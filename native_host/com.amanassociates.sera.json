@@ -1,9 +1,9 @@
 {
   "name": "com.amanassociates.sera",
   "description": "Project Sera Native Messaging Host",
-  "path": "host.bat", 
+  "path": "host.bat",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://lmdeiocgdgmelaefkkielejgfikaliog/"
+    "chrome-extension://fienapnofgmobkohaemhggpfcieeglge/"
   ]
 }

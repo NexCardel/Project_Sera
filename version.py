@@ -54,7 +54,12 @@ def check_for_updates(timeout_seconds: int = 4) -> Optional[Dict]:
                 
                 # Check if update is available or mandatory
                 update_needed = is_update_available(latest_v, APP_VERSION)
-                is_mandatory = data.get("mandatory", False) or is_update_available(min_req_v, APP_VERSION)
+                # A mandatory flag only applies to an actual newer release. Without
+                # this guard, a build can be forced to download itself forever.
+                is_mandatory = update_needed and (
+                    data.get("mandatory", False)
+                    or is_update_available(min_req_v, APP_VERSION)
+                )
                 
                 if update_needed or is_mandatory:
                     return {
@@ -64,6 +69,11 @@ def check_for_updates(timeout_seconds: int = 4) -> Optional[Dict]:
                         "download_url": data.get("download_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
                         "release_notes": data.get("release_notes", "A new security and feature update is available for Project Sera.")
                     }
+    except urllib.error.HTTPError as e:
+        # A release branch/repository may not publish version metadata yet. This
+        # is a normal no-update state and should not alarm staff at startup.
+        if e.code != 404:
+            print(f"[Updater] Version check skipped/failed: {e}")
     except Exception as e:
         print(f"[Updater] Version check skipped/failed: {e}")
     return None

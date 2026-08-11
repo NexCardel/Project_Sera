@@ -10,6 +10,8 @@ import subprocess
 import shutil
 from pathlib import Path
 
+from build_extension import build as build_extension
+
 APP_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -24,14 +26,21 @@ def build():
         print(f"Error: Spec file {spec_file} not found!")
         sys.exit(1)
         
-    dist_dir = APP_DIR / "dist" / "CompanyInfo1"
+    dist_dir = APP_DIR / "package_dist" / "Amas_Sera"
     if dist_dir.exists():
         try:
             shutil.rmtree(dist_dir, ignore_errors=True)
         except Exception:
             pass
 
-    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", str(spec_file)]
+    build_extension()
+
+    cmd = [
+        sys.executable, "-m", "PyInstaller", "--noconfirm",
+        "--distpath", str(APP_DIR / "package_dist"),
+        "--workpath", str(APP_DIR / "package_build"),
+        str(spec_file),
+    ]
     print(f"Running command: {' '.join(cmd)}")
     
     res = subprocess.run(cmd, cwd=str(APP_DIR))
@@ -39,7 +48,7 @@ def build():
         print("\nERROR: PyInstaller build failed! Please check error output above.")
         sys.exit(res.returncode)
         
-    exe_file = dist_dir / "CompanyInfo1.exe"
+    exe_file = dist_dir / "Amas_Sera.exe"
     
     if exe_file.exists():
         print("\n====================================================")
@@ -47,11 +56,7 @@ def build():
         print("====================================================")
         print(f"Executable Location: {exe_file}")
         print(f"Bundle Directory:   {dist_dir}\n")
-        print("Next Steps for Creating the Windows Setup Installer:")
-        print("1. Install Inno Setup (free) from: https://jrsoftware.org/isinfo.php")
-        print("2. Open 'installer_setup.iss' in Inno Setup Compiler.")
-        print("3. Click 'Build -> Compile' (or press Ctrl+F9).")
-        print("4. Your 1-click installer 'Amas_Sera_Setup_v2.0.exe' will be created in 'installer_output/'.")
+        print("Run Inno Setup Compiler against build_tools/installer_setup.iss to create the installer.")
     else:
         print(f"\nERROR: Executable was not found at {exe_file}")
 

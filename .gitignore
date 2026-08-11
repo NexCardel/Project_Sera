@@ -32,6 +32,7 @@ installer_output/
 
 # Virtual Environments
 venv/
+.build_venv/
 env/
 ENV/
 env.bak/
@@ -57,3 +58,7 @@ native_host/host_error.log
 # OS generated files
 .DS_Store
 Thumbs.db
+
+package_assets/
+package_build/
+package_dist/
