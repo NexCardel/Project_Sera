@@ -2,7 +2,7 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.3.0"
+#define MyAppVersion "2.3.2"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
 
@@ -42,6 +42,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Registry]
 Root: HKLM; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Google\Chrome\Extensions\{code:ExtensionId}"; ValueType: string; ValueName: "path"; ValueData: "{app}\extension\ProjectSeraCompanion.crx"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Google\Chrome\Extensions\{code:ExtensionId}"; ValueType: string; ValueName: "version"; ValueData: "{code:ExtensionVersion}"
 Root: HKLM; Subkey: "Software\Microsoft\Edge\Extensions\{code:ExtensionId}"; ValueType: string; ValueName: "path"; ValueData: "{app}\extension\ProjectSeraCompanion.crx"; Flags: uninsdeletekey
@@ -67,4 +69,8 @@ begin
 end;
 
 [Run]
+Filename: "{sys}\cmd.exe"; Parameters: "/C ""{app}\_internal\native_host\register_native_host.bat"" --silent"; StatusMsg: "Registering browser native host..."; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\cmd.exe"; Parameters: "/C ""{app}\_internal\native_host\unregister_native_host.bat"" --silent"; StatusMsg: "Removing browser native host..."; Flags: runhidden waituntilterminated

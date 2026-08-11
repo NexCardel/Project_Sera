@@ -61,6 +61,7 @@ def register_native_messaging_host():
     if sys.platform != "win32":
         return
     import winreg
+    import json
     try:
         ensure_permanent_extension()
         if getattr(sys, 'frozen', False):
@@ -69,20 +70,29 @@ def register_native_messaging_host():
             base_dir = Path(__file__).resolve().parent
             
         json_path = base_dir / "native_host" / "com.amanassociates.sera.json"
-        if not json_path.exists():
-            return
-            
-        targets = [
-            r"Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera",
-            r"Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera",
-        ]
+        host_bat_path = base_dir / "native_host" / "host.bat"
         
-        for subkey in targets:
+        if json_path.exists():
             try:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
-                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(json_path.resolve()))
-            except Exception:
-                pass
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                data["path"] = str(host_bat_path.resolve())
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+            except Exception as e:
+                print(f"Could not update native host JSON path: {e}")
+
+            targets = [
+                r"Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera",
+                r"Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera",
+            ]
+            
+            for subkey in targets:
+                try:
+                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(json_path.resolve()))
+                except Exception:
+                    pass
     except Exception as e:
         print(f"Could not register native messaging host: {e}")
 
