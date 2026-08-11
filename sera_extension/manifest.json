@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Project Sera Companion",
+  "version": "1.0",
+  "description": "Autofill and filing confirmation tracking for Aman Associates.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnMl3ML5fZ5U73kVLgR1IUG1w23aaN1uGoGCxTecIhDdkEPJNoFp01Jm3t3QZi5WX/VBSLpPzI+mBt9lMm8VH43XfvZjSqjTn9WqpX+Ag69kqtGZ9rykre+ez36k1WCWwhs08jMm4dQf6JSHx3ASvw7IY5wJto8CzhtPdwnLAoJiwyn0xSnyrMHkCB7QbMXWD/4w9mXHgYGxRMFh1wSSHpCUrQx2LiavV6ixXslgCh5Cip08Ock62TeF1me9S4XacH73QzajohAlJ69M3LE+C62uG1RckgnVLxo+x1FawcuUyxcwD4JVOtm3YFib+C4P5+sJoPxSbZOjM8kGH6s666wIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "file://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Show Sera Manual Assist"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["tracker.js", "content_scripts/login.js", "content_scripts/filing_detector.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["config.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

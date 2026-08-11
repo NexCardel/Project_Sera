@@ -1,0 +1,317 @@
+"""
+search_window.py
+----------------
+Window 1: employee-facing search bar + spreadsheet-style results.
+"""
+
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+import qtawesome as qta
+from ui.utils.theme import SmartTableWidgetItem
+
+
+
+class SearchWindow(QWidget):
+
+    client_selected = Signal(int)
+    add_client_requested = Signal()
+    edit_client_requested = Signal(int)
+    delete_client_requested = Signal(int)
+    manage_services_requested = Signal(int)
+    archive_client_requested = Signal(int)
+    admin_mode_requested = Signal()
+    dashboard_requested = Signal()
+    action_alert_requested = Signal(str, str)
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._on_search_changed)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        # Top Header Row
+        header_row = QHBoxLayout()
+        title = QLabel("All Clients / Search")
+        title.setProperty("class", "PageTitle")
+        header_row.addWidget(title)
+        header_row.addStretch()
+        layout.addLayout(header_row)
+
+        # Search & Filter Row
+        search_row = QHBoxLayout()
+        search_row.setSpacing(12)
+        
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search by company, proprietor, ID...")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.setMinimumHeight(36)
+        self.search_box.textChanged.connect(self._on_search_input_changed)
+        self.search_box.returnPressed.connect(self._activate_current_result)
+        self.search_box.installEventFilter(self)
+        search_row.addWidget(self.search_box, stretch=3)
+
+        self.btn_archive_client = QPushButton()
+        self.btn_archive_client.setToolTip("Archive selected client")
+        self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#241F1B"))
+        self.btn_archive_client.setIconSize(QSize(20, 20))
+        self.btn_archive_client.setFixedWidth(40)
+        self.btn_archive_client.setMinimumHeight(36)
+        self.btn_archive_client.clicked.connect(self._request_archive_client)
+        search_row.addWidget(self.btn_archive_client)
+
+        lbl_services = QLabel("Services:")
+        lbl_services.setProperty("class", "SidebarSection") # Re-using class for bold
+        lbl_services.setStyleSheet("color: black;")
+        search_row.addWidget(lbl_services)
+        
+        self.service_filter = QComboBox()
+        self.service_filter.setMinimumHeight(36)
+        self.service_filter.setMinimumWidth(160)
+        self.service_filter.currentIndexChanged.connect(self._on_search_input_changed)
+        search_row.addWidget(self.service_filter)
+        
+        search_row.addStretch(1)
+
+        # Client actions.  Adding is available to normal staff; changing an
+        # existing client is deliberately restricted to Admin Mode.
+        self.btn_edit_client = QPushButton("Edit")
+        self.btn_edit_client.setMinimumHeight(36)
+        self.btn_edit_client.clicked.connect(self._request_edit_client)
+        search_row.addWidget(self.btn_edit_client)
+
+        self.btn_delete_client = QPushButton("Delete")
+        self.btn_delete_client.setMinimumHeight(36)
+        self.btn_delete_client.clicked.connect(self._request_delete_client)
+        search_row.addWidget(self.btn_delete_client)
+
+        self.btn_manage_services = QPushButton("Attach/Detach")
+        self.btn_manage_services.setMinimumHeight(36)
+        self.btn_manage_services.clicked.connect(self._request_manage_services)
+        search_row.addWidget(self.btn_manage_services)
+
+        self.btn_add_client = QPushButton("+ Add Client")
+        self.btn_add_client.setMinimumHeight(36)
+        self.btn_add_client.setProperty("class", "primary")
+        self.btn_add_client.clicked.connect(self.add_client_requested.emit)
+        layout.addLayout(search_row)
+
+        self.results_table = QTableWidget()
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.results_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.setShowGrid(True)
+        self.results_table.setAlternatingRowColors(False)
+        self.results_table.viewport().setCursor(Qt.PointingHandCursor)
+        self.results_table.setSortingEnabled(True)
+        self.results_table.horizontalHeader().setSortIndicatorShown(True)
+        self.results_table.horizontalHeader().setSectionsClickable(True)
+        self.results_table.itemActivated.connect(self._on_item_activated)
+        layout.addWidget(self.results_table)
+
+        self.set_admin_mode(False)
+
+
+
+        hint = QLabel(
+            "Type to search, press Enter to open the top result "
+            "(\u2193/\u2191 to pick a different one first)."
+        )
+        hint.setProperty("class", "HintText")
+        layout.addWidget(hint)
+
+        self.search_box.setFocus()
+
+    def eventFilter(self, obj, event):
+        # Pressing Down in the search box jumps straight into the results
+        # table so you never have to reach for Tab or the mouse to browse.
+        if obj is self.search_box and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Down and self.results_table.rowCount() > 0:
+            self.results_table.setFocus()
+            if self.results_table.currentRow() < 0:
+                self.results_table.setCurrentCell(0, 0)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _on_search_input_changed(self, *_):
+        self._search_timer.start(150)
+
+    def _on_clear_search(self):
+        self._search_timer.stop()
+        self.search_box.clear()
+        self.search_box.setFocus()
+        self._on_search_changed()
+
+    def _activate_current_result(self):
+        if self._search_timer.isActive():
+            self._search_timer.stop()
+            self._on_search_changed()
+        item = self.results_table.currentItem()
+        if item is not None:
+            self._on_item_activated(item)
+
+    def _reload_filters(self):
+        is_admin = getattr(self, "is_admin_mode", False)
+        all_cols = self.db.get_mcl_columns()
+        if is_admin:
+            self._cached_mcl_cols = [c for c in all_cols if c.get("admin_show_in_search", True)]
+        else:
+            self._cached_mcl_cols = [c for c in all_cols if c.get("show_in_search", True)]
+
+        self._cached_services = self.db.get_services()
+        self.service_filter.blockSignals(True)
+        self.service_filter.clear()
+        self.service_filter.addItem("All Services", None)
+        for s in self._cached_services:
+            self.service_filter.addItem(s["name"], s["id"])
+        self.service_filter.blockSignals(False)
+
+    def _on_search_changed(self, *_):
+        text = self.search_box.text().strip()
+        svc_id = self.service_filter.currentData()
+        
+        is_admin = getattr(self, "is_admin_mode", False)
+        all_cols = self.db.get_mcl_columns()
+        if is_admin:
+            mcl_cols = [c for c in all_cols if c.get("admin_show_in_search", True)]
+        else:
+            mcl_cols = [c for c in all_cols if c.get("show_in_search", True)]
+        self._cached_mcl_cols = mcl_cols
+            
+        services = getattr(self, "_cached_services", None)
+        if services is None:
+            services = self.db.get_services()
+            self._cached_services = services
+        
+        headers = [col["label"] for col in mcl_cols]
+        headers.append("Services")
+
+        self.results_table.setUpdatesEnabled(False)
+        self.results_table.setSortingEnabled(False)
+        try:
+            self.results_table.setColumnCount(len(headers))
+            self.results_table.setHorizontalHeaderLabels(headers)
+            self.results_table.horizontalHeader().setStretchLastSection(True)
+
+            clients = self.db.search_clients(text, service_id=svc_id)
+            self.results_table.setRowCount(len(clients))
+
+            services_map = {s["id"]: s["name"] for s in services}
+            col_max_lens = [len(h) for h in headers]
+
+            for r, client in enumerate(clients):
+
+
+                client_id = client["id"]
+                client_vals = client.get("values", {})
+                
+                for c_idx, col in enumerate(mcl_cols):
+                    val = client_vals.get(col["id"], "")
+                    if len(val) > col_max_lens[c_idx]:
+                        col_max_lens[c_idx] = len(val)
+                    item = SmartTableWidgetItem(val)
+                    item.setData(Qt.UserRole, client_id)
+                    self.results_table.setItem(r, c_idx, item)
+                    
+                client_svc_ids = client.get("service_ids", [])
+                svc_names = [services_map[s_id] for s_id in client_svc_ids if s_id in services_map]
+                svc_val = ", ".join(svc_names)
+                if len(svc_val) > col_max_lens[-1]:
+                    col_max_lens[-1] = len(svc_val)
+                svc_item = SmartTableWidgetItem(svc_val)
+                svc_item.setData(Qt.UserRole, client_id)
+                self.results_table.setItem(r, len(mcl_cols), svc_item)
+
+
+            if self.results_table.rowCount() > 0:
+                self.results_table.setCurrentCell(0, 0)
+
+            # Ultra-fast O(1) column width calculation without scanning all table cell widgets
+            fm = self.results_table.fontMetrics()
+            char_w = fm.horizontalAdvance("M")
+            for c_idx, h_text in enumerate(headers):
+                sample_chars = min(col_max_lens[c_idx], 40)
+                calc_w = max(sample_chars * char_w + 32, fm.horizontalAdvance(h_text) + 36, 95)
+                self.results_table.setColumnWidth(c_idx, calc_w)
+        finally:
+            self.results_table.setSortingEnabled(True)
+            self.results_table.horizontalHeader().setSortIndicatorShown(True)
+            self.results_table.horizontalHeader().setSectionsClickable(True)
+            self.results_table.setUpdatesEnabled(True)
+
+
+
+
+    def _on_item_activated(self, item: QTableWidgetItem):
+        client_id = item.data(Qt.UserRole)
+        if client_id is not None:
+            self.client_selected.emit(client_id)
+
+    def _selected_client_id(self):
+        item = self.results_table.currentItem()
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _request_edit_client(self):
+        client_id = self._selected_client_id()
+        if client_id is not None:
+            self.edit_client_requested.emit(client_id)
+
+    def _request_delete_client(self):
+        client_id = self._selected_client_id()
+        if client_id is not None:
+            self.delete_client_requested.emit(client_id)
+
+    def _request_manage_services(self):
+        client_id = self._selected_client_id()
+        if client_id is not None:
+            self.manage_services_requested.emit(client_id)
+
+    def _request_archive_client(self):
+        client_id = self._selected_client_id()
+        if client_id is not None:
+            self.archive_client_requested.emit(client_id)
+
+    def set_admin_mode(self, active: bool):
+        """Expose mutation controls only after the Admin PIN is verified."""
+        self.is_admin_mode = active
+        for button in (self.btn_edit_client, self.btn_delete_client, self.btn_manage_services, self.btn_archive_client):
+            button.setVisible(active)
+        if hasattr(self, "results_table"):
+            self._reload_filters()
+            self._on_search_changed()
+
+
+
+    def refresh(self):
+        self._reload_filters()
+        self.search_box.blockSignals(True)
+        self.search_box.clear()
+        self.search_box.blockSignals(False)
+        self.results_table.clearContents()
+        self.results_table.setRowCount(0)
+        self.search_box.setFocus()
+        self._search_timer.stop()
+        self._on_search_changed()
+
+    def focus_and_select_search(self):
+        self.search_box.setFocus()
+        self.search_box.selectAll()

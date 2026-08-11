@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GST Return Portal — Success Simulation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f6f9;
+            margin: 40px;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .success-banner {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #c3e6cb;
+            font-weight: bold;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .label {
+            font-weight: bold;
+            color: #555;
+        }
+        .value {
+            font-family: monospace;
+            font-size: 16px;
+            color: #1a73e8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-banner">
+            Return Submitted Successfully!
+        </div>
+        <h3>Filing Acknowledgment</h3>
+        <div class="info-row">
+            <span class="label">Return Type:</span>
+            <span>GSTR-3B</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Period:</span>
+            <span>March 2024</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Transaction ID:</span>
+            <span class="value" id="arnVal">AA27032419827364</span>
+        </div>
+    </div>
+</body>
+</html>
