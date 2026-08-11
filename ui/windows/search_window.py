@@ -55,6 +55,14 @@ class SearchWindow(QWidget):
         title.setProperty("class", "PageTitle")
         header_row.addWidget(title)
         header_row.addStretch()
+
+        # Keep the primary action out of the crowded filter/action row so it
+        # remains visible on narrow desktop windows.
+        self.btn_add_client = QPushButton("+ Add Client")
+        self.btn_add_client.setMinimumHeight(36)
+        self.btn_add_client.setProperty("class", "primary")
+        self.btn_add_client.clicked.connect(self.add_client_requested.emit)
+        header_row.addWidget(self.btn_add_client)
         layout.addLayout(header_row)
 
         # Search & Filter Row
@@ -109,10 +117,6 @@ class SearchWindow(QWidget):
         self.btn_manage_services.clicked.connect(self._request_manage_services)
         search_row.addWidget(self.btn_manage_services)
 
-        self.btn_add_client = QPushButton("+ Add Client")
-        self.btn_add_client.setMinimumHeight(36)
-        self.btn_add_client.setProperty("class", "primary")
-        self.btn_add_client.clicked.connect(self.add_client_requested.emit)
         layout.addLayout(search_row)
 
         self.results_table = QTableWidget()
