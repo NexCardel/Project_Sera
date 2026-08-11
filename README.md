@@ -175,3 +175,30 @@ The packaged build includes `native_host.host` so `CompanyInfo1.exe --native-hos
 
 - **Syncthing Restores**: Restoring a database in Admin Mode overwrites the local `master.db` and `sera.salt`. If Syncthing is running, this restored version will sync to other staff PCs. Ensure teammates pause Syncthing before performing a database restore.
 - **Audit Tracking**: Each employee enters their staff name on first launch, ensuring the Audit Log accurately attributes credential access, portal autofill events, and return submission tracking.
+
+---
+
+## 8. Releasing Updates to Staff (Auto-Updater Workflow)
+
+When you make changes to the app and want all employees to update:
+
+1. Update `APP_VERSION` in `version.py` (e.g. `2.3.1`).
+2. Update `version.json` in the git repository:
+   ```json
+   {
+     "version": "2.3.1",
+     "min_required_version": "2.3.1",
+     "mandatory": true,
+     "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.1/Amas_Sera_Setup_v2.3.1.exe",
+     "release_notes": "Summary of what changed in v2.3.1"
+   }
+   ```
+3. Commit and push your changes to GitHub:
+   ```bash
+   git add .
+   git commit -m "Release v2.3.1"
+   git push
+   ```
+4. Create a release tag on GitHub (`v2.3.1`) and upload the new installer executable (`Amas_Sera_Setup_v2.3.1.exe`) matching `download_url`.
+5. The next time any employee opens Project Sera, the app will check GitHub, present a mandatory update modal, download the update, and restart into the new version.
+

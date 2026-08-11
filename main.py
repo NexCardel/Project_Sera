@@ -130,6 +130,19 @@ class SeraApp:
 
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
         self.actor, self.actor_alias = self._ensure_user_actor()
+
+        # Check for mandatory updates on GitHub
+        loading_dlg.set_status("Checking GitHub for mandatory version updates...")
+        import version
+        update_info = version.check_for_updates()
+        if update_info:
+            loading_dlg.close()
+            from ui.dialogs.update_dialog import ForceUpdateDialog
+            update_dlg = ForceUpdateDialog(update_info)
+            res = update_dlg.exec()
+            # If update modal was dismissed or failed, exit process to enforce update
+            sys.exit(0)
+
         self._build_ui()
         loading_dlg.close()
 
