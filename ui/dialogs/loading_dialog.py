@@ -10,7 +10,7 @@ class StartupLoadingDialog(QDialog):
     def __init__(self, parent=None, title="Project Sera"):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Dialog)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedSize(360, 160)
         self._build_ui()

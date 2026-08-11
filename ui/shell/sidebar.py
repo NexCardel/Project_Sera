@@ -111,7 +111,16 @@ class AccordionHeader(QWidget):
         super().mousePressEvent(event)
 
 
-class Sidebar(QWidget):
+def _safe_qta_icon(icon_name, color=None):
+    try:
+        if color:
+            return qta.icon(icon_name, color=color)
+        return qta.icon(icon_name)
+    except Exception:
+        from PySide6.QtGui import QIcon
+        return QIcon()
+
+class Sidebar(QFrame):
     # Navigation Signals
     go_to_search = Signal()
     
@@ -279,7 +288,7 @@ class Sidebar(QWidget):
         profile.setObjectName("SidebarProfile")
         profile.setAlignment(Qt.AlignCenter)
         profile.setFixedSize(27, 27)
-        profile.setPixmap(qta.icon("fa5s.user", color="#168A70").pixmap(14, 14))
+        profile.setPixmap(_safe_qta_icon("fa5s.user", color="#168A70").pixmap(14, 14))
         self.profile_name = QLabel()
         self.profile_name.setObjectName("SidebarProfileName")
         self.profile_name.setStyleSheet("background-color: transparent; color: #F8F5F2; font-size: 12px; font-weight: 600;")
@@ -361,7 +370,7 @@ class Sidebar(QWidget):
     def _create_nav_button(self, text, signal, icon_name=None, parent_layout=None) -> QPushButton:
         btn = QPushButton(f" {text}")
         if icon_name:
-            btn.setIcon(qta.icon(icon_name, color='#F8F5F2'))
+            btn.setIcon(_safe_qta_icon(icon_name, color='#F8F5F2'))
             btn.setIconSize(QSize(17, 17))
         btn.setObjectName("SidebarButton")
         btn.setProperty("sidebar_sub", False)

@@ -121,6 +121,17 @@ class SeraApp:
             
         from ui.dialogs.loading_dialog import StartupLoadingDialog
         loading_dlg = StartupLoadingDialog()
+        
+        # Exception hook to close loading modal on error
+        orig_excepthook = sys.excepthook
+        def _safe_excepthook(exctype, value, tb):
+            try:
+                loading_dlg.close()
+            except Exception:
+                pass
+            orig_excepthook(exctype, value, tb)
+        sys.excepthook = _safe_excepthook
+
         loading_dlg.show()
         self.app.processEvents()
 
@@ -139,7 +150,9 @@ class SeraApp:
             sys.exit(1)
 
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
+        loading_dlg.hide()
         self.actor, self.actor_alias = self._ensure_user_actor()
+        loading_dlg.show()
 
         # Check for mandatory updates on GitHub
         loading_dlg.set_status("Checking GitHub for mandatory version updates...")

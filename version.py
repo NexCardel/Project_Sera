@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable
 
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.3"
 GITHUB_REPO = "NexCardel/Project_Sera"
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.json"
 
