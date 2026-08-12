@@ -37,9 +37,9 @@ Source: "..\package_assets\extension\extension_id.txt"; DestDir: "{app}\extensio
 Source: "..\package_assets\extension\extension_version.txt"; DestDir: "{app}\extension"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0
 Name: "{group}\Uninstall {#ShortcutName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0; Tasks: desktopicon
 
 [Registry]
 Root: HKLM; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey
