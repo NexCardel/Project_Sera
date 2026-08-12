@@ -100,11 +100,29 @@ def register_native_messaging_host():
 class SeraApp:
     def __init__(self):
         register_native_messaging_host()
+
+        # Fix Windows Taskbar preview icon grouping & display
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AmanAssociates.ProjectSera.Vault.2.3.3")
+            except Exception:
+                pass
+
         self.app = QApplication(sys.argv)
         # Avoid Windows legacy bitmap-font fallback warnings (8514oem/Fixedsys)
         # and keep all dialogs consistent with the app stylesheet.
         self.app.setFont(QFont("Segoe UI", 10))
         APP_DIR.mkdir(parents=True, exist_ok=True)
+        
+        icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
+        if not icon_path.exists():
+            icon_path = APP_DIR / "assets" / "logo" / "icon_here.png"
+        if not icon_path.exists():
+            icon_path = APP_DIR / "assets" / "logo" / "sera_icon.png"
+        if icon_path.exists():
+            from PySide6.QtGui import QIcon
+            self.app.setWindowIcon(QIcon(str(icon_path)))
         
         self.db_path = str(APP_DIR / "master.db")
         self.salt_path = str(APP_DIR / security.SALT_FILE)
@@ -318,6 +336,7 @@ class SeraApp:
         self.search_win.delete_client_requested.connect(self._delete_client_from_search)
         self.search_win.manage_services_requested.connect(self._manage_client_services_from_search)
         self.search_win.archive_client_requested.connect(self._archive_client_from_search)
+        self.search_win.toast_requested.connect(self.shell.show_alert)
         self.search_win.action_alert_requested.connect(self.shell.show_action_alert)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)

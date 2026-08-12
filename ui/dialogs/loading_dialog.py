@@ -34,10 +34,24 @@ class StartupLoadingDialog(QDialog):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(8)
 
-        logo = QLabel("PS")
+        logo = QLabel()
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(26, 26)
-        logo.setStyleSheet("background-color: #164A68; border-radius: 6px; color: #F8F5F2; font-size: 11px; font-weight: 700;")
+        logo.setFixedSize(28, 28)
+        
+        from pathlib import Path
+        from PySide6.QtGui import QPixmap
+        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.png"
+        if not logo_path.exists():
+            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "files" / "sera_icon_whitegold.png"
+        if not logo_path.exists():
+            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "sera_icon.png"
+            
+        if logo_path.exists():
+            pix = QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo.setPixmap(pix)
+        else:
+            logo.setText("PS")
+            logo.setStyleSheet("background-color: #164A68; border-radius: 6px; color: #F8F5F2; font-size: 11px; font-weight: 700;")
         header_layout.addWidget(logo)
 
         app_title = QLabel("Project Sera")

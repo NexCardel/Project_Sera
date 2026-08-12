@@ -29,6 +29,7 @@ class SeraDatabase:
         self.db_path = db_path
         self.hex_key = hex_key
         self._init_schema()
+        self.resequence_client_serial_numbers()
 
     @contextmanager
     def _connect(self):
@@ -97,9 +98,14 @@ class SeraDatabase:
                     is_archived INTEGER NOT NULL DEFAULT 0
                 );
             """)
-            # Existing installs created `clients` before is_archived existed --
-            # ADD COLUMN it in if this is an upgrade, not a fresh DB.
             self._ensure_column(conn, "clients", "is_archived", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "clients", "client_id_token", "TEXT")
+
+            # Auto-populate client_id_token for any existing clients
+            cur = conn.execute("SELECT id FROM clients WHERE client_id_token IS NULL OR client_id_token = '' ORDER BY id")
+            missing_token_ids = cur.fetchall()
+            for (c_id,) in missing_token_ids:
+                conn.execute("UPDATE clients SET client_id_token = ? WHERE id = ?", (f"CLI-{c_id:05d}", c_id))
 
             # 4. Client Values (EAV side table)
             conn.execute("""
@@ -231,10 +237,15 @@ class SeraDatabase:
             if cur.fetchone()[0] == 0:
                 self._seed_default_data(conn)
 
+            # Ensure serial number / row index columns are never marked as identity columns
+            conn.execute(
+                "UPDATE mcl_columns SET is_identity = 0 WHERE LOWER(TRIM(label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')"
+            )
+
     def _seed_default_data(self, conn):
         """Seeds default MCL columns and Services for fresh database installations."""
         default_cols = [
-            ("No.", "text", 1, 1),
+            ("No.", "text", 0, 1),
             ("NAME OF COMPANY", "text", 1, 2),
             ("NAME OF PROPRIETOR", "text", 1, 3),
             ("GSTIN", "text", 0, 4),
@@ -373,9 +384,17 @@ class SeraDatabase:
                 for r in cur.fetchall()
             ]
 
+    def get_id_column(self) -> Optional[dict]:
+        for col in self.get_mcl_columns():
+            if col.get("field_type") == "id":
+                return col
+        return None
+
     def create_mcl_column(self, label: str, field_type: str, dropdown_options=None, is_identity: int = 0) -> int:
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
+            if field_type == "id":
+                conn.execute("UPDATE mcl_columns SET field_type = 'text' WHERE field_type = 'id'")
             cur = conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mcl_columns")
             next_order = cur.fetchone()[0]
             cur = conn.execute(
@@ -388,6 +407,8 @@ class SeraDatabase:
     def update_mcl_column(self, column_id: int, label: str, field_type: str, dropdown_options=None, is_identity: int = None):
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
+            if field_type == "id":
+                conn.execute("UPDATE mcl_columns SET field_type = 'text' WHERE field_type = 'id' AND id != ?", (column_id,))
             if is_identity is not None:
                 conn.execute(
                     """UPDATE mcl_columns SET label=?, field_type=?, dropdown_options=?, is_identity=? 
@@ -553,7 +574,7 @@ class SeraDatabase:
                         include_archived: bool = False, archived_only: bool = False) -> list[dict]:
         like = f"%{query}%" if query else ""
         with self._connect() as conn:
-            sql = "SELECT DISTINCT c.id, c.notes, c.created_at, c.updated_at, c.is_archived FROM clients c"
+            sql = "SELECT DISTINCT c.id, c.notes, c.created_at, c.updated_at, c.is_archived, c.client_id_token FROM clients c"
             
             if query:
                 sql += " LEFT JOIN client_values cv ON c.id = cv.client_id"
@@ -590,6 +611,7 @@ class SeraDatabase:
                 r[0]: {
                     "id": r[0], "notes": r[1], "created_at": r[2], "updated_at": r[3],
                     "is_archived": bool(r[4]) if len(r) > 4 else False,
+                    "client_id_token": r[5] if len(r) > 5 and r[5] else f"CLI-{r[0]:05d}",
                     "values": {},
                     "service_ids": []
                 }
@@ -613,11 +635,17 @@ class SeraDatabase:
                     if cid in clients_map:
                         clients_map[cid]["service_ids"].append(sid)
 
+            id_col = self.get_id_column()
+            if id_col:
+                for cid, cdata in clients_map.items():
+                    if id_col["id"] not in cdata["values"] or not str(cdata["values"][id_col["id"]]).strip():
+                        cdata["values"][id_col["id"]] = str(cid)
+
             return [clients_map[cid] for cid in client_ids]
 
 
     def _fetch_client_full(self, conn, client_id: int) -> dict:
-        cur = conn.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+        cur = conn.execute("SELECT id, notes, created_at, updated_at, is_archived, client_id_token FROM clients WHERE id = ?", (client_id,))
         row = cur.fetchone()
         if not row:
             return None
@@ -625,10 +653,15 @@ class SeraDatabase:
         client = {
             "id": row[0], "notes": row[1], "created_at": row[2], "updated_at": row[3],
             "is_archived": bool(row[4]) if len(row) > 4 else False,
+            "client_id_token": row[5] if len(row) > 5 and row[5] else f"CLI-{row[0]:05d}"
         }
 
         vcur = conn.execute("SELECT column_id, value FROM client_values WHERE client_id=?", (client_id,))
         client["values"] = {r[0]: r[1] for r in vcur.fetchall()}
+
+        id_col = self.get_id_column()
+        if id_col and (id_col["id"] not in client["values"] or not str(client["values"][id_col["id"]]).strip()):
+            client["values"][id_col["id"]] = str(client_id)
 
         scur = conn.execute("SELECT service_id FROM client_services WHERE client_id=?", (client_id,))
         client["service_ids"] = [r[0] for r in scur.fetchall()]
@@ -669,6 +702,13 @@ class SeraDatabase:
                 (notes, now, now)
             )
             client_id = cur.lastrowid
+            token = f"CLI-{client_id:05d}"
+            conn.execute("UPDATE clients SET client_id_token=? WHERE id=?", (token, client_id))
+
+            # Auto-assign serial number to ID column if present and not provided
+            id_col = self.get_id_column()
+            if id_col and (id_col["id"] not in values or not str(values.get(id_col["id"], "")).strip()):
+                values[id_col["id"]] = str(client_id)
 
             for col_id, val in values.items():
                 if val is not None and val != "":
@@ -1003,6 +1043,29 @@ class SeraDatabase:
                     "UPDATE clients SET is_archived=0, updated_at=? WHERE id=?", (now, cid)
                 )
 
+    def resequence_client_serial_numbers(self):
+        """Resequences all non-archived clients' serial numbers in 1, 2, 3... order
+        for the column with field_type == 'id' (or identity serial number column)."""
+        id_col = self.get_id_column()
+        if not id_col:
+            cols = self.get_mcl_columns()
+            for c in cols:
+                lbl = c["label"].strip().lower()
+                if lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#", "numer", "number"}:
+                    id_col = c
+                    break
+        if not id_col:
+            return
+
+        with self._connect() as conn:
+            clients = conn.execute("SELECT id FROM clients WHERE is_archived = 0 ORDER BY id ASC").fetchall()
+            for idx, (cid,) in enumerate(clients, start=1):
+                conn.execute(
+                    "INSERT INTO client_values (client_id, column_id, value) VALUES (?, ?, ?) "
+                    "ON CONFLICT(client_id, column_id) DO UPDATE SET value = excluded.value",
+                    (cid, id_col["id"], str(idx))
+                )
+
     def bulk_delete_clients(self, client_ids: list[int]):
         with self._connect() as conn:
             for cid in client_ids:
@@ -1020,18 +1083,37 @@ class SeraDatabase:
                 "details": list[str]       # human-readable summary per group
             }
         """
+        import re
+
+        def _norm(s: str) -> str:
+            if not s:
+                return ""
+            return re.sub(r'[^a-z0-9]', '', s.lower())
+
         with self._connect() as conn:
-            # 1. Get identity column IDs
-            id_cols = [
-                r[0] for r in conn.execute(
-                    "SELECT id FROM mcl_columns WHERE is_identity = 1 ORDER BY sort_order"
-                ).fetchall()
-            ]
+            # 1. Get identity columns, excluding serial number / index columns (like "No.", "Sl No", "ID")
+            raw_id_cols = conn.execute(
+                "SELECT id, label FROM mcl_columns WHERE is_identity = 1 ORDER BY sort_order"
+            ).fetchall()
+
+            ignored_labels = {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#"}
+            id_cols = [r[0] for r in raw_id_cols if r[1].strip().lower() not in ignored_labels]
+
+            # If no valid identity columns remain, fallback to company, proprietor, firm, name, gstin, pan columns
+            if not id_cols:
+                all_cols = conn.execute("SELECT id, label FROM mcl_columns ORDER BY sort_order").fetchall()
+                id_cols = [
+                    r[0] for r in all_cols
+                    if r[1].strip().lower() not in ignored_labels and any(
+                        k in r[1].upper() for k in ["COMPANY", "PROPRIETOR", "FIRM", "NAME", "GSTIN", "PAN"]
+                    )
+                ]
+
             if not id_cols:
                 return {"duplicates_found": 0, "deleted": 0, "groups": 0,
                         "details": ["No identity columns defined — cannot detect duplicates."]}
 
-            # 2. Build identity fingerprint for every non-archived client
+            # 2. Build normalized identity fingerprint for every non-archived client
             client_ids = [
                 r[0] for r in conn.execute(
                     "SELECT id FROM clients WHERE is_archived = 0 ORDER BY id"
@@ -1043,13 +1125,18 @@ class SeraDatabase:
 
             for cid in client_ids:
                 vals = []
+                raw_display_vals = []
                 for col_id in id_cols:
                     cur = conn.execute(
                         "SELECT value FROM client_values WHERE client_id = ? AND column_id = ?",
                         (cid, col_id)
                     )
                     row = cur.fetchone()
-                    vals.append((row[0] or "").strip().lower() if row else "")
+                    raw_val = row[0] if row and row[0] else ""
+                    norm_val = _norm(raw_val)
+                    vals.append(norm_val)
+                    if raw_val.strip():
+                        raw_display_vals.append(raw_val.strip())
 
                 fp = tuple(vals)
                 # Skip clients with completely empty identity (can't match)
@@ -1057,7 +1144,7 @@ class SeraDatabase:
                     continue
 
                 fingerprints.setdefault(fp, []).append(cid)
-                client_labels[cid] = ", ".join(v for v in vals if v)
+                client_labels[cid] = " | ".join(raw_display_vals)
 
             # 3. For each group with >1 client, keep lowest ID, delete the rest
             deleted = 0

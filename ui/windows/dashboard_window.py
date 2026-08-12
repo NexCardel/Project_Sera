@@ -6,7 +6,10 @@ Provides an aggregate view of compliance filing statuses across all clients.
 """
 
 from PySide6.QtCore import Qt, Signal, QSize
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,

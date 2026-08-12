@@ -4,7 +4,7 @@ dynamic_form_widgets.py
 Shared UI pieces for rendering dynamic fields at runtime.
 """
 
-from PySide6.QtCore import QDate, QRegularExpression
+from PySide6.QtCore import QDate, QRegularExpression, Qt
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QComboBox,
@@ -17,6 +17,13 @@ DATE_FORMAT = "yyyy-MM-dd"
 def make_input_widget(field: dict, value: str = ""):
     """Builds the right editable input widget for a field definition."""
     field_type = field.get("field_type", "text")
+
+    if field_type == "id":
+        widget = QLineEdit(value or "(Auto-Generated)")
+        widget.setReadOnly(True)
+        widget.setFocusPolicy(Qt.NoFocus)
+        widget.setStyleSheet("background-color: #EFEFEF; color: #2E9B5F; font-weight: 700; border: 1px solid #CCCCCC;")
+        return widget
 
     if field_type == "password":
         widget = QLineEdit(value or "")

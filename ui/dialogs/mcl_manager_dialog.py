@@ -28,6 +28,7 @@ FIELD_TYPE_CHOICES = [
     ("Password / Secret", "password"),
     ("Dropdown", "dropdown"),
     ("Date", "date"),
+    ("ID (Primary Key / Auto-Serial)", "id"),
 ]
 
 class ColumnEditDialog(QDialog):
@@ -138,8 +139,13 @@ class MCLManagerDialog(QDialog):
     def _reload_columns(self):
         self.col_list.clear()
         for c in self.db.get_mcl_columns():
-            id_tag = " [Identity]" if c["is_identity"] else ""
-            item = QListWidgetItem(f"{c['label']} ({c['field_type']}){id_tag}")
+            tags = []
+            if c["field_type"] == "id":
+                tags.append("ID / Primary Key")
+            if c["is_identity"]:
+                tags.append("Identity")
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            item = QListWidgetItem(f"{c['label']} ({c['field_type']}){tag_str}")
             item.setData(Qt.UserRole, c["id"])
             self.col_list.addItem(item)
 

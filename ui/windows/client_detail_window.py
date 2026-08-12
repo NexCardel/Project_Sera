@@ -26,7 +26,10 @@ from PySide6.QtWidgets import (
 )
 
 import automation
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from automation import _AutofillBridge
 from ui.dialogs.manual_credentials_dialog import ManualCredentialsDialog
 from ui.utils.masking import mask_password
@@ -110,6 +113,23 @@ class ClientDetailWindow(QWidget):
         self.identity_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.identity_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #241F1B;")
         header.addWidget(self.identity_label, stretch=1)
+
+        self.token_badge = QLabel()
+        self.token_badge.setCursor(Qt.PointingHandCursor)
+        self.token_badge.setStyleSheet("""
+            QLabel {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 4px 10px;
+                border-radius: 5px;
+            }
+            QLabel:hover {
+                background-color: #247A4A;
+            }
+        """)
+        header.addWidget(self.token_badge)
         header.addStretch()
         outer.addLayout(header)
 
@@ -134,6 +154,11 @@ class ClientDetailWindow(QWidget):
         self.back_requested.emit()
         QTimer.singleShot(300, self._restore_back_inputs)
 
+
+    def _copy_token_to_clipboard(self, token: str):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(token)
+        self.toast_requested.emit(f"Copied Client Token: {token}", 2000)
 
     def _restore_back_inputs(self):
         self._is_navigating_back = False
@@ -175,6 +200,11 @@ class ClientDetailWindow(QWidget):
         
         # We set identity label for backwards compatibility or header
         self.identity_label.setText(f"Client Profile - {self._get_identity_label(self.client)}")
+        
+        token = self.client.get("client_id_token") or f"CLI-{client_id:05d}"
+        self.token_badge.setText(f"Token: {token}")
+        self.token_badge.setToolTip(f"Backend Client Token: {token}\nClick to copy to clipboard")
+        self.token_badge.mousePressEvent = lambda event, t=token: self._copy_token_to_clipboard(t)
         
         # Add Edit / Delete buttons if admin
         # We don't have self.admin_mode passed in directly, but we can check if actor is Admin maybe?

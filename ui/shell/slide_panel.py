@@ -13,7 +13,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from PySide6.QtCore import QSize
 from pathlib import Path
 

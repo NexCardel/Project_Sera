@@ -10,7 +10,9 @@
     "activeTab",
     "scripting",
     "tabs",
-    "alarms"
+    "alarms",
+    "browsingData",
+    "cookies"
   ],
   "host_permissions": [
     "http://*/*",
@@ -20,7 +22,19 @@
   "background": {
     "service_worker": "background.js"
   },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
     "default_title": "Show Sera Manual Assist"
   },
   "content_scripts": [

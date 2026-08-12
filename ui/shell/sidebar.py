@@ -1,4 +1,7 @@
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from PySide6.QtCore import Qt, Signal, QSize, Property, QPropertyAnimation, QEasingCurve, QRectF
 from PySide6.QtGui import QPainter, QColor, QBrush, QPen
 from PySide6.QtWidgets import (
@@ -112,13 +115,15 @@ class AccordionHeader(QWidget):
 
 
 def _safe_qta_icon(icon_name, color=None):
-    try:
-        if color:
-            return qta.icon(icon_name, color=color)
-        return qta.icon(icon_name)
-    except Exception:
-        from PySide6.QtGui import QIcon
-        return QIcon()
+    if qta is not None:
+        try:
+            if color:
+                return qta.icon(icon_name, color=color)
+            return qta.icon(icon_name)
+        except Exception:
+            pass
+    from PySide6.QtGui import QIcon
+    return QIcon()
 
 class Sidebar(QFrame):
     # Navigation Signals
@@ -167,12 +172,28 @@ class Sidebar(QFrame):
         brand.setStyleSheet("background-color: #2E9B5F;")
         brand_layout = QHBoxLayout(brand)
         brand_layout.setContentsMargins(4, 3, 4, 8)
-        brand_layout.setSpacing(5)
-        logo = QLabel("AA")
+        brand_layout.setSpacing(8)
+        
+        logo = QLabel()
         logo.setObjectName("SidebarLogo")
         logo.setAlignment(Qt.AlignCenter)
-        logo.setFixedSize(24, 24)
-        logo.setStyleSheet("background-color: #164A68; border-radius: 5px; color: #F8F5F2; font-size: 10px; font-weight: 700;")
+        logo.setFixedSize(28, 28)
+        
+        from pathlib import Path
+        from PySide6.QtGui import QPixmap
+        logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.png"
+        if not logo_path.exists():
+            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "files" / "sera_icon_whitegold.png"
+        if not logo_path.exists():
+            logo_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "sera_icon.png"
+            
+        if logo_path.exists():
+            pix = QPixmap(str(logo_path)).scaled(28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo.setPixmap(pix)
+        else:
+            logo.setText("PS")
+            logo.setStyleSheet("background-color: #164A68; border-radius: 5px; color: #F8F5F2; font-size: 10px; font-weight: 700;")
+
         title = QLabel("Aman Associates")
         title.setObjectName("SidebarTitle")
         title.setStyleSheet("background-color: transparent; color: #F8F5F2; font-size: 14px; font-weight: 700;")
@@ -259,10 +280,6 @@ class Sidebar(QFrame):
         self.lbl_services, self.l_services = self._create_accordion_group("Services", "mdi.briefcase-outline", expanded=False)
         self.btn_manage_services = self._create_admin_sub_nav_button("Manage Services", self.action_manage_services, parent_layout=self.l_services)
         self.btn_manage_staff = self._create_admin_sub_nav_button("Manage Staff Users", self.action_manage_staff, parent_layout=self.l_services)
-
-        # Reports is a visual navigation group reserved for the reporting view.
-        self.lbl_reports, self.l_reports = self._create_accordion_group("Reports", "mdi.file-document-outline", expanded=False)
-
         # --- Data Management Group ---
         self.lbl_data, self.l_data = self._create_accordion_group("Data Management", "mdi.database-outline", expanded=False)
         
@@ -300,12 +317,15 @@ class Sidebar(QFrame):
         self._update_visibility()
 
     def eventFilter(self, watched, event):
-        from PySide6.QtCore import QEvent
-        if watched is getattr(self, "profile_row", None) and event.type() == QEvent.MouseButtonPress:
-            if self._admin_mode:
-                self.action_open_alias_matrix.emit()
-                return True
-        return super().eventFilter(watched, event)
+        try:
+            from PySide6.QtCore import QEvent
+            if watched is getattr(self, "profile_row", None) and event.type() == QEvent.MouseButtonPress:
+                if self._admin_mode:
+                    self.action_open_alias_matrix.emit()
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _on_admin_toggled(self, checked):
         if checked:

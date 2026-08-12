@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from ui.utils.theme import SmartTableWidgetItem
 
 
@@ -32,6 +35,7 @@ class SearchWindow(QWidget):
     archive_client_requested = Signal(int)
     admin_mode_requested = Signal()
     dashboard_requested = Signal()
+    toast_requested = Signal(str, str)
     action_alert_requested = Signal(str, str)
 
     def __init__(self, db):
@@ -56,8 +60,6 @@ class SearchWindow(QWidget):
         header_row.addWidget(title)
         header_row.addStretch()
 
-        # Keep the primary action out of the crowded filter/action row so it
-        # remains visible on narrow desktop windows.
         self.btn_add_client = QPushButton("+ Add Client")
         self.btn_add_client.setMinimumHeight(36)
         self.btn_add_client.setProperty("class", "primary")
@@ -88,7 +90,7 @@ class SearchWindow(QWidget):
         search_row.addWidget(self.btn_archive_client)
 
         lbl_services = QLabel("Services:")
-        lbl_services.setProperty("class", "SidebarSection") # Re-using class for bold
+        lbl_services.setProperty("class", "SidebarSection")
         lbl_services.setStyleSheet("color: black;")
         search_row.addWidget(lbl_services)
         
@@ -100,8 +102,6 @@ class SearchWindow(QWidget):
         
         search_row.addStretch(1)
 
-        # Client actions.  Adding is available to normal staff; changing an
-        # existing client is deliberately restricted to Admin Mode.
         self.btn_edit_client = QPushButton("Edit")
         self.btn_edit_client.setMinimumHeight(36)
         self.btn_edit_client.clicked.connect(self._request_edit_client)
@@ -120,8 +120,8 @@ class SearchWindow(QWidget):
         layout.addLayout(search_row)
 
         self.results_table = QTableWidget()
-        self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.results_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.results_table.verticalHeader().setVisible(False)
         self.results_table.setShowGrid(True)
@@ -131,11 +131,17 @@ class SearchWindow(QWidget):
         self.results_table.horizontalHeader().setSortIndicatorShown(True)
         self.results_table.horizontalHeader().setSectionsClickable(True)
         self.results_table.itemActivated.connect(self._on_item_activated)
+        self.results_table.installEventFilter(self)
+        self.results_table.viewport().installEventFilter(self)
+        
+        from PySide6.QtGui import QKeySequence, QShortcut
+        self.copy_shortcut = QShortcut(QKeySequence.Copy, self.results_table)
+        self.copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self.copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
+        
         layout.addWidget(self.results_table)
 
         self.set_admin_mode(False)
-
-
 
         hint = QLabel(
             "Type to search, press Enter to open the top result "
@@ -147,14 +153,74 @@ class SearchWindow(QWidget):
         self.search_box.setFocus()
 
     def eventFilter(self, obj, event):
-        # Pressing Down in the search box jumps straight into the results
-        # table so you never have to reach for Tab or the mouse to browse.
-        if obj is self.search_box and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Down and self.results_table.rowCount() > 0:
-            self.results_table.setFocus()
-            if self.results_table.currentRow() < 0:
-                self.results_table.setCurrentCell(0, 0)
-            return True
-        return super().eventFilter(obj, event)
+        try:
+            if obj is self.search_box and event.type() == QEvent.KeyPress and event.key() == Qt.Key_Down and self.results_table.rowCount() > 0:
+                self.results_table.setFocus()
+                if self.results_table.currentRow() < 0:
+                    self.results_table.setCurrentCell(0, 0)
+                return True
+            elif (obj is self.results_table or obj is self.results_table.viewport()) and event.type() == QEvent.KeyPress:
+                if (event.modifiers() & Qt.ControlModifier) and event.key() == Qt.Key_C:
+                    self._copy_selection_to_clipboard()
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _copy_selection_to_clipboard(self):
+        from PySide6.QtWidgets import QApplication
+        selected_ranges = self.results_table.selectedRanges()
+        rows_data = []
+
+        if selected_ranges:
+            for r_range in selected_ranges:
+                for r in range(r_range.topRow(), r_range.bottomRow() + 1):
+                    row_cells = []
+                    for c in range(r_range.leftColumn(), r_range.rightColumn() + 1):
+                        item = self.results_table.item(r, c)
+                        row_cells.append(item.text() if item else "")
+                    rows_data.append("\t".join(row_cells))
+        else:
+            item = self.results_table.currentItem()
+            if item:
+                rows_data.append(item.text())
+
+        if rows_data:
+            text = "\n".join(rows_data)
+            QApplication.clipboard().setText(text)
+            self._flash_copied_items()
+            
+            if len(rows_data) == 1 and "\t" not in text:
+                msg = f"Copied '{text}' to clipboard"
+            elif len(rows_data) == 1:
+                msg = "Copied selected record to clipboard"
+            else:
+                msg = f"Copied {len(rows_data)} rows to clipboard"
+                
+            self.toast_requested.emit(msg, "success")
+
+    def _flash_copied_items(self):
+        from PySide6.QtCore import QTimer
+        
+        orig_style = self.results_table.styleSheet() or ""
+        # Flash selection as bright green (#2E9B5F)
+        flash_style = orig_style + """
+            QTableWidget::item:selected {
+                background-color: #2E9B5F !important;
+                color: #FFFFFF !important;
+            }
+        """
+        self.results_table.setStyleSheet(flash_style)
+        self.results_table.viewport().update()
+
+        def restore_style():
+            try:
+                self.results_table.setStyleSheet(orig_style)
+                self.results_table.viewport().update()
+            except Exception:
+                pass
+
+        QTimer.singleShot(500, restore_style)
 
     def _on_search_input_changed(self, *_):
         self._search_timer.start(150)
@@ -230,6 +296,11 @@ class SearchWindow(QWidget):
                 
                 for c_idx, col in enumerate(mcl_cols):
                     val = client_vals.get(col["id"], "")
+                    col_lbl = col["label"].strip().lower()
+                    if col.get("field_type") == "id":
+                        val = client.get("client_id_token") or f"CLI-{client_id:05d}"
+                    elif col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}:
+                        val = str(r + 1)
                     if len(val) > col_max_lens[c_idx]:
                         col_max_lens[c_idx] = len(val)
                     item = SmartTableWidgetItem(val)

@@ -14,7 +14,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QFrame
 )
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 
 class StaffAliasMatrixDialog(QDialog):
     """

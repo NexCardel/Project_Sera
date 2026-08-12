@@ -2,9 +2,10 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.3.3"
+#define MyAppVersion "2.3.3.1"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
+#define ShortcutName "CompanyInfo1"
 
 [Setup]
 AppId={{D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B}}
@@ -16,6 +17,7 @@ DefaultGroupName={#MyAppPublisher}
 DisableProgramGroupPage=yes
 OutputDir=..\installer_output
 OutputBaseFilename=Amas_Sera_Setup_v{#MyAppVersion}
+SetupIconFile=..\assets\logo\icon_here.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -35,9 +37,9 @@ Source: "..\package_assets\extension\extension_id.txt"; DestDir: "{app}\extensio
 Source: "..\package_assets\extension\extension_version.txt"; DestDir: "{app}\extension"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\Uninstall {#ShortcutName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
 Root: HKLM; Subkey: "Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera"; ValueType: string; ValueData: "{app}\_internal\native_host\com.amanassociates.sera.json"; Flags: uninsdeletekey

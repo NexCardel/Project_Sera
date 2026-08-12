@@ -113,6 +113,18 @@ class SettingsDialog(QDialog):
         self.tracker_enabled_check.setToolTip("Toggle the background Filing Success Tracker IPC listener.")
         form_general.addRow("", self.tracker_enabled_check)
         
+        # Primary Key (ID Field) Wiring Status
+        id_col = self.db.get_id_column()
+        if id_col:
+            id_status_text = f"'{id_col['label']}' — Wired to Client ID Tokens (Auto Serial # & Backend Token: CLI-XXXXX)"
+            lbl_id = QLabel(id_status_text)
+            lbl_id.setStyleSheet("color: #2E9B5F; font-weight: 700;")
+        else:
+            lbl_id = QLabel("Not assigned (Can be assigned in Manage Master Column List)")
+            lbl_id.setStyleSheet("color: #888888; font-style: italic;")
+            
+        form_general.addRow("ID / Primary Key Column:", lbl_id)
+
         tabs.addTab(tab_general, "General")
 
         # --- TAB 2: Main Screen Visibility ---

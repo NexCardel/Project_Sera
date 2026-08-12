@@ -14,7 +14,15 @@ This README is the quick orientation page. The detailed implementation notes hav
 
 For the current visual system, sidebar/navigation states, client-detail layout, and screen-by-screen styling rules, see [Sera_UI.md](Sera_UI.md).
 
-The bottom-left audit confirmation system is documented in [Sera_Alert_System_Blueprint.md](../docs/blueprints/Sera_Alert_System_Blueprint.md) and implemented in the desktop shell.
+## Version 2.3.3 Features
+
+- **Excel-Style Grid Copying (`Ctrl+C`)**: Select cells or cell blocks and copy formatted data directly to Excel with a 500 ms green highlight flash (`#2E9B5F`).
+- **Master Column List (MCL) ID Tokens**: Added `ID` field type (`"ID (Primary Key / Auto-Serial)"`) with single-column exclusivity, auto-serial numbers, and backend Client ID tokens (`CLI-XXXXX`) for anonymous cloud identification.
+- **Client Detail Token Badge**: Interactive `Token: CLI-XXXXX` badge in client detail headers with click-to-copy capability.
+- **Automatic Extension Cookie Clearing**: Extension automatically clears browser session cookies after every 5 injections to eliminate stale session errors on government portals.
+- **Smart Duplicate Purging**: Case-insensitive, punctuation-insensitive string normalization for duplicate detection, ignoring serial number columns.
+- **Modal Dialog Protection**: Prevents active slide panels from closing during modal dialog interactions.
+- **Branding Integration**: Official `icon_here` branding assets applied across application window, taskbar, sidebar, splash loading dialog, companion extension, and setup installer executable icon.
 
 ## Quick Start
 
@@ -43,7 +51,8 @@ Both files must sync to every employee machine via Syncthing. They belong togeth
 ## Build
 
 ```bash
-pyinstaller build_tools/Amas_Sera.spec
+venv\Scripts\python build_tools\build_package.py
+& "C:\Program Files\Inno Setup 7\ISCC.exe" build_tools\installer_setup.iss
 ```
 
-Distribute the complete `dist/Amas_Sera/` folder, not the executable alone.
+Distribute the compiled installer `installer_output\Amas_Sera_Setup_v2.3.3.exe` or the standalone bundle in `package_dist\Amas_Sera\`.

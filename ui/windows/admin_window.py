@@ -6,7 +6,10 @@ Window 3: CRUD interface for the firm owner. Driven dynamically by MCL.
 
 from PySide6.QtCore import QSize, Signal, Qt
 from PySide6.QtGui import QIcon
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 from pathlib import Path
 from PySide6.QtWidgets import (
     QAbstractItemView,

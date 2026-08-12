@@ -1,6 +1,9 @@
 from PySide6.QtCore import QPropertyAnimation, Qt, QTimer
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QLabel, QFrame
-import qtawesome as qta
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
 
 
 class SeraAlert(QFrame):

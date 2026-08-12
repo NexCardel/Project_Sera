@@ -12,6 +12,14 @@ class AppShell(QWidget):
         self.setWindowTitle("Aman Associates — SERA Workspace")
         self.dismiss_detail_on_outside = False
 
+        from pathlib import Path
+        from PySide6.QtGui import QIcon
+        icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.ico"
+        if not icon_path.exists():
+            icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "logo" / "icon_here.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
         from PySide6.QtWidgets import QApplication
         if QApplication.instance() is not None:
             QApplication.instance().installEventFilter(self)
@@ -24,6 +32,10 @@ class AppShell(QWidget):
             and event.type() == QEvent.MouseButtonPress
             and self.slide_panel.width() > 0
         ):
+            from PySide6.QtWidgets import QApplication
+            if QApplication.activeModalWidget() is not None:
+                return super().eventFilter(watched, event)
+
             pos = self.mapFromGlobal(event.globalPosition().toPoint())
             if not self.slide_panel.geometry().contains(pos):
                 self.dismiss_detail_on_outside = False

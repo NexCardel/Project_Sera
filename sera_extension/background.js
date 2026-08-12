@@ -420,7 +420,66 @@ function handleManualAssistTab(message) {
   });
 }
 
+function recordInjectionAndClearCookiesIfNeeded() {
+  chrome.storage.local.get({ injectionCount: 0 }, (data) => {
+    let newCount = (data.injectionCount || 0) + 1;
+    console.log(`Sera: Extension injection count = ${newCount}/5`);
+    
+    if (newCount >= 5) {
+      console.log("Sera: Reached 5 extension injections. Clearing browser cookies...");
+      clearBrowserCookies(() => {
+        console.log("Sera: Browser cookies cleared successfully after 5 injections.");
+      });
+      chrome.storage.local.set({ injectionCount: 0 });
+    } else {
+      chrome.storage.local.set({ injectionCount: newCount });
+    }
+  });
+}
+
+function clearBrowserCookies(callback) {
+  let done = false;
+  const finish = () => {
+    if (!done) {
+      done = true;
+      if (callback) callback();
+    }
+  };
+
+  if (chrome.browsingData && chrome.browsingData.removeCookies) {
+    chrome.browsingData.removeCookies({ "since": 0 }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("Sera: browsingData.removeCookies warning:", chrome.runtime.lastError);
+      }
+      finish();
+    });
+  } else if (chrome.browsingData && chrome.browsingData.remove) {
+    chrome.browsingData.remove({ "since": 0 }, { "cookies": true }, () => {
+      finish();
+    });
+  } else if (chrome.cookies) {
+    chrome.cookies.getAll({}, (cookies) => {
+      if (!cookies || cookies.length === 0) {
+        finish();
+        return;
+      }
+      let pending = cookies.length;
+      cookies.forEach((cookie) => {
+        const protocol = cookie.secure ? "https:" : "http:";
+        const url = `${protocol}//${cookie.domain.replace(/^\./, "")}${cookie.path}`;
+        chrome.cookies.remove({ url: url, name: cookie.name }, () => {
+          pending--;
+          if (pending <= 0) finish();
+        });
+      });
+    });
+  } else {
+    finish();
+  }
+}
+
 function injectManualAssist(tabId, message) {
+  recordInjectionAndClearCookiesIfNeeded();
   chrome.scripting.executeScript({ target:{tabId}, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
       message.client_name || message.portal, 30000] })
@@ -447,6 +506,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 });
 
 function injectFillScript(tabId, userid, password, usernameSelector, passwordSelector, extensionFlow) {
+  recordInjectionAndClearCookiesIfNeeded();
   chrome.scripting.executeScript({
     target: { tabId },
     func: fillCredentialsInPage,
