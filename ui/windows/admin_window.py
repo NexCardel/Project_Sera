@@ -652,9 +652,35 @@ class AdminWindow(QWidget):
             QMessageBox.critical(self, "Backup failed", str(e))
 
     def _on_restore_backup(self):
-        backup_dir = QFileDialog.getExistingDirectory(self, "Choose backup folder to restore")
-        if not backup_dir:
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Database Restore Source")
+        msg_box.setText("How would you like to locate the database backup to restore?")
+        msg_box.setInformativeText(
+            "Select 'Backup Folder' to scan a folder automatically,\n"
+            "or 'Specific File' to select a Syncthing conflict file (*.sync-conflict*.db)."
+        )
+        btn_folder = msg_box.addButton("Select Backup Folder", QMessageBox.AcceptRole)
+        btn_file = msg_box.addButton("Select Specific Database File (*.db)", QMessageBox.AcceptRole)
+        btn_cancel = msg_box.addButton(QMessageBox.Cancel)
+        msg_box.exec()
+
+        clicked = msg_box.clickedButton()
+        if clicked == btn_cancel:
             return
+
+        if clicked == btn_file:
+            target_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Choose Database File or Syncthing Conflict File",
+                "",
+                "Database Files (*.db *.sqlite *sync-conflict*);;All Files (*)"
+            )
+        else:
+            target_path = QFileDialog.getExistingDirectory(self, "Choose backup folder to restore")
+
+        if not target_path:
+            return
+
         confirm = QMessageBox.warning(
             self, "Confirm Database Restore",
             "WARNING: Restoring a database backup will overwrite your current live database.\n\n"
@@ -664,9 +690,10 @@ class AdminWindow(QWidget):
         )
         if confirm == QMessageBox.Yes:
             try:
-                self.db.restore_from(backup_dir)
-                self.db.log_action(self.actor, "restore", detail=f"Restored from {backup_dir}")
+                summary = self.db.restore_from(target_path)
+                self.db.log_action(self.actor, "restore", detail=summary)
                 self.action_alert_requested.emit("restore", None)
+                QMessageBox.information(self, "Restore Successful", f"{summary}\n\nThe database has been restored successfully.")
                 self.refresh()
             except Exception as e:
                 QMessageBox.critical(self, "Restore Error", f"Failed to restore backup:\n{e!s}")

@@ -1248,30 +1248,119 @@ class SeraDatabase:
 
         return target_folder
 
-    def restore_from(self, backup_dir: str):
-        """Restores master.db and sera.salt from backup_dir over live files with pre-restore safety copy."""
-        backup_db = os.path.join(backup_dir, "master.db")
-        backup_salt = os.path.join(backup_dir, security.SALT_FILE)
+    def restore_from(self, target_path: str, master_password: str = None) -> str:
+        """
+        Restores database and salt from target_path (folder or file path).
+        Supports Syncthing conflict files (e.g. master.sync-conflict-*.db, sera.salt.sync-conflict-*).
+        Validates SQLCipher decryption before overwriting live database.
+        Returns a human-readable summary string of restored components.
+        """
+        if not target_path or not os.path.exists(target_path):
+            raise FileNotFoundError(f"Selected restore path does not exist: {target_path}")
 
-        if not os.path.exists(backup_db):
-            raise FileNotFoundError(f"Backup folder missing master.db: {backup_dir}")
-        if not os.path.exists(backup_salt):
-            raise FileNotFoundError(f"Backup folder missing sera.salt: {backup_dir}")
+        if os.path.isfile(target_path):
+            backup_dir = os.path.dirname(target_path)
+            candidate_dbs = [target_path]
+        else:
+            backup_dir = target_path
+            candidate_dbs = []
+            standard_db = os.path.join(backup_dir, "master.db")
+            if os.path.exists(standard_db):
+                candidate_dbs.append(standard_db)
+            
+            # Scan for Syncthing conflict database files and other .db files
+            for entry in os.listdir(backup_dir):
+                full_p = os.path.join(backup_dir, entry)
+                if os.path.isfile(full_p) and full_p not in candidate_dbs:
+                    lower = entry.lower()
+                    if lower.endswith(".db") or "sync-conflict" in lower or lower.startswith("master"):
+                        candidate_dbs.append(full_p)
+            
+            # Sort candidates by modification time, newest first
+            candidate_dbs.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
+        if not candidate_dbs:
+            raise FileNotFoundError(f"No valid database (.db) files found in {backup_dir}")
+
+        # Scan for candidate salt files
         live_dir = os.path.dirname(self.db_path)
         live_salt = os.path.join(live_dir, security.SALT_FILE)
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        
+        candidate_salts = []
+        standard_salt = os.path.join(backup_dir, security.SALT_FILE)
+        if os.path.exists(standard_salt):
+            candidate_salts.append(standard_salt)
+            
+        for entry in os.listdir(backup_dir):
+            full_p = os.path.join(backup_dir, entry)
+            if os.path.isfile(full_p) and full_p not in candidate_salts:
+                lower = entry.lower()
+                if "salt" in lower or lower.endswith(".salt") or "sync-conflict" in lower:
+                    candidate_salts.append(full_p)
+                    
+        if os.path.exists(live_salt) and live_salt not in candidate_salts:
+            candidate_salts.append(live_salt)
 
-        # Safety copy of current live files
+        if not candidate_salts:
+            raise FileNotFoundError(f"No salt (sera.salt) files found in backup or live folder.")
+
+        # Attempt to find a valid (db, salt, hex_key) pair that decrypts cleanly
+        matched_db = None
+        matched_salt = None
+        matched_hex_key = None
+
+        for db_file in candidate_dbs:
+            for salt_file in candidate_salts:
+                try:
+                    salt_bytes = security.load_salt(salt_file)
+                    if master_password:
+                        test_key = security.derive_key_hex(master_password, salt_bytes)
+                    else:
+                        test_key = self.hex_key
+                    
+                    # Test SQLCipher opening and table query
+                    conn = sqlite3.connect(db_file)
+                    conn.execute(f"PRAGMA key = \"x'{test_key}'\";")
+                    cur = conn.cursor()
+                    cur.execute("SELECT count(*) FROM sqlite_master;")
+                    cur.fetchone()
+                    conn.close()
+
+                    # Decryption succeeded!
+                    matched_db = db_file
+                    matched_salt = salt_file
+                    matched_hex_key = test_key
+                    break
+                except Exception:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            if matched_db:
+                break
+
+        if not matched_db or not matched_salt or not matched_hex_key:
+            raise ValueError(
+                "Could not decrypt any database candidate in the backup folder.\n"
+                "Please verify that the master password is correct or that the matching salt file is present."
+            )
+
+        # Create safety backup of current live database
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         pre_db = os.path.join(live_dir, f"master.db.pre-restore-{now_str}")
         shutil.copy2(self.db_path, pre_db)
         if os.path.exists(live_salt):
             pre_salt = os.path.join(live_dir, f"sera.salt.pre-restore-{now_str}")
             shutil.copy2(live_salt, pre_salt)
 
-        # Overwrite live files
-        shutil.copy2(backup_db, self.db_path)
-        shutil.copy2(backup_salt, live_salt)
+        # Overwrite live files with validated Syncthing conflict/backup pair
+        shutil.copy2(matched_db, self.db_path)
+        shutil.copy2(matched_salt, live_salt)
+        self.hex_key = matched_hex_key
+
+        db_name = os.path.basename(matched_db)
+        salt_name = os.path.basename(matched_salt)
+        return f"Database restored from '{db_name}' using salt '{salt_name}'."
 
     # ---------------- CSV Export ----------------
 

@@ -62,16 +62,30 @@ def register_native_messaging_host():
         return
     import winreg
     import json
+    import shutil
     try:
         ensure_permanent_extension()
-        if getattr(sys, 'frozen', False):
-            base_dir = Path(sys._MEIPASS)
-        else:
-            base_dir = Path(__file__).resolve().parent
-            
-        json_path = base_dir / "native_host" / "com.amanassociates.sera.json"
-        host_bat_path = base_dir / "native_host" / "host.bat"
         
+        # Use permanent APP_DIR/native_host directory so registry path never points to temporary _MEIPASS
+        perm_native_dir = APP_DIR / "native_host"
+        perm_native_dir.mkdir(parents=True, exist_ok=True)
+
+        if getattr(sys, 'frozen', False):
+            source_native = Path(sys._MEIPASS) / "native_host"
+        else:
+            source_native = Path(__file__).resolve().parent / "native_host"
+
+        if source_native.exists():
+            for item in source_native.glob("*"):
+                if item.is_file():
+                    try:
+                        shutil.copy2(item, perm_native_dir / item.name)
+                    except Exception:
+                        pass
+
+        json_path = perm_native_dir / "com.amanassociates.sera.json"
+        host_bat_path = perm_native_dir / "host.bat"
+
         if json_path.exists():
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
@@ -485,4 +499,8 @@ class SeraApp:
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
+    if "--native-host" in sys.argv:
+        from native_host.host import main as run_native_host
+        run_native_host()
+        sys.exit(0)
     SeraApp().run()
