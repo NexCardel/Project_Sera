@@ -252,36 +252,10 @@ class SyncPeerService:
         )
 
         pk = peer.key()
-        is_new_peer = False
         with self._peers_lock:
-            if pk not in self._peers:
-                is_new_peer = True
             self._peers[pk] = peer
 
         self._safe_call(self.on_peer_table_changed, self._peer_list())
-
-        # Auto-catchup: If a newly connected peer has fewer records / an older database revision than our local database,
-        # automatically push our populated/newer database to the new peer so it catches up!
-        if is_new_peer:
-            peer_client_count = int(body.get("client_count", 0))
-            peer_sync_rev = int(body.get("sync_revision", 0))
-
-            local_metrics = self._get_local_metrics()
-            local_client_count = local_metrics.get("client_count", 0)
-            local_sync_rev = local_metrics.get("sync_revision", 0)
-
-            should_push_to_peer = False
-            if local_client_count > peer_client_count:
-                should_push_to_peer = True
-            elif local_client_count == peer_client_count and local_sync_rev > peer_sync_rev:
-                should_push_to_peer = True
-
-            if should_push_to_peer:
-                def bg_auto_sync():
-                    time.sleep(1.0)
-                    print(f"[LAN Catch-up] Pushing local populated DB (clients={local_client_count}, rev={local_sync_rev}) to newly connected peer {peer.host} ({peer.ip})")
-                    self.push_to(peer.ip, peer.sync_port, live_update=True)
-                threading.Thread(target=bg_auto_sync, daemon=True).start()
 
     def _start_peer_reaper(self):
         def loop():
