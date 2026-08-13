@@ -1,7 +1,7 @@
 {
-  "version": "2.3.3.1",
-  "min_required_version": "2.3.3.1",
+  "version": "2.3.4.0",
+  "min_required_version": "2.3.4.0",
   "mandatory": true,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.3.1/Amas_Sera_Setup_v2.3.3.1.exe",
-  "release_notes": "Project Sera v2.3.3.1 release: Flogo logo update, CompanyInfo1 desktop shortcut naming, Excel-style cell Ctrl+C copying, MCL ID field token system, and automatic extension cookie clearing."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.4.0/Amas_Sera_Setup_v2.3.4.0.exe",
+  "release_notes": "Project Sera v2.3.4.0 release: New Sera Sync LAN database synchronization panel, automated P2P database & salt pushing, auto-restart upon database sync, and removal of the staff alias system."
 }

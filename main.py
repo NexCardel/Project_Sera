@@ -6,6 +6,7 @@ App entry point for Project Sera.
 
 import sys
 import os
+import socket
 from pathlib import Path
 
 # Qt probes a couple of legacy Windows bitmap fonts during platform startup;
@@ -183,8 +184,20 @@ class SeraApp:
 
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
         loading_dlg.hide()
-        self.actor, self.actor_alias = self._ensure_user_actor()
+        self.actor, self.actor_alias = self._ensure_user_identity()
         loading_dlg.show()
+
+        # Start Sera Sync LAN peer service
+        loading_dlg.set_status("Starting Sera Sync LAN discovery...")
+        from sync_peer import SyncPeerService
+        self.sync_service = SyncPeerService(
+            db_path=self.db_path,
+            salt_path=self.salt_path,
+            username=self.actor_alias,
+            on_sync_received=self._on_sync_received,
+            on_error=lambda msg: print(f"[Sera Sync] {msg}"),
+        )
+        self.sync_service.start()
 
         # Check for mandatory updates on GitHub
         loading_dlg.set_status("Checking GitHub for mandatory version updates...")
@@ -250,34 +263,34 @@ class SeraApp:
 
         return password if ok and password else ""
 
-    def _ensure_user_actor(self) -> tuple[str, str]:
-
+    def _ensure_user_identity(self) -> tuple[str, str]:
+        """Get or prompt for a simple username for this workstation.
+        Stores it in device_identity.txt for future launches."""
         from PySide6.QtWidgets import QInputDialog, QLineEdit
 
-        saved_alias = ""
+        saved_name = ""
         try:
-            saved_alias = self.identity_path.read_text(encoding="utf-8").strip()
+            saved_name = self.identity_path.read_text(encoding="utf-8").strip()
         except OSError:
             pass
 
-        if saved_alias:
-            return self.db.assign_or_get_alias(saved_alias)
+        if saved_name:
+            return saved_name, saved_name
 
-        # On new PC / first run: prompt employee for Display Alias ONLY without exposing secret canonical usernames
-        alias_input, ok = QInputDialog.getText(
+        # First run on this PC: prompt for a display name
+        name_input, ok = QInputDialog.getText(
             None, "Workstation Setup",
-            "Enter your Workstation / Display Alias (e.g. FrontDesk-1, TaxStation-A):",
-            QLineEdit.Normal, "Station-1"
+            "Enter your name or workstation label (e.g. Rajesh, FrontDesk-1):",
+            QLineEdit.Normal, socket.gethostname()
         )
-        clean_alias = alias_input.strip() if ok and alias_input.strip() else "Station-1"
-        username, assigned_alias = self.db.assign_or_get_alias(clean_alias)
-        
+        clean_name = name_input.strip() if ok and name_input.strip() else socket.gethostname()
+
         try:
-            self.identity_path.write_text(assigned_alias, encoding="utf-8")
+            self.identity_path.write_text(clean_name, encoding="utf-8")
         except OSError:
             pass
 
-        return username, assigned_alias
+        return clean_name, clean_name
 
     def _apply_theme(self):
         theme_name = self.db.get_setting("theme", "light")
@@ -373,8 +386,8 @@ class SeraApp:
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
         sidebar.action_manage_mcl.connect(self.admin_win._on_manage_mcl)
         sidebar.action_manage_services.connect(self.admin_win._on_manage_services)
-        sidebar.action_manage_staff.connect(self.admin_win._on_manage_staff_users)
-        sidebar.action_open_alias_matrix.connect(self.admin_win._on_manage_staff_users)
+        sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
+        sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
 
         sidebar.action_manage_filing_types.connect(self.admin_win._on_manage_filing_types)
         sidebar.action_import_fps.connect(self.admin_win._on_import_fps)
@@ -391,6 +404,9 @@ class SeraApp:
         
         self.sc_ctrl_k = QShortcut(QKeySequence("Ctrl+K"), self.shell)
         self.sc_ctrl_k.activated.connect(self._global_search_shortcut)
+
+        # Inject sync service into admin window for Sera Sync dialog
+        self.admin_win.set_sync_service(self.sync_service)
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
         self._apply_window_mode()
@@ -494,6 +510,25 @@ class SeraApp:
             widget.finished.connect(self.shell.slide_panel.slide_out)
         self.shell.slide_panel.set_widget(widget, title)
         self.shell.slide_panel.slide_in()
+
+    def _on_sync_received(self):
+        """Called from SyncPeerService background thread when an incoming
+        database push has been accepted and written to disk. Auto-restart."""
+        # Marshal to main thread via QTimer
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._do_auto_restart)
+
+    def _do_auto_restart(self):
+        """Restart the application to reload the newly synced database."""
+        QMessageBox.information(
+            self.shell, "Sera Sync — Database Received",
+            "A new database has been synced from another workstation.\n\n"
+            "The application will now restart to load the updated database."
+        )
+        self.sync_service.stop()
+        # Re-launch the same executable
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
 
     def run(self):
         sys.exit(self.app.exec())

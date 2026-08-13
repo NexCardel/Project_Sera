@@ -146,7 +146,7 @@ class Sidebar(QFrame):
     
     action_settings = Signal()
     action_restore = Signal()
-    action_open_alias_matrix = Signal()
+    action_open_sera_sync = Signal()
     
     # Toggle Signal
     action_enter_admin = Signal()
@@ -321,7 +321,7 @@ class Sidebar(QFrame):
             from PySide6.QtCore import QEvent
             if watched is getattr(self, "profile_row", None) and event.type() == QEvent.MouseButtonPress:
                 if self._admin_mode:
-                    self.action_open_alias_matrix.emit()
+                    self.action_open_sera_sync.emit()
                     return True
         except Exception:
             pass
@@ -341,7 +341,7 @@ class Sidebar(QFrame):
         if hasattr(self, "profile_row"):
             if active:
                 self.profile_row.setCursor(Qt.PointingHandCursor)
-                self.profile_row.setToolTip("Open Staff User ↔ Alias Matrix (Admin Only)")
+                self.profile_row.setToolTip("Open Sera Sync (Admin Only)")
             else:
                 self.profile_row.setCursor(Qt.ArrowCursor)
                 self.profile_row.setToolTip("")

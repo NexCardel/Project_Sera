@@ -28,8 +28,27 @@ class SeraDatabase:
     def __init__(self, db_path: str, hex_key: str):
         self.db_path = db_path
         self.hex_key = hex_key
+        # Set externally by main.py once SyncPeerService exists, so this
+        # module never has to import sync_peer.py directly (sync depends
+        # on the db, not the other way around). Left as a no-op until then
+        # so every call site stays safe regardless of init order.
+        self._sync_revision_hook = None
         self._init_schema()
         self.resequence_client_serial_numbers()
+
+    def set_sync_revision_hook(self, fn):
+        """fn is called with no arguments after any write that should
+        propagate to other machines (see log_action, which fires this for
+        every mutating action already going through the audit trail)."""
+        self._sync_revision_hook = fn
+
+    def _bump_sync_revision_if_configured(self):
+        if self._sync_revision_hook:
+            try:
+                self._sync_revision_hook()
+            except Exception:
+                # A sync hiccup must never break the caller's actual DB write.
+                pass
 
     @contextmanager
     def _connect(self):
@@ -1202,6 +1221,11 @@ class SeraDatabase:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (ts, actor_name, action, client_id, service_id, detail)
             )
+        # "view" is read-only and shouldn't trigger a sync push; everything
+        # else logged here already represents a real data mutation somewhere
+        # in this module, so it's the cheapest reliable place to hook.
+        if action != "view":
+            self._bump_sync_revision_if_configured()
 
     def get_audit_logs(self, client_id: int = None, actor: str = None, action: str = None, limit: int = 500) -> list[dict]:
         with self._connect() as conn:
@@ -1251,7 +1275,8 @@ class SeraDatabase:
     def restore_from(self, target_path: str, master_password: str = None) -> str:
         """
         Restores database and salt from target_path (folder or file path).
-        Supports Syncthing conflict files (e.g. master.sync-conflict-*.db, sera.salt.sync-conflict-*).
+        Supports Syncthing conflict files (master.db.sync-conflict-*),
+        built-in sync_peer conflict files (master.db.conflict-*), and pre-sync backups.
         Validates SQLCipher decryption before overwriting live database.
         Returns a human-readable summary string of restored components.
         """
@@ -1268,12 +1293,12 @@ class SeraDatabase:
             if os.path.exists(standard_db):
                 candidate_dbs.append(standard_db)
             
-            # Scan for Syncthing conflict database files and other .db files
+            # Scan for Syncthing conflict files, sync_peer conflict files, and other .db files
             for entry in os.listdir(backup_dir):
                 full_p = os.path.join(backup_dir, entry)
                 if os.path.isfile(full_p) and full_p not in candidate_dbs:
                     lower = entry.lower()
-                    if lower.endswith(".db") or "sync-conflict" in lower or lower.startswith("master"):
+                    if lower.endswith(".db") or "sync-conflict" in lower or ".conflict-" in lower or ".pre-sync-" in lower or lower.startswith("master"):
                         candidate_dbs.append(full_p)
             
             # Sort candidates by modification time, newest first
@@ -1295,7 +1320,7 @@ class SeraDatabase:
             full_p = os.path.join(backup_dir, entry)
             if os.path.isfile(full_p) and full_p not in candidate_salts:
                 lower = entry.lower()
-                if "salt" in lower or lower.endswith(".salt") or "sync-conflict" in lower:
+                if "salt" in lower or lower.endswith(".salt") or "sync-conflict" in lower or ".conflict-" in lower:
                     candidate_salts.append(full_p)
                     
         if os.path.exists(live_salt) and live_salt not in candidate_salts:
@@ -1428,16 +1453,22 @@ class SeraDatabase:
                 writer.writerow(headers)
                 writer.writerow(example_row)
 
-    # ---------------- Syncthing Conflict Detection ----------------
+    # ---------------- Sync Conflict Detection ----------------
 
     def get_sync_conflicts(self) -> list[str]:
-        """Scans the database directory for Syncthing conflict files (e.g. master.db.sync-conflict-*)."""
+        """Scans the database directory for unresolved sync conflict files:
+        both legacy Syncthing markers (master.db.sync-conflict-*) for any
+        machine mid-migration, and the built-in LAN sync's own markers
+        (master.db.conflict-*) written by sync_peer.py when two machines
+        genuinely diverge. Does NOT flag master.db.pre-sync-* or
+        master.db.pre-restore-* files, since those are routine safety
+        copies made on every clean sync/restore, not conflict evidence."""
         db_dir = os.path.dirname(self.db_path)
         if not os.path.exists(db_dir):
             return []
         conflicts = []
         for filename in os.listdir(db_dir):
-            if "sync-conflict" in filename:
+            if "sync-conflict" in filename or ".conflict-" in filename:
                 conflicts.append(os.path.join(db_dir, filename))
         return sorted(conflicts)
 

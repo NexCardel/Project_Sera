@@ -815,10 +815,15 @@ class AdminWindow(QWidget):
         dlg = _DedupResultDialog(results, self)
         dlg.exec()
 
-    def _on_manage_staff_users(self):
-        """Open the Admin-only Username <-> Alias Matrix Dialog."""
-        from ui.dialogs.staff_alias_matrix_dialog import StaffAliasMatrixDialog
-        dlg = StaffAliasMatrixDialog(self.db, parent=self)
+    def _on_open_sera_sync(self):
+        """Open the Sera Sync dialog for LAN database synchronization."""
+        if not hasattr(self, '_sync_service') or self._sync_service is None:
+            QMessageBox.warning(self, "Sera Sync", "Sync service is not running. Please restart the app.")
+            return
+        from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+        dlg = SeraSyncDialog(self._sync_service, parent=self)
         dlg.exec()
-        self.refresh()
 
+    def set_sync_service(self, sync_service):
+        """Inject the SyncPeerService instance for Sera Sync dialog access."""
+        self._sync_service = sync_service
