@@ -60,7 +60,28 @@ class SearchWindow(QWidget):
         header_row.addWidget(title)
         header_row.addStretch()
 
-        self.btn_add_client = QPushButton("+ Add Client")
+        self.btn_refresh = QPushButton()
+        if qta:
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#241F1B"))
+            self.btn_refresh.setIconSize(QSize(20, 20))
+        self.btn_refresh.setFixedSize(36, 36)
+        self.btn_refresh.setToolTip("Refresh workspace & trigger LAN database sync")
+        self.btn_refresh.clicked.connect(self._on_manual_refresh)
+        header_row.addWidget(self.btn_refresh)
+
+        self.btn_archive_client = QPushButton()
+        if qta:
+            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#241F1B"))
+            self.btn_archive_client.setIconSize(QSize(20, 20))
+        self.btn_archive_client.setFixedSize(36, 36)
+        self.btn_archive_client.setToolTip("Archive selected client")
+        self.btn_archive_client.clicked.connect(self._request_archive_client)
+        header_row.addWidget(self.btn_archive_client)
+
+        self.btn_add_client = QPushButton(" Add Client")
+        if qta:
+            self.btn_add_client.setIcon(qta.icon("mdi.plus", color="#FFFFFF"))
+            self.btn_add_client.setIconSize(QSize(18, 18))
         self.btn_add_client.setMinimumHeight(36)
         self.btn_add_client.setProperty("class", "primary")
         self.btn_add_client.clicked.connect(self.add_client_requested.emit)
@@ -69,7 +90,7 @@ class SearchWindow(QWidget):
 
         # Search & Filter Row
         search_row = QHBoxLayout()
-        search_row.setSpacing(12)
+        search_row.setSpacing(10)
         
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search by company, proprietor, ID...")
@@ -79,15 +100,6 @@ class SearchWindow(QWidget):
         self.search_box.returnPressed.connect(self._activate_current_result)
         self.search_box.installEventFilter(self)
         search_row.addWidget(self.search_box, stretch=3)
-
-        self.btn_archive_client = QPushButton()
-        self.btn_archive_client.setToolTip("Archive selected client")
-        self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#241F1B"))
-        self.btn_archive_client.setIconSize(QSize(20, 20))
-        self.btn_archive_client.setFixedWidth(40)
-        self.btn_archive_client.setMinimumHeight(36)
-        self.btn_archive_client.clicked.connect(self._request_archive_client)
-        search_row.addWidget(self.btn_archive_client)
 
         lbl_services = QLabel("Services:")
         lbl_services.setProperty("class", "SidebarSection")
@@ -102,18 +114,30 @@ class SearchWindow(QWidget):
         
         search_row.addStretch(1)
 
-        self.btn_edit_client = QPushButton("Edit")
-        self.btn_edit_client.setMinimumHeight(36)
+        self.btn_edit_client = QPushButton()
+        if qta:
+            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#241F1B"))
+            self.btn_edit_client.setIconSize(QSize(20, 20))
+        self.btn_edit_client.setFixedSize(36, 36)
+        self.btn_edit_client.setToolTip("Edit selected client profile")
         self.btn_edit_client.clicked.connect(self._request_edit_client)
         search_row.addWidget(self.btn_edit_client)
 
-        self.btn_delete_client = QPushButton("Delete")
-        self.btn_delete_client.setMinimumHeight(36)
+        self.btn_delete_client = QPushButton()
+        if qta:
+            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#D9383A"))
+            self.btn_delete_client.setIconSize(QSize(20, 20))
+        self.btn_delete_client.setFixedSize(36, 36)
+        self.btn_delete_client.setToolTip("Permanently delete selected client record")
         self.btn_delete_client.clicked.connect(self._request_delete_client)
         search_row.addWidget(self.btn_delete_client)
 
-        self.btn_manage_services = QPushButton("Attach/Detach")
-        self.btn_manage_services.setMinimumHeight(36)
+        self.btn_manage_services = QPushButton()
+        if qta:
+            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#241F1B"))
+            self.btn_manage_services.setIconSize(QSize(20, 20))
+        self.btn_manage_services.setFixedSize(36, 36)
+        self.btn_manage_services.setToolTip("Attach / Detach Services for selected client")
         self.btn_manage_services.clicked.connect(self._request_manage_services)
         search_row.addWidget(self.btn_manage_services)
 
@@ -253,11 +277,12 @@ class SearchWindow(QWidget):
         self.service_filter.addItem("All Services", None)
         for s in self._cached_services:
             self.service_filter.addItem(s["name"], s["id"])
+        self.service_filter.addItem("📦 Archived Clients", "archived")
         self.service_filter.blockSignals(False)
 
     def _on_search_changed(self, *_):
         text = self.search_box.text().strip()
-        svc_id = self.service_filter.currentData()
+        svc_val = self.service_filter.currentData()
         
         is_admin = getattr(self, "is_admin_mode", False)
         all_cols = self.db.get_mcl_columns()
@@ -282,7 +307,10 @@ class SearchWindow(QWidget):
             self.results_table.setHorizontalHeaderLabels(headers)
             self.results_table.horizontalHeader().setStretchLastSection(True)
 
-            clients = self.db.search_clients(text, service_id=svc_id)
+            if svc_val == "archived":
+                clients = self.db.search_clients(text, service_id=None, archived_only=True)
+            else:
+                clients = self.db.search_clients(text, service_id=svc_val)
             self.results_table.setRowCount(len(clients))
 
             services_map = {s["id"]: s["name"] for s in services}
@@ -366,15 +394,30 @@ class SearchWindow(QWidget):
             self.archive_client_requested.emit(client_id)
 
     def set_admin_mode(self, active: bool):
-        """Expose mutation controls only after the Admin PIN is verified."""
+        """Expose detailed admin mutation controls when Admin Mode is active."""
         self.is_admin_mode = active
-        for button in (self.btn_edit_client, self.btn_delete_client, self.btn_manage_services, self.btn_archive_client):
-            button.setVisible(active)
+        admin_buttons = [
+            getattr(self, "btn_edit_client", None),
+            getattr(self, "btn_delete_client", None),
+            getattr(self, "btn_manage_services", None),
+        ]
+        for btn in admin_buttons:
+            if btn is not None:
+                btn.setVisible(active)
         if hasattr(self, "results_table"):
             self._reload_filters()
             self._on_search_changed()
 
 
+
+    def _on_manual_refresh(self):
+        self.refresh()
+        self.toast_requested.emit("Workspace refreshed & LAN database synced", "info")
+        try:
+            if hasattr(self.db, "_bump_sync_revision_if_configured"):
+                self.db._bump_sync_revision_if_configured()
+        except Exception:
+            pass
 
     def refresh(self):
         self._reload_filters()

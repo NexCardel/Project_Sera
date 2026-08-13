@@ -21,7 +21,13 @@ if "--native-host" in sys.argv or any(arg.startswith("chrome-extension://") for 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy
 from ui.shell.app_shell import AppShell
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, Signal
+
+class SyncSignalBridge(QObject):
+    sync_received_signal = Signal()
+    live_sync_received_signal = Signal(str, str)
+    peer_logs_received_signal = Signal(str)
+    sync_sent_signal = Signal(int, int)
 
 import security
 from database import SeraDatabase
@@ -130,6 +136,12 @@ class SeraApp:
         self.app.setFont(QFont("Segoe UI", 10))
         APP_DIR.mkdir(parents=True, exist_ok=True)
         
+        self.sync_bridge = SyncSignalBridge()
+        self.sync_bridge.sync_received_signal.connect(self._lock_and_force_restart)
+        self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
+        self.sync_bridge.peer_logs_received_signal.connect(self._handle_peer_logs_received_main_thread)
+        self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
+        
         icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
         if not icon_path.exists():
             icon_path = APP_DIR / "assets" / "logo" / "icon_here.png"
@@ -195,9 +207,12 @@ class SeraApp:
             salt_path=self.salt_path,
             username=self.actor_alias,
             on_sync_received=self._on_sync_received,
+            on_live_sync_received=self._on_live_sync_received,
+            on_peer_logs_received=self._on_peer_logs_received,
             on_error=lambda msg: print(f"[Sera Sync] {msg}"),
         )
         self.sync_service.start()
+        self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
 
         # Check for mandatory updates on GitHub
         loading_dlg.set_status("Checking GitHub for mandatory version updates...")
@@ -436,9 +451,20 @@ class SeraApp:
         self.shell.slide_panel.set_widget(self.detail_win, persistent=True)
         self.shell.slide_panel.slide_in()
 
+    def _refresh_all_screens(self):
+        try:
+            if hasattr(self, "search_win") and self.search_win:
+                self.search_win.refresh()
+            if hasattr(self, "dashboard_win") and self.dashboard_win:
+                self.dashboard_win.refresh()
+            if hasattr(self, "admin_win") and self.admin_win:
+                self.admin_win.refresh()
+        except Exception as e:
+            print(f"[Auto-Refresh] Error refreshing screens: {e}")
+
     def _open_new_client_form(self):
         dialog = NewClientDialog(self.db, parent=self.shell)
-        dialog.client_created.connect(self.search_win.refresh)
+        dialog.client_created.connect(self._refresh_all_screens)
         dialog.exec()
 
     def _open_client_editor(self, client_id: int):
@@ -448,11 +474,11 @@ class SeraApp:
 
     def _delete_client_from_search(self, client_id: int):
         self.admin_win.delete_client(client_id)
-        self.search_win.refresh()
+        self._refresh_all_screens()
 
     def _manage_client_services_from_search(self, client_id: int):
         self.admin_win.manage_client_services(client_id)
-        self.search_win.refresh()
+        self._refresh_all_screens()
 
     def _archive_client_from_search(self, client_id: int):
         client = self.db.get_client(client_id)
@@ -467,9 +493,9 @@ class SeraApp:
         if confirm != QMessageBox.Yes:
             return
         self.db.bulk_archive_clients([client_id])
-        self.db.log_action(self.actor, "archive", client_id=client_id, detail="Archived from Search")
+        self.db.log_action(self.actor, "archive", client_id=client_id, detail=f"Archived CLI-{client_id:05d} from Search")
         self.shell.show_action_alert("archive", identity)
-        self.search_win.refresh()
+        self._refresh_all_screens()
 
     def _request_admin_mode(self):
         dlg = AdminPinDialog(self.db)
@@ -512,10 +538,95 @@ class SeraApp:
         self.shell.slide_panel.slide_in()
 
     def _on_sync_received(self):
-        """Called from SyncPeerService background thread when an incoming
-        database push has been accepted and written to disk. Locks UI and restarts."""
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._lock_and_force_restart)
+        """Called from SyncPeerService background TCP thread when an incoming
+        database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
+        self.sync_bridge.sync_received_signal.emit()
+
+    def _on_live_sync_received(self, sender_username: str, sender_host: str):
+        """Called from SyncPeerService background thread on live data auto-sync."""
+        self.sync_bridge.live_sync_received_signal.emit(sender_username, sender_host)
+
+    def _on_peer_logs_received(self, sender_host: str):
+        """Called from SyncPeerService background thread when SSAL logs are received."""
+        self.sync_bridge.peer_logs_received_signal.emit(sender_host)
+
+    def _handle_live_sync_received_main_thread(self, sender_username: str, sender_host: str):
+        """Main thread GUI handler for live auto-sync without app restart."""
+        try:
+            if hasattr(self, "dashboard_win") and self.dashboard_win:
+                self.dashboard_win.refresh()
+            if hasattr(self, "search_win") and self.search_win:
+                self.search_win.refresh()
+            if hasattr(self, "admin_win") and self.admin_win:
+                self.admin_win.refresh()
+            if hasattr(self, "sidebar") and self.sidebar:
+                self.sidebar.notify_sync_received(sender_username, sender_host)
+            if hasattr(self, "shell") and self.shell:
+                self.shell.show_alert(f"🔄 Database auto-synced live from {sender_username} ({sender_host})", level="success", duration=4500)
+        except Exception as e:
+            print(f"[Live Auto-Sync] Error refreshing UI: {e}")
+
+    def _handle_peer_logs_received_main_thread(self, sender_host: str):
+        """Main thread GUI handler when Host PC receives peer audit logs."""
+        try:
+            if hasattr(self, "shell") and self.shell:
+                self.shell.show_alert(f"📋 SSAL Audit Logs received from {sender_host}", level="info", duration=3000)
+        except Exception:
+            pass
+
+    def _handle_sync_sent_main_thread(self, count: int, total: int):
+        """Main thread GUI handler when local changes are broadcasted to peers."""
+        try:
+            if hasattr(self, "sidebar") and self.sidebar:
+                self.sidebar.notify_sync_sent(count, total)
+            if hasattr(self, "shell") and self.shell and count > 0:
+                target_str = f"{count}/{total} workstations" if total > 1 else f"{count} workstation"
+                self.shell.show_alert(f"⬆️ Live update synced to {target_str}", level="success", duration=3500)
+        except Exception:
+            pass
+
+    def _broadcast_live_update_to_peers(self):
+        """Called by Database write hook to broadcast mutations to LAN peers live and in parallel."""
+        if hasattr(self, "sync_service") and self.sync_service:
+            import threading
+            def push_peer(peer_info, count_ref):
+                try:
+                    ip = peer_info.get("ip")
+                    port = int(peer_info.get("sync_port", 49157))
+                    if ip:
+                        res = self.sync_service.push_to(ip, port, live_update=True)
+                        if "successfully" in str(res).lower() or "ok" in str(res).lower():
+                            count_ref[0] += 1
+                except Exception as e:
+                    print(f"[Live Auto-Sync] Push to {peer_info.get('host')} failed: {e}")
+
+            def bg_push_all():
+                try:
+                    peers = self.sync_service.get_peers()
+                    if not peers:
+                        return
+                    count_ref = [0]
+                    threads = []
+                    for peer in peers:
+                        t = threading.Thread(target=push_peer, args=(peer, count_ref), daemon=True)
+                        t.start()
+                        threads.append(t)
+                    for t in threads:
+                        t.join(timeout=3.5)
+                    self.sync_bridge.sync_sent_signal.emit(count_ref[0], len(peers))
+
+                    # SSAL: If configured, push recent audit logs to Host PC
+                    host_ip = self.db.get_setting("host_ip")
+                    if host_ip and self.sync_service:
+                        try:
+                            recent_logs = self.db.get_audit_logs(limit=100)
+                            self.sync_service.push_audit_logs_to_host(host_ip, recent_logs)
+                        except Exception as ex:
+                            print(f"[SSAL] Auto push logs to host failed: {ex}")
+                except Exception as e:
+                    print(f"[Live Auto-Sync] Broadcast exception: {e}")
+
+            threading.Thread(target=bg_push_all, daemon=True).start()
 
     def _lock_and_force_restart(self):
         """Disables main UI completely and pops a non-dismissable modal dialog requiring application restart."""
@@ -563,8 +674,8 @@ class SeraApp:
 
         dlg.exec()
 
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
+        import version
+        version.restart_app()
 
     def run(self):
         sys.exit(self.app.exec())

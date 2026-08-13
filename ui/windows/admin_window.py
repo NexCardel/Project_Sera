@@ -134,7 +134,7 @@ class NewClientDialog(QDialog):
             if proceed != QMessageBox.Yes:
                 return
 
-        self.db.add_client(values, notes, service_ids)
+        self.db.add_client(values, notes, service_ids, actor=getattr(self, "actor", "Staff"))
         self.client_created.emit()
         self.accept()
 
@@ -557,12 +557,12 @@ class AdminWindow(QWidget):
 
         # FIX: Added actual popups to tell you it worked!
         if is_new:
-            self.selected_client_id = self.db.add_client(values, notes, service_ids)
+            self.selected_client_id = self.db.add_client(values, notes, service_ids, actor=self.actor)
             saved_client = self.db.get_client(self.selected_client_id)
             c_name = self._get_identity_label(saved_client) if saved_client else ""
             self.action_alert_requested.emit("create", c_name)
         else:
-            self.db.update_client(self.selected_client_id, values, notes, service_ids)
+            self.db.update_client(self.selected_client_id, values, notes, service_ids, actor=self.actor)
             saved_client = self.db.get_client(self.selected_client_id)
             c_name = self._get_identity_label(saved_client) if saved_client else ""
             self.action_alert_requested.emit("update", c_name)
@@ -698,16 +698,16 @@ class AdminWindow(QWidget):
                     f"{summary}\n\nThe database has been restored successfully.\n\n"
                     "The application will now restart to initialize the restored database."
                 )
-                import sys, os
-                python = sys.executable
-                os.execl(python, python, *sys.argv)
+                import version
+                version.restart_app()
             except Exception as e:
                 QMessageBox.critical(self, "Restore Error", f"Failed to restore backup:\n{e!s}")
 
     def _on_view_audit_log(self):
+        from ui.dialogs.audit_log_dialog import AuditLogDialog
         dlg = AuditLogDialog(self.db, actor=self.actor, parent=self)
         dlg.toast_requested.connect(self.toast_requested.emit)
-        self.request_slide_panel.emit(dlg, "Audit Log")
+        dlg.exec()
 
     def _on_export_csv(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -827,7 +827,7 @@ class AdminWindow(QWidget):
             QMessageBox.warning(self, "Sera Sync", "Sync service is not running. Please restart the app.")
             return
         from ui.dialogs.sera_sync_dialog import SeraSyncDialog
-        dlg = SeraSyncDialog(self._sync_service, parent=self)
+        dlg = SeraSyncDialog(self._sync_service, db=self.db, actor=self.actor, parent=self)
         dlg.exec()
 
     def set_sync_service(self, sync_service):

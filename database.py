@@ -180,6 +180,8 @@ class SeraDatabase:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_client ON audit_log(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_client ON client_values(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_column ON client_values(column_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cs_client ON client_services(client_id);")
@@ -406,6 +408,17 @@ class SeraDatabase:
     def get_id_column(self) -> Optional[dict]:
         for col in self.get_mcl_columns():
             if col.get("field_type") == "id":
+                return col
+        return None
+
+    def get_identity_column(self) -> Optional[dict]:
+        ignored_labels = {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#"}
+        mcl = self.get_mcl_columns()
+        for col in mcl:
+            if col.get("is_identity") and col.get("label", "").strip().lower() not in ignored_labels:
+                return col
+        for col in mcl:
+            if col.get("label", "").strip().lower() not in ignored_labels:
                 return col
         return None
 
@@ -713,7 +726,7 @@ class SeraDatabase:
                 for r in cur.fetchall()
             ]
 
-    def add_client(self, values: dict[int, str], notes: str, service_ids: list[int]) -> int:
+    def add_client(self, values: dict[int, str], notes: str, service_ids: list[int], actor: str = "Staff") -> int:
         now = datetime.datetime.utcnow().isoformat()
         with self._connect() as conn:
             cur = conn.execute(
@@ -741,9 +754,10 @@ class SeraDatabase:
                     "INSERT INTO client_services (client_id, service_id) VALUES (?, ?)",
                     (client_id, sid)
                 )
-            return client_id
+        self.log_action(actor=actor, action="create", client_id=client_id, detail=f"Added new client record CLI-{client_id:05d}")
+        return client_id
 
-    def update_client(self, client_id: int, values: dict[int, str], notes: str, service_ids: list[int]):
+    def update_client(self, client_id: int, values: dict[int, str], notes: str, service_ids: list[int], actor: str = "Staff"):
         now = datetime.datetime.utcnow().isoformat()
         with self._connect() as conn:
             conn.execute(
@@ -766,8 +780,9 @@ class SeraDatabase:
                     "INSERT INTO client_services (client_id, service_id) VALUES (?, ?)",
                     (client_id, sid)
                 )
+        self.log_action(actor=actor, action="update", client_id=client_id, detail=f"Updated client profile CLI-{client_id:05d}")
 
-    def archive_client(self, client_id: int):
+    def archive_client(self, client_id: int, actor: str = "Staff"):
         """Soft-delete: hides the client from search/autofill but keeps the
         record, restorable via unarchive_client(). Distinct from delete_client(),
         which is permanent."""
@@ -777,18 +792,21 @@ class SeraDatabase:
                 "UPDATE clients SET is_archived=1, updated_at=? WHERE id=?",
                 (now, client_id)
             )
+        self.log_action(actor=actor, action="archive", client_id=client_id, detail=f"Archived client record CLI-{client_id:05d}")
 
-    def unarchive_client(self, client_id: int):
+    def unarchive_client(self, client_id: int, actor: str = "Staff"):
         now = datetime.datetime.utcnow().isoformat()
         with self._connect() as conn:
             conn.execute(
                 "UPDATE clients SET is_archived=0, updated_at=? WHERE id=?",
                 (now, client_id)
             )
+        self.log_action(actor=actor, action="unarchive", client_id=client_id, detail=f"Unarchived client record CLI-{client_id:05d}")
 
-    def delete_client(self, client_id: int):
+    def delete_client(self, client_id: int, actor: str = "Staff"):
         with self._connect() as conn:
             conn.execute("DELETE FROM clients WHERE id=?", (client_id,))
+        self.log_action(actor=actor, action="delete", client_id=client_id, detail=f"Permanently deleted client record CLI-{client_id:05d}")
 
     def find_duplicate_clients(self, values: dict[int, str], exclude_client_id: int = None) -> list[str]:
         """Non-blocking duplicate check: returns the identity-column values in
@@ -852,7 +870,7 @@ class SeraDatabase:
     SERVICES_HEADER_ALIASES = {"services", "service", "labels", "label"}
     SYSTEM_HEADERS = {"client id", "created at", "updated at", "is archived"}
 
-    def bulk_import_clients(self, rows: list[dict[str, str]]) -> dict:
+    def bulk_import_clients(self, rows: list[dict[str, str]], actor: str = "Admin") -> dict:
         """Imports/updates clients from parsed CSV rows (list of header->value dicts).
 
         Matching & upsert behavior (this is what makes re-importing the same
@@ -1036,6 +1054,8 @@ class SeraDatabase:
                         (client_id, sid)
                     )
                 imported += 1
+
+        self.log_action(actor=actor, action="csv_import", detail=f"Imported {imported} client(s), updated {updated} from CSV")
 
         return {
             "imported": imported,
@@ -1227,7 +1247,16 @@ class SeraDatabase:
         if action != "view":
             self._bump_sync_revision_if_configured()
 
-    def get_audit_logs(self, client_id: int = None, actor: str = None, action: str = None, limit: int = 500) -> list[dict]:
+    def get_audit_logs(
+        self,
+        client_id: int = None,
+        actor: str = None,
+        action: str = None,
+        from_date: str = None,
+        to_date: str = None,
+        resolve_names: bool = True,
+        limit: int = 500
+    ) -> list[dict]:
         with self._connect() as conn:
             sql = "SELECT id, ts, actor, action, client_id, service_id, detail FROM audit_log"
             where = []
@@ -1241,19 +1270,52 @@ class SeraDatabase:
             if action and action != "All Actions":
                 where.append("action = ?")
                 params.append(action)
+            if from_date:
+                where.append("ts >= ?")
+                params.append(from_date)
+            if to_date:
+                if to_date.endswith("T00:00:00"):
+                    where.append("ts < ?")
+                else:
+                    where.append("ts <= ?")
+                params.append(to_date)
             if where:
                 sql += " WHERE " + " AND ".join(where)
             sql += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
-            
+
             cur = conn.execute(sql, params)
-            return [
-                {
+            rows = cur.fetchall()
+
+            client_name_map = {}
+            if resolve_names:
+                try:
+                    cur_vals = conn.execute("""
+                        SELECT cv.client_id, cv.value
+                        FROM client_values cv
+                        JOIN mcl_columns mc ON mc.id = cv.column_id
+                        WHERE cv.value IS NOT NULL AND cv.value != ''
+                          AND LOWER(TRIM(mc.label)) NOT IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')
+                        ORDER BY mc.is_identity DESC, mc.sort_order ASC
+                    """).fetchall()
+                    for cid_val, val_text in cur_vals:
+                        if cid_val not in client_name_map:
+                            client_name_map[cid_val] = val_text
+                except Exception:
+                    pass
+
+            results = []
+            for r in rows:
+                cid = r[4]
+                cname = client_name_map.get(cid) if cid else None
+                client_label = cname if cname else (f"CLI-{cid:05d}" if cid else "—")
+                results.append({
                     "id": r[0], "ts": r[1], "actor": r[2], "action": r[3],
-                    "client_id": r[4], "service_id": r[5], "detail": r[6]
-                }
-                for r in cur.fetchall()
-            ]
+                    "client_id": cid, "client_name": client_label,
+                    "client_token": f"CLI-{cid:05d}" if cid else "",
+                    "service_id": r[5], "detail": r[6]
+                })
+            return results
 
     # ---------------- Backup & Restore ----------------
 
@@ -1420,12 +1482,13 @@ class SeraDatabase:
 
     def export_audit_log_csv(self, filepath: str):
         import csv
-        logs = self.get_audit_logs(limit=10000)
+        logs = self.get_audit_logs(limit=10000, resolve_names=False)
         with open(filepath, mode="w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["Log ID", "Timestamp (UTC)", "Actor", "Action", "Client ID", "Service ID", "Detail"])
+            writer.writerow(["Log ID", "Timestamp (UTC)", "Actor", "Action", "Client Token", "Service ID", "Detail"])
             for l in logs:
-                writer.writerow([l["id"], l["ts"], l["actor"], l["action"], l["client_id"] or "", l["service_id"] or "", l["detail"] or ""])
+                token = f"CLI-{l['client_id']:05d}" if l.get("client_id") else "—"
+                writer.writerow([l["id"], l["ts"], l["actor"], l["action"], token, l["service_id"] or "", l["detail"] or ""])
 
     def export_mcl_schema_csv(self, filepath: str):
         import csv
@@ -1607,11 +1670,13 @@ class SeraDatabase:
             )
             
         # Log action in audit trail outside of _connect to avoid recursive connection DB lock
+        action_type = "filing_submitted" if status == "submitted" else "filing_status_update"
+        arn_info = f" (ARN: {arn_number})" if arn_number else ""
         self.log_action(
             actor=updated_by,
-            action="filing_status_update",
+            action=action_type,
             client_id=client_id,
-            detail=f"Filing type ID {filing_type_id} for period '{period_label}' set to '{status}'"
+            detail=f"Filing status for period '{period_label}' set to '{status}'{arn_info}"
         )
         return {
             "client_id": client_id, "filing_type_id": filing_type_id,
@@ -1765,3 +1830,134 @@ class SeraDatabase:
                 "items": items,
                 "status_map": status_map
             }
+
+
+class PeerAuditLogManager:
+    """
+    Manages audit logs received from peer workstations over Sera Sync (SSAL).
+    Stores per-workstation logs in isolated SQLite databases under ~/AmanAssociates_Sera/peer_logs/
+    to prevent locks, transaction overhead, or schema conflicts with live master.db.
+    """
+    def __init__(self, base_dir: str):
+        self.peer_logs_dir = os.path.join(base_dir, "peer_logs")
+        os.makedirs(self.peer_logs_dir, exist_ok=True)
+
+    def _get_peer_db_path(self, hostname: str) -> str:
+        safe_host = "".join(c for c in hostname if c.isalnum() or c in ("-", "_")).lower()
+        if not safe_host:
+            safe_host = "unknown"
+        return os.path.join(self.peer_logs_dir, f"peer_{safe_host}.db")
+
+    def store_peer_logs(self, hostname: str, logs: list[dict]):
+        if not hostname:
+            return
+        db_path = self._get_peer_db_path(hostname)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS peer_audit_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    orig_id     INTEGER,
+                    ts          TEXT NOT NULL,
+                    actor       TEXT NOT NULL,
+                    action      TEXT NOT NULL,
+                    client_id   INTEGER,
+                    client_name TEXT,
+                    service_id  INTEGER,
+                    detail      TEXT,
+                    UNIQUE(ts, actor, action, detail)
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS peer_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+            """)
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('hostname', ?)", (hostname,))
+            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('last_received', ?)", (now_iso,))
+
+            for l in logs:
+                conn.execute("""
+                    INSERT OR IGNORE INTO peer_audit_log (orig_id, ts, actor, action, client_id, client_name, service_id, detail)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    l.get("id"), l.get("ts"), l.get("actor", "Unknown"), l.get("action", "unknown"),
+                    l.get("client_id"), l.get("client_name") or l.get("client_label"), l.get("service_id"), l.get("detail")
+                ))
+            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('log_count', (SELECT CAST(COUNT(*) AS TEXT) FROM peer_audit_log))")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_peer_workstations(self) -> list[dict]:
+        workstations = []
+        if not os.path.exists(self.peer_logs_dir):
+            return workstations
+
+        for f in os.listdir(self.peer_logs_dir):
+            if f.startswith("peer_") and f.endswith(".db"):
+                db_path = os.path.join(self.peer_logs_dir, f)
+                try:
+                    conn = sqlite3.connect(db_path)
+                    meta = {}
+                    for row in conn.execute("SELECT key, value FROM peer_meta").fetchall():
+                        meta[row[0]] = row[1]
+                    count = conn.execute("SELECT COUNT(*) FROM peer_audit_log").fetchone()[0]
+                    conn.close()
+
+                    host = meta.get("hostname", f[5:-3])
+                    workstations.append({
+                        "hostname": host,
+                        "last_received": meta.get("last_received", ""),
+                        "count": count,
+                        "db_path": db_path
+                    })
+                except Exception:
+                    pass
+        return sorted(workstations, key=lambda x: x["hostname"].lower())
+
+    def get_peer_logs(self, hostname: str, actor: str = None, action: str = None, from_date: str = None, to_date: str = None, limit: int = 500) -> list[dict]:
+        db_path = self._get_peer_db_path(hostname)
+        if not os.path.exists(db_path):
+            return []
+
+        conn = sqlite3.connect(db_path)
+        try:
+            sql = "SELECT id, ts, actor, action, client_id, client_name, service_id, detail FROM peer_audit_log"
+            where = []
+            params = []
+            if actor:
+                where.append("actor LIKE ?")
+                params.append(f"%{actor}%")
+            if action and action != "All Actions":
+                where.append("action = ?")
+                params.append(action)
+            if from_date:
+                where.append("ts >= ?")
+                params.append(from_date)
+            if to_date:
+                if to_date.endswith("T00:00:00"):
+                    where.append("ts < ?")
+                else:
+                    where.append("ts <= ?")
+                params.append(to_date)
+
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY id DESC LIMIT ?"
+            params.append(limit)
+
+            cur = conn.execute(sql, params)
+            return [
+                {
+                    "id": r[0], "ts": r[1], "actor": r[2], "action": r[3],
+                    "client_id": r[4], "client_name": r[5] or (f"CLI-{r[4]:05d}" if r[4] else "—"),
+                    "service_id": r[6], "detail": r[7]
+                }
+                for r in cur.fetchall()
+            ]
+        finally:
+            conn.close()
+

@@ -36,7 +36,7 @@ BEACON_PORT = 49156
 SYNC_PORT = 49157
 BEACON_INTERVAL_SEC = 5
 PEER_TIMEOUT_SEC = 30
-SOCK_TIMEOUT_SEC = 10
+SOCK_TIMEOUT_SEC = 3
 
 # Fixed app-level magic bytes for beacon validation (not password-derived)
 SERA_SYNC_MAGIC = "sera-sync-v2"
@@ -47,13 +47,15 @@ def _utc_now_iso() -> str:
 
 
 class PeerInfo:
-    __slots__ = ("username", "host", "ip", "sync_port", "last_seen")
+    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen")
 
-    def __init__(self, username, host, ip, sync_port, last_seen):
+    def __init__(self, username, host, ip, sync_port, app_version="Unknown", db_mtime="", last_seen=0.0):
         self.username = username
         self.host = host
         self.ip = ip
         self.sync_port = sync_port
+        self.app_version = app_version
+        self.db_mtime = db_mtime
         self.last_seen = last_seen
 
     def key(self) -> str:
@@ -65,6 +67,8 @@ class PeerInfo:
             "host": self.host,
             "ip": self.ip,
             "sync_port": self.sync_port,
+            "app_version": self.app_version,
+            "db_mtime": self.db_mtime,
             "last_seen": self.last_seen,
         }
 
@@ -86,17 +90,23 @@ class SyncPeerService:
         db_path: str,
         salt_path: str,
         username: str,
+        sync_port: int = SYNC_PORT,
         on_peer_table_changed: Optional[Callable] = None,
         on_sync_received: Optional[Callable] = None,
+        on_live_sync_received: Optional[Callable] = None,
+        on_peer_logs_received: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
     ):
         self.db_path = db_path
         self.salt_path = salt_path
         self.username = username
+        self.sync_port = sync_port
         self.host_name = socket.gethostname()
 
         self.on_peer_table_changed = on_peer_table_changed
         self.on_sync_received = on_sync_received
+        self.on_live_sync_received = on_live_sync_received
+        self.on_peer_logs_received = on_peer_logs_received
         self.on_error = on_error
 
         self._peers: dict[str, PeerInfo] = {}
@@ -136,11 +146,31 @@ class SyncPeerService:
     # ---------------- UDP beacon (send + listen) ----------------
 
     def _beacon_payload(self) -> bytes:
+        db_mtime_str = ""
+        db_mtime_ts = 0.0
+        try:
+            if os.path.exists(self.db_path):
+                mtime = os.path.getmtime(self.db_path)
+                db_mtime_ts = mtime
+                db_mtime_str = datetime.datetime.fromtimestamp(mtime, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+
+        app_ver = "Unknown"
+        try:
+            import version
+            app_ver = getattr(version, "APP_VERSION", "Unknown")
+        except Exception:
+            pass
+
         body = {
             "magic": SERA_SYNC_MAGIC,
             "username": self.username,
             "host": self.host_name,
-            "sync_port": SYNC_PORT,
+            "sync_port": self.sync_port,
+            "app_version": app_ver,
+            "db_mtime": db_mtime_str,
+            "db_mtime_ts": db_mtime_ts,
         }
         return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
@@ -151,9 +181,13 @@ class SyncPeerService:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             while not self._stop_event.is_set():
                 try:
-                    sock.sendto(self._beacon_payload(), ("255.255.255.255", BEACON_PORT))
+                    payload = self._beacon_payload()
+                    sock.sendto(payload, ("255.255.255.255", BEACON_PORT))
                 except OSError as e:
-                    self._safe_call(self.on_error, f"Beacon send failed: {e}")
+                    # Suppress transient network unreachable error (WinError 10065) when adapter is temporarily offline
+                    winerr = getattr(e, "winerror", None)
+                    if winerr != 10065 and getattr(e, "errno", None) != 10065 and "10065" not in str(e):
+                        self._safe_call(self.on_error, f"Beacon send failed: {e}")
                 self._stop_event.wait(BEACON_INTERVAL_SEC)
             sock.close()
         self._spawn(loop, "sync-beacon-sender")
@@ -191,11 +225,33 @@ class SyncPeerService:
             host=body["host"],
             ip=ip,
             sync_port=int(body.get("sync_port", SYNC_PORT)),
+            app_version=body.get("app_version", "Unknown"),
+            db_mtime=body.get("db_mtime", ""),
             last_seen=time.time(),
         )
+
+        pk = peer.key()
+        is_new_peer = False
         with self._peers_lock:
-            self._peers[peer.key()] = peer
+            if pk not in self._peers:
+                is_new_peer = True
+            self._peers[pk] = peer
+
         self._safe_call(self.on_peer_table_changed, self._peer_list())
+
+        # Auto-catchup: If a newly connected peer has an older database timestamp than our local database,
+        # automatically push our newer local database to the new peer ONCE when it connects so it catches up!
+        if is_new_peer:
+            peer_mtime_ts = float(body.get("db_mtime_ts", 0))
+            local_mtime_ts = 0.0
+            if os.path.exists(self.db_path):
+                local_mtime_ts = os.path.getmtime(self.db_path)
+            if local_mtime_ts > 0 and peer_mtime_ts > 0 and (local_mtime_ts - peer_mtime_ts > 5.0):
+                def bg_auto_sync():
+                    time.sleep(1.0)
+                    print(f"[LAN Catch-up] Pushing local newer DB to newly connected peer {peer.host} ({peer.ip})")
+                    self.push_to(peer.ip, peer.sync_port, live_update=True)
+                threading.Thread(target=bg_auto_sync, daemon=True).start()
 
     def _start_peer_reaper(self):
         def loop():
@@ -224,7 +280,8 @@ class SyncPeerService:
     def _start_tcp_server(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("0.0.0.0", SYNC_PORT))
+        srv.bind(("0.0.0.0", self.sync_port))
+        self.sync_port = srv.getsockname()[1]
         srv.listen(5)
         srv.settimeout(1.0)
         self._tcp_server = srv
@@ -243,21 +300,58 @@ class SyncPeerService:
         self._spawn(loop, "sync-tcp-server")
 
     def _handle_incoming_push(self, conn: socket.socket, sender_ip: str):
-        """Receives master.db + sera.salt from the sender and overwrites local files."""
+        """Receives database pushes or SSAL audit logs from network peers."""
         try:
             conn.settimeout(SOCK_TIMEOUT_SEC)
 
-            # Read header: JSON with action and sizes
+            # Read header: JSON with action and payload details
             header_raw = _recv_framed(conn)
             header = json.loads(header_raw.decode("utf-8"))
+            action = header.get("action")
 
-            if header.get("action") != "push_database":
+            if action == "push_audit_log":
+                sender_host = header.get("host", sender_ip)
+                logs = header.get("logs", [])
+                live_dir = os.path.dirname(self.db_path)
+                try:
+                    from database import PeerAuditLogManager
+                    mgr = PeerAuditLogManager(live_dir)
+                    mgr.store_peer_logs(sender_host, logs)
+                except Exception as ex:
+                    print(f"[SSAL] Error storing peer logs from {sender_host}: {ex}")
+
+                _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
+                self._safe_call(self.on_peer_logs_received, sender_host)
+                return
+
+            if action != "push_database":
                 conn.close()
                 return
 
             sender_username = header.get("username", "Unknown")
+            sender_host = header.get("host", sender_ip)
+            is_live_update = bool(header.get("live_update", False))
+            force_override = bool(header.get("force_override", False))
+            incoming_mtime = float(header.get("db_mtime", 0))
             db_size = int(header["db_size"])
             salt_size = int(header["salt_size"])
+
+            # TIMESTAMP CONFLICT GUARD:
+            # If local database is newer than incoming database by > 3.0s, and force_override is False,
+            # REJECT incoming push to protect local actions from being overwritten by an older database snapshot!
+            local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0
+            if not force_override and local_mtime > 0 and incoming_mtime > 0 and (local_mtime - incoming_mtime > 3.0):
+                print(f"[Sync Guard] Rejected older DB push from {sender_host}: Local mtime ({local_mtime}) > Incoming mtime ({incoming_mtime})")
+                _send_framed(conn, json.dumps({
+                    "status": "rejected",
+                    "reason": "Local database is newer than incoming database. Overwrite prevented."
+                }).encode("utf-8"))
+                # Trigger a reverse auto-push so sender receives our newer database
+                def reverse_sync():
+                    time.sleep(1.0)
+                    self.push_to(sender_ip, int(header.get("sync_port", SYNC_PORT)), live_update=True)
+                threading.Thread(target=reverse_sync, daemon=True).start()
+                return
 
             # Send ACK to proceed
             _send_framed(conn, json.dumps({"status": "ready"}).encode("utf-8"))
@@ -279,22 +373,42 @@ class SyncPeerService:
                 backup_salt = os.path.join(live_dir, f"sera.salt.pre-sync-{now_str}")
                 shutil.copy2(self.salt_path, backup_salt)
 
-            # Atomic-ish replace: write to temp file then rename
-            tmp_db = self.db_path + ".incoming"
-            with open(tmp_db, "wb") as f:
-                f.write(db_bytes)
-            os.replace(tmp_db, self.db_path)
+            # Write files with fallback if Windows holds a temporary file lock
+            def safe_write_file(target_path, content_bytes):
+                tmp_path = target_path + ".incoming"
+                with open(tmp_path, "wb") as f:
+                    f.write(content_bytes)
+                try:
+                    os.replace(tmp_path, target_path)
+                except OSError:
+                    with open(target_path, "wb") as f:
+                        f.write(content_bytes)
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
 
-            tmp_salt = self.salt_path + ".incoming"
-            with open(tmp_salt, "wb") as f:
-                f.write(salt_bytes)
-            os.replace(tmp_salt, self.salt_path)
+            safe_write_file(self.db_path, db_bytes)
+            safe_write_file(self.salt_path, salt_bytes)
+
+            # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal)
+            # so SQLite doesn't replay old transactions upon app restart!
+            for ext in ["-wal", "-shm", "-journal"]:
+                sidecar = self.db_path + ext
+                if os.path.exists(sidecar):
+                    try:
+                        os.remove(sidecar)
+                    except OSError:
+                        pass
 
             # Send success confirmation
             _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
 
-            # Notify app to auto-restart
-            self._safe_call(self.on_sync_received)
+            if is_live_update and self.on_live_sync_received:
+                self._safe_call(self.on_live_sync_received, sender_username, sender_host)
+            else:
+                self._safe_call(self.on_sync_received)
 
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
             self._safe_call(self.on_error, f"Incoming sync from {sender_ip} failed: {e}")
@@ -306,7 +420,7 @@ class SyncPeerService:
 
     # ---------------- Push database to a peer ----------------
 
-    def push_to(self, peer_ip: str, peer_port: int = SYNC_PORT) -> str:
+    def push_to(self, peer_ip: str, peer_port: int = SYNC_PORT, live_update: bool = False, force_override: bool = False) -> str:
         """
         Pushes local master.db + sera.salt to the specified peer.
         Returns a success/failure message string.
@@ -322,6 +436,8 @@ class SyncPeerService:
         with open(self.salt_path, "rb") as f:
             salt_bytes = f.read()
 
+        local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
+
         # Connect to peer
         try:
             with socket.create_connection((peer_ip, peer_port), timeout=SOCK_TIMEOUT_SEC) as conn:
@@ -330,8 +446,12 @@ class SyncPeerService:
                     "action": "push_database",
                     "username": self.username,
                     "host": self.host_name,
+                    "sync_port": self.sync_port,
                     "db_size": len(db_bytes),
                     "salt_size": len(salt_bytes),
+                    "live_update": live_update,
+                    "force_override": force_override,
+                    "db_mtime": local_mtime,
                 }
                 _send_framed(conn, json.dumps(header).encode("utf-8"))
 
@@ -339,7 +459,8 @@ class SyncPeerService:
                 ack_raw = _recv_framed(conn)
                 ack = json.loads(ack_raw.decode("utf-8"))
                 if ack.get("status") != "ready":
-                    return f"Peer rejected sync request"
+                    reason = ack.get("reason", "Peer rejected sync request")
+                    return f"Sync skipped: {reason}"
 
                 # Send database + salt
                 conn.sendall(db_bytes)
@@ -355,6 +476,45 @@ class SyncPeerService:
 
         except OSError as e:
             return f"Could not connect to peer: {e}"
+
+    def push_audit_logs_to_host(self, host_ip: str, logs: list[dict], host_port: int = SYNC_PORT) -> bool:
+        """
+        Pushes local audit log entries to the Host PC for SSAL aggregation.
+        """
+        if not logs:
+            return True
+        try:
+            with socket.create_connection((host_ip, host_port), timeout=SOCK_TIMEOUT_SEC) as conn:
+                header = {
+                    "action": "push_audit_log",
+                    "username": self.username,
+                    "host": self.host_name,
+                    "logs": logs,
+                }
+                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                result_raw = _recv_framed(conn)
+                result = json.loads(result_raw.decode("utf-8"))
+                return result.get("status") == "ok"
+        except Exception as e:
+            return False
+
+    def push_to_all(self, peers: Optional[list[dict]] = None) -> dict[str, str]:
+        """
+        Pushes local master.db + sera.salt to all specified peers (or all known peers if None).
+        Returns a dictionary mapping peer_host -> result string.
+        """
+        if peers is None:
+            peers = self.get_peers()
+
+        results = {}
+        for peer in peers:
+            peer_ip = peer.get("ip")
+            peer_port = int(peer.get("sync_port", SYNC_PORT))
+            peer_host = peer.get("host", peer_ip)
+            if peer_ip:
+                res = self.push_to(peer_ip, peer_port)
+                results[peer_host] = res
+        return results
 
     def _safe_call(self, cb, *args):
         if cb:

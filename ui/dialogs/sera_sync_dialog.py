@@ -29,16 +29,18 @@ def _safe_icon(name, **kwargs):
 class SeraSyncDialog(QDialog):
     """
     Admin-only dialog showing other Sera instances on the local network.
-    Allows pushing the local database to a selected peer.
+    Allows pushing the local database to a selected peer or all discovered peers.
     """
     sync_pushed = Signal(str)  # emitted with peer hostname after successful push
 
-    def __init__(self, sync_service, parent=None):
+    def __init__(self, sync_service, db=None, actor="System", parent=None):
         super().__init__(parent)
         self.sync_service = sync_service
+        self.db = db
+        self.actor = actor
         self.setWindowTitle("Sera Sync — LAN Database Sync")
-        self.resize(640, 420)
-        self.setMinimumSize(560, 360)
+        self.resize(720, 440)
+        self.setMinimumSize(640, 380)
         self._build_ui()
         self._refresh_peers()
 
@@ -77,21 +79,23 @@ class SeraSyncDialog(QDialog):
 
         desc = QLabel(
             "Devices running Sera on your local network are listed below. "
-            "Select a device and click 'Sync Database' to push your current database to that device. "
-            "The receiving device will auto-restart with your database."
+            "Select a device and click 'Sync Selected' (or click 'Sync To All Devices') to push your current database to team members. "
+            "Receiving devices will auto-restart with your updated database."
         )
         desc.setWordWrap(True)
         desc.setProperty("class", "GuidanceText")
         layout.addWidget(desc)
 
-        # Peer Table
+        # Peer Table (6 Columns)
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Username", "Hostname", "IP Address", "Status"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Username", "Hostname", "IP Address", "App Version", "DB Modified", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -102,18 +106,29 @@ class SeraSyncDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
-        self.btn_sync = QPushButton("  Sync Database To Selected")
+        self.btn_sync = QPushButton("  Sync Selected")
         icon = _safe_icon("mdi.database-export", color="#FFFFFF")
         if icon:
             self.btn_sync.setIcon(icon)
-        self.btn_sync.setProperty("class", "primary")
         self.btn_sync.setStyleSheet(
             "QPushButton { background-color: #2E9B5F; color: white; font-weight: 600; "
-            "padding: 8px 16px; border-radius: 6px; } "
+            "padding: 8px 14px; border-radius: 6px; } "
             "QPushButton:hover { background-color: #34B76D; }"
         )
         self.btn_sync.clicked.connect(self._on_sync_clicked)
         btn_row.addWidget(self.btn_sync)
+
+        self.btn_sync_all = QPushButton("  Sync To All Devices")
+        icon = _safe_icon("mdi.database-sync", color="#FFFFFF")
+        if icon:
+            self.btn_sync_all.setIcon(icon)
+        self.btn_sync_all.setStyleSheet(
+            "QPushButton { background-color: #1A73E8; color: white; font-weight: 600; "
+            "padding: 8px 14px; border-radius: 6px; } "
+            "QPushButton:hover { background-color: #2884FB; }"
+        )
+        self.btn_sync_all.clicked.connect(self._on_sync_all_clicked)
+        btn_row.addWidget(self.btn_sync_all)
 
         self.btn_refresh = QPushButton("  Refresh")
         icon = _safe_icon("mdi.refresh", color="#FFFFFF")
@@ -161,9 +176,15 @@ class SeraSyncDialog(QDialog):
             ip_item = QTableWidgetItem(peer.get("ip", ""))
             self.table.setItem(r_idx, 2, ip_item)
 
+            ver_item = QTableWidgetItem(peer.get("app_version", "v2.3.4"))
+            self.table.setItem(r_idx, 3, ver_item)
+
+            mtime_item = QTableWidgetItem(peer.get("db_mtime", "N/A"))
+            self.table.setItem(r_idx, 4, mtime_item)
+
             status_item = QTableWidgetItem("🟢 Online")
             status_item.setForeground(Qt.green)
-            self.table.setItem(r_idx, 3, status_item)
+            self.table.setItem(r_idx, 5, status_item)
 
         if new_sel_row >= 0:
             self.table.selectRow(new_sel_row)
@@ -200,7 +221,7 @@ class SeraSyncDialog(QDialog):
             return
 
         # Update status to "Syncing..."
-        status_item = self.table.item(selected, 3)
+        status_item = self.table.item(selected, 5)
         if status_item:
             status_item.setText("🔄 Syncing...")
 
@@ -208,9 +229,17 @@ class SeraSyncDialog(QDialog):
         self.btn_sync.setText("  Syncing...")
 
         try:
-            result = self.sync_service.push_to(peer_ip, peer_port)
+            result = self.sync_service.push_to(peer_ip, peer_port, force_override=True)
 
             if "successfully" in result.lower():
+                if self.db:
+                    try:
+                        self.db.log_action(
+                            self.actor, "sync_pushed",
+                            detail=f"Pushed database to {peer_username} ({peer_host} - {peer_ip})"
+                        )
+                    except Exception:
+                        pass
                 QMessageBox.information(self, "Sync Complete", f"{result}\n\nDatabase sent to {peer_username} ({peer_host}).")
                 self.sync_pushed.emit(peer_host)
             else:
@@ -219,7 +248,74 @@ class SeraSyncDialog(QDialog):
             QMessageBox.critical(self, "Sync Error", f"Failed to sync database:\n{e!s}")
         finally:
             self.btn_sync.setEnabled(True)
-            self.btn_sync.setText("  Sync Database To Selected")
+            self.btn_sync.setText("  Sync Selected")
+            self._refresh_peers()
+
+    def _on_sync_all_clicked(self):
+        peers = self.sync_service.get_peers()
+        if not peers:
+            QMessageBox.information(
+                self, "No Online Devices",
+                "No other devices running Sera were discovered on the local network."
+            )
+            return
+
+        peer_names = ", ".join([f"{p.get('username')} ({p.get('host')})" for p in peers])
+        confirm = QMessageBox.warning(
+            self, "Confirm Bulk Database Sync",
+            f"You are about to push your database to ALL {len(peers)} online device(s):\n\n"
+            f"  Target Devices: {peer_names}\n\n"
+            f"This will OVERWRITE their databases with your current database.\n"
+            f"Target devices will auto-restart with your database.\n\n"
+            f"Are you sure you want to proceed?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.btn_sync_all.setEnabled(False)
+        self.btn_sync_all.setText("  Syncing All...")
+
+        try:
+            results = self.sync_service.push_to_all(peers)
+            successes = []
+            failures = []
+
+            for peer in peers:
+                host = peer.get("host", "Unknown")
+                user = peer.get("username", "Unknown")
+                res = results.get(host, "No response")
+                if "successfully" in res.lower():
+                    successes.append(f"• {user} ({host}): Success")
+                    if self.db:
+                        try:
+                            self.db.log_action(
+                                self.actor, "sync_pushed",
+                                detail=f"Pushed database to {user} ({host} - {peer.get('ip')})"
+                            )
+                        except Exception:
+                            pass
+                else:
+                    failures.append(f"• {user} ({host}): {res}")
+
+            msg_parts = []
+            if successes:
+                msg_parts.append("Successfully synced database to:\n" + "\n".join(successes))
+            if failures:
+                msg_parts.append("Failed to sync to:\n" + "\n".join(failures))
+
+            full_msg = "\n\n".join(msg_parts)
+            if failures:
+                QMessageBox.warning(self, "Bulk Sync Results", full_msg)
+            else:
+                QMessageBox.information(self, "Bulk Sync Complete", full_msg)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Sync Error", f"Bulk sync failed:\n{e!s}")
+        finally:
+            self.btn_sync_all.setEnabled(True)
+            self.btn_sync_all.setText("  Sync To All Devices")
             self._refresh_peers()
 
     def closeEvent(self, event):

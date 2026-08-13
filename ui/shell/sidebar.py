@@ -314,7 +314,30 @@ class Sidebar(QFrame):
         self.profile_row.installEventFilter(self)
         self.main_layout.addWidget(self.profile_row)
 
+        self.sync_status_badge = QLabel("🟢 Auto-Sync Active")
+        self.sync_status_badge.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600; padding: 4px 8px; background-color: #1A382B; border-radius: 4px; margin-top: 4px;")
+        self.main_layout.addWidget(self.sync_status_badge)
+
         self._update_visibility()
+
+    def notify_sync_sent(self, count: int, total: int):
+        """Visual badge indicator when local changes are pushed to LAN peers."""
+        import datetime
+        now_t = datetime.datetime.now().strftime("%H:%M:%S")
+        target_str = f"{count}/{total} PCs" if total > 1 else f"{count} PC"
+        self.sync_status_badge.setText(f"⬆️ Synced to {target_str} ({now_t})")
+        self.sync_status_badge.setStyleSheet(
+            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #2E9B5F; border-radius: 4px; margin-top: 4px;"
+        )
+
+    def notify_sync_received(self, sender_username: str, sender_host: str):
+        """Visual badge indicator when incoming live auto-sync is received."""
+        import datetime
+        now_t = datetime.datetime.now().strftime("%H:%M:%S")
+        self.sync_status_badge.setText(f"⬇️ Synced Live {now_t} ({sender_host})")
+        self.sync_status_badge.setStyleSheet(
+            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #1F7846; border-radius: 4px; margin-top: 4px;"
+        )
 
     def eventFilter(self, watched, event):
         try:

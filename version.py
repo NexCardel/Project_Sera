@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable
 
-APP_VERSION = "2.3.4.1"
+APP_VERSION = "2.4.0"
 GITHUB_REPO = "NexCardel/Project_Sera"
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.json"
 
@@ -126,3 +126,23 @@ start "" "{installer_path.resolve()}"
         
     subprocess.Popen(["cmd.exe", "/c", str(bat_script.resolve())], creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     sys.exit(0)
+
+
+def restart_app():
+    """
+    Cleanly restarts the application on Windows, macOS, and Linux.
+    Avoids os.execl thread corruption issues with PySide6/Qt on Windows.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable] + sys.argv[1:]
+    else:
+        cmd = [sys.executable] + sys.argv
+
+    subprocess.Popen(cmd)
+    app = QApplication.instance()
+    if app:
+        app.quit()
+    sys.exit(0)
+
