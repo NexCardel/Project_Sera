@@ -1,61 +1,80 @@
 # Build and Release
 
-## Build Executable
+This document outlines how to build standalone executable packages, compile Windows setup installers, and publish mandatory auto-updates for Project Sera.
 
-Generate the packaged app with PyInstaller:
+---
 
-```bash
-pyinstaller build_tools/Amas_Sera.spec
+## 1. Complete Build Process
+
+To build both the standalone desktop executable bundle and the signed Chrome/Edge extension package:
+
+```powershell
+venv\Scripts\python build_tools\build_package.py
 ```
 
 Output lands in:
+- **Executable Bundle**: `package_dist\Amas_Sera\Amas_Sera.exe`
+- **Browser Extension CRX**: `package_assets\extension\ProjectSeraCompanion.crx`
 
-```text
-package_dist/Amas_Sera/Amas_Sera.exe
+> [!IMPORTANT]
+> Always run `package_dist\Amas_Sera\Amas_Sera.exe` from inside the `package_dist\Amas_Sera\` directory. PyInstaller requires adjacent dependencies in `_internal\`.
+
+---
+
+## 2. Windows Setup Installer (Inno Setup 7)
+
+Compile `build_tools\installer_setup.iss` with Inno Setup Compiler (`ISCC.exe`):
+
+```powershell
+& "C:\Program Files\Inno Setup 7\ISCC.exe" build_tools\installer_setup.iss
 ```
 
-Run and distribute `package_dist/Amas_Sera/Amas_Sera.exe` together with the entire `package_dist/Amas_Sera/` folder.
+The resulting single-file installer will be generated at:
 
-Do not run the executable from `package_build/`, and do not copy the `.exe` by itself. PyInstaller needs the adjacent `_internal/` directory, including Python DLLs, dependency binaries (`qtawesome`, `sqlcipher3`, `playwright`), and bundled application data (`assets/`, `ui/`, `native_host/`, `sera_extension/`).
+```text
+installer_output\Amas_Sera_Setup_v2.3.4.1.exe
+```
 
-## Auto-Updater Workflow
+### Key Installer Specifications:
+- **Shortcut Name**: Configured as **`CompanyInfo1`** on Desktop and Start Menu.
+- **Application AppID**: `D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B`
+- **Native Host Registration**: Installs persistent native host manifest to `~/AmanAssociates_Sera/native_host/` and registers registry entries under `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera`.
 
-When releasing changes to staff:
+---
 
-1. Update `APP_VERSION` in `version.py`, for example `2.3.3`.
-2. Update `version.json` in the git repository:
+## 3. Auto-Updater & GitHub Release Workflow
+
+When publishing a new release to staff:
+
+1. Update `APP_VERSION` in `version.py`, e.g., `"2.3.4.1"`.
+2. Update `#define MyAppVersion` in `build_tools\installer_setup.iss`.
+3. Update `version.json` in the repository root:
 
 ```json
 {
-  "version": "2.3.3",
-  "min_required_version": "2.3.3",
+  "version": "2.3.4.1",
+  "min_required_version": "2.3.4.1",
   "mandatory": true,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.3/Amas_Sera_Setup_v2.3.3.exe",
-  "release_notes": "Project Sera v2.3.3 release: Excel-style cell Ctrl+C copying, fixed duplicate purging, modal dialog slide panel protection, MCL ID field token system, and automatic extension cookie clearing."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.4.1/Amas_Sera_Setup_v2.3.4.1.exe",
+  "release_notes": "Project Sera v2.3.4.1 release: Instant app locking and mandatory modal restart dialog upon receiving LAN database sync or manual database restore."
 }
 ```
 
-3. Commit and push the changes:
+4. Commit and push the version updates:
 
 ```bash
 git add .
-git commit -m "Release v2.3.3"
-git push
+git commit -m "Release v2.3.4.1"
+git push origin main
 ```
 
-4. Create a GitHub release tag such as `v2.3.3`.
-5. Upload the installer executable matching `download_url`, for example `Amas_Sera_Setup_v2.3.3.exe`.
-
-The next time an employee opens Project Sera, the app checks GitHub, presents a mandatory update modal, downloads the update, and restarts into the new version.
-
-## Complete Windows Installer
-
-Build the desktop bundle and its signed Chrome/Edge extension package with:
+5. Create a GitHub release tag matching `v2.3.4.1`:
 
 ```bash
-venv\Scripts\python.exe build_tools\build_package.py
+git tag -a v2.3.4.1 -m "Release v2.3.4.1"
+git push origin v2.3.4.1
 ```
 
-Then compile `build_tools\installer_setup.iss` with Inno Setup Compiler (`ISCC.exe`). The resulting installer is `installer_output\Amas_Sera_Setup_v2.3.3.exe`.
+6. Upload the compiled setup installer `installer_output\Amas_Sera_Setup_v2.3.4.1.exe` as the binary release asset matching `download_url`.
 
-The extension signing key is kept at `build_tools\sera_extension.pem` and is intentionally ignored by Git. Keep it securely: replacing it changes the extension ID and breaks browser updates/native-host allowlisting for installed users.
+The next time an employee opens Project Sera, the app queries GitHub (`version.json`), presents the mandatory update modal, downloads the installer, and restarts into the new version.

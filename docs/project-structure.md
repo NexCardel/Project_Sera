@@ -1,50 +1,83 @@
 # Project Structure
 
-This document maps the main source files and runtime data locations used by Project Sera.
+This document maps the main source files, documentation artifacts, and runtime data locations used by Project Sera. For an interactive visual node graph and file-by-file dependency matrix, see [Codebase Architecture & Node Representation](codebase-architecture-nodes.md) ([PDF Export](codebase-architecture-nodes.pdf)).
+
+---
 
 ## Source Tree
 
 ```text
 project_sera/
-|-- main.py                    # App entry point and IPC signal handler
-|-- database.py                # SQLCipher DB setup, CRUD, Audit Log, Filing Status, Backup/Restore
-|-- security.py                # Key derivation and PIN hashing
-|-- automation.py              # Playwright browser autofill and extension native-host bridge
+|-- main.py                    # App entry point, signal bridge, update checker & event loop
+|-- database.py                # SQLCipher DB setup, CRUD, Audit Log, MCL, Backup/Restore & conflict resolver
+|-- security.py                # Key derivation (PBKDF2), salt management & Argon2id PIN verification
+|-- sync_peer.py               # Built-in Sera Sync LAN peer discovery (UDP 49156) & P2P push (TCP 49157)
+|-- version.py                 # Version metadata & GitHub release check/download service
+|-- version.json               # GitHub auto-updater release definition
 |-- requirements.txt
 |-- README.md
-|-- tests/
-|   `-- test_portal_success.html
+|-- GEMINI.md                  # Project rules & AI developer guidelines
+|-- docs/                      # Technical documentation & architecture guides
+|   |-- codebase-architecture-nodes.md
+|   |-- codebase-architecture-nodes.pdf
+|   |-- project-structure.md
+|   |-- setup.md
+|   |-- features-security.md
+|   |-- browser-automation-extension.md
+|   |-- file-submission-tracker.md
+|   |-- build-release.md
+|   `-- operations-sync.md
 |-- native_host/               # Native Messaging bridge for browser extension
 |   |-- com.amanassociates.sera.json
 |   |-- host.bat
-|   |-- host.py
-|   `-- register_native_host.bat
+|   `-- host.py
 |-- sera_extension/            # Browser extension companion
-|   |-- background.js          # Active tab tracker, tab-close detection, IPC relay
-|   |-- tracker.js             # Passive DOM observer for ARN capture and in-page toast
-|   |-- manifest.json          # Extension permissions and content script definitions
-|   |-- config.json
-|   `-- content_scripts/
+|   |-- background.js          # Active tab tracker & IPC relay
+|   |-- tracker.js             # Passive DOM observer for ARN capture
+|   `-- manifest.json          # Extension permissions & content script definitions
+|-- build_tools/
+|   |-- build_package.py       # PyInstaller bundle & CRX extension packer
+|   `-- installer_setup.iss    # Inno Setup 7 Windows installer script
 `-- ui/
-    |-- extension_listener.py   # Threaded TCP server socket on port 49152 for extension events
+    |-- extension_listener.py  # Local TCP socket server on port 49152 for extension events
     |-- components/
-    |   `-- toast.py            # SeraAlert notification widget
+    |   `-- toast.py           # SeraAlert notification widget
     |-- dialogs/
-    |   `-- filing_confirmation_dialog.py
+    |   |-- sera_sync_dialog.py # Sera Sync LAN P2P management dialog
+    |   |-- csv_import_dialog.py
+    |   |-- mcl_manager_dialog.py
+    |   |-- service_manager_dialog.py
+    |   |-- form_type_manager_dialog.py
+    |   |-- manual_credentials_dialog.py
+    |   `-- update_dialog.py
     |-- services/
-    |   `-- alert_service.py
+    |   `-- alert_service.py   # Toast alert message formatter
     |-- shell/
+    |   |-- app_shell.py       # Main shell container & tab router
+    |   |-- sidebar.py         # Navigation bar & Sera Sync button
+    |   `-- slide_panel.py     # Animated client detail drawer
     `-- windows/
+        |-- search_window.py   # Client search & Excel Ctrl+C grid
+        |-- client_detail_window.py
+        |-- admin_window.py    # Admin management, restore & Sera Sync
+        `-- dashboard_window.py # DRS return status dashboard
 ```
 
-## Runtime Data
+---
 
-At runtime, the app creates:
+## Runtime Data Directory
+
+At runtime, the application stores data in `~/AmanAssociates_Sera/`:
 
 ```text
 ~/AmanAssociates_Sera/
-|-- master.db      # Encrypted database; sync this via Syncthing
-`-- sera.salt      # Non-secret key-derivation salt; sync this too
+|-- master.db            # SQLCipher encrypted database
+|-- sera.salt            # Salt file for PBKDF2 key derivation
+|-- device_identity.txt  # Workstation identity label
+`-- native_host/         # Permanent Native Messaging host scripts
+    |-- com.amanassociates.sera.json
+    |-- host.bat
+    `-- host.py
 ```
 
-Both files need to be present on every employee machine through Syncthing, pointed at the same `AmanAssociates_Sera` folder. For step-by-step instructions, see `../docs/Syncthing_Setup_Guide.md`.
+Both `master.db` and `sera.salt` belong together and can be pushed across the local network using **Sera Sync** or synchronized using Syncthing.
