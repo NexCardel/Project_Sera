@@ -513,20 +513,56 @@ class SeraApp:
 
     def _on_sync_received(self):
         """Called from SyncPeerService background thread when an incoming
-        database push has been accepted and written to disk. Auto-restart."""
-        # Marshal to main thread via QTimer
+        database push has been accepted and written to disk. Locks UI and restarts."""
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._do_auto_restart)
+        QTimer.singleShot(0, self._lock_and_force_restart)
 
-    def _do_auto_restart(self):
-        """Restart the application to reload the newly synced database."""
-        QMessageBox.information(
-            self.shell, "Sera Sync — Database Received",
-            "A new database has been synced from another workstation.\n\n"
-            "The application will now restart to load the updated database."
+    def _lock_and_force_restart(self):
+        """Disables main UI completely and pops a non-dismissable modal dialog requiring application restart."""
+        from PySide6.QtWidgets import QVBoxLayout, QLabel, QPushButton
+        
+        if hasattr(self, "shell") and self.shell:
+            self.shell.setEnabled(False)
+
+        if hasattr(self, "sync_service") and self.sync_service:
+            try:
+                self.sync_service.stop()
+            except Exception:
+                pass
+
+        dlg = QDialog(None)
+        dlg.setWindowTitle("Sera Sync — Database Received")
+        dlg.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        dlg.setFixedSize(460, 210)
+        dlg.setStyleSheet("QDialog { background-color: #1A232A; color: #FFFFFF; }")
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(14)
+
+        lbl_title = QLabel("Database Synchronized Successfully!")
+        lbl_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #4CF9B7;")
+        layout.addWidget(lbl_title)
+
+        lbl_desc = QLabel(
+            "An updated database has been pushed to this workstation from another team member.\n\n"
+            "The application MUST restart now to initialize the new database."
         )
-        self.sync_service.stop()
-        # Re-launch the same executable
+        lbl_desc.setWordWrap(True)
+        lbl_desc.setStyleSheet("font-size: 13px; color: #E0E0E0;")
+        layout.addWidget(lbl_desc)
+
+        btn_restart = QPushButton("Restart Application Now")
+        btn_restart.setStyleSheet(
+            "QPushButton { background-color: #2E9B5F; color: white; font-weight: 700; "
+            "font-size: 14px; padding: 10px 20px; border-radius: 6px; } "
+            "QPushButton:hover { background-color: #34B76D; }"
+        )
+        btn_restart.clicked.connect(dlg.accept)
+        layout.addWidget(btn_restart)
+
+        dlg.exec()
+
         python = sys.executable
         os.execl(python, python, *sys.argv)
 

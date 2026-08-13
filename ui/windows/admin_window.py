@@ -693,8 +693,14 @@ class AdminWindow(QWidget):
                 summary = self.db.restore_from(target_path)
                 self.db.log_action(self.actor, "restore", detail=summary)
                 self.action_alert_requested.emit("restore", None)
-                QMessageBox.information(self, "Restore Successful", f"{summary}\n\nThe database has been restored successfully.")
-                self.refresh()
+                QMessageBox.information(
+                    self, "Restore Successful",
+                    f"{summary}\n\nThe database has been restored successfully.\n\n"
+                    "The application will now restart to initialize the restored database."
+                )
+                import sys, os
+                python = sys.executable
+                os.execl(python, python, *sys.argv)
             except Exception as e:
                 QMessageBox.critical(self, "Restore Error", f"Failed to restore backup:\n{e!s}")
 
