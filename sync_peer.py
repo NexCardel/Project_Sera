@@ -328,6 +328,17 @@ class SyncPeerService:
                 self._safe_call(self.on_peer_logs_received, sender_host)
                 return
 
+            if action == "request_database_pull":
+                sender_host = header.get("host", sender_ip)
+                peer_port = int(header.get("sync_port", SYNC_PORT))
+                print(f"[LAN Pull Request] {sender_host} requested database pull. Pushing local DB...")
+                _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
+                def fulfill_pull():
+                    time.sleep(0.2)
+                    self.push_to(sender_ip, peer_port, live_update=True)
+                threading.Thread(target=fulfill_pull, daemon=True).start()
+                return
+
             if action != "push_database":
                 conn.close()
                 return
@@ -540,6 +551,24 @@ class SyncPeerService:
                 res = self.push_to(peer_ip, peer_port)
                 results[peer_host] = res
         return results
+
+    def request_pull_from(self, peer_ip: str, peer_port: int = SYNC_PORT) -> bool:
+        """Requests specified peer to push their higher-revision database to us."""
+        try:
+            with socket.create_connection((peer_ip, peer_port), timeout=SOCK_TIMEOUT_SEC) as conn:
+                header = {
+                    "action": "request_database_pull",
+                    "username": self.username,
+                    "host": self.host_name,
+                    "sync_port": self.sync_port,
+                }
+                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                resp_raw = _recv_framed(conn)
+                resp = json.loads(resp_raw.decode("utf-8"))
+                return resp.get("status") == "ok"
+        except OSError as ex:
+            print(f"[LAN Pull Request] Failed to request database from {peer_ip}: {ex}")
+            return False
 
     def _safe_call(self, cb, *args):
         if cb:

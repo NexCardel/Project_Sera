@@ -595,6 +595,20 @@ class SeraApp:
                     ip = peer_info.get("ip")
                     port = int(peer_info.get("sync_port", 49157))
                     if ip:
+                        local_metrics = self.db.get_sync_metrics() if hasattr(self.db, "get_sync_metrics") else {}
+                        local_clients = local_metrics.get("client_count", 0)
+                        local_rev = local_metrics.get("sync_revision", 0)
+
+                        peer_clients = int(peer_info.get("client_count", 0))
+                        peer_rev = int(peer_info.get("sync_revision", 0))
+
+                        # PRE-FLIGHT GUARD: If local database has fewer clients or lower revision than peer,
+                        # NEVER push local database to peer. Instead, request peer to send their higher database to us!
+                        if local_clients < peer_clients or (local_clients == peer_clients and local_rev < peer_rev):
+                            print(f"[Pre-flight Guard] Skipping push to {peer_info.get('host')}: Local DB (clients={local_clients}, rev={local_rev}) < Peer DB (clients={peer_clients}, rev={peer_rev}). Requesting pull...")
+                            self.sync_service.request_pull_from(ip, port)
+                            return
+
                         res = self.sync_service.push_to(ip, port, live_update=True)
                         if "successfully" in str(res).lower() or "ok" in str(res).lower():
                             count_ref[0] += 1
