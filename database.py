@@ -1247,6 +1247,46 @@ class SeraDatabase:
         if action != "view":
             self._bump_sync_revision_if_configured()
 
+    def get_sync_metrics(self) -> dict:
+        """
+        Returns database structural metrics used by LAN Sync engine to evaluate revisions:
+        - client_count: Total active non-deleted client records
+        - archived_count: Total archived client records
+        - log_count: Total SSAL audit log entries
+        - latest_timestamp: ISO timestamp of most recent audit log entry
+        - sync_revision: Structural database revision score (client_count * 1000 + log_count)
+        """
+        try:
+            with self._connect() as conn:
+                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_deleted = 0")
+                client_count = cur.fetchone()[0]
+
+                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_deleted = 1")
+                archived_count = cur.fetchone()[0]
+
+                cur = conn.execute("SELECT COUNT(*), MAX(ts) FROM audit_log")
+                row = cur.fetchone()
+                log_count = row[0] if row and row[0] else 0
+                latest_ts = row[1] if row and row[1] else ""
+
+                sync_revision = (client_count * 1000) + log_count
+
+                return {
+                    "client_count": client_count,
+                    "archived_count": archived_count,
+                    "log_count": log_count,
+                    "latest_timestamp": latest_ts,
+                    "sync_revision": sync_revision,
+                }
+        except Exception:
+            return {
+                "client_count": 0,
+                "archived_count": 0,
+                "log_count": 0,
+                "latest_timestamp": "",
+                "sync_revision": 0,
+            }
+
     def get_audit_logs(
         self,
         client_id: int = None,

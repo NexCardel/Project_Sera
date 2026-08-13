@@ -206,6 +206,7 @@ class SeraApp:
             db_path=self.db_path,
             salt_path=self.salt_path,
             username=self.actor_alias,
+            db=self.db,
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,
             on_peer_logs_received=self._on_peer_logs_received,

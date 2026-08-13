@@ -91,6 +91,7 @@ class SyncPeerService:
         salt_path: str,
         username: str,
         sync_port: int = SYNC_PORT,
+        db: Optional[Any] = None,
         on_peer_table_changed: Optional[Callable] = None,
         on_sync_received: Optional[Callable] = None,
         on_live_sync_received: Optional[Callable] = None,
@@ -101,6 +102,7 @@ class SyncPeerService:
         self.salt_path = salt_path
         self.username = username
         self.sync_port = sync_port
+        self.db = db
         self.host_name = socket.gethostname()
 
         self.on_peer_table_changed = on_peer_table_changed
@@ -116,6 +118,20 @@ class SyncPeerService:
         self._threads: list[threading.Thread] = []
         self._udp_sock: Optional[socket.socket] = None
         self._tcp_server: Optional[socket.socket] = None
+
+    def _get_local_metrics(self) -> dict:
+        if self.db and hasattr(self.db, "get_sync_metrics"):
+            try:
+                return self.db.get_sync_metrics()
+            except Exception:
+                pass
+        return {
+            "client_count": 0,
+            "archived_count": 0,
+            "log_count": 0,
+            "latest_timestamp": "",
+            "sync_revision": 0,
+        }
 
     # ---------------- lifecycle ----------------
 
@@ -163,6 +179,8 @@ class SyncPeerService:
         except Exception:
             pass
 
+        metrics = self._get_local_metrics()
+
         body = {
             "magic": SERA_SYNC_MAGIC,
             "username": self.username,
@@ -171,6 +189,9 @@ class SyncPeerService:
             "app_version": app_ver,
             "db_mtime": db_mtime_str,
             "db_mtime_ts": db_mtime_ts,
+            "client_count": metrics.get("client_count", 0),
+            "sync_revision": metrics.get("sync_revision", 0),
+            "latest_timestamp": metrics.get("latest_timestamp", ""),
         }
         return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
@@ -239,17 +260,26 @@ class SyncPeerService:
 
         self._safe_call(self.on_peer_table_changed, self._peer_list())
 
-        # Auto-catchup: If a newly connected peer has an older database timestamp than our local database,
-        # automatically push our newer local database to the new peer ONCE when it connects so it catches up!
+        # Auto-catchup: If a newly connected peer has fewer records / an older database revision than our local database,
+        # automatically push our populated/newer database to the new peer so it catches up!
         if is_new_peer:
-            peer_mtime_ts = float(body.get("db_mtime_ts", 0))
-            local_mtime_ts = 0.0
-            if os.path.exists(self.db_path):
-                local_mtime_ts = os.path.getmtime(self.db_path)
-            if local_mtime_ts > 0 and peer_mtime_ts > 0 and (local_mtime_ts - peer_mtime_ts > 5.0):
+            peer_client_count = int(body.get("client_count", 0))
+            peer_sync_rev = int(body.get("sync_revision", 0))
+
+            local_metrics = self._get_local_metrics()
+            local_client_count = local_metrics.get("client_count", 0)
+            local_sync_rev = local_metrics.get("sync_revision", 0)
+
+            should_push_to_peer = False
+            if local_client_count > peer_client_count:
+                should_push_to_peer = True
+            elif local_client_count == peer_client_count and local_sync_rev > peer_sync_rev:
+                should_push_to_peer = True
+
+            if should_push_to_peer:
                 def bg_auto_sync():
                     time.sleep(1.0)
-                    print(f"[LAN Catch-up] Pushing local newer DB to newly connected peer {peer.host} ({peer.ip})")
+                    print(f"[LAN Catch-up] Pushing local populated DB (clients={local_client_count}, rev={local_sync_rev}) to newly connected peer {peer.host} ({peer.ip})")
                     self.push_to(peer.ip, peer.sync_port, live_update=True)
                 threading.Thread(target=bg_auto_sync, daemon=True).start()
 
@@ -332,21 +362,38 @@ class SyncPeerService:
             sender_host = header.get("host", sender_ip)
             is_live_update = bool(header.get("live_update", False))
             force_override = bool(header.get("force_override", False))
-            incoming_mtime = float(header.get("db_mtime", 0))
+            incoming_client_count = int(header.get("client_count", 0))
+            incoming_sync_rev = int(header.get("sync_revision", 0))
+            incoming_latest_ts = str(header.get("latest_timestamp", ""))
             db_size = int(header["db_size"])
             salt_size = int(header["salt_size"])
 
-            # TIMESTAMP CONFLICT GUARD:
-            # If local database is newer than incoming database by > 3.0s, and force_override is False,
-            # REJECT incoming push to protect local actions from being overwritten by an older database snapshot!
-            local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0
-            if not force_override and local_mtime > 0 and incoming_mtime > 0 and (local_mtime - incoming_mtime > 3.0):
-                print(f"[Sync Guard] Rejected older DB push from {sender_host}: Local mtime ({local_mtime}) > Incoming mtime ({incoming_mtime})")
+            # EMPTY DATABASE & REVISION PROTECTION GUARD:
+            # 1. An empty incoming database (0 clients) can NEVER overwrite a local populated database (>0 clients)!
+            # 2. A database push with fewer clients or a lower revision cannot overwrite local work!
+            local_metrics = self._get_local_metrics()
+            local_client_count = local_metrics.get("client_count", 0)
+            local_sync_rev = local_metrics.get("sync_revision", 0)
+            local_latest_ts = local_metrics.get("latest_timestamp", "")
+
+            reject_reason = None
+            if not force_override:
+                if incoming_client_count == 0 and local_client_count > 0:
+                    reject_reason = f"Incoming empty database (0 clients) rejected to protect local records ({local_client_count} clients)"
+                elif incoming_client_count < local_client_count:
+                    reject_reason = f"Incoming database has fewer clients ({incoming_client_count}) than local database ({local_client_count})"
+                elif incoming_client_count == local_client_count and incoming_sync_rev < local_sync_rev:
+                    reject_reason = f"Incoming database revision ({incoming_sync_rev}) is lower than local database revision ({local_sync_rev})"
+                elif incoming_client_count == local_client_count and incoming_sync_rev == local_sync_rev and local_latest_ts > incoming_latest_ts:
+                    reject_reason = f"Incoming database timestamp ({incoming_latest_ts}) is older than local timestamp ({local_latest_ts})"
+
+            if reject_reason:
+                print(f"[Sync Guard] Rejected incoming DB push from {sender_host}: {reject_reason}")
                 _send_framed(conn, json.dumps({
                     "status": "rejected",
-                    "reason": "Local database is newer than incoming database. Overwrite prevented."
+                    "reason": reject_reason
                 }).encode("utf-8"))
-                # Trigger a reverse auto-push so sender receives our newer database
+                # Trigger a reverse auto-push so sender receives our populated/newer database
                 def reverse_sync():
                     time.sleep(1.0)
                     self.push_to(sender_ip, int(header.get("sync_port", SYNC_PORT)), live_update=True)
@@ -437,6 +484,7 @@ class SyncPeerService:
             salt_bytes = f.read()
 
         local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
+        metrics = self._get_local_metrics()
 
         # Connect to peer
         try:
@@ -451,6 +499,9 @@ class SyncPeerService:
                     "salt_size": len(salt_bytes),
                     "live_update": live_update,
                     "force_override": force_override,
+                    "client_count": metrics.get("client_count", 0),
+                    "sync_revision": metrics.get("sync_revision", 0),
+                    "latest_timestamp": metrics.get("latest_timestamp", ""),
                     "db_mtime": local_mtime,
                 }
                 _send_framed(conn, json.dumps(header).encode("utf-8"))
