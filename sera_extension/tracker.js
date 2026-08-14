@@ -28,13 +28,27 @@
     return el.textContent || el.innerText || "";
   }
 
+  function injectNetInterceptor() {
+    try {
+      if (document.getElementById('sera-sad-net-interceptor')) return;
+      const script = document.createElement('script');
+      script.id = 'sera-sad-net-interceptor';
+      script.src = chrome.runtime.getURL('content_scripts/net_interceptor.js');
+      (document.head || document.documentElement).appendChild(script);
+      console.log("Sera FST: Net Interceptor injected into MAIN world.");
+    } catch (e) {
+      console.error("Sera FST: Failed to inject Net Interceptor", e);
+    }
+  }
+
   function startMonitoring() {
+    injectNetInterceptor();
+
     // Also track any submit button clicks as an early warning
     document.body.addEventListener('click', (e) => {
       const text = getElementTextContent(e.target).trim().toLowerCase();
       if (text.includes('submit') || text.includes('file return') || text.includes('confirm')) {
         console.log("Sera FST: Detected click on likely submit button:", e.target);
-        // We could send a message here, but for now we wait for the final success screen.
       }
     });
 
@@ -43,7 +57,6 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    // Check once immediately in case it's already there
     checkSuccess();
   }
 
@@ -112,22 +125,24 @@
     }
   }
 
-  function showBrowserSuccessPopup(ctx, arn) {
+  function showBrowserSuccessPopup(ctx, arn, method = "DOM_Tracker") {
     const div = document.createElement('div');
     div.style.position = 'fixed';
     div.style.top = '20px';
     div.style.right = '20px';
-    div.style.padding = '20px';
-    div.style.backgroundColor = '#4caf50';
-    div.style.color = 'white';
+    div.style.padding = '18px 22px';
+    div.style.backgroundColor = '#161B22';
+    div.style.color = '#F0F6FC';
+    div.style.border = '2px solid #2E9B5F';
     div.style.borderRadius = '8px';
-    div.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-    div.style.zIndex = '999999';
-    div.style.fontFamily = 'Arial, sans-serif';
+    div.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+    div.style.zIndex = '9999999';
+    div.style.fontFamily = 'Segoe UI, Arial, sans-serif';
+    const methodBadge = method === 'SAD_API_Interceptor' ? '⚡ SAD API Interceptor' : '👁️ DOM Observer';
     div.innerHTML = `
-      <h3 style="margin:0 0 10px 0; font-size:18px;">✅ Return Submitted!</h3>
-      <p style="margin:0 0 5px 0;">Sera captured the successful filing.</p>
-        ${arn ? '<p style="margin:0 0 0 0; font-size:12px; opacity:0.8">ARN: ' + arn + '</p>' : ''}
+      <h3 style="margin:0 0 6px 0; font-size:16px; color:#4CF9B7;">✅ Return Filing Captured!</h3>
+      <p style="margin:0 0 4px 0; font-size:12px; color:#A0A0A0;">Method: <strong style="color:#2E9B5F;">${methodBadge}</strong></p>
+      ${arn ? '<p style="margin:4px 0 0 0; font-size:13px; font-weight:700; font-family:monospace; color:#39FF14;">ARN: ' + arn + '</p>' : ''}
     `;
     document.body.appendChild(div);
     
@@ -135,6 +150,6 @@
       div.style.opacity = '0';
       div.style.transition = 'opacity 0.5s';
       setTimeout(() => div.remove(), 500);
-    }, 5000);
+    }, 6000);
   }
 })();

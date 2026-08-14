@@ -1,0 +1,67 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+installer_output/
+*.zip
+*.exe
+*.spec
+
+# Virtual Environments
+venv/
+.build_venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Project Sera Local Database & Secrets / Salts
+master.db
+*.db
+*.sqlite
+*.salt
+sera.salt
+device_identity.txt
+*.log
+native_host/host_error.log
+
+# IDE & Tool caches
+.vscode/
+.idea/
+.ruff_cache/
+*.swp
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+package_assets/
+package_build/
+package_dist/
+Version SKY/
+version sky/
+[Vv]ersion [Ss]ky/

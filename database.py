@@ -63,6 +63,9 @@ class SeraDatabase:
             # instead of masking them as a wrong master password.
             conn.rollback()
             raise e
+        except sqlite3.OperationalError as e:
+            conn.rollback()
+            raise e
         except sqlite3.DatabaseError as e:
             conn.rollback()
             raise DatabaseError(
@@ -253,7 +256,39 @@ class SeraDatabase:
                 );
             """)
 
-            # 11. Seed default MCL columns and services if fresh database
+            # 11. Search Grid Cell Formatting (Excel-style cell & text colors)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cell_formatting (
+                    client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    column_key   TEXT NOT NULL,
+                    bg_color     TEXT,
+                    fg_color     TEXT,
+                    updated_at   TEXT NOT NULL,
+                    PRIMARY KEY (client_id, column_key)
+                );
+            """)
+
+            # 12. Client Tracker Dump (SAD API Interceptor & Extension captures)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_client ON tracker_dump(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_arn ON tracker_dump(arn_number);")
+
+
+            # 12. Seed default MCL columns and services if fresh database
             cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
             if cur.fetchone()[0] == 0:
                 self._seed_default_data(conn)
@@ -834,33 +869,7 @@ class SeraDatabase:
                     matches.append(val)
             return matches
 
-    # ---------------- Backup ----------------
 
-    def backup_to(self, dest_dir: str) -> str:
-        """Copies master.db + sera.salt into a timestamped subfolder of
-        dest_dir. Both files are needed to restore -- the salt alone can't
-        derive the key, and the DB alone can't be decrypted without it.
-        Safe to call any time: connections are opened per-operation and
-        closed immediately (see _connect()), so there's never a lingering
-        write lock to worry about mid-copy."""
-        app_data_dir = os.path.dirname(self.db_path)
-        salt_path = os.path.join(app_data_dir, security.SALT_FILE)
-
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        backup_dir = os.path.join(dest_dir, f"sera_backup_{stamp}")
-        os.makedirs(backup_dir, exist_ok=True)
-
-        shutil.copy2(self.db_path, os.path.join(backup_dir, os.path.basename(self.db_path)))
-        if os.path.exists(salt_path):
-            shutil.copy2(salt_path, os.path.join(backup_dir, security.SALT_FILE))
-        else:
-            raise DatabaseError(
-                f"Backed up {os.path.basename(self.db_path)}, but couldn't find "
-                f"{security.SALT_FILE} next to it -- without the salt file, this "
-                f"backup cannot be unlocked. Check {app_data_dir} manually."
-            )
-
-        return backup_dir
 
     # ---------------- CSV Import ----------------
 
@@ -1584,82 +1593,7 @@ class SeraDatabase:
                 (notes, now, client_id)
             )
 
-    # ---------------- DRS (Deadline Reminder System) ----------------
-
-    def get_filing_types(self, service_id: int = None) -> list[dict]:
-        with self._connect() as conn:
-            sql = """SELECT ft.id, ft.service_id, s.name as service_name, ft.code, ft.name,
-                            ft.frequency, ft.start_period, ft.due_day, ft.due_day_absolute,
-                            ft.grace_days, ft.notes, ft.variants_json, ft.active, ft.imported_at, ft.imported_by
-                     FROM filing_types ft
-                     JOIN services s ON s.id = ft.service_id"""
-            params = []
-            if service_id is not None:
-                sql += " WHERE ft.service_id = ?"
-                params.append(service_id)
-            sql += " ORDER BY s.sort_order, ft.code"
-            
-            cur = conn.execute(sql, params)
-            return [
-                {
-                    "id": r[0], "service_id": r[1], "service_name": r[2], "code": r[3], "name": r[4],
-                    "frequency": r[5], "start_period": r[6], "due_day": r[7], "due_day_absolute": r[8],
-                    "grace_days": r[9], "notes": r[10],
-                    "variants": json.loads(r[11]) if r[11] else [],
-                    "active": bool(r[12]), "imported_at": r[13], "imported_by": r[14]
-                }
-                for r in cur.fetchall()
-            ]
-
-    def upsert_filing_type(self, service_id: int, code: str, name: str, frequency: str,
-                           start_period: str, due_day: int = None, due_day_absolute: str = None,
-                           grace_days: int = 0, notes: str = "", variants: list = None,
-                           imported_by: str = "Admin") -> int:
-        now = datetime.datetime.utcnow().isoformat()
-        variants_json = json.dumps(variants) if variants else None
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO filing_types 
-                   (service_id, code, name, frequency, start_period, due_day, due_day_absolute,
-                    grace_days, notes, variants_json, active, imported_at, imported_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                   ON CONFLICT(service_id, code) DO UPDATE SET
-                       name = excluded.name,
-                       frequency = excluded.frequency,
-                       start_period = excluded.start_period,
-                       due_day = excluded.due_day,
-                       due_day_absolute = excluded.due_day_absolute,
-                       grace_days = excluded.grace_days,
-                       notes = excluded.notes,
-                       variants_json = excluded.variants_json,
-                       imported_at = excluded.imported_at,
-                       imported_by = excluded.imported_by""",
-                (service_id, code.strip(), name.strip(), frequency.strip(), start_period.strip(),
-                 due_day, due_day_absolute, grace_days, notes, variants_json, now, imported_by)
-            )
-            cur = conn.execute("SELECT id FROM filing_types WHERE service_id = ? AND code = ?", (service_id, code.strip()))
-            return cur.fetchone()[0]
-
-    def set_client_filing_type_enabled(self, client_id: int, filing_type_id: int, is_enabled: bool, variant_tag: str = None):
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO client_filing_types (client_id, filing_type_id, variant_tag, is_enabled)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(client_id, filing_type_id) DO UPDATE SET
-                       is_enabled = excluded.is_enabled,
-                       variant_tag = COALESCE(excluded.variant_tag, client_filing_types.variant_tag)""",
-                (client_id, filing_type_id, variant_tag, 1 if is_enabled else 0)
-            )
-
-    def attach_client_filing_type(self, client_id: int, filing_type_id: int, variant_tag: str = None):
-        self.set_client_filing_type_enabled(client_id, filing_type_id, is_enabled=True, variant_tag=variant_tag)
-
-    def detach_client_filing_type(self, client_id: int, filing_type_id: int):
-        with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM client_filing_types WHERE client_id = ? AND filing_type_id = ?",
-                (client_id, filing_type_id)
-            )
+    # ---------------- File Submission Tracker (FST) ----------------
 
     def get_client_filing_types(self, client_id: int, enabled_only: bool = False) -> list[dict]:
         with self._connect() as conn:
@@ -1725,151 +1659,263 @@ class SeraDatabase:
             "updated_at": now, "updated_by": updated_by
         }
 
-    def get_filing_status(self, client_id: int, filing_type_id: int, period_label: str) -> dict:
+    # ---------------- Tracker Dump Subsystem (SAD & Extension) ----------------
+
+    def insert_tracker_dump(self, client_id: int, service_id: int = None, portal: str = None,
+                            period_label: str = None, arn_number: str = None,
+                            capture_method: str = "DOM_Tracker", status: str = "submitted",
+                            raw_payload_json: str = None, captured_by: str = "System") -> dict:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._connect() as conn:
-            cur = conn.execute(
-                """SELECT id, client_id, filing_type_id, period_label, status,
-                          arn_number, submitted_at, updated_at, updated_by
-                   FROM filing_status
-                   WHERE client_id = ? AND filing_type_id = ? AND period_label = ?""",
-                (client_id, filing_type_id, period_label)
-            )
-            r = cur.fetchone()
-            if not r:
-                return None
-            return {
-                "id": r[0], "client_id": r[1], "filing_type_id": r[2], "period_label": r[3],
-                "status": r[4], "arn_number": r[5], "submitted_at": r[6],
-                "updated_at": r[7], "updated_by": r[8]
-            }
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
 
-    def get_client_filing_statuses(self, client_id: int, period_labels: list[str] = None) -> list[dict]:
-        with self._connect() as conn:
-            sql = """SELECT fs.id, fs.client_id, fs.filing_type_id, ft.code as filing_code,
-                            ft.name as filing_name, s.name as service_name, fs.period_label,
-                            fs.status, fs.arn_number, fs.submitted_at, fs.updated_at, fs.updated_by
-                     FROM filing_status fs
-                     JOIN filing_types ft ON ft.id = fs.filing_type_id
-                     JOIN services s ON s.id = ft.service_id
-                     WHERE fs.client_id = ?"""
-            params = [client_id]
-            if period_labels:
-                placeholders = ",".join("?" for _ in period_labels)
-                sql += f" AND fs.period_label IN ({placeholders})"
-                params.extend(period_labels)
-            sql += " ORDER BY s.sort_order, ft.code, fs.period_label DESC"
-            
-            cur = conn.execute(sql, params)
-            return [
-                {
-                    "id": r[0], "client_id": r[1], "filing_type_id": r[2], "filing_code": r[3],
-                    "filing_name": r[4], "service_name": r[5], "period_label": r[6],
-                    "status": r[7], "arn_number": r[8], "submitted_at": r[9],
-                    "updated_at": r[10], "updated_by": r[11]
-                }
-                for r in cur.fetchall()
-            ]
-
-    def get_all_filing_statuses(self, period_label: str = None) -> list[dict]:
-        with self._connect() as conn:
-            sql = """SELECT fs.id, fs.client_id, fs.filing_type_id, ft.code as filing_code,
-                            ft.name as filing_name, s.name as service_name, fs.period_label,
-                            fs.status, fs.arn_number, fs.submitted_at, fs.updated_at, fs.updated_by
-                     FROM filing_status fs
-                     JOIN filing_types ft ON ft.id = fs.filing_type_id
-                     JOIN services s ON s.id = ft.service_id"""
-            params = []
-            if period_label:
-                sql += " WHERE fs.period_label = ?"
-                params.append(period_label)
-            sql += " ORDER BY fs.updated_at DESC"
-            
-            cur = conn.execute(sql, params)
-            return [
-                {
-                    "id": r[0], "client_id": r[1], "filing_type_id": r[2], "filing_code": r[3],
-                    "filing_name": r[4], "service_name": r[5], "period_label": r[6],
-                    "status": r[7], "arn_number": r[8], "submitted_at": r[9],
-                    "updated_at": r[10], "updated_by": r[11]
-                }
-                for r in cur.fetchall()
-            ]
-
-    def get_dashboard_batch_data(self, service_id: int = None) -> dict:
-        """
-        Executes bulk fetching for the DRS Dashboard in 2 single queries instead of N+1 loops.
-        Returns:
-            {
-                "items": list of client-filing combinations,
-                "status_map": {(client_id, filing_type_id, period_label): status_dict}
-            }
-        """
-        with self._connect() as conn:
-            cur_id = conn.execute(
-                """SELECT cv.client_id, cv.value
-                   FROM client_values cv
-                   JOIN mcl_columns mc ON mc.id = cv.column_id
-                   WHERE mc.is_identity = 1 AND cv.value IS NOT NULL AND cv.value != ''
-                   ORDER BY cv.client_id, mc.sort_order"""
-            )
-            client_names = {}
-            for r in cur_id.fetchall():
-                cid, val = r[0], r[1]
-                if cid not in client_names:
-                    client_names[cid] = []
-                client_names[cid].append(val)
-
-            sql = """SELECT c.id as client_id,
-                            ft.id as filing_type_id, ft.service_id, s.name as service_name,
-                            ft.code, ft.name as filing_name, ft.frequency, ft.start_period,
-                            ft.due_day, ft.due_day_absolute, ft.grace_days, ft.notes,
-                            ft.variants_json, cft.variant_tag
-                     FROM clients c
-                     JOIN client_services cs ON cs.client_id = c.id
-                     JOIN filing_types ft ON ft.service_id = cs.service_id
-                     JOIN services s ON s.id = ft.service_id
-                     LEFT JOIN client_filing_types cft ON (cft.client_id = c.id AND cft.filing_type_id = ft.id)
-                     WHERE c.is_archived = 0 AND ft.active = 1 AND COALESCE(cft.is_enabled, 1) = 1"""
-            params = []
-            if service_id is not None:
-                sql += " AND ft.service_id = ?"
-                params.append(service_id)
-            sql += " ORDER BY c.id, s.sort_order, ft.code"
-
-            cur = conn.execute(sql, params)
-            items = []
-            for r in cur.fetchall():
-                cid = r[0]
-                name_list = client_names.get(cid, [])
-                c_name = " — ".join(name_list) if name_list else f"Client #{cid}"
-                items.append({
-                    "client_id": cid,
-                    "client_name": c_name,
-                    "filing_type": {
-                        "id": r[1], "service_id": r[2], "service_name": r[3], "code": r[4], "name": r[5],
-                        "frequency": r[6], "start_period": r[7], "due_day": r[8], "due_day_absolute": r[9],
-                        "grace_days": r[10], "notes": r[11],
-                        "variants": json.loads(r[12]) if r[12] else [],
-                        "variant_tag": r[13]
+            # Deduplication Check: Ignore identical ARN received within last 10 seconds
+            if arn_number and arn_number != "N/A":
+                cur = conn.execute(
+                    "SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ?",
+                    (arn_number, (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)).isoformat())
+                )
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "id": row[0], "client_id": row[1], "service_id": service_id,
+                        "portal": portal, "period_label": period_label, "arn_number": arn_number,
+                        "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
-                })
 
-            cur_stat = conn.execute(
-                """SELECT client_id, filing_type_id, period_label, status, arn_number, submitted_at, updated_at, updated_by
-                   FROM filing_status"""
+            # Resolve client_id: 1. Direct ID, 2. Token (CLI-00370), 3. MCL Serial No (No. 370)
+            valid_id = None
+            if client_id:
+                # 1. Direct ID match
+                cur = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
+                row = cur.fetchone()
+                if row:
+                    valid_id = row[0]
+
+                # 2. Token match (CLI-00370 or CLI-370)
+                if not valid_id:
+                    try:
+                        token_str = f"CLI-{int(client_id):05d}"
+                        cur = conn.execute("SELECT id FROM clients WHERE client_id_token = ? OR client_id_token = ?", (token_str, f"CLI-{client_id}"))
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 3. MCL Serial No / SL No column match (e.g. No. 370)
+                if not valid_id:
+                    try:
+                        cur = conn.execute(
+                            """SELECT cv.client_id
+                               FROM client_values cv
+                               JOIN mcl_columns mc ON mc.id = cv.column_id
+                               WHERE TRIM(cv.value) = ? AND LOWER(TRIM(mc.label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')""",
+                            (str(client_id).strip(),)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 4. Search Grid Row Number match (e.g. Row #370 in Search Grid -> 370th client in DB)
+                if not valid_id:
+                    try:
+                        row_num = int(client_id)
+                        if row_num > 0:
+                            cur = conn.execute("SELECT id FROM clients WHERE is_archived = 0 ORDER BY id ASC LIMIT 1 OFFSET ?", (row_num - 1,))
+                            row = cur.fetchone()
+                            if row:
+                                valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 5. Name / PAN / GSTIN substring match in client_values
+                if not valid_id:
+                    try:
+                        search_str = f"%{str(client_id).strip()}%"
+                        cur = conn.execute(
+                            "SELECT client_id FROM client_values WHERE value LIKE ? LIMIT 1",
+                            (search_str,)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+            if not valid_id:
+                cur = conn.execute("SELECT id FROM clients ORDER BY id ASC LIMIT 1")
+                row = cur.fetchone()
+                if row:
+                    valid_id = row[0]
+                else:
+                    cur = conn.execute("INSERT INTO clients (notes, created_at, updated_at) VALUES ('Default System Client', ?, ?)", (now, now))
+                    valid_id = cur.lastrowid
+
+            cur = conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (valid_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
             )
-            status_map = {}
-            for r in cur_stat.fetchall():
-                status_map[(r[0], r[1], r[2])] = {
-                    "client_id": r[0], "filing_type_id": r[1], "period_label": r[2],
-                    "status": r[3], "arn_number": r[4], "submitted_at": r[5],
-                    "updated_at": r[6], "updated_by": r[7]
-                }
+            dump_id = cur.lastrowid
+        return {
+            "id": dump_id, "client_id": valid_id, "service_id": service_id,
+            "portal": portal, "period_label": period_label, "arn_number": arn_number,
+            "capture_method": capture_method, "status": status, "created_at": now
+        }
 
-            return {
-                "items": items,
-                "status_map": status_map
-            }
+    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
+        with self._connect() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
+            sql = """SELECT td.id, td.client_id, c.client_id_token, td.service_id, s.name as service_name,
+                            td.portal, td.period_label, td.arn_number, td.capture_method, td.status,
+                            td.raw_payload_json, td.captured_by, td.created_at
+                     FROM tracker_dump td
+                     LEFT JOIN clients c ON c.id = td.client_id
+                     LEFT JOIN services s ON s.id = td.service_id
+                     WHERE 1=1"""
+            params = []
+            if client_id:
+                sql += " AND td.client_id = ?"
+                params.append(client_id)
+            if search_query:
+                sql += " AND (td.arn_number LIKE ? OR td.portal LIKE ? OR td.period_label LIKE ?)"
+                q = f"%{search_query}%"
+                params.extend([q, q, q])
+            sql += " ORDER BY td.id DESC LIMIT ?"
+            params.append(limit)
+
+            cur = conn.execute(sql, params)
+            rows = cur.fetchall()
+
+            # Pre-fetch MCL columns metadata once
+            mcl_cols = self.get_mcl_columns()
+
+            # Build client display name & pan map for all unique client_ids in results
+            client_map = {}
+            for r in rows:
+                cid = r[1]
+                if cid and cid not in client_map:
+                    try:
+                        cdata = self._fetch_client_full(conn, cid)
+                        if cdata:
+                            c_vals = cdata.get("values", {})
+                            name_val = ""
+                            pan_val = ""
+                            for col in mcl_cols:
+                                lbl = col.get("label", "").lower()
+                                val = c_vals.get(col["id"], "")
+                                if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
+                                    name_val = str(val).strip()
+                                elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
+                                    pan_val = str(val).strip()
+                            client_map[cid] = {
+                                "name": name_val or cdata.get("client_id_token", f"CLI-{cid:05d}"),
+                                "pan": pan_val
+                            }
+                    except Exception:
+                        pass
+                if cid not in client_map:
+                    client_map[cid] = {"name": f"CLI-{cid:05d}" if cid else "Unknown Client", "pan": ""}
+
+            results = []
+            for r in rows:
+                cid = r[1]
+                info = client_map.get(cid, {"name": "Unknown Client", "pan": ""})
+                results.append({
+                    "id": r[0], "client_id": cid,
+                    "client_name": info["name"], "pan": info["pan"],
+                    "service_id": r[3], "service_name": r[4] or r[5] or "Portal", "portal": r[5] or "",
+                    "period_label": r[6] or "", "arn_number": r[7] or "N/A", "capture_method": r[8] or "DOM_Tracker",
+                    "status": r[9] or "submitted", "raw_payload_json": r[10] or "{}", "captured_by": r[11] or "System",
+                    "created_at": r[12]
+                })
+            return results
+
+    def delete_tracker_dump(self, dump_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM tracker_dump WHERE id = ?", (dump_id,))
+            return cur.rowcount > 0
+
+    def clear_tracker_dumps(self) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM tracker_dump")
+            return cur.rowcount
+
+
+    # ---------------- Cell Formatting (Search Grid) ----------------
+    def bulk_set_cell_formatting(self, formatting_list: list[dict]):
+        if not formatting_list:
+            return
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._connect() as conn:
+            for item in formatting_list:
+                cid = item["client_id"]
+                ckey = str(item["column_key"])
+                bg = item.get("bg_color")
+                fg = item.get("fg_color")
+                conn.execute(
+                    """INSERT INTO cell_formatting (client_id, column_key, bg_color, fg_color, updated_at)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(client_id, column_key) DO UPDATE SET
+                           bg_color = excluded.bg_color,
+                           fg_color = excluded.fg_color,
+                           updated_at = excluded.updated_at""",
+                    (cid, ckey, bg or "", fg or "", now)
+                )
+
+    def clear_cell_formatting(self, client_column_pairs: list[tuple[int, str]]):
+        if not client_column_pairs:
+            return
+        with self._connect() as conn:
+            for cid, ckey in client_column_pairs:
+                conn.execute(
+                    "DELETE FROM cell_formatting WHERE client_id = ? AND column_key = ?",
+                    (cid, str(ckey))
+                )
+
+    def get_cell_formatting_for_clients(self, client_ids: list[int]) -> dict:
+        if not client_ids:
+            return {}
+        with self._connect() as conn:
+            placeholders = ",".join("?" for _ in client_ids)
+            sql = f"SELECT client_id, column_key, bg_color, fg_color FROM cell_formatting WHERE client_id IN ({placeholders})"
+            cur = conn.execute(sql, client_ids)
+            result = {}
+            for r in cur.fetchall():
+                result[(r[0], str(r[1]))] = {"bg_color": r[2], "fg_color": r[3]}
+            return result
 
 
 class PeerAuditLogManager:

@@ -133,9 +133,17 @@ class AppShell(QWidget):
         """Adds a widget to the main content area."""
         self.content_area.addWidget(widget)
 
-    def set_current_page(self, index: int):
-        """Switches the content area to the specified page index with a smooth cross-fade transition."""
-        if self.content_area.currentIndex() == index:
+    def set_current_page(self, page):
+        """Switches the content area to the specified page index or QWidget with a smooth cross-fade transition."""
+        if isinstance(page, QWidget):
+            index = self.content_area.indexOf(page)
+        else:
+            try:
+                index = int(page)
+            except (ValueError, TypeError):
+                return
+
+        if index < 0 or self.content_area.currentIndex() == index:
             return
 
         new_widget = self.content_area.widget(index)

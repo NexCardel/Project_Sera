@@ -41,6 +41,8 @@ class SearchWindow(QWidget):
     def __init__(self, db):
         super().__init__()
         self.db = db
+        self._undo_stack = []
+        self._redo_stack = []
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(150)
@@ -58,11 +60,64 @@ class SearchWindow(QWidget):
         title = QLabel("All Clients / Search")
         title.setProperty("class", "PageTitle")
         header_row.addWidget(title)
+        
+        # Cell Formatting & Undo/Redo Toolbar (Visible in both Normal and Admin modes)
+        header_row.addSpacing(16)
+        
+        self.btn_fill_color = QPushButton()
+        if qta:
+            self.btn_fill_color.setIcon(qta.icon("mdi.format-color-fill", color="#FFFFFF"))
+            self.btn_fill_color.setIconSize(QSize(20, 20))
+        self.btn_fill_color.setFixedSize(36, 36)
+        self.btn_fill_color.setToolTip("Cell Fill Color (Background)")
+        self.btn_fill_color.clicked.connect(self._open_fill_menu_from_toolbar)
+        header_row.addWidget(self.btn_fill_color)
+
+        self.btn_text_color = QPushButton()
+        if qta:
+            self.btn_text_color.setIcon(qta.icon("mdi.format-color-text", color="#FFFFFF"))
+            self.btn_text_color.setIconSize(QSize(20, 20))
+        self.btn_text_color.setFixedSize(36, 36)
+        self.btn_text_color.setToolTip("Cell Text Color (Foreground)")
+        self.btn_text_color.clicked.connect(self._open_text_menu_from_toolbar)
+        header_row.addWidget(self.btn_text_color)
+
+        self.btn_clear_fmt = QPushButton()
+        if qta:
+            self.btn_clear_fmt.setIcon(qta.icon("mdi.eraser", color="#FF4D4D"))
+            self.btn_clear_fmt.setIconSize(QSize(20, 20))
+        self.btn_clear_fmt.setFixedSize(36, 36)
+        self.btn_clear_fmt.setToolTip("Clear Selected Cell Formatting")
+        self.btn_clear_fmt.clicked.connect(self._clear_selected_formatting_from_toolbar)
+        header_row.addWidget(self.btn_clear_fmt)
+
+        header_row.addSpacing(8)
+
+        self.btn_undo = QPushButton()
+        if qta:
+            self.btn_undo.setIcon(qta.icon("mdi.undo", color="#FFFFFF"))
+            self.btn_undo.setIconSize(QSize(20, 20))
+        self.btn_undo.setFixedSize(36, 36)
+        self.btn_undo.setToolTip("Undo Cell Formatting (Ctrl+Z)")
+        self.btn_undo.clicked.connect(self._undo_last_action)
+        self.btn_undo.setEnabled(False)
+        header_row.addWidget(self.btn_undo)
+
+        self.btn_redo = QPushButton()
+        if qta:
+            self.btn_redo.setIcon(qta.icon("mdi.redo", color="#FFFFFF"))
+            self.btn_redo.setIconSize(QSize(20, 20))
+        self.btn_redo.setFixedSize(36, 36)
+        self.btn_redo.setToolTip("Redo Cell Formatting (Ctrl+Y)")
+        self.btn_redo.clicked.connect(self._redo_last_action)
+        self.btn_redo.setEnabled(False)
+        header_row.addWidget(self.btn_redo)
+
         header_row.addStretch()
 
         self.btn_refresh = QPushButton()
         if qta:
-            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#241F1B"))
+            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#FFFFFF"))
             self.btn_refresh.setIconSize(QSize(20, 20))
         self.btn_refresh.setFixedSize(36, 36)
         self.btn_refresh.setToolTip("Refresh workspace & trigger LAN database sync")
@@ -71,7 +126,7 @@ class SearchWindow(QWidget):
 
         self.btn_archive_client = QPushButton()
         if qta:
-            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#241F1B"))
+            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#FFFFFF"))
             self.btn_archive_client.setIconSize(QSize(20, 20))
         self.btn_archive_client.setFixedSize(36, 36)
         self.btn_archive_client.setToolTip("Archive selected client")
@@ -103,7 +158,7 @@ class SearchWindow(QWidget):
 
         lbl_services = QLabel("Services:")
         lbl_services.setProperty("class", "SidebarSection")
-        lbl_services.setStyleSheet("color: black;")
+        lbl_services.setStyleSheet("color: #FFFFFF;")
         search_row.addWidget(lbl_services)
         
         self.service_filter = QComboBox()
@@ -116,7 +171,7 @@ class SearchWindow(QWidget):
 
         self.btn_edit_client = QPushButton()
         if qta:
-            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#241F1B"))
+            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#FFFFFF"))
             self.btn_edit_client.setIconSize(QSize(20, 20))
         self.btn_edit_client.setFixedSize(36, 36)
         self.btn_edit_client.setToolTip("Edit selected client profile")
@@ -125,7 +180,7 @@ class SearchWindow(QWidget):
 
         self.btn_delete_client = QPushButton()
         if qta:
-            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#D9383A"))
+            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#FF4D4D"))
             self.btn_delete_client.setIconSize(QSize(20, 20))
         self.btn_delete_client.setFixedSize(36, 36)
         self.btn_delete_client.setToolTip("Permanently delete selected client record")
@@ -134,7 +189,7 @@ class SearchWindow(QWidget):
 
         self.btn_manage_services = QPushButton()
         if qta:
-            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#241F1B"))
+            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#FFFFFF"))
             self.btn_manage_services.setIconSize(QSize(20, 20))
         self.btn_manage_services.setFixedSize(36, 36)
         self.btn_manage_services.setToolTip("Attach / Detach Services for selected client")
@@ -154,14 +209,46 @@ class SearchWindow(QWidget):
         self.results_table.setSortingEnabled(True)
         self.results_table.horizontalHeader().setSortIndicatorShown(True)
         self.results_table.horizontalHeader().setSectionsClickable(True)
+        self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.results_table.customContextMenuRequested.connect(self._show_cell_formatting_menu)
         self.results_table.itemActivated.connect(self._on_item_activated)
         self.results_table.installEventFilter(self)
-        self.results_table.viewport().installEventFilter(self)
+        self.results_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #FFFFFF;
+                alternate-background-color: #FFFFFF;
+                color: #241F1B;
+                gridline-color: #D8CDB4;
+            }
+            QHeaderView::section {
+                background-color: #0A0A0A;
+                color: #FFFFFF;
+                font-weight: 600;
+                border: none;
+                border-bottom: 1px solid #262626;
+                border-right: 1px solid #262626;
+                padding: 6px;
+            }
+            QTableWidget::item {
+                color: #241F1B;
+            }
+            QTableWidget::item:selected {
+                background-color: rgba(46, 155, 95, 0.3);
+                border: 1.5px solid #2E9B5F;
+                color: #241F1B;
+            }
+        """)
         
         from PySide6.QtGui import QKeySequence, QShortcut
         self.copy_shortcut = QShortcut(QKeySequence.Copy, self.results_table)
         self.copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self.copy_shortcut.activated.connect(self._copy_selection_to_clipboard)
+
+        self.undo_shortcut = QShortcut(QKeySequence.Undo, self)
+        self.undo_shortcut.activated.connect(self._undo_last_action)
+
+        self.redo_shortcut = QShortcut(QKeySequence.Redo, self)
+        self.redo_shortcut.activated.connect(self._redo_last_action)
         
         layout.addWidget(self.results_table)
 
@@ -281,6 +368,13 @@ class SearchWindow(QWidget):
         self.service_filter.blockSignals(False)
 
     def _on_search_changed(self, *_):
+        curr_row = self.results_table.currentRow()
+        curr_col = self.results_table.currentColumn()
+        saved_ranges = [
+            (r.topRow(), r.bottomRow(), r.leftColumn(), r.rightColumn())
+            for r in self.results_table.selectedRanges()
+        ]
+
         text = self.search_box.text().strip()
         svc_val = self.service_filter.currentData()
         
@@ -316,15 +410,18 @@ class SearchWindow(QWidget):
             services_map = {s["id"]: s["name"] for s in services}
             col_max_lens = [len(h) for h in headers]
 
+            client_ids = [c["id"] for c in clients]
+            fmt_map = self.db.get_cell_formatting_for_clients(client_ids)
+            from PySide6.QtGui import QColor, QBrush
+
             for r, client in enumerate(clients):
-
-
                 client_id = client["id"]
                 client_vals = client.get("values", {})
                 
                 for c_idx, col in enumerate(mcl_cols):
                     val = client_vals.get(col["id"], "")
                     col_lbl = col["label"].strip().lower()
+                    col_key = str(col["id"])
                     if col.get("field_type") == "id":
                         val = client.get("client_id_token") or f"CLI-{client_id:05d}"
                     elif col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}:
@@ -333,6 +430,19 @@ class SearchWindow(QWidget):
                         col_max_lens[c_idx] = len(val)
                     item = SmartTableWidgetItem(val)
                     item.setData(Qt.UserRole, client_id)
+                    item.setData(Qt.UserRole + 1, col_key)
+
+                    fmt = fmt_map.get((client_id, col_key))
+                    if fmt:
+                        font = item.font()
+                        if fmt.get("bg_color"):
+                            item.setBackground(QBrush(QColor(fmt["bg_color"])))
+                            font.setBold(True)
+                        if fmt.get("fg_color"):
+                            item.setForeground(QBrush(QColor(fmt["fg_color"])))
+                            font.setBold(True)
+                        item.setFont(font)
+
                     self.results_table.setItem(r, c_idx, item)
                     
                 client_svc_ids = client.get("service_ids", [])
@@ -342,11 +452,33 @@ class SearchWindow(QWidget):
                     col_max_lens[-1] = len(svc_val)
                 svc_item = SmartTableWidgetItem(svc_val)
                 svc_item.setData(Qt.UserRole, client_id)
+                svc_item.setData(Qt.UserRole + 1, "services")
+
+                svc_fmt = fmt_map.get((client_id, "services"))
+                if svc_fmt:
+                    font = svc_item.font()
+                    if svc_fmt.get("bg_color"):
+                        svc_item.setBackground(QBrush(QColor(svc_fmt["bg_color"])))
+                        font.setBold(True)
+                    if svc_fmt.get("fg_color"):
+                        svc_item.setForeground(QBrush(QColor(svc_fmt["fg_color"])))
+                        font.setBold(True)
+                    svc_item.setFont(font)
+
                 self.results_table.setItem(r, len(mcl_cols), svc_item)
 
 
             if self.results_table.rowCount() > 0:
-                self.results_table.setCurrentCell(0, 0)
+                if curr_row >= 0 and curr_col >= 0 and curr_row < self.results_table.rowCount() and curr_col < self.results_table.columnCount():
+                    self.results_table.setCurrentCell(curr_row, curr_col)
+                    for top, bottom, left, right in saved_ranges:
+                        if bottom < self.results_table.rowCount() and right < self.results_table.columnCount():
+                            from PySide6.QtWidgets import QTableWidgetSelectionRange
+                            self.results_table.setRangeSelected(
+                                QTableWidgetSelectionRange(top, left, bottom, right), True
+                            )
+                else:
+                    self.results_table.setCurrentCell(0, 0)
 
             # Ultra-fast O(1) column width calculation without scanning all table cell widgets
             fm = self.results_table.fontMetrics()
@@ -368,6 +500,318 @@ class SearchWindow(QWidget):
         client_id = item.data(Qt.UserRole)
         if client_id is not None:
             self.client_selected.emit(client_id)
+
+    def _update_undo_redo_buttons(self):
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.setEnabled(len(self._undo_stack) > 0)
+        if hasattr(self, "btn_redo"):
+            self.btn_redo.setEnabled(len(self._redo_stack) > 0)
+
+    def _undo_last_action(self):
+        if hasattr(self, "search_box") and self.search_box.hasFocus():
+            self.search_box.undo()
+            return
+
+        if not self._undo_stack:
+            return
+
+        op = self._undo_stack.pop()
+        self._redo_stack.append(op)
+
+        to_set = [st for st in op["prev"] if st.get("bg_color") or st.get("fg_color")]
+        to_clear = [(st["client_id"], st["column_key"]) for st in op["prev"] if not (st.get("bg_color") or st.get("fg_color"))]
+
+        if to_set:
+            self.db.bulk_set_cell_formatting(to_set)
+        if to_clear:
+            self.db.clear_cell_formatting(to_clear)
+
+        self._on_search_changed()
+        self._update_undo_redo_buttons()
+        self.toast_requested.emit("Undid cell formatting (Ctrl+Z)", "info")
+
+    def _redo_last_action(self):
+        if hasattr(self, "search_box") and self.search_box.hasFocus():
+            self.search_box.redo()
+            return
+
+        if not self._redo_stack:
+            return
+
+        op = self._redo_stack.pop()
+        self._undo_stack.append(op)
+
+        to_set = [st for st in op["new"] if st.get("bg_color") or st.get("fg_color")]
+        to_clear = [(st["client_id"], st["column_key"]) for st in op["new"] if not (st.get("bg_color") or st.get("fg_color"))]
+
+        if to_set:
+            self.db.bulk_set_cell_formatting(to_set)
+        if to_clear:
+            self.db.clear_cell_formatting(to_clear)
+
+        self._on_search_changed()
+        self._update_undo_redo_buttons()
+        self.toast_requested.emit("Redid cell formatting (Ctrl+Y)", "info")
+
+    def _execute_formatting_operation(self, action_type: str, val: str):
+        from PySide6.QtCore import QPoint
+        selected_ranges = self.results_table.selectedRanges()
+        if not selected_ranges:
+            self.toast_requested.emit("Please select grid cells to format", "info")
+            return
+
+        client_ids = set()
+        for r_range in selected_ranges:
+            for r in range(r_range.topRow(), r_range.bottomRow() + 1):
+                item = self.results_table.item(r, 0)
+                if item:
+                    cid = item.data(Qt.UserRole)
+                    if cid:
+                        client_ids.add(cid)
+
+        existing_map = self.db.get_cell_formatting_for_clients(list(client_ids))
+
+        prev_states = []
+        new_states = []
+        cells_to_format = []
+        cells_to_clear = []
+
+        for r_range in selected_ranges:
+            for r in range(r_range.topRow(), r_range.bottomRow() + 1):
+                for c in range(r_range.leftColumn(), r_range.rightColumn() + 1):
+                    item = self.results_table.item(r, c)
+                    if item:
+                        cid = item.data(Qt.UserRole)
+                        ckey = item.data(Qt.UserRole + 1)
+                        if cid and ckey:
+                            cur_fmt = existing_map.get((cid, str(ckey))) or {}
+                            old_bg = cur_fmt.get("bg_color") or ""
+                            old_fg = cur_fmt.get("fg_color") or ""
+                            prev_states.append({"client_id": cid, "column_key": ckey, "bg_color": old_bg, "fg_color": old_fg})
+
+                            if action_type == "fill":
+                                new_bg = "" if val == "clear" else val
+                                new_fg = old_fg
+                            elif action_type == "text":
+                                new_bg = old_bg
+                                new_fg = "" if val == "clear" else val
+                            elif action_type == "all" and val == "clear":
+                                new_bg = ""
+                                new_fg = ""
+
+                            new_states.append({"client_id": cid, "column_key": ckey, "bg_color": new_bg, "fg_color": new_fg})
+
+                            if new_bg or new_fg:
+                                cells_to_format.append({"client_id": cid, "column_key": ckey, "bg_color": new_bg, "fg_color": new_fg})
+                            else:
+                                cells_to_clear.append((cid, ckey))
+
+        if cells_to_format:
+            self.db.bulk_set_cell_formatting(cells_to_format)
+        if cells_to_clear:
+            self.db.clear_cell_formatting(cells_to_clear)
+
+        self._undo_stack.append({"prev": prev_states, "new": new_states})
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+        self._on_search_changed()
+        count = len(prev_states)
+        if action_type == "all" and val == "clear":
+            self.toast_requested.emit(f"Cleared cell formatting for {count} item(s)", "info")
+        else:
+            self.toast_requested.emit(f"Applied cell formatting to {count} item(s)", "success")
+
+    def _open_fill_menu_from_toolbar(self):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QColorDialog
+        menu = self._build_formatting_menu_fill_only()
+        pos = self.btn_fill_color.mapToGlobal(QPoint(0, self.btn_fill_color.height()))
+        chosen = menu.exec_(pos)
+        if chosen and chosen.data():
+            action_type, val = chosen.data()
+            if val == "custom":
+                color = QColorDialog.getColor(parent=self)
+                if not color.isValid():
+                    return
+                val = color.name()
+            self._execute_formatting_operation(action_type, val)
+
+    def _open_text_menu_from_toolbar(self):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QColorDialog
+        menu = self._build_formatting_menu_text_only()
+        pos = self.btn_text_color.mapToGlobal(QPoint(0, self.btn_text_color.height()))
+        chosen = menu.exec_(pos)
+        if chosen and chosen.data():
+            action_type, val = chosen.data()
+            if val == "custom":
+                color = QColorDialog.getColor(parent=self)
+                if not color.isValid():
+                    return
+                val = color.name()
+            self._execute_formatting_operation(action_type, val)
+
+    def _clear_selected_formatting_from_toolbar(self):
+        self._execute_formatting_operation("all", "clear")
+
+    def _build_formatting_menu_fill_only(self):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        fill_presets = [
+            ("Vivid Yellow", "#FFF200"),
+            ("Soft Yellow", "#FFF3CD"),
+            ("Vivid Green", "#A8D08D"),
+            ("Soft Green", "#D4EDDA"),
+            ("Vivid Red", "#FF9999"),
+            ("Soft Red", "#F8D7DA"),
+            ("Vivid Blue", "#9BC2E6"),
+            ("Soft Blue", "#CCE5FF"),
+            ("Amber Orange", "#FFC000"),
+            ("Lavender Purple", "#C5A5CF"),
+            ("Medium Gray", "#AEAEAE"),
+            ("Dark Navy Header", "#2F5597"),
+        ]
+        for label, hex_val in fill_presets:
+            act = menu.addAction(label)
+            if qta:
+                act.setIcon(qta.icon("mdi.circle", color=hex_val))
+            act.setData(("fill", hex_val))
+        menu.addSeparator()
+        custom_fill_act = menu.addAction("Custom Fill Color...")
+        if qta:
+            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+        custom_fill_act.setData(("fill", "custom"))
+        clear_fill_act = menu.addAction("Clear Fill Color")
+        if qta:
+            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color="#999999"))
+        clear_fill_act.setData(("fill", "clear"))
+        return menu
+
+    def _build_formatting_menu_text_only(self):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        text_presets = [
+            ("Dark Red", "#9C0006"),
+            ("Dark Green", "#006100"),
+            ("Dark Yellow", "#9C6500"),
+            ("Deep Navy", "#002060"),
+            ("Pure Black", "#000000"),
+            ("Pure White", "#FFFFFF"),
+            ("Deep Purple", "#7030A0"),
+        ]
+        for label, hex_val in text_presets:
+            act = menu.addAction(label)
+            if qta:
+                act.setIcon(qta.icon("mdi.circle", color=hex_val))
+            act.setData(("text", hex_val))
+        menu.addSeparator()
+        custom_text_act = menu.addAction("Custom Text Color...")
+        if qta:
+            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+        custom_text_act.setData(("text", "custom"))
+        clear_text_act = menu.addAction("Clear Text Color")
+        if qta:
+            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color="#999999"))
+        clear_text_act.setData(("text", "clear"))
+        return menu
+
+    def _show_cell_formatting_menu(self, pos):
+        from PySide6.QtWidgets import QMenu, QColorDialog
+        from PySide6.QtGui import QColor, QBrush, QFont
+        
+        selected_ranges = self.results_table.selectedRanges()
+        if not selected_ranges:
+            return
+            
+        menu = QMenu(self)
+        
+        # Fill Color Submenu
+        fill_menu = menu.addMenu("Cell Fill Color (Background)")
+        if qta:
+            fill_menu.setIcon(qta.icon("mdi.format-color-fill", color="#241F1B"))
+            
+        fill_presets = [
+            ("Vivid Yellow", "#FFF200"),
+            ("Soft Yellow", "#FFF3CD"),
+            ("Vivid Green", "#A8D08D"),
+            ("Soft Green", "#D4EDDA"),
+            ("Vivid Red", "#FF9999"),
+            ("Soft Red", "#F8D7DA"),
+            ("Vivid Blue", "#9BC2E6"),
+            ("Soft Blue", "#CCE5FF"),
+            ("Amber Orange", "#FFC000"),
+            ("Lavender Purple", "#C5A5CF"),
+            ("Medium Gray", "#AEAEAE"),
+            ("Dark Navy Header", "#2F5597"),
+        ]
+        for label, hex_val in fill_presets:
+            act = fill_menu.addAction(label)
+            if qta:
+                act.setIcon(qta.icon("mdi.circle", color=hex_val))
+            act.setData(("fill", hex_val))
+            
+        fill_menu.addSeparator()
+        custom_fill_act = fill_menu.addAction("Custom Fill Color...")
+        if qta:
+            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+        custom_fill_act.setData(("fill", "custom"))
+        
+        clear_fill_act = fill_menu.addAction("Clear Fill Color")
+        if qta:
+            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color="#999999"))
+        clear_fill_act.setData(("fill", "clear"))
+        
+        # Text Color Submenu
+        text_menu = menu.addMenu("Cell Text Color (Foreground)")
+        if qta:
+            text_menu.setIcon(qta.icon("mdi.format-color-text", color="#241F1B"))
+            
+        text_presets = [
+            ("Dark Red", "#9C0006"),
+            ("Dark Green", "#006100"),
+            ("Dark Yellow", "#9C6500"),
+            ("Deep Navy", "#002060"),
+            ("Pure Black", "#000000"),
+            ("Pure White", "#FFFFFF"),
+            ("Deep Purple", "#7030A0"),
+        ]
+        for label, hex_val in text_presets:
+            act = text_menu.addAction(label)
+            if qta:
+                act.setIcon(qta.icon("mdi.circle", color=hex_val))
+            act.setData(("text", hex_val))
+            
+        text_menu.addSeparator()
+        custom_text_act = text_menu.addAction("Custom Text Color...")
+        if qta:
+            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+        custom_text_act.setData(("text", "custom"))
+        
+        clear_text_act = text_menu.addAction("Clear Text Color")
+        if qta:
+            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color="#999999"))
+        clear_text_act.setData(("text", "clear"))
+        
+        menu.addSeparator()
+        clear_all_act = menu.addAction("Clear All Cell Formatting")
+        if qta:
+            clear_all_act.setIcon(qta.icon("mdi.eraser", color="#D9383A"))
+        clear_all_act.setData(("all", "clear"))
+        
+        chosen_action = menu.exec_(self.results_table.viewport().mapToGlobal(pos))
+        if not chosen_action or not chosen_action.data():
+            return
+            
+        action_type, val = chosen_action.data()
+        
+        if val == "custom":
+            color = QColorDialog.getColor(parent=self)
+            if not color.isValid():
+                return
+            val = color.name()
+            
+        self._execute_formatting_operation(action_type, val)
 
     def _selected_client_id(self):
         item = self.results_table.currentItem()

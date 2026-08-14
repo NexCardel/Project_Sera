@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SAD API Detection Test Bench — Project Sera</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #121212;
+            color: #F8F5F2;
+            margin: 0;
+            padding: 40px;
+        }
+        .card {
+            max-width: 750px;
+            margin: 0 auto;
+            background: #171717;
+            border: 1px solid #333;
+            border-top: 4px solid #2E9B5F;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+        h2 { color: #2E9B5F; margin-top: 0; }
+        p { color: #AAA; font-size: 14px; }
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 18px;
+            background: #222;
+            padding: 12px 16px;
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+        .control-row label {
+            font-weight: bold;
+            color: #4CF9B7;
+            font-size: 13px;
+        }
+        .control-row input {
+            background: #111;
+            border: 1px solid #2E9B5F;
+            border-radius: 4px;
+            color: white;
+            padding: 6px 12px;
+            font-size: 14px;
+            width: 220px;
+        }
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-top: 20px;
+        }
+        button {
+            background-color: #2E9B5F;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 12px 18px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #247C4C; }
+        button.danger { background-color: #D9534F; }
+        button.danger:hover { background-color: #C9302C; }
+        #logBox {
+            margin-top: 24px;
+            background: #0A0A0A;
+            border: 1px solid #2E9B5F;
+            border-radius: 6px;
+            padding: 16px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            color: #39FF14;
+            height: 160px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>Sera API Detection (SAD) — Simulation Bench</h2>
+        <p>Use these controls to test SAD network response interception for any client in your vault.</p>
+
+        <div class="control-row">
+            <label for="clientIdInput">Target Client (ID, Name, or PAN):</label>
+            <input type="text" id="clientIdInput" value="A. Classic" placeholder="e.g. 2 or A. Classic or PAN">
+            <span style="color: #AAA; font-size: 12px;">(Enter Client ID, Name, or PAN)</span>
+        </div>
+
+        <div class="btn-grid">
+            <button onclick="simulateGstFiling()">1. Simulate GST GSTR-3B API Submission</button>
+            <button onclick="simulateIncomeTaxFiling()">2. Simulate Income Tax ITR-V API Submission</button>
+            <button onclick="simulateTracesCorrection()">3. Simulate TRACES XHR Request Submission</button>
+            <button class="danger" onclick="simulateFailedFiling()">4. Simulate Failed Portal Response (Error Code 0)</button>
+        </div>
+
+        <h4 style="margin-top:24px; margin-bottom:8px;">Network Log Output:</h4>
+        <div id="logBox">Awaiting API simulation triggers...</div>
+    </div>
+
+    <script>
+        function logMsg(msg) {
+            const box = document.getElementById('logBox');
+            const time = new Date().toLocaleTimeString();
+            box.innerHTML += `[${time}] ${msg}<br>`;
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function getTargetClientId() {
+            const inputVal = document.getElementById('clientIdInput').value.trim();
+            if (!inputVal) return 1;
+            const parsed = parseInt(inputVal, 10);
+            return isNaN(parsed) ? inputVal : parsed;
+        }
+
+        async function simulateGstFiling() {
+            const target = getTargetClientId();
+            logMsg(`Triggering fetch() to mock GST Filing API for Client '${target}'...`);
+            const mockGstResponse = {
+                status_cd: "1",
+                data: {
+                    arn: "AA270826" + Math.floor(100000000 + Math.random() * 900000000),
+                    ack_num: "AA27082619827364",
+                    filing_date: new Date().toISOString()
+                },
+                message: "GSTR-3B filed successfully"
+            };
+
+            window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', {
+                detail: {
+                    client_id: target,
+                    portal: "GST Portal",
+                    arn: mockGstResponse.data.arn,
+                    capture_method: "SAD_API_Interceptor",
+                    raw_payload: mockGstResponse
+                }
+            }));
+            logMsg(`Intercepted GST ARN: ${mockGstResponse.data.arn} (Target: '${target}')`);
+        }
+
+        async function simulateIncomeTaxFiling() {
+            const target = getTargetClientId();
+            logMsg(`Triggering fetch() to mock Income Tax submitITR API for Client '${target}'...`);
+            const mockItResponse = {
+                status: "SUCCESS",
+                acknowledgementNumber: "28374928" + Math.floor(10000000 + Math.random() * 90000000),
+                assessmentYear: "2026-27"
+            };
+
+            window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', {
+                detail: {
+                    client_id: target,
+                    portal: "Income Tax Portal",
+                    arn: mockItResponse.acknowledgementNumber,
+                    capture_method: "SAD_API_Interceptor",
+                    raw_payload: mockItResponse
+                }
+            }));
+            logMsg(`Intercepted ITR Ack No: ${mockItResponse.acknowledgementNumber} (Target: '${target}')`);
+        }
+
+        async function simulateTracesCorrection() {
+            const target = getTargetClientId();
+            logMsg(`Triggering XHR request to mock TRACES Correction API for Client '${target}'...`);
+            const mockTracesResponse = {
+                status: "SUCCESS",
+                requestNo: "100" + Math.floor(1000000 + Math.random() * 9000000),
+                statusDesc: "Correction submission verified"
+            };
+
+            window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', {
+                detail: {
+                    client_id: target,
+                    portal: "TRACES Portal",
+                    arn: mockTracesResponse.requestNo,
+                    capture_method: "SAD_API_Interceptor",
+                    raw_payload: mockTracesResponse
+                }
+            }));
+            logMsg(`Intercepted TRACES Request No: ${mockTracesResponse.requestNo} (Target: '${target}')`);
+        }
+
+        function simulateFailedFiling() {
+            logMsg("Simulating Failed API Response (status_cd: 0)...");
+            logMsg("SAD correctly ignores non-successful filing responses.");
+        }
+    </script>
+</body>
+</html>

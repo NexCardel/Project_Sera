@@ -7,6 +7,7 @@ App entry point for Project Sera.
 import sys
 import os
 import socket
+import json
 from pathlib import Path
 
 # Qt probes a couple of legacy Windows bitmap fonts during platform startup;
@@ -34,7 +35,7 @@ from database import SeraDatabase
 from ui.windows.search_window import SearchWindow
 from ui.windows.client_detail_window import ClientDetailWindow
 from ui.windows.admin_window import AdminWindow, AdminPinDialog, NewClientDialog
-from ui.windows.dashboard_window import DashboardWindow
+from ui.windows.tracker_dump_window import TrackerDumpWindow
 from ui.utils.theme import get_theme_stylesheet
 from ui.extension_listener import ExtensionListener
 from ui.dialogs.filing_confirmation_dialog import FilingConfirmationDialog
@@ -159,8 +160,8 @@ class SeraApp:
         if not os.path.exists(self.salt_path):
             security.generate_and_save_salt(self.salt_path)
             
-        # Master Password Prompt
-        master_password = self._prompt_master_password()
+        # Auto-unlock vault via stored keyfile or default credentials (no login prompt on launch)
+        master_password = self._get_master_password()
         if not master_password:
             sys.exit(0)
             
@@ -231,44 +232,81 @@ class SeraApp:
         loading_dlg.close()
 
         
-        # Start extension listener (only when tracker is enabled)
-        if self.db.get_setting("tracker_enabled", "0") == "1":
-            self.ext_listener = ExtensionListener(self.app)
-            self.ext_listener.filing_result_received.connect(self._handle_extension_result)
-            self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
-            self.app.aboutToQuit.connect(self.ext_listener.stop)
-            self.ext_listener.start()
+        # Ensure tracker_enabled is set to 1 in DB settings
+        if self.db.get_setting("tracker_enabled", "0") != "1":
+            self.db.set_setting("tracker_enabled", "1")
 
-
+        # Start extension listener on port 49152
+        self.ext_listener = ExtensionListener(self.app)
+        self.ext_listener.filing_result_received.connect(self._handle_extension_result)
+        self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
+        self.app.aboutToQuit.connect(self.ext_listener.stop)
+        self.ext_listener.start()
 
     def _handle_extension_result(self, msg: dict):
         client_id = msg.get('client_id')
         if not client_id: return
         
-        result_type = msg.get('type')
-        arn = msg.get('arn')
-        portal = msg.get('portal')
+        arn = msg.get('arn', 'N/A')
+        portal = msg.get('portal', 'Portal')
+        capture_method = msg.get("capture_method", "DOM_Tracker")
         
-        dlg = FilingConfirmationDialog(self.db, client_id, portal, result_type, arn, self.shell)
-        if dlg.exec() == QDialog.Accepted:
-            ft_id = dlg.get_selected_filing_type_id()
-            period = dlg.get_period_label()
-            
-            if ft_id and period:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self.db.set_filing_status(
-                    client_id=client_id, 
-                    filing_type_id=ft_id, 
-                    period_label=period, 
-                    status="submitted", 
-                    updated_by=self.actor,
-                    arn_number=arn, 
-                    submitted_at=now
-                )
-                QMessageBox.information(self.shell, "Success", f"Saved filing record for period {period}.")
-                self.detail_win.load_client(client_id)
-            else:
-                QMessageBox.warning(self.shell, "Incomplete", "Filing type or period was not provided. Record not saved.")
+        # Directly record into Tracker Dump database (Unhooked from modal prompt)
+        try:
+            self.db.insert_tracker_dump(
+                client_id=int(client_id),
+                service_id=None,
+                portal=portal,
+                period_label=msg.get("period_label", ""),
+                arn_number=arn,
+                capture_method=capture_method,
+                status="submitted",
+                raw_payload_json=json.dumps(msg),
+                captured_by=self.actor
+            )
+            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
+                self.tracker_dump_win.load_data()
+
+            # Non-intrusive toast notification on desktop shell
+            if hasattr(self, "shell") and self.shell:
+                method_label = "SAD API Interceptor" if capture_method == "SAD_API_Interceptor" else "Extension Observer"
+                self.shell.show_toast(f"Captured {portal} Filing ({method_label}) — ARN: {arn}", duration=5000)
+        except Exception as e:
+            print(f"[Tracker Dump Error] {e}")
+
+    def _get_master_password(self) -> str:
+        key_file = APP_DIR / "sera.key"
+        if key_file.exists():
+            try:
+                pwd = key_file.read_text(encoding="utf-8").strip()
+                if pwd:
+                    return pwd
+            except Exception:
+                pass
+        
+        # Default password check
+        default_pwd = "admin123"
+        try:
+            salt = security.load_salt(self.salt_path)
+            hex_key = security.derive_key_hex(default_pwd, salt)
+            # Verify if default password unlocks database
+            test_db = SeraDatabase(self.db_path, hex_key)
+            try:
+                key_file.write_text(default_pwd, encoding="utf-8")
+            except Exception:
+                pass
+            return default_pwd
+        except Exception:
+            pass
+
+        # Fallback: Prompt once if custom password was set, then remember it
+        pwd = self._prompt_master_password()
+        if pwd:
+            try:
+                key_file.write_text(pwd, encoding="utf-8")
+            except Exception:
+                pass
+        return pwd
 
     def _prompt_master_password(self) -> str:
         from PySide6.QtWidgets import QInputDialog, QLineEdit
@@ -280,10 +318,8 @@ class SeraApp:
         return password if ok and password else ""
 
     def _ensure_user_identity(self) -> tuple[str, str]:
-        """Get or prompt for a simple username for this workstation.
+        """Get or create a simple username for this workstation (non-intrusive).
         Stores it in device_identity.txt for future launches."""
-        from PySide6.QtWidgets import QInputDialog, QLineEdit
-
         saved_name = ""
         try:
             saved_name = self.identity_path.read_text(encoding="utf-8").strip()
@@ -293,19 +329,11 @@ class SeraApp:
         if saved_name:
             return saved_name, saved_name
 
-        # First run on this PC: prompt for a display name
-        name_input, ok = QInputDialog.getText(
-            None, "Workstation Setup",
-            "Enter your name or workstation label (e.g. Rajesh, FrontDesk-1):",
-            QLineEdit.Normal, socket.gethostname()
-        )
-        clean_name = name_input.strip() if ok and name_input.strip() else socket.gethostname()
-
+        clean_name = socket.gethostname()
         try:
             self.identity_path.write_text(clean_name, encoding="utf-8")
         except OSError:
             pass
-
         return clean_name, clean_name
 
     def _apply_theme(self):
@@ -363,11 +391,10 @@ class SeraApp:
         self.search_win = SearchWindow(self.db)
         self.detail_win = ClientDetailWindow(self.db, actor=self.actor)
         self.admin_win = AdminWindow(self.db, actor=self.actor)
-        self.dashboard_win = DashboardWindow(self.db)
-        
-        self.shell.add_page(self.search_win)     # Index 0
-        self.shell.add_page(self.admin_win)      # Index 1
-        self.shell.add_page(self.dashboard_win)  # Index 2
+        self.tracker_dump_win = TrackerDumpWindow(self.db)
+        self.shell.add_page(self.search_win)          # Index 0
+        self.shell.add_page(self.admin_win)           # Index 1
+        self.shell.add_page(self.tracker_dump_win)    # Index 2
         
         # Inject detail_win into the slide panel
         self.shell.slide_panel.set_widget(self.detail_win, persistent=True)
@@ -389,7 +416,6 @@ class SeraApp:
         self.admin_win.request_slide_panel.connect(self._open_in_slide_panel)
         self.admin_win.toast_requested.connect(self.shell.show_toast)
         self.admin_win.action_alert_requested.connect(self.shell.show_action_alert)
-        self.dashboard_win.back_requested.connect(self._show_search_from_detail)
         
         # Sidebar Connections
         sidebar = self.shell.sidebar
@@ -397,16 +423,14 @@ class SeraApp:
         sidebar.action_import_csv.connect(self.admin_win._on_import_csv)
         sidebar.action_download_template.connect(self.admin_win._on_download_template)
         sidebar.action_purge_duplicates.connect(self.admin_win._on_purge_duplicates)
-        sidebar.action_drs.connect(self._show_dashboard)
         sidebar.action_manage_clients.connect(self._show_manage_clients)
+        sidebar.action_tracker_dump.connect(self._show_tracker_dump)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
         sidebar.action_manage_mcl.connect(self.admin_win._on_manage_mcl)
         sidebar.action_manage_services.connect(self.admin_win._on_manage_services)
         sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
 
-        sidebar.action_manage_filing_types.connect(self.admin_win._on_manage_filing_types)
-        sidebar.action_import_fps.connect(self.admin_win._on_import_fps)
         sidebar.action_export_csv.connect(self.admin_win._on_export_csv)
         sidebar.action_backup.connect(self.admin_win._on_backup)
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
@@ -456,8 +480,6 @@ class SeraApp:
         try:
             if hasattr(self, "search_win") and self.search_win:
                 self.search_win.refresh()
-            if hasattr(self, "dashboard_win") and self.dashboard_win:
-                self.dashboard_win.refresh()
             if hasattr(self, "admin_win") and self.admin_win:
                 self.admin_win.refresh()
         except Exception as e:
@@ -517,16 +539,18 @@ class SeraApp:
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()
 
-    def _show_dashboard(self):
-        self.shell.dismiss_detail_on_outside = False
-        self.dashboard_win.refresh()
-        self.shell.set_current_page(2)
-        self.shell.slide_panel.slide_out()
-
     def _show_manage_clients(self):
         self.shell.dismiss_detail_on_outside = False
         self.admin_win.refresh()
         self.shell.set_current_page(1)
+        self.shell.slide_panel.slide_out()
+
+    def _show_tracker_dump(self):
+        self.shell.dismiss_detail_on_outside = False
+        if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
+            self.tracker_dump_win.load_data()
+            self.shell.set_current_page(self.tracker_dump_win)
+            self.shell.sidebar.set_active_navigation(self.shell.sidebar.btn_tracker_dump)
         self.shell.slide_panel.slide_out()
 
     def _open_in_slide_panel(self, widget, title: str):

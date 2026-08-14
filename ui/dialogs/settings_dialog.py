@@ -61,7 +61,6 @@ class SettingsDialog(QDialog):
         
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("Light Mode (Default)", "light")
-        self.theme_combo.addItem("Dark Mode (Sleek)", "dark")
         form_general.addRow("Application Theme:", self.theme_combo)
 
         self.window_mode_combo = QComboBox()
@@ -103,10 +102,10 @@ class SettingsDialog(QDialog):
         separator.setProperty("class", "Separator")
         form_general.addRow(separator)
 
-        self.drs_enabled_check = QCheckBox("Enable DRS (Deadline Reminder System)")
-        self.drs_enabled_check.setEnabled(True)
-        self.drs_enabled_check.setToolTip("Toggle the DRS (Deadline Reminder System) filing status panel.")
-        form_general.addRow("", self.drs_enabled_check)
+
+        self.autostart_check = QCheckBox("Launch Project Sera automatically on Windows PC startup")
+        self.autostart_check.setToolTip("Automatically launch Project Sera in background when Windows starts.")
+        form_general.addRow("", self.autostart_check)
 
         self.tracker_enabled_check = QCheckBox("Enable Filing Success Tracker (Extension)")
         self.tracker_enabled_check.setEnabled(True)
@@ -127,7 +126,36 @@ class SettingsDialog(QDialog):
 
         tabs.addTab(tab_general, "General")
 
-        # --- TAB 2: Main Screen Visibility ---
+        # --- TAB 2: Action Buttons ---
+        tab_buttons = QWidget()
+        layout_btn = QVBoxLayout(tab_buttons)
+        layout_btn.setSpacing(12)
+        layout_btn.setContentsMargins(14, 14, 14, 14)
+
+        lbl_btn_info = QLabel("Configure visibility of service action buttons in Client Detail view:")
+        lbl_btn_info.setStyleSheet("font-weight: 600; color: #241F1B; font-size: 13px;")
+        layout_btn.addWidget(lbl_btn_info)
+
+        self.btn_ext_check = QCheckBox("Enable 'Ext' Button (Extension Autofill ⚡)")
+        self.btn_ext_check.setToolTip("Toggle the Ext (Extension Autofill) button in Client Detail view.")
+        layout_btn.addWidget(self.btn_ext_check)
+
+        self.btn_assist_check = QCheckBox("Enable 'Assist' Button (SMTI Manual Assist 📋)")
+        self.btn_assist_check.setToolTip("Toggle the Assist (SMTI Manual Assist) button in Client Detail view.")
+        layout_btn.addWidget(self.btn_assist_check)
+
+        self.btn_copy_check = QCheckBox("Enable 'Copy' Button (MECP Manual Copy 📄)")
+        self.btn_copy_check.setToolTip("Toggle the Copy (MECP Manual Copy) button in Client Detail view.")
+        layout_btn.addWidget(self.btn_copy_check)
+
+        self.show_hide_enabled_check = QCheckBox("Enable 'Show/Hide' Password Eye Buttons (👁️)")
+        self.show_hide_enabled_check.setToolTip("Toggle the Show/Hide eye button next to passwords in Client Detail view.")
+        layout_btn.addWidget(self.show_hide_enabled_check)
+
+        layout_btn.addStretch()
+        tabs.addTab(tab_buttons, "Action Buttons")
+
+        # --- TAB 3: Main Screen Visibility ---
         tab_main_screen = QWidget()
         layout_ms = QVBoxLayout(tab_main_screen)
         layout_ms.addWidget(QLabel("Select which columns should appear on the search grid:"))
@@ -148,7 +176,7 @@ class SettingsDialog(QDialog):
         layout_ms.addWidget(scroll_ms)
         tabs.addTab(tab_main_screen, "Main Screen")
         
-        # --- TAB 3: Quick-Copy Permissions ---
+        # --- TAB 4: Quick-Copy Permissions ---
         tab_qc = QWidget()
         layout_qc = QVBoxLayout(tab_qc)
         layout_qc.addWidget(QLabel("Select which fields employees can directly click to copy:"))
@@ -169,7 +197,7 @@ class SettingsDialog(QDialog):
         layout_qc.addWidget(scroll_qc)
         tabs.addTab(tab_qc, "Quick-Copy")
 
-        # --- TAB 4: Admin Screen Visibility ---
+        # --- TAB 5: Admin Screen Visibility ---
         tab_admin_screen = QWidget()
         layout_as = QVBoxLayout(tab_admin_screen)
         layout_as.addWidget(QLabel("Select which columns should appear on the search grid in Admin Mode:"))
@@ -233,17 +261,24 @@ class SettingsDialog(QDialog):
         quick_copy = self.db.get_setting("quick_copy_enabled", "0")
         self.quick_copy_check.setChecked(quick_copy == "1")
 
+        ext_btn = self.db.get_setting("extension_autofill_enabled", "1")
+        self.btn_ext_check.setChecked(ext_btn == "1")
+
+        assist_btn = self.db.get_setting("manual_assist_enabled", "1")
+        self.btn_assist_check.setChecked(assist_btn == "1")
+
+        copy_btn = self.db.get_setting("manual_copy_btn_enabled", "1")
+        self.btn_copy_check.setChecked(copy_btn == "1")
+
         show_hide_btn = self.db.get_setting("show_hide_btn_enabled", "1")
         self.show_hide_enabled_check.setChecked(show_hide_btn == "1")
 
-        manual_copy_btn = self.db.get_setting("manual_copy_btn_enabled", "1")
-        self.manual_copy_enabled_check.setChecked(manual_copy_btn == "1")
-
-        drs_enabled = self.db.get_setting("drs_enabled", "0")
-        self.drs_enabled_check.setChecked(drs_enabled == "1")
 
         tracker_enabled = self.db.get_setting("tracker_enabled", "0")
         self.tracker_enabled_check.setChecked(tracker_enabled == "1")
+
+        from ui.utils import autostart
+        self.autostart_check.setChecked(autostart.is_autostart_enabled())
 
     def _on_save(self):
         theme = self.theme_combo.currentData()
@@ -252,10 +287,14 @@ class SettingsDialog(QDialog):
         reveal_count = self.reveal_count_spin.value()
         clipboard_sec = self.clipboard_spin.value()
         quick_copy_val = "1" if self.quick_copy_check.isChecked() else "0"
+        ext_btn_val = "1" if self.btn_ext_check.isChecked() else "0"
+        assist_btn_val = "1" if self.btn_assist_check.isChecked() else "0"
+        copy_btn_val = "1" if self.btn_copy_check.isChecked() else "0"
         show_hide_val = "1" if self.show_hide_enabled_check.isChecked() else "0"
-        manual_copy_val = "1" if self.manual_copy_enabled_check.isChecked() else "0"
-        drs_val = "1" if self.drs_enabled_check.isChecked() else "0"
         tracker_val = "1" if self.tracker_enabled_check.isChecked() else "0"
+
+        from ui.utils import autostart
+        autostart.set_autostart_enabled(self.autostart_check.isChecked())
 
         try:
             # Save General Settings
@@ -265,9 +304,10 @@ class SettingsDialog(QDialog):
             self.db.set_setting("mask_reveal_count", str(reveal_count))
             self.db.set_setting("clipboard_clear_seconds", str(clipboard_sec))
             self.db.set_setting("quick_copy_enabled", quick_copy_val)
+            self.db.set_setting("extension_autofill_enabled", ext_btn_val)
+            self.db.set_setting("manual_assist_enabled", assist_btn_val)
+            self.db.set_setting("manual_copy_btn_enabled", copy_btn_val)
             self.db.set_setting("show_hide_btn_enabled", show_hide_val)
-            self.db.set_setting("manual_copy_btn_enabled", manual_copy_val)
-            self.db.set_setting("drs_enabled", drs_val)
             self.db.set_setting("tracker_enabled", tracker_val)
             
             # Broadcast tracker toggle to browser extension immediately
@@ -285,7 +325,7 @@ class SettingsDialog(QDialog):
 
             self.db.log_action(
                 self.actor, "update_settings",
-                detail=f"Theme: {theme}, WindowMode: {win_mode}, Masking: {mode}, Quick-Copy Master: {quick_copy_val}, DRS: {drs_val}, Tracker: {tracker_val}, Visibility IDs: {len(visible_ids)}, QuickCopy IDs: {len(qc_allowed_ids)}, AdminVisibility IDs: {len(admin_visible_ids)}"
+                detail=f"Theme: {theme}, WindowMode: {win_mode}, Masking: {mode}, Quick-Copy Master: {quick_copy_val}, Tracker: {tracker_val}, Visibility IDs: {len(visible_ids)}, QuickCopy IDs: {len(qc_allowed_ids)}, AdminVisibility IDs: {len(admin_visible_ids)}"
             )
 
 

@@ -1,0 +1,25 @@
+# Project Sera - Dependency List
+# Install with: pip install -r requirements.txt
+
+# --- UI Framework ---
+# PySide6 is used instead of PyQt6 because it is LGPL-licensed, which is
+# free to use in closed-source commercial/internal tools. PyQt6 requires
+# a paid commercial license for that use case.
+# Version left unpinned (floor only) so pip can pick whatever build is
+# compatible with your installed Python version.
+PySide6>=6.7
+qtawesome>=1.3.1
+
+# --- Encrypted SQLite (SQLCipher bindings) ---
+# Prebuilt Windows/Mac/Linux wheels, no manual OpenSSL/SQLCipher compile needed.
+sqlcipher3-wheels>=0.5.3
+
+# --- Browser Automation ---
+playwright>=1.46
+
+# --- Security / Key Derivation ---
+argon2-cffi>=23.1      # Admin PIN hashing (Argon2id)
+cryptography>=43.0     # PBKDF2 key derivation for the DB encryption key
+
+# --- Packaging ---
+pyinstaller>=6.10

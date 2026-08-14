@@ -133,14 +133,12 @@ class Sidebar(QFrame):
     action_import_csv = Signal()
     action_download_template = Signal()
     action_purge_duplicates = Signal()
-    action_drs = Signal()
     action_manage_clients = Signal()
+    action_tracker_dump = Signal()
     action_audit_log = Signal()
     action_manage_mcl = Signal()
     action_manage_services = Signal()
     action_manage_staff = Signal()
-    action_manage_filing_types = Signal()
-    action_import_fps = Signal()
     action_export_csv = Signal()
     action_backup = Signal()
     
@@ -244,10 +242,6 @@ class Sidebar(QFrame):
         self.admin_widgets = []
         self._nav_buttons = []
         
-        # --- Dashboard ---
-        self.btn_drs = self._create_nav_button("Dashboard", self.action_drs, "mdi.home-outline")
-        self.btn_drs.setEnabled(False)
-        self.btn_drs.setToolTip("DRS (Dashboard & Deadline Reminder System) is currently offline for system maintenance.")
 
         # --- Clients Group ---
         self.lbl_clients, self.l_clients = self._create_accordion_group("Clients", "mdi.account-multiple-outline", expanded=True)
@@ -258,6 +252,7 @@ class Sidebar(QFrame):
         self.btn_manage_clients = self._create_admin_sub_nav_button(
             "Manage Clients", self.action_manage_clients, parent_layout=self.l_clients
         )
+        self.btn_tracker_dump = self._create_sub_nav_button("Tracker Dump", self.action_tracker_dump, parent_layout=self.l_clients)
         self.btn_audit = self._create_admin_sub_nav_button("Audit Log", self.action_audit_log, parent_layout=self.l_clients)
         self.btn_manage_mcl = self._create_admin_sub_nav_button("Manage MCL", self.action_manage_mcl, parent_layout=self.l_clients)
         self.btn_purge = self._create_sub_nav_button("Purge Duplicates", self.action_purge_duplicates, parent_layout=self.l_clients)
@@ -266,13 +261,6 @@ class Sidebar(QFrame):
         self.lbl_settings, self.l_settings = self._create_accordion_group("Settings", "mdi.cog-outline", expanded=True)
         
         self.btn_settings = self._create_admin_sub_nav_button("General", self.action_settings, parent_layout=self.l_settings)
-        self.btn_manage_ft = self._create_admin_sub_nav_button("Filing Types", self.action_manage_filing_types, parent_layout=self.l_settings)
-        self.btn_manage_ft.setEnabled(False)
-        self.btn_manage_ft.setToolTip("Filing Types management is currently offline because DRS is offline.")
-
-        self.btn_import_fps = self._create_admin_sub_nav_button("Periods", self.action_import_fps, parent_layout=self.l_settings)
-        self.btn_import_fps.setEnabled(False)
-        self.btn_import_fps.setToolTip("Filing Periods management is currently offline because DRS is offline.")
 
         self.btn_dl_template = self._create_sub_nav_button("CSV Templates", self.action_download_template, parent_layout=self.l_settings)
 

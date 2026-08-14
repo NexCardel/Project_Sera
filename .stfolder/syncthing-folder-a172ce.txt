@@ -1,0 +1,5 @@
+# This directory is a Syncthing folder marker.
+# Do not delete.
+
+folderID: app
+created: 2026-08-13T17:36:19+05:30
