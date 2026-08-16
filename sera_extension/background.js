@@ -5,6 +5,7 @@ function connectToNativeHost() {
   const hostName = "com.amanassociates.sera";
   try {
     nativePort = chrome.runtime.connectNative(hostName);
+    console.log('Sera native host connection established');
     nativePort.onMessage.addListener((message) => {
       console.log("Received from Sera desktop:", message);
       if (message.type === "autofill" && message.url) {
@@ -12,10 +13,13 @@ function connectToNativeHost() {
         else if (message.mode === "manual_assist") handleManualAssistTab(message);
         else handleAutofillTab(message);
       } else if (message.type === "update_settings") {
-        if (message.tracker_enabled === false) {
-          chrome.storage.local.set({ trackerEnabled: false, activeAutofillPayload: null });
+        const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
+        const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
+        const overallTracker = fst || sad;
+        if (!overallTracker) {
+          chrome.storage.local.set({ trackerEnabled: false, fstEnabled: false, sadEnabled: false, activeAutofillPayload: null });
         } else {
-          chrome.storage.local.set({ trackerEnabled: true });
+          chrome.storage.local.set({ trackerEnabled: true, fstEnabled: fst, sadEnabled: sad });
         }
       }
     });
@@ -74,9 +78,55 @@ try {
 } catch (e) {}
 
 chrome.runtime.onStartup.addListener(ensureConnected);
-chrome.runtime.onInstalled.addListener(ensureConnected);
+chrome.runtime.onInstalled.addListener(() => {
+  // Ensure native connection
+  ensureConnected();
+  // Enable tracker by default the first time the extension is installed
+  chrome.storage.local.get(['trackerEnabled'], (data) => {
+    if (data.trackerEnabled === undefined) {
+      chrome.storage.local.set({ trackerEnabled: true });
+    }
+  });
+});
 
 ensureConnected();
+
+console.log('Sera SAD: background.js module loaded, registering listeners.');
+
+// SAD: Inject net_interceptor.js into a tab's MAIN world.
+// chrome.scripting.executeScript with world:'MAIN' bypasses page CSP entirely.
+function injectSAD(tabId, reason) {
+  console.log('Sera SAD: injectSAD called for tab', tabId, '| reason:', reason);
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    files: ['content_scripts/net_interceptor.js'],
+    world: 'MAIN'
+  }).then(() => {
+    console.log('Sera SAD: ✅ injected into tab', tabId);
+  }).catch(err => {
+    console.log('Sera SAD: ❌ inject failed for tab', tabId, ':', err.message);
+  });
+}
+
+// Inject into every tab that finishes loading
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  console.log('Sera SAD: tabs.onUpdated fired', tabId, changeInfo.status, tab && tab.url);
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return;
+  injectSAD(tabId, 'onUpdated');
+});
+
+// Also inject into ALL already-open tabs when the service worker starts up
+// (handles the case where the extension is reloaded while tabs are already open)
+chrome.tabs.query({}, (tabs) => {
+  console.log('Sera SAD: startup tab scan, found', tabs.length, 'tabs');
+  for (const tab of tabs) {
+    if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) continue;
+    if (tab.status === 'complete') injectSAD(tab.id, 'startup-scan');
+  }
+});
+
+
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
@@ -306,9 +356,13 @@ function handleAutofillTab(message) {
 
   // Store payload  // Keep the active payload around for the content scripts
   const isTrackerEnabled = message.tracker_enabled === true;
+  const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
+  const isSadEnabled = message.sad_enabled !== false && isTrackerEnabled;
   chrome.storage.local.set({ 
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, ts: Date.now() },
-    trackerEnabled: isTrackerEnabled
+    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, ts: Date.now() },
+    trackerEnabled: isTrackerEnabled,
+    fstEnabled: isFstEnabled,
+    sadEnabled: isSadEnabled
   });
 
   chrome.tabs.query({}, (tabs) => {
@@ -529,9 +583,19 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log("Sera background: received runtime message:", msg);
   if (msg.type === "filing_result") {
-    if (nativePort) nativePort.postMessage(msg);
-    else {
+    console.log("Sera background: handling filing_result, nativePort is", nativePort ? "connected" : "null");
+    if (nativePort) {
+      try {
+        nativePort.postMessage(msg);
+        console.log("Sera background: successfully posted filing_result to native host");
+      } catch (err) {
+        console.error("Sera background: failed to postMessage to nativePort:", err);
+      }
+    } else {
+      console.warn("Sera background: nativePort is null, reconnecting and caching...");
+      ensureConnected();
       chrome.storage.local.get({ pendingResults: [] }, data => {
         chrome.storage.local.set({ pendingResults: [...data.pendingResults, msg] });
       });

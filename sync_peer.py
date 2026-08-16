@@ -47,9 +47,21 @@ def _utc_now_iso() -> str:
 
 
 class PeerInfo:
-    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen")
+    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count")
 
-    def __init__(self, username, host, ip, sync_port, app_version="Unknown", db_mtime="", last_seen=0.0):
+    def __init__(
+        self,
+        username,
+        host,
+        ip,
+        sync_port,
+        app_version="Unknown",
+        db_mtime="",
+        last_seen=0.0,
+        inv_frames=False,
+        sync_revision=0,
+        client_count=0,
+    ):
         self.username = username
         self.host = host
         self.ip = ip
@@ -57,6 +69,9 @@ class PeerInfo:
         self.app_version = app_version
         self.db_mtime = db_mtime
         self.last_seen = last_seen
+        self.inv_frames = bool(inv_frames)
+        self.sync_revision = int(sync_revision)
+        self.client_count = int(client_count)
 
     def key(self) -> str:
         return f"{self.host}:{self.ip}"
@@ -70,6 +85,9 @@ class PeerInfo:
             "app_version": self.app_version,
             "db_mtime": self.db_mtime,
             "last_seen": self.last_seen,
+            "inv_frames": self.inv_frames,
+            "sync_revision": self.sync_revision,
+            "client_count": self.client_count,
         }
 
 
@@ -78,11 +96,15 @@ class SyncPeerService:
     Owns the beacon thread, listener thread, TCP sync server, and the
     peer table. Instantiate once per app run and call start()/stop().
 
-    Callback hooks (all optional, called from background threads -- callers
-    that touch Qt widgets must marshal back to the main thread themselves):
-        on_peer_table_changed(list[dict])
-        on_sync_received()                          # we received a database push, app should restart
-        on_error(str)
+    Supports two synchronization types:
+      - Initial Sync: Full database + salt transfer with pre-sync backup and app restart.
+      - Live Sync: Lightweight incremental update with real-time UI refresh without restart.
+
+    Supports the inv_frames protocol:
+      - When inv_frames is True on a node, it rejects ALL incoming data but can push its DB.
+      - If only 1 node on LAN has inv_frames ON, it acts as the master authority, and normal nodes accept.
+      - If >1 node has inv_frames ON, the entire LAN sync halts (complementary freeze) to prevent corruption.
+      - If 0 nodes have inv_frames ON, normal P2P sync operates freely.
     """
 
     def __init__(
@@ -92,6 +114,7 @@ class SyncPeerService:
         username: str,
         sync_port: int = SYNC_PORT,
         db: Optional[Any] = None,
+        inv_frames: bool = False,
         on_peer_table_changed: Optional[Callable] = None,
         on_sync_received: Optional[Callable] = None,
         on_live_sync_received: Optional[Callable] = None,
@@ -104,6 +127,7 @@ class SyncPeerService:
         self.username = username
         self.sync_port = sync_port
         self.db = db
+        self.inv_frames = bool(inv_frames)
         self.host_name = socket.gethostname()
 
         self.on_peer_table_changed = on_peer_table_changed
@@ -123,6 +147,64 @@ class SyncPeerService:
         self._threads: list[threading.Thread] = []
         self._udp_sock: Optional[socket.socket] = None
         self._tcp_server: Optional[socket.socket] = None
+
+    def set_inv_frames(self, enabled: bool):
+        self.inv_frames = bool(enabled)
+        mode_str = "ENABLED" if self.inv_frames else "DISABLED"
+        metrics = self._get_local_metrics()
+        self.log_activity(
+            "INV_FRAMES",
+            f"Inv-Frames mode {mode_str}",
+            f"Node is Sovereign Master (Rev: {metrics.get('sync_revision', 0)})" if self.inv_frames else f"Node returned to normal P2P mode (Rev: {metrics.get('sync_revision', 0)})",
+        )
+        self.send_immediate_beacon()
+        self._safe_call(self.on_peer_table_changed, self._peer_list())
+
+    def send_immediate_beacon(self):
+        def _send():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                payload = self._beacon_payload()
+                sock.sendto(payload, ("255.255.255.255", BEACON_PORT))
+                sock.close()
+            except Exception:
+                pass
+        threading.Thread(target=_send, daemon=True).start()
+
+    def get_active_inv_frames_nodes(self) -> list[str]:
+        """Returns hostnames of all active nodes currently running with inv_frames = True."""
+        nodes = []
+        if self.inv_frames:
+            nodes.append(self.host_name)
+        cutoff = time.time() - PEER_TIMEOUT_SEC
+        with self._peers_lock:
+            for p in self._peers.values():
+                if p.inv_frames and p.last_seen >= cutoff and p.host not in nodes:
+                    nodes.append(p.host)
+        return nodes
+
+    def get_sync_state(self) -> dict:
+        """Evaluates LAN sync state according to inv_frames protocol rules."""
+        active_inv = self.get_active_inv_frames_nodes()
+        total_inv = len(active_inv)
+        if total_inv > 1:
+            status = "LAN_SYNC_FROZEN_MULTI_INV"
+            authority = None
+        elif total_inv == 1:
+            authority = active_inv[0]
+            status = "INV_FRAMES_MASTER" if self.inv_frames else "INV_FRAMES_FOLLOWER"
+        else:
+            authority = None
+            status = "NORMAL"
+        return {
+            "status": status,
+            "authority_host": authority,
+            "active_inv_frames_nodes": active_inv,
+            "total_inv_frames_count": total_inv,
+            "local_inv_frames": self.inv_frames,
+        }
 
     def log_activity(self, cat: str, title: str, detail: str = ""):
         entry = {
@@ -215,6 +297,7 @@ class SyncPeerService:
             "client_count": metrics.get("client_count", 0),
             "sync_revision": metrics.get("sync_revision", 0),
             "latest_timestamp": metrics.get("latest_timestamp", ""),
+            "inv_frames": self.inv_frames,
         }
         return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
@@ -264,6 +347,10 @@ class SyncPeerService:
         except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError):
             return
 
+        inv_frames = bool(body.get("inv_frames", False))
+        sync_rev = int(body.get("sync_revision", 0))
+        client_cnt = int(body.get("client_count", 0))
+
         peer = PeerInfo(
             username=body.get("username", "Unknown"),
             host=body["host"],
@@ -272,11 +359,24 @@ class SyncPeerService:
             app_version=body.get("app_version", "Unknown"),
             db_mtime=body.get("db_mtime", ""),
             last_seen=time.time(),
+            inv_frames=inv_frames,
+            sync_revision=sync_rev,
+            client_count=client_cnt,
         )
 
         pk = peer.key()
+        prev_peer = None
         with self._peers_lock:
+            prev_peer = self._peers.get(pk)
             self._peers[pk] = peer
+
+        # Log node discovery and revision score updates in live activity stream
+        if not prev_peer:
+            inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
+            self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}")
+        elif prev_peer.sync_revision != sync_rev or prev_peer.inv_frames != inv_frames:
+            inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
+            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}")
 
         self._safe_call(self.on_peer_table_changed, self._peer_list())
 
@@ -327,7 +427,7 @@ class SyncPeerService:
         self._spawn(loop, "sync-tcp-server")
 
     def _handle_incoming_push(self, conn: socket.socket, sender_ip: str):
-        """Receives database pushes or SSAL audit logs from network peers."""
+        """Receives database pushes or SSAL audit logs from network peers obeying inv_frames protocol."""
         try:
             conn.settimeout(SOCK_TIMEOUT_SEC)
 
@@ -335,16 +435,56 @@ class SyncPeerService:
             header_raw = _recv_framed(conn)
             header = json.loads(header_raw.decode("utf-8"))
             action = header.get("action")
+            sender_host = header.get("host", sender_ip)
+            sender_username = header.get("username", "Unknown")
+            is_live_update = bool(header.get("live_update", False))
+            force_override = bool(header.get("force_override", False))
+            incoming_client_count = int(header.get("client_count", 0))
+            incoming_sync_rev = int(header.get("sync_revision", 0))
+            incoming_latest_ts = str(header.get("latest_timestamp", ""))
+            sender_inv_frames = bool(header.get("inv_frames", False))
+
+            sync_state = self.get_sync_state()
+            local_metrics = self._get_local_metrics()
+            local_client_count = local_metrics.get("client_count", 0)
+            local_sync_rev = local_metrics.get("sync_revision", 0)
+            local_latest_ts = local_metrics.get("latest_timestamp", "")
+
+            # ---------------- PROTOCOL RULE 1: Local inv_frames Mode ----------------
+            if self.inv_frames:
+                reject_reason = f"INV_FRAMES_ACTIVE: Local node ({self.host_name}) is in Inv-Frames mode and rejects all incoming data."
+                print(f"[Inv-Frames] Rejected {action} from {sender_host}: {reject_reason}")
+                self.log_activity("INV_FRAMES", f"Rejected {action} from {sender_host}", f"Local Inv-Frames is ON | Sender Rev: {incoming_sync_rev}, Local Rev: {local_sync_rev}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                return
+
+            # ---------------- PROTOCOL RULE 2: Multiple inv_frames Nodes (LAN Freeze) ----------------
+            if sync_state["status"] == "LAN_SYNC_FROZEN_MULTI_INV":
+                inv_nodes_str = ", ".join(sync_state["active_inv_frames_nodes"])
+                reject_reason = f"LAN_SYNC_FROZEN: Multiple nodes ({inv_nodes_str}) have Inv-Frames active. All LAN sync is paused to prevent corruption."
+                print(f"[LAN Sync Frozen] Blocked sync from {sender_host}: {reject_reason}")
+                self.log_activity("GUARD", f"Blocked sync from {sender_host}", f"LAN Sync Frozen (Multiple Inv-Frames nodes: {inv_nodes_str}) | Sender Rev: {incoming_sync_rev}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                return
+
+            # ---------------- PROTOCOL RULE 3: Single inv_frames Authority Node ----------------
+            if sync_state["status"] == "INV_FRAMES_FOLLOWER":
+                authority = sync_state["authority_host"]
+                if sender_host != authority and not sender_inv_frames:
+                    reject_reason = f"INV_FRAMES_AUTHORITY_ACTIVE: Node {authority} is the active Inv-Frames authority. Sync between normal nodes is locked."
+                    print(f"[Inv-Frames Lock] Blocked non-authority push from {sender_host}: {reject_reason}")
+                    self.log_activity("INV_FRAMES", f"Blocked push from {sender_host}", f"Waiting for Authority {authority} | Sender Rev: {incoming_sync_rev}")
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                    return
 
             if action == "push_audit_log":
-                sender_host = header.get("host", sender_ip)
                 logs = header.get("logs", [])
                 live_dir = os.path.dirname(self.db_path)
                 try:
                     from database import PeerAuditLogManager
                     mgr = PeerAuditLogManager(live_dir)
                     mgr.store_peer_logs(sender_host, logs)
-                    self.log_activity("SSAL", f"Received {len(logs)} audit log(s) from {sender_host}")
+                    self.log_activity("SSAL", f"Received {len(logs)} audit log(s) from {sender_host}", f"Local Rev: {local_sync_rev}")
                 except Exception as ex:
                     print(f"[SSAL] Error storing peer logs from {sender_host}: {ex}")
 
@@ -353,10 +493,9 @@ class SyncPeerService:
                 return
 
             if action == "request_database_pull":
-                sender_host = header.get("host", sender_ip)
                 peer_port = int(header.get("sync_port", SYNC_PORT))
                 print(f"[LAN Pull Request] {sender_host} requested database pull. Pushing local DB...")
-                self.log_activity("PULL", f"Pull request from {sender_host}", f"Fulfilling push to {sender_ip}:{peer_port}")
+                self.log_activity("PULL", f"Pull request from {sender_host}", f"Local Rev Score: {local_sync_rev} | Pushing to {sender_ip}:{peer_port}")
                 _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
                 def fulfill_pull():
                     time.sleep(0.2)
@@ -368,26 +507,13 @@ class SyncPeerService:
                 conn.close()
                 return
 
-            sender_username = header.get("username", "Unknown")
-            sender_host = header.get("host", sender_ip)
-            is_live_update = bool(header.get("live_update", False))
-            force_override = bool(header.get("force_override", False))
-            incoming_client_count = int(header.get("client_count", 0))
-            incoming_sync_rev = int(header.get("sync_revision", 0))
-            incoming_latest_ts = str(header.get("latest_timestamp", ""))
             db_size = int(header["db_size"])
             salt_size = int(header["salt_size"])
 
-            # EMPTY DATABASE & REVISION PROTECTION GUARD:
-            # 1. An empty incoming database (0 clients) can NEVER overwrite a local populated database (>0 clients)!
-            # 2. A database push with fewer clients or a lower revision cannot overwrite local work!
-            local_metrics = self._get_local_metrics()
-            local_client_count = local_metrics.get("client_count", 0)
-            local_sync_rev = local_metrics.get("sync_revision", 0)
-            local_latest_ts = local_metrics.get("latest_timestamp", "")
-
-            reject_reason = None
-            if not force_override:
+            # ---------------- PROTOCOL RULE 4: Normal P2P Sync Guard ----------------
+            # If in Normal P2P mode (not following a sovereign Inv-Frames node), enforce standard revision protection
+            if sync_state["status"] == "NORMAL" and not force_override:
+                reject_reason = None
                 if incoming_client_count == 0 and local_client_count > 0:
                     reject_reason = f"Incoming empty database (0 clients) rejected to protect local records ({local_client_count} clients)"
                 elif incoming_client_count < local_client_count:
@@ -397,19 +523,19 @@ class SyncPeerService:
                 elif incoming_client_count == local_client_count and incoming_sync_rev == local_sync_rev and local_latest_ts > incoming_latest_ts:
                     reject_reason = f"Incoming database timestamp ({incoming_latest_ts}) is older than local timestamp ({local_latest_ts})"
 
-            if reject_reason:
-                print(f"[Sync Guard] Rejected incoming DB push from {sender_host}: {reject_reason}")
-                self.log_activity("GUARD", f"Rejected DB push from {sender_host}", reject_reason)
-                _send_framed(conn, json.dumps({
-                    "status": "rejected",
-                    "reason": reject_reason
-                }).encode("utf-8"))
-                # Trigger a reverse auto-push so sender receives our populated/newer database
-                def reverse_sync():
-                    time.sleep(1.0)
-                    self.push_to(sender_ip, int(header.get("sync_port", SYNC_PORT)), live_update=True)
-                threading.Thread(target=reverse_sync, daemon=True).start()
-                return
+                if reject_reason:
+                    print(f"[Sync Guard] Rejected incoming DB push from {sender_host}: {reject_reason}")
+                    self.log_activity("GUARD", f"Rejected DB push from {sender_host}", f"{reject_reason} | Sender Rev: {incoming_sync_rev}, Local Rev: {local_sync_rev}")
+                    _send_framed(conn, json.dumps({
+                        "status": "rejected",
+                        "reason": reject_reason
+                    }).encode("utf-8"))
+                    # Trigger reverse auto-push so sender receives our higher-revision database
+                    def reverse_sync():
+                        time.sleep(1.0)
+                        self.push_to(sender_ip, int(header.get("sync_port", SYNC_PORT)), live_update=True)
+                    threading.Thread(target=reverse_sync, daemon=True).start()
+                    return
 
             # Send ACK to proceed
             _send_framed(conn, json.dumps({"status": "ready"}).encode("utf-8"))
@@ -451,7 +577,6 @@ class SyncPeerService:
             safe_write_file(self.salt_path, salt_bytes)
 
             # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal)
-            # so SQLite doesn't replay old transactions upon app restart!
             for ext in ["-wal", "-shm", "-journal"]:
                 sidecar = self.db_path + ext
                 if os.path.exists(sidecar):
@@ -462,7 +587,13 @@ class SyncPeerService:
 
             # Send success confirmation
             _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
-            self.log_activity("SYNC IN", f"Accepted DB update from {sender_username} ({sender_host})", f"Live update: {is_live_update}")
+            sync_type_label = "Live Sync" if is_live_update else "Initial Full Sync"
+            auth_tag = " (Inv-Frames Master)" if (sync_state["status"] == "INV_FRAMES_FOLLOWER" and sender_host == sync_state["authority_host"]) else ""
+            self.log_activity(
+                "SYNC IN",
+                f"Accepted {sync_type_label} from {sender_username} ({sender_host}){auth_tag}",
+                f"New Rev: {incoming_sync_rev} | Previous Rev: {local_sync_rev} | Clients: {incoming_client_count}",
+            )
 
             if is_live_update and self.on_live_sync_received:
                 self._safe_call(self.on_live_sync_received, sender_username, sender_host)
@@ -484,6 +615,13 @@ class SyncPeerService:
         Pushes local master.db + sera.salt to the specified peer.
         Returns a success/failure message string.
         """
+        sync_state = self.get_sync_state()
+        if sync_state["status"] == "LAN_SYNC_FROZEN_MULTI_INV" and not force_override:
+            inv_nodes_str = ", ".join(sync_state["active_inv_frames_nodes"])
+            msg = f"Sync blocked: Multiple nodes ({inv_nodes_str}) have Inv-Frames active. LAN sync is frozen."
+            self.log_activity("GUARD", "Outbound sync blocked", msg)
+            return msg
+
         # Read local files
         if not os.path.exists(self.db_path):
             raise FileNotFoundError("Local master.db not found")
@@ -497,6 +635,8 @@ class SyncPeerService:
 
         local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
         metrics = self._get_local_metrics()
+        local_sync_rev = metrics.get("sync_revision", 0)
+        local_client_cnt = metrics.get("client_count", 0)
 
         # Connect to peer
         try:
@@ -511,10 +651,11 @@ class SyncPeerService:
                     "salt_size": len(salt_bytes),
                     "live_update": live_update,
                     "force_override": force_override,
-                    "client_count": metrics.get("client_count", 0),
-                    "sync_revision": metrics.get("sync_revision", 0),
+                    "client_count": local_client_cnt,
+                    "sync_revision": local_sync_rev,
                     "latest_timestamp": metrics.get("latest_timestamp", ""),
                     "db_mtime": local_mtime,
+                    "inv_frames": self.inv_frames,
                 }
                 _send_framed(conn, json.dumps(header).encode("utf-8"))
 
@@ -523,6 +664,7 @@ class SyncPeerService:
                 ack = json.loads(ack_raw.decode("utf-8"))
                 if ack.get("status") != "ready":
                     reason = ack.get("reason", "Peer rejected sync request")
+                    self.log_activity("PUSH", f"Sync rejected by {peer_ip}:{peer_port}", reason)
                     return f"Sync skipped: {reason}"
 
                 # Send database + salt
@@ -533,7 +675,13 @@ class SyncPeerService:
                 result_raw = _recv_framed(conn)
                 result = json.loads(result_raw.decode("utf-8"))
                 if result.get("status") == "ok":
-                    return "Database synced successfully!"
+                    sync_kind = "Live Sync" if live_update else "Initial Full Sync"
+                    self.log_activity(
+                        "PUSH",
+                        f"Pushed {sync_kind} to {peer_ip}:{peer_port}",
+                        f"Local Rev Score: {local_sync_rev} | Clients: {local_client_cnt}",
+                    )
+                    return f"{sync_kind} synced successfully!"
                 else:
                     return f"Sync failed: {result}"
 

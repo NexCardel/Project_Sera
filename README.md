@@ -17,25 +17,27 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.3.4.1)
+## Latest Features (v2.4.2)
 
-- **Sera Sync (Zero-Configuration LAN Database Pushing)**:
-  - Built-in P2P LAN peer discovery over UDP broadcast (`Port 49156`).
-  - Admin-accessible **Sera Sync** panel (`sera_sync_dialog.py`) displaying real-time online workstations, hostnames, and IP addresses.
-  - One-way TCP database push (`Port 49157`) transferring `master.db` + `sera.salt` directly to a target peer without requiring pre-configured identical master passwords.
-  - **Instant UI Locking & Modal Restart**: Receiving machine automatically locks UI interactions, pops a mandatory modal restart prompt, and cleanly auto-restarts (`os.execl`) to re-authenticate SQLCipher.
-- **Smart Syncthing & Peer Backup Restore**:
-  - `restore_from()` automatically scans, pairs, and decrypts Syncthing conflict files (`master.sync-conflict-*.db`, `sera.salt.sync-conflict-*`) and `sync_peer` conflict files (`.conflict-`, `.pre-sync-`).
-  - Validates SQLCipher HMAC decryption (`SELECT count(*) FROM sqlite_master;`) prior to overwriting live database files.
-- **Permanent Chrome Native Messaging Infrastructure**:
-  - Native host manifest and scripts stored in permanent directory `~/AmanAssociates_Sera/native_host/` to prevent PyInstaller temporary `_MEIPASS` registry path leaks.
-  - Handled `--native-host` CLI flag interception before `QApplication` initialization to isolate binary STDIN/STDOUT pipes from GUI logs.
-- **Branding & Taskbar Grouping**:
-  - Updated visual branding vector (`Flogo.svg`) rendered into multi-resolution native Windows `.ico` files (`256x256` down to `16x16`).
-  - Explicit `AppUserModelID` registration (`AmanAssociates.ProjectSera.Vault.2.3.3`) for clean Windows Taskbar preview grouping.
-  - Windows Desktop and Start Menu shortcut name configured as **`CompanyInfo1`**.
-- **Excel-Style Grid Copying (`Ctrl+C`)**: Select cells or cell blocks and copy formatted data directly to Excel with a 500 ms green highlight flash (`#2E9B5F`).
-- **Master Column List (MCL) ID Tokens**: Added `ID` field type (`"ID (Primary Key / Auto-Serial)"`) with single-column exclusivity, auto-serial numbers, and backend Client ID tokens (`CLI-XXXXX`).
+- **Sera API Detection (SAD)**:
+  - Passive Network Response Interceptor (`net_interceptor.js`) running in the page MAIN execution world.
+  - Intercepts `fetch()` and `XMLHttpRequest` calls in real-time across GST (`status_cd: "1"`), Income Tax (`acknowledgementNumber`), TRACES (`requestNo`), and universal web portals.
+  - Extracts filing ARNs, Ack numbers, and HTTP success payloads without modifying or delaying page network traffic.
+- **Tracker Dump Subsystem**:
+  - Dedicated desktop workspace (`TrackerDumpWindow`) logging all raw SAD captures and extension dumps into SQLite table `tracker_dump`.
+  - Features real-time search, method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`), raw JSON payload inspector drawer, and CSV export.
+  - Universal client resolution dynamically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), and Name/PAN/GSTIN substring queries.
+- **Modal-Free Background Filing Logging**:
+  - Filing results are recorded silently in the background (`FilingConfirmationDialog` unhooked).
+  - Displays non-intrusive 5-second desktop toast notifications (`Captured GST Portal Filing (SAD API Interceptor) — ARN: AA270826...`) with zero screen popups.
+- **Instant Prompt-Free Auto-Unlock**:
+  - Auto-derives and decrypts vault on startup using local keyfile (`sera.key`).
+  - Launches instantly into your workspace without popping up a master password login prompt on launch, while preserving full Admin PIN protection for administrative tasks.
+- **Windows Autostart Integration**:
+  - Automatic launching on Windows PC startup via Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+  - Toggleable anytime from Settings → General.
+- **Search Grid Cell Formatting Fixes**:
+  - Persistent cell fill highlights and text colors across database restarts without QSS stylesheet overrides.
 
 ---
 
@@ -49,7 +51,7 @@ playwright install chromium
 python main.py
 ```
 
-First run prompts for a workstation user name and a master password. The master password is never stored on disk; it is used to derive the SQLCipher database encryption key via PBKDF2.
+On first launch, Project Sera auto-derives and secures your vault using `sera.key`. Admin Mode remains protected by the Admin PIN (`1234` or custom PIN).
 
 ---
 
@@ -61,6 +63,7 @@ Project Sera stores encrypted vault data in:
 ~/AmanAssociates_Sera/
 |-- master.db
 |-- sera.salt
+|-- sera.key
 |-- device_identity.txt
 `-- native_host/
     |-- com.amanassociates.sera.json
@@ -68,7 +71,7 @@ Project Sera stores encrypted vault data in:
     `-- host.py
 ```
 
-`master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key from the master password. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.
+`master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.
 
 ---
 
@@ -84,4 +87,4 @@ venv\Scripts\python build_tools\build_package.py
 & "C:\Program Files\Inno Setup 7\ISCC.exe" build_tools\installer_setup.iss
 ```
 
-Compiled installer executables are saved to `installer_output\Amas_Sera_Setup_v2.3.4.1.exe`.
+Compiled installer executables are saved to `installer_output\Amas_Sera_Setup_v2.4.2.exe`.

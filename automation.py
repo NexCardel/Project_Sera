@@ -10,6 +10,7 @@ import socket
 import json
 import time
 import webbrowser
+from typing import Optional
 from PySide6.QtCore import QObject, Signal
 
 class _AutofillBridge(QObject):
@@ -63,7 +64,9 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "arn_selector": service.get("arn_selector", ""),
         "client_id": client_id,
         "client_name": service.get("_client_name", service.get("name", "Client")),
-        "tracker_enabled": service.get("_tracker_enabled", True)
+        "tracker_enabled": service.get("_tracker_enabled", True),
+        "fst_enabled": service.get("_fst_enabled", True),
+        "sad_enabled": service.get("_sad_enabled", True),
     }
 
     def _attempt_send():
@@ -95,11 +98,15 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
     threading.Thread(target=_attempt_send, daemon=True).start()
 
 
-def update_extension_settings(tracker_enabled: bool):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None):
     """Sends immediate setting updates to native_host -> background.js"""
+    if tracker_enabled is None:
+        tracker_enabled = fst_enabled or sad_enabled
     payload = {
         "type": "update_settings",
-        "tracker_enabled": tracker_enabled
+        "tracker_enabled": tracker_enabled,
+        "fst_enabled": fst_enabled,
+        "sad_enabled": sad_enabled,
     }
     def _do_send():
         try:

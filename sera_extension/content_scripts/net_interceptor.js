@@ -24,13 +24,25 @@
             let isSuccess = false;
 
             // 1. GST Portal Detection (services.gst.gov.in)
-            if (host.includes("gst.gov.in") || url.includes("/returns/") || url.includes("/gstr") || url.includes("/evc/")) {
+            let periodLabel = "";
+            let filingType = "";
+            if (host.includes("gst.gov.in") || url.includes("/returns/") || url.includes("/gstr") || url.includes("/evc/") || url.includes("/file")) {
                 portal = "GST Portal";
-                const statusCd = String(jsonObj.status_cd || jsonObj.status || "");
-                if (statusCd === "1" || statusCd.toUpperCase() === "SUCCESS" || jsonObj.error_cd === null) {
+                const statusCd = String(jsonObj.status_cd || jsonObj.status || jsonObj.statusCode || "");
+                if (statusCd === "1" || statusCd.toUpperCase() === "SUCCESS" || jsonObj.error_cd === null || jsonObj.error === null) {
                     isSuccess = true;
-                    // ARN extraction
-                    capturedArn = jsonObj.arn || jsonObj.ack_num || (jsonObj.data && (jsonObj.data.arn || jsonObj.data.ack_num));
+                    // Comprehensive GST ARN & Reference keys
+                    capturedArn = jsonObj.arn || jsonObj.ack_num || jsonObj.ack_no || jsonObj.ackNo ||
+                                  jsonObj.ref_id || jsonObj.referenceId || jsonObj.trans_id ||
+                                  (jsonObj.data && (jsonObj.data.arn || jsonObj.data.ack_num || jsonObj.data.ack_no || jsonObj.data.ackNo || jsonObj.data.ref_id || jsonObj.data.trans_id)) ||
+                                  (jsonObj.response && (jsonObj.response.arn || jsonObj.response.ack_num)) ||
+                                  (jsonObj.result && (jsonObj.result.arn || jsonObj.result.ack_num));
+
+                    // Extract period and return type if present
+                    const rawPeriod = jsonObj.ret_period || (jsonObj.data && jsonObj.data.ret_period) || jsonObj.period || "";
+                    if (rawPeriod) periodLabel = String(rawPeriod);
+                    const rawType = jsonObj.rtn_type || jsonObj.form_type || (jsonObj.data && (jsonObj.data.rtn_type || jsonObj.data.form_type)) || "";
+                    if (rawType) filingType = String(rawType);
                 }
             }
 
@@ -40,7 +52,12 @@
                 const status = String(jsonObj.status || jsonObj.statusCode || "").toUpperCase();
                 if (status === "SUCCESS" || status === "200" || jsonObj.success === true) {
                     isSuccess = true;
-                    capturedArn = jsonObj.acknowledgementNumber || jsonObj.itrAckNo || jsonObj.ackNo || jsonObj.ackNumber;
+                    capturedArn = jsonObj.acknowledgementNumber || jsonObj.itrAckNo || jsonObj.ackNo || jsonObj.ackNumber ||
+                                  (jsonObj.data && (jsonObj.data.acknowledgementNumber || jsonObj.data.itrAckNo || jsonObj.data.ackNo));
+                    const rawAy = jsonObj.assessmentYear || (jsonObj.data && jsonObj.data.assessmentYear) || "";
+                    if (rawAy) periodLabel = `AY ${rawAy}`;
+                    const rawForm = jsonObj.formName || (jsonObj.data && jsonObj.data.formName) || "";
+                    if (rawForm) filingType = String(rawForm);
                 }
             }
 
@@ -48,9 +65,10 @@
             if (!capturedArn && (host.includes("tdscpc.gov.in") || url.includes("/usr/") || url.includes("reqCorrection"))) {
                 portal = "TRACES Portal";
                 const status = String(jsonObj.status || "").toUpperCase();
-                if (status === "SUCCESS" || jsonObj.requestNo || jsonObj.ticketNo) {
+                if (status === "SUCCESS" || jsonObj.requestNo || jsonObj.ticketNo || (jsonObj.data && (jsonObj.data.requestNo || jsonObj.data.ticketNo))) {
                     isSuccess = true;
-                    capturedArn = jsonObj.requestNo || jsonObj.ticketNo || jsonObj.tokenNo;
+                    capturedArn = jsonObj.requestNo || jsonObj.ticketNo || jsonObj.tokenNo ||
+                                  (jsonObj.data && (jsonObj.data.requestNo || jsonObj.data.ticketNo || jsonObj.data.tokenNo));
                 }
             }
 
@@ -58,7 +76,7 @@
             if (!capturedArn) {
                 const strData = JSON.stringify(jsonObj);
                 // Look for GST ARN pattern (15 chars starting with state code, e.g. AA27...)
-                const arnMatch = strData.match(/"(?:arn|ack_num|acknowledgementNumber|requestNo)"\s*:\s*"([A-Za-z0-9]{10,20})"/i);
+                const arnMatch = strData.match(/"(?:arn|ack_num|ack_no|ackNo|acknowledgementNumber|requestNo|ref_id)"\s*:\s*"([A-Za-z0-9]{10,25})"/i);
                 if (arnMatch && arnMatch[1]) {
                     capturedArn = arnMatch[1];
                     isSuccess = true;
@@ -71,6 +89,8 @@
                     detail: {
                         portal: portal,
                         arn: String(capturedArn).trim(),
+                        period_label: periodLabel,
+                        filing_type: filingType,
                         capture_method: 'SAD_API_Interceptor',
                         raw_payload: jsonObj,
                         url: url,

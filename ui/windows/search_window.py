@@ -8,6 +8,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -199,6 +200,9 @@ class SearchWindow(QWidget):
         layout.addLayout(search_row)
 
         self.results_table = QTableWidget()
+        self.results_table.setFrameShape(QFrame.NoFrame)
+        self.results_table.setLineWidth(0)
+        self.results_table.setMidLineWidth(0)
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -219,6 +223,12 @@ class SearchWindow(QWidget):
                 alternate-background-color: #FFFFFF;
                 color: #241F1B;
                 gridline-color: #D8CDB4;
+                border: none;
+                outline: none;
+            }
+            QHeaderView {
+                background-color: #0A0A0A;
+                border: none;
             }
             QHeaderView::section {
                 background-color: #0A0A0A;
@@ -229,13 +239,13 @@ class SearchWindow(QWidget):
                 border-right: 1px solid #262626;
                 padding: 6px;
             }
-            QTableWidget::item {
-                color: #241F1B;
+            QTableCornerButton::section {
+                background-color: #0A0A0A;
+                border: none;
             }
             QTableWidget::item:selected {
                 background-color: rgba(46, 155, 95, 0.3);
                 border: 1.5px solid #2E9B5F;
-                color: #241F1B;
             }
         """)
         

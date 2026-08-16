@@ -179,6 +179,7 @@ class AdminWindow(QWidget):
     request_slide_panel = Signal(QWidget, str)
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
+    settings_saved = Signal()  # Forwarded from SettingsDialog when user saves
 
     def __init__(self, db, actor: str = "Admin"):
         super().__init__()
@@ -232,6 +233,8 @@ class AdminWindow(QWidget):
         banner_layout.addWidget(self.conflict_label)
         banner_layout.addStretch()
         btn_inspect_conflict = QPushButton("Inspect Conflicts...")
+        if qta:
+            btn_inspect_conflict.setIcon(qta.icon("mdi.file-alert-outline", color="#FFFFFF"))
         btn_inspect_conflict.clicked.connect(self._on_inspect_conflicts)
         banner_layout.addWidget(btn_inspect_conflict)
         
@@ -277,6 +280,8 @@ class AdminWindow(QWidget):
 
         bulk_row = QHBoxLayout()
         bulk_svc_btn = QPushButton("Attach/Detach Service on Selected...")
+        if qta:
+            bulk_svc_btn.setIcon(qta.icon("mdi.briefcase-edit-outline", color="#FFFFFF"))
         bulk_svc_btn.clicked.connect(self._on_bulk_service)
         bulk_row.addWidget(bulk_svc_btn)
         left_layout.addLayout(bulk_row)
@@ -299,6 +304,14 @@ class AdminWindow(QWidget):
         archive_btn = QPushButton("Archive")
         restore_btn = QPushButton("Restore")
         purge_btn = QPushButton("Delete Permanently")
+
+        if qta:
+            new_btn.setIcon(qta.icon("mdi.account-plus", color="#FFFFFF"))
+            save_btn.setIcon(qta.icon("mdi.content-save-outline", color="#FFFFFF"))
+            archive_btn.setIcon(qta.icon("mdi.archive-outline", color="#FFFFFF"))
+            restore_btn.setIcon(qta.icon("mdi.backup-restore", color="#FFFFFF"))
+            purge_btn.setIcon(qta.icon("mdi.delete-forever-outline", color="#FF4D4D"))
+
         new_btn.clicked.connect(self._on_new)
         save_btn.clicked.connect(self._on_save)
         archive_btn.clicked.connect(self._on_archive)
@@ -748,6 +761,7 @@ class AdminWindow(QWidget):
     def _on_open_settings(self):
         dlg = SettingsDialog(self.db, actor=self.actor, parent=self)
         dlg.toast_requested.connect(self.toast_requested.emit)
+        dlg.settings_saved.connect(self.settings_saved.emit)
         dlg.finished.connect(self.refresh)
         self.request_slide_panel.emit(dlg, "Settings")
 

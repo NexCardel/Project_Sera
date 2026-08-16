@@ -182,17 +182,27 @@ class TrackerDumpWindow(QWidget):
                 background-color: #C9302C;
             }
             QTableWidget {
-                background-color: #171717;
-                gridline-color: #333333;
+                background-color: #121212;
+                alternate-background-color: #1A1A1A;
+                gridline-color: #2D2D2D;
                 border: 1px solid #333333;
                 border-radius: 6px;
-                color: #F8F5F2;
-                selection-background-color: #2E9B5F;
+                color: #F0F6FC;
+                selection-background-color: #1F6FEB;
                 selection-color: #FFFFFF;
             }
+            QTableWidget::item {
+                color: #F0F6FC;
+                padding: 8px 10px;
+                border-bottom: 1px solid #222222;
+            }
+            QTableWidget::item:selected {
+                background-color: #1F6FEB;
+                color: #FFFFFF;
+            }
             QHeaderView::section {
-                background-color: #0A0A0A;
-                color: #2E9B5F;
+                background-color: #0D1117;
+                color: #4CF9B7;
                 font-weight: 700;
                 font-size: 12px;
                 padding: 8px;
@@ -283,10 +293,6 @@ class TrackerDumpWindow(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet("""
-            QTableWidget::item { padding: 6px; }
-            QTableWidget::item:alternate { background-color: #1E1E1E; }
-        """)
 
         main_layout.addWidget(self.table)
 
@@ -342,42 +348,53 @@ class TrackerDumpWindow(QWidget):
             # ID
             id_item = QTableWidgetItem(str(r["id"]))
             id_item.setTextAlignment(Qt.AlignCenter)
+            id_item.setForeground(QColor("#8B949E"))
             self.table.setItem(row_idx, 0, id_item)
 
             # Client Name & PAN
-            client_str = f"{r['client_name']} ({r['pan']})" if r.get('pan') else r['client_name']
-            c_item = QTableWidgetItem(client_str)
-            c_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            client_name = r.get('client_name') or "Unknown Client"
+            pan_str = f" ({r['pan']})" if r.get('pan') else ""
+            c_item = QTableWidgetItem(f"{client_name}{pan_str}")
+            c_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            c_item.setForeground(QColor("#FFFFFF"))
             self.table.setItem(row_idx, 1, c_item)
 
             # Service / Portal
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
-            self.table.setItem(row_idx, 2, QTableWidgetItem(portal_str))
+            portal_item = QTableWidgetItem(portal_str)
+            portal_item.setForeground(QColor("#E6EDF3"))
+            self.table.setItem(row_idx, 2, portal_item)
 
             # Period
-            self.table.setItem(row_idx, 3, QTableWidgetItem(r.get("period_label", "N/A")))
+            period_val = r.get("period_label") or "N/A"
+            period_item = QTableWidgetItem(period_val)
+            period_item.setForeground(QColor("#D29922") if r.get("period_label") else QColor("#8B949E"))
+            self.table.setItem(row_idx, 3, period_item)
 
-            # ARN Number
+            # ARN Number (High contrast bright neon emerald)
             arn_item = QTableWidgetItem(r.get("arn_number", "N/A"))
-            arn_item.setFont(QFont("Consolas", 9, QFont.Bold))
-            arn_item.setForeground(QColor("#4CF9B7"))
+            arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
+            arn_item.setForeground(QColor("#39FF14"))
             self.table.setItem(row_idx, 4, arn_item)
 
             # Capture Method Badge
             method = r.get("capture_method", "DOM_Tracker")
             method_item = QTableWidgetItem(method)
             method_item.setTextAlignment(Qt.AlignCenter)
+            method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             if method == "SAD_API_Interceptor":
-                method_item.setForeground(QColor("#00FF66")) # Neon Emerald
+                method_item.setForeground(QColor("#4CF9B7")) # Neon Mint
             elif method == "DOM_Tracker":
-                method_item.setForeground(QColor("#33B5E5")) # Sky Blue
+                method_item.setForeground(QColor("#58A6FF")) # Sky Blue
             else:
-                method_item.setForeground(QColor("#FFBB33")) # Amber
+                method_item.setForeground(QColor("#FFA657")) # Warm Amber
             self.table.setItem(row_idx, 5, method_item)
 
             # Timestamp
             ts_str = r.get("created_at", "")[:19].replace("T", " ")
-            self.table.setItem(row_idx, 6, QTableWidgetItem(ts_str))
+            ts_item = QTableWidgetItem(ts_str)
+            ts_item.setForeground(QColor("#8B949E"))
+            self.table.setItem(row_idx, 6, ts_item)
 
             # Actions Column
             action_widget = QWidget()

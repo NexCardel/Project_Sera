@@ -5,18 +5,22 @@
   let context = null;
   let hasFired = false;
 
-  // Check if tracker is enabled before doing anything
-  chrome.storage.local.get(['activeAutofillPayload', 'trackerEnabled'], (data) => {
-    // 1. If tracker is explicitly disabled globally, exit immediately
-    if (data.trackerEnabled === false) {
-      console.log("Sera FST: Tracker is disabled in settings. Skipping.");
+  // net_interceptor.js is injected into the MAIN world by background.js
+  // via chrome.scripting.executeScript on every tab load — no need to do
+  // anything here for the SAD network interception path.
+
+  // Check if DOM-based tracker (FST) is enabled before starting DOM monitoring
+  chrome.storage.local.get(['activeAutofillPayload', 'trackerEnabled', 'fstEnabled'], (data) => {
+    // 1. If tracker or FST is explicitly disabled globally, exit immediately
+    if (data.trackerEnabled === false || data.fstEnabled === false) {
+      console.log("Sera FST: Tracker/FST is disabled in settings. Skipping.");
       return;
     }
 
-    // 2. Must have an active payload with tracker_enabled === true
+    // 2. Must have an active payload with tracker_enabled === true and fst_enabled !== false
     const payload = data.activeAutofillPayload;
-    if (!payload || payload.tracker_enabled !== true) {
-      console.log("Sera FST: Tracker is not active for this payload. Skipping.");
+    if (!payload || payload.tracker_enabled !== true || payload.fst_enabled === false) {
+      console.log("Sera FST: FST is not active for this payload. Skipping.");
       return;
     }
 
@@ -28,22 +32,8 @@
     return el.textContent || el.innerText || "";
   }
 
-  function injectNetInterceptor() {
-    try {
-      if (document.getElementById('sera-sad-net-interceptor')) return;
-      const script = document.createElement('script');
-      script.id = 'sera-sad-net-interceptor';
-      script.src = chrome.runtime.getURL('content_scripts/net_interceptor.js');
-      (document.head || document.documentElement).appendChild(script);
-      console.log("Sera FST: Net Interceptor injected into MAIN world.");
-    } catch (e) {
-      console.error("Sera FST: Failed to inject Net Interceptor", e);
-    }
-  }
 
   function startMonitoring() {
-    injectNetInterceptor();
-
     // Also track any submit button clicks as an early warning
     document.body.addEventListener('click', (e) => {
       const text = getElementTextContent(e.target).trim().toLowerCase();

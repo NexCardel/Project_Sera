@@ -8,8 +8,16 @@
 
         console.log("Sera Filing Detector: Received SAD API Capture event", detail);
 
-        chrome.storage.local.get(['activeAutofillPayload'], (data) => {
-            const payload = data.activeAutofillPayload || {};
+        chrome.storage.local.get(['activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled'], (data) => {
+            if (data.trackerEnabled === false || data.sadEnabled === false) {
+                console.log("Sera Filing Detector: SAD interception is disabled in settings. Skipping.");
+                return;
+            }
+            const payload = data.activeAutofillPayload || data.manualAssistPayload || data.mecpPayload || {};
+            if (payload.sad_enabled === false) {
+                console.log("Sera Filing Detector: SAD is disabled for this payload. Skipping.");
+                return;
+            }
             // Prioritize detail.client_id (from test bench / page event) -> active payload client_id -> fallback 1
             const effectiveClientId = detail.client_id || payload.client_id || 1;
 

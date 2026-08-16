@@ -184,13 +184,9 @@ QTableWidget, QTableView, QTreeWidget {
     color: #241F1B;
     gridline-color: #D8CDB4;
     outline: none;
-    border: 1px solid #D8CDB4;
-    border-radius: 8px;
+    border: none;
 }
 
-QTableWidget::item, QTableView::item, QTreeWidget::item {
-    color: #241F1B;
-}
 
 QTableWidget::item:selected, QTableView::item:selected, QTreeWidget::item:selected {
     background-color: rgba(46, 155, 95, 0.4);
@@ -280,7 +276,8 @@ QLabel#stat_val {
 
 /* Sidebar Specific Styles */
 #Sidebar {
-    background-color: #2E9B5F;
+    background-color: #121212;
+    border-right: 1px solid #1E1E1E;
 }
 /* Typography & Common */
 QLabel[class="DialogTitle"] { font-size: 16px; font-weight: 600; }
@@ -337,19 +334,19 @@ QFrame#SeraAlert[level="error"] QLabel { color: #EF9A9A; }
 QLabel[class="ToastLabel"], QLabel[class="SeraAlertLabel"] { color: #F8FAFC; font-weight: 600; font-size: 13px; background: transparent; }
 
 /* Sidebar */
-QLabel#SidebarTitle { font-size: 15px; font-weight: 700; color: #F8F5F2; background: transparent; }
-QLabel#SidebarSection { font-size: 13px; font-weight: 500; color: #F8F5F2; margin: 0; background: transparent; }
-QLabel#SidebarLogo { background: #164A68; border-radius: 5px; color: #F8F5F2; font-size: 11px; font-weight: 700; }
-QLabel#SidebarProfile { background: #FF4D4D; border-radius: 13px; color: #FFFFFF; font-size: 18px; }
-QFrame#SidebarDivider { border: none; border-top: 1px solid rgba(255, 255, 255, 120); min-height: 1px; max-height: 1px; margin: 2px 0; }
+QLabel#SidebarTitle { font-size: 14px; font-weight: 700; color: #FFFFFF; background: transparent; }
+QLabel#SidebarSection { font-size: 12px; font-weight: 500; color: #A0A0A0; margin: 0; background: transparent; }
+QLabel#SidebarLogo { background: #164A68; border-radius: 5px; color: #FFFFFF; font-size: 11px; font-weight: 700; }
+QLabel#SidebarProfile { background: #2E9B5F; border-radius: 13px; color: #FFFFFF; font-size: 18px; }
+QFrame#SidebarDivider { border: none; border-top: 1px solid #262626; min-height: 1px; max-height: 1px; margin: 4px 0; }
 QWidget#SidebarAccordionHeader { background: transparent; border-radius: 4px; }
-QWidget#SidebarAccordionHeader:hover { background: rgba(35, 121, 74, 90); }
-QWidget#SidebarAccordionHeader[active="true"] { background: rgba(35, 121, 74, 110); }
-QPushButton#SidebarButton { min-height: 21px; text-align: left; padding: 5px 8px; font-size: 13px; border: none; border-radius: 4px; background: transparent; font-weight: 500; color: #F8F5F2; }
-QPushButton#SidebarButton:hover { background: rgba(35, 121, 74, 90); }
-QPushButton#SidebarSubButton { min-height: 18px; text-align: left; padding: 3px 8px 3px 34px; font-size: 12px; color: #F8F5F2; border: none; border-radius: 4px; background: transparent; }
-QPushButton#SidebarSubButton:hover { background: rgba(35, 121, 74, 90); }
-QPushButton#SidebarSubButton[active="true"] { background: #FF4D4D; color: #FFFFFF; font-weight: 700; }
+QWidget#SidebarAccordionHeader:hover { background: #1E1E1E; }
+QWidget#SidebarAccordionHeader[active="true"] { background: #1E1E1E; }
+QPushButton#SidebarButton { min-height: 22px; text-align: left; padding: 5px 8px; font-size: 13px; border: none; border-radius: 4px; background: transparent; font-weight: 500; color: #A0A0A0; }
+QPushButton#SidebarButton:hover { background: #222222; color: #FFFFFF; }
+QPushButton#SidebarSubButton { min-height: 20px; text-align: left; padding: 4px 8px 4px 34px; font-size: 12px; color: #A0A0A0; border: none; border-radius: 4px; background: transparent; }
+QPushButton#SidebarSubButton:hover { background: #222222; color: #FFFFFF; }
+QPushButton#SidebarSubButton[active="true"] { background: #2E9B5F; color: #FFFFFF; font-weight: 600; }
 
 /* Slide Panel */
 QFrame#SlidePanel { background-color: #0A0A0A; border-left: 1px solid #262626; }

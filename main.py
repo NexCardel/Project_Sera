@@ -19,10 +19,25 @@ if "--native-host" in sys.argv or any(arg.startswith("chrome-extension://") for 
     nh.main()
     sys.exit(0)
 
-from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy
+from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy, QSystemTrayIcon, QMenu
 from ui.shell.app_shell import AppShell
-from PySide6.QtGui import QFont, QShortcut, QKeySequence
+from PySide6.QtGui import QFont, QShortcut, QKeySequence, QIcon, QAction
 from PySide6.QtCore import Qt, QObject, Signal
+
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
+
+def _safe_qta_icon(icon_name, color=None):
+    if qta is not None:
+        try:
+            if color:
+                return qta.icon(icon_name, color=color)
+            return qta.icon(icon_name)
+        except Exception:
+            pass
+    return QIcon()
 
 class SyncSignalBridge(QObject):
     sync_received_signal = Signal()
@@ -135,6 +150,7 @@ class SeraApp:
         # Avoid Windows legacy bitmap-font fallback warnings (8514oem/Fixedsys)
         # and keep all dialogs consistent with the app stylesheet.
         self.app.setFont(QFont("Segoe UI", 10))
+        self.app.setQuitOnLastWindowClosed(False)
         APP_DIR.mkdir(parents=True, exist_ok=True)
         
         self.sync_bridge = SyncSignalBridge()
@@ -143,14 +159,22 @@ class SeraApp:
         self.sync_bridge.peer_logs_received_signal.connect(self._handle_peer_logs_received_main_thread)
         self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
         
-        icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
+        base_dir = Path(__file__).resolve().parent
+        icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
         if not icon_path.exists():
-            icon_path = APP_DIR / "assets" / "logo" / "icon_here.png"
+            icon_path = base_dir / "assets" / "logo" / "icon_here.png"
         if not icon_path.exists():
-            icon_path = APP_DIR / "assets" / "logo" / "sera_icon.png"
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.ico"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.png"
+        if not icon_path.exists():
+            icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
+
         if icon_path.exists():
-            from PySide6.QtGui import QIcon
-            self.app.setWindowIcon(QIcon(str(icon_path)))
+            self.app_icon = QIcon(str(icon_path))
+            self.app.setWindowIcon(self.app_icon)
+        else:
+            self.app_icon = None
         
         self.db_path = str(APP_DIR / "master.db")
         self.salt_path = str(APP_DIR / security.SALT_FILE)
@@ -203,11 +227,18 @@ class SeraApp:
         # Start Sera Sync LAN peer service
         loading_dlg.set_status("Starting Sera Sync LAN discovery...")
         from sync_peer import SyncPeerService
+        inv_frames_enabled = False
+        if self.db and hasattr(self.db, "get_setting"):
+            try:
+                inv_frames_enabled = (self.db.get_setting("inv_frames", "0") == "1")
+            except Exception:
+                pass
         self.sync_service = SyncPeerService(
             db_path=self.db_path,
             salt_path=self.salt_path,
             username=self.actor_alias,
             db=self.db,
+            inv_frames=inv_frames_enabled,
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,
             on_peer_logs_received=self._on_peer_logs_received,
@@ -232,8 +263,12 @@ class SeraApp:
         loading_dlg.close()
 
         
-        # Ensure tracker_enabled is set to 1 in DB settings
-        if self.db.get_setting("tracker_enabled", "0") != "1":
+        # Ensure FST, SAD, and tracker settings are initialized
+        if self.db.get_setting("fst_enabled") is None:
+            self.db.set_setting("fst_enabled", "1")
+        if self.db.get_setting("sad_enabled") is None:
+            self.db.set_setting("sad_enabled", "1")
+        if self.db.get_setting("tracker_enabled") is None:
             self.db.set_setting("tracker_enabled", "1")
 
         # Start extension listener on port 49152
@@ -244,17 +279,25 @@ class SeraApp:
         self.ext_listener.start()
 
     def _handle_extension_result(self, msg: dict):
-        client_id = msg.get('client_id')
-        if not client_id: return
+        print(f"[main._handle_extension_result] Processing incoming message: {msg}")
+        raw_client_id = msg.get('client_id')
+        if not raw_client_id:
+            print("[main._handle_extension_result] Missing client_id in message, using 1")
+            raw_client_id = 1
         
+        try:
+            client_id = int(raw_client_id)
+        except (ValueError, TypeError):
+            client_id = 1
+
         arn = msg.get('arn', 'N/A')
         portal = msg.get('portal', 'Portal')
         capture_method = msg.get("capture_method", "DOM_Tracker")
         
         # Directly record into Tracker Dump database (Unhooked from modal prompt)
         try:
-            self.db.insert_tracker_dump(
-                client_id=int(client_id),
+            res = self.db.insert_tracker_dump(
+                client_id=client_id,
                 service_id=None,
                 portal=portal,
                 period_label=msg.get("period_label", ""),
@@ -264,13 +307,21 @@ class SeraApp:
                 raw_payload_json=json.dumps(msg),
                 captured_by=self.actor
             )
+            print(f"[main._handle_extension_result] Successfully inserted tracker_dump row: {res}")
             if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
                 self.tracker_dump_win.load_data()
 
             # Non-intrusive toast notification on desktop shell
-            if hasattr(self, "shell") and self.shell:
-                method_label = "SAD API Interceptor" if capture_method == "SAD_API_Interceptor" else "Extension Observer"
+            method_label = "SAD API Interceptor" if capture_method == "SAD_API_Interceptor" else "Extension Observer"
+            if hasattr(self, "shell") and self.shell and self.shell.isVisible() and not self.shell.isMinimized():
                 self.shell.show_toast(f"Captured {portal} Filing ({method_label}) — ARN: {arn}", duration=5000)
+            elif hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    f"Filing Captured — {portal}",
+                    f"ARN: {arn} ({method_label})",
+                    QSystemTrayIcon.Information,
+                    4500
+                )
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
 
@@ -416,7 +467,8 @@ class SeraApp:
         self.admin_win.request_slide_panel.connect(self._open_in_slide_panel)
         self.admin_win.toast_requested.connect(self.shell.show_toast)
         self.admin_win.action_alert_requested.connect(self.shell.show_action_alert)
-        
+        self.admin_win.settings_saved.connect(self._apply_run_in_background)
+
         # Sidebar Connections
         sidebar = self.shell.sidebar
         sidebar.go_to_search.connect(self._show_search_from_admin)
@@ -449,7 +501,138 @@ class SeraApp:
         self.admin_win.set_sync_service(self.sync_service)
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
+        self.shell.on_minimized_to_tray = self._show_tray_minimized_hint
+        self._setup_system_tray()
+        # Apply run_in_background setting so closeEvent behaves correctly from startup
+        self._apply_run_in_background()
         self._apply_window_mode()
+
+    def _apply_run_in_background(self):
+        """Read the run_in_background db setting and push it onto the shell.
+
+        Called once at startup and again every time the user saves settings.
+        When False the tray icon is hidden (not needed) and closing the window
+        performs a full quit instead of minimising.
+        """
+        run_in_bg = self.db.get_setting("run_in_background", "1") == "1"
+        self.shell._run_in_background = run_in_bg
+
+        # Show/hide the tray icon according to the setting
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            if run_in_bg:
+                self.tray_icon.show()
+            else:
+                self.tray_icon.hide()
+
+    def _setup_system_tray(self):
+        """Initializes the Windows system tray icon and background context menu."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self.tray_icon = QSystemTrayIcon(self.shell)
+        if hasattr(self, "app_icon") and self.app_icon and not self.app_icon.isNull():
+            self.tray_icon.setIcon(self.app_icon)
+        elif not self.shell.windowIcon().isNull():
+            self.tray_icon.setIcon(self.shell.windowIcon())
+
+        self.tray_icon.setToolTip("Project Sera — Aman Associates (Running in background)")
+
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #1E252B;
+                color: #F8F5F2;
+                border: 1px solid #2E9B5F;
+                border-radius: 6px;
+                padding: 6px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 7px 22px 7px 28px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #333D45;
+                margin: 4px 8px;
+            }
+        """)
+
+        action_open = tray_menu.addAction(_safe_qta_icon("mdi.monitor", "#4CF9B7"), "Open Project Sera")
+        action_open.triggered.connect(self._restore_from_tray)
+        f = action_open.font()
+        f.setBold(True)
+        action_open.setFont(f)
+
+        action_search = tray_menu.addAction(_safe_qta_icon("mdi.magnify", "#4CF9B7"), "Search Clients")
+        action_search.triggered.connect(lambda: (self._show_search_from_admin(), self._restore_from_tray()))
+
+        action_tracker = tray_menu.addAction(_safe_qta_icon("mdi.clipboard-text-search-outline", "#4CF9B7"), "Tracker Dump Workspace")
+        action_tracker.triggered.connect(lambda: (self._show_tracker_dump(), self._restore_from_tray()))
+
+        action_sync = tray_menu.addAction(_safe_qta_icon("mdi.sync", "#4CF9B7"), "Sera Sync")
+        action_sync.triggered.connect(lambda: (self.admin_win._on_open_sera_sync(), self._restore_from_tray()))
+
+        tray_menu.addSeparator()
+
+        action_quit = tray_menu.addAction(_safe_qta_icon("mdi.power", "#FF4D4D"), "Exit Project Sera")
+        action_quit.triggered.connect(self._quit_application)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_activated)
+        self.tray_icon.show()
+
+    def _on_tray_activated(self, reason):
+        """Single or double click on tray icon restores and brings window to foreground."""
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            if self.shell.isVisible() and not self.shell.isMinimized():
+                self.shell.raise_()
+                self.shell.activateWindow()
+            else:
+                self._restore_from_tray()
+
+    def _restore_from_tray(self):
+        """Unhides/restores the main application window."""
+        if hasattr(self, "shell") and self.shell:
+            if self.shell.isMinimized():
+                self.shell.showNormal()
+            self.shell.show()
+            self.shell.raise_()
+            self.shell.activateWindow()
+
+    def _show_tray_minimized_hint(self):
+        """Displays a one-time balloon toast notifying user that the app is active in background."""
+        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+            if not getattr(self, "_tray_hint_shown", False):
+                self.tray_icon.showMessage(
+                    "Project Sera is running in the background",
+                    "The app is still active and listening for sync/filings. Right-click this tray icon to open or exit.",
+                    QSystemTrayIcon.Information,
+                    3500
+                )
+                self._tray_hint_shown = True
+
+    def _quit_application(self):
+        """Full clean application shutdown triggered from the system tray menu."""
+        if hasattr(self, "shell") and self.shell:
+            self.shell._force_close = True
+            self.shell.close()
+        if hasattr(self, "ext_listener") and self.ext_listener:
+            try:
+                self.ext_listener.stop()
+            except Exception:
+                pass
+        if hasattr(self, "sync_service") and self.sync_service:
+            try:
+                self.sync_service.stop()
+            except Exception:
+                pass
+        self.app.quit()
 
     def _global_search_shortcut(self):
         self.shell.dismiss_detail_on_outside = False

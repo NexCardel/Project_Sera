@@ -25,6 +25,29 @@ class AppShell(QWidget):
             QApplication.instance().installEventFilter(self)
         self._build_ui()
 
+    def closeEvent(self, event):
+        """Intercept close button (X).
+
+        If 'run_in_background' is enabled the window is hidden to the system
+        tray (existing behaviour).  If it is disabled the app quits cleanly.
+        """
+        if getattr(self, "_force_close", False):
+            event.accept()
+            return
+
+        run_in_bg = getattr(self, "_run_in_background", True)
+        if run_in_bg:
+            # Minimise to tray
+            event.ignore()
+            self.hide()
+            if hasattr(self, "on_minimized_to_tray") and callable(self.on_minimized_to_tray):
+                self.on_minimized_to_tray()
+        else:
+            # Full quit — let the coordinator clean up via aboutToQuit
+            event.ignore()
+            from PySide6.QtWidgets import QApplication
+            QApplication.instance().quit()
+
     def eventFilter(self, watched, event):
         """Close Client Detail when the blurred area/sidebar is clicked."""
         if (

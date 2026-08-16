@@ -605,7 +605,11 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("autofill", self._get_identity_label(self.client))
 
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "0") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
             service, uid, pwd, self.client["id"],
@@ -650,7 +654,11 @@ class ClientDetailWindow(QWidget):
         if automation.is_manual_portal(service):
             self._launch_manual(service, uid, pwd)
         else:
-            service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "0") == "1"
+            fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+            sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+            service["_fst_enabled"] = fst_on
+            service["_sad_enabled"] = sad_on
+            service["_tracker_enabled"] = fst_on or sad_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
                 on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
@@ -673,7 +681,11 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "1") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
             service, uid, pwd, self.client["id"],
@@ -691,7 +703,11 @@ class ClientDetailWindow(QWidget):
             detail=f"Manual assist triggered for {service['name']}"
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "1") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(
             service, uid, pwd, self.client["id"],

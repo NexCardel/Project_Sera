@@ -32,7 +32,7 @@ Compile `build_tools\installer_setup.iss` with Inno Setup Compiler (`ISCC.exe`):
 The resulting single-file installer will be generated at:
 
 ```text
-installer_output\Amas_Sera_Setup_v2.3.4.1.exe
+installer_output\Amas_Sera_Setup_v2.4.2.exe
 ```
 
 ### Key Installer Specifications:
@@ -46,17 +46,17 @@ installer_output\Amas_Sera_Setup_v2.3.4.1.exe
 
 When publishing a new release to staff:
 
-1. Update `APP_VERSION` in `version.py`, e.g., `"2.3.4.1"`.
+1. Update `APP_VERSION` in `version.py`, e.g., `"2.4.2"`.
 2. Update `#define MyAppVersion` in `build_tools\installer_setup.iss`.
 3. Update `version.json` in the repository root:
 
 ```json
 {
-  "version": "2.3.4.1",
-  "min_required_version": "2.3.4.1",
-  "mandatory": true,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.3.4.1/Amas_Sera_Setup_v2.3.4.1.exe",
-  "release_notes": "Project Sera v2.3.4.1 release: Instant app locking and mandatory modal restart dialog upon receiving LAN database sync or manual database restore."
+  "version": "2.4.2",
+  "min_required_version": "2.4.2",
+  "mandatory": false,
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.4.2/Amas_Sera_Setup_v2.4.2.exe",
+  "release_notes": "Project Sera v2.4.2 release: Sera API Detection (SAD) network response interceptor, Tracker Dump workspace, instant prompt-free auto-unlock, and Windows autostart."
 }
 ```
 
@@ -64,17 +64,17 @@ When publishing a new release to staff:
 
 ```bash
 git add .
-git commit -m "Release v2.3.4.1"
+git commit -m "Release v2.4.2"
 git push origin main
 ```
 
-5. Create a GitHub release tag matching `v2.3.4.1`:
+5. Create a GitHub release tag matching `v2.4.2`:
 
 ```bash
-git tag -a v2.3.4.1 -m "Release v2.3.4.1"
-git push origin v2.3.4.1
+git tag -a v2.4.2 -m "Release v2.4.2"
+git push origin v2.4.2
 ```
 
-6. Upload the compiled setup installer `installer_output\Amas_Sera_Setup_v2.3.4.1.exe` as the binary release asset matching `download_url`.
+6. Upload the compiled setup installer `installer_output\Amas_Sera_Setup_v2.4.2.exe` as the binary release asset matching `download_url`.
 
 The next time an employee opens Project Sera, the app queries GitHub (`version.json`), presents the mandatory update modal, downloads the installer, and restarts into the new version.

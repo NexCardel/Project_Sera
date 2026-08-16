@@ -1,56 +1,57 @@
-# File Submission Tracker (FST)
+# File Submission Tracker (FST) & Sera API Detection (SAD)
 
-The File Submission Tracker (FST) automatically captures and records tax return filings, Ack/ARN numbers, and period submission statuses directly into the vault's `filing_status` table.
+The File Submission Tracker (FST) and Sera API Detection (SAD) engine automatically capture and record tax return filings, Ack/ARN numbers, network response payloads, and submission timestamps directly into the vault's `tracker_dump` and `filing_status` tables.
 
-> [!NOTE]
-> The legacy DRS Engine UI components, DRS Dashboard window, and DRS Manager dialogs have been removed per project specifications to streamline the user interface. The core File Submission Tracker (FST) remains fully operational.
+---
 
-## Workflow
+## Workflow & Architecture
 
 ```text
 [Desktop App: main.py] -- Autofill Payload --> [Native Host / TCP 49153] --> [Extension: background.js]
                                                                                |
                                                                                v
-                                                                       Injects active session
+                                                                       Injects net_interceptor.js
                                                                                |
                                                                                v
-[filing_status Table in DB] <-- TCP 49152 -- [ExtensionListener] <-- Filing Result -- [tracker.js on Portal]
-        ^
-        |
-[FilingConfirmationDialog] <-- Uncertain Result when no ARN is captured before tab close/logout
+[tracker_dump & filing_status DB] <-- TCP 49152 -- [ExtensionListener] <-- [net_interceptor.js in MAIN World]
+        ^                                                                      |
+        |                                                                      v
+[Tracker Dump Workspace UI] <--- Real-time reload signal <--- CustomEvent (SeraFSTApiCapture)
 ```
 
-## Tier 1: Automated ARN Capture
+---
 
-`tracker.js` is injected into portal tabs when an active autofill payload is set.
+## Detection Tiers
 
-It monitors the page DOM with `MutationObserver` for:
+### Tier 1: Sera API Detection (SAD) — Passive Network Interceptor
+`net_interceptor.js` is injected into the web page's MAIN execution world. It passively intercepts `window.fetch()` and `XMLHttpRequest` responses without modifying or delaying page network traffic:
 
-- Success text such as `submitted successfully`.
-- ARN identifiers such as `ARN:` or `Transaction ID:`.
+- **GST Portal (`*.gst.gov.in`)**: Detects `status_cd: "1"` / `error_cd: null` and extracts `arn` / `ack_num` / `data.arn`.
+- **Income Tax Portal (`*.incometax.gov.in`)**: Detects `status: "SUCCESS"` / `statusCode: 200` and extracts `acknowledgementNumber` / `itrAckNo` / `ackNo`.
+- **TRACES Portal (`*.tdscpc.gov.in`)**: Detects `status: "SUCCESS"` and extracts `requestNo` / `ticketNo` / `tokenNo`.
+- **Universal Fallback Engine**: Regex matching for 15-character ARNs (`AA270826...`), numeric Ack numbers, and common response tokens (`receiptNo`, `challanNo`, `submissionId`).
 
-When detected, it shows a green browser toast and sends `filing_result` to `ExtensionListener` on TCP port 49152.
+### Tier 2: DOM Observer Fallback (`tracker.js`)
+If a portal uses static HTML rendering without JSON APIs, `tracker.js` monitors page DOM mutations for success banners and ARN text node patterns.
 
-## Tier 2: Fallback Confirmation Modal
+---
 
-If the user closes the browser tab or logs out without an ARN being captured during an active session, `background.js` sends an `uncertain_result` to the desktop app.
+## Tracker Dump Subsystem
 
-The desktop app shows `FilingConfirmationDialog` as a system-modal, always-on-top confirmation window. It includes period selection buttons based on filing frequency: Monthly, Quarterly, or Annual.
+All captured network responses and filing results are logged directly to the `tracker_dump` database table and presented in the **Tracker Dump** workspace:
 
-On confirmation, the app writes a `submitted` record to the `filing_status` table with timestamp and active staff attribution, then reloads `ClientDetailWindow`.
+- **No Modal Interruptions**: Incoming filings are saved silently in the background without modal popups (`FilingConfirmationDialog` unhooked).
+- **Toast Notifications**: Non-intrusive 5-second desktop toasts alert staff upon capture (e.g. `Captured GST Portal Filing (SAD API Interceptor) — ARN: AA270826...`).
+- **Real-Time Workspace**: `TrackerDumpWindow` updates automatically, featuring multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`), raw JSON payload inspection, and CSV export.
+- **Universal Client Resolution**: Maps incoming client parameters dynamically via Database Primary Key ID, `client_id_token` (`CLI-00370`), MCL Serial No (`No. 370`), or Name/PAN/GSTIN substring search.
 
-## Verification
+---
 
-Fallback test:
+## Verification & Testing Guide
 
-1. Click Autofill.
-2. Close the browser tab without filing.
-3. Confirm the desktop app opens `FilingConfirmationDialog`.
-
-Automated capture test:
-
-1. Click Autofill.
-2. Open `tests/test_portal_success.html`.
-3. Confirm the browser shows the success toast.
-4. Confirm the desktop app pre-populates ARN `AA27032419827364`.
-5. Close the tab and confirm no fallback prompt appears.
+1. **Direct Socket Test**:
+   ```bash
+   python tests/test_dump_injection.py [client_id_or_name] [portal_name]
+   ```
+2. **Interactive Simulation Bench**:
+   Open [`tests/test_sad_interceptor.html`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/tests/test_sad_interceptor.html) in your browser, enter any target Client ID, Name, or PAN, and trigger simulated GST, Income Tax, or TRACES submissions.
