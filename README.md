@@ -17,7 +17,7 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.4.3)
+## Latest Features (v2.5.0)
 
 - **Sera Clipboard Assist (SCA — Ambient Password Autofill)**:
   - Automatically arms password in memory when staff copy client User IDs from Excel, Sheets, Notepad, or CSV rosters.
