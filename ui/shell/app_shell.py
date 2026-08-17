@@ -74,6 +74,12 @@ class AppShell(QWidget):
 
         # 1. Sidebar
         self.sidebar = Sidebar()
+        self.sidebar_target_width = 172
+        self.sidebar_collapsed = False
+        self.sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
+        self.sidebar_anim.setDuration(220)
+        self.sidebar_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self.sidebar.toggle_requested.connect(self.toggle_sidebar)
         self.layout.addWidget(self.sidebar)
 
         # 2. Content Area (Stacked Widget)
@@ -136,6 +142,34 @@ class AppShell(QWidget):
         if self.blur_effect.blurRadius() <= 0.5:
             self.blur_effect.setBlurRadius(0.0)
             self.blur_effect.setEnabled(False)
+
+    def toggle_sidebar(self):
+        """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        if self.sidebar_collapsed:
+            self.expand_sidebar()
+        else:
+            self.collapse_sidebar()
+
+    def collapse_sidebar(self):
+        """Collapse sidebar to 0px."""
+        self.sidebar_anim.stop()
+        self.sidebar.setMinimumWidth(0)
+        self.sidebar_anim.setStartValue(self.sidebar.width())
+        self.sidebar_anim.setEndValue(0)
+        self.sidebar_collapsed = True
+        self.sidebar_anim.start()
+
+    def expand_sidebar(self):
+        """Expand sidebar to target width (172px)."""
+        self.sidebar_anim.stop()
+        self.sidebar_anim.setStartValue(self.sidebar.width())
+        self.sidebar_anim.setEndValue(self.sidebar_target_width)
+        self.sidebar_collapsed = False
+        def _on_expand_finished():
+            if not self.sidebar_collapsed:
+                self.sidebar.setMinimumWidth(self.sidebar_target_width)
+        self.sidebar_anim.finished.connect(_on_expand_finished)
+        self.sidebar_anim.start()
 
     def show_alert(self, message: str, level: str = "success", duration: int = 3000):
         """Displays a non-blocking bottom-left Sera Alert notification."""

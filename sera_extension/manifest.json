@@ -39,13 +39,19 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content_scripts/net_interceptor.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content_scripts/net_interceptor.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "js": [
         "tracker.js",
         "content_scripts/login.js",

@@ -98,7 +98,30 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
     threading.Thread(target=_attempt_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None):
+def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000):
+    """Sends SCA_ARM payload to native_host -> background.js over TCP 49153."""
+    payload = {
+        "type": "SCA_ARM",
+        "client_id": client_id,
+        "client_id_token": client_token,
+        "matched_uid": matched_uid,
+        "business_name": business_name,
+        "owner_name": owner_name,
+        "services": services,
+        "ttl_ms": ttl_ms,
+    }
+    def _do_send():
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1.0)
+                s.connect(('127.0.0.1', 49153))
+                s.sendall(json.dumps(payload).encode('utf-8'))
+        except Exception:
+            pass
+    threading.Thread(target=_do_send, daemon=True).start()
+
+
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -107,6 +130,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "tracker_enabled": tracker_enabled,
         "fst_enabled": fst_enabled,
         "sad_enabled": sad_enabled,
+        "sca_enabled": sca_enabled,
     }
     def _do_send():
         try:

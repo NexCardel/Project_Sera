@@ -56,6 +56,11 @@ class SeraDatabase:
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
             conn.execute("PRAGMA foreign_keys = ON;")
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA cache_size = -64000;")       # 64MB RAM page cache
+            conn.execute("PRAGMA temp_store = MEMORY;")        # In-memory temporary tables & sorts
+            conn.execute("PRAGMA mmap_size = 268435456;")      # 256MB memory-mapped fast reads
             yield conn
             conn.commit()
         except sqlite3.IntegrityError as e:
@@ -127,7 +132,7 @@ class SeraDatabase:
             cur = conn.execute("SELECT id FROM clients WHERE client_id_token IS NULL OR client_id_token = '' ORDER BY id")
             missing_token_ids = cur.fetchall()
             for (c_id,) in missing_token_ids:
-                conn.execute("UPDATE clients SET client_id_token = ? WHERE id = ?", (f"CLI-{c_id:05d}", c_id))
+                conn.execute("UPDATE clients SET client_id_token = ? WHERE id = ?", (str(c_id), c_id))
 
             # 4. Client Values (EAV side table)
             conn.execute("""
@@ -187,7 +192,11 @@ class SeraDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_client ON client_values(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_column ON client_values(column_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_client_col ON client_values(client_id, column_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_col_val ON client_values(column_id, value);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mc_identity ON mcl_columns(is_identity, id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cs_client ON client_services(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cs_service ON client_services(service_id, client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_archived ON clients(is_archived);")
 
             # Shared staff roster. The selected identity is stored locally by
@@ -678,7 +687,7 @@ class SeraDatabase:
                 r[0]: {
                     "id": r[0], "notes": r[1], "created_at": r[2], "updated_at": r[3],
                     "is_archived": bool(r[4]) if len(r) > 4 else False,
-                    "client_id_token": r[5] if len(r) > 5 and r[5] else f"CLI-{r[0]:05d}",
+                    "client_id_token": r[5] if len(r) > 5 and r[5] else str(r[0]),
                     "values": {},
                     "service_ids": []
                 }
@@ -720,7 +729,7 @@ class SeraDatabase:
         client = {
             "id": row[0], "notes": row[1], "created_at": row[2], "updated_at": row[3],
             "is_archived": bool(row[4]) if len(row) > 4 else False,
-            "client_id_token": row[5] if len(row) > 5 and row[5] else f"CLI-{row[0]:05d}"
+            "client_id_token": row[5] if len(row) > 5 and row[5] else str(row[0])
         }
 
         vcur = conn.execute("SELECT column_id, value FROM client_values WHERE client_id=?", (client_id,))
@@ -769,7 +778,7 @@ class SeraDatabase:
                 (notes, now, now)
             )
             client_id = cur.lastrowid
-            token = f"CLI-{client_id:05d}"
+            token = str(client_id)
             conn.execute("UPDATE clients SET client_id_token=? WHERE id=?", (token, client_id))
 
             # Auto-assign serial number to ID column if present and not provided
@@ -1841,7 +1850,7 @@ class SeraDatabase:
                                 elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
                                     pan_val = str(val).strip()
                             client_map[cid] = {
-                                "name": name_val or cdata.get("client_id_token", f"CLI-{cid:05d}"),
+                                "name": name_val or cdata.get("client_id_token", str(cid)),
                                 "pan": pan_val
                             }
                     except Exception:

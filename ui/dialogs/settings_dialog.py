@@ -115,11 +115,16 @@ class SettingsDialog(QDialog):
         self.sad_enabled_check.setEnabled(True)
         self.sad_enabled_check.setToolTip("Toggle passive network response interceptor (fetch/XHR) for real-time JSON API capture.")
         form_general.addRow("", self.sad_enabled_check)
+
+        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist — Ambient Password Autofill 📋)")
+        self.sca_enabled_check.setEnabled(True)
+        self.sca_enabled_check.setToolTip("When copying client User ID from Excel, silently arms matching password for ambient autofill on portal paste.")
+        form_general.addRow("", self.sca_enabled_check)
         
         # Primary Key (ID Field) Wiring Status
         id_col = self.db.get_id_column()
         if id_col:
-            id_status_text = f"'{id_col['label']}' — Wired to Client ID Tokens (Auto Serial # & Backend Token: CLI-XXXXX)"
+            id_status_text = f"'{id_col['label']}' — Wired to Client Auto-Serial Numbers (1, 2, 3...)"
             lbl_id = QLabel(id_status_text)
             lbl_id.setStyleSheet("color: #2E9B5F; font-weight: 700;")
         else:
@@ -284,6 +289,9 @@ class SettingsDialog(QDialog):
         sad_enabled = self.db.get_setting("sad_enabled", "1")
         self.sad_enabled_check.setChecked(sad_enabled == "1")
 
+        sca_enabled = self.db.get_setting("sca_enabled", "1")
+        self.sca_enabled_check.setChecked(sca_enabled == "1")
+
         run_in_bg = self.db.get_setting("run_in_background", "1")
         self.run_in_bg_check.setChecked(run_in_bg == "1")
 
@@ -303,6 +311,7 @@ class SettingsDialog(QDialog):
         show_hide_val = "1" if self.show_hide_enabled_check.isChecked() else "0"
         fst_val = "1" if self.fst_enabled_check.isChecked() else "0"
         sad_val = "1" if self.sad_enabled_check.isChecked() else "0"
+        sca_val = "1" if self.sca_enabled_check.isChecked() else "0"
         tracker_val = "1" if (fst_val == "1" or sad_val == "1") else "0"
         run_in_bg_val = "1" if self.run_in_bg_check.isChecked() else "0"
 
@@ -323,12 +332,13 @@ class SettingsDialog(QDialog):
             self.db.set_setting("show_hide_btn_enabled", show_hide_val)
             self.db.set_setting("fst_enabled", fst_val)
             self.db.set_setting("sad_enabled", sad_val)
+            self.db.set_setting("sca_enabled", sca_val)
             self.db.set_setting("tracker_enabled", tracker_val)
             self.db.set_setting("run_in_background", run_in_bg_val)
 
-            # Broadcast FST and SAD settings to browser extension immediately
-            import automation
-            automation.update_extension_settings(fst_enabled=(fst_val == "1"), sad_enabled=(sad_val == "1"))
+            # Update extension daemon settings
+            from automation import update_extension_settings
+            update_extension_settings(fst_enabled=(fst_val == "1"), sad_enabled=(sad_val == "1"), tracker_enabled=(tracker_val == "1"), sca_enabled=(sca_val == "1"))
             
             # Save Column Permissions
             visible_ids = [cid for cid, cb in self.visibility_cbs.items() if cb.isChecked()]

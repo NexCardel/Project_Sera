@@ -38,6 +38,7 @@ class SearchWindow(QWidget):
     dashboard_requested = Signal()
     toast_requested = Signal(str, str)
     action_alert_requested = Signal(str, str)
+    toggle_sidebar_requested = Signal()
 
     def __init__(self, db):
         super().__init__()
@@ -58,6 +59,19 @@ class SearchWindow(QWidget):
 
         # Top Header Row
         header_row = QHBoxLayout()
+        
+        self.btn_toggle_sidebar = QPushButton()
+        self.btn_toggle_sidebar.setObjectName("PageToggleSidebarButton")
+        if qta:
+            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#A0A0A0"))
+            self.btn_toggle_sidebar.setIconSize(QSize(20, 20))
+        self.btn_toggle_sidebar.setFixedSize(36, 36)
+        self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_sidebar.setToolTip("Toggle Sidebar (Ctrl+B)")
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar_requested.emit)
+        header_row.addWidget(self.btn_toggle_sidebar)
+        header_row.addSpacing(6)
+
         title = QLabel("All Clients / Search")
         title.setProperty("class", "PageTitle")
         header_row.addWidget(title)
@@ -433,7 +447,7 @@ class SearchWindow(QWidget):
                     col_lbl = col["label"].strip().lower()
                     col_key = str(col["id"])
                     if col.get("field_type") == "id":
-                        val = client.get("client_id_token") or f"CLI-{client_id:05d}"
+                        val = client.get("client_id_token") or str(client_id)
                     elif col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}:
                         val = str(r + 1)
                     if len(val) > col_max_lens[c_idx]:

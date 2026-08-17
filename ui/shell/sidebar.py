@@ -145,10 +145,12 @@ class Sidebar(QFrame):
     action_settings = Signal()
     action_restore = Signal()
     action_open_sera_sync = Signal()
+    action_trigger_sync = Signal()
     
     # Toggle Signal
     action_enter_admin = Signal()
     action_exit_admin = Signal()
+    toggle_requested = Signal()
 
 
     def __init__(self, parent=None):
@@ -199,6 +201,29 @@ class Sidebar(QFrame):
         brand_layout.addWidget(logo)
         brand_layout.addWidget(title)
         brand_layout.addStretch()
+
+        self.btn_toggle_sidebar = QPushButton()
+        self.btn_toggle_sidebar.setObjectName("SidebarCollapseButton")
+        if qta:
+            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#A0A0A0"))
+            self.btn_toggle_sidebar.setIconSize(QSize(18, 18))
+        self.btn_toggle_sidebar.setFixedSize(28, 28)
+        self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_sidebar.setToolTip("Toggle / Hide Sidebar (Ctrl+B)")
+        self.btn_toggle_sidebar.setStyleSheet("""
+            QPushButton#SidebarCollapseButton {
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                padding: 3px;
+            }
+            QPushButton#SidebarCollapseButton:hover {
+                background-color: #222222;
+            }
+        """)
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_requested.emit)
+        brand_layout.addWidget(self.btn_toggle_sidebar)
+
         self.main_layout.addWidget(brand)
         
         # Admin Toggle (Top Area)
@@ -305,30 +330,96 @@ class Sidebar(QFrame):
         self.profile_row.installEventFilter(self)
         self.main_layout.addWidget(self.profile_row)
 
-        self.sync_status_badge = QLabel("🟢 Auto-Sync Active")
-        self.sync_status_badge.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600; padding: 4px 8px; background-color: #14241B; border: 1px solid #1E4D34; border-radius: 4px; margin-top: 4px;")
+        self.sync_status_badge = QPushButton("🟢 Auto-Sync Active")
+        self.sync_status_badge.setObjectName("SyncDeckPill")
+        self.sync_status_badge.setCursor(Qt.PointingHandCursor)
+        self.sync_status_badge.setToolTip("Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
+        self._style_sync_pill("idle")
+        self.sync_status_badge.clicked.connect(self._on_sync_pill_clicked)
         self.main_layout.addWidget(self.sync_status_badge)
 
         self._update_visibility()
 
+    def _style_sync_pill(self, state: str = "idle"):
+        if state == "idle":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #4CF9B7;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 5px 8px;
+                    background-color: #0E1F16;
+                    border: 1px solid #1E4D34;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+                QPushButton#SyncDeckPill:hover {
+                    background-color: #163626;
+                    border-color: #2E9B5F;
+                    color: #FFFFFF;
+                }
+                QPushButton#SyncDeckPill:pressed {
+                    background-color: #23794A;
+                }
+            """)
+        elif state == "syncing":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #FFFFFF;
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 5px 8px;
+                    background-color: #2E9B5F;
+                    border: 1px solid #34B76D;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+            """)
+        elif state == "received":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #FFFFFF;
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 5px 8px;
+                    background-color: #1F7846;
+                    border: 1px solid #2E9B5F;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+            """)
+
+    def _on_sync_pill_clicked(self):
+        self._style_sync_pill("syncing")
+        self.sync_status_badge.setText("⚡ Syncing LAN Mesh...")
+        self.action_trigger_sync.emit()
+        from PySide6.QtCore import QTimer
+        def _reset_idle():
+            self._style_sync_pill("idle")
+            self.sync_status_badge.setText("🟢 Auto-Sync Active")
+        QTimer.singleShot(1600, _reset_idle)
+
     def notify_sync_sent(self, count: int, total: int):
         """Visual badge indicator when local changes are pushed to LAN peers."""
         import datetime
+        from PySide6.QtCore import QTimer
         now_t = datetime.datetime.now().strftime("%H:%M:%S")
         target_str = f"{count}/{total} PCs" if total > 1 else f"{count} PC"
-        self.sync_status_badge.setText(f"⬆️ Synced to {target_str} ({now_t})")
-        self.sync_status_badge.setStyleSheet(
-            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #2E9B5F; border-radius: 4px; margin-top: 4px;"
-        )
+        self._style_sync_pill("syncing")
+        self.sync_status_badge.setText(f"⬆️ Synced {target_str} ({now_t})")
+        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
 
     def notify_sync_received(self, sender_username: str, sender_host: str):
         """Visual badge indicator when incoming live auto-sync is received."""
         import datetime
+        from PySide6.QtCore import QTimer
         now_t = datetime.datetime.now().strftime("%H:%M:%S")
-        self.sync_status_badge.setText(f"⬇️ Synced Live {now_t} ({sender_host})")
-        self.sync_status_badge.setStyleSheet(
-            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #1F7846; border-radius: 4px; margin-top: 4px;"
-        )
+        self._style_sync_pill("received")
+        self.sync_status_badge.setText(f"⬇️ Live Sync ({now_t})")
+        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
 
     def eventFilter(self, watched, event):
         try:

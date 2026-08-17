@@ -62,6 +62,18 @@ The **Tracker Dump** workspace (`TrackerDumpWindow`) serves as a central hub for
 
 ---
 
+## Sera Clipboard Assist (SCA — Ambient Autofill)
+
+- **Ambient Workflow**: When staff copy a client User ID (PAN, GSTIN, UID) from an Excel workbook, SCA detects the Excel clipboard marker in $O(1)$, matches the candidate against an in-memory index, and silently arms the matching client password for autofill.
+- **Zero-Touch Injection**: When the user pastes that User ID into any recognized portal login field in the browser, the password field autofills itself immediately.
+- **Security & Privacy Guardrails**:
+  - Raw clipboard text is never logged, stored in SQLite, or written to disk.
+  - Excel MIME format gating (`Csv`, `Biff12`, `XML Spreadsheet`, `Link`) ensures non-Excel clipboard events (chat, browser URLs, email, text editors) are rejected instantaneously at zero CPU cost.
+  - 45-second TTL auto-expiry and 15-second debounce window.
+  - Toggleable via **Settings → General** ("Enable SCA — Sera Clipboard Assist").
+
+---
+
 ## Admin Gating & Settings
 
 Mutating controls are hidden in standard user mode. System Audit Log, Backup/Restore, and Settings are available only after Admin PIN authentication.

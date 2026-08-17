@@ -263,13 +263,21 @@ class SeraApp:
         loading_dlg.close()
 
         
-        # Ensure FST, SAD, and tracker settings are initialized
+        # Ensure FST, SAD, SCA, and tracker settings are initialized
         if self.db.get_setting("fst_enabled") is None:
             self.db.set_setting("fst_enabled", "1")
         if self.db.get_setting("sad_enabled") is None:
             self.db.set_setting("sad_enabled", "1")
+        if self.db.get_setting("sca_enabled") is None:
+            self.db.set_setting("sca_enabled", "1")
         if self.db.get_setting("tracker_enabled") is None:
             self.db.set_setting("tracker_enabled", "1")
+
+        # Initialize Sera Clipboard Assist (SCA)
+        from clipboard_watch import ClipboardWatchService
+        self.clipboard_watcher = ClipboardWatchService(self.db, self.shell)
+        sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
+        self.clipboard_watcher.set_enabled(sca_active)
 
         # Start extension listener on port 49152
         self.ext_listener = ExtensionListener(self.app)
@@ -280,6 +288,18 @@ class SeraApp:
 
     def _handle_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
+        if msg.get("type") == "audit_event":
+            try:
+                self.db.log_action(
+                    actor=self.actor,
+                    action=msg.get("action", "SCA autofill triggered"),
+                    client_id=msg.get("client_id"),
+                    detail=msg.get("detail", "")
+                )
+            except Exception:
+                pass
+            return
+
         raw_client_id = msg.get('client_id')
         if not raw_client_id:
             print("[main._handle_extension_result] Missing client_id in message, using 1")
@@ -459,6 +479,7 @@ class SeraApp:
         self.search_win.archive_client_requested.connect(self._archive_client_from_search)
         self.search_win.toast_requested.connect(self.shell.show_alert)
         self.search_win.action_alert_requested.connect(self.shell.show_action_alert)
+        self.search_win.toggle_sidebar_requested.connect(self.shell.toggle_sidebar)
         
         self.detail_win.back_requested.connect(self._show_search_from_detail)
         self.detail_win.toast_requested.connect(self.shell.show_toast)
@@ -482,6 +503,7 @@ class SeraApp:
         sidebar.action_manage_services.connect(self.admin_win._on_manage_services)
         sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
+        sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
         sidebar.action_export_csv.connect(self.admin_win._on_export_csv)
         sidebar.action_backup.connect(self.admin_win._on_backup)
@@ -496,6 +518,10 @@ class SeraApp:
         
         self.sc_ctrl_k = QShortcut(QKeySequence("Ctrl+K"), self.shell)
         self.sc_ctrl_k.activated.connect(self._global_search_shortcut)
+
+        # Toggle Sidebar Hotkey (Ctrl+B)
+        self.sc_ctrl_b = QShortcut(QKeySequence("Ctrl+B"), self.shell)
+        self.sc_ctrl_b.activated.connect(self.shell.toggle_sidebar)
 
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
@@ -512,17 +538,25 @@ class SeraApp:
 
         Called once at startup and again every time the user saves settings.
         When False the tray icon is hidden (not needed) and closing the window
-        performs a full quit instead of minimising.
+        exits the app immediately. When True the tray icon is shown and closing
+        minimises to tray.
         """
-        run_in_bg = self.db.get_setting("run_in_background", "1") == "1"
-        self.shell._run_in_background = run_in_bg
+        try:
+            run_in_bg = (self.db.get_setting("run_in_background", "1") == "1")
+            self.shell._run_in_background = run_in_bg
+            if hasattr(self, "tray_icon") and self.tray_icon:
+                if run_in_bg:
+                    self.tray_icon.show()
+                else:
+                    self.tray_icon.hide()
 
-        # Show/hide the tray icon according to the setting
-        if hasattr(self, "tray_icon") and self.tray_icon:
-            if run_in_bg:
-                self.tray_icon.show()
-            else:
-                self.tray_icon.hide()
+            # Also refresh SCA (Sera Clipboard Assist) status
+            if hasattr(self, "clipboard_watcher") and self.clipboard_watcher:
+                sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
+                self.clipboard_watcher.set_enabled(sca_active)
+                self.clipboard_watcher.refresh_index()
+        except Exception:
+            pass
 
     def _setup_system_tray(self):
         """Initializes the Windows system tray icon and background context menu."""
@@ -665,6 +699,8 @@ class SeraApp:
                 self.search_win.refresh()
             if hasattr(self, "admin_win") and self.admin_win:
                 self.admin_win.refresh()
+            if hasattr(self, "clipboard_watcher") and self.clipboard_watcher:
+                self.clipboard_watcher.refresh_index()
         except Exception as e:
             print(f"[Auto-Refresh] Error refreshing screens: {e}")
 

@@ -347,6 +347,10 @@ QPushButton#SidebarButton:hover { background: #222222; color: #FFFFFF; }
 QPushButton#SidebarSubButton { min-height: 20px; text-align: left; padding: 4px 8px 4px 34px; font-size: 12px; color: #A0A0A0; border: none; border-radius: 4px; background: transparent; }
 QPushButton#SidebarSubButton:hover { background: #222222; color: #FFFFFF; }
 QPushButton#SidebarSubButton[active="true"] { background: #2E9B5F; color: #FFFFFF; font-weight: 600; }
+QPushButton#SidebarCollapseButton { background: transparent; border: none; border-radius: 4px; padding: 3px; }
+QPushButton#SidebarCollapseButton:hover { background-color: #222222; }
+QPushButton#PageToggleSidebarButton { background: #171717; border: 1px solid #333333; border-radius: 6px; padding: 4px; }
+QPushButton#PageToggleSidebarButton:hover { background-color: #262626; border-color: #2E9B5F; }
 
 /* Slide Panel */
 QFrame#SlidePanel { background-color: #0A0A0A; border-left: 1px solid #262626; }

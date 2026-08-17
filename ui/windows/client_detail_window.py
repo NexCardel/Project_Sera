@@ -201,9 +201,9 @@ class ClientDetailWindow(QWidget):
         self.identity_label.setText(f"Client Profile - {self._get_identity_label(self.client)}")
         self.identity_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #FFFFFF;")
         
-        token = self.client.get("client_id_token") or f"CLI-{client_id:05d}"
-        self.token_badge.setText(f"Token: {token}")
-        self.token_badge.setToolTip(f"Backend Client Token: {token}\nClick to copy to clipboard")
+        token = self.client.get("client_id_token") or str(client_id)
+        self.token_badge.setText(f"ID: {token}")
+        self.token_badge.setToolTip(f"Client ID: {token}\nClick to copy to clipboard")
         self.token_badge.mousePressEvent = lambda event, t=token: self._copy_token_to_clipboard(t)
         
         from PySide6.QtWidgets import QGridLayout

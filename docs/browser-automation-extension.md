@@ -21,12 +21,19 @@ The injected `fillCredentialsInPage()` function:
 - Dispatches Angular-compatible `CompositionEvent` and `InputEvent` events so reactive forms register password input cleanly.
 - Auto-clicks the Continue/Submit button 600 ms after password fill.
 
-### Automatic Cookie Clearing (Every 5 Injections)
+## Sera Clipboard Assist (SCA — Ambient Password Autofill)
 
-- The extension maintains an injection counter stored in `chrome.storage.local`.
-- Injections across both automated fill (`injectFillScript`) and manual assist (`injectManualAssist`) increment the counter (`1/5`, `2/5`, `3/5`, `4/5`, `5/5`).
-- Upon reaching **5 injections**, the extension automatically invokes `chrome.browsingData.removeCookies()` to wipe browser session cookies.
-- This prevents stale session tokens, `"User Already Logged In"`, or state mismatch errors on government compliance portals (Income Tax, GST, MCA, TRACES, etc.).
+- **Ambient Trigger**: When staff copy a User ID (PAN, GSTIN, UID) from Excel, Sheets, Notepad, or any client roster, Sera silently arms the matching client password in memory with a 45-second TTL timer.
+- **Zero-Touch Autofill**: When the user pastes that User ID into any recognized portal login field in the browser, the password field autofills itself immediately.
+- **Floating Confirmation Banner**: Simultaneously displays a sleek, non-intrusive floating card in the top-right corner of the page showing the client business name, owner name, and `"Password was autofilled for <Portal>"` confirmation.
+- **Privacy & Safety**: Never persists raw clipboard text, scopes checkbox clicks away from `"Show password"` controls, and can be toggled via **Settings → General**.
+
+## Sera Manual Tracker Injection (SMTI / Manual Assist)
+
+- **Obsidian & Emerald UI Widget**: An interactive floating card widget rendered in an isolated Shadow DOM on the web page.
+- **Independent Field Injection**: Allows staff to independently trigger `👤 Inject User ID` and `🔑 Inject Password` with immediate visual click confirmation (`✓ Injected`).
+- **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
+- **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
 ## Native Messaging on Another PC
 

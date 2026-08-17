@@ -45,7 +45,7 @@ class TestIdFieldAndTokens(unittest.TestCase):
         
         client = self.db.get_client(cid)
         self.assertIsNotNone(client)
-        self.assertEqual(client["client_id_token"], f"CLI-{cid:05d}")
+        self.assertEqual(client["client_id_token"], str(cid))
         self.assertEqual(client["values"].get(col_id), str(cid))
 
 if __name__ == "__main__":

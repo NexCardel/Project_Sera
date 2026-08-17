@@ -17,8 +17,17 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.4.2)
+## Latest Features (v2.4.3)
 
+- **Sera Clipboard Assist (SCA — Ambient Password Autofill)**:
+  - Automatically arms password in memory when staff copy client User IDs from Excel, Sheets, Notepad, or CSV rosters.
+  - Zero-touch autofill immediately injects matching credentials when the User ID is pasted into any recognized web portal.
+  - Floats an on-page notification banner displaying client business name, owner name, and portal autofill confirmation.
+- **Modernized SMTI (Manual Assist) Widget**:
+  - Upgraded Obsidian & Emerald UI design matching the desktop design tokens.
+  - Emerald action buttons for independent User ID and Password injection with instant visual click confirmation.
+  - Integrated 30-second live auto-dismiss countdown timer.
+  - Strict protection against accidental "Show password" checkbox toggles.
 - **Sera API Detection (SAD)**:
   - Passive Network Response Interceptor (`net_interceptor.js`) running in the page MAIN execution world.
   - Intercepts `fetch()` and `XMLHttpRequest` calls in real-time across GST (`status_cd: "1"`), Income Tax (`acknowledgementNumber`), TRACES (`requestNo`), and universal web portals.
@@ -27,17 +36,9 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
   - Dedicated desktop workspace (`TrackerDumpWindow`) logging all raw SAD captures and extension dumps into SQLite table `tracker_dump`.
   - Features real-time search, method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`), raw JSON payload inspector drawer, and CSV export.
   - Universal client resolution dynamically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), and Name/PAN/GSTIN substring queries.
-- **Modal-Free Background Filing Logging**:
-  - Filing results are recorded silently in the background (`FilingConfirmationDialog` unhooked).
-  - Displays non-intrusive 5-second desktop toast notifications (`Captured GST Portal Filing (SAD API Interceptor) — ARN: AA270826...`) with zero screen popups.
-- **Instant Prompt-Free Auto-Unlock**:
+- **Instant Prompt-Free Auto-Unlock & Windows Autostart**:
   - Auto-derives and decrypts vault on startup using local keyfile (`sera.key`).
   - Launches instantly into your workspace without popping up a master password login prompt on launch, while preserving full Admin PIN protection for administrative tasks.
-- **Windows Autostart Integration**:
-  - Automatic launching on Windows PC startup via Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
-  - Toggleable anytime from Settings → General.
-- **Search Grid Cell Formatting Fixes**:
-  - Persistent cell fill highlights and text colors across database restarts without QSS stylesheet overrides.
 
 ---
 
