@@ -162,7 +162,7 @@ class AuditLogDialog(QDialog):
         self.action_combo = QComboBox()
         self.action_combo.setFixedWidth(130)
         self.action_combo.addItems([
-            "All Actions", "view", "autofill", "manual_copy",
+            "All Actions", "view", "autofill", "sca_autofill", "manual_copy",
             "create", "update", "archive", "unarchive", "delete",
             "csv_import", "backup", "restore", "csv_export",
             "filing_submitted", "sync_pushed", "sync_received", "audit_log_viewed"

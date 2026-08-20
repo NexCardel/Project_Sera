@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import shutil
+import time
 from contextlib import contextmanager
 
 import security
@@ -296,8 +297,29 @@ class SeraDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_client ON tracker_dump(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_arn ON tracker_dump(arn_number);")
 
+            # 13. Client Activity Stats & Transient Breadcrumb Log
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_activity_stats (
+                    client_id        INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                    view_count       INTEGER DEFAULT 0,
+                    action_count     INTEGER DEFAULT 0,
+                    last_action      TEXT,
+                    last_action_time REAL
+                );
+            """)
 
-            # 12. Seed default MCL columns and services if fresh database
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_recent_activity (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    action_type TEXT NOT NULL,
+                    detail      TEXT,
+                    timestamp   REAL NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_recent_act_client ON client_recent_activity(client_id, timestamp);")
+
+            # 14. Seed default MCL columns and services if fresh database
             cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
             if cur.fetchone()[0] == 0:
                 self._seed_default_data(conn)
@@ -551,6 +573,30 @@ class SeraDatabase:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str, extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "") -> int:
+        u_sel = (username_selector or "").strip()
+        p_sel = (password_selector or "").strip()
+        link = (login_page_link or "").strip()
+
+        # If selectors are missing, resolve from verified presets
+        if not u_sel or not p_sel:
+            presets = [
+                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
+                (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
+                (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
+                (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
+            ]
+            combined = f"{name.lower()} {link.lower()}"
+            for kws, def_u, def_p, def_url, def_flow in presets:
+                if any(k in combined for k in kws):
+                    if not u_sel: u_sel = def_u
+                    if not p_sel: p_sel = def_p
+                    if not link: link = def_url
+                    if not extension_flow: extension_flow = def_flow
+                    break
+
         with self._connect() as conn:
             cur = conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM services")
             next_order = cur.fetchone()[0]
@@ -559,8 +605,8 @@ class SeraDatabase:
                                          username_selector, password_selector, automation_mode, extension_flow,
                                          success_selector, arn_selector, sort_order)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (name.strip(), login_page_link, userid_column_id, password_column_id,
-                 username_selector, password_selector, automation_mode, extension_flow,
+                (name.strip(), link, userid_column_id, password_column_id,
+                 u_sel, p_sel, automation_mode, extension_flow,
                  success_selector, arn_selector, next_order)
             )
             return cur.lastrowid
@@ -569,42 +615,95 @@ class SeraDatabase:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str, extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = ""):
+        u_sel = (username_selector or "").strip()
+        p_sel = (password_selector or "").strip()
+        link = (login_page_link or "").strip()
+
+        # If selectors are missing, resolve from verified presets
+        if not u_sel or not p_sel:
+            presets = [
+                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
+                (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
+                (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
+                (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
+            ]
+            combined = f"{name.lower()} {link.lower()}"
+            for kws, def_u, def_p, def_url, def_flow in presets:
+                if any(k in combined for k in kws):
+                    if not u_sel: u_sel = def_u
+                    if not p_sel: p_sel = def_p
+                    if not link: link = def_url
+                    if not extension_flow: extension_flow = def_flow
+                    break
+
         with self._connect() as conn:
             conn.execute(
                 """UPDATE services SET name=?, login_page_link=?, userid_column_id=?,
                                        password_column_id=?, username_selector=?, password_selector=?,
                                        automation_mode=?, extension_flow=?, success_selector=?, arn_selector=? WHERE id=?""",
-                (name.strip(), login_page_link, userid_column_id, password_column_id,
-                 username_selector, password_selector, automation_mode, extension_flow,
+                (name.strip(), link, userid_column_id, password_column_id,
+                 u_sel, p_sel, automation_mode, extension_flow,
                  success_selector, arn_selector, service_id)
             )
 
     def auto_populate_service_selectors(self):
         """
         Auto-scrapes and resolves username & password CSS selectors for services
-        that have a login_page_link but are missing valid selectors.
+        that have a login_page_link or recognizable name but are missing valid selectors.
         """
         import urllib.request
         import re
 
-        known_portals = {
-            'gst.gov.in': ('#username', '#user_pass'),
-            'incometax.gov.in': ('#panAdhaarUserId', "input[type='password']"),
-            'epfindia.gov.in': ('#userName', '#password'),
-            'tdscpc.gov.in': ('#userId', '#password'),
-            'icegate.gov.in': ('#userId', '#password'),
-        }
+        # Known portal definitions: (keywords_in_name_or_url, (u_sel, p_sel, default_url, default_flow))
+        known_portals = [
+            (
+                ['tdscpc', 'traces', 'tds'],
+                ('#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single')
+            ),
+            (
+                ['gst.gov.in', 'gst'],
+                ('#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single')
+            ),
+            (
+                ['incometax', 'itr', 'eportal'],
+                ('#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double')
+            ),
+            (
+                ['gmail', 'google', 'accounts.google'],
+                ('#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double')
+            ),
+            (
+                ['epfindia', 'epfo', 'unifiedportal'],
+                ('#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single')
+            ),
+            (
+                ['icegate'],
+                ('#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single')
+            ),
+            (
+                ['mca.gov.in', 'mca21', 'mca'],
+                ('#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double')
+            ),
+        ]
+
+        def _match_known(name: str, url: str) -> tuple[str, str, str, str]:
+            combined = f"{name or ''} {url or ''}".lower()
+            for keywords, (u_sel, p_sel, def_url, def_flow) in known_portals:
+                for kw in keywords:
+                    if kw in combined:
+                        return (u_sel, p_sel, def_url, def_flow)
+            return ("", "", "", "")
 
         def _scrape_url(url: str) -> tuple[str, str]:
             if not url or not url.strip():
                 return ("", "")
             url_clean = url.strip()
-            for domain, (u_sel, p_sel) in known_portals.items():
-                if domain in url_clean.lower():
-                    return (u_sel, p_sel)
             try:
                 req = urllib.request.Request(url_clean, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-                with urllib.request.urlopen(req, timeout=4) as resp:
+                with urllib.request.urlopen(req, timeout=3) as resp:
                     html = resp.read().decode('utf-8', errors='ignore')
                     
                     p_match = re.search(r'<input[^>]*type=["\']password["\'][^>]*>', html, re.I)
@@ -620,16 +719,31 @@ class SeraDatabase:
                         if id_m: u_sel = '#' + id_m.group(1)
                     return (u_sel, p_sel)
             except Exception:
-                return ("input[type='text']", "input[type='password']")
+                return ("input[type='text'], input[name='userId'], #username", "input[type='password'], #password, #psw")
 
         services = self.get_services()
         for svc in services:
             svc_id = svc["id"]
+            svc_name = svc.get("name", "")
             link = svc.get("login_page_link", "")
             u_sel = (svc.get("username_selector") or "").strip()
             p_sel = (svc.get("password_selector") or "").strip()
+            flow = svc.get("extension_flow", "double")
 
-            if link and (not u_sel or not p_sel):
+            k_u, k_p, k_url, k_flow = _match_known(svc_name, link)
+            
+            # If known portal, apply high-accuracy verified selectors
+            if k_u and k_p:
+                final_u = u_sel if (u_sel and u_sel not in ["input[type='text']", "#username"]) else k_u
+                final_p = p_sel if (p_sel and p_sel not in ["input[type='password']", "#password"]) else k_p
+                final_link = link if link else k_url
+                final_flow = flow if flow else k_flow
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE services SET username_selector = ?, password_selector = ?, login_page_link = ?, extension_flow = ? WHERE id = ?",
+                        (final_u, final_p, final_link, final_flow, svc_id)
+                    )
+            elif link and (not u_sel or not p_sel):
                 new_u_sel, new_p_sel = _scrape_url(link)
                 final_u = u_sel if u_sel else new_u_sel
                 final_p = p_sel if p_sel else new_p_sel
@@ -644,10 +758,73 @@ class SeraDatabase:
             conn.execute("DELETE FROM services WHERE id=?", (service_id,))
 
 
-    # ---------------- Clients ----------------
+    # ---------------- Clients & Activity ----------------
+
+    def record_client_activity(self, client_id: int, action_type: str, detail: str = ""):
+        """Records a client interaction (e.g. GST, ITR, Viewed, Copied, Edited)."""
+        now = time.time()
+        with self._connect() as conn:
+            # 1. Insert into recent activity log
+            conn.execute(
+                "INSERT INTO client_recent_activity (client_id, action_type, detail, timestamp) VALUES (?, ?, ?, ?)",
+                (client_id, action_type, detail, now)
+            )
+            # 2. Update aggregate stats
+            is_view = 1 if action_type == "Viewed" else 0
+            is_action = 0 if action_type == "Viewed" else 1
+            conn.execute("""
+                INSERT INTO client_activity_stats (client_id, view_count, action_count, last_action, last_action_time)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    view_count = view_count + excluded.view_count,
+                    action_count = action_count + excluded.action_count,
+                    last_action = excluded.last_action,
+                    last_action_time = excluded.last_action_time
+            """, (client_id, is_view, is_action, action_type, now))
+            
+            # Prune old recent activity entries (older than 24 hours) to keep table lightweight
+            cutoff = now - 86400
+            conn.execute("DELETE FROM client_recent_activity WHERE timestamp < ?", (cutoff,))
+
+    def get_recent_client_activities(self, max_age_seconds: int = 1800) -> dict[int, list[dict]]:
+        """Returns map of client_id -> list of recent action dicts within max_age_seconds."""
+        now = time.time()
+        cutoff = now - max_age_seconds
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT client_id, action_type, detail, timestamp FROM client_recent_activity WHERE timestamp >= ? ORDER BY timestamp DESC",
+                (cutoff,)
+            )
+            res = {}
+            for r in cur.fetchall():
+                cid = r[0]
+                if cid not in res:
+                    res[cid] = []
+                res[cid].append({
+                    "action_type": r[1],
+                    "detail": r[2] or "",
+                    "timestamp": r[3],
+                    "age_seconds": int(now - r[3])
+                })
+            return res
+
+    def get_all_activity_stats(self) -> dict[int, dict]:
+        """Returns map of client_id -> dict of activity stats."""
+        with self._connect() as conn:
+            cur = conn.execute("SELECT client_id, view_count, action_count, last_action, last_action_time FROM client_activity_stats")
+            return {
+                r[0]: {
+                    "view_count": r[1],
+                    "action_count": r[2],
+                    "last_action": r[3],
+                    "last_action_time": r[4]
+                }
+                for r in cur.fetchall()
+            }
 
     def search_clients(self, query: str = "", service_id: int = None,
-                        include_archived: bool = False, archived_only: bool = False) -> list[dict]:
+                        include_archived: bool = False, archived_only: bool = False,
+                        filter_preset: str = None) -> list[dict]:
         like = f"%{query}%" if query else ""
         with self._connect() as conn:
             sql = "SELECT DISTINCT c.id, c.notes, c.created_at, c.updated_at, c.is_archived, c.client_id_token FROM clients c"
@@ -660,22 +837,41 @@ class SeraDatabase:
 
             where_clauses = []
             params = []
+            order_by = "ORDER BY c.id ASC"
             
             if query:
-                where_clauses.append("mc.is_identity = 1 AND cv.value LIKE ?")
-                params.append(like)
+                where_clauses.append("(c.client_id_token LIKE ? OR CAST(c.id AS TEXT) LIKE ? OR cv.value LIKE ?)")
+                params.extend([like, like, like])
             if service_id is not None:
                 where_clauses.append("cs.service_id = ?")
                 params.append(service_id)
-            if archived_only:
+            if archived_only or filter_preset == "archived":
                 where_clauses.append("c.is_archived = 1")
             elif not include_archived:
                 where_clauses.append("c.is_archived = 0")
 
+            if filter_preset == "most_viewed":
+                where_clauses.append("c.id IN (SELECT client_id FROM client_activity_stats WHERE (view_count + action_count) > 0)")
+                order_by = "ORDER BY (SELECT (view_count * 3 + action_count) FROM client_activity_stats WHERE client_id = c.id) DESC"
+            elif filter_preset == "active_today":
+                start_of_today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                where_clauses.append("c.id IN (SELECT client_id FROM client_recent_activity WHERE timestamp >= ?)")
+                params.append(start_of_today)
+            elif filter_preset == "has_services":
+                where_clauses.append("c.id IN (SELECT client_id FROM client_services)")
+            elif filter_preset == "no_services":
+                where_clauses.append("c.id NOT IN (SELECT client_id FROM client_services)")
+            elif filter_preset == "has_passwords":
+                where_clauses.append("c.id IN (SELECT cv.client_id FROM client_values cv JOIN mcl_columns mc ON cv.column_id = mc.id WHERE mc.field_type = 'password' AND LENGTH(TRIM(COALESCE(cv.value, ''))) > 0)")
+            elif filter_preset == "missing_passwords":
+                where_clauses.append("c.id NOT IN (SELECT cv.client_id FROM client_values cv JOIN mcl_columns mc ON cv.column_id = mc.id WHERE mc.field_type = 'password' AND LENGTH(TRIM(COALESCE(cv.value, ''))) > 0)")
+            elif filter_preset == "has_formatting":
+                where_clauses.append("c.id IN (SELECT client_id FROM cell_formatting)")
+
             if where_clauses:
                 sql += " WHERE " + " AND ".join(where_clauses)
 
-            sql += " ORDER BY c.id ASC"
+            sql += f" {order_by}"
 
             cur = conn.execute(sql, params)
             rows = cur.fetchall()
@@ -1247,6 +1443,11 @@ class SeraDatabase:
                         "DELETE FROM client_services WHERE client_id=? AND service_id=?",
                         (cid, service_id)
                     )
+        try:
+            for cid in client_ids:
+                self.record_client_activity(cid, "Services", "Service attached" if attach else "Service detached")
+        except Exception:
+            pass
 
     # ---------------- Audit Log ----------------
 
@@ -1259,6 +1460,36 @@ class SeraDatabase:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (ts, actor_name, action, client_id, service_id, detail)
             )
+        
+        # Automatically record client activity breadcrumbs on mutations
+        if client_id:
+            try:
+                act_norm = str(action).lower()
+                tag = "Edited"
+                if "update" in act_norm or "edit" in act_norm or "save" in act_norm:
+                    tag = "Edited"
+                elif "create" in act_norm or "add" in act_norm:
+                    tag = "Created"
+                elif "archive" in act_norm:
+                    tag = "Archived"
+                elif "unarchive" in act_norm or "restore" in act_norm:
+                    tag = "Restored"
+                elif "note" in act_norm:
+                    tag = "Note"
+                elif "service" in act_norm:
+                    tag = "Services"
+                elif "view" in act_norm:
+                    tag = "Viewed"
+                elif "copy" in act_norm:
+                    tag = "Copied"
+                elif "sca" in act_norm:
+                    tag = "SCA"
+                else:
+                    tag = action.capitalize()[:10]
+                self.record_client_activity(int(client_id), tag, detail or f"{tag} by {actor_name}")
+            except Exception:
+                pass
+
         # "view" is read-only and shouldn't trigger a sync push; everything
         # else logged here already represents a real data mutation somewhere
         # in this module, so it's the cheapest reliable place to hook.
@@ -1601,6 +1832,10 @@ class SeraDatabase:
                 "UPDATE clients SET notes = ?, updated_at = ? WHERE id = ?",
                 (notes, now, client_id)
             )
+        try:
+            self.record_client_activity(client_id, "Note", "Updated client notes")
+        except Exception:
+            pass
 
     # ---------------- File Submission Tracker (FST) ----------------
 

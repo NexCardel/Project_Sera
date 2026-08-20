@@ -5,17 +5,25 @@ function connectToNativeHost() {
   const hostName = "com.amanassociates.sera";
   try {
     nativePort = chrome.runtime.connectNative(hostName);
+    console.log('Sera native host connection established');
     nativePort.onMessage.addListener((message) => {
       console.log("Received from Sera desktop:", message);
       if (message.type === "autofill" && message.url) {
         if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
         else if (message.mode === "manual_assist") handleManualAssistTab(message);
         else handleAutofillTab(message);
+      } else if (message.type === "SCA_ARM") {
+        handleScaArm(message);
       } else if (message.type === "update_settings") {
-        if (message.tracker_enabled === false) {
-          chrome.storage.local.set({ trackerEnabled: false, activeAutofillPayload: null });
+        const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
+        const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
+        const sca = message.sca_enabled !== false;
+        const scaMode = message.sca_mode || "autofill";
+        const overallTracker = fst || sad;
+        if (!overallTracker) {
+          chrome.storage.local.set({ trackerEnabled: false, fstEnabled: false, sadEnabled: false, scaEnabled: sca, scaMode: scaMode, activeAutofillPayload: null });
         } else {
-          chrome.storage.local.set({ trackerEnabled: true });
+          chrome.storage.local.set({ trackerEnabled: true, fstEnabled: fst, sadEnabled: sad, scaEnabled: sca, scaMode: scaMode });
         }
       }
     });
@@ -74,9 +82,55 @@ try {
 } catch (e) {}
 
 chrome.runtime.onStartup.addListener(ensureConnected);
-chrome.runtime.onInstalled.addListener(ensureConnected);
+chrome.runtime.onInstalled.addListener(() => {
+  // Ensure native connection
+  ensureConnected();
+  // Enable tracker by default the first time the extension is installed
+  chrome.storage.local.get(['trackerEnabled'], (data) => {
+    if (data.trackerEnabled === undefined) {
+      chrome.storage.local.set({ trackerEnabled: true });
+    }
+  });
+});
 
 ensureConnected();
+
+console.log('Sera SAD: background.js module loaded, registering listeners.');
+
+// SAD: Inject net_interceptor.js into a tab's MAIN world.
+// chrome.scripting.executeScript with world:'MAIN' bypasses page CSP entirely.
+function injectSAD(tabId, reason) {
+  console.log('Sera SAD: injectSAD called for tab', tabId, '| reason:', reason);
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    files: ['content_scripts/net_interceptor.js'],
+    world: 'MAIN'
+  }).then(() => {
+    console.log('Sera SAD: ✅ injected into tab', tabId);
+  }).catch(err => {
+    console.log('Sera SAD: ❌ inject failed for tab', tabId, ':', err.message);
+  });
+}
+
+// Inject into every tab that finishes loading
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  console.log('Sera SAD: tabs.onUpdated fired', tabId, changeInfo.status, tab && tab.url);
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) return;
+  injectSAD(tabId, 'onUpdated');
+});
+
+// Also inject into ALL already-open tabs when the service worker starts up
+// (handles the case where the extension is reloaded while tabs are already open)
+chrome.tabs.query({}, (tabs) => {
+  console.log('Sera SAD: startup tab scan, found', tabs.length, 'tabs');
+  for (const tab of tabs) {
+    if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:')) continue;
+    if (tab.status === 'complete') injectSAD(tab.id, 'startup-scan');
+  }
+});
+
+
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
@@ -107,28 +161,16 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   function simulateType(el, value) {
     if (!el) return;
     try { el.focus(); } catch (e) {}
-    el.dispatchEvent(new Event('focus', { bubbles: true }));
 
-    // Use Angular-compatible native setter
+    // Use native property descriptor setter
     try {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       setter.call(el, value);
     } catch (e) { el.value = value; }
 
-    // Dispatch compositionstart to signal framework that input is starting
-    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
-
-    // Dispatch proper InputEvent (Angular's DefaultValueAccessor listens for this)
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-
-    // Dispatch compositionend to finalize
-    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: value }));
-
-    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Unidentified' }));
-    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Unidentified' }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    try { el.blur(); } catch (e) {}
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
   // Auto-click Continue/Login button after password fill
@@ -176,7 +218,15 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       "input[type='email']",
       "input[name='identifier']",
       "#panAdhaarUserId",
+      "#userId",
+      "input[name='userId']",
+      "#txtUserId",
+      "#identifierId",
+      "input[type='email']",
+      "input[name='identifier']",
+      "#panAdhaarUserId",
       "#username",
+      "#userName",
       "input[name='pan']",
       "input[name='username']",
       "input[name='user']"
@@ -231,11 +281,14 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     let passAttempts = 0;
     const cleanPassSel = cleanSelector(passwordSelector);
     const passFallbacks = [
+      "input[name='psw']",
+      "#psw",
       "input[type='password']",
       "input[name='Passwd']",
       "input[name='password']",
       "#passwordInput",
       "#user_pass",
+      "#password",
       "input[name='passwd']"
     ];
 
@@ -263,10 +316,13 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       }
                         
       if (passField && password) {
-        // Handle secure access checkbox (Angular Material v14+ uses mat-mdc-checkbox-checked)
-        const cb = document.querySelector("mat-checkbox");
+        // Handle IT portal secure access message checkbox specifically (never click "Show password" checkboxes)
+        const cb = document.querySelector("mat-checkbox#agreeTermAndCondition, mat-checkbox.login-terms, app-login mat-checkbox");
         if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
-          cb.click();
+          const cbText = (cb.textContent || "").toLowerCase();
+          if (!cbText.includes("show") && !cbText.includes("reveal")) {
+            cb.click();
+          }
         }
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
@@ -306,9 +362,13 @@ function handleAutofillTab(message) {
 
   // Store payload  // Keep the active payload around for the content scripts
   const isTrackerEnabled = message.tracker_enabled === true;
+  const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
+  const isSadEnabled = message.sad_enabled !== false && isTrackerEnabled;
   chrome.storage.local.set({ 
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, ts: Date.now() },
-    trackerEnabled: isTrackerEnabled
+    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, ts: Date.now() },
+    trackerEnabled: isTrackerEnabled,
+    fstEnabled: isFstEnabled,
+    sadEnabled: isSadEnabled
   });
 
   chrome.tabs.query({}, (tabs) => {
@@ -351,61 +411,274 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
+  const duration = expiresMs || 30000;
   const host = document.createElement("div");
   host.id = hostId;
+  host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
+
   const shadow = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent = `
     :host { all: initial; }
-    .box { position: fixed; z-index: 2147483647; top: 18px; right: 18px; min-width: 210px; max-width: 310px; width: max-content;
-      padding: 12px; border-radius: 10px; background: #241f1b; color: #fff;
-      box-shadow: 0 8px 28px rgba(0,0,0,.28); font: 13px Segoe UI,Arial,sans-serif;
-      transform: scale(1.3); transform-origin: top right; }
-    .title { display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
-      margin-bottom: 9px; font-weight: 700; }
-    .client { color:#bfe3d7; word-break: break-word; white-space: normal; line-height: 1.35; font-size: 13px; }
-    button { display:block; width:100%; margin-top:7px; padding:7px 8px; border:0; border-radius:6px;
-      background:#4cf9b7; color:#165c55; font:600 12px Segoe UI,Arial,sans-serif; cursor:pointer; }
-    button:hover { background:#80ffca; } .close { background:transparent; color:#fff; width:auto;
-      margin:0; padding:0 2px; font-size:16px; flex-shrink:0; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    .card {
+      min-width: 320px;
+      max-width: 420px;
+      padding: 16px 18px;
+      background: linear-gradient(145deg, #121815, #0B120E);
+      border: 1.5px solid #2E9B5F;
+      border-radius: 14px;
+      box-shadow: 0 16px 44px rgba(0,0,0,0.75), 0 0 20px rgba(46, 155, 95, 0.25);
+      color: #FFFFFF;
+      transform: translateX(120%);
+      opacity: 0;
+      transition: transform 0.38s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.32s ease;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .badge {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: #4CF9B7;
+      background: rgba(46, 155, 95, 0.22);
+      border: 1px solid rgba(76, 249, 183, 0.35);
+      padding: 3.5px 9px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: #7E9388;
+      font-size: 16px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .close-btn:hover {
+      color: #FFFFFF;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .client-title {
+      font-size: 15.5px;
+      font-weight: 800;
+      color: #FFFFFF;
+      line-height: 1.35;
+      margin-bottom: 14px;
+      word-break: break-word;
+      letter-spacing: 0.2px;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 10.5px 14px;
+      border: 1px solid #1E4D34;
+      border-radius: 9px;
+      background: #14281E;
+      color: #E2F8EE;
+      font: 700 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      outline: none;
+      user-select: none;
+    }
+    .btn:hover {
+      background: #1B3D2B;
+      border-color: #2E9B5F;
+      color: #FFFFFF;
+      box-shadow: 0 0 12px rgba(46, 155, 95, 0.3);
+    }
+    .btn:active {
+      background: #23794A;
+      transform: scale(0.985);
+    }
+    .btn.primary {
+      background: #2E9B5F;
+      border-color: #34B76D;
+      color: #FFFFFF;
+    }
+    .btn.primary:hover {
+      background: #34B76D;
+    }
+    .btn.done {
+      background: #102B1E;
+      border-color: #2E9B5F;
+      color: #4CF9B7;
+    }
+    .timer-container {
+      margin-top: 12px;
+      height: 3.5px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .timer-bar {
+      height: 100%;
+      width: 100%;
+      background: #2E9B5F;
+      transform-origin: left;
+      transition: transform linear;
+    }
   `;
 
   shadow.appendChild(style);
-  const box = document.createElement("div"); box.className = "box";
-  const title = document.createElement("div"); title.className = "title";
-  const name = document.createElement("span"); name.className = "client"; name.textContent = clientName || "Client";
-  const close = document.createElement("button"); close.className = "close"; close.textContent = "×";
-  title.append(name, close);
-  const uidBtn = document.createElement("button"); uidBtn.textContent = "User ID";
-  const passBtn = document.createElement("button"); passBtn.textContent = "Password";
-  box.append(title, uidBtn, passBtn); shadow.appendChild(box); document.documentElement.appendChild(host);
+  const card = document.createElement("div");
+  card.className = "card";
 
-  function clean(sel) { return (sel || "").trim().replace(/\s+\[/g, "[").replace(/input\s+/g, "input"); }
-  function visible(el) { if (!el || el.disabled || el.type === "hidden") return false;
-    const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+  // Header
+  const header = document.createElement("div");
+  header.className = "header";
+
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.innerHTML = "⚡ Sera Assist";
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "close-btn";
+  closeBtn.innerHTML = "✕";
+  closeBtn.title = "Dismiss";
+
+  header.append(badge, closeBtn);
+
+  // Client Title
+  const title = document.createElement("div");
+  title.className = "client-title";
+  title.textContent = clientName || "Client Profile";
+
+  // Action Buttons
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  const uidBtn = document.createElement("button");
+  uidBtn.className = "btn primary";
+  uidBtn.innerHTML = "👤  Inject User ID";
+
+  const passBtn = document.createElement("button");
+  passBtn.className = "btn primary";
+  passBtn.innerHTML = "🔑  Inject Password";
+
+  actions.append(uidBtn, passBtn);
+
+  // Countdown timer bar
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+
+  card.append(header, title, actions, timerContainer);
+  shadow.appendChild(card);
+  document.documentElement.appendChild(host);
+
+  // Animate in
+  setTimeout(() => {
+    card.style.transform = "translateX(0)";
+    card.style.opacity = "1";
+    timerBar.style.transitionDuration = `${duration}ms`;
+    timerBar.style.transform = "scaleX(0)";
+  }, 30);
+
+  function clean(sel) {
+    return (sel || "").trim().replace(/\s+\[/g, "[").replace(/input\s+/g, "input");
+  }
+
+  function visible(el) {
+    if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    } catch (_) {
+      return true;
+    }
+  }
+
   function find(selector, fallbacks) {
-    try { const el = selector && document.querySelector(clean(selector)); if (visible(el)) return el; } catch (_) {}
-    for (const sel of fallbacks) { try { const el = document.querySelector(sel); if (visible(el)) return el; } catch (_) {} }
+    try {
+      const el = selector && document.querySelector(clean(selector));
+      if (visible(el)) return el;
+    } catch (_) {}
+    for (const sel of fallbacks) {
+      try {
+        const el = document.querySelector(sel);
+        if (visible(el)) return el;
+      } catch (_) {}
+    }
     return null;
   }
-  function fill(el, value) {
-    if (!el) return;
-    el.focus();
-    try { Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(el, value); }
-    catch (_) { el.value = value; }
-    el.dispatchEvent(new CompositionEvent("compositionstart", { bubbles:true }));
-    el.dispatchEvent(new InputEvent("input", { bubbles:true, inputType:"insertText", data:value }));
-    el.dispatchEvent(new CompositionEvent("compositionend", { bubbles:true, data:value }));
-    el.dispatchEvent(new Event("change", { bubbles:true })); el.blur();
-  }
-  uidBtn.onclick = () => fill(find(usernameSelector, ["#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "input[name='username']"]), userid);
-  passBtn.onclick = () => {
-    fill(find(passwordSelector, ["input[type='password']", "#passwordInput", "input[name='password']"]), password);
-    setTimeout(() => { if (host.isConnected) host.remove(); }, 350);
-  };
-  close.onclick = () => host.remove();
-  setTimeout(() => { if (host.isConnected) host.remove(); }, expiresMs || 30000);
 
+  function fill(el, value) {
+    if (!el) return false;
+    try { el.focus(); } catch (_) {}
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      setter.call(el, value);
+    } catch (_) {
+      el.value = value;
+    }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function dismiss() {
+    card.style.transform = "translateX(120%)";
+    card.style.opacity = "0";
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+  }
+
+  uidBtn.onclick = () => {
+    const el = find(usernameSelector, [
+      "#userId", "input[name='userId']", "#txtUserId",
+      "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
+      "input[name='username']", "input[name='user']", "input[name='pan']"
+    ]);
+    if (fill(el, userid)) {
+      uidBtn.className = "btn done";
+      uidBtn.innerHTML = "✓  User ID Injected";
+      setTimeout(() => {
+        uidBtn.className = "btn primary";
+        uidBtn.innerHTML = "👤  Inject User ID";
+      }, 2000);
+    }
+  };
+
+  passBtn.onclick = () => {
+    const el = find(passwordSelector, [
+      "input[name='psw']", "#psw", "input[type='password']", "input[name='Passwd']",
+      "#password", "#passwordInput", "#user_pass", "input[name='password']", "input[name='pass']"
+    ]);
+    if (fill(el, password)) {
+      passBtn.className = "btn done";
+      passBtn.innerHTML = "✓  Password Injected";
+      setTimeout(() => {
+        dismiss();
+      }, 400);
+    }
+  };
+
+  closeBtn.onclick = dismiss;
+  setTimeout(() => { if (host.isConnected) dismiss(); }, duration);
 }
 
 function handleManualAssistTab(message) {
@@ -529,9 +802,19 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log("Sera background: received runtime message:", msg);
   if (msg.type === "filing_result") {
-    if (nativePort) nativePort.postMessage(msg);
-    else {
+    console.log("Sera background: handling filing_result, nativePort is", nativePort ? "connected" : "null");
+    if (nativePort) {
+      try {
+        nativePort.postMessage(msg);
+        console.log("Sera background: successfully posted filing_result to native host");
+      } catch (err) {
+        console.error("Sera background: failed to postMessage to nativePort:", err);
+      }
+    } else {
+      console.warn("Sera background: nativePort is null, reconnecting and caching...");
+      ensureConnected();
       chrome.storage.local.get({ pendingResults: [] }, data => {
         chrome.storage.local.set({ pendingResults: [...data.pendingResults, msg] });
       });
@@ -789,3 +1072,485 @@ function injectMECP(tabId, message) {
   }).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }
+
+// ---------------- SCA (Sera Clipboard Assist) ----------------
+let armedSCAPayload = null;
+let armedSCATimer = null;
+
+function handleScaArm(message) {
+  chrome.storage.local.get(['scaEnabled'], (data) => {
+    if (data.scaEnabled === false) {
+      console.log("Sera SCA: SCA is disabled in settings. Skipping arm.");
+      return;
+    }
+    console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id);
+    if (armedSCATimer) {
+      clearTimeout(armedSCATimer);
+      armedSCATimer = null;
+    }
+    const ttl = message.ttl_ms || 45000;
+    armedSCAPayload = {
+      ...message,
+      expiresAt: Date.now() + ttl
+    };
+    armedSCATimer = setTimeout(() => {
+      console.log("Sera SCA: Armed state expired.");
+      armedSCAPayload = null;
+      armedSCATimer = null;
+    }, ttl);
+
+    // Broadcast armed payload to active tabs for instantaneous paste readiness
+    chrome.storage.local.set({ armedSCAPayload: armedSCAPayload });
+  });
+}
+
+// Global runtime message listener from content scripts (e.g. paste triggered)
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+  if (req.type === "sca_paste_matched") {
+    console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
+    if (!sender.tab || !sender.tab.id) return;
+
+    chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode'], (data) => {
+      if (data.scaEnabled === false) return;
+      const payload = data.armedSCAPayload || armedSCAPayload;
+      if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
+        console.log("Sera SCA: No active armed payload found for paste event.");
+        return;
+      }
+
+      const matchedService = (payload.services || []).find(s => {
+        try {
+          const uHost = new URL(s.url).hostname.toLowerCase();
+          const targetPortal = (req.portal || '').toLowerCase();
+          let tHost = '';
+          if (sender.tab && sender.tab.url) {
+            try { tHost = new URL(sender.tab.url).hostname.toLowerCase(); } catch (_) {}
+          }
+          return (tHost && (tHost.includes(uHost) || uHost.includes(tHost))) ||
+                 (targetPortal && (targetPortal.includes(uHost) || uHost.includes(targetPortal)));
+        } catch (_) {
+          return true;
+        }
+      }) || (payload.services && payload.services[0]);
+
+      if (matchedService && matchedService.password) {
+        const isWidgetMode = (payload.sca_mode === "widget" || payload.sca_mode === "assist") || (data.scaMode === "widget" || data.scaMode === "assist");
+
+        if (isWidgetMode) {
+          // Trigger interactive SCA Widget on this tab
+          chrome.scripting.executeScript({
+            target: { tabId: sender.tab.id },
+            func: (pwd, pwdSel, bizName, ownName, portalName, matchedUid, clientId, clientToken) => {
+              function isVis(el) {
+                if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
+                try {
+                  const style = window.getComputedStyle(el);
+                  return style.display !== "none" && style.visibility !== "hidden";
+                } catch (_) { return true; }
+              }
+
+              function simType(el, val) {
+                if (!el) return;
+                try { el.focus(); } catch (_) {}
+                try {
+                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                  setter.call(el, val);
+                } catch (_) { el.value = val; }
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+
+              const fallbacks = [
+                pwdSel,
+                "input[name='psw']",
+                "#psw",
+                "input[name='Passwd']",
+                "input[type='password']",
+                "#password",
+                "#passwordInput",
+                "#user_pass",
+                "input[name='password']",
+                "input[name='pass']"
+              ].filter(Boolean);
+
+              function findPassField() {
+                for (const sel of fallbacks) {
+                  try {
+                    const els = document.querySelectorAll(sel);
+                    for (const el of els) {
+                      if (isVis(el)) return el;
+                    }
+                  } catch (_) {}
+                }
+                return null;
+              }
+
+              function renderAndShowWidget(targetField) {
+                const hostId = "sera-sca-widget-host";
+                const old = document.getElementById(hostId);
+                if (old) old.remove();
+                const assistOld = document.getElementById("sera-sca-assist-host");
+                if (assistOld) assistOld.remove();
+                const toastOld = document.getElementById("sera-sca-toast-host");
+                if (toastOld) toastOld.remove();
+
+                const host = document.createElement("div");
+                host.id = hostId;
+                const shadow = host.attachShadow({ mode: "closed" });
+
+                const style = document.createElement("style");
+                style.textContent = `
+                  .card {
+                    position: fixed; top: 20px; right: 24px; z-index: 2147483647;
+                    width: 320px; padding: 14px 16px;
+                    background: linear-gradient(145deg, #111814, #0B130E);
+                    border: 1.5px solid #2E9B5F;
+                    border-radius: 12px;
+                    box-shadow: 0 12px 36px rgba(0,0,0,0.65), 0 0 16px rgba(46, 155, 95, 0.25);
+                    color: #FFFFFF;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    transform: translateX(120%);
+                    opacity: 0;
+                    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+                    box-sizing: border-box;
+                  }
+                  .header {
+                    display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+                  }
+                  .badge {
+                    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+                    color: #4CF9B7; background: rgba(46, 155, 95, 0.22);
+                    border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px;
+                    display: flex; align-items: center; gap: 4px;
+                  }
+                  .close-btn {
+                    background: transparent; border: none; cursor: pointer; font-size: 14px;
+                    color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;
+                  }
+                  .close-btn:hover { color: #FFFFFF; }
+                  .title {
+                    font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;
+                  }
+                  .subtitle {
+                    font-size: 12px; color: #9FB3A8; line-height: 1.2; margin-bottom: 10px;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                  }
+                  .btn-inject {
+                    display: flex; align-items: center; justify-content: center; gap: 6px;
+                    width: 100%; padding: 9px 12px; font-size: 13px; font-weight: 700;
+                    color: #FFFFFF; background: #2E9B5F; border: 1px solid #34B76D;
+                    border-radius: 8px; cursor: pointer; transition: all 0.15s ease;
+                    box-shadow: 0 4px 12px rgba(46, 155, 95, 0.3);
+                    box-sizing: border-box;
+                  }
+                  .btn-inject:hover {
+                    background: #34B76D; box-shadow: 0 6px 16px rgba(52, 183, 109, 0.45);
+                  }
+                  .btn-inject:active {
+                    transform: scale(0.98);
+                  }
+                  .btn-inject.done {
+                    background: #102B1E; border-color: #2E9B5F; color: #4CF9B7;
+                  }
+                  .timer-container {
+                    margin-top: 10px; height: 3px; background: rgba(255, 255, 255, 0.08);
+                    border-radius: 2px; overflow: hidden;
+                  }
+                  .timer-bar {
+                    height: 100%; width: 100%; background: #2E9B5F; transform-origin: left;
+                    transition: transform 30s linear;
+                  }
+                `;
+
+                shadow.appendChild(style);
+
+                const card = document.createElement("div");
+                card.className = "card";
+
+                const header = document.createElement("div");
+                header.className = "header";
+
+                const badge = document.createElement("div");
+                badge.className = "badge";
+                badge.textContent = "⚡ SCA Widget";
+
+                const closeBtn = document.createElement("button");
+                closeBtn.className = "close-btn";
+                closeBtn.textContent = "✕";
+
+                header.append(badge, closeBtn);
+
+                const title = document.createElement("div");
+                title.className = "title";
+                title.textContent = bizName || "Client Profile";
+
+                const subtitle = document.createElement("div");
+                subtitle.className = "subtitle";
+                subtitle.textContent = ownName ? `👤 ${ownName} • ${portalName}` : `${portalName}`;
+
+                const injectBtn = document.createElement("button");
+                injectBtn.className = "btn-inject";
+                injectBtn.innerHTML = "🔑  Inject Password";
+
+                const timerContainer = document.createElement("div");
+                timerContainer.className = "timer-container";
+                const timerBar = document.createElement("div");
+                timerBar.className = "timer-bar";
+                timerContainer.appendChild(timerBar);
+
+                card.append(header, title, subtitle, injectBtn, timerContainer);
+                shadow.appendChild(card);
+                document.body.appendChild(host);
+
+                // Animate in
+                setTimeout(() => {
+                  card.style.transform = "translateX(0)";
+                  card.style.opacity = "1";
+                  timerBar.style.transform = "scaleX(0)";
+                }, 40);
+
+                function dismiss() {
+                  card.style.transform = "translateX(120%)";
+                  card.style.opacity = "0";
+                  setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+                }
+
+                closeBtn.onclick = dismiss;
+                const autoTimer = setTimeout(dismiss, 30000);
+
+                injectBtn.onclick = () => {
+                  const currentField = targetField && isVis(targetField) ? targetField : findPassField();
+                  if (currentField) {
+                    simType(currentField, pwd);
+                    clearTimeout(autoTimer);
+                    injectBtn.className = "btn-inject done";
+                    injectBtn.innerHTML = "✓  Password Injected";
+                    setTimeout(dismiss, 500);
+                  } else {
+                    injectBtn.innerHTML = "⚠️ Password field not visible";
+                    setTimeout(() => {
+                      injectBtn.innerHTML = "🔑  Inject Password";
+                    }, 1500);
+                  }
+                };
+              }
+
+              // Check if password field is already visible (single-page login)
+              const initialField = findPassField();
+              if (initialField) {
+                renderAndShowWidget(initialField);
+              } else {
+                // Two-page login: wait up to 45s for user to click Next and password field to appear
+                let attempts = 0;
+                const waitInterval = setInterval(() => {
+                  attempts++;
+                  const pf = findPassField();
+                  if (pf) {
+                    clearInterval(waitInterval);
+                    renderAndShowWidget(pf);
+                  } else if (attempts >= 300) {
+                    clearInterval(waitInterval);
+                  }
+                }, 150);
+              }
+            },
+            args: [
+              matchedService.password,
+              matchedService.password_selector,
+              payload.business_name || "",
+              payload.owner_name || "",
+              matchedService.name || "Portal",
+              payload.matched_uid || "",
+              payload.client_id || 0,
+              payload.client_id_token || ""
+            ]
+          }).then(() => {
+            if (!nativePort) ensureConnected();
+            if (nativePort) {
+              try {
+                nativePort.postMessage({
+                  type: "audit_event",
+                  action: "SCA widget armed",
+                  client_id: payload.client_id,
+                  detail: `SCA widget armed — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
+                });
+              } catch (_) {}
+            }
+          }).catch(err => console.error("Sera SCA: Widget injection error", err));
+        } else {
+          // Trigger ambient silent password fill on this tab
+          chrome.scripting.executeScript({
+            target: { tabId: sender.tab.id },
+            func: (pwd, pwdSel, flow, bizName, ownName, portalName) => {
+              function isVis(el) {
+                if (!el) return false;
+                if (el.type === 'hidden' || el.getAttribute('tabindex') === '-1') return false;
+                try {
+                  const style = window.getComputedStyle(el);
+                  return style.display !== 'none' && style.visibility !== 'hidden';
+                } catch (_) { return true; }
+              }
+              function simType(el, val) {
+                if (!el) return;
+                try { el.focus(); } catch (_) {}
+                try {
+                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                  setter.call(el, val);
+                } catch (_) { el.value = val; }
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+
+              function showScaToast() {
+                const existing = document.getElementById('sera-sca-toast-host');
+                if (existing) existing.remove();
+
+                const host = document.createElement('div');
+                host.id = 'sera-sca-toast-host';
+                host.style.cssText = 'position: fixed; top: 20px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; pointer-events: auto;';
+
+                const shadow = host.attachShadow({ mode: 'closed' });
+                const container = document.createElement('div');
+                container.style.cssText = `
+                  display: flex;
+                  flex-direction: column;
+                  gap: 6px;
+                  min-width: 290px;
+                  max-width: 380px;
+                  padding: 14px 16px;
+                  background: linear-gradient(145deg, #111814, #0B130E);
+                  border: 1.5px solid #2E9B5F;
+                  border-radius: 12px;
+                  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(46, 155, 95, 0.25);
+                  color: #FFFFFF;
+                  transform: translateX(120%);
+                  opacity: 0;
+                  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+                `;
+
+                const headerRow = document.createElement('div');
+                headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;';
+
+                const badge = document.createElement('span');
+                badge.style.cssText = 'font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #4CF9B7; background: rgba(46, 155, 95, 0.22); border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px;';
+                badge.innerHTML = '⚡ Sera Clipboard Assist';
+
+                const closeBtn = document.createElement('span');
+                closeBtn.style.cssText = 'cursor: pointer; font-size: 14px; color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;';
+                closeBtn.textContent = '✕';
+                closeBtn.onclick = () => {
+                  container.style.transform = 'translateX(120%)';
+                  container.style.opacity = '0';
+                  setTimeout(() => host.remove(), 400);
+                };
+
+                headerRow.appendChild(badge);
+                headerRow.appendChild(closeBtn);
+
+                const title = document.createElement('div');
+                title.style.cssText = 'font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+                title.textContent = bizName || 'Client Profile';
+
+                let ownerDiv = null;
+                if (ownName) {
+                  ownerDiv = document.createElement('div');
+                  ownerDiv.style.cssText = 'font-size: 12px; color: #9FB3A8; line-height: 1.2;';
+                  ownerDiv.textContent = `👤 ${ownName}`;
+                }
+
+                const statusDiv = document.createElement('div');
+                statusDiv.style.cssText = 'display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #34D399; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08);';
+                statusDiv.innerHTML = `<span>✓</span> <span>Password was autofilled for ${portalName || 'Portal'}</span>`;
+
+                container.appendChild(headerRow);
+                container.appendChild(title);
+                if (ownerDiv) container.appendChild(ownerDiv);
+                container.appendChild(statusDiv);
+                shadow.appendChild(container);
+                document.body.appendChild(host);
+
+                // Slide in
+                setTimeout(() => {
+                  container.style.transform = 'translateX(0)';
+                  container.style.opacity = '1';
+                }, 40);
+
+                // Auto-dismiss after 6.5 seconds
+                setTimeout(() => {
+                  container.style.transform = 'translateX(120%)';
+                  container.style.opacity = '0';
+                  setTimeout(() => host.remove(), 400);
+                }, 6500);
+              }
+
+              // Find password field (includes TRACES and Google's Passwd field)
+              const fallbacks = [
+                pwdSel,
+                "input[name='psw']",
+                "#psw",
+                "input[name='Passwd']",
+                "input[type='password']",
+                "#password",
+                "#passwordInput",
+                "#user_pass",
+                "input[name='password']",
+                "input[name='pass']"
+              ].filter(Boolean);
+
+              let attempts = 0;
+              // Poll for up to 30 seconds waiting for password field to appear when user advances to step 2
+              const interval = setInterval(() => {
+                attempts++;
+                let passField = null;
+                for (const sel of fallbacks) {
+                  try {
+                    const els = document.querySelectorAll(sel);
+                    for (const el of els) {
+                      if (isVis(el)) { passField = el; break; }
+                    }
+                    if (passField) break;
+                  } catch (_) {}
+                }
+
+                if (passField) {
+                  clearInterval(interval);
+                  setTimeout(() => {
+                    simType(passField, pwd);
+                    showScaToast();
+                    console.log("Sera SCA: Password filled safely & notification banner displayed.");
+                  }, 100);
+                } else if (attempts >= 200) {
+                  clearInterval(interval);
+                }
+              }, 150);
+            },
+            args: [
+              matchedService.password,
+              matchedService.password_selector,
+              matchedService.extension_flow || "double",
+              payload.business_name || "",
+              payload.owner_name || "",
+              matchedService.name || "Portal"
+            ]
+          }).then(() => {
+            // Send audit trail notification back to desktop app
+            if (!nativePort) ensureConnected();
+            if (nativePort) {
+              try {
+                nativePort.postMessage({
+                  type: "audit_event",
+                  action: "SCA autofill triggered",
+                  client_id: payload.client_id,
+                  detail: `SCA ambient autofill — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
+                });
+              } catch (_) {}
+            }
+          }).catch(err => console.error("Sera SCA: Injection error", err));
+        }
+      }
+    });
+  }
+});

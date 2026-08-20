@@ -4,7 +4,7 @@ admin_window.py
 Window 3: CRUD interface for the firm owner. Driven dynamically by MCL.
 """
 
-from PySide6.QtCore import QSize, Signal, Qt
+from PySide6.QtCore import QSize, QTimer, Signal, Qt
 from PySide6.QtGui import QIcon
 try:
     import qtawesome as qta
@@ -41,6 +41,7 @@ from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
 from ui.dialogs.settings_dialog import SettingsDialog
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget
+from ui.windows.search_window import ActivityCellDelegate
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
 
@@ -92,7 +93,7 @@ class NewClientDialog(QDialog):
     def _build_dynamic_form(self):
         self.form_layout.addRow(QLabel("<b>Client Information</b>"))
         for col in self.db.get_mcl_columns():
-            widget = make_input_widget(col, "")
+            widget = make_input_widget(col, "", mask_password=False)
             self._input_widgets[col["id"]] = (col, widget)
             self.form_layout.addRow(f"{col['label']}:", widget)
 
@@ -189,6 +190,14 @@ class AdminWindow(QWidget):
         self.selected_client_id = None
         self._input_widgets = {}
         self._service_cbs = {}
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(120)
+        self._search_timer.timeout.connect(self.refresh)
+        self._activity_timer = QTimer(self)
+        self._activity_timer.setInterval(60000)
+        self._activity_timer.timeout.connect(self._refresh_activity_tags)
+        self._activity_timer.start()
         self._build_ui()
 
     def _build_ui(self):
@@ -247,6 +256,19 @@ class AdminWindow(QWidget):
         body = QHBoxLayout()
 
         left_layout = QVBoxLayout()
+        left_layout.setSpacing(8)
+
+        # Search Bar for Manage Clients Table
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Search clients (ID, Name, PAN, GSTIN...)")
+        self.search_input.setClearButtonEnabled(True)
+        if qta:
+            self.search_input.addAction(qta.icon("mdi.magnify", color="#889988"), QLineEdit.LeadingPosition)
+        self.search_input.textChanged.connect(self._on_search_changed)
+        search_row.addWidget(self.search_input)
+        left_layout.addLayout(search_row)
+
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Filter:"))
         self.filter_combo = QComboBox()
@@ -256,6 +278,20 @@ class AdminWindow(QWidget):
         self.show_archived_cb.toggled.connect(self._on_archive_toggle)
         filter_row.addWidget(self.show_archived_cb)
         left_layout.addLayout(filter_row)
+
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel("Sort:"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("ID (Ascending: 1, 2, 3...)", ("id", "asc"))
+        self.sort_combo.addItem("ID (Descending: 3, 2, 1...)", ("id", "desc"))
+        self.sort_combo.addItem("Client Identity (A → Z)", ("identity", "asc"))
+        self.sort_combo.addItem("Client Identity (Z → A)", ("identity", "desc"))
+        self.sort_combo.addItem("🔥 Most Viewed / Activity", ("activity", "desc"))
+        self.sort_combo.addItem("Recently Added (Newest first)", ("created_at", "desc"))
+        self.sort_combo.addItem("Recently Updated", ("updated_at", "desc"))
+        self.sort_combo.currentIndexChanged.connect(self.refresh)
+        sort_row.addWidget(self.sort_combo, stretch=1)
+        left_layout.addLayout(sort_row)
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["ID", "Client Identity"])
@@ -270,6 +306,7 @@ class AdminWindow(QWidget):
         self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setSortIndicatorShown(True)
         self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.setItemDelegate(ActivityCellDelegate(self.table))
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         left_layout.addWidget(self.table, stretch=1)
 
@@ -335,12 +372,22 @@ class AdminWindow(QWidget):
         layout.addLayout(body)
         self._reload_filters()
 
+    def _on_search_changed(self):
+        self._search_timer.start()
+
     def _reload_filters(self):
         self.filter_combo.blockSignals(True)
         self.filter_combo.clear()
         self.filter_combo.addItem("All clients", None)
+        self.filter_combo.addItem("🔥 Most Viewed / Active", "most_viewed")
+        self.filter_combo.addItem("⚡ Active Today", "active_today")
+        self.filter_combo.addItem("🌐 Has Attached Services", "has_services")
+        self.filter_combo.addItem("⚠️ Unassigned (No Services)", "no_services")
+        self.filter_combo.addItem("🔒 Has Login Credentials", "has_passwords")
+        self.filter_combo.addItem("⚠️ Missing Passwords", "missing_passwords")
+        self.filter_combo.addItem("📦 Archived Only", "archived")
         for s in self.db.get_services():
-            self.filter_combo.addItem(s["name"], s["id"])
+            self.filter_combo.addItem(f"Service: {s['name']}", s["id"])
         self.filter_combo.blockSignals(False)
 
     def _build_dynamic_form(self, client_values=None, client_services=None):
@@ -375,7 +422,7 @@ class AdminWindow(QWidget):
         self.form_layout.addRow(QLabel("<b>Client Information</b>"))
         for col in self.db.get_mcl_columns():
             val = client_values.get(col["id"], "")
-            widget = make_input_widget(col, val)
+            widget = make_input_widget(col, val, mask_password=False)
             self._input_widgets[col["id"]] = (col, widget)
             self.form_layout.addRow(f"{col['label']}:", widget)
             
@@ -398,9 +445,42 @@ class AdminWindow(QWidget):
 
     def refresh(self):
         self._check_sync_conflicts()
-        svc_id = self.filter_combo.currentData()
-        show_archived = self.show_archived_cb.isChecked()
-        clients = self.db.search_clients("", service_id=svc_id, archived_only=show_archived)
+        filter_data = self.filter_combo.currentData() if hasattr(self, "filter_combo") else None
+        show_archived = self.show_archived_cb.isChecked() if hasattr(self, "show_archived_cb") else False
+        search_query = self.search_input.text().strip() if hasattr(self, "search_input") else ""
+
+        svc_id = filter_data if isinstance(filter_data, int) else None
+        filter_preset = filter_data if isinstance(filter_data, str) else None
+        if show_archived:
+            filter_preset = "archived"
+
+        clients = self.db.search_clients(
+            search_query,
+            service_id=svc_id,
+            archived_only=(filter_preset == "archived"),
+            filter_preset=filter_preset
+        )
+
+        # Apply Sort By Selection
+        if hasattr(self, "sort_combo") and self.sort_combo.currentData():
+            sort_key, sort_dir = self.sort_combo.currentData()
+            reverse = (sort_dir == "desc")
+            if sort_key == "id":
+                def _id_sort_key(c):
+                    token = str(c.get("client_id_token") or c.get("id", ""))
+                    if token.isdigit():
+                        return (0, int(token), token)
+                    return (1, 0, token.lower())
+                clients.sort(key=_id_sort_key, reverse=reverse)
+            elif sort_key == "identity":
+                clients.sort(key=lambda c: self._get_identity_label(c).lower(), reverse=reverse)
+            elif sort_key == "activity":
+                stats_map = self.db.get_all_activity_stats()
+                clients.sort(key=lambda c: (stats_map.get(c["id"], {}).get("view_count", 0) * 3 + stats_map.get(c["id"], {}).get("action_count", 0)), reverse=reverse)
+            elif sort_key == "created_at":
+                clients.sort(key=lambda c: c.get("created_at") or "", reverse=reverse)
+            elif sort_key == "updated_at":
+                clients.sort(key=lambda c: c.get("updated_at") or "", reverse=reverse)
         
         # FIX: Remember which client you had selected so the screen doesn't wipe
         old_selected = self.selected_client_id
@@ -414,13 +494,27 @@ class AdminWindow(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         
         from ui.utils.theme import SmartTableWidgetItem
+        recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
 
         row_to_select = -1
         for c in clients:
             r = self.table.rowCount()
             self.table.insertRow(r)
             self.table.setItem(r, 0, SmartTableWidgetItem(str(c["id"])))
-            self.table.setItem(r, 1, SmartTableWidgetItem(self._get_identity_label(c)))
+            
+            lbl = self._get_identity_label(c)
+            item1 = SmartTableWidgetItem(lbl)
+            act_list = recent_acts.get(c["id"], [])
+            if act_list:
+                top = act_list[0]
+                action_type = top["action_type"]
+                age = top["age_seconds"]
+                rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+                item1.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
+                tooltip_lines = [f"• {a['action_type']} ({'just now' if a['age_seconds'] < 60 else str(a['age_seconds']//60) + 'm ago'})" for a in act_list[:4]]
+                item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
+
+            self.table.setItem(r, 1, item1)
             if c["id"] == old_selected:
                 row_to_select = r
                 
@@ -433,6 +527,31 @@ class AdminWindow(QWidget):
             self.table.selectRow(row_to_select)
         else:
             self._on_new()
+
+    def _refresh_activity_tags(self):
+        try:
+            recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
+            for r in range(self.table.rowCount()):
+                id_item = self.table.item(r, 0)
+                name_item = self.table.item(r, 1)
+                if not id_item or not name_item:
+                    continue
+                try:
+                    cid = int(id_item.text())
+                except ValueError:
+                    continue
+                act_list = recent_acts.get(cid, [])
+                if act_list:
+                    top = act_list[0]
+                    action_type = top["action_type"]
+                    age = top["age_seconds"]
+                    rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+                    name_item.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
+                else:
+                    name_item.setData(Qt.UserRole + 2, "")
+            self.table.viewport().update()
+        except Exception:
+            pass
 
 
 

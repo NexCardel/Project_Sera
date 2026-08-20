@@ -5,18 +5,22 @@
   let context = null;
   let hasFired = false;
 
-  // Check if tracker is enabled before doing anything
-  chrome.storage.local.get(['activeAutofillPayload', 'trackerEnabled'], (data) => {
-    // 1. If tracker is explicitly disabled globally, exit immediately
-    if (data.trackerEnabled === false) {
-      console.log("Sera FST: Tracker is disabled in settings. Skipping.");
+  // net_interceptor.js is injected into the MAIN world by background.js
+  // via chrome.scripting.executeScript on every tab load — no need to do
+  // anything here for the SAD network interception path.
+
+  // Check if DOM-based tracker (FST) is enabled before starting DOM monitoring
+  chrome.storage.local.get(['activeAutofillPayload', 'trackerEnabled', 'fstEnabled'], (data) => {
+    // 1. If tracker or FST is explicitly disabled globally, exit immediately
+    if (data.trackerEnabled === false || data.fstEnabled === false) {
+      console.log("Sera FST: Tracker/FST is disabled in settings. Skipping.");
       return;
     }
 
-    // 2. Must have an active payload with tracker_enabled === true
+    // 2. Must have an active payload with tracker_enabled === true and fst_enabled !== false
     const payload = data.activeAutofillPayload;
-    if (!payload || payload.tracker_enabled !== true) {
-      console.log("Sera FST: Tracker is not active for this payload. Skipping.");
+    if (!payload || payload.tracker_enabled !== true || payload.fst_enabled === false) {
+      console.log("Sera FST: FST is not active for this payload. Skipping.");
       return;
     }
 
@@ -28,13 +32,13 @@
     return el.textContent || el.innerText || "";
   }
 
+
   function startMonitoring() {
     // Also track any submit button clicks as an early warning
     document.body.addEventListener('click', (e) => {
       const text = getElementTextContent(e.target).trim().toLowerCase();
       if (text.includes('submit') || text.includes('file return') || text.includes('confirm')) {
         console.log("Sera FST: Detected click on likely submit button:", e.target);
-        // We could send a message here, but for now we wait for the final success screen.
       }
     });
 
@@ -43,7 +47,6 @@
     });
 
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    // Check once immediately in case it's already there
     checkSuccess();
   }
 
@@ -112,22 +115,24 @@
     }
   }
 
-  function showBrowserSuccessPopup(ctx, arn) {
+  function showBrowserSuccessPopup(ctx, arn, method = "DOM_Tracker") {
     const div = document.createElement('div');
     div.style.position = 'fixed';
     div.style.top = '20px';
     div.style.right = '20px';
-    div.style.padding = '20px';
-    div.style.backgroundColor = '#4caf50';
-    div.style.color = 'white';
+    div.style.padding = '18px 22px';
+    div.style.backgroundColor = '#161B22';
+    div.style.color = '#F0F6FC';
+    div.style.border = '2px solid #2E9B5F';
     div.style.borderRadius = '8px';
-    div.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-    div.style.zIndex = '999999';
-    div.style.fontFamily = 'Arial, sans-serif';
+    div.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
+    div.style.zIndex = '9999999';
+    div.style.fontFamily = 'Segoe UI, Arial, sans-serif';
+    const methodBadge = method === 'SAD_API_Interceptor' ? '⚡ SAD API Interceptor' : '👁️ DOM Observer';
     div.innerHTML = `
-      <h3 style="margin:0 0 10px 0; font-size:18px;">✅ Return Submitted!</h3>
-      <p style="margin:0 0 5px 0;">Sera captured the successful filing.</p>
-        ${arn ? '<p style="margin:0 0 0 0; font-size:12px; opacity:0.8">ARN: ' + arn + '</p>' : ''}
+      <h3 style="margin:0 0 6px 0; font-size:16px; color:#4CF9B7;">✅ Return Filing Captured!</h3>
+      <p style="margin:0 0 4px 0; font-size:12px; color:#A0A0A0;">Method: <strong style="color:#2E9B5F;">${methodBadge}</strong></p>
+      ${arn ? '<p style="margin:4px 0 0 0; font-size:13px; font-weight:700; font-family:monospace; color:#39FF14;">ARN: ' + arn + '</p>' : ''}
     `;
     document.body.appendChild(div);
     
@@ -135,6 +140,6 @@
       div.style.opacity = '0';
       div.style.transition = 'opacity 0.5s';
       setTimeout(() => div.remove(), 500);
-    }, 5000);
+    }, 6000);
   }
 })();

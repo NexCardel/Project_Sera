@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import shutil
+import time
 from contextlib import contextmanager
 
 import security
@@ -56,11 +57,19 @@ class SeraDatabase:
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
             conn.execute("PRAGMA foreign_keys = ON;")
+            conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            conn.execute("PRAGMA cache_size = -64000;")       # 64MB RAM page cache
+            conn.execute("PRAGMA temp_store = MEMORY;")        # In-memory temporary tables & sorts
+            conn.execute("PRAGMA mmap_size = 268435456;")      # 256MB memory-mapped fast reads
             yield conn
             conn.commit()
         except sqlite3.IntegrityError as e:
             # FIX: Properly bubble up data constraint errors (like NOT NULL)
             # instead of masking them as a wrong master password.
+            conn.rollback()
+            raise e
+        except sqlite3.OperationalError as e:
             conn.rollback()
             raise e
         except sqlite3.DatabaseError as e:
@@ -124,7 +133,7 @@ class SeraDatabase:
             cur = conn.execute("SELECT id FROM clients WHERE client_id_token IS NULL OR client_id_token = '' ORDER BY id")
             missing_token_ids = cur.fetchall()
             for (c_id,) in missing_token_ids:
-                conn.execute("UPDATE clients SET client_id_token = ? WHERE id = ?", (f"CLI-{c_id:05d}", c_id))
+                conn.execute("UPDATE clients SET client_id_token = ? WHERE id = ?", (str(c_id), c_id))
 
             # 4. Client Values (EAV side table)
             conn.execute("""
@@ -184,7 +193,11 @@ class SeraDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_client ON client_values(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_column ON client_values(column_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_client_col ON client_values(client_id, column_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cv_col_val ON client_values(column_id, value);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mc_identity ON mcl_columns(is_identity, id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_cs_client ON client_services(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cs_service ON client_services(service_id, client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_clients_archived ON clients(is_archived);")
 
             # Shared staff roster. The selected identity is stored locally by
@@ -265,7 +278,48 @@ class SeraDatabase:
                 );
             """)
 
-            # 12. Seed default MCL columns and services if fresh database
+            # 12. Client Tracker Dump (SAD API Interceptor & Extension captures)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_client ON tracker_dump(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_arn ON tracker_dump(arn_number);")
+
+            # 13. Client Activity Stats & Transient Breadcrumb Log
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_activity_stats (
+                    client_id        INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+                    view_count       INTEGER DEFAULT 0,
+                    action_count     INTEGER DEFAULT 0,
+                    last_action      TEXT,
+                    last_action_time REAL
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_recent_activity (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    action_type TEXT NOT NULL,
+                    detail      TEXT,
+                    timestamp   REAL NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_recent_act_client ON client_recent_activity(client_id, timestamp);")
+
+            # 14. Seed default MCL columns and services if fresh database
             cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
             if cur.fetchone()[0] == 0:
                 self._seed_default_data(conn)
@@ -519,6 +573,30 @@ class SeraDatabase:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str, extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "") -> int:
+        u_sel = (username_selector or "").strip()
+        p_sel = (password_selector or "").strip()
+        link = (login_page_link or "").strip()
+
+        # If selectors are missing, resolve from verified presets
+        if not u_sel or not p_sel:
+            presets = [
+                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
+                (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
+                (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
+                (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
+            ]
+            combined = f"{name.lower()} {link.lower()}"
+            for kws, def_u, def_p, def_url, def_flow in presets:
+                if any(k in combined for k in kws):
+                    if not u_sel: u_sel = def_u
+                    if not p_sel: p_sel = def_p
+                    if not link: link = def_url
+                    if not extension_flow: extension_flow = def_flow
+                    break
+
         with self._connect() as conn:
             cur = conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM services")
             next_order = cur.fetchone()[0]
@@ -527,8 +605,8 @@ class SeraDatabase:
                                          username_selector, password_selector, automation_mode, extension_flow,
                                          success_selector, arn_selector, sort_order)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (name.strip(), login_page_link, userid_column_id, password_column_id,
-                 username_selector, password_selector, automation_mode, extension_flow,
+                (name.strip(), link, userid_column_id, password_column_id,
+                 u_sel, p_sel, automation_mode, extension_flow,
                  success_selector, arn_selector, next_order)
             )
             return cur.lastrowid
@@ -537,42 +615,95 @@ class SeraDatabase:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str, extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = ""):
+        u_sel = (username_selector or "").strip()
+        p_sel = (password_selector or "").strip()
+        link = (login_page_link or "").strip()
+
+        # If selectors are missing, resolve from verified presets
+        if not u_sel or not p_sel:
+            presets = [
+                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
+                (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
+                (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
+                (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
+            ]
+            combined = f"{name.lower()} {link.lower()}"
+            for kws, def_u, def_p, def_url, def_flow in presets:
+                if any(k in combined for k in kws):
+                    if not u_sel: u_sel = def_u
+                    if not p_sel: p_sel = def_p
+                    if not link: link = def_url
+                    if not extension_flow: extension_flow = def_flow
+                    break
+
         with self._connect() as conn:
             conn.execute(
                 """UPDATE services SET name=?, login_page_link=?, userid_column_id=?,
                                        password_column_id=?, username_selector=?, password_selector=?,
                                        automation_mode=?, extension_flow=?, success_selector=?, arn_selector=? WHERE id=?""",
-                (name.strip(), login_page_link, userid_column_id, password_column_id,
-                 username_selector, password_selector, automation_mode, extension_flow,
+                (name.strip(), link, userid_column_id, password_column_id,
+                 u_sel, p_sel, automation_mode, extension_flow,
                  success_selector, arn_selector, service_id)
             )
 
     def auto_populate_service_selectors(self):
         """
         Auto-scrapes and resolves username & password CSS selectors for services
-        that have a login_page_link but are missing valid selectors.
+        that have a login_page_link or recognizable name but are missing valid selectors.
         """
         import urllib.request
         import re
 
-        known_portals = {
-            'gst.gov.in': ('#username', '#user_pass'),
-            'incometax.gov.in': ('#panAdhaarUserId', "input[type='password']"),
-            'epfindia.gov.in': ('#userName', '#password'),
-            'tdscpc.gov.in': ('#userId', '#password'),
-            'icegate.gov.in': ('#userId', '#password'),
-        }
+        # Known portal definitions: (keywords_in_name_or_url, (u_sel, p_sel, default_url, default_flow))
+        known_portals = [
+            (
+                ['tdscpc', 'traces', 'tds'],
+                ('#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single')
+            ),
+            (
+                ['gst.gov.in', 'gst'],
+                ('#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single')
+            ),
+            (
+                ['incometax', 'itr', 'eportal'],
+                ('#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double')
+            ),
+            (
+                ['gmail', 'google', 'accounts.google'],
+                ('#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double')
+            ),
+            (
+                ['epfindia', 'epfo', 'unifiedportal'],
+                ('#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single')
+            ),
+            (
+                ['icegate'],
+                ('#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single')
+            ),
+            (
+                ['mca.gov.in', 'mca21', 'mca'],
+                ('#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double')
+            ),
+        ]
+
+        def _match_known(name: str, url: str) -> tuple[str, str, str, str]:
+            combined = f"{name or ''} {url or ''}".lower()
+            for keywords, (u_sel, p_sel, def_url, def_flow) in known_portals:
+                for kw in keywords:
+                    if kw in combined:
+                        return (u_sel, p_sel, def_url, def_flow)
+            return ("", "", "", "")
 
         def _scrape_url(url: str) -> tuple[str, str]:
             if not url or not url.strip():
                 return ("", "")
             url_clean = url.strip()
-            for domain, (u_sel, p_sel) in known_portals.items():
-                if domain in url_clean.lower():
-                    return (u_sel, p_sel)
             try:
                 req = urllib.request.Request(url_clean, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-                with urllib.request.urlopen(req, timeout=4) as resp:
+                with urllib.request.urlopen(req, timeout=3) as resp:
                     html = resp.read().decode('utf-8', errors='ignore')
                     
                     p_match = re.search(r'<input[^>]*type=["\']password["\'][^>]*>', html, re.I)
@@ -588,16 +719,31 @@ class SeraDatabase:
                         if id_m: u_sel = '#' + id_m.group(1)
                     return (u_sel, p_sel)
             except Exception:
-                return ("input[type='text']", "input[type='password']")
+                return ("input[type='text'], input[name='userId'], #username", "input[type='password'], #password, #psw")
 
         services = self.get_services()
         for svc in services:
             svc_id = svc["id"]
+            svc_name = svc.get("name", "")
             link = svc.get("login_page_link", "")
             u_sel = (svc.get("username_selector") or "").strip()
             p_sel = (svc.get("password_selector") or "").strip()
+            flow = svc.get("extension_flow", "double")
 
-            if link and (not u_sel or not p_sel):
+            k_u, k_p, k_url, k_flow = _match_known(svc_name, link)
+            
+            # If known portal, apply high-accuracy verified selectors
+            if k_u and k_p:
+                final_u = u_sel if (u_sel and u_sel not in ["input[type='text']", "#username"]) else k_u
+                final_p = p_sel if (p_sel and p_sel not in ["input[type='password']", "#password"]) else k_p
+                final_link = link if link else k_url
+                final_flow = flow if flow else k_flow
+                with self._connect() as conn:
+                    conn.execute(
+                        "UPDATE services SET username_selector = ?, password_selector = ?, login_page_link = ?, extension_flow = ? WHERE id = ?",
+                        (final_u, final_p, final_link, final_flow, svc_id)
+                    )
+            elif link and (not u_sel or not p_sel):
                 new_u_sel, new_p_sel = _scrape_url(link)
                 final_u = u_sel if u_sel else new_u_sel
                 final_p = p_sel if p_sel else new_p_sel
@@ -612,10 +758,73 @@ class SeraDatabase:
             conn.execute("DELETE FROM services WHERE id=?", (service_id,))
 
 
-    # ---------------- Clients ----------------
+    # ---------------- Clients & Activity ----------------
+
+    def record_client_activity(self, client_id: int, action_type: str, detail: str = ""):
+        """Records a client interaction (e.g. GST, ITR, Viewed, Copied, Edited)."""
+        now = time.time()
+        with self._connect() as conn:
+            # 1. Insert into recent activity log
+            conn.execute(
+                "INSERT INTO client_recent_activity (client_id, action_type, detail, timestamp) VALUES (?, ?, ?, ?)",
+                (client_id, action_type, detail, now)
+            )
+            # 2. Update aggregate stats
+            is_view = 1 if action_type == "Viewed" else 0
+            is_action = 0 if action_type == "Viewed" else 1
+            conn.execute("""
+                INSERT INTO client_activity_stats (client_id, view_count, action_count, last_action, last_action_time)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    view_count = view_count + excluded.view_count,
+                    action_count = action_count + excluded.action_count,
+                    last_action = excluded.last_action,
+                    last_action_time = excluded.last_action_time
+            """, (client_id, is_view, is_action, action_type, now))
+            
+            # Prune old recent activity entries (older than 24 hours) to keep table lightweight
+            cutoff = now - 86400
+            conn.execute("DELETE FROM client_recent_activity WHERE timestamp < ?", (cutoff,))
+
+    def get_recent_client_activities(self, max_age_seconds: int = 1800) -> dict[int, list[dict]]:
+        """Returns map of client_id -> list of recent action dicts within max_age_seconds."""
+        now = time.time()
+        cutoff = now - max_age_seconds
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT client_id, action_type, detail, timestamp FROM client_recent_activity WHERE timestamp >= ? ORDER BY timestamp DESC",
+                (cutoff,)
+            )
+            res = {}
+            for r in cur.fetchall():
+                cid = r[0]
+                if cid not in res:
+                    res[cid] = []
+                res[cid].append({
+                    "action_type": r[1],
+                    "detail": r[2] or "",
+                    "timestamp": r[3],
+                    "age_seconds": int(now - r[3])
+                })
+            return res
+
+    def get_all_activity_stats(self) -> dict[int, dict]:
+        """Returns map of client_id -> dict of activity stats."""
+        with self._connect() as conn:
+            cur = conn.execute("SELECT client_id, view_count, action_count, last_action, last_action_time FROM client_activity_stats")
+            return {
+                r[0]: {
+                    "view_count": r[1],
+                    "action_count": r[2],
+                    "last_action": r[3],
+                    "last_action_time": r[4]
+                }
+                for r in cur.fetchall()
+            }
 
     def search_clients(self, query: str = "", service_id: int = None,
-                        include_archived: bool = False, archived_only: bool = False) -> list[dict]:
+                        include_archived: bool = False, archived_only: bool = False,
+                        filter_preset: str = None) -> list[dict]:
         like = f"%{query}%" if query else ""
         with self._connect() as conn:
             sql = "SELECT DISTINCT c.id, c.notes, c.created_at, c.updated_at, c.is_archived, c.client_id_token FROM clients c"
@@ -628,22 +837,41 @@ class SeraDatabase:
 
             where_clauses = []
             params = []
+            order_by = "ORDER BY c.id ASC"
             
             if query:
-                where_clauses.append("mc.is_identity = 1 AND cv.value LIKE ?")
-                params.append(like)
+                where_clauses.append("(c.client_id_token LIKE ? OR CAST(c.id AS TEXT) LIKE ? OR cv.value LIKE ?)")
+                params.extend([like, like, like])
             if service_id is not None:
                 where_clauses.append("cs.service_id = ?")
                 params.append(service_id)
-            if archived_only:
+            if archived_only or filter_preset == "archived":
                 where_clauses.append("c.is_archived = 1")
             elif not include_archived:
                 where_clauses.append("c.is_archived = 0")
 
+            if filter_preset == "most_viewed":
+                where_clauses.append("c.id IN (SELECT client_id FROM client_activity_stats WHERE (view_count + action_count) > 0)")
+                order_by = "ORDER BY (SELECT (view_count * 3 + action_count) FROM client_activity_stats WHERE client_id = c.id) DESC"
+            elif filter_preset == "active_today":
+                start_of_today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                where_clauses.append("c.id IN (SELECT client_id FROM client_recent_activity WHERE timestamp >= ?)")
+                params.append(start_of_today)
+            elif filter_preset == "has_services":
+                where_clauses.append("c.id IN (SELECT client_id FROM client_services)")
+            elif filter_preset == "no_services":
+                where_clauses.append("c.id NOT IN (SELECT client_id FROM client_services)")
+            elif filter_preset == "has_passwords":
+                where_clauses.append("c.id IN (SELECT cv.client_id FROM client_values cv JOIN mcl_columns mc ON cv.column_id = mc.id WHERE mc.field_type = 'password' AND LENGTH(TRIM(COALESCE(cv.value, ''))) > 0)")
+            elif filter_preset == "missing_passwords":
+                where_clauses.append("c.id NOT IN (SELECT cv.client_id FROM client_values cv JOIN mcl_columns mc ON cv.column_id = mc.id WHERE mc.field_type = 'password' AND LENGTH(TRIM(COALESCE(cv.value, ''))) > 0)")
+            elif filter_preset == "has_formatting":
+                where_clauses.append("c.id IN (SELECT client_id FROM cell_formatting)")
+
             if where_clauses:
                 sql += " WHERE " + " AND ".join(where_clauses)
 
-            sql += " ORDER BY c.id ASC"
+            sql += f" {order_by}"
 
             cur = conn.execute(sql, params)
             rows = cur.fetchall()
@@ -655,7 +883,7 @@ class SeraDatabase:
                 r[0]: {
                     "id": r[0], "notes": r[1], "created_at": r[2], "updated_at": r[3],
                     "is_archived": bool(r[4]) if len(r) > 4 else False,
-                    "client_id_token": r[5] if len(r) > 5 and r[5] else f"CLI-{r[0]:05d}",
+                    "client_id_token": r[5] if len(r) > 5 and r[5] else str(r[0]),
                     "values": {},
                     "service_ids": []
                 }
@@ -697,7 +925,7 @@ class SeraDatabase:
         client = {
             "id": row[0], "notes": row[1], "created_at": row[2], "updated_at": row[3],
             "is_archived": bool(row[4]) if len(row) > 4 else False,
-            "client_id_token": row[5] if len(row) > 5 and row[5] else f"CLI-{row[0]:05d}"
+            "client_id_token": row[5] if len(row) > 5 and row[5] else str(row[0])
         }
 
         vcur = conn.execute("SELECT column_id, value FROM client_values WHERE client_id=?", (client_id,))
@@ -746,7 +974,7 @@ class SeraDatabase:
                 (notes, now, now)
             )
             client_id = cur.lastrowid
-            token = f"CLI-{client_id:05d}"
+            token = str(client_id)
             conn.execute("UPDATE clients SET client_id_token=? WHERE id=?", (token, client_id))
 
             # Auto-assign serial number to ID column if present and not provided
@@ -1215,6 +1443,11 @@ class SeraDatabase:
                         "DELETE FROM client_services WHERE client_id=? AND service_id=?",
                         (cid, service_id)
                     )
+        try:
+            for cid in client_ids:
+                self.record_client_activity(cid, "Services", "Service attached" if attach else "Service detached")
+        except Exception:
+            pass
 
     # ---------------- Audit Log ----------------
 
@@ -1227,6 +1460,36 @@ class SeraDatabase:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (ts, actor_name, action, client_id, service_id, detail)
             )
+        
+        # Automatically record client activity breadcrumbs on mutations
+        if client_id:
+            try:
+                act_norm = str(action).lower()
+                tag = "Edited"
+                if "update" in act_norm or "edit" in act_norm or "save" in act_norm:
+                    tag = "Edited"
+                elif "create" in act_norm or "add" in act_norm:
+                    tag = "Created"
+                elif "archive" in act_norm:
+                    tag = "Archived"
+                elif "unarchive" in act_norm or "restore" in act_norm:
+                    tag = "Restored"
+                elif "note" in act_norm:
+                    tag = "Note"
+                elif "service" in act_norm:
+                    tag = "Services"
+                elif "view" in act_norm:
+                    tag = "Viewed"
+                elif "copy" in act_norm:
+                    tag = "Copied"
+                elif "sca" in act_norm:
+                    tag = "SCA"
+                else:
+                    tag = action.capitalize()[:10]
+                self.record_client_activity(int(client_id), tag, detail or f"{tag} by {actor_name}")
+            except Exception:
+                pass
+
         # "view" is read-only and shouldn't trigger a sync push; everything
         # else logged here already represents a real data mutation somewhere
         # in this module, so it's the cheapest reliable place to hook.
@@ -1569,6 +1832,10 @@ class SeraDatabase:
                 "UPDATE clients SET notes = ?, updated_at = ? WHERE id = ?",
                 (notes, now, client_id)
             )
+        try:
+            self.record_client_activity(client_id, "Note", "Updated client notes")
+        except Exception:
+            pass
 
     # ---------------- File Submission Tracker (FST) ----------------
 
@@ -1635,6 +1902,222 @@ class SeraDatabase:
             "arn_number": arn_number, "submitted_at": submitted_at,
             "updated_at": now, "updated_by": updated_by
         }
+
+    # ---------------- Tracker Dump Subsystem (SAD & Extension) ----------------
+
+    def insert_tracker_dump(self, client_id: int, service_id: int = None, portal: str = None,
+                            period_label: str = None, arn_number: str = None,
+                            capture_method: str = "DOM_Tracker", status: str = "submitted",
+                            raw_payload_json: str = None, captured_by: str = "System") -> dict:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
+
+            # Deduplication Check: Ignore identical ARN received within last 10 seconds
+            if arn_number and arn_number != "N/A":
+                cur = conn.execute(
+                    "SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ?",
+                    (arn_number, (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)).isoformat())
+                )
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "id": row[0], "client_id": row[1], "service_id": service_id,
+                        "portal": portal, "period_label": period_label, "arn_number": arn_number,
+                        "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
+                    }
+
+            # Resolve client_id: 1. Direct ID, 2. Token (CLI-00370), 3. MCL Serial No (No. 370)
+            valid_id = None
+            if client_id:
+                # 1. Direct ID match
+                cur = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
+                row = cur.fetchone()
+                if row:
+                    valid_id = row[0]
+
+                # 2. Token match (CLI-00370 or CLI-370)
+                if not valid_id:
+                    try:
+                        token_str = f"CLI-{int(client_id):05d}"
+                        cur = conn.execute("SELECT id FROM clients WHERE client_id_token = ? OR client_id_token = ?", (token_str, f"CLI-{client_id}"))
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 3. MCL Serial No / SL No column match (e.g. No. 370)
+                if not valid_id:
+                    try:
+                        cur = conn.execute(
+                            """SELECT cv.client_id
+                               FROM client_values cv
+                               JOIN mcl_columns mc ON mc.id = cv.column_id
+                               WHERE TRIM(cv.value) = ? AND LOWER(TRIM(mc.label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')""",
+                            (str(client_id).strip(),)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 4. Search Grid Row Number match (e.g. Row #370 in Search Grid -> 370th client in DB)
+                if not valid_id:
+                    try:
+                        row_num = int(client_id)
+                        if row_num > 0:
+                            cur = conn.execute("SELECT id FROM clients WHERE is_archived = 0 ORDER BY id ASC LIMIT 1 OFFSET ?", (row_num - 1,))
+                            row = cur.fetchone()
+                            if row:
+                                valid_id = row[0]
+                    except Exception:
+                        pass
+
+                # 5. Name / PAN / GSTIN substring match in client_values
+                if not valid_id:
+                    try:
+                        search_str = f"%{str(client_id).strip()}%"
+                        cur = conn.execute(
+                            "SELECT client_id FROM client_values WHERE value LIKE ? LIMIT 1",
+                            (search_str,)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            valid_id = row[0]
+                    except Exception:
+                        pass
+
+            if not valid_id:
+                cur = conn.execute("SELECT id FROM clients ORDER BY id ASC LIMIT 1")
+                row = cur.fetchone()
+                if row:
+                    valid_id = row[0]
+                else:
+                    cur = conn.execute("INSERT INTO clients (notes, created_at, updated_at) VALUES ('Default System Client', ?, ?)", (now, now))
+                    valid_id = cur.lastrowid
+
+            cur = conn.execute(
+                """INSERT INTO tracker_dump
+                   (client_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (valid_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
+            )
+            dump_id = cur.lastrowid
+        return {
+            "id": dump_id, "client_id": valid_id, "service_id": service_id,
+            "portal": portal, "period_label": period_label, "arn_number": arn_number,
+            "capture_method": capture_method, "status": status, "created_at": now
+        }
+
+    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
+        with self._connect() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tracker_dump (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                    service_id      INTEGER,
+                    portal          TEXT,
+                    period_label    TEXT,
+                    arn_number      TEXT,
+                    capture_method  TEXT DEFAULT 'DOM_Tracker',
+                    status          TEXT DEFAULT 'submitted',
+                    raw_payload_json TEXT,
+                    captured_by     TEXT,
+                    created_at      TEXT NOT NULL
+                );
+            """)
+            sql = """SELECT td.id, td.client_id, c.client_id_token, td.service_id, s.name as service_name,
+                            td.portal, td.period_label, td.arn_number, td.capture_method, td.status,
+                            td.raw_payload_json, td.captured_by, td.created_at
+                     FROM tracker_dump td
+                     LEFT JOIN clients c ON c.id = td.client_id
+                     LEFT JOIN services s ON s.id = td.service_id
+                     WHERE 1=1"""
+            params = []
+            if client_id:
+                sql += " AND td.client_id = ?"
+                params.append(client_id)
+            if search_query:
+                sql += " AND (td.arn_number LIKE ? OR td.portal LIKE ? OR td.period_label LIKE ?)"
+                q = f"%{search_query}%"
+                params.extend([q, q, q])
+            sql += " ORDER BY td.id DESC LIMIT ?"
+            params.append(limit)
+
+            cur = conn.execute(sql, params)
+            rows = cur.fetchall()
+
+            # Pre-fetch MCL columns metadata once
+            mcl_cols = self.get_mcl_columns()
+
+            # Build client display name & pan map for all unique client_ids in results
+            client_map = {}
+            for r in rows:
+                cid = r[1]
+                if cid and cid not in client_map:
+                    try:
+                        cdata = self._fetch_client_full(conn, cid)
+                        if cdata:
+                            c_vals = cdata.get("values", {})
+                            name_val = ""
+                            pan_val = ""
+                            for col in mcl_cols:
+                                lbl = col.get("label", "").lower()
+                                val = c_vals.get(col["id"], "")
+                                if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
+                                    name_val = str(val).strip()
+                                elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
+                                    pan_val = str(val).strip()
+                            client_map[cid] = {
+                                "name": name_val or cdata.get("client_id_token", str(cid)),
+                                "pan": pan_val
+                            }
+                    except Exception:
+                        pass
+                if cid not in client_map:
+                    client_map[cid] = {"name": f"CLI-{cid:05d}" if cid else "Unknown Client", "pan": ""}
+
+            results = []
+            for r in rows:
+                cid = r[1]
+                info = client_map.get(cid, {"name": "Unknown Client", "pan": ""})
+                results.append({
+                    "id": r[0], "client_id": cid,
+                    "client_name": info["name"], "pan": info["pan"],
+                    "service_id": r[3], "service_name": r[4] or r[5] or "Portal", "portal": r[5] or "",
+                    "period_label": r[6] or "", "arn_number": r[7] or "N/A", "capture_method": r[8] or "DOM_Tracker",
+                    "status": r[9] or "submitted", "raw_payload_json": r[10] or "{}", "captured_by": r[11] or "System",
+                    "created_at": r[12]
+                })
+            return results
+
+    def delete_tracker_dump(self, dump_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM tracker_dump WHERE id = ?", (dump_id,))
+            return cur.rowcount > 0
+
+    def clear_tracker_dumps(self) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM tracker_dump")
+            return cur.rowcount
+
+
     # ---------------- Cell Formatting (Search Grid) ----------------
     def bulk_set_cell_formatting(self, formatting_list: list[dict]):
         if not formatting_list:
@@ -1650,10 +2133,10 @@ class SeraDatabase:
                     """INSERT INTO cell_formatting (client_id, column_key, bg_color, fg_color, updated_at)
                        VALUES (?, ?, ?, ?, ?)
                        ON CONFLICT(client_id, column_key) DO UPDATE SET
-                           bg_color = COALESCE(excluded.bg_color, cell_formatting.bg_color),
-                           fg_color = COALESCE(excluded.fg_color, cell_formatting.fg_color),
+                           bg_color = excluded.bg_color,
+                           fg_color = excluded.fg_color,
                            updated_at = excluded.updated_at""",
-                    (cid, ckey, bg, fg, now)
+                    (cid, ckey, bg or "", fg or "", now)
                 )
 
     def clear_cell_formatting(self, client_column_pairs: list[tuple[int, str]]):

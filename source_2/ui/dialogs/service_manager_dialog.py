@@ -91,10 +91,59 @@ class ServiceEditDialog(QDialog):
         form.addRow("Extension Login Flow:", self.ext_flow_combo)
         layout.addLayout(form)
 
+        # Wire real-time portal selector presets on typing
+        self.name_input.textChanged.connect(self._auto_detect_portal_presets)
+        self.url_input.textChanged.connect(self._auto_detect_portal_presets)
+
+        if not service_data or not self.uid_sel.text().strip():
+            self._auto_detect_portal_presets()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _auto_detect_portal_presets(self):
+        name = self.name_input.text().strip().lower()
+        url = self.url_input.text().strip().lower()
+        combined = f"{name} {url}"
+        
+        presets = [
+            (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single', ['traces', 'tds', 'tan', 'pan', 'user'], ['traces', 'tds', 'pass', 'pwd']),
+            (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single', ['gst', 'user', 'pan'], ['gst', 'pass', 'pwd']),
+            (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double', ['pan', 'itr', 'user'], ['itr', 'tax', 'pass', 'pwd']),
+            (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double', ['email', 'gmail', 'google', 'user'], ['gmail', 'google', 'pass', 'pwd']),
+            (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single', ['epfo', 'uan', 'pf', 'user'], ['epfo', 'pf', 'pass', 'pwd']),
+            (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single', ['icegate', 'user'], ['icegate', 'pass', 'pwd']),
+            (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double', ['mca', 'user', 'din', 'pan'], ['mca', 'pass', 'pwd']),
+        ]
+        
+        for kws, u_sel, p_sel, def_url, def_flow, u_mcl_hints, p_mcl_hints in presets:
+            if any(k in combined for k in kws):
+                if not self.uid_sel.text().strip() or self.uid_sel.text() in ['#username', "input[type='text']"]:
+                    self.uid_sel.setText(u_sel)
+                if not self.pwd_sel.text().strip() or self.pwd_sel.text() in ['#password', "input[type='password']"]:
+                    self.pwd_sel.setText(p_sel)
+                if not self.url_input.text().strip():
+                    self.url_input.setText(def_url)
+                idx = self.ext_flow_combo.findData(def_flow)
+                if idx >= 0:
+                    self.ext_flow_combo.setCurrentIndex(idx)
+                
+                # Auto-select MCL column if unselected
+                if self.uid_combo.currentIndex() <= 0:
+                    for i in range(1, self.uid_combo.count()):
+                        lbl = self.uid_combo.itemText(i).lower()
+                        if any(h in lbl for h in u_mcl_hints):
+                            self.uid_combo.setCurrentIndex(i)
+                            break
+                if self.pwd_combo.currentIndex() <= 0:
+                    for i in range(1, self.pwd_combo.count()):
+                        lbl = self.pwd_combo.itemText(i).lower()
+                        if any(h in lbl for h in p_mcl_hints):
+                            self.pwd_combo.setCurrentIndex(i)
+                            break
+                break
 
     def _on_accept(self):
         if not self.name_input.text().strip():
@@ -125,6 +174,10 @@ class ServiceManagerDialog(QDialog):
         self.setModal(True)
         self.resize(450, 400)
         self._build_ui()
+        try:
+            self.db.auto_populate_service_selectors()
+        except Exception:
+            pass
         self._reload_services()
 
     def _build_ui(self):
@@ -165,6 +218,7 @@ class ServiceManagerDialog(QDialog):
         if dlg.exec() == QDialog.Accepted:
             try:
                 self.db.create_service(**dlg.result_data())
+                self.db.auto_populate_service_selectors()
                 self._reload_services()
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
@@ -177,6 +231,7 @@ class ServiceManagerDialog(QDialog):
         dlg = ServiceEditDialog(self.db, self, current)
         if dlg.exec() == QDialog.Accepted:
             self.db.update_service(sid, **dlg.result_data())
+            self.db.auto_populate_service_selectors()
             self._reload_services()
 
     def _on_delete(self):

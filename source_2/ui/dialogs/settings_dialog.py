@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
 
 class SettingsDialog(QDialog):
     toast_requested = Signal(str, int)
-    
+    settings_saved = Signal()  # Emitted after every successful save
+
     def __init__(self, db, actor: str = "Admin", parent=None):
         super().__init__(parent)
         self.setObjectName("ToolDialog")
@@ -89,29 +90,47 @@ class SettingsDialog(QDialog):
         self.quick_copy_check = QCheckBox("Enable Quick-Copy (Master Toggle)")
         form_general.addRow("", self.quick_copy_check)
 
-        self.show_hide_enabled_check = QCheckBox("Enable 'Show/Hide' Password Buttons")
-        self.show_hide_enabled_check.setToolTip("Toggle the Show/Hide button next to password credentials in Client Detail view. Uncheck to hide password reveal buttons.")
-        form_general.addRow("", self.show_hide_enabled_check)
-
-        self.manual_copy_enabled_check = QCheckBox("Enable Service Manual Credential Copy Buttons")
-        self.manual_copy_enabled_check.setToolTip("Toggle the service manual credential copy buttons (e.g. GST — Manual Copy) in Client Detail view. Uncheck to hide manual copy controls.")
-        form_general.addRow("", self.manual_copy_enabled_check)
-
         # Feature Toggles
         separator = QLabel("")
         separator.setProperty("class", "Separator")
         form_general.addRow(separator)
 
+        self.run_in_bg_check = QCheckBox("Keep app running in the background when closed")
+        self.run_in_bg_check.setToolTip(
+            "When enabled, closing the window minimises Sera to the system tray instead of exiting. "
+            "Disable to fully quit the application when the window is closed."
+        )
+        form_general.addRow("", self.run_in_bg_check)
 
-        self.tracker_enabled_check = QCheckBox("Enable Filing Success Tracker (Extension)")
-        self.tracker_enabled_check.setEnabled(True)
-        self.tracker_enabled_check.setToolTip("Toggle the background Filing Success Tracker IPC listener.")
-        form_general.addRow("", self.tracker_enabled_check)
+        self.autostart_check = QCheckBox("Launch Project Sera automatically on Windows PC startup")
+        self.autostart_check.setToolTip("Automatically launch Project Sera in background when Windows starts.")
+        form_general.addRow("", self.autostart_check)
+
+        self.fst_enabled_check = QCheckBox("Enable FST (File Submission Tracker — DOM Observer 📋)")
+        self.fst_enabled_check.setEnabled(True)
+        self.fst_enabled_check.setToolTip("Toggle DOM mutation observer for capturing filing confirmations from web pages.")
+        form_general.addRow("", self.fst_enabled_check)
+
+        self.sad_enabled_check = QCheckBox("Enable SAD (Sera API Detection — Network Interceptor ⚡)")
+        self.sad_enabled_check.setEnabled(True)
+        self.sad_enabled_check.setToolTip("Toggle passive network response interceptor (fetch/XHR) for real-time JSON API capture.")
+        form_general.addRow("", self.sad_enabled_check)
+
+        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist 📋)")
+        self.sca_enabled_check.setEnabled(True)
+        self.sca_enabled_check.setToolTip("When copying client User ID from Excel, arms matching credentials for portal interaction.")
+        form_general.addRow("", self.sca_enabled_check)
+
+        self.sca_mode_combo = QComboBox()
+        self.sca_mode_combo.addItem("Ambient Autofill (Silently fills password on paste)", "autofill")
+        self.sca_mode_combo.addItem("SCA Widget (Floating 1-click password prompt on paste)", "widget")
+        self.sca_mode_combo.setToolTip("Choose whether SCA silently injects password or presents a 1-click interactive SCA Widget.")
+        form_general.addRow("SCA Action Mode:", self.sca_mode_combo)
         
         # Primary Key (ID Field) Wiring Status
         id_col = self.db.get_id_column()
         if id_col:
-            id_status_text = f"'{id_col['label']}' — Wired to Client ID Tokens (Auto Serial # & Backend Token: CLI-XXXXX)"
+            id_status_text = f"'{id_col['label']}' — Wired to Client Auto-Serial Numbers (1, 2, 3...)"
             lbl_id = QLabel(id_status_text)
             lbl_id.setStyleSheet("color: #2E9B5F; font-weight: 700;")
         else:
@@ -270,8 +289,27 @@ class SettingsDialog(QDialog):
         self.show_hide_enabled_check.setChecked(show_hide_btn == "1")
 
 
-        tracker_enabled = self.db.get_setting("tracker_enabled", "0")
-        self.tracker_enabled_check.setChecked(tracker_enabled == "1")
+        fst_enabled = self.db.get_setting("fst_enabled", "1")
+        self.fst_enabled_check.setChecked(fst_enabled == "1")
+
+        sad_enabled = self.db.get_setting("sad_enabled", "1")
+        self.sad_enabled_check.setChecked(sad_enabled == "1")
+
+        sca_enabled = self.db.get_setting("sca_enabled", "1")
+        self.sca_enabled_check.setChecked(sca_enabled == "1")
+
+        sca_mode = self.db.get_setting("sca_action_mode", "autofill")
+        if sca_mode == "assist":
+            sca_mode = "widget"
+        idx_sm = self.sca_mode_combo.findData(sca_mode)
+        if idx_sm >= 0:
+            self.sca_mode_combo.setCurrentIndex(idx_sm)
+
+        run_in_bg = self.db.get_setting("run_in_background", "1")
+        self.run_in_bg_check.setChecked(run_in_bg == "1")
+
+        from ui.utils import autostart
+        self.autostart_check.setChecked(autostart.is_autostart_enabled())
 
     def _on_save(self):
         theme = self.theme_combo.currentData()
@@ -284,7 +322,15 @@ class SettingsDialog(QDialog):
         assist_btn_val = "1" if self.btn_assist_check.isChecked() else "0"
         copy_btn_val = "1" if self.btn_copy_check.isChecked() else "0"
         show_hide_val = "1" if self.show_hide_enabled_check.isChecked() else "0"
-        tracker_val = "1" if self.tracker_enabled_check.isChecked() else "0"
+        fst_val = "1" if self.fst_enabled_check.isChecked() else "0"
+        sad_val = "1" if self.sad_enabled_check.isChecked() else "0"
+        sca_val = "1" if self.sca_enabled_check.isChecked() else "0"
+        sca_mode_val = self.sca_mode_combo.currentData() or "autofill"
+        tracker_val = "1" if (fst_val == "1" or sad_val == "1") else "0"
+        run_in_bg_val = "1" if self.run_in_bg_check.isChecked() else "0"
+
+        from ui.utils import autostart
+        autostart.set_autostart_enabled(self.autostart_check.isChecked())
 
         try:
             # Save General Settings
@@ -298,11 +344,22 @@ class SettingsDialog(QDialog):
             self.db.set_setting("manual_assist_enabled", assist_btn_val)
             self.db.set_setting("manual_copy_btn_enabled", copy_btn_val)
             self.db.set_setting("show_hide_btn_enabled", show_hide_val)
+            self.db.set_setting("fst_enabled", fst_val)
+            self.db.set_setting("sad_enabled", sad_val)
+            self.db.set_setting("sca_enabled", sca_val)
+            self.db.set_setting("sca_action_mode", sca_mode_val)
             self.db.set_setting("tracker_enabled", tracker_val)
-            
-            # Broadcast tracker toggle to browser extension immediately
-            import automation
-            automation.update_extension_settings(tracker_val == "1")
+            self.db.set_setting("run_in_background", run_in_bg_val)
+
+            # Update extension daemon settings
+            from automation import update_extension_settings
+            update_extension_settings(
+                fst_enabled=(fst_val == "1"),
+                sad_enabled=(sad_val == "1"),
+                tracker_enabled=(tracker_val == "1"),
+                sca_enabled=(sca_val == "1"),
+                sca_mode=sca_mode_val
+            )
             
             # Save Column Permissions
             visible_ids = [cid for cid, cb in self.visibility_cbs.items() if cb.isChecked()]
@@ -315,11 +372,12 @@ class SettingsDialog(QDialog):
 
             self.db.log_action(
                 self.actor, "update_settings",
-                detail=f"Theme: {theme}, WindowMode: {win_mode}, Masking: {mode}, Quick-Copy Master: {quick_copy_val}, Tracker: {tracker_val}, Visibility IDs: {len(visible_ids)}, QuickCopy IDs: {len(qc_allowed_ids)}, AdminVisibility IDs: {len(admin_visible_ids)}"
+                detail=f"Theme: {theme}, WindowMode: {win_mode}, Masking: {mode}, Quick-Copy Master: {quick_copy_val}, FST: {fst_val}, SAD: {sad_val}, Visibility IDs: {len(visible_ids)}, QuickCopy IDs: {len(qc_allowed_ids)}, AdminVisibility IDs: {len(admin_visible_ids)}"
             )
 
 
             self.toast_requested.emit("Application settings updated successfully!", 3000)
+            self.settings_saved.emit()
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Error Saving Settings", str(e))

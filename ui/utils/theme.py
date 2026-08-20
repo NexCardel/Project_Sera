@@ -19,7 +19,18 @@ class SmartTableWidgetItem(QTableWidgetItem):
         t1 = self.text().strip()
         t2 = other.text().strip()
 
-        # Try float/int comparison for numeric values
+        # Try float/int comparison for leading numeric tokens (e.g. "1001 (Viewed • 5m ago)")
+        import re
+        m1 = re.match(r'^([+-]?\d+(?:\.\d+)?)\b', t1)
+        m2 = re.match(r'^([+-]?\d+(?:\.\d+)?)\b', t2)
+        if m1 and m2:
+            try:
+                n1, n2 = float(m1.group(1)), float(m2.group(1))
+                if n1 != n2:
+                    return n1 < n2
+            except ValueError:
+                pass
+
         try:
             return float(t1) < float(t2)
         except ValueError:

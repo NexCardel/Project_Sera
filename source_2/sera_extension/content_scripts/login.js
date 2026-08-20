@@ -1,6 +1,52 @@
-// Project Sera: Lightweight content script.
-// Autofill is now handled by direct injection from background.js.
-// This script only listens for explicit messages as a fallback.
+let _lastScaTriggerUid = "";
+let _lastScaTriggerTime = 0;
+
+function checkAndTriggerSCA(candidateText) {
+  if (!candidateText) return;
+  const clean = candidateText.trim().toUpperCase();
+  if (clean.length < 3 || clean.length > 100) return;
+
+  const now = Date.now();
+  if (_lastScaTriggerUid === clean && (now - _lastScaTriggerTime) < 1200) {
+    return;
+  }
+
+  chrome.storage.local.get(['armedSCAPayload', 'scaEnabled'], (data) => {
+    if (data.scaEnabled === false) return;
+    const armed = data.armedSCAPayload;
+    if (armed && armed.matched_uid && armed.expiresAt > Date.now()) {
+      if (clean === armed.matched_uid.toUpperCase() || clean.includes(armed.matched_uid.toUpperCase())) {
+        _lastScaTriggerUid = clean;
+        _lastScaTriggerTime = Date.now();
+        console.log("Sera SCA: Detected matching UID entry:", clean);
+        chrome.runtime.sendMessage({
+          type: "sca_paste_matched",
+          matched_uid: clean,
+          portal: window.location.hostname
+        });
+      }
+    }
+  });
+}
+
+document.addEventListener('paste', (e) => {
+  try {
+    const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+    checkAndTriggerSCA(pastedText);
+  } catch (_) {}
+}, true);
+
+document.addEventListener('input', (e) => {
+  try {
+    const target = e.target;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+      const type = (target.type || '').toLowerCase();
+      if (type !== 'password' && target.value) {
+        checkAndTriggerSCA(target.value);
+      }
+    }
+  } catch (_) {}
+}, true);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "autofill" && message.userid) {

@@ -25,6 +25,29 @@ class AppShell(QWidget):
             QApplication.instance().installEventFilter(self)
         self._build_ui()
 
+    def closeEvent(self, event):
+        """Intercept close button (X).
+
+        If 'run_in_background' is enabled the window is hidden to the system
+        tray (existing behaviour).  If it is disabled the app quits cleanly.
+        """
+        if getattr(self, "_force_close", False):
+            event.accept()
+            return
+
+        run_in_bg = getattr(self, "_run_in_background", True)
+        if run_in_bg:
+            # Minimise to tray
+            event.ignore()
+            self.hide()
+            if hasattr(self, "on_minimized_to_tray") and callable(self.on_minimized_to_tray):
+                self.on_minimized_to_tray()
+        else:
+            # Full quit — let the coordinator clean up via aboutToQuit
+            event.ignore()
+            from PySide6.QtWidgets import QApplication
+            QApplication.instance().quit()
+
     def eventFilter(self, watched, event):
         """Close Client Detail when the blurred area/sidebar is clicked."""
         if (
@@ -51,6 +74,12 @@ class AppShell(QWidget):
 
         # 1. Sidebar
         self.sidebar = Sidebar()
+        self.sidebar_target_width = 172
+        self.sidebar_collapsed = False
+        self.sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
+        self.sidebar_anim.setDuration(220)
+        self.sidebar_anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self.sidebar.toggle_requested.connect(self.toggle_sidebar)
         self.layout.addWidget(self.sidebar)
 
         # 2. Content Area (Stacked Widget)
@@ -114,6 +143,34 @@ class AppShell(QWidget):
             self.blur_effect.setBlurRadius(0.0)
             self.blur_effect.setEnabled(False)
 
+    def toggle_sidebar(self):
+        """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        if self.sidebar_collapsed:
+            self.expand_sidebar()
+        else:
+            self.collapse_sidebar()
+
+    def collapse_sidebar(self):
+        """Collapse sidebar to 0px."""
+        self.sidebar_anim.stop()
+        self.sidebar.setMinimumWidth(0)
+        self.sidebar_anim.setStartValue(self.sidebar.width())
+        self.sidebar_anim.setEndValue(0)
+        self.sidebar_collapsed = True
+        self.sidebar_anim.start()
+
+    def expand_sidebar(self):
+        """Expand sidebar to target width (172px)."""
+        self.sidebar_anim.stop()
+        self.sidebar_anim.setStartValue(self.sidebar.width())
+        self.sidebar_anim.setEndValue(self.sidebar_target_width)
+        self.sidebar_collapsed = False
+        def _on_expand_finished():
+            if not self.sidebar_collapsed:
+                self.sidebar.setMinimumWidth(self.sidebar_target_width)
+        self.sidebar_anim.finished.connect(_on_expand_finished)
+        self.sidebar_anim.start()
+
     def show_alert(self, message: str, level: str = "success", duration: int = 3000):
         """Displays a non-blocking bottom-left Sera Alert notification."""
         self.alert.show_alert(message, level=level, duration_ms=duration)
@@ -133,9 +190,17 @@ class AppShell(QWidget):
         """Adds a widget to the main content area."""
         self.content_area.addWidget(widget)
 
-    def set_current_page(self, index: int):
-        """Switches the content area to the specified page index with a smooth cross-fade transition."""
-        if self.content_area.currentIndex() == index:
+    def set_current_page(self, page):
+        """Switches the content area to the specified page index or QWidget with a smooth cross-fade transition."""
+        if isinstance(page, QWidget):
+            index = self.content_area.indexOf(page)
+        else:
+            try:
+                index = int(page)
+            except (ValueError, TypeError):
+                return
+
+        if index < 0 or self.content_area.currentIndex() == index:
             return
 
         new_widget = self.content_area.widget(index)

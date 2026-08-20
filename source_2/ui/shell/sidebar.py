@@ -75,7 +75,7 @@ class AccordionHeader(QWidget):
     def __init__(self, text, icon_name, expanded=True, parent=None):
         super().__init__(parent)
         self.setObjectName("SidebarAccordionHeader")
-        self.setStyleSheet("background-color: #2E9B5F;")
+        self.setStyleSheet("background-color: transparent;")
         self.is_expanded = expanded
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(32)
@@ -87,10 +87,10 @@ class AccordionHeader(QWidget):
         self.icon_lbl = QLabel()
         self.icon_lbl.setStyleSheet("background-color: transparent;")
         if icon_name:
-            self.icon_lbl.setPixmap(qta.icon(icon_name, color='#F8F5F2').pixmap(17, 17))
+            self.icon_lbl.setPixmap(qta.icon(icon_name, color='#A0A0A0').pixmap(16, 16))
         
         self.text_lbl = QLabel(text)
-        self.text_lbl.setStyleSheet("background-color: transparent; font-weight: 600; color: #F8F5F2; border: none; font-size: 13px;")
+        self.text_lbl.setStyleSheet("background-color: transparent; font-weight: 600; color: #E0E0E0; border: none; font-size: 13px;")
         
         self.chevron_lbl = QLabel()
         self.chevron_lbl.setStyleSheet("background-color: transparent;")
@@ -104,7 +104,7 @@ class AccordionHeader(QWidget):
         
     def _update_chevron(self):
         icon = "mdi.chevron-up" if self.is_expanded else "mdi.chevron-down"
-        self.chevron_lbl.setPixmap(qta.icon(icon, color='#F8F5F2').pixmap(16, 16))
+        self.chevron_lbl.setPixmap(qta.icon(icon, color='#707070').pixmap(14, 14))
         
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -134,6 +134,7 @@ class Sidebar(QFrame):
     action_download_template = Signal()
     action_purge_duplicates = Signal()
     action_manage_clients = Signal()
+    action_tracker_dump = Signal()
     action_audit_log = Signal()
     action_manage_mcl = Signal()
     action_manage_services = Signal()
@@ -144,10 +145,12 @@ class Sidebar(QFrame):
     action_settings = Signal()
     action_restore = Signal()
     action_open_sera_sync = Signal()
+    action_trigger_sync = Signal()
     
     # Toggle Signal
     action_enter_admin = Signal()
     action_exit_admin = Signal()
+    toggle_requested = Signal()
 
 
     def __init__(self, parent=None):
@@ -166,7 +169,7 @@ class Sidebar(QFrame):
 
         # Title / Brand
         brand = QWidget()
-        brand.setStyleSheet("background-color: #2E9B5F;")
+        brand.setStyleSheet("background-color: transparent;")
         brand_layout = QHBoxLayout(brand)
         brand_layout.setContentsMargins(4, 3, 4, 8)
         brand_layout.setSpacing(8)
@@ -189,22 +192,45 @@ class Sidebar(QFrame):
             logo.setPixmap(pix)
         else:
             logo.setText("PS")
-            logo.setStyleSheet("background-color: #164A68; border-radius: 5px; color: #F8F5F2; font-size: 10px; font-weight: 700;")
+            logo.setStyleSheet("background-color: #164A68; border-radius: 5px; color: #FFFFFF; font-size: 10px; font-weight: 700;")
 
         title = QLabel("Aman Associates")
         title.setObjectName("SidebarTitle")
-        title.setStyleSheet("background-color: transparent; color: #F8F5F2; font-size: 14px; font-weight: 700;")
+        title.setStyleSheet("background-color: transparent; color: #FFFFFF; font-size: 14px; font-weight: 700;")
 
         brand_layout.addWidget(logo)
         brand_layout.addWidget(title)
         brand_layout.addStretch()
+
+        self.btn_toggle_sidebar = QPushButton()
+        self.btn_toggle_sidebar.setObjectName("SidebarCollapseButton")
+        if qta:
+            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#A0A0A0"))
+            self.btn_toggle_sidebar.setIconSize(QSize(18, 18))
+        self.btn_toggle_sidebar.setFixedSize(28, 28)
+        self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
+        self.btn_toggle_sidebar.setToolTip("Toggle / Hide Sidebar (Ctrl+B)")
+        self.btn_toggle_sidebar.setStyleSheet("""
+            QPushButton#SidebarCollapseButton {
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                padding: 3px;
+            }
+            QPushButton#SidebarCollapseButton:hover {
+                background-color: #222222;
+            }
+        """)
+        self.btn_toggle_sidebar.clicked.connect(self.toggle_requested.emit)
+        brand_layout.addWidget(self.btn_toggle_sidebar)
+
         self.main_layout.addWidget(brand)
         
         # Admin Toggle (Top Area)
         self.admin_layout = QHBoxLayout()
         self.lbl_admin = QLabel("Admin Mode")
         self.lbl_admin.setObjectName("SidebarSection")
-        self.lbl_admin.setStyleSheet("color: white;")
+        self.lbl_admin.setStyleSheet("color: #A0A0A0; font-size: 12px; font-weight: 500;")
         
         self.toggle_admin = ToggleSwitch()
         self.toggle_admin.toggled.connect(self._on_admin_toggled)
@@ -217,6 +243,7 @@ class Sidebar(QFrame):
         divider = QFrame()
         divider.setObjectName("SidebarDivider")
         divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; min-height: 1px; max-height: 1px; margin: 4px 0;")
         self.main_layout.addWidget(divider)
         self.main_layout.addSpacing(1)
 
@@ -230,7 +257,7 @@ class Sidebar(QFrame):
         
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("ScrollContent")
-        self.scroll_content.setStyleSheet("background-color: #2E9B5F;")
+        self.scroll_content.setStyleSheet("background-color: transparent;")
         self.layout = QVBoxLayout(self.scroll_content)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(3)
@@ -251,6 +278,7 @@ class Sidebar(QFrame):
         self.btn_manage_clients = self._create_admin_sub_nav_button(
             "Manage Clients", self.action_manage_clients, parent_layout=self.l_clients
         )
+        self.btn_tracker_dump = self._create_sub_nav_button("Tracker Dump", self.action_tracker_dump, parent_layout=self.l_clients)
         self.btn_audit = self._create_admin_sub_nav_button("Audit Log", self.action_audit_log, parent_layout=self.l_clients)
         self.btn_manage_mcl = self._create_admin_sub_nav_button("Manage MCL", self.action_manage_mcl, parent_layout=self.l_clients)
         self.btn_purge = self._create_sub_nav_button("Purge Duplicates", self.action_purge_duplicates, parent_layout=self.l_clients)
@@ -280,9 +308,10 @@ class Sidebar(QFrame):
         footer_divider = QFrame()
         footer_divider.setObjectName("SidebarDivider")
         footer_divider.setFrameShape(QFrame.HLine)
+        footer_divider.setStyleSheet("border: none; border-top: 1px solid #262626; min-height: 1px; max-height: 1px; margin: 4px 0;")
         self.main_layout.addWidget(footer_divider)
         self.profile_row = QWidget()
-        self.profile_row.setStyleSheet("background-color: #2E9B5F;")
+        self.profile_row.setStyleSheet("background-color: transparent;")
         profile_layout = QHBoxLayout(self.profile_row)
         profile_layout.setContentsMargins(2, 2, 2, 2)
         profile_layout.setSpacing(7)
@@ -290,40 +319,107 @@ class Sidebar(QFrame):
         profile = QLabel()
         profile.setObjectName("SidebarProfile")
         profile.setAlignment(Qt.AlignCenter)
-        profile.setFixedSize(27, 27)
-        profile.setPixmap(_safe_qta_icon("fa5s.user", color="#168A70").pixmap(14, 14))
+        profile.setFixedSize(26, 26)
+        profile.setStyleSheet("background: #2E9B5F; border-radius: 13px; color: #FFFFFF;")
+        profile.setPixmap(_safe_qta_icon("mdi.account", color="#FFFFFF").pixmap(14, 14))
         self.profile_name = QLabel()
         self.profile_name.setObjectName("SidebarProfileName")
-        self.profile_name.setStyleSheet("background-color: transparent; color: #F8F5F2; font-size: 12px; font-weight: 600;")
+        self.profile_name.setStyleSheet("background-color: transparent; color: #E0E0E0; font-size: 12px; font-weight: 600;")
         profile_layout.addWidget(profile)
         profile_layout.addWidget(self.profile_name, stretch=1)
         self.profile_row.installEventFilter(self)
         self.main_layout.addWidget(self.profile_row)
 
-        self.sync_status_badge = QLabel("🟢 Auto-Sync Active")
-        self.sync_status_badge.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600; padding: 4px 8px; background-color: #1A382B; border-radius: 4px; margin-top: 4px;")
+        self.sync_status_badge = QPushButton("🟢 Auto-Sync Active")
+        self.sync_status_badge.setObjectName("SyncDeckPill")
+        self.sync_status_badge.setCursor(Qt.PointingHandCursor)
+        self.sync_status_badge.setToolTip("Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
+        self._style_sync_pill("idle")
+        self.sync_status_badge.clicked.connect(self._on_sync_pill_clicked)
         self.main_layout.addWidget(self.sync_status_badge)
 
         self._update_visibility()
 
+    def _style_sync_pill(self, state: str = "idle"):
+        if state == "idle":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #4CF9B7;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 5px 8px;
+                    background-color: #0E1F16;
+                    border: 1px solid #1E4D34;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+                QPushButton#SyncDeckPill:hover {
+                    background-color: #163626;
+                    border-color: #2E9B5F;
+                    color: #FFFFFF;
+                }
+                QPushButton#SyncDeckPill:pressed {
+                    background-color: #23794A;
+                }
+            """)
+        elif state == "syncing":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #FFFFFF;
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 5px 8px;
+                    background-color: #2E9B5F;
+                    border: 1px solid #34B76D;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+            """)
+        elif state == "received":
+            self.sync_status_badge.setStyleSheet("""
+                QPushButton#SyncDeckPill {
+                    color: #FFFFFF;
+                    font-size: 11px;
+                    font-weight: 700;
+                    padding: 5px 8px;
+                    background-color: #1F7846;
+                    border: 1px solid #2E9B5F;
+                    border-radius: 12px;
+                    margin-top: 4px;
+                    text-align: center;
+                }
+            """)
+
+    def _on_sync_pill_clicked(self):
+        self._style_sync_pill("syncing")
+        self.sync_status_badge.setText("⚡ Syncing LAN Mesh...")
+        self.action_trigger_sync.emit()
+        from PySide6.QtCore import QTimer
+        def _reset_idle():
+            self._style_sync_pill("idle")
+            self.sync_status_badge.setText("🟢 Auto-Sync Active")
+        QTimer.singleShot(1600, _reset_idle)
+
     def notify_sync_sent(self, count: int, total: int):
         """Visual badge indicator when local changes are pushed to LAN peers."""
         import datetime
+        from PySide6.QtCore import QTimer
         now_t = datetime.datetime.now().strftime("%H:%M:%S")
         target_str = f"{count}/{total} PCs" if total > 1 else f"{count} PC"
-        self.sync_status_badge.setText(f"⬆️ Synced to {target_str} ({now_t})")
-        self.sync_status_badge.setStyleSheet(
-            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #2E9B5F; border-radius: 4px; margin-top: 4px;"
-        )
+        self._style_sync_pill("syncing")
+        self.sync_status_badge.setText(f"⬆️ Synced {target_str} ({now_t})")
+        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
 
     def notify_sync_received(self, sender_username: str, sender_host: str):
         """Visual badge indicator when incoming live auto-sync is received."""
         import datetime
+        from PySide6.QtCore import QTimer
         now_t = datetime.datetime.now().strftime("%H:%M:%S")
-        self.sync_status_badge.setText(f"⬇️ Synced Live {now_t} ({sender_host})")
-        self.sync_status_badge.setStyleSheet(
-            "color: #FFFFFF; font-size: 11px; font-weight: 700; padding: 4px 8px; background-color: #1F7846; border-radius: 4px; margin-top: 4px;"
-        )
+        self._style_sync_pill("received")
+        self.sync_status_badge.setText(f"⬇️ Live Sync ({now_t})")
+        QTimer.singleShot(3500, lambda: (self._style_sync_pill("idle"), self.sync_status_badge.setText("🟢 Auto-Sync Active")))
 
     def eventFilter(self, watched, event):
         try:
@@ -379,16 +475,13 @@ class Sidebar(QFrame):
 
     def _create_accordion_group(self, text, icon_name, expanded=True):
         header = AccordionHeader(text, icon_name, expanded)
-        if text == "Clients":
-            header.setProperty("active", True)
-            header.setStyleSheet("background-color: #23794A; border-radius: 4px;")
         self.layout.addWidget(header)
         
         container = QWidget()
-        container.setStyleSheet("background-color: #2E9B5F;")
+        container.setStyleSheet("background-color: transparent;")
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(4)
+        container_layout.setSpacing(3)
         
         container.setVisible(expanded)
         header.toggled.connect(container.setVisible)
@@ -441,7 +534,7 @@ class Sidebar(QFrame):
     @staticmethod
     def _style_nav_button(button: QPushButton, active: bool):
         is_sub = bool(button.property("sidebar_sub"))
-        padding = "3px 8px 3px 34px"
+        padding = "4px 8px 4px 34px"
         size = "12px"
         if not is_sub:
             padding = "5px 8px"
@@ -449,15 +542,15 @@ class Sidebar(QFrame):
 
         if active:
             button.setStyleSheet(
-                f"QPushButton {{ background-color: #FF4D4D; color: #FFFFFF; border: none; "
-                f"border-radius: 4px; padding: {padding}; font-size: {size}; font-weight: 700; text-align: left; }}"
-                "QPushButton:hover { background-color: #E63939; }"
+                f"QPushButton {{ background-color: #2E9B5F; color: #FFFFFF; border: none; "
+                f"border-radius: 4px; padding: {padding}; font-size: {size}; font-weight: 600; text-align: left; }}"
+                "QPushButton:hover { background-color: #34B76D; }"
             )
         else:
             button.setStyleSheet(
-                f"QPushButton {{ background-color: #2E9B5F; color: #F8F5F2; border: none; "
+                f"QPushButton {{ background-color: transparent; color: #A0A0A0; border: none; "
                 f"border-radius: 4px; padding: {padding}; font-size: {size}; font-weight: 500; text-align: left; }}"
-                "QPushButton:hover { background-color: #23794A; }"
+                "QPushButton:hover { background-color: #222222; color: #FFFFFF; }"
             )
 
     def _create_admin_nav_button(self, text, signal, icon_name=None, parent_layout=None) -> QPushButton:

@@ -17,12 +17,91 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QStyledItemDelegate,
+    QStyle,
 )
+from PySide6.QtGui import QPainter, QColor, QFont, QBrush, QFontMetrics
 try:
     import qtawesome as qta
 except Exception:
     qta = None
 from ui.utils.theme import SmartTableWidgetItem
+
+
+class ActivityCellDelegate(QStyledItemDelegate):
+    """
+    Renders Client ID cells with a smaller, subtle grey breadcrumb badge
+    next to the primary ID (e.g. '1001' + '(Viewed • 5m ago)' in 8.5pt #888888).
+    """
+    def paint(self, painter: QPainter, option, index):
+        activity_tag = index.data(Qt.UserRole + 2)
+        if not activity_tag:
+            super().paint(painter, option, index)
+            return
+
+        painter.save()
+        self.initStyleOption(option, index)
+
+        # Draw cell background (selection or custom format background)
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        else:
+            bg = index.data(Qt.BackgroundRole)
+            if bg:
+                painter.fillRect(option.rect, bg)
+            else:
+                painter.fillRect(option.rect, option.palette.base())
+
+        rect = option.rect.adjusted(6, 0, -6, 0)
+        main_text = str(index.data(Qt.DisplayRole) or "")
+
+        # 1. Main ID text
+        main_font = option.font
+        painter.setFont(main_font)
+        fg = index.data(Qt.ForegroundRole)
+        if fg and not (option.state & QStyle.State_Selected):
+            painter.setPen(fg.color() if hasattr(fg, "color") else fg)
+        elif option.state & QStyle.State_Selected:
+            painter.setPen(QColor("#FFFFFF"))
+        else:
+            painter.setPen(QColor("#241F1B"))
+
+        fm = painter.fontMetrics()
+        main_w = fm.horizontalAdvance(main_text)
+        y_center = rect.top() + (rect.height() + fm.ascent() - fm.descent()) // 2
+        painter.drawText(rect.left(), y_center, main_text)
+
+        # 2. Activity breadcrumb (smaller font, soft grey)
+        small_font = QFont(main_font)
+        small_font.setPointSize(max(main_font.pointSize() - 2, 8))
+        painter.setFont(small_font)
+        small_fm = painter.fontMetrics()
+
+        tag_color = QColor("#8E8E93") if not (option.state & QStyle.State_Selected) else QColor("#D1D5DB")
+        painter.setPen(tag_color)
+
+        tag_x = rect.left() + main_w + 6
+        tag_y = rect.top() + (rect.height() + small_fm.ascent() - small_fm.descent()) // 2
+        painter.drawText(tag_x, tag_y, f"({activity_tag})")
+
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        base_size = super().sizeHint(option, index)
+        activity_tag = index.data(Qt.UserRole + 2)
+        if not activity_tag:
+            return base_size
+
+        main_text = str(index.data(Qt.DisplayRole) or "")
+        fm = option.fontMetrics
+        main_w = fm.horizontalAdvance(main_text)
+
+        small_font = QFont(option.font)
+        small_font.setPointSize(max(option.font.pointSize() - 2, 8))
+        small_fm = QFontMetrics(small_font)
+        tag_w = small_fm.horizontalAdvance(f"({activity_tag})")
+
+        return QSize(main_w + tag_w + 20, base_size.height())
 
 
 
@@ -49,6 +128,17 @@ class SearchWindow(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(150)
         self._search_timer.timeout.connect(self._on_search_changed)
+
+        self._scroll_save_timer = QTimer(self)
+        self._scroll_save_timer.setSingleShot(True)
+        self._scroll_save_timer.setInterval(200)
+        self._scroll_save_timer.timeout.connect(self._save_scroll_position)
+
+        self._activity_refresh_timer = QTimer(self)
+        self._activity_refresh_timer.setInterval(60000)
+        self._activity_refresh_timer.timeout.connect(self._on_search_changed)
+        self._activity_refresh_timer.start()
+
         self._build_ui()
         self.refresh()
 
@@ -130,55 +220,49 @@ class SearchWindow(QWidget):
 
         header_row.addStretch()
 
-        self.btn_refresh = QPushButton()
-        if qta:
-            self.btn_refresh.setIcon(qta.icon("mdi.refresh", color="#FFFFFF"))
-            self.btn_refresh.setIconSize(QSize(20, 20))
-        self.btn_refresh.setFixedSize(36, 36)
-        self.btn_refresh.setToolTip("Refresh workspace & trigger LAN database sync")
-        self.btn_refresh.clicked.connect(self._on_manual_refresh)
-        header_row.addWidget(self.btn_refresh)
-
-        self.btn_archive_client = QPushButton()
-        if qta:
-            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#FFFFFF"))
-            self.btn_archive_client.setIconSize(QSize(20, 20))
-        self.btn_archive_client.setFixedSize(36, 36)
-        self.btn_archive_client.setToolTip("Archive selected client")
-        self.btn_archive_client.clicked.connect(self._request_archive_client)
-        header_row.addWidget(self.btn_archive_client)
-
-        self.btn_add_client = QPushButton(" Add Client")
-        if qta:
-            self.btn_add_client.setIcon(qta.icon("mdi.plus", color="#FFFFFF"))
-            self.btn_add_client.setIconSize(QSize(18, 18))
-        self.btn_add_client.setMinimumHeight(36)
+        # Add Client button
+        self.btn_add_client = QPushButton("+ Add Client")
         self.btn_add_client.setProperty("class", "primary")
+        self.btn_add_client.setMinimumHeight(36)
+        self.btn_add_client.setCursor(Qt.PointingHandCursor)
         self.btn_add_client.clicked.connect(self.add_client_requested.emit)
         header_row.addWidget(self.btn_add_client)
+        header_row.addSpacing(8)
+
+        # Sync Trigger (Refresh) button
+        self.btn_sync = QPushButton()
+        if qta:
+            self.btn_sync.setIcon(qta.icon("mdi.refresh", color="#FFFFFF"))
+            self.btn_sync.setIconSize(QSize(20, 20))
+        self.btn_sync.setFixedSize(36, 36)
+        self.btn_sync.setCursor(Qt.PointingHandCursor)
+        self.btn_sync.setToolTip("Refresh table data (pull latest from synced database)")
+        self.btn_sync.clicked.connect(self._on_manual_refresh)
+        header_row.addWidget(self.btn_sync)
+
         layout.addLayout(header_row)
 
-        # Search & Filter Row
+        # Search Bar + Services Row
         search_row = QHBoxLayout()
-        search_row.setSpacing(10)
-        
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search by company, proprietor, ID...")
+        self.search_box.setPlaceholderText("Search clients across all columns...")
         self.search_box.setClearButtonEnabled(True)
+        if qta:
+            self.search_box.addAction(qta.icon("mdi.magnify", color="#889988"), QLineEdit.LeadingPosition)
         self.search_box.setMinimumHeight(36)
         self.search_box.textChanged.connect(self._on_search_input_changed)
         self.search_box.returnPressed.connect(self._activate_current_result)
         self.search_box.installEventFilter(self)
         search_row.addWidget(self.search_box, stretch=3)
 
-        lbl_services = QLabel("Services:")
+        lbl_services = QLabel("Filter:")
         lbl_services.setProperty("class", "SidebarSection")
         lbl_services.setStyleSheet("color: #FFFFFF;")
         search_row.addWidget(lbl_services)
         
         self.service_filter = QComboBox()
         self.service_filter.setMinimumHeight(36)
-        self.service_filter.setMinimumWidth(160)
+        self.service_filter.setMinimumWidth(180)
         self.service_filter.currentIndexChanged.connect(self._on_search_input_changed)
         search_row.addWidget(self.service_filter)
         
@@ -211,6 +295,15 @@ class SearchWindow(QWidget):
         self.btn_manage_services.clicked.connect(self._request_manage_services)
         search_row.addWidget(self.btn_manage_services)
 
+        self.btn_archive_client = QPushButton()
+        if qta:
+            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#FFFFFF"))
+            self.btn_archive_client.setIconSize(QSize(20, 20))
+        self.btn_archive_client.setFixedSize(36, 36)
+        self.btn_archive_client.setToolTip("Archive selected client")
+        self.btn_archive_client.clicked.connect(self._request_archive_client)
+        search_row.addWidget(self.btn_archive_client)
+
         layout.addLayout(search_row)
 
         self.results_table = QTableWidget()
@@ -229,8 +322,11 @@ class SearchWindow(QWidget):
         self.results_table.horizontalHeader().setSectionsClickable(True)
         self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self._show_cell_formatting_menu)
+        self.results_table.setItemDelegate(ActivityCellDelegate(self.results_table))
         self.results_table.itemActivated.connect(self._on_item_activated)
         self.results_table.installEventFilter(self)
+        self.results_table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.results_table.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.results_table.setStyleSheet("""
             QTableWidget {
                 background-color: #FFFFFF;
@@ -385,11 +481,53 @@ class SearchWindow(QWidget):
         self._cached_services = self.db.get_services()
         self.service_filter.blockSignals(True)
         self.service_filter.clear()
-        self.service_filter.addItem("All Services", None)
-        for s in self._cached_services:
-            self.service_filter.addItem(s["name"], s["id"])
+        
+        # Smart Filter Presets
+        self.service_filter.addItem("All Clients", None)
+        self.service_filter.addItem("🔥 Most Viewed / Active", "most_viewed")
+        self.service_filter.addItem("⚡ Active Today", "active_today")
+        self.service_filter.addItem("🌐 Has Attached Services", "has_services")
+        self.service_filter.addItem("⚠️ Unassigned (No Services)", "no_services")
+        self.service_filter.addItem("🎨 Formatted / Highlighted Cells", "has_formatting")
+        self.service_filter.addItem("🔒 Has Login Credentials", "has_passwords")
+        self.service_filter.addItem("⚠️ Missing Passwords", "missing_passwords")
         self.service_filter.addItem("📦 Archived Clients", "archived")
+        
+        # Specific Portal Services
+        for s in self._cached_services:
+            self.service_filter.addItem(f"Service: {s['name']}", s["id"])
+            
         self.service_filter.blockSignals(False)
+
+    def _on_scroll_changed(self, *_):
+        if not getattr(self, "_restoring_scroll", False):
+            self._scroll_save_timer.start()
+
+    def _save_scroll_position(self):
+        try:
+            from PySide6.QtCore import QSettings
+            settings = QSettings("AmanAssociates", "ProjectSera")
+            v_val = self.results_table.verticalScrollBar().value()
+            h_val = self.results_table.horizontalScrollBar().value()
+            settings.setValue("search_grid_vscroll", v_val)
+            settings.setValue("search_grid_hscroll", h_val)
+        except Exception:
+            pass
+
+    def _restore_scroll_position(self):
+        try:
+            from PySide6.QtCore import QSettings
+            settings = QSettings("AmanAssociates", "ProjectSera")
+            v_val = settings.value("search_grid_vscroll", None)
+            h_val = settings.value("search_grid_hscroll", None)
+            self._restoring_scroll = True
+            if v_val is not None:
+                self.results_table.verticalScrollBar().setValue(int(v_val))
+            if h_val is not None:
+                self.results_table.horizontalScrollBar().setValue(int(h_val))
+            self._restoring_scroll = False
+        except Exception:
+            self._restoring_scroll = False
 
     def _on_search_changed(self, *_):
         curr_row = self.results_table.currentRow()
@@ -425,10 +563,12 @@ class SearchWindow(QWidget):
             self.results_table.setHorizontalHeaderLabels(headers)
             self.results_table.horizontalHeader().setStretchLastSection(True)
 
-            if svc_val == "archived":
-                clients = self.db.search_clients(text, service_id=None, archived_only=True)
-            else:
+            if isinstance(svc_val, int):
                 clients = self.db.search_clients(text, service_id=svc_val)
+            elif isinstance(svc_val, str):
+                clients = self.db.search_clients(text, filter_preset=svc_val)
+            else:
+                clients = self.db.search_clients(text)
             self.results_table.setRowCount(len(clients))
 
             services_map = {s["id"]: s["name"] for s in services}
@@ -436,25 +576,48 @@ class SearchWindow(QWidget):
 
             client_ids = [c["id"] for c in clients]
             fmt_map = self.db.get_cell_formatting_for_clients(client_ids)
+            recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
             from PySide6.QtGui import QColor, QBrush
 
             for r, client in enumerate(clients):
                 client_id = client["id"]
                 client_vals = client.get("values", {})
+                act_list = recent_acts.get(client_id, [])
                 
                 for c_idx, col in enumerate(mcl_cols):
                     val = client_vals.get(col["id"], "")
                     col_lbl = col["label"].strip().lower()
                     col_key = str(col["id"])
-                    if col.get("field_type") == "id":
-                        val = client.get("client_id_token") or str(client_id)
+                    is_id_col = (col.get("field_type") == "id" or col_lbl in {"id", "client id", "token"})
+                    
+                    if is_id_col:
+                        raw_id = client.get("client_id_token") or str(client_id)
+                        val = raw_id
+                        act_tag = ""
+                        if act_list:
+                            top = act_list[0]
+                            action_type = top["action_type"]
+                            age = top["age_seconds"]
+                            rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+                            act_tag = f"{action_type} • {rel}"
                     elif col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}:
                         val = str(r + 1)
-                    if len(val) > col_max_lens[c_idx]:
-                        col_max_lens[c_idx] = len(val)
+                        act_tag = ""
+                    else:
+                        act_tag = ""
+                        
+                    calc_len = len(val) + (len(act_tag) + 4 if act_tag else 0)
+                    if calc_len > col_max_lens[c_idx]:
+                        col_max_lens[c_idx] = calc_len
                     item = SmartTableWidgetItem(val)
                     item.setData(Qt.UserRole, client_id)
                     item.setData(Qt.UserRole + 1, col_key)
+                    if act_tag:
+                        item.setData(Qt.UserRole + 2, act_tag)
+
+                    if is_id_col and act_list:
+                        tooltip_lines = [f"• {a['action_type']} ({'just now' if a['age_seconds'] < 60 else str(a['age_seconds']//60) + 'm ago'})" for a in act_list[:4]]
+                        item.setToolTip(f"Client ID: {client.get('client_id_token') or str(client_id)}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
 
                     fmt = fmt_map.get((client_id, col_key))
                     if fmt:
@@ -469,12 +632,13 @@ class SearchWindow(QWidget):
 
                     self.results_table.setItem(r, c_idx, item)
                     
+                # Services column
                 client_svc_ids = client.get("service_ids", [])
                 svc_names = [services_map[s_id] for s_id in client_svc_ids if s_id in services_map]
-                svc_val = ", ".join(svc_names)
-                if len(svc_val) > col_max_lens[-1]:
-                    col_max_lens[-1] = len(svc_val)
-                svc_item = SmartTableWidgetItem(svc_val)
+                svc_val_str = ", ".join(svc_names)
+                if len(svc_val_str) > col_max_lens[-1]:
+                    col_max_lens[-1] = len(svc_val_str)
+                svc_item = SmartTableWidgetItem(svc_val_str)
                 svc_item.setData(Qt.UserRole, client_id)
                 svc_item.setData(Qt.UserRole + 1, "services")
 
@@ -504,13 +668,30 @@ class SearchWindow(QWidget):
                 else:
                     self.results_table.setCurrentCell(0, 0)
 
-            # Ultra-fast O(1) column width calculation without scanning all table cell widgets
+            # Auto-fit column widths: compact fit for ID / Serial columns, comfortable fit for data columns
             fm = self.results_table.fontMetrics()
             char_w = fm.horizontalAdvance("M")
-            for c_idx, h_text in enumerate(headers):
-                sample_chars = min(col_max_lens[c_idx], 40)
-                calc_w = max(sample_chars * char_w + 32, fm.horizontalAdvance(h_text) + 36, 95)
-                self.results_table.setColumnWidth(c_idx, calc_w)
+            for c_idx, col in enumerate(mcl_cols):
+                col_lbl = col["label"].strip().lower()
+                is_compact = (col.get("field_type") == "id" or col_lbl in {"id", "client id", "token", "no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"})
+                if is_compact:
+                    self.results_table.resizeColumnToContents(c_idx)
+                    self.results_table.setColumnWidth(c_idx, max(self.results_table.columnWidth(c_idx) + 16, 50))
+                else:
+                    sample_chars = min(col_max_lens[c_idx], 40)
+                    calc_w = max(sample_chars * char_w + 24, fm.horizontalAdvance(col["label"]) + 28, 80)
+                    self.results_table.setColumnWidth(c_idx, calc_w)
+
+            # Services column (last section stretches to fill remaining space)
+            if len(headers) > len(mcl_cols):
+                svc_idx = len(mcl_cols)
+                self.results_table.setColumnWidth(
+                    svc_idx, max(min(col_max_lens[-1], 50) * char_w + 24, fm.horizontalAdvance("Services") + 28, 100)
+                )
+
+            if not getattr(self, "_has_restored_scroll", False):
+                self._has_restored_scroll = True
+                QTimer.singleShot(100, self._restore_scroll_position)
         finally:
             self.results_table.setSortingEnabled(True)
             self.results_table.horizontalHeader().setSortIndicatorShown(True)

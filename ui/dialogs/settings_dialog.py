@@ -116,10 +116,16 @@ class SettingsDialog(QDialog):
         self.sad_enabled_check.setToolTip("Toggle passive network response interceptor (fetch/XHR) for real-time JSON API capture.")
         form_general.addRow("", self.sad_enabled_check)
 
-        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist — Ambient Password Autofill 📋)")
+        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist 📋)")
         self.sca_enabled_check.setEnabled(True)
-        self.sca_enabled_check.setToolTip("When copying client User ID from Excel, silently arms matching password for ambient autofill on portal paste.")
+        self.sca_enabled_check.setToolTip("When copying client User ID from Excel, arms matching credentials for portal interaction.")
         form_general.addRow("", self.sca_enabled_check)
+
+        self.sca_mode_combo = QComboBox()
+        self.sca_mode_combo.addItem("Ambient Autofill (Silently fills password on paste)", "autofill")
+        self.sca_mode_combo.addItem("SCA Widget (Floating 1-click password prompt on paste)", "widget")
+        self.sca_mode_combo.setToolTip("Choose whether SCA silently injects password or presents a 1-click interactive SCA Widget.")
+        form_general.addRow("SCA Action Mode:", self.sca_mode_combo)
         
         # Primary Key (ID Field) Wiring Status
         id_col = self.db.get_id_column()
@@ -292,6 +298,13 @@ class SettingsDialog(QDialog):
         sca_enabled = self.db.get_setting("sca_enabled", "1")
         self.sca_enabled_check.setChecked(sca_enabled == "1")
 
+        sca_mode = self.db.get_setting("sca_action_mode", "autofill")
+        if sca_mode == "assist":
+            sca_mode = "widget"
+        idx_sm = self.sca_mode_combo.findData(sca_mode)
+        if idx_sm >= 0:
+            self.sca_mode_combo.setCurrentIndex(idx_sm)
+
         run_in_bg = self.db.get_setting("run_in_background", "1")
         self.run_in_bg_check.setChecked(run_in_bg == "1")
 
@@ -312,6 +325,7 @@ class SettingsDialog(QDialog):
         fst_val = "1" if self.fst_enabled_check.isChecked() else "0"
         sad_val = "1" if self.sad_enabled_check.isChecked() else "0"
         sca_val = "1" if self.sca_enabled_check.isChecked() else "0"
+        sca_mode_val = self.sca_mode_combo.currentData() or "autofill"
         tracker_val = "1" if (fst_val == "1" or sad_val == "1") else "0"
         run_in_bg_val = "1" if self.run_in_bg_check.isChecked() else "0"
 
@@ -333,12 +347,19 @@ class SettingsDialog(QDialog):
             self.db.set_setting("fst_enabled", fst_val)
             self.db.set_setting("sad_enabled", sad_val)
             self.db.set_setting("sca_enabled", sca_val)
+            self.db.set_setting("sca_action_mode", sca_mode_val)
             self.db.set_setting("tracker_enabled", tracker_val)
             self.db.set_setting("run_in_background", run_in_bg_val)
 
             # Update extension daemon settings
             from automation import update_extension_settings
-            update_extension_settings(fst_enabled=(fst_val == "1"), sad_enabled=(sad_val == "1"), tracker_enabled=(tracker_val == "1"), sca_enabled=(sca_val == "1"))
+            update_extension_settings(
+                fst_enabled=(fst_val == "1"),
+                sad_enabled=(sad_val == "1"),
+                tracker_enabled=(tracker_val == "1"),
+                sca_enabled=(sca_val == "1"),
+                sca_mode=sca_mode_val
+            )
             
             # Save Column Permissions
             visible_ids = [cid for cid, cb in self.visibility_cbs.items() if cb.isChecked()]

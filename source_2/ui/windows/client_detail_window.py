@@ -177,6 +177,10 @@ class ClientDetailWindow(QWidget):
         self.scroll_widget.setUpdatesEnabled(False)
         try:
             self._load_client_internal(client_id)
+            try:
+                self.db.record_client_activity(client_id, "Viewed", "Opened profile")
+            except Exception:
+                pass
         finally:
             self.scroll_widget.setUpdatesEnabled(True)
 
@@ -201,9 +205,9 @@ class ClientDetailWindow(QWidget):
         self.identity_label.setText(f"Client Profile - {self._get_identity_label(self.client)}")
         self.identity_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #FFFFFF;")
         
-        token = self.client.get("client_id_token") or f"CLI-{client_id:05d}"
-        self.token_badge.setText(f"Token: {token}")
-        self.token_badge.setToolTip(f"Backend Client Token: {token}\nClick to copy to clipboard")
+        token = self.client.get("client_id_token") or str(client_id)
+        self.token_badge.setText(f"ID: {token}")
+        self.token_badge.setToolTip(f"Client ID: {token}\nClick to copy to clipboard")
         self.token_badge.mousePressEvent = lambda event, t=token: self._copy_token_to_clipboard(t)
         
         from PySide6.QtWidgets import QGridLayout
@@ -597,6 +601,11 @@ class ClientDetailWindow(QWidget):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
+        try:
+            self.db.record_client_activity(self.client["id"], service["name"], "Autofilled")
+        except Exception:
+            pass
+
         self.db.log_action(
             self.actor, "autofill_extension",
             client_id=self.client["id"],
@@ -605,7 +614,11 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("autofill", self._get_identity_label(self.client))
 
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "0") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
             service, uid, pwd, self.client["id"],
@@ -618,6 +631,11 @@ class ClientDetailWindow(QWidget):
         if not uid or not pwd:
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
+
+        try:
+            self.db.record_client_activity(self.client["id"], service["name"], "Playwright Autofill")
+        except Exception:
+            pass
 
         self.db.log_action(
             self.actor, "autofill_playwright",
@@ -639,6 +657,11 @@ class ClientDetailWindow(QWidget):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
+        try:
+            self.db.record_client_activity(self.client["id"], service["name"], "Autofilled")
+        except Exception:
+            pass
+
         self.db.log_action(
             self.actor, "autofill",
             client_id=self.client["id"],
@@ -650,7 +673,11 @@ class ClientDetailWindow(QWidget):
         if automation.is_manual_portal(service):
             self._launch_manual(service, uid, pwd)
         else:
-            service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "0") == "1"
+            fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+            sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+            service["_fst_enabled"] = fst_on
+            service["_sad_enabled"] = sad_on
+            service["_tracker_enabled"] = fst_on or sad_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
                 on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
@@ -665,6 +692,11 @@ class ClientDetailWindow(QWidget):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
+        try:
+            self.db.record_client_activity(self.client["id"], service["name"], "Manual Copy")
+        except Exception:
+            pass
+
         self.db.log_action(
             self.actor, "manual_copy",
             client_id=self.client["id"],
@@ -673,7 +705,11 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "1") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
             service, uid, pwd, self.client["id"],
@@ -686,12 +722,20 @@ class ClientDetailWindow(QWidget):
         if not uid or not pwd:
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
+        try:
+            self.db.record_client_activity(self.client["id"], service["name"], "Manual Assist")
+        except Exception:
+            pass
         self.db.log_action(
             self.actor, "manual_assist", client_id=self.client["id"], service_id=service["id"],
             detail=f"Manual assist triggered for {service['name']}"
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
-        service["_tracker_enabled"] = self.db.get_setting("tracker_enabled", "1") == "1"
+        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
+        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
+        service["_fst_enabled"] = fst_on
+        service["_sad_enabled"] = sad_on
+        service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(
             service, uid, pwd, self.client["id"],
@@ -722,7 +766,6 @@ class ClientDetailWindow(QWidget):
         if self.client.get("notes") == new_notes:
             if hasattr(self, "notes_status_lbl"):
                 self.notes_status_lbl.setText("  • Saved ✓")
-                self.notes_status_lbl.setStyleSheet("color: #2E7D32; font-size: 11px; font-weight: 600;")
             return
 
         self.db.update_client_notes(self.client["id"], new_notes)
@@ -747,6 +790,12 @@ class ClientDetailWindow(QWidget):
         c_name = self._get_identity_label(self.client) if self.client else label_name
         self.action_alert_requested.emit("manual_copy", c_name)
         
+        if self.client:
+            try:
+                self.db.record_client_activity(self.client["id"], "Copied", label_name)
+            except Exception:
+                pass
+
         self.db.log_action(
             self.actor, "manual_copy",
             client_id=self.client["id"] if self.client else None,

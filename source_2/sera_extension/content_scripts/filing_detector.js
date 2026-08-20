@@ -1,2 +1,34 @@
-console.log("Project Sera: Filing detector script injected.");
-// Placeholder: Filing confirmation logic (GST/ITR ARN tracking) will go here.
+// filing_detector.js - Listens for SAD API captures and handles filing results
+(function() {
+    console.log("Project Sera: Filing detector active.");
+
+    window.addEventListener('SeraFSTApiCapture', (event) => {
+        if (!event || !event.detail) return;
+        const detail = event.detail;
+
+        console.log("Sera Filing Detector: Received SAD API Capture event", detail);
+
+        chrome.storage.local.get(['activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled'], (data) => {
+            if (data.trackerEnabled === false || data.sadEnabled === false) {
+                console.log("Sera Filing Detector: SAD interception is disabled in settings. Skipping.");
+                return;
+            }
+            const payload = data.activeAutofillPayload || data.manualAssistPayload || data.mecpPayload || {};
+            if (payload.sad_enabled === false) {
+                console.log("Sera Filing Detector: SAD is disabled for this payload. Skipping.");
+                return;
+            }
+            // Prioritize detail.client_id (from test bench / page event) -> active payload client_id -> fallback 1
+            const effectiveClientId = detail.client_id || payload.client_id || 1;
+
+            chrome.runtime.sendMessage({
+                type: "filing_result",
+                client_id: effectiveClientId,
+                portal: detail.portal || payload.portal || "Portal",
+                arn: detail.arn || "N/A",
+                capture_method: detail.capture_method || "SAD_API_Interceptor",
+                raw_payload: detail.raw_payload || {}
+            });
+        });
+    });
+})();
