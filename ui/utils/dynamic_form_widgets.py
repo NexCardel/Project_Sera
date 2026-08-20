@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 DATE_FORMAT = "yyyy-MM-dd"
 
-def make_input_widget(field: dict, value: str = ""):
+def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
     """Builds the right editable input widget for a field definition."""
     field_type = field.get("field_type", "text")
 
@@ -27,7 +27,10 @@ def make_input_widget(field: dict, value: str = ""):
 
     if field_type == "password":
         widget = QLineEdit(value or "")
-        widget.setEchoMode(QLineEdit.Password)
+        if mask_password:
+            widget.setEchoMode(QLineEdit.Password)
+        else:
+            widget.setEchoMode(QLineEdit.Normal)
         return widget
         
     if field_type == "number":

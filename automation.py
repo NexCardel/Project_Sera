@@ -98,7 +98,7 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
     threading.Thread(target=_attempt_send, daemon=True).start()
 
 
-def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000):
+def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000, sca_mode: str = "autofill"):
     """Sends SCA_ARM payload to native_host -> background.js over TCP 49153."""
     payload = {
         "type": "SCA_ARM",
@@ -109,19 +109,24 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
         "owner_name": owner_name,
         "services": services,
         "ttl_ms": ttl_ms,
+        "sca_mode": sca_mode,
     }
     def _do_send():
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)
-                s.connect(('127.0.0.1', 49153))
-                s.sendall(json.dumps(payload).encode('utf-8'))
-        except Exception:
-            pass
+        # Retry for up to 35 seconds so startup copy reaches the extension as soon as browser opens
+        max_attempts = int(min(ttl_ms, 35000) / 500)
+        for _ in range(max_attempts):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
+                    s.connect(('127.0.0.1', 49153))
+                    s.sendall(json.dumps(payload).encode('utf-8'))
+                    return
+            except Exception:
+                time.sleep(0.5)
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill"):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -131,13 +136,16 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "fst_enabled": fst_enabled,
         "sad_enabled": sad_enabled,
         "sca_enabled": sca_enabled,
+        "sca_mode": sca_mode,
     }
     def _do_send():
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)
-                s.connect(('127.0.0.1', 49153))
-                s.sendall(json.dumps(payload).encode('utf-8'))
-        except Exception:
-            pass
+        for _ in range(5):
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
+                    s.connect(('127.0.0.1', 49153))
+                    s.sendall(json.dumps(payload).encode('utf-8'))
+                    return
+            except Exception:
+                time.sleep(0.2)
     threading.Thread(target=_do_send, daemon=True).start()

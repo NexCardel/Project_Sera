@@ -63,6 +63,8 @@ class ExtensionListener(QThread):
                                 self.filing_result_received.emit(msg)
                             elif msg.get('type') == 'uncertain_result':
                                 self.uncertain_result_received.emit(msg)
+                            elif msg.get('type') == 'audit_event':
+                                self.filing_result_received.emit(msg)
                         except json.JSONDecodeError as jde:
                             print(f"[ExtensionListener] JSON Decode Error: {jde}")
             except Exception as e:

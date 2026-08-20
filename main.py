@@ -109,6 +109,15 @@ def register_native_messaging_host():
         json_path = perm_native_dir / "com.amanassociates.sera.json"
         host_bat_path = perm_native_dir / "host.bat"
 
+        # Explicitly configure host.bat with the exact active Python/Executable path
+        if not getattr(sys, 'frozen', False):
+            python_exe = sys.executable
+            bat_content = f'@echo off\n"{python_exe}" -u "%~dp0host.py" %* 2> "%~dp0host_error.log"\n'
+            try:
+                host_bat_path.write_text(bat_content, encoding="utf-8")
+            except Exception:
+                pass
+
         if json_path.exists():
             try:
                 with open(json_path, "r", encoding="utf-8") as f:
@@ -214,6 +223,23 @@ class SeraApp:
             self.db = SeraDatabase(self.db_path, hex_key)
             import threading
             threading.Thread(target=self.db.auto_populate_service_selectors, daemon=True).start()
+
+            # Ensure FST, SAD, SCA, and tracker settings are initialized
+            if self.db.get_setting("fst_enabled") is None:
+                self.db.set_setting("fst_enabled", "1")
+            if self.db.get_setting("sad_enabled") is None:
+                self.db.set_setting("sad_enabled", "1")
+            if self.db.get_setting("sca_enabled") is None:
+                self.db.set_setting("sca_enabled", "1")
+            if self.db.get_setting("tracker_enabled") is None:
+                self.db.set_setting("tracker_enabled", "1")
+
+            # Initialize Sera Clipboard Assist (SCA) immediately so cold-boot copies are armed
+            from clipboard_watch import ClipboardWatchService
+            self.clipboard_watcher = ClipboardWatchService(self.db, self.app)
+            self.clipboard_watcher.sca_armed.connect(self._on_sca_armed)
+            sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
+            self.clipboard_watcher.set_enabled(sca_active)
         except Exception as e:
             loading_dlg.close()
             QMessageBox.critical(None, "Database Error", str(e))
@@ -247,37 +273,19 @@ class SeraApp:
         self.sync_service.start()
         self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
 
-        # Check for mandatory updates on GitHub
+        # Check for mandatory updates on GitHub (fast timeout on cold boot)
         loading_dlg.set_status("Checking GitHub for mandatory version updates...")
         import version
-        update_info = version.check_for_updates()
+        update_info = version.check_for_updates(timeout_seconds=2)
         if update_info:
             loading_dlg.close()
             from ui.dialogs.update_dialog import ForceUpdateDialog
             update_dlg = ForceUpdateDialog(update_info)
             res = update_dlg.exec()
-            # If update modal was dismissed or failed, exit process to enforce update
-            sys.exit(0)
 
+        loading_dlg.set_status("Initializing User Interface...")
         self._build_ui()
         loading_dlg.close()
-
-        
-        # Ensure FST, SAD, SCA, and tracker settings are initialized
-        if self.db.get_setting("fst_enabled") is None:
-            self.db.set_setting("fst_enabled", "1")
-        if self.db.get_setting("sad_enabled") is None:
-            self.db.set_setting("sad_enabled", "1")
-        if self.db.get_setting("sca_enabled") is None:
-            self.db.set_setting("sca_enabled", "1")
-        if self.db.get_setting("tracker_enabled") is None:
-            self.db.set_setting("tracker_enabled", "1")
-
-        # Initialize Sera Clipboard Assist (SCA)
-        from clipboard_watch import ClipboardWatchService
-        self.clipboard_watcher = ClipboardWatchService(self.db, self.shell)
-        sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
-        self.clipboard_watcher.set_enabled(sca_active)
 
         # Start extension listener on port 49152
         self.ext_listener = ExtensionListener(self.app)
@@ -286,18 +294,33 @@ class SeraApp:
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.ext_listener.start()
 
+    def _on_sca_armed(self, client_id: int, client_token: str, services: list):
+        try:
+            self.db.record_client_activity(client_id, "SCA", f"Armed {len(services)} portal(s)")
+            if hasattr(self, "search_win"):
+                self.search_win._on_search_changed()
+        except Exception:
+            pass
+
     def _handle_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
         if msg.get("type") == "audit_event":
             try:
+                cid = msg.get("client_id")
+                action_name = msg.get("action", "SCA autofill triggered")
+                short_act = "SCA Auto" if "autofill" in action_name.lower() else ("SCA Widget" if "widget" in action_name.lower() else "SCA")
                 self.db.log_action(
                     actor=self.actor,
-                    action=msg.get("action", "SCA autofill triggered"),
-                    client_id=msg.get("client_id"),
+                    action=action_name,
+                    client_id=cid,
                     detail=msg.get("detail", "")
                 )
-            except Exception:
-                pass
+                if cid:
+                    self.db.record_client_activity(int(cid), short_act, msg.get("detail", ""))
+                    if hasattr(self, "search_win"):
+                        self.search_win._on_search_changed()
+            except Exception as e:
+                print(f"[main] audit_event error: {e}")
             return
 
         raw_client_id = msg.get('client_id')

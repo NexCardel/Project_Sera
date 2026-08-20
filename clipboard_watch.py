@@ -60,10 +60,12 @@ class ClipboardWatchService(QObject):
         self._uid_index: Dict[str, int] = {}  # {normalized_uid: client_id}
         self._last_armed_token: Optional[str] = None
         self._last_armed_time: float = 0.0
-        self._debounce_window = 15.0  # seconds
+        self._debounce_window = 2.0  # seconds (allows quick re-copy to re-arm)
         
         self.refresh_index()
         self._connect_clipboard()
+        # Proactively check clipboard on startup in case a UID was already copied
+        QTimer.singleShot(600, self._on_clipboard_changed)
 
     def _connect_clipboard(self):
         app = QApplication.instance()
@@ -88,7 +90,7 @@ class ClipboardWatchService(QObject):
                 for col_id, val in vals.items():
                     if val and isinstance(val, str):
                         clean_val = val.strip().upper()
-                        if 3 <= len(clean_val) <= 35:
+                        if 3 <= len(clean_val) <= 100:
                             new_index[clean_val] = cid
 
                 token = c.get("client_id_token")
@@ -115,7 +117,7 @@ class ClipboardWatchService(QObject):
 
         text_clean = text.strip()
         length = len(text_clean)
-        if length < 3 or length > 35:
+        if length < 3 or length > 100:
             return
 
         normalized_candidate = text_clean.upper()
@@ -209,7 +211,8 @@ class ClipboardWatchService(QObject):
                 })
 
             if service_payloads:
-                print(f"[SCA] Arming {len(service_payloads)} services for client {client_token} ({business_name})")
+                sca_mode = self.db.get_setting("sca_action_mode", "autofill")
+                print(f"[SCA] Arming {len(service_payloads)} services for client {client_token} ({business_name}) [mode: {sca_mode}]")
                 from automation import arm_sca
                 arm_sca(
                     client_id=client_id,
@@ -218,8 +221,13 @@ class ClipboardWatchService(QObject):
                     services=service_payloads,
                     business_name=business_name,
                     owner_name=owner_name,
-                    ttl_ms=45000
+                    ttl_ms=45000,
+                    sca_mode=sca_mode
                 )
+                try:
+                    self.db.record_client_activity(client_id, "SCA", f"Copied UID: {matched_uid}")
+                except Exception:
+                    pass
                 self.sca_armed.emit(client_id, client_token, service_payloads)
         except Exception as e:
             print(f"[SCA] _arm_client_services error: {e}")

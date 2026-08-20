@@ -1,13 +1,23 @@
+let _lastScaTriggerUid = "";
+let _lastScaTriggerTime = 0;
+
 function checkAndTriggerSCA(candidateText) {
   if (!candidateText) return;
   const clean = candidateText.trim().toUpperCase();
-  if (clean.length < 3 || clean.length > 35) return;
+  if (clean.length < 3 || clean.length > 100) return;
+
+  const now = Date.now();
+  if (_lastScaTriggerUid === clean && (now - _lastScaTriggerTime) < 1200) {
+    return;
+  }
 
   chrome.storage.local.get(['armedSCAPayload', 'scaEnabled'], (data) => {
     if (data.scaEnabled === false) return;
     const armed = data.armedSCAPayload;
     if (armed && armed.matched_uid && armed.expiresAt > Date.now()) {
       if (clean === armed.matched_uid.toUpperCase() || clean.includes(armed.matched_uid.toUpperCase())) {
+        _lastScaTriggerUid = clean;
+        _lastScaTriggerTime = Date.now();
         console.log("Sera SCA: Detected matching UID entry:", clean);
         chrome.runtime.sendMessage({
           type: "sca_paste_matched",
