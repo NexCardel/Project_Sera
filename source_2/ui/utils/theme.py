@@ -200,14 +200,14 @@ QTableWidget, QTableView, QTreeWidget {
 
 
 QTableWidget::item:selected, QTableView::item:selected, QTreeWidget::item:selected {
-    background-color: rgba(46, 155, 95, 0.4);
-    border: 1.5px solid #2E9B5F;
-    color: #241F1B;
+    background-color: #0078D7;
+    color: #FFFFFF;
     font-weight: 600;
 }
 
 QTableWidget::item:focus, QTableView::item:focus, QTreeWidget::item:focus {
-    border: 2px solid #2E9B5F;
+    border: none;
+    outline: none;
 }
 
 QHeaderView::section {

@@ -43,10 +43,16 @@ class AppShell(QWidget):
             if hasattr(self, "on_minimized_to_tray") and callable(self.on_minimized_to_tray):
                 self.on_minimized_to_tray()
         else:
-            # Full quit — let the coordinator clean up via aboutToQuit
-            event.ignore()
-            from PySide6.QtWidgets import QApplication
-            QApplication.instance().quit()
+            # Hide window immediately so the user experiences an instant shutdown
+            self.hide()
+            event.accept()
+            if hasattr(self, "on_quit_requested") and callable(self.on_quit_requested):
+                self.on_quit_requested()
+            else:
+                from PySide6.QtWidgets import QApplication
+                app_inst = QApplication.instance()
+                if app_inst:
+                    app_inst.quit()
 
     def eventFilter(self, watched, event):
         """Close Client Detail when the blurred area/sidebar is clicked."""

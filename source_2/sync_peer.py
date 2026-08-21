@@ -256,7 +256,10 @@ class SyncPeerService:
             except OSError:
                 pass
         for t in self._threads:
-            t.join(timeout=2)
+            try:
+                t.join(timeout=0.05)
+            except Exception:
+                pass
 
     def _spawn(self, target, name):
         t = threading.Thread(target=target, name=name, daemon=True)

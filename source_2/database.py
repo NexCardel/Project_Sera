@@ -580,11 +580,11 @@ class SeraDatabase:
         # If selectors are missing, resolve from verified presets
         if not u_sel or not p_sel:
             presets = [
-                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['tdscpc', 'traces', 'tds'], "input[id*='userId'], input[name*='userId'], #userId, input[name='userId']", "input[id*='psw'], input[name*='psw'], input[type='password'], #psw, input[name='psw']", 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
                 (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
                 (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
                 (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
-                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password']', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
                 (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
                 (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
             ]
@@ -622,7 +622,7 @@ class SeraDatabase:
         # If selectors are missing, resolve from verified presets
         if not u_sel or not p_sel:
             presets = [
-                (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
+                (['tdscpc', 'traces', 'tds'], "input[id*='userId'], input[name*='userId'], #userId, input[name='userId']", "input[id*='psw'], input[name*='psw'], input[type='password'], #psw, input[name='psw']", 'https://www.tdscpc.gov.in/app/login.xhtml', 'single'),
                 (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
                 (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
                 (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
@@ -661,7 +661,7 @@ class SeraDatabase:
         known_portals = [
             (
                 ['tdscpc', 'traces', 'tds'],
-                ('#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single')
+                ("input[id*='userId'], input[name*='userId'], #userId, input[name='userId']", "input[id*='psw'], input[name*='psw'], input[type='password'], #psw, input[name='psw']", 'https://www.tdscpc.gov.in/app/login.xhtml', 'single')
             ),
             (
                 ['gst.gov.in', 'gst'],

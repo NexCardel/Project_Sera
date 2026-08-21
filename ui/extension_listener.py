@@ -12,13 +12,19 @@ class ExtensionListener(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running = True
+        self._server = None
 
     def stop(self):
         self._running = False
+        if self._server:
+            try:
+                self._server.close()
+            except Exception:
+                pass
         try:
             if self.isRunning():
                 self.quit()
-                self.wait(1500)
+                self.wait(150)
         except RuntimeError:
             # C++ object already deleted by Qt — nothing to do.
             pass
@@ -26,7 +32,8 @@ class ExtensionListener(QThread):
     def run(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.settimeout(1.0)
+        server.settimeout(0.3)
+        self._server = server
         try:
             server.bind(('127.0.0.1', IPC_PORT))
             server.listen(5)

@@ -102,7 +102,7 @@ console.log('Sera SAD: background.js module loaded, registering listeners.');
 function injectSAD(tabId, reason) {
   console.log('Sera SAD: injectSAD called for tab', tabId, '| reason:', reason);
   chrome.scripting.executeScript({
-    target: { tabId: tabId },
+    target: { tabId: tabId, allFrames: true },
     files: ['content_scripts/net_interceptor.js'],
     world: 'MAIN'
   }).then(() => {
@@ -141,6 +141,20 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   function cleanSelector(sel) {
     if (!sel) return "";
     return sel.trim().replace(/\s+\[/g, '[').replace(/input\s+/g, 'input');
+  }
+
+  function queryFirst(selectorStr) {
+    if (!selectorStr) return null;
+    const parts = selectorStr.split(',').map(s => s.trim()).filter(Boolean);
+    for (const p of parts) {
+      try {
+        const els = document.querySelectorAll(p);
+        for (const el of els) {
+          if (isVisible(el)) return el;
+        }
+      } catch (e) {}
+    }
+    return null;
   }
 
   function isVisible(el) {
@@ -214,13 +228,15 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     let panAttempts = 0;
     const cleanUserSel = cleanSelector(usernameSelector);
     const userFallbacks = [
-      "#identifierId",
-      "input[type='email']",
-      "input[name='identifier']",
-      "#panAdhaarUserId",
+      "input[id*='userId']",
+      "input[name*='userId']",
+      "input[id$='userId']",
+      "input[name$='userId']",
       "#userId",
       "input[name='userId']",
-      "#txtUserId",
+      "input[id*='txtUserId']",
+      "input[name*='txtUserId']",
+      "input[id*='USER_ID']",
       "#identifierId",
       "input[type='email']",
       "input[name='identifier']",
@@ -228,6 +244,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       "#username",
       "#userName",
       "input[name='pan']",
+      "input[id*='pan']",
       "input[name='username']",
       "input[name='user']"
     ];
@@ -237,10 +254,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       let userField = null;
 
       if (cleanUserSel) {
-        try {
-          const cand = document.querySelector(cleanUserSel);
-          if (cand && isVisible(cand)) userField = cand;
-        } catch (e) {}
+        userField = queryFirst(cleanUserSel);
       }
 
       if (!userField) {
@@ -281,11 +295,16 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     let passAttempts = 0;
     const cleanPassSel = cleanSelector(passwordSelector);
     const passFallbacks = [
+      "input[id*='psw']",
+      "input[name*='psw']",
+      "input[id$='psw']",
+      "input[name$='psw']",
       "input[name='psw']",
       "#psw",
       "input[type='password']",
+      "input[id*='password']",
+      "input[name*='password']",
       "input[name='Passwd']",
-      "input[name='password']",
       "#passwordInput",
       "#user_pass",
       "#password",
@@ -297,10 +316,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       let passField = null;
 
       if (cleanPassSel) {
-        try {
-          const cand = document.querySelector(cleanPassSel);
-          if (cand && isVisible(cand)) passField = cand;
-        } catch (e) {}
+        passField = queryFirst(cleanPassSel);
       }
 
       if (!passField) {
@@ -372,7 +388,12 @@ function handleAutofillTab(message) {
   });
 
   chrome.tabs.query({}, (tabs) => {
-    const existing = tabs.find(t => t.url && t.url.includes(targetHostname));
+    const existing = tabs.find(t => {
+      if (!t.url) return false;
+      if (t.url.includes(targetHostname)) return true;
+      if (targetHostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
+      return false;
+    });
     
     if (existing) {
       chrome.windows.update(existing.windowId, { focused: true }, () => {
@@ -537,6 +558,84 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       transform-origin: left;
       transition: transform linear;
     }
+    .flutter-guide {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-top: 2px;
+      margin-bottom: 2px;
+    }
+    .guide-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 13px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1.5px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      transition: all 0.25s ease;
+    }
+    .guide-step.active {
+      background: rgba(46, 155, 95, 0.16);
+      border-color: #2E9B5F;
+      box-shadow: 0 0 16px rgba(46, 155, 95, 0.3);
+    }
+    .guide-step.done {
+      background: rgba(16, 43, 30, 0.55);
+      border-color: #1E7E48;
+      opacity: 0.88;
+    }
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #18241E;
+      border: 1.5px solid #334D3E;
+      color: #8EB7A0;
+      font-size: 13px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s ease;
+    }
+    .guide-step.active .step-num {
+      background: #2E9B5F;
+      border-color: #4CF9B7;
+      color: #FFFFFF;
+      box-shadow: 0 0 10px rgba(76, 249, 183, 0.45);
+    }
+    .guide-step.done .step-num {
+      background: #102B1E;
+      border-color: #4CF9B7;
+      color: #4CF9B7;
+      font-weight: 900;
+    }
+    .step-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2.5px;
+    }
+    .step-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: #FFFFFF;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-desc {
+      font-size: 11.5px;
+      color: #8BA295;
+      line-height: 1.35;
+    }
+    .guide-step.active .step-desc {
+      color: #BDEFD6;
+    }
+    .guide-step.done .step-desc {
+      color: #5D806E;
+    }
   `;
 
   shadow.appendChild(style);
@@ -569,11 +668,11 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
-  uidBtn.innerHTML = "👤  Inject User ID";
+  uidBtn.innerHTML = "👤  Username";
 
   const passBtn = document.createElement("button");
   passBtn.className = "btn primary";
-  passBtn.innerHTML = "🔑  Inject Password";
+  passBtn.innerHTML = "🔑  Password";
 
   actions.append(uidBtn, passBtn);
 
@@ -601,79 +700,360 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   }
 
   function visible(el) {
-    if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
+    if (!el || el.type === "hidden") return false;
     try {
       const style = window.getComputedStyle(el);
       if (style.display === "none" || style.visibility === "hidden") return false;
-      const r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
+      return true;
     } catch (_) {
       return true;
     }
   }
 
-  function find(selector, fallbacks) {
-    try {
-      const el = selector && document.querySelector(clean(selector));
-      if (visible(el)) return el;
-    } catch (_) {}
-    for (const sel of fallbacks) {
+  function queryAll(selectorStr) {
+    if (!selectorStr) return [];
+    const results = [];
+    const parts = selectorStr.split(',').map(s => s.trim()).filter(Boolean);
+    for (const p of parts) {
       try {
-        const el = document.querySelector(sel);
-        if (visible(el)) return el;
+        const els = document.querySelectorAll(p);
+        for (const el of els) {
+          if (visible(el) && !results.includes(el)) results.push(el);
+        }
       } catch (_) {}
     }
+    return results;
+  }
+
+  function findField(selector, fallbacks) {
+    if (selector) {
+      const matches = queryAll(clean(selector));
+      if (matches.length > 0) return matches[0];
+    }
+    for (const sel of fallbacks) {
+      const matches = queryAll(sel);
+      if (matches.length > 0) return matches[0];
+    }
+    try {
+      const active = document.activeElement;
+      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA") && visible(active)) {
+        return active;
+      }
+    } catch (_) {}
     return null;
   }
 
+  function isFlutterPage() {
+    return !!(document.querySelector("flt-glass-pane") ||
+              document.querySelector("flt-text-editing-host") ||
+              document.querySelector("flutter-view") ||
+              document.querySelector("[flt-renderer]") ||
+              window.location.hostname.includes("tdscpc.gov.in") ||
+              window.location.hostname.includes("traces"));
+  }
+
+  function getFlutterActiveInput() {
+    try {
+      const host = document.querySelector("flt-text-editing-host");
+      if (host) {
+        const inp = host.querySelector("input, textarea");
+        if (inp) return inp;
+      }
+      const pane = document.querySelector("flt-glass-pane");
+      if (pane && pane.shadowRoot) {
+        const inp = pane.shadowRoot.querySelector("flt-text-editing-host input, flt-text-editing-host textarea");
+        if (inp) return inp;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function execInsert(el, value) {
+    try {
+      el.focus();
+      el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "a", code: "KeyA", ctrlKey: true }));
+      document.execCommand("selectAll");
+      const ok = document.execCommand("insertText", false, value);
+      if (ok) return true;
+    } catch (_) {}
+    return false;
+  }
+
   function fill(el, value) {
-    if (!el) return false;
-    try { el.focus(); } catch (_) {}
+    if (!el || !value) return false;
+    try {
+      if (el.disabled) { el.removeAttribute("disabled"); el.disabled = false; }
+      if (el.readOnly) { el.removeAttribute("readonly"); el.readOnly = false; }
+      el.focus();
+    } catch (_) {}
     try {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       setter.call(el, value);
     } catch (_) {
       el.value = value;
     }
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
     el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
     return true;
   }
 
-  function dismiss() {
+  function copyText(text) {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      } catch (_) {}
+    }
+  }
+
+  function smartFill(value, selector, fallbacks) {
+    const el = findField(selector, fallbacks);
+    if (el && fill(el, value)) return "filled";
+
+    const fltEl = getFlutterActiveInput();
+    if (fltEl) {
+      if (execInsert(fltEl, value)) return "filled";
+      if (fill(fltEl, value)) return "filled";
+    }
+
+    if (isFlutterPage()) {
+      copyText(value);
+      return "flutter_no_focus";
+    }
+
+    copyText(value);
+    return "copied";
+  }
+
+  const userFallbacks = [
+    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
+    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
+    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
+    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
+    "input[name='username']", "input[name='user']"
+  ];
+
+  const passFallbacks = [
+    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
+    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
+    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
+  ];
+
+  const isFlutter = isFlutterPage();
+
+  // ── Flutter auto-fill via MutationObserver ─────────────────────────────
+  let flutterObserver = null;
+  let flutterFillStep = 0; // 0 = waiting for userID, 1 = waiting for password, 2 = done
+
+  function fillFlutterInput(el, value) {
+    try {
+      el.focus();
+      document.execCommand("selectAll");
+      const ok = document.execCommand("insertText", false, value);
+      if (ok) return true;
+    } catch (_) {}
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      setter.call(el, value);
+    } catch (_) { el.value = value; }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return el.value === value;
+  }
+
+  function tabToNextField(el) {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Tab", code: "Tab", keyCode: 9 }));
+    el.dispatchEvent(new KeyboardEvent("keyup",  { bubbles: true, cancelable: true, key: "Tab", code: "Tab", keyCode: 9 }));
+  }
+
+  let step1El = null, step2El = null, stepNum1 = null, stepNum2 = null, stepTitle1 = null, stepTitle2 = null, stepDesc2 = null;
+
+  function updateFlutterUI(step) {
+    if (!step1El || !step2El) return;
+    if (step === 1) {
+      step1El.className = "guide-step done";
+      if (stepNum1) stepNum1.innerHTML = "✓";
+      if (stepTitle1) stepTitle1.innerHTML = "✓  Username Typed";
+      step2El.className = "guide-step active";
+      if (stepTitle2) stepTitle2.innerHTML = "👉 Step 2: Click the Password box";
+      if (stepDesc2) stepDesc2.innerHTML = "Now tap or click inside the Password box on the page!";
+    } else if (step === 2) {
+      step2El.className = "guide-step done";
+      if (stepNum2) stepNum2.innerHTML = "✓";
+      if (stepTitle2) stepTitle2.innerHTML = "✓  Password Typed";
+    }
+  }
+
+  function startFlutterObserver() {
+    if (flutterObserver) return;
+    flutterFillStep = 0;
+
+    const roots = [document];
+    try {
+      const pane = document.querySelector("flt-glass-pane");
+      if (pane && pane.shadowRoot) roots.push(pane.shadowRoot);
+    } catch (_) {}
+
+    const onInput = (el) => {
+      if (flutterFillStep === 0) {
+        // Fill User ID
+        const filled = fillFlutterInput(el, userid);
+        if (filled) {
+          flutterFillStep = 1;
+          updateFlutterUI(1);
+          setTimeout(() => tabToNextField(el), 80);
+        }
+      } else if (flutterFillStep === 1) {
+        // Fill Password
+        const filled = fillFlutterInput(el, password);
+        if (filled) {
+          flutterFillStep = 2;
+          updateFlutterUI(2);
+          stopFlutterObserver();
+          setTimeout(dismiss, 400);
+        }
+      }
+    };
+
+    const observe = (root) => {
+      const mo = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.addedNodes) {
+            if (node.nodeType !== 1) continue;
+            if (node.tagName && (node.tagName === "INPUT" || node.tagName === "TEXTAREA")) {
+              onInput(node);
+            }
+            const inp = node.querySelector && node.querySelector("input, textarea");
+            if (inp) onInput(inp);
+          }
+        }
+      });
+      const host = root.querySelector ? root.querySelector("flt-text-editing-host") : null;
+      if (host) {
+        mo.observe(host, { childList: true, subtree: true });
+        const existing = host.querySelector("input, textarea");
+        if (existing) onInput(existing);
+      } else {
+        mo.observe(root.body || root, { childList: true, subtree: true });
+      }
+      return mo;
+    };
+
+    const observers = roots.map(observe);
+    flutterObserver = { disconnect: () => observers.forEach(o => o.disconnect()) };
+  }
+
+  function stopFlutterObserver() {
+    if (flutterObserver) { flutterObserver.disconnect(); flutterObserver = null; }
+  }
+
+  let dismiss = () => {
     card.style.transform = "translateX(120%)";
     card.style.opacity = "0";
     setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+  };
+
+  if (isFlutter) {
+    // Hide buttons on Flutter sites as requested — replace with child-friendly step cards
+    actions.style.display = "none";
+
+    const guideContainer = document.createElement("div");
+    guideContainer.className = "flutter-guide";
+
+    // Step 1: Username
+    step1El = document.createElement("div");
+    step1El.className = "guide-step active";
+    stepNum1 = document.createElement("div");
+    stepNum1.className = "step-num";
+    stepNum1.textContent = "1";
+    const textWrap1 = document.createElement("div");
+    textWrap1.className = "step-text";
+    stepTitle1 = document.createElement("div");
+    stepTitle1.className = "step-title";
+    stepTitle1.textContent = "👉 Step 1: Click the Username box";
+    const stepDesc1 = document.createElement("div");
+    stepDesc1.className = "step-desc";
+    stepDesc1.textContent = "Click or tap inside the User ID box on the page. Sera will type it automatically!";
+    textWrap1.append(stepTitle1, stepDesc1);
+    step1El.append(stepNum1, textWrap1);
+
+    // Step 2: Password
+    step2El = document.createElement("div");
+    step2El.className = "guide-step";
+    stepNum2 = document.createElement("div");
+    stepNum2.className = "step-num";
+    stepNum2.textContent = "2";
+    const textWrap2 = document.createElement("div");
+    textWrap2.className = "step-text";
+    stepTitle2 = document.createElement("div");
+    stepTitle2.className = "step-title";
+    stepTitle2.textContent = "Step 2: Click the Password box";
+    stepDesc2 = document.createElement("div");
+    stepDesc2.className = "step-desc";
+    stepDesc2.textContent = "Next, click inside the Password box on the page. Sera will type it for you!";
+    textWrap2.append(stepTitle2, stepDesc2);
+    step2El.append(stepNum2, textWrap2);
+
+    guideContainer.append(step1El, step2El);
+    card.insertBefore(guideContainer, timerContainer);
+
+    // Start watching immediately
+    startFlutterObserver();
+
+    // Wrap dismiss to clean up observer
+    const baseDismiss = dismiss;
+    dismiss = () => { stopFlutterObserver(); baseDismiss(); };
+  }
+
+  function setBtn(btn, state, text) {
+    if (state === "done") {
+      btn.className = "btn done";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    } else if (state === "warn") {
+      btn.className = "btn";
+      btn.style.borderColor = "#E8A040";
+      btn.style.color = "#F5C97A";
+    } else {
+      btn.className = "btn primary";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    }
+    btn.innerHTML = text;
   }
 
   uidBtn.onclick = () => {
-    const el = find(usernameSelector, [
-      "#userId", "input[name='userId']", "#txtUserId",
-      "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
-      "input[name='username']", "input[name='user']", "input[name='pan']"
-    ]);
-    if (fill(el, userid)) {
-      uidBtn.className = "btn done";
-      uidBtn.innerHTML = "✓  User ID Injected";
-      setTimeout(() => {
-        uidBtn.className = "btn primary";
-        uidBtn.innerHTML = "👤  Inject User ID";
-      }, 2000);
+    const result = smartFill(userid, usernameSelector, userFallbacks);
+    if (result === "filled") {
+      setBtn(uidBtn, "done", "✓  Username Injected");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
+    } else {
+      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
     }
   };
 
   passBtn.onclick = () => {
-    const el = find(passwordSelector, [
-      "input[name='psw']", "#psw", "input[type='password']", "input[name='Passwd']",
-      "#password", "#passwordInput", "#user_pass", "input[name='password']", "input[name='pass']"
-    ]);
-    if (fill(el, password)) {
-      passBtn.className = "btn done";
-      passBtn.innerHTML = "✓  Password Injected";
-      setTimeout(() => {
-        dismiss();
-      }, 400);
+    const result = smartFill(password, passwordSelector, passFallbacks);
+    if (result === "filled") {
+      setBtn(passBtn, "done", "✓  Password Injected");
+      setTimeout(dismiss, 400);
+    } else {
+      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
+      setTimeout(dismiss, 1200);
     }
   };
 
@@ -688,15 +1068,26 @@ function handleManualAssistTab(message) {
   chrome.storage.local.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
+
+  // Flutter web apps (e.g. TRACES) fire status="complete" when the HTML shell loads,
+  // but Flutter itself bootstraps asynchronously after that. Give it time to render.
+  const isFlutterUrl = /tdscpc\.gov\.in|traces\.gov\.in|flutter/i.test(message.url || "");
+  const injectDelay = isFlutterUrl ? 3000 : 0;
+
   chrome.tabs.query({}, tabs => {
-    const existing = tabs.find(t => t.url && t.url.includes(hostname));
+    const existing = tabs.find(t => {
+      if (!t.url) return false;
+      if (t.url.includes(hostname)) return true;
+      if (hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
+      return false;
+    });
     const open = tab => {
       if (!tab) return;
       chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
       chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
         if (tabId === tab.id && info.status === "complete") {
           chrome.tabs.onUpdated.removeListener(listener);
-          injectManualAssist(tab.id, message);
+          setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
         }
       });
       chrome.tabs.update(tab.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
@@ -735,7 +1126,7 @@ function clearBrowserCookies(callback) {
   if (chrome.browsingData && chrome.browsingData.removeCookies) {
     chrome.browsingData.removeCookies({ "since": 0 }, () => {
       if (chrome.runtime.lastError) {
-        console.warn("Sera: browsingData.removeCookies warning:", chrome.runtime.lastError);
+        console.warn("Sera: removeCookies error:", chrome.runtime.lastError.message);
       }
       finish();
     });
@@ -766,7 +1157,10 @@ function clearBrowserCookies(callback) {
 
 function injectManualAssist(tabId, message) {
   recordInjectionAndClearCookiesIfNeeded();
-  chrome.scripting.executeScript({ target:{tabId}, func:manualAssistWidget,
+  // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
+  armedSCAPayload = null;
+  chrome.storage.local.remove(['armedSCAPayload']);
+  chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
       message.client_name || message.portal, 30000] })
     .then(() => console.log("Sera: Manual Assist widget injected"))
@@ -794,7 +1188,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 function injectFillScript(tabId, userid, password, usernameSelector, passwordSelector, extensionFlow) {
   recordInjectionAndClearCookiesIfNeeded();
   chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId: tabId, allFrames: true },
     func: fillCredentialsInPage,
     args: [userid, password, usernameSelector, passwordSelector, extensionFlow]
   }).then(() => console.log("Sera: fill script injected"))
@@ -1110,8 +1504,14 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
     if (!sender.tab || !sender.tab.id) return;
 
-    chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode'], (data) => {
+    chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode', 'manualAssistPayload'], (data) => {
       if (data.scaEnabled === false) return;
+      // Don't trigger SCA if SMTI (Manual Assist) widget is currently active
+      const smtiActive = data.manualAssistPayload && data.manualAssistPayload.expiresAt && data.manualAssistPayload.expiresAt > Date.now();
+      if (smtiActive) {
+        console.log("Sera SCA: Skipping — SMTI (Manual Assist) is currently active on this tab.");
+        return;
+      }
       const payload = data.armedSCAPayload || armedSCAPayload;
       if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
         console.log("Sera SCA: No active armed payload found for paste event.");
@@ -1139,7 +1539,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         if (isWidgetMode) {
           // Trigger interactive SCA Widget on this tab
           chrome.scripting.executeScript({
-            target: { tabId: sender.tab.id },
+            target: { tabId: sender.tab.id, allFrames: true },
             func: (pwd, pwdSel, bizName, ownName, portalName, matchedUid, clientId, clientToken) => {
               function isVis(el) {
                 if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
@@ -1163,10 +1563,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
               const fallbacks = [
                 pwdSel,
+                "input[id*='psw']",
+                "input[name*='psw']",
+                "input[id$='psw']",
+                "input[name$='psw']",
                 "input[name='psw']",
                 "#psw",
                 "input[name='Passwd']",
                 "input[type='password']",
+                "input[id*='password']",
+                "input[name*='password']",
                 "#password",
                 "#passwordInput",
                 "#user_pass",
@@ -1382,7 +1788,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         } else {
           // Trigger ambient silent password fill on this tab
           chrome.scripting.executeScript({
-            target: { tabId: sender.tab.id },
+            target: { tabId: sender.tab.id, allFrames: true },
             func: (pwd, pwdSel, flow, bizName, ownName, portalName) => {
               function isVis(el) {
                 if (!el) return false;
@@ -1489,10 +1895,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               // Find password field (includes TRACES and Google's Passwd field)
               const fallbacks = [
                 pwdSel,
+                "input[id*='psw']",
+                "input[name*='psw']",
+                "input[id$='psw']",
+                "input[name$='psw']",
                 "input[name='psw']",
                 "#psw",
                 "input[name='Passwd']",
                 "input[type='password']",
+                "input[id*='password']",
+                "input[name*='password']",
                 "#password",
                 "#passwordInput",
                 "#user_pass",

@@ -30,21 +30,23 @@ from ui.utils.theme import SmartTableWidgetItem
 
 class ActivityCellDelegate(QStyledItemDelegate):
     """
-    Renders Client ID cells with a smaller, subtle grey breadcrumb badge
-    next to the primary ID (e.g. '1001' + '(Viewed • 5m ago)' in 8.5pt #888888).
+    Renders table cells with a clean, modern spreadsheet-style selection cursor
+    (vivid blue highlight fill with crisp white text when selected), custom formatting support,
+    and activity breadcrumb badges for Client ID cells.
     """
     def paint(self, painter: QPainter, option, index):
-        activity_tag = index.data(Qt.UserRole + 2)
-        if not activity_tag:
-            super().paint(painter, option, index)
-            return
-
         painter.save()
         self.initStyleOption(option, index)
 
-        # Draw cell background (selection or custom format background)
-        if option.state & QStyle.State_Selected:
-            painter.fillRect(option.rect, option.palette.highlight())
+        is_selected = bool(option.state & QStyle.State_Selected)
+        parent_widget = option.widget
+
+        # Draw cell background (selection, copy-flash, or custom format background)
+        if is_selected:
+            if parent_widget and parent_widget.property("is_flashing"):
+                painter.fillRect(option.rect, QColor("#2E9B5F"))
+            else:
+                painter.fillRect(option.rect, option.palette.highlight())
         else:
             bg = index.data(Qt.BackgroundRole)
             if bg:
@@ -54,35 +56,44 @@ class ActivityCellDelegate(QStyledItemDelegate):
 
         rect = option.rect.adjusted(6, 0, -6, 0)
         main_text = str(index.data(Qt.DisplayRole) or "")
+        activity_tag = index.data(Qt.UserRole + 2)
 
-        # 1. Main ID text
         main_font = option.font
         painter.setFont(main_font)
-        fg = index.data(Qt.ForegroundRole)
-        if fg and not (option.state & QStyle.State_Selected):
-            painter.setPen(fg.color() if hasattr(fg, "color") else fg)
-        elif option.state & QStyle.State_Selected:
+        fm = painter.fontMetrics()
+
+        # Text color
+        if is_selected:
             painter.setPen(QColor("#FFFFFF"))
         else:
-            painter.setPen(QColor("#241F1B"))
+            fg = index.data(Qt.ForegroundRole)
+            if fg:
+                painter.setPen(fg.color() if hasattr(fg, "color") else fg)
+            else:
+                painter.setPen(QColor("#241F1B"))
 
-        fm = painter.fontMetrics()
-        main_w = fm.horizontalAdvance(main_text)
         y_center = rect.top() + (rect.height() + fm.ascent() - fm.descent()) // 2
-        painter.drawText(rect.left(), y_center, main_text)
 
-        # 2. Activity breadcrumb (smaller font, soft grey)
-        small_font = QFont(main_font)
-        small_font.setPointSize(max(main_font.pointSize() - 2, 8))
-        painter.setFont(small_font)
-        small_fm = painter.fontMetrics()
+        if activity_tag:
+            main_w = fm.horizontalAdvance(main_text)
+            painter.drawText(rect.left(), y_center, main_text)
 
-        tag_color = QColor("#8E8E93") if not (option.state & QStyle.State_Selected) else QColor("#D1D5DB")
-        painter.setPen(tag_color)
+            # Activity breadcrumb (smaller font, soft grey/light grey when selected)
+            small_font = QFont(main_font)
+            small_font.setPointSize(max(main_font.pointSize() - 2, 8))
+            painter.setFont(small_font)
+            small_fm = painter.fontMetrics()
 
-        tag_x = rect.left() + main_w + 6
-        tag_y = rect.top() + (rect.height() + small_fm.ascent() - small_fm.descent()) // 2
-        painter.drawText(tag_x, tag_y, f"({activity_tag})")
+            tag_color = QColor("#D1D5DB") if is_selected else QColor("#8E8E93")
+            painter.setPen(tag_color)
+
+            tag_x = rect.left() + main_w + 6
+            tag_y = rect.top() + (rect.height() + small_fm.ascent() - small_fm.descent()) // 2
+            painter.drawText(tag_x, tag_y, f"({activity_tag})")
+        else:
+            avail_w = max(rect.width(), 0)
+            elided = fm.elidedText(main_text, Qt.ElideRight, avail_w)
+            painter.drawText(rect.left(), y_center, elided)
 
         painter.restore()
 
@@ -335,6 +346,8 @@ class SearchWindow(QWidget):
                 gridline-color: #D8CDB4;
                 border: none;
                 outline: none;
+                selection-background-color: #0078D7;
+                selection-color: #FFFFFF;
             }
             QHeaderView {
                 background-color: #0A0A0A;
@@ -352,10 +365,6 @@ class SearchWindow(QWidget):
             QTableCornerButton::section {
                 background-color: #0A0A0A;
                 border: none;
-            }
-            QTableWidget::item:selected {
-                background-color: rgba(46, 155, 95, 0.3);
-                border: 1.5px solid #2E9B5F;
             }
         """)
         
@@ -433,20 +442,12 @@ class SearchWindow(QWidget):
     def _flash_copied_items(self):
         from PySide6.QtCore import QTimer
         
-        orig_style = self.results_table.styleSheet() or ""
-        # Flash selection as bright green (#2E9B5F)
-        flash_style = orig_style + """
-            QTableWidget::item:selected {
-                background-color: #2E9B5F !important;
-                color: #FFFFFF !important;
-            }
-        """
-        self.results_table.setStyleSheet(flash_style)
+        self.results_table.setProperty("is_flashing", True)
         self.results_table.viewport().update()
 
         def restore_style():
             try:
-                self.results_table.setStyleSheet(orig_style)
+                self.results_table.setProperty("is_flashing", False)
                 self.results_table.viewport().update()
             except Exception:
                 pass
