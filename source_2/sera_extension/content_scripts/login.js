@@ -52,7 +52,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "autofill" && message.userid) {
     console.log("Sera content script: received fallback autofill message.");
     // Simple one-shot fill, no observers
-    var userField = document.querySelector("#panAdhaarUserId") ||
+    var userField = document.querySelector("input[id*='userId']") ||
+                    document.querySelector("input[name*='userId']") ||
+                    document.querySelector("#userId") ||
+                    document.querySelector("input[name='userId']") ||
+                    document.querySelector("#panAdhaarUserId") ||
                     document.querySelector("#username") ||
                     document.querySelector("input[name='pan']");
     if (userField && message.userid) {
@@ -61,7 +65,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       userField.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    var passField = document.querySelector("#passwordInput") ||
+    var passField = document.querySelector("input[id*='psw']") ||
+                    document.querySelector("input[name*='psw']") ||
+                    document.querySelector("#psw") ||
+                    document.querySelector("input[name='psw']") ||
+                    document.querySelector("#passwordInput") ||
                     document.querySelector("input[type='password']") ||
                     document.querySelector("#user_pass");
     if (passField && message.password) {

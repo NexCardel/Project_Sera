@@ -551,6 +551,7 @@ class SeraApp:
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
         self.shell.on_minimized_to_tray = self._show_tray_minimized_hint
+        self.shell.on_quit_requested = self._quit_application
         self._setup_system_tray()
         # Apply run_in_background setting so closeEvent behaves correctly from startup
         self._apply_run_in_background()
@@ -675,10 +676,13 @@ class SeraApp:
                 self._tray_hint_shown = True
 
     def _quit_application(self):
-        """Full clean application shutdown triggered from the system tray menu."""
+        """Full clean application shutdown triggered from the system tray menu or close button."""
         if hasattr(self, "shell") and self.shell:
+            self.shell.hide()
             self.shell._force_close = True
             self.shell.close()
+        if hasattr(self, "tray_icon") and self.tray_icon:
+            self.tray_icon.hide()
         if hasattr(self, "ext_listener") and self.ext_listener:
             try:
                 self.ext_listener.stop()
@@ -704,7 +708,6 @@ class SeraApp:
 
     def _show_search_from_admin(self):
         self.shell.dismiss_detail_on_outside = False
-        self._apply_theme()
         self.search_win.refresh()
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()

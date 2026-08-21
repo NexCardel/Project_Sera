@@ -286,7 +286,9 @@ class AdminWindow(QWidget):
         self.sort_combo.addItem("ID (Descending: 3, 2, 1...)", ("id", "desc"))
         self.sort_combo.addItem("Client Identity (A → Z)", ("identity", "asc"))
         self.sort_combo.addItem("Client Identity (Z → A)", ("identity", "desc"))
-        self.sort_combo.addItem("🔥 Most Viewed / Activity", ("activity", "desc"))
+        self.sort_combo.addItem("🕒 Activity: Earliest → Later", ("activity_time", "asc"))
+        self.sort_combo.addItem("🕒 Activity: Latest → Earlier", ("activity_time", "desc"))
+        self.sort_combo.addItem("🔥 Most Viewed / Activity Count", ("activity", "desc"))
         self.sort_combo.addItem("Recently Added (Newest first)", ("created_at", "desc"))
         self.sort_combo.addItem("Recently Updated", ("updated_at", "desc"))
         self.sort_combo.currentIndexChanged.connect(self.refresh)
@@ -379,10 +381,11 @@ class AdminWindow(QWidget):
         self.filter_combo.blockSignals(True)
         self.filter_combo.clear()
         self.filter_combo.addItem("All clients", None)
+        self.filter_combo.addItem("🕒 Activity: Earliest → Later", "activity_earliest_to_latest")
+        self.filter_combo.addItem("🕒 Activity: Latest → Earlier", "activity_latest_to_earliest")
         self.filter_combo.addItem("🔥 Most Viewed / Active", "most_viewed")
         self.filter_combo.addItem("⚡ Active Today", "active_today")
         self.filter_combo.addItem("🌐 Has Attached Services", "has_services")
-        self.filter_combo.addItem("⚠️ Unassigned (No Services)", "no_services")
         self.filter_combo.addItem("🔒 Has Login Credentials", "has_passwords")
         self.filter_combo.addItem("⚠️ Missing Passwords", "missing_passwords")
         self.filter_combo.addItem("📦 Archived Only", "archived")
@@ -438,30 +441,33 @@ class AdminWindow(QWidget):
             self._service_cbs[s["id"]] = cb
             self.form_layout.addRow("", cb)
 
-    def _get_identity_label(self, client):
-        identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
+    def _get_identity_label(self, client, identity_cols=None):
+        if identity_cols is None:
+            identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
         vals = [client["values"].get(cid, "") for cid in identity_cols if client["values"].get(cid)]
         return " — ".join(vals) if vals else "[No Identity Data]"
 
     def refresh(self):
         self._check_sync_conflicts()
-        filter_data = self.filter_combo.currentData() if hasattr(self, "filter_combo") else None
+        self._refresh_client_list()
+
+    def _refresh_client_list(self):
+        query = self.search_input.text().strip() if hasattr(self, "search_input") else ""
+        filter_val = self.filter_combo.currentData() if hasattr(self, "filter_combo") else None
         show_archived = self.show_archived_cb.isChecked() if hasattr(self, "show_archived_cb") else False
-        search_query = self.search_input.text().strip() if hasattr(self, "search_input") else ""
-
-        svc_id = filter_data if isinstance(filter_data, int) else None
-        filter_preset = filter_data if isinstance(filter_data, str) else None
-        if show_archived:
-            filter_preset = "archived"
-
+        
+        svc_id = filter_val if isinstance(filter_val, int) else None
+        preset = filter_val if isinstance(filter_val, str) else None
+        
         clients = self.db.search_clients(
-            search_query,
+            query=query,
             service_id=svc_id,
-            archived_only=(filter_preset == "archived"),
-            filter_preset=filter_preset
+            include_archived=show_archived,
+            filter_preset=preset
         )
 
-        # Apply Sort By Selection
+        identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
+
         if hasattr(self, "sort_combo") and self.sort_combo.currentData():
             sort_key, sort_dir = self.sort_combo.currentData()
             reverse = (sort_dir == "desc")
@@ -473,10 +479,23 @@ class AdminWindow(QWidget):
                     return (1, 0, token.lower())
                 clients.sort(key=_id_sort_key, reverse=reverse)
             elif sort_key == "identity":
-                clients.sort(key=lambda c: self._get_identity_label(c).lower(), reverse=reverse)
+                clients.sort(key=lambda c: self._get_identity_label(c, identity_cols).lower(), reverse=reverse)
+            elif sort_key == "activity_time":
+                stats_map = self.db.get_all_activity_stats()
+                def _act_time_key(c):
+                    t = stats_map.get(c["id"], {}).get("last_action_time", 0.0)
+                    is_active = 0 if (t and t > 0) else 1
+                    time_val = -t if reverse else t
+                    return (is_active, time_val, c["id"])
+                clients.sort(key=_act_time_key)
             elif sort_key == "activity":
                 stats_map = self.db.get_all_activity_stats()
-                clients.sort(key=lambda c: (stats_map.get(c["id"], {}).get("view_count", 0) * 3 + stats_map.get(c["id"], {}).get("action_count", 0)), reverse=reverse)
+                def _act_score_key(c):
+                    score = stats_map.get(c["id"], {}).get("view_count", 0) * 3 + stats_map.get(c["id"], {}).get("action_count", 0)
+                    is_active = 0 if score > 0 else 1
+                    score_val = -score if reverse else score
+                    return (is_active, score_val, c["id"])
+                clients.sort(key=_act_score_key)
             elif sort_key == "created_at":
                 clients.sort(key=lambda c: c.get("created_at") or "", reverse=reverse)
             elif sort_key == "updated_at":
@@ -485,52 +504,72 @@ class AdminWindow(QWidget):
         # FIX: Remember which client you had selected so the screen doesn't wipe
         old_selected = self.selected_client_id
         
+        self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
-        self.table.setRowCount(0)
-        self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["ID", "Client Identity"])
-        self.table.setColumnHidden(0, True)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        
-        from ui.utils.theme import SmartTableWidgetItem
-        recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
-
-        row_to_select = -1
-        for c in clients:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            self.table.setItem(r, 0, SmartTableWidgetItem(str(c["id"])))
+        try:
+            self.table.setRowCount(len(clients))
+            self.table.setColumnCount(2)
+            self.table.setHorizontalHeaderLabels(["ID", "Client Identity"])
+            self.table.setColumnHidden(0, True)
+            self.table.horizontalHeader().setStretchLastSection(True)
             
-            lbl = self._get_identity_label(c)
-            item1 = SmartTableWidgetItem(lbl)
-            act_list = recent_acts.get(c["id"], [])
-            if act_list:
-                top = act_list[0]
-                action_type = top["action_type"]
-                age = top["age_seconds"]
-                rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
-                item1.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
-                tooltip_lines = [f"• {a['action_type']} ({'just now' if a['age_seconds'] < 60 else str(a['age_seconds']//60) + 'm ago'})" for a in act_list[:4]]
-                item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
+            from ui.utils.theme import SmartTableWidgetItem
+            recent_acts = self.db.get_recent_client_activities()
 
-            self.table.setItem(r, 1, item1)
-            if c["id"] == old_selected:
-                row_to_select = r
+            def _fmt_rel(age_sec: int) -> str:
+                if age_sec < 60:
+                    return "just now"
+                if age_sec < 3600:
+                    return f"{age_sec // 60}m ago"
+                if age_sec < 86400:
+                    return f"{age_sec // 3600}h ago"
+                return f"{age_sec // 86400}d ago"
+
+            row_to_select = -1
+            for r, c in enumerate(clients):
+                self.table.setItem(r, 0, SmartTableWidgetItem(str(c["id"])))
                 
-        self.table.blockSignals(False)
-        self.table.setSortingEnabled(True)
-        self.table.horizontalHeader().setSortIndicatorShown(True)
-        self.table.horizontalHeader().setSectionsClickable(True)
-        
-        if row_to_select >= 0:
-            self.table.selectRow(row_to_select)
-        else:
-            self._on_new()
+                lbl = self._get_identity_label(c, identity_cols)
+                item1 = SmartTableWidgetItem(lbl)
+                act_list = recent_acts.get(c["id"], [])
+                if act_list:
+                    top = act_list[0]
+                    action_type = top["action_type"]
+                    age = top["age_seconds"]
+                    rel = _fmt_rel(age)
+                    item1.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
+                    tooltip_lines = [f"• {a['action_type']} ({_fmt_rel(a['age_seconds'])})" for a in act_list[:4]]
+                    item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
+
+                self.table.setItem(r, 1, item1)
+                if c["id"] == old_selected:
+                    row_to_select = r
+                    
+            self.table.blockSignals(False)
+            self.table.setSortingEnabled(True)
+            self.table.horizontalHeader().setSortIndicatorShown(True)
+            self.table.horizontalHeader().setSectionsClickable(True)
+            
+            if row_to_select >= 0:
+                self.table.selectRow(row_to_select)
+            else:
+                self._on_new()
+        finally:
+            self.table.setUpdatesEnabled(True)
 
     def _refresh_activity_tags(self):
         try:
-            recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
+            recent_acts = self.db.get_recent_client_activities()
+            def _fmt_rel(age_sec: int) -> str:
+                if age_sec < 60:
+                    return "just now"
+                if age_sec < 3600:
+                    return f"{age_sec // 60}m ago"
+                if age_sec < 86400:
+                    return f"{age_sec // 3600}h ago"
+                return f"{age_sec // 86400}d ago"
+
             for r in range(self.table.rowCount()):
                 id_item = self.table.item(r, 0)
                 name_item = self.table.item(r, 1)
@@ -545,7 +584,7 @@ class AdminWindow(QWidget):
                     top = act_list[0]
                     action_type = top["action_type"]
                     age = top["age_seconds"]
-                    rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+                    rel = _fmt_rel(age)
                     name_item.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
                 else:
                     name_item.setData(Qt.UserRole + 2, "")

@@ -109,7 +109,7 @@ class ServiceEditDialog(QDialog):
         combined = f"{name} {url}"
         
         presets = [
-            (['tdscpc', 'traces', 'tds'], '#userId, input[name="userId"]', '#psw, #password, input[name="psw"], input[type="password"]', 'https://www.tdscpc.gov.in/app/login.xhtml', 'single', ['traces', 'tds', 'tan', 'pan', 'user'], ['traces', 'tds', 'pass', 'pwd']),
+            (['tdscpc', 'traces', 'tds'], "input[id*='userId'], input[name*='userId'], #userId, input[name='userId']", "input[id*='psw'], input[name*='psw'], input[type='password'], #psw, input[name='psw']", 'https://www.tdscpc.gov.in/app/login.xhtml', 'single', ['traces', 'tds', 'tan', 'pan', 'user'], ['traces', 'tds', 'pass', 'pwd']),
             (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single', ['gst', 'user', 'pan'], ['gst', 'pass', 'pwd']),
             (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double', ['pan', 'itr', 'user'], ['itr', 'tax', 'pass', 'pwd']),
             (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double', ['email', 'gmail', 'google', 'user'], ['gmail', 'google', 'pass', 'pwd']),

@@ -46,7 +46,8 @@
         "content_scripts/net_interceptor.js"
       ],
       "run_at": "document_start",
-      "world": "MAIN"
+      "world": "MAIN",
+      "all_frames": true
     },
     {
       "matches": [
@@ -57,7 +58,8 @@
         "content_scripts/login.js",
         "content_scripts/filing_detector.js"
       ],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [
