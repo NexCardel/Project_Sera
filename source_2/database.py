@@ -13,6 +13,7 @@ import sqlcipher3.dbapi2 as sqlite3
 import datetime
 import json
 import os
+import sys
 import shutil
 import time
 import threading
@@ -328,12 +329,109 @@ class SeraDatabase:
             # 14. Seed default MCL columns and services if fresh database
             cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
             if cur.fetchone()[0] == 0:
-                self._seed_default_data(conn)
+                seeded = self._seed_from_ini(conn)
+                if not seeded:
+                    self._seed_default_data(conn)
 
             # Ensure serial number / row index columns are never marked as identity columns
             conn.execute(
                 "UPDATE mcl_columns SET is_identity = 0 WHERE LOWER(TRIM(label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')"
             )
+
+        self.load_ini_defaults()
+
+    def _find_ini_file(self, ini_path: str = None) -> str:
+        if ini_path and os.path.exists(ini_path):
+            return ini_path
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "settings.ini"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.ini"),
+            os.path.join(os.getcwd(), "settings.ini"),
+        ]
+        if hasattr(sys, "_MEIPASS"):
+            candidates.insert(0, os.path.join(sys._MEIPASS, "settings.ini"))
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return None
+
+    def _seed_from_ini(self, conn, ini_path: str = None) -> bool:
+        import configparser
+        ini_file = self._find_ini_file(ini_path)
+        if not ini_file:
+            return False
+        try:
+            config = configparser.ConfigParser()
+            config.read(ini_file, encoding="utf-8-sig")
+            if "MCL_Columns" not in config:
+                return False
+
+            col_ids_map = {}
+            for _, line in config["MCL_Columns"].items():
+                parts = [p.strip() for p in line.split("|")]
+                if not parts:
+                    continue
+                lbl = parts[0]
+                kwargs = {}
+                for p in parts[1:]:
+                    if "=" in p:
+                        k, v = p.split("=", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if k in ("is_identity", "sort_order", "show_in_search", "allow_quick_copy", "admin_show_in_search"):
+                            kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
+                        else:
+                            kwargs[k] = v
+                cur = conn.execute(
+                    """INSERT INTO mcl_columns (label, field_type, is_identity, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        lbl,
+                        kwargs.get("field_type", "text"),
+                        kwargs.get("is_identity", 0),
+                        kwargs.get("sort_order", 0),
+                        kwargs.get("show_in_search", 1),
+                        kwargs.get("allow_quick_copy", 1),
+                        kwargs.get("admin_show_in_search", 1),
+                    )
+                )
+                col_ids_map[lbl] = cur.lastrowid
+
+            if "Services" in config:
+                for _, line in config["Services"].items():
+                    parts = [p.strip() for p in line.split("|")]
+                    if not parts:
+                        continue
+                    name = parts[0]
+                    kwargs = {}
+                    for p in parts[1:]:
+                        if "=" in p:
+                            k, v = p.split("=", 1)
+                            kwargs[k.strip()] = v.strip()
+                    
+                    u_col = kwargs.get("user_col")
+                    p_col = kwargs.get("pass_col")
+                    u_id = col_ids_map.get(u_col) if u_col else None
+                    p_id = col_ids_map.get(p_col) if p_col else None
+                    s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                    conn.execute(
+                        """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            name,
+                            kwargs.get("login_link", ""),
+                            u_id,
+                            p_id,
+                            kwargs.get("user_sel", ""),
+                            kwargs.get("pass_sel", ""),
+                            kwargs.get("mode", "extension"),
+                            kwargs.get("flow", "double"),
+                            s_order,
+                        )
+                    )
+            return True
+        except Exception:
+            return False
 
     def _seed_default_data(self, conn):
         """Seeds default MCL columns and Services for fresh database installations."""
@@ -400,6 +498,173 @@ class SeraDatabase:
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 [(k, str(v) if v is not None else "") for k, v in settings_dict.items()]
             )
+
+    def load_ini_defaults(self, ini_path: str = None):
+        """Loads default settings, MCL columns, and services from a .ini file if present."""
+        import sys
+        import configparser
+        if not ini_path:
+            candidates = [
+                os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "settings.ini"),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.ini"),
+                os.path.join(os.getcwd(), "settings.ini"),
+            ]
+            if hasattr(sys, "_MEIPASS"):
+                candidates.insert(0, os.path.join(sys._MEIPASS, "settings.ini"))
+            for c in candidates:
+                if os.path.exists(c):
+                    ini_path = c
+                    break
+
+        if not ini_path or not os.path.exists(ini_path):
+            return
+
+        try:
+            config = configparser.ConfigParser()
+            config.read(ini_path, encoding="utf-8-sig")
+
+            if "AppSettings" in config:
+                existing = self.get_all_settings()
+                to_set = {}
+                for k, v in config["AppSettings"].items():
+                    if k not in existing:
+                        to_set[k] = v
+                if to_set:
+                    self.set_settings_bulk(to_set)
+
+            if "MCL_Columns" in config:
+                mcl_items = config["MCL_Columns"].items()
+                with self._connect() as conn:
+                    cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
+                    count = cur.fetchone()[0]
+                    if count == 0:
+                        for _, line in mcl_items:
+                            parts = [p.strip() for p in line.split("|")]
+                            if not parts:
+                                continue
+                            lbl = parts[0]
+                            kwargs = {}
+                            for p in parts[1:]:
+                                if "=" in p:
+                                    k, v = p.split("=", 1)
+                                    k = k.strip()
+                                    v = v.strip()
+                                    if k in ("is_identity", "sort_order", "show_in_search", "allow_quick_copy", "admin_show_in_search"):
+                                        kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
+                                    else:
+                                        kwargs[k] = v
+                            conn.execute(
+                                """INSERT INTO mcl_columns (label, field_type, is_identity, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    lbl,
+                                    kwargs.get("field_type", "text"),
+                                    kwargs.get("is_identity", 0),
+                                    kwargs.get("sort_order", 0),
+                                    kwargs.get("show_in_search", 1),
+                                    kwargs.get("allow_quick_copy", 1),
+                                    kwargs.get("admin_show_in_search", 1),
+                                )
+                            )
+
+            if "Services" in config:
+                svc_items = config["Services"].items()
+                with self._connect() as conn:
+                    cur = conn.execute("SELECT COUNT(*) FROM services")
+                    count = cur.fetchone()[0]
+                    if count == 0:
+                        cur = conn.execute("SELECT id, label FROM mcl_columns")
+                        lbl_to_id = {r[1]: r[0] for r in cur.fetchall()}
+                        for _, line in svc_items:
+                            parts = [p.strip() for p in line.split("|")]
+                            if not parts:
+                                continue
+                            name = parts[0]
+                            kwargs = {}
+                            for p in parts[1:]:
+                                if "=" in p:
+                                    k, v = p.split("=", 1)
+                                    kwargs[k.strip()] = v.strip()
+                            
+                            u_col = kwargs.get("user_col")
+                            p_col = kwargs.get("pass_col")
+                            u_id = lbl_to_id.get(u_col) if u_col else None
+                            p_id = lbl_to_id.get(p_col) if p_col else None
+                            s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                            conn.execute(
+                                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    name,
+                                    kwargs.get("login_link", ""),
+                                    u_id,
+                                    p_id,
+                                    kwargs.get("user_sel", ""),
+                                    kwargs.get("pass_sel", ""),
+                                    kwargs.get("mode", "extension"),
+                                    kwargs.get("flow", "double"),
+                                    s_order,
+                                )
+                            )
+
+            if "ColumnVisibility" in config:
+                col_vis = config["ColumnVisibility"]
+                if "show_in_search" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["show_in_search"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_visibility(ids)
+                if "allow_quick_copy" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["allow_quick_copy"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_quick_copy(ids)
+                if "admin_show_in_search" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["admin_show_in_search"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_admin_visibility(ids)
+        except Exception as e:
+            pass
+
+    def export_to_ini(self, ini_path: str):
+        """Exports current database settings, MCL columns, and services to a .ini file."""
+        import configparser
+        try:
+            config = configparser.ConfigParser()
+            config["AppSettings"] = self.get_all_settings()
+
+            mcl = self.get_mcl_columns()
+            mcl_sec = {}
+            id_to_lbl = {}
+            for idx, c in enumerate(mcl, 1):
+                id_to_lbl[c["id"]] = c["label"]
+                line = (
+                    f"{c['label']} | field_type={c.get('field_type','text')} | "
+                    f"is_identity={1 if c.get('is_identity') else 0} | sort_order={c.get('sort_order',0)} | "
+                    f"show_in_search={1 if c.get('show_in_search') else 0} | "
+                    f"allow_quick_copy={1 if c.get('allow_quick_copy') else 0} | "
+                    f"admin_show_in_search={1 if c.get('admin_show_in_search') else 0}"
+                )
+                mcl_sec[f"col_{idx}"] = line
+            config["MCL_Columns"] = mcl_sec
+
+            services = self.get_services()
+            svc_sec = {}
+            for idx, s in enumerate(services, 1):
+                u_lbl = id_to_lbl.get(s.get("userid_column_id"), "")
+                p_lbl = id_to_lbl.get(s.get("password_column_id"), "")
+                line = (
+                    f"{s['name']} | login_link={s.get('login_page_link','')} | "
+                    f"user_col={u_lbl} | pass_col={p_lbl} | "
+                    f"user_sel={s.get('username_selector','')} | pass_sel={s.get('password_selector','')} | "
+                    f"mode={s.get('automation_mode','extension')} | flow={s.get('extension_flow','double')} | "
+                    f"sort_order={s.get('sort_order',1)}"
+                )
+                svc_sec[f"svc_{idx}"] = line
+            config["Services"] = svc_sec
+
+            with open(ini_path, "w", encoding="utf-8") as f:
+                config.write(f)
+        except Exception:
+            pass
 
     # ---------------- Shared staff roster ----------------
 
