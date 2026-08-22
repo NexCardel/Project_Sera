@@ -54,12 +54,18 @@ class AppShell(QWidget):
                 if app_inst:
                     app_inst.quit()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "slide_panel") and self.slide_panel:
+            self.slide_panel.update_position()
+
     def eventFilter(self, watched, event):
-        """Close Client Detail when the blurred area/sidebar is clicked."""
+        """Close Client Detail when the area outside the slide panel is clicked."""
         if (
             self.dismiss_detail_on_outside
             and event.type() == QEvent.MouseButtonPress
-            and self.slide_panel.width() > 0
+            and hasattr(self, "slide_panel")
+            and (getattr(self.slide_panel, "is_open", False) or self.slide_panel.isVisible())
         ):
             from PySide6.QtWidgets import QApplication
             if QApplication.activeModalWidget() is not None:
@@ -94,60 +100,14 @@ class AppShell(QWidget):
         self.content_area.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.layout.addWidget(self.content_area, stretch=1)
 
-        # 3. Slide Panel
+        # 3. Slide Panel (Overlay on top of AppShell)
         from ui.shell.slide_panel import SlidePanel
-        self.slide_panel = SlidePanel()
-        self.layout.addWidget(self.slide_panel)
+        self.slide_panel = SlidePanel(parent=self)
 
-        # 4. Blur Effect for Content Area when Slide Panel opens
-        self.blur_effect = QGraphicsBlurEffect(self.content_area)
-        self.blur_effect.setBlurRadius(0.0)
-        self.blur_effect.setEnabled(False)
-        self.content_area.setGraphicsEffect(self.blur_effect)
-        
-        self.blur_anim = QPropertyAnimation(self.blur_effect, b"blurRadius", self)
-        self.blur_anim.setDuration(220)
-        self.blur_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.blur_anim.finished.connect(self._on_blur_anim_finished)
-
-        self.slide_panel.opened.connect(self._apply_blur)
-        self.slide_panel.closed.connect(self._remove_blur)
-
-        # 5. Sera Alert Notification System
+        # 4. Sera Alert Notification System
         from ui.components.toast import SeraAlert
         self.alert = SeraAlert(self)
         self.toast = self.alert  # Backward compatibility alias
-
-    def _apply_blur(self):
-        """Smoothly blurs the content area when the client detail slide panel opens."""
-        self.blur_effect.setEnabled(True)
-        self.blur_anim.stop()
-        curr = self.blur_effect.blurRadius()
-        if curr >= 4.0:
-            self.blur_effect.setBlurRadius(4.0)
-            return
-        self.blur_anim.setStartValue(curr)
-        self.blur_anim.setEndValue(4.0)  # Subtle, crisp background softening
-        self.blur_anim.start()
-
-
-    def _remove_blur(self):
-        """Smoothly un-blurs the content area when the slide panel closes."""
-        self.blur_anim.stop()
-        curr = self.blur_effect.blurRadius()
-        if curr <= 0.0:
-            self.blur_effect.setBlurRadius(0.0)
-            self.blur_effect.setEnabled(False)
-            return
-        self.blur_anim.setStartValue(curr)
-        self.blur_anim.setEndValue(0.0)
-        self.blur_anim.start()
-
-    def _on_blur_anim_finished(self):
-        """Disable blur effect after un-blurring to preserve crisp font rendering."""
-        if self.blur_effect.blurRadius() <= 0.5:
-            self.blur_effect.setBlurRadius(0.0)
-            self.blur_effect.setEnabled(False)
 
     def toggle_sidebar(self):
         """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""

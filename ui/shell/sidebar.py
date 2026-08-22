@@ -49,8 +49,7 @@ class ToggleSwitch(QAbstractButton):
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Track background
-        bg_color = QColor("#888888") if self.isChecked() else QColor("#999999")
-        if self.isChecked(): bg_color = QColor("#FF4D4D") # Red accent when checked
+        bg_color = QColor("#444444") if not self.isChecked() else QColor("#2E9B5F") # Emerald accent when checked
         painter.setBrush(QBrush(bg_color))
         painter.setPen(Qt.NoPen)
         painter.drawRoundedRect(0, 0, self.width(), self.height(), self.height()/2, self.height()/2)
@@ -131,19 +130,12 @@ class Sidebar(QFrame):
     
     # Action Signals
     action_import_csv = Signal()
-    action_download_template = Signal()
-    action_purge_duplicates = Signal()
     action_manage_clients = Signal()
     action_tracker_dump = Signal()
     action_audit_log = Signal()
-    action_manage_mcl = Signal()
-    action_manage_services = Signal()
     action_manage_staff = Signal()
-    action_export_csv = Signal()
-    action_backup = Signal()
     
     action_settings = Signal()
-    action_restore = Signal()
     action_open_sera_sync = Signal()
     action_trigger_sync = Signal()
     
@@ -280,27 +272,11 @@ class Sidebar(QFrame):
         )
         self.btn_tracker_dump = self._create_sub_nav_button("Tracker Dump", self.action_tracker_dump, parent_layout=self.l_clients)
         self.btn_audit = self._create_admin_sub_nav_button("Audit Log", self.action_audit_log, parent_layout=self.l_clients)
-        self.btn_manage_mcl = self._create_admin_sub_nav_button("Manage MCL", self.action_manage_mcl, parent_layout=self.l_clients)
-        self.btn_purge = self._create_sub_nav_button("Purge Duplicates", self.action_purge_duplicates, parent_layout=self.l_clients)
 
-        # --- Settings Group ---
-        self.lbl_settings, self.l_settings = self._create_accordion_group("Settings", "mdi.cog-outline", expanded=True)
-        
-        self.btn_settings = self._create_admin_sub_nav_button("General", self.action_settings, parent_layout=self.l_settings)
-
-        self.btn_dl_template = self._create_sub_nav_button("CSV Templates", self.action_download_template, parent_layout=self.l_settings)
-
-        # --- Services Group ---
-        self.lbl_services, self.l_services = self._create_accordion_group("Services", "mdi.briefcase-outline", expanded=False)
-        self.btn_manage_services = self._create_admin_sub_nav_button("Manage Services", self.action_manage_services, parent_layout=self.l_services)
-        self.btn_manage_staff = self._create_admin_sub_nav_button("Manage Staff Users", self.action_manage_staff, parent_layout=self.l_services)
-        # --- Data Management Group ---
-        self.lbl_data, self.l_data = self._create_accordion_group("Data Management", "mdi.database-outline", expanded=False)
-        
-        self.btn_new_clients = self._create_sub_nav_button("Import CSV", self.action_import_csv, parent_layout=self.l_data)
-        self.btn_export = self._create_admin_sub_nav_button("Export CSV", self.action_export_csv, parent_layout=self.l_data)
-        self.btn_backup = self._create_admin_sub_nav_button("Backup DB", self.action_backup, parent_layout=self.l_data)
-        self.btn_restore = self._create_admin_sub_nav_button("Restore DB", self.action_restore, parent_layout=self.l_data)
+        # --- Other Tabs ---
+        self.btn_settings = self._create_admin_nav_button("Options", self.action_settings, "mdi.cog-outline")
+        self.btn_manage_staff = self._create_admin_nav_button("Manage Staff Users", self.action_manage_staff, "mdi.briefcase-outline")
+        self.btn_new_clients = self._create_nav_button("Import CSV", self.action_import_csv, "mdi.database-outline")
 
         # Spacer keeps the navigation at the top while the account area stays pinned.
         self.layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))

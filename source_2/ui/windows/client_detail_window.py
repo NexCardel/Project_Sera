@@ -37,6 +37,21 @@ from pathlib import Path
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
 
 
+_ICON_CACHE = {}
+
+def _cached_icon(name: str, color: str = None) -> QIcon:
+    key = (name, color)
+    if key not in _ICON_CACHE:
+        if qta:
+            try:
+                _ICON_CACHE[key] = qta.icon(name, color=color) if color else qta.icon(name)
+            except Exception:
+                _ICON_CACHE[key] = QIcon()
+        else:
+            _ICON_CACHE[key] = QIcon()
+    return _ICON_CACHE[key]
+
+
 def _get_service_icon(name: str) -> str:
     n = (name or "").lower()
     if "gst" in n:
@@ -57,6 +72,21 @@ def _get_service_icon(name: str) -> str:
         return "mdi.map-marker-outline"
     else:
         return "mdi.web"
+
+
+def _get_portal_accent_color(name: str) -> str:
+    n = (name or "").lower()
+    if "gst" in n:
+        return "#D85A30"
+    elif "income" in n or "tax" in n or "itr" in n:
+        return "#378ADD"
+    elif "email" in n or "mail" in n:
+        return "#7F77DD"
+    elif "tds" in n or "traces" in n:
+        return "#E6A23C"
+    elif "pf" in n or "provident" in n:
+        return "#2E9B5F"
+    return "#5DCAA5"
 
 
 class ClickableLabel(QLabel):
@@ -88,56 +118,73 @@ class ClientDetailWindow(QWidget):
         self.back_shortcut.activated.connect(self._safe_back_request)
 
     def _build_ui(self):
+        self.setStyleSheet("background-color: #1C1C1C;")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(10)
+        outer.setContentsMargins(24, 14, 24, 14)
+        outer.setSpacing(8)
 
+        # Header Bar: Back Button | Identity Title (2-line) | Token Badge
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(10)
-        # The back control is placed at the start of the detail header.
-        self.back_btn = QPushButton("✕")
-        self.back_btn.setText("")
-        self.back_btn.setFixedSize(30, 30)
-        self.back_btn.setToolTip("Back")
-        self.back_btn.setIcon(qta.icon("mdi.arrow-left", color="#000000"))
-        self.back_btn.setIconSize(QSize(18, 18))
-        self.back_btn.setProperty("class", "CloseButton")
+        header.setContentsMargins(0, 0, 0, 2)
+        header.setSpacing(12)
+
+        self.back_btn = QPushButton()
+        self.back_btn.setFixedSize(28, 28)
+        self.back_btn.setToolTip("Back (Esc)")
+        self.back_btn.setIcon(qta.icon("mdi.arrow-left", color="#B4B2A9") if qta else QIcon(BACK_ICON))
+        self.back_btn.setIconSize(QSize(16, 16))
+        self.back_btn.setProperty("class", "GhostIconButton")
+        self.back_btn.setCursor(Qt.PointingHandCursor)
         self.back_btn.clicked.connect(self._safe_back_request)
         header.addWidget(self.back_btn)
-        header.removeWidget(self.back_btn)
-        header.insertWidget(0, self.back_btn)
-        self.identity_label = QLabel()
-        self.identity_label.setProperty("class", "LargeIdentityText")
-        self.identity_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.identity_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #241F1B;")
-        header.addWidget(self.identity_label, stretch=1)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setContentsMargins(0, 0, 0, 0)
+        title_vbox.setSpacing(1)
+
+        self.primary_name_lbl = QLabel()
+        self.primary_name_lbl.setStyleSheet("font-size: 14px; font-weight: 600; color: #F5F5F0;")
+        title_vbox.addWidget(self.primary_name_lbl)
+
+        self.secondary_name_lbl = QLabel()
+        self.secondary_name_lbl.setStyleSheet("font-size: 11px; color: #888780;")
+        title_vbox.addWidget(self.secondary_name_lbl)
+
+        header.addLayout(title_vbox, stretch=1)
 
         self.token_badge = QLabel()
         self.token_badge.setCursor(Qt.PointingHandCursor)
         self.token_badge.setStyleSheet("""
             QLabel {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-                font-size: 11px;
-                font-weight: 700;
-                padding: 4px 10px;
-                border-radius: 5px;
+                background-color: #123B31;
+                color: #5DCAA5;
+                font-size: 10px;
+                font-weight: 600;
+                padding: 3px 10px;
+                border-radius: 10px;
             }
             QLabel:hover {
-                background-color: #247A4A;
+                background-color: #16483C;
             }
         """)
         header.addWidget(self.token_badge)
-        header.addStretch()
         outer.addLayout(header)
 
+        # Top Hairline Divider
+        top_divider = QFrame()
+        top_divider.setFrameShape(QFrame.HLine)
+        top_divider.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+        outer.addWidget(top_divider)
+
+        # Scroll Area for Profile Content (Seamless on #1C1C1C)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self.scroll_widget = QWidget()
+        self.scroll_widget.setStyleSheet("background: transparent;")
         self.scroll_layout = QVBoxLayout(self.scroll_widget)
-        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_layout.setSpacing(6)
+        self.scroll_layout.setContentsMargins(4, 8, 4, 12)
+        self.scroll_layout.setSpacing(12)
         scroll.setWidget(self.scroll_widget)
         outer.addWidget(scroll, stretch=1)
 
@@ -152,7 +199,6 @@ class ClientDetailWindow(QWidget):
         self.back_shortcut.setEnabled(False)
         self.back_requested.emit()
         QTimer.singleShot(300, self._restore_back_inputs)
-
 
     def _copy_token_to_clipboard(self, token: str):
         from PySide6.QtWidgets import QApplication
@@ -200,13 +246,17 @@ class ClientDetailWindow(QWidget):
 
         self.db.log_action(self.actor, "view", client_id=client_id)
 
-        
-        # We set identity label for backwards compatibility or header
-        self.identity_label.setText(f"Client Profile - {self._get_identity_label(self.client)}")
-        self.identity_label.setStyleSheet("font-size: 18px; font-weight: 700; color: #FFFFFF;")
+        # Header Titles and Token
+        primary, secondary = self._get_identity_parts(self.client)
+        self.primary_name_lbl.setText(primary)
+        if secondary:
+            self.secondary_name_lbl.setText(secondary)
+            self.secondary_name_lbl.show()
+        else:
+            self.secondary_name_lbl.hide()
         
         token = self.client.get("client_id_token") or str(client_id)
-        self.token_badge.setText(f"ID: {token}")
+        self.token_badge.setText(f"CLI-{token.zfill(5)}" if token.isdigit() else f"ID: {token}")
         self.token_badge.setToolTip(f"Client ID: {token}\nClick to copy to clipboard")
         self.token_badge.mousePressEvent = lambda event, t=token: self._copy_token_to_clipboard(t)
         
@@ -214,7 +264,6 @@ class ClientDetailWindow(QWidget):
         
         mask_mode = self.db.get_setting("mask_mode", "last_n")
         reveal_count = int(self.db.get_setting("mask_reveal_count", "4"))
-        
         show_hide_btn_enabled = self.db.get_setting("show_hide_btn_enabled", "1") == "1"
         
         timeout_sec = 30
@@ -223,244 +272,216 @@ class ClientDetailWindow(QWidget):
         except Exception:
             pass
 
-        # 1. Identity & Contacts
-        id_box = QGroupBox("Identity & Contacts")
-        id_layout = QGridLayout(id_box)
-        id_box.setObjectName("ClientDetailCard")
-        id_layout.setContentsMargins(10, 14, 10, 10)
-        id_layout.setSpacing(8)
-        
-        # 2. Security Credentials
-        sec_box = QGroupBox("Security Credentials")
-        sec_layout = QGridLayout(sec_box)
-        sec_box.setObjectName("ClientDetailCard")
-        sec_layout.setContentsMargins(10, 14, 10, 10)
-        sec_layout.setSpacing(8)
-
-        # Build them
         mcl_cols = self.db.get_mcl_columns()
-        id_row, id_col = 0, 0
-        sec_row, sec_col = 0, 0
+        identity_cols = [c for c in mcl_cols if c["field_type"] != "password"]
+        security_cols = [c for c in mcl_cols if c["field_type"] == "password"]
 
-        for col in mcl_cols:
-            raw_val = self.client["values"].get(col["id"], "")
-            allow_qc = col.get("allow_quick_copy", True)
-            
-            if col["field_type"] == "password":
-                # Security Credentials (2-Column Grid)
-                field_widget = QWidget()
-                fl = QHBoxLayout(field_widget)
-                fl.setContentsMargins(10, 8, 10, 8)
-                fl.setSpacing(8)
-                
-                lbl = QLabel(f"{col['label']}:")
-                lbl.setProperty("class", "SidebarSection")
-                lbl.setStyleSheet("color: #94A3B8; font-weight: 600; font-size: 11px;")
-                lbl.setObjectName("DetailSectionLabel")
-                fl.addWidget(lbl)
-                
-                masked_val = mask_password(raw_val, mask_mode, reveal_count) if raw_val else "—"
-                
-                if allow_qc:
-                    val_label = ClickableLabel(masked_val)
-                    if raw_val:
-                        val_label.clicked.connect(
-                            lambda v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                        )
-                        val_label.setCursor(Qt.PointingHandCursor)
-                else:
-                    val_label = QLabel(masked_val)
-                val_label.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: 500;")
-                val_label.setObjectName("DetailSecretValue")
-                fl.addWidget(val_label, stretch=1)
-                
-                if raw_val:
-                    btn_row = QHBoxLayout()
-                    btn_row.setContentsMargins(0, 0, 0, 0)
-                    btn_row.setSpacing(4)
-                    
-                    if show_hide_btn_enabled:
-                        btn_show = QPushButton()
-                        btn_show.setFixedSize(28, 28)
-                        btn_show.setToolTip("Show / Hide Password")
-                        btn_show.setObjectName("DetailActionButton")
-                        btn_show.setIcon(qta.icon("mdi.eye-outline", color="#FFFFFF"))
-                        btn_show.setCheckable(True)
-                        btn_show.setStyleSheet("QPushButton { background-color: #262626; border: 1px solid #333333; border-radius: 6px; } QPushButton:hover { background-color: #333333; }")
-                        btn_show.toggled.connect(
-                            lambda checked, lbl=val_label, m=masked_val, r=raw_val, btn=btn_show: (
-                                lbl.setText(r if checked else m),
-                                btn.setIcon(qta.icon("mdi.eye-off-outline" if checked else "mdi.eye-outline", color="#FFFFFF"))
-                            )
-                        )
-                        btn_row.addWidget(btn_show)
+        # ======================================================================
+        # 1. Identity Section (Flowing 2-Column Grid on Canvas)
+        # ======================================================================
+        if identity_cols:
+            sec_lbl = QLabel("IDENTITY")
+            sec_lbl.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+            self.scroll_layout.addWidget(sec_lbl)
 
-                    if allow_qc:
-                        btn_copy = QPushButton()
-                        btn_copy.setFixedSize(28, 28)
-                        btn_copy.setToolTip("Copy Password")
-                        btn_copy.setObjectName("DetailActionButton")
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#FFFFFF"))
-                        btn_copy.setStyleSheet("QPushButton { background-color: #262626; border: 1px solid #333333; border-radius: 6px; } QPushButton:hover { background-color: #333333; }")
-                        btn_copy.clicked.connect(
-                            lambda _, v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._copy_to_clipboard(v, lbl_name, is_sec, t)
-                        )
-                        btn_row.addWidget(btn_copy)
-                        
-                    fl.addLayout(btn_row)
+            id_grid = QGridLayout()
+            id_grid.setContentsMargins(0, 2, 0, 6)
+            id_grid.setHorizontalSpacing(24)
+            id_grid.setVerticalSpacing(10)
 
-                field_widget.setStyleSheet("QWidget { background: #171717; border: 1px solid #262626; border-radius: 7px; } QLabel { border: none; background: transparent; color: #FFFFFF; }")
-                field_widget.setObjectName("ClientDetailField")
-                
-                sec_layout.addWidget(field_widget, sec_row, sec_col)
-                sec_col += 1
-                if sec_col > 1:
-                    sec_col = 0
-                    sec_row += 1
-            else:
-                # Identity & Contacts
-                field_widget = QWidget()
-                card_layout = QHBoxLayout(field_widget)
-                card_layout.setContentsMargins(10, 8, 10, 8)
-                card_layout.setSpacing(6)
+            id_row, id_col = 0, 0
+            for col in identity_cols:
+                raw_val = self.client["values"].get(col["id"], "")
+                allow_qc = col.get("allow_quick_copy", True)
 
-                fl = QVBoxLayout()
-                fl.setContentsMargins(0, 0, 0, 0)
-                fl.setSpacing(2)
-                
+                field_vbox = QVBoxLayout()
+                field_vbox.setContentsMargins(0, 0, 0, 0)
+                field_vbox.setSpacing(2)
+
                 lbl = QLabel(col['label'])
-                lbl.setProperty("class", "SidebarSection")
-                lbl.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: 600;")
-                lbl.setObjectName("DetailFieldLabel")
-                
-                if allow_qc:
-                    val_label = ClickableLabel(raw_val or "—")
-                    if raw_val:
+                lbl.setStyleSheet("font-size: 10px; color: #7A7972;")
+                field_vbox.addWidget(lbl)
+
+                val_row = QHBoxLayout()
+                val_row.setContentsMargins(0, 0, 0, 0)
+                val_row.setSpacing(6)
+
+                if raw_val:
+                    if allow_qc:
+                        val_label = ClickableLabel(raw_val)
                         val_label.clicked.connect(
                             lambda v=raw_val, lbl_name=col['label'], is_sec=False, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
                         )
                         val_label.setCursor(Qt.PointingHandCursor)
-                else:
-                    val_label = QLabel(raw_val or "—")
-                val_label.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: 500;")
-                val_label.setObjectName("DetailFieldValue")
-                
-                fl.addWidget(lbl)
-                fl.addWidget(val_label)
-                card_layout.addLayout(fl, stretch=1)
+                        val_label.setToolTip(f"Click to copy {col['label']}")
+                    else:
+                        val_label = QLabel(raw_val)
+                    val_label.setStyleSheet("font-size: 12px; font-weight: 500; color: #E8E8E3;")
+                    val_row.addWidget(val_label, stretch=1)
 
-                if allow_qc and raw_val:
-                    icon_lbl = ClickableLabel()
-                    icon_lbl.setPixmap(qta.icon("mdi.content-copy", color="#FFFFFF").pixmap(QSize(16, 16)))
-                    icon_lbl.setFixedSize(18, 18)
-                    icon_lbl.setToolTip(f"Click to copy {col['label']}")
-                    icon_lbl.setCursor(Qt.PointingHandCursor)
-                    icon_lbl.clicked.connect(
-                        lambda v=raw_val, lbl_name=col['label'], is_sec=False, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                    )
-                    card_layout.addWidget(icon_lbl, alignment=Qt.AlignVCenter)
-                
-                field_widget.setStyleSheet("QWidget { background: #171717; border: 1px solid #262626; border-radius: 7px; } QLabel { border: none; background: transparent; color: #FFFFFF; }")
-                field_widget.setObjectName("ClientDetailField")
-                
-                id_layout.addWidget(field_widget, id_row, id_col)
+                    if allow_qc:
+                        btn_copy = QPushButton()
+                        btn_copy.setFixedSize(22, 22)
+                        btn_copy.setProperty("class", "GhostIconButton")
+                        btn_copy.setToolTip(f"Copy {col['label']}")
+                        btn_copy.setIcon(_cached_icon("mdi.content-copy", "#8E8D88"))
+                        btn_copy.setIconSize(QSize(13, 13))
+                        btn_copy.clicked.connect(
+                            lambda _, v=raw_val, lbl_name=col['label'], is_sec=False, t=timeout_sec: self._copy_to_clipboard(v, lbl_name, is_sec, t)
+                        )
+                        val_row.addWidget(btn_copy)
+                else:
+                    val_label = QLabel("Not set")
+                    val_label.setStyleSheet("font-size: 12px; color: #57564F;")
+                    val_row.addWidget(val_label, stretch=1)
+
+                field_vbox.addLayout(val_row)
+                id_grid.addLayout(field_vbox, id_row, id_col)
+
                 id_col += 1
                 if id_col > 1:
                     id_col = 0
                     id_row += 1
 
-        self.scroll_layout.addWidget(id_box)
-        self.scroll_layout.addWidget(sec_box)
+            self.scroll_layout.addLayout(id_grid)
 
-        notes_header = QHBoxLayout()
-        notes_label = QLabel("Notes")
-        notes_label.setStyleSheet("color: #2E9B5F; font-size: 14px; font-weight: 700;")
-        notes_label.setObjectName("DetailSectionLabel")
-        notes_header.addWidget(notes_label)
+            # Section Divider
+            div1 = QFrame()
+            div1.setFrameShape(QFrame.HLine)
+            div1.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+            self.scroll_layout.addWidget(div1)
 
-        self.notes_status_lbl = QLabel("")
-        self.notes_status_lbl.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600;")
-        notes_header.addWidget(self.notes_status_lbl)
-        notes_header.addStretch()
-        
-        self.scroll_layout.addLayout(notes_header)
+        # ======================================================================
+        # 2. Security Credentials Section (2-Column Grid on Canvas)
+        # ======================================================================
+        if security_cols:
+            sec_lbl2 = QLabel("SECURITY CREDENTIALS")
+            sec_lbl2.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+            self.scroll_layout.addWidget(sec_lbl2)
 
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setObjectName("DetailNotes")
-        self.notes_edit.setReadOnly(False)
-        self.notes_edit.setPlaceholderText("Type notes for this client here...")
-        self.notes_edit.setMaximumHeight(64)
-        
-        self._loading_notes = True
-        self.notes_edit.setPlainText(self.client.get("notes") or "")
-        self._loading_notes = False
+            sec_grid = QGridLayout()
+            sec_grid.setContentsMargins(0, 2, 0, 6)
+            sec_grid.setHorizontalSpacing(24)
+            sec_grid.setVerticalSpacing(8)
 
-        self.notes_edit.setStyleSheet("QTextEdit#DetailNotes { background-color: #FFFFFF; border: 1px solid #D8CDB4; border-radius: 7px; padding: 8px; font-size: 13px; color: #241F1B; }")
-        
-        # Debounce auto-save setup (500ms delay after typing stops)
-        self._notes_timer = QTimer(self)
-        self._notes_timer.setSingleShot(True)
-        self._notes_timer.timeout.connect(self._auto_save_notes)
-        self.notes_edit.textChanged.connect(self._on_notes_text_changed)
+            sec_row, sec_col = 0, 0
+            for idx, col in enumerate(security_cols):
+                raw_val = self.client["values"].get(col["id"], "")
+                allow_qc = col.get("allow_quick_copy", True)
 
-        self.scroll_layout.addWidget(self.notes_edit)
+                field_row_widget = QWidget()
+                fr_layout = QHBoxLayout(field_row_widget)
+                fr_layout.setContentsMargins(0, 4, 0, 4)
+                fr_layout.setSpacing(6)
 
+                text_vbox = QVBoxLayout()
+                text_vbox.setContentsMargins(0, 0, 0, 0)
+                text_vbox.setSpacing(2)
+
+                lbl = QLabel(col['label'])
+                lbl.setStyleSheet("font-size: 10px; color: #7A7972;")
+                text_vbox.addWidget(lbl)
+
+                if raw_val:
+                    masked_val = mask_password(raw_val, mask_mode, reveal_count)
+                    if allow_qc:
+                        val_label = ClickableLabel(masked_val)
+                        val_label.clicked.connect(
+                            lambda v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
+                        )
+                        val_label.setCursor(Qt.PointingHandCursor)
+                        val_label.setToolTip(f"Click to copy {col['label']}")
+                    else:
+                        val_label = QLabel(masked_val)
+                    val_label.setStyleSheet("font-size: 12px; font-weight: 500; color: #E8E8E3;")
+                else:
+                    masked_val = "Not set"
+                    val_label = QLabel("Not set")
+                    val_label.setStyleSheet("font-size: 12px; color: #57564F;")
+
+                text_vbox.addWidget(val_label)
+                fr_layout.addLayout(text_vbox, stretch=1)
+
+                if raw_val:
+                    btn_group = QHBoxLayout()
+                    btn_group.setContentsMargins(0, 0, 0, 0)
+                    btn_group.setSpacing(2)
+
+                    if show_hide_btn_enabled:
+                        btn_show = QPushButton()
+                        btn_show.setFixedSize(24, 24)
+                        btn_show.setProperty("class", "GhostIconButton")
+                        btn_show.setToolTip("Show / Hide Password")
+                        btn_show.setIcon(_cached_icon("mdi.eye-outline", "#8E8D88"))
+                        btn_show.setIconSize(QSize(14, 14))
+                        btn_show.setCheckable(True)
+                        btn_show.toggled.connect(
+                            lambda checked, lbl_w=val_label, m=masked_val, r=raw_val, btn_w=btn_show: (
+                                lbl_w.setText(r if checked else m),
+                                btn_w.setIcon(_cached_icon("mdi.eye-off-outline" if checked else "mdi.eye-outline", "#FFFFFF" if checked else "#8E8D88"))
+                            )
+                        )
+                        btn_group.addWidget(btn_show)
+
+                    if allow_qc:
+                        btn_copy = QPushButton()
+                        btn_copy.setFixedSize(24, 24)
+                        btn_copy.setProperty("class", "GhostIconButton")
+                        btn_copy.setToolTip("Copy Password")
+                        btn_copy.setIcon(_cached_icon("mdi.content-copy", "#8E8D88"))
+                        btn_copy.setIconSize(QSize(13, 13))
+                        btn_copy.clicked.connect(
+                            lambda _, v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._copy_to_clipboard(v, lbl_name, is_sec, t)
+                        )
+                        btn_group.addWidget(btn_copy)
+
+                    fr_layout.addLayout(btn_group)
+
+                sec_grid.addWidget(field_row_widget, sec_row, sec_col)
+                sec_col += 1
+                if sec_col > 1:
+                    sec_col = 0
+                    sec_row += 1
+
+            self.scroll_layout.addLayout(sec_grid)
+
+            # Section Divider
+            div2 = QFrame()
+            div2.setFrameShape(QFrame.HLine)
+            div2.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+            self.scroll_layout.addWidget(div2)
+
+        # ======================================================================
+        # 3. Services Section (Flowing List on Canvas)
+        # ======================================================================
         services = self.db.get_client_services(client_id)
         if services:
             ext_setting = self.db.get_setting("extension_autofill_enabled", "1") == "1"
             assist_setting = self.db.get_setting("manual_assist_enabled", "1") == "1"
             copy_setting = self.db.get_setting("manual_copy_btn_enabled", "1") == "1"
 
-            # Service Management Card
-            svc_card = QGroupBox("Service Management")
-            svc_card.setObjectName("ClientDetailCard")
-            svc_card_layout = QVBoxLayout(svc_card)
-            svc_card_layout.setContentsMargins(12, 12, 12, 12)
-            svc_card_layout.setSpacing(6)
+            # Header row above services
+            svc_hdr = QHBoxLayout()
+            svc_hdr.setContentsMargins(0, 0, 0, 0)
+            lbl_svc_sec = QLabel("SERVICES")
+            lbl_svc_sec.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+            svc_hdr.addWidget(lbl_svc_sec)
+            svc_hdr.addStretch()
 
-            # Top Header Bar inside card (Title + Shortcuts info)
-            card_hdr = QHBoxLayout()
-            card_hdr.setContentsMargins(0, 0, 0, 0)
-            
-            lbl_title = QLabel("Service Management")
-            lbl_title.setStyleSheet("font-weight: 700; font-size: 14px; color: #2E9B5F;")
-            card_hdr.addWidget(lbl_title)
-            card_hdr.addStretch()
-
-            shortcut_info = QLabel("ⓘ shortcuts")
-            shortcut_info.setStyleSheet("color: #CBD5E1; font-size: 11px;")
+            shortcut_info = QLabel("ⓘ shortcuts: Alt+1..9")
+            shortcut_info.setStyleSheet("color: #6E6D67; font-size: 10.5px;")
             shortcut_info.setToolTip(
                 "Shortcuts:\n"
                 "Alt+1..9 = Extension Autofill\n"
                 "Alt+Ctrl+1..9 = Manual Assist\n"
                 "Alt+Shift+1..9 = Manual Copy"
             )
-            card_hdr.addWidget(shortcut_info)
-            svc_card_layout.addLayout(card_hdr)
+            svc_hdr.addWidget(shortcut_info)
+            self.scroll_layout.addLayout(svc_hdr)
 
-            # Column Headers (Service | Ext | Assist | Copy)
-            col_hdr = QHBoxLayout()
-            col_hdr.setContentsMargins(0, 4, 0, 4)
-            lbl_col_svc = QLabel("Service")
-            lbl_col_svc.setStyleSheet("color: #CBD5E1; font-size: 11px; font-weight: 600;")
-            col_hdr.addWidget(lbl_col_svc)
-            col_hdr.addStretch()
-
-            for hdr_text, is_on in [("Ext", ext_setting), ("Assist", assist_setting), ("Copy", copy_setting)]:
-                if is_on:
-                    lbl_h = QLabel(hdr_text)
-                    lbl_h.setStyleSheet("color: #CBD5E1; font-size: 11px; font-weight: 600; font-family: monospace;")
-                    lbl_h.setFixedWidth(34)
-                    lbl_h.setAlignment(Qt.AlignCenter)
-                    col_hdr.addWidget(lbl_h)
-
-            svc_card_layout.addLayout(col_hdr)
-
-            # Header separator
-            sep = QFrame()
-            sep.setFrameShape(QFrame.HLine)
-            sep.setStyleSheet("color: #262626; background-color: #262626; min-height: 1px; max-height: 1px; border: none;")
-            svc_card_layout.addWidget(sep)
+            svc_list_layout = QVBoxLayout()
+            svc_list_layout.setContentsMargins(0, 0, 0, 4)
+            svc_list_layout.setSpacing(0)
 
             for i, s in enumerate(services):
                 key_num = i + 1
@@ -475,33 +496,37 @@ class ClientDetailWindow(QWidget):
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
-                row_layout.setContentsMargins(4, 4, 4, 4)
-                row_layout.setSpacing(8)
+                row_layout.setContentsMargins(0, 5, 0, 5)
+                row_layout.setSpacing(10)
 
-                # Icon + Service Name
+                # Accent Color Dot / Icon
+                portal_color = _get_portal_accent_color(s["name"])
                 icon_name = _get_service_icon(s["name"])
+                
                 icon_lbl = QLabel()
-                icon_lbl.setPixmap(qta.icon(icon_name, color="#FF4D4D").pixmap(QSize(18, 18)))
-                icon_lbl.setFixedSize(22, 22)
+                icon_lbl.setPixmap(qta.icon(icon_name, color=portal_color).pixmap(QSize(16, 16)) if qta else QIcon().pixmap(QSize(16, 16)))
+                icon_lbl.setFixedSize(18, 18)
                 row_layout.addWidget(icon_lbl)
 
                 svc_name = QLabel(s["name"])
-                svc_name.setStyleSheet("font-weight: 600; font-size: 13px; color: #FFFFFF;")
+                svc_name.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
                 row_layout.addWidget(svc_name, stretch=1)
 
                 # 1. Ext Button (Extension Autofill)
                 if ext_setting:
                     btn_ext = QPushButton()
-                    btn_ext.setFixedSize(34, 28)
+                    btn_ext.setFixedSize(36, 28)
                     btn_ext.setCursor(Qt.PointingHandCursor if ext_on else Qt.ForbiddenCursor)
                     btn_ext.setEnabled(ext_on)
                     if ext_on:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#FFFFFF"))
+                        btn_ext.setIcon(qta.icon("mdi.flash", color="#FFFFFF") if qta else QIcon())
+                        btn_ext.setIconSize(QSize(18, 18))
                         btn_ext.setToolTip(f"Extension Autofill {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
                         btn_ext.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
                         btn_ext.clicked.connect(lambda _, svc=s: self._launch_extension_autofill(svc))
                     else:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#666666"))
+                        btn_ext.setIcon(qta.icon("mdi.flash", color="#555555") if qta else QIcon())
+                        btn_ext.setIconSize(QSize(18, 18))
                         btn_ext.setToolTip("Extension Autofill is OFF" if not ext_setting else "Manual-only portal")
                         btn_ext.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
                     row_layout.addWidget(btn_ext)
@@ -509,16 +534,18 @@ class ClientDetailWindow(QWidget):
                 # 2. Assist Button (Manual Assist)
                 if assist_setting:
                     btn_assist = QPushButton()
-                    btn_assist.setFixedSize(34, 28)
+                    btn_assist.setFixedSize(36, 28)
                     btn_assist.setCursor(Qt.PointingHandCursor if assist_on else Qt.ForbiddenCursor)
                     btn_assist.setEnabled(assist_on)
                     if assist_on:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#FF4D4D"))
+                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#FF4D4D") if qta else QIcon())
+                        btn_assist.setIconSize(QSize(18, 18))
                         btn_assist.setToolTip(f"Manual Assist {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
-                        btn_assist.setStyleSheet("QPushButton { background-color: #171717; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                        btn_assist.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
                         btn_assist.clicked.connect(lambda _, svc=s: self._launch_manual_assist(svc))
                     else:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#666666"))
+                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#555555") if qta else QIcon())
+                        btn_assist.setIconSize(QSize(18, 18))
                         btn_assist.setToolTip("Manual Assist is OFF")
                         btn_assist.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
                     row_layout.addWidget(btn_assist)
@@ -526,28 +553,29 @@ class ClientDetailWindow(QWidget):
                 # 3. Copy Button (Manual Copy)
                 if copy_setting:
                     btn_copy = QPushButton()
-                    btn_copy.setFixedSize(34, 28)
+                    btn_copy.setFixedSize(36, 28)
                     btn_copy.setCursor(Qt.PointingHandCursor if copy_on else Qt.ForbiddenCursor)
                     btn_copy.setEnabled(copy_on)
                     if copy_on:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#FF4D4D"))
+                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#FF4D4D") if qta else QIcon())
+                        btn_copy.setIconSize(QSize(17, 17))
                         btn_copy.setToolTip(f"Manual Copy {s['name']}" + (f" (Alt+Shift+{key_num})" if has_shortcut else ""))
-                        btn_copy.setStyleSheet("QPushButton { background-color: #171717; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                        btn_copy.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
                         btn_copy.clicked.connect(lambda _, svc=s: self._launch_manual_copy(svc))
                     else:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#666666"))
+                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#555555") if qta else QIcon())
+                        btn_copy.setIconSize(QSize(17, 17))
                         btn_copy.setToolTip("Manual Copy is OFF")
                         btn_copy.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
                     row_layout.addWidget(btn_copy)
 
-                svc_card_layout.addWidget(row_widget)
+                svc_list_layout.addWidget(row_widget)
 
-                # Separator line except last row
                 if i < len(services) - 1:
-                    row_sep = QFrame()
-                    row_sep.setFrameShape(QFrame.HLine)
-                    row_sep.setStyleSheet("color: #262626; background-color: #262626; min-height: 1px; max-height: 1px; border: none;")
-                    svc_card_layout.addWidget(row_sep)
+                    item_div = QFrame()
+                    item_div.setFrameShape(QFrame.HLine)
+                    item_div.setStyleSheet("background-color: #232323; min-height: 1px; max-height: 1px; border: none;")
+                    svc_list_layout.addWidget(item_div)
 
                 if has_shortcut:
                     if ext_on:
@@ -565,30 +593,70 @@ class ClientDetailWindow(QWidget):
                         sc_copy.activated.connect(lambda svc=s: self._launch_manual_copy(svc))
                         self._service_shortcuts.append(sc_copy)
 
-            # Footer Legend
-            legend_sep = QFrame()
-            legend_sep.setFrameShape(QFrame.HLine)
-            legend_sep.setStyleSheet("color: #262626; background-color: #262626; min-height: 1px; max-height: 1px; border: none; margin-top: 4px;")
-            svc_card_layout.addWidget(legend_sep)
+            self.scroll_layout.addLayout(svc_list_layout)
 
-            footer_legend = QLabel("⚡ Ext = extension autofill    📋 Assist = manual dialog    📄 Copy = manual copy")
-            footer_legend.setStyleSheet("color: #94A3B8; font-size: 11px; padding-top: 2px;")
-            svc_card_layout.addWidget(footer_legend)
+            # Section Divider
+            div3 = QFrame()
+            div3.setFrameShape(QFrame.HLine)
+            div3.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+            self.scroll_layout.addWidget(div3)
 
-            self.scroll_layout.addWidget(svc_card)
+        # ======================================================================
+        # 4. Notes Section (Clean White Editor)
+        # ======================================================================
+        notes_header = QHBoxLayout()
+        notes_header.setContentsMargins(0, 0, 0, 0)
+        notes_label = QLabel("NOTES")
+        notes_label.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+        notes_header.addWidget(notes_label)
 
+        self.notes_status_lbl = QLabel("")
+        self.notes_status_lbl.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600;")
+        notes_header.addWidget(self.notes_status_lbl)
+        notes_header.addStretch()
+        self.scroll_layout.addLayout(notes_header)
 
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setObjectName("DetailNotes")
+        self.notes_edit.setReadOnly(False)
+        self.notes_edit.setPlaceholderText("Add notes for this client...")
+        self.notes_edit.setMaximumHeight(64)
+        self.notes_edit.setStyleSheet("""
+            QTextEdit#DetailNotes {
+                background-color: #FFFFFF;
+                border: 1px solid #D8CDB4;
+                border-radius: 7px;
+                padding: 8px;
+                font-size: 12.5px;
+                color: #241F1B;
+            }
+            QTextEdit#DetailNotes:focus {
+                border-color: #2E9B5F;
+            }
+        """)
+        
+        self._loading_notes = True
+        self.notes_edit.setPlainText(self.client.get("notes") or "")
+        self._loading_notes = False
 
-
-
+        self._notes_timer = QTimer(self)
+        self._notes_timer.setSingleShot(True)
+        self._notes_timer.timeout.connect(self._auto_save_notes)
+        self.notes_edit.textChanged.connect(self._on_notes_text_changed)
+        self.scroll_layout.addWidget(self.notes_edit)
 
         self.scroll_layout.addStretch()
 
+    def _get_identity_parts(self, client):
+        identity_cols = [c for c in self.db.get_mcl_columns() if c["is_identity"]]
+        vals = [client["values"].get(c["id"], "") for c in identity_cols if client["values"].get(c["id"])]
+        primary = vals[0] if len(vals) > 0 else "Client Profile"
+        secondary = vals[1] if len(vals) > 1 else ""
+        return primary, secondary
+
     def _get_identity_label(self, client):
-        identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
-        vals = [client["values"].get(cid, "") for cid in identity_cols if client["values"].get(cid)]
-        return " - ".join(vals) if vals else "[No Identity Data]"
-        return " — ".join(vals) if vals else "[No Identity Data]"
+        primary, secondary = self._get_identity_parts(client)
+        return f"{primary} — {secondary}" if secondary else primary
 
     def _get_credentials(self, service: dict):
         uid = self.client["values"].get(service["userid_column_id"], "")

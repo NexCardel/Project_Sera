@@ -517,21 +517,14 @@ class SeraApp:
         sidebar = self.shell.sidebar
         sidebar.go_to_search.connect(self._show_search_from_admin)
         sidebar.action_import_csv.connect(self.admin_win._on_import_csv)
-        sidebar.action_download_template.connect(self.admin_win._on_download_template)
-        sidebar.action_purge_duplicates.connect(self.admin_win._on_purge_duplicates)
         sidebar.action_manage_clients.connect(self._show_manage_clients)
         sidebar.action_tracker_dump.connect(self._show_tracker_dump)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
-        sidebar.action_manage_mcl.connect(self.admin_win._on_manage_mcl)
-        sidebar.action_manage_services.connect(self.admin_win._on_manage_services)
         sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
-        sidebar.action_export_csv.connect(self.admin_win._on_export_csv)
-        sidebar.action_backup.connect(self.admin_win._on_backup)
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
-        sidebar.action_restore.connect(self.admin_win._on_restore_backup)
         sidebar.action_enter_admin.connect(self._request_admin_mode)
         sidebar.action_exit_admin.connect(self._exit_admin_mode)
         
@@ -708,7 +701,6 @@ class SeraApp:
 
     def _show_search_from_admin(self):
         self.shell.dismiss_detail_on_outside = False
-        self._apply_theme()
         self.search_win.refresh()
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()

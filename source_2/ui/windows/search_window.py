@@ -162,9 +162,9 @@ class SearchWindow(QWidget):
         header_row = QHBoxLayout()
         
         self.btn_toggle_sidebar = QPushButton()
-        self.btn_toggle_sidebar.setObjectName("PageToggleSidebarButton")
+        self.btn_toggle_sidebar.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#A0A0A0"))
+            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#8E8D88"))
             self.btn_toggle_sidebar.setIconSize(QSize(20, 20))
         self.btn_toggle_sidebar.setFixedSize(36, 36)
         self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
@@ -181,8 +181,9 @@ class SearchWindow(QWidget):
         header_row.addSpacing(16)
         
         self.btn_fill_color = QPushButton()
+        self.btn_fill_color.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_fill_color.setIcon(qta.icon("mdi.format-color-fill", color="#FFFFFF"))
+            self.btn_fill_color.setIcon(qta.icon("mdi.format-color-fill", color="#8E8D88"))
             self.btn_fill_color.setIconSize(QSize(20, 20))
         self.btn_fill_color.setFixedSize(36, 36)
         self.btn_fill_color.setToolTip("Cell Fill Color (Background)")
@@ -190,8 +191,9 @@ class SearchWindow(QWidget):
         header_row.addWidget(self.btn_fill_color)
 
         self.btn_text_color = QPushButton()
+        self.btn_text_color.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_text_color.setIcon(qta.icon("mdi.format-color-text", color="#FFFFFF"))
+            self.btn_text_color.setIcon(qta.icon("mdi.format-color-text", color="#8E8D88"))
             self.btn_text_color.setIconSize(QSize(20, 20))
         self.btn_text_color.setFixedSize(36, 36)
         self.btn_text_color.setToolTip("Cell Text Color (Foreground)")
@@ -199,8 +201,9 @@ class SearchWindow(QWidget):
         header_row.addWidget(self.btn_text_color)
 
         self.btn_clear_fmt = QPushButton()
+        self.btn_clear_fmt.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_clear_fmt.setIcon(qta.icon("mdi.eraser", color="#FF4D4D"))
+            self.btn_clear_fmt.setIcon(qta.icon("mdi.eraser", color="#8E8D88"))
             self.btn_clear_fmt.setIconSize(QSize(20, 20))
         self.btn_clear_fmt.setFixedSize(36, 36)
         self.btn_clear_fmt.setToolTip("Clear Selected Cell Formatting")
@@ -210,8 +213,9 @@ class SearchWindow(QWidget):
         header_row.addSpacing(8)
 
         self.btn_undo = QPushButton()
+        self.btn_undo.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_undo.setIcon(qta.icon("mdi.undo", color="#FFFFFF"))
+            self.btn_undo.setIcon(qta.icon("mdi.undo", color="#8E8D88"))
             self.btn_undo.setIconSize(QSize(20, 20))
         self.btn_undo.setFixedSize(36, 36)
         self.btn_undo.setToolTip("Undo Cell Formatting (Ctrl+Z)")
@@ -220,8 +224,9 @@ class SearchWindow(QWidget):
         header_row.addWidget(self.btn_undo)
 
         self.btn_redo = QPushButton()
+        self.btn_redo.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_redo.setIcon(qta.icon("mdi.redo", color="#FFFFFF"))
+            self.btn_redo.setIcon(qta.icon("mdi.redo", color="#8E8D88"))
             self.btn_redo.setIconSize(QSize(20, 20))
         self.btn_redo.setFixedSize(36, 36)
         self.btn_redo.setToolTip("Redo Cell Formatting (Ctrl+Y)")
@@ -242,8 +247,9 @@ class SearchWindow(QWidget):
 
         # Sync Trigger (Refresh) button
         self.btn_sync = QPushButton()
+        self.btn_sync.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_sync.setIcon(qta.icon("mdi.refresh", color="#FFFFFF"))
+            self.btn_sync.setIcon(qta.icon("mdi.refresh", color="#8E8D88"))
             self.btn_sync.setIconSize(QSize(20, 20))
         self.btn_sync.setFixedSize(36, 36)
         self.btn_sync.setCursor(Qt.PointingHandCursor)
@@ -259,7 +265,7 @@ class SearchWindow(QWidget):
         self.search_box.setPlaceholderText("Search clients across all columns...")
         self.search_box.setClearButtonEnabled(True)
         if qta:
-            self.search_box.addAction(qta.icon("mdi.magnify", color="#889988"), QLineEdit.LeadingPosition)
+            self.search_box.addAction(qta.icon("mdi.magnify", color="#8E8D88"), QLineEdit.LeadingPosition)
         self.search_box.setMinimumHeight(36)
         self.search_box.textChanged.connect(self._on_search_input_changed)
         self.search_box.returnPressed.connect(self._activate_current_result)
@@ -267,8 +273,8 @@ class SearchWindow(QWidget):
         search_row.addWidget(self.search_box, stretch=3)
 
         lbl_services = QLabel("Filter:")
-        lbl_services.setProperty("class", "SidebarSection")
-        lbl_services.setStyleSheet("color: #FFFFFF;")
+        lbl_services.setProperty("class", "SectionLabel")
+        lbl_services.setStyleSheet("color: #8E8D88;")
         search_row.addWidget(lbl_services)
         
         self.service_filter = QComboBox()
@@ -280,8 +286,9 @@ class SearchWindow(QWidget):
         search_row.addStretch(1)
 
         self.btn_edit_client = QPushButton()
+        self.btn_edit_client.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#FFFFFF"))
+            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#8E8D88"))
             self.btn_edit_client.setIconSize(QSize(20, 20))
         self.btn_edit_client.setFixedSize(36, 36)
         self.btn_edit_client.setToolTip("Edit selected client profile")
@@ -289,8 +296,9 @@ class SearchWindow(QWidget):
         search_row.addWidget(self.btn_edit_client)
 
         self.btn_delete_client = QPushButton()
+        self.btn_delete_client.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#FF4D4D"))
+            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#C62828"))
             self.btn_delete_client.setIconSize(QSize(20, 20))
         self.btn_delete_client.setFixedSize(36, 36)
         self.btn_delete_client.setToolTip("Permanently delete selected client record")
@@ -298,8 +306,9 @@ class SearchWindow(QWidget):
         search_row.addWidget(self.btn_delete_client)
 
         self.btn_manage_services = QPushButton()
+        self.btn_manage_services.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#FFFFFF"))
+            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#8E8D88"))
             self.btn_manage_services.setIconSize(QSize(20, 20))
         self.btn_manage_services.setFixedSize(36, 36)
         self.btn_manage_services.setToolTip("Attach / Detach Services for selected client")
@@ -307,8 +316,9 @@ class SearchWindow(QWidget):
         search_row.addWidget(self.btn_manage_services)
 
         self.btn_archive_client = QPushButton()
+        self.btn_archive_client.setProperty("class", "GhostIconButton")
         if qta:
-            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#FFFFFF"))
+            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#8E8D88"))
             self.btn_archive_client.setIconSize(QSize(20, 20))
         self.btn_archive_client.setFixedSize(36, 36)
         self.btn_archive_client.setToolTip("Archive selected client")
@@ -578,18 +588,34 @@ class SearchWindow(QWidget):
             client_ids = [c["id"] for c in clients]
             fmt_map = self.db.get_cell_formatting_for_clients(client_ids)
             recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
-            from PySide6.QtGui import QColor, QBrush
+            
+            # Pre-compute column metadata and brush cache for high-speed rendering
+            col_meta = []
+            for c_idx, col in enumerate(mcl_cols):
+                col_id = col["id"]
+                col_key = str(col_id)
+                col_lbl = col["label"].strip().lower()
+                is_id = (col.get("field_type") == "id" or col_lbl in {"id", "client id", "token"})
+                is_num = col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}
+                col_meta.append((c_idx, col_id, col_key, is_id, is_num))
+
+            brush_cache = {}
+            def _get_brush(color_str):
+                if not color_str:
+                    return None
+                if color_str not in brush_cache:
+                    brush_cache[color_str] = QBrush(QColor(color_str))
+                return brush_cache[color_str]
+
+            self.results_table.blockSignals(True)
 
             for r, client in enumerate(clients):
                 client_id = client["id"]
                 client_vals = client.get("values", {})
                 act_list = recent_acts.get(client_id, [])
                 
-                for c_idx, col in enumerate(mcl_cols):
-                    val = client_vals.get(col["id"], "")
-                    col_lbl = col["label"].strip().lower()
-                    col_key = str(col["id"])
-                    is_id_col = (col.get("field_type") == "id" or col_lbl in {"id", "client id", "token"})
+                for c_idx, col_id, col_key, is_id_col, is_num_col in col_meta:
+                    val = client_vals.get(col_id, "")
                     
                     if is_id_col:
                         raw_id = client.get("client_id_token") or str(client_id)
@@ -601,7 +627,7 @@ class SearchWindow(QWidget):
                             age = top["age_seconds"]
                             rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
                             act_tag = f"{action_type} • {rel}"
-                    elif col_lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}:
+                    elif is_num_col:
                         val = str(r + 1)
                         act_tag = ""
                     else:
@@ -623,11 +649,13 @@ class SearchWindow(QWidget):
                     fmt = fmt_map.get((client_id, col_key))
                     if fmt:
                         font = item.font()
-                        if fmt.get("bg_color"):
-                            item.setBackground(QBrush(QColor(fmt["bg_color"])))
+                        bg_b = _get_brush(fmt.get("bg_color"))
+                        if bg_b:
+                            item.setBackground(bg_b)
                             font.setBold(True)
-                        if fmt.get("fg_color"):
-                            item.setForeground(QBrush(QColor(fmt["fg_color"])))
+                        fg_b = _get_brush(fmt.get("fg_color"))
+                        if fg_b:
+                            item.setForeground(fg_b)
                             font.setBold(True)
                         item.setFont(font)
 
@@ -646,15 +674,19 @@ class SearchWindow(QWidget):
                 svc_fmt = fmt_map.get((client_id, "services"))
                 if svc_fmt:
                     font = svc_item.font()
-                    if svc_fmt.get("bg_color"):
-                        svc_item.setBackground(QBrush(QColor(svc_fmt["bg_color"])))
+                    bg_b = _get_brush(svc_fmt.get("bg_color"))
+                    if bg_b:
+                        svc_item.setBackground(bg_b)
                         font.setBold(True)
-                    if svc_fmt.get("fg_color"):
-                        svc_item.setForeground(QBrush(QColor(svc_fmt["fg_color"])))
+                    fg_b = _get_brush(svc_fmt.get("fg_color"))
+                    if fg_b:
+                        svc_item.setForeground(fg_b)
                         font.setBold(True)
                     svc_item.setFont(font)
 
                 self.results_table.setItem(r, len(mcl_cols), svc_item)
+
+            self.results_table.blockSignals(False)
 
 
             if self.results_table.rowCount() > 0:

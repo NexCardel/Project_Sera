@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import time
+import threading
 from contextlib import contextmanager
 
 import security
@@ -29,6 +30,7 @@ class SeraDatabase:
     def __init__(self, db_path: str, hex_key: str):
         self.db_path = db_path
         self.hex_key = hex_key
+        self._local = threading.local()
         # Set externally by main.py once SyncPeerService exists, so this
         # module never has to import sync_peer.py directly (sync depends
         # on the db, not the other way around). Left as a no-op until then
@@ -65,8 +67,6 @@ class SeraDatabase:
             yield conn
             conn.commit()
         except sqlite3.IntegrityError as e:
-            # FIX: Properly bubble up data constraint errors (like NOT NULL)
-            # instead of masking them as a wrong master password.
             conn.rollback()
             raise e
         except sqlite3.OperationalError as e:
@@ -78,8 +78,14 @@ class SeraDatabase:
                 "Could not open the database. This almost always means "
                 "the master password was typed incorrectly."
             ) from e
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
+
+    def close(self):
+        pass
 
 
     def _ensure_column(self, conn, table: str, column: str, coldef: str):
@@ -374,12 +380,25 @@ class SeraDatabase:
             row = cur.fetchone()
             return row[0] if row else default
 
+    def get_all_settings(self) -> dict:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT key, value FROM app_settings")
+            return {r[0]: r[1] for r in cur.fetchall()}
+
     def set_setting(self, key: str, value: str):
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO app_settings (key, value) VALUES (?, ?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (key, value),
+            )
+
+    def set_settings_bulk(self, settings_dict: dict):
+        with self._connect() as conn:
+            conn.executemany(
+                """INSERT INTO app_settings (key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                [(k, str(v) if v is not None else "") for k, v in settings_dict.items()]
             )
 
     # ---------------- Shared staff roster ----------------
@@ -584,7 +603,7 @@ class SeraDatabase:
                 (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
                 (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
                 (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
-                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password']', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
                 (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
                 (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
             ]
@@ -1728,6 +1747,9 @@ class SeraDatabase:
         if os.path.exists(live_salt):
             pre_salt = os.path.join(live_dir, f"sera.salt.pre-restore-{now_str}")
             shutil.copy2(live_salt, pre_salt)
+
+        # Close any open connections before file replacement
+        self.close()
 
         # Overwrite live files with validated Syncthing conflict/backup pair
         shutil.copy2(matched_db, self.db_path)

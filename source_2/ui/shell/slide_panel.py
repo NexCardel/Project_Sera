@@ -1,9 +1,10 @@
 from PySide6.QtCore import (
     QEasingCurve,
-    QParallelAnimationGroup,
     QPropertyAnimation,
+    QRect,
     Signal,
     Qt,
+    QSize,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -13,11 +14,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QIcon
 try:
     import qtawesome as qta
 except Exception:
     qta = None
-from PySide6.QtCore import QSize
 from pathlib import Path
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
@@ -30,7 +31,7 @@ class SlidePanel(QFrame):
     def __init__(self, parent=None, width=650):
         super().__init__(parent)
         self.target_width = width
-        self.setFixedWidth(0)
+        self._is_open = False
         self.setObjectName("SlidePanel")
         
         self.layout = QVBoxLayout(self)
@@ -42,7 +43,10 @@ class SlidePanel(QFrame):
         h_layout.setContentsMargins(24, 24, 24, 0)
 
         self.btn_back = QPushButton()
-        self.btn_back.setIcon(qta.icon("mdi.arrow-left", color="#FFFFFF"))
+        if qta:
+            self.btn_back.setIcon(qta.icon("mdi.arrow-left", color="#FFFFFF"))
+        else:
+            self.btn_back.setIcon(QIcon(BACK_ICON))
         self.btn_back.setIconSize(QSize(22, 22))
         self.btn_back.setToolTip("Back")
         self.btn_back.setCursor(Qt.PointingHandCursor)
@@ -80,19 +84,33 @@ class SlidePanel(QFrame):
         self.container_layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(self.container, stretch=1)
         
-        self.anim_min = QPropertyAnimation(self, b"minimumWidth")
-        self.anim_max = QPropertyAnimation(self, b"maximumWidth")
-        self.anim_group = QParallelAnimationGroup()
-        self.anim_group.addAnimation(self.anim_min)
-        self.anim_group.addAnimation(self.anim_max)
-        
-        for anim in [self.anim_min, self.anim_max]:
-            anim.setDuration(220)
-            anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim = QPropertyAnimation(self, b"geometry", self)
+        self.anim.setDuration(220)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.finished.connect(self._on_anim_finished)
+
+        self.hide()
+
+    @property
+    def is_open(self) -> bool:
+        return self._is_open
+
+    def update_position(self):
+        """Update geometry when parent resizes."""
+        if not self.parent():
+            return
+        parent_w = self.parent().width()
+        parent_h = self.parent().height()
+        panel_w = min(self.target_width, parent_w)
+        if self._is_open:
+            self.setGeometry(parent_w - panel_w, 0, panel_w, parent_h)
+            self.raise_()
+        else:
+            self.setGeometry(parent_w, 0, panel_w, parent_h)
 
     def set_widget(self, widget: QWidget, title: str = "", persistent: bool = False):
         if self.container_layout.count() > 0 and self.container_layout.itemAt(0).widget() == widget:
-            pass # Already set
+            pass  # Already set
         else:
             while self.container_layout.count():
                 item = self.container_layout.takeAt(0)
@@ -116,21 +134,49 @@ class SlidePanel(QFrame):
             self.btn_back.hide()
             
     def slide_in(self):
+        self._is_open = True
         self.opened.emit()
-        if self.width() == self.target_width:
+        self.show()
+        self.raise_()
+        if not self.parent():
             return
-        self.anim_min.setStartValue(self.width())
-        self.anim_min.setEndValue(self.target_width)
-        self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(self.target_width)
-        self.anim_group.start()
+        parent_w = self.parent().width()
+        parent_h = self.parent().height()
+        panel_w = min(self.target_width, parent_w)
+
+        self.anim.stop()
+        start_geom = self.geometry()
+        if not self.isVisible() or start_geom.width() <= 0 or not start_geom.isValid() or start_geom.x() >= parent_w:
+            start_geom = QRect(parent_w, 0, panel_w, parent_h)
+        else:
+            start_geom = QRect(start_geom.x(), 0, panel_w, parent_h)
+        
+        end_geom = QRect(parent_w - panel_w, 0, panel_w, parent_h)
+        self.anim.setStartValue(start_geom)
+        self.anim.setEndValue(end_geom)
+        self.anim.start()
 
     def slide_out(self):
-        self.closed.emit()
-        if self.width() == 0:
+        if not self._is_open and not self.isVisible():
             return
-        self.anim_min.setStartValue(self.width())
-        self.anim_min.setEndValue(0)
-        self.anim_max.setStartValue(self.width())
-        self.anim_max.setEndValue(0)
-        self.anim_group.start()
+        self._is_open = False
+        self.closed.emit()
+        if not self.parent():
+            self.hide()
+            return
+        parent_w = self.parent().width()
+        parent_h = self.parent().height()
+        panel_w = min(self.target_width, parent_w)
+
+        self.anim.stop()
+        start_geom = self.geometry()
+        end_geom = QRect(parent_w, 0, panel_w, parent_h)
+        self.anim.setStartValue(start_geom)
+        self.anim.setEndValue(end_geom)
+        self.anim.start()
+
+    def _on_anim_finished(self):
+        if not self._is_open:
+            self.hide()
+        else:
+            self.raise_()

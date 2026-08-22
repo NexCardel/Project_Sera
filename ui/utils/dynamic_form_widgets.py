@@ -76,3 +76,17 @@ def read_input_widget(field: dict, widget) -> str:
     if field_type == "date":
         return widget.date().toString(DATE_FORMAT)
     return widget.text().strip() if field_type != "password" else widget.text()
+
+def set_input_widget_value(field: dict, widget, value: str = ""):
+    """Updates an existing widget's value in-place without rebuilding UI."""
+    field_type = field.get("field_type", "text")
+    if field_type == "id":
+        widget.setText(value or "(Auto-Generated)")
+    elif field_type == "dropdown":
+        idx = widget.findData(value or "")
+        widget.setCurrentIndex(max(idx, 0))
+    elif field_type == "date":
+        qdate = QDate.fromString(value, DATE_FORMAT) if value else None
+        widget.setDate(qdate if qdate and qdate.isValid() else QDate.currentDate())
+    else:
+        widget.setText(value or "")
