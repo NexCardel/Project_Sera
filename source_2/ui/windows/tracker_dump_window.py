@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor, QFont, QGuiApplication, QClipboard
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QComboBox, QMessageBox, QDialog, QTextEdit, QFrame,
+    QComboBox, QMessageBox, QDialog, QTextEdit, QTextBrowser, QFrame,
     QFileDialog, QScrollArea, QFormLayout, QCheckBox, QTabWidget,
     QApplication
 )
@@ -488,8 +488,10 @@ class PayloadInspectorDialog(QDialog):
         tl_layout = QVBoxLayout(tab_timeline)
         tl_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.txt_timeline = QTextEdit()
+        self.txt_timeline = QTextBrowser()
         self.txt_timeline.setReadOnly(True)
+        self.txt_timeline.setOpenLinks(False)
+        self.expanded_repeats = set()
 
         captures = []
         if self.db and hasattr(self.db, "get_captures_for_container"):
@@ -506,8 +508,34 @@ class PayloadInspectorDialog(QDialog):
 
         decoded_sessions = group_captures_into_sessions(captures)
         self.decoded_timeline_sessions = decoded_sessions
-        html_content = format_timeline_flow_html(decoded_sessions, title_tag)
+        html_content = format_timeline_flow_html(decoded_sessions, title_tag, expanded_step_uids=self.expanded_repeats)
         self.txt_timeline.setHtml(html_content)
+
+        def _on_timeline_anchor_clicked(url):
+            raw_url = url.toString()
+            frag = url.fragment()
+            full_target = frag if frag else raw_url
+            
+            if "toggle_repeat" in full_target:
+                uid = full_target.replace("#", "").replace("toggle_repeat:", "").replace("toggle_repeat_", "")
+                if uid in self.expanded_repeats:
+                    self.expanded_repeats.remove(uid)
+                else:
+                    self.expanded_repeats.add(uid)
+                
+                sb = self.txt_timeline.verticalScrollBar()
+                v_scroll = sb.value() if sb else 0
+                
+                new_html = format_timeline_flow_html(
+                    self.decoded_timeline_sessions,
+                    title_tag=title_tag,
+                    expanded_step_uids=self.expanded_repeats
+                )
+                self.txt_timeline.setHtml(new_html)
+                if sb:
+                    sb.setValue(v_scroll)
+
+        self.txt_timeline.anchorClicked.connect(_on_timeline_anchor_clicked)
 
         tl_layout.addWidget(self.txt_timeline)
         tabs.addTab(tab_timeline, "Timeline")
@@ -717,35 +745,12 @@ class TrackerDumpWindow(QWidget):
         btn_refresh.clicked.connect(self.load_data)
         header_layout.addWidget(btn_refresh)
 
-        btn_open_txt = QPushButton("Open Dump (TXT)")
-        btn_open_txt.setProperty("class", "ActionBtn")
-        btn_open_txt.setIcon(_safe_qta_icon("mdi.file-document-outline", "#FFFFFF"))
-        btn_open_txt.clicked.connect(self._open_raw_dump_txt)
-        header_layout.addWidget(btn_open_txt)
+        self.btn_preferences = QPushButton("Preferences")
+        self.btn_preferences.setProperty("class", "ActionBtn")
+        self.btn_preferences.setIcon(_safe_qta_icon("mdi.cog-outline", "#FFFFFF"))
+        self.btn_preferences.clicked.connect(self._show_preferences_menu)
+        header_layout.addWidget(self.btn_preferences)
 
-        btn_rebuild_txt = QPushButton("Rebuild TXT")
-        btn_rebuild_txt.setProperty("class", "ActionBtn")
-        btn_rebuild_txt.setIcon(_safe_qta_icon("mdi.file-sync-outline", "#FFFFFF"))
-        btn_rebuild_txt.clicked.connect(self._rebuild_raw_dump_txt)
-        header_layout.addWidget(btn_rebuild_txt)
-
-        btn_reresolve = QPushButton("Re-Resolve Identity")
-        btn_reresolve.setProperty("class", "ActionBtn")
-        btn_reresolve.setIcon(_safe_qta_icon("mdi.database-sync", "#FFFFFF"))
-        btn_reresolve.clicked.connect(self._reresolve_identities)
-        header_layout.addWidget(btn_reresolve)
-
-        btn_export = QPushButton("Export CSV")
-        btn_export.setProperty("class", "ActionBtn")
-        btn_export.setIcon(_safe_qta_icon("mdi.file-export", "#FFFFFF"))
-        btn_export.clicked.connect(self._export_csv)
-        header_layout.addWidget(btn_export)
-
-        btn_purge = QPushButton("Clear All")
-        btn_purge.setProperty("class", "DangerBtn")
-        btn_purge.setIcon(_safe_qta_icon("mdi.delete-sweep", "#FFFFFF"))
-        btn_purge.clicked.connect(self._clear_all_dumps)
-        header_layout.addWidget(btn_purge)
 
         main_layout.addWidget(header_card)
 
@@ -1267,3 +1272,97 @@ class TrackerDumpWindow(QWidget):
             )
         except Exception as e:
             QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
+
+    def _open_fst_classifier_report(self):
+        """Generates and opens the latest FST Classification Excel report from FST_Classifier_1."""
+        import os, sys
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        classifier_dir = os.path.join(app_dir, "FST_Classifier_1")
+        report_path = os.path.join(classifier_dir, "payload_report.xlsx")
+        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        
+        target_dump = None
+        for p in dump_paths:
+            if os.path.exists(p) and os.path.getsize(p) > 100:
+                target_dump = p
+                break
+        if not target_dump and dump_paths:
+            self.db.rebuild_raw_payload_dumps_file()
+            target_dump = dump_paths[0]
+
+        try:
+            if classifier_dir not in sys.path:
+                sys.path.insert(0, classifier_dir)
+            import fst_classifier
+
+            os.makedirs(classifier_dir, exist_ok=True)
+            success = fst_classifier.process_data(target_dump, report_path)
+            if success and os.path.exists(report_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
+            else:
+                QMessageBox.warning(self, "Classification Notice", "Could not generate classification report from available payloads.")
+        except Exception as e:
+            QMessageBox.critical(self, "Classifier Error", f"Failed to run FST Classifier: {e}")
+
+    def _show_preferences_menu(self):
+        """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #171717;
+                border: 1px solid #2E9B5F;
+                border-radius: 8px;
+                padding: 6px;
+                color: #F8F5F2;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 8px 24px 8px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #333333;
+                margin: 4px 8px;
+            }
+        """)
+
+        act_open_txt = menu.addAction(_safe_qta_icon("mdi.file-document-outline", "#4CF9B7"), "Open Dump (TXT)")
+        act_open_txt.triggered.connect(self._open_raw_dump_txt)
+
+        act_rebuild_txt = menu.addAction(_safe_qta_icon("mdi.file-sync-outline", "#4CF9B7"), "Rebuild TXT Dump")
+        act_rebuild_txt.triggered.connect(self._rebuild_raw_dump_txt)
+
+        act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
+        act_reresolve.triggered.connect(self._reresolve_identities)
+
+        menu.addSeparator()
+
+        act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
+        act_classifier.triggered.connect(self._open_fst_classifier_report)
+
+        act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
+        act_export_csv.triggered.connect(self._export_csv)
+
+        menu.addSeparator()
+
+        act_clear = menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
+        act_clear.triggered.connect(self._clear_all_dumps)
+
+        # Spawn popup directly below Preferences button
+        btn = getattr(self, "btn_preferences", None)
+        if btn:
+            menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
+        else:
+            menu.exec_(self.cursor().pos())
+
+

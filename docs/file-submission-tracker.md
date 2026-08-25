@@ -1,6 +1,8 @@
-# Sera FST — File Submission Tracker
+# Sera FST — File Submission Tracker & Lifecycle Intelligence Engine
 
-**Sera FST (File Submission Tracker)** is the complete file submission tracking, verification, and audit subsystem in Project Sera. It automatically captures, validates, and logs tax return filings, statutory forms, e-verifications, Ack/ARN numbers, JSON response payloads, and submission timestamps into the vault's `tracker_dump` and `filing_status` database tables.
+**Sera FST (File Submission Tracker)** is the complete file submission tracking, verification, audit, and lifecycle analysis subsystem in Project Sera. It automatically intercepts, captures, validates, resolves taxpayer identities, and logs tax return filings, statutory forms, e-verifications, Ack/ARN numbers, JSON response payloads, and submission timestamps into the vault's `tracker_dump` (SQLite / `rawPayload.db`) and `filing_status` database tables.
+
+In addition to live browser-level interception, Sera FST includes the **FST Classifier Engine (`FST_Classifier_1`)**, an automated analytical module that performs cross-entry lifecycle correlation, multi-session deduplication, and generates formatted audit spreadsheets (`payload_report.xlsx`).
 
 ---
 
@@ -56,119 +58,157 @@
                       │  • Non-intrusive Toast    │
                       └─────────────┬─────────────┘
                                     │
-                                    ▼
-                      ┌───────────────────────────┐
-                      │  Tracker Dump Workspace   │
-                      │  (TrackerDumpWindow UI)   │
-                      └───────────────────────────┘
+            ┌───────────────────────┴───────────────────────┐
+            │                                               │
+            ▼                                               ▼
+┌───────────────────────────┐                 ┌───────────────────────────┐
+│  Tracker Dump Workspace   │                 │   FST Classifier Engine   │
+│  (TrackerDumpWindow UI)   │                 │    (FST_Classifier_1)     │
+│  • SRPF Containers        │                 │  • Temporal Identity Map  │
+│  • Monospace Timeline     │                 │  • 7-Category Correlation │
+│  • Floating Preferences   │◄───────────────►│  • Live File Watcher      │
+│    (QMenu / Tools Panel)  │                 │  • Formatted Excel Report │
+└───────────────────────────┘                 └───────────────────────────┘
 ```
 
 ---
 
-## 2. Detection Tiers & Engines
+## 2. Detection Tiers & Interception Engines
 
-Sera FST employs a two-tier detection architecture to ensure 100% filing capture reliability across all government tax portals:
+Sera FST employs a multi-tier detection architecture to ensure 100% filing capture reliability across all government tax portals:
 
 ### Tier 1: Sera SAD — API Detector (Network Layer)
 `net_interceptor.js` is injected into the web page's `MAIN` execution world at `document_start`. It passively intercepts `window.fetch()` and `XMLHttpRequest` JSON responses without modifying or delaying page network traffic:
 
 * **Angular `responseType: "json"` Compatibility**: Directly inspects `xhr.response` parsed objects when `xhr.responseType === "json"`, preventing browser `DOMException` errors on Angular SPAs.
 * **Income Tax Department (ITD 2.0)**:
-  - **Live Returns & E-Verification**: Intercepts `/iec/foservices/api/e-verify/submit`, `/iec/foservices/api/itr/everify`, and `/iec/servicesapi/auth/getEntity`.
+  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, and `/iec/servicesapi/auth/getEntity`.
   - **ITD Key Normalization**:
-    - `"assmentYear": "2024"` $\longrightarrow$ Automatically formatted as **`AY 2024-25`**.
-    - `"formTypeCd": "4S"` / `"formTypeCd": "3"` $\longrightarrow$ Automatically formatted as **`ITR-4S`** / **`ITR-3`**.
-    - `"submitUserId": "BKAPM7233A"` $\longrightarrow$ Automatically extracted as **`PAN: BKAPM7233A`**.
+    - `"assmentYear": "2026"` $\longrightarrow$ Automatically formatted as **`AY 2026-27`**.
+    - `"formTypeCd": "4S"` / `"formTypeCd": "4"` $\longrightarrow$ Formatted as **`ITR-4S`** / **`ITR-4`**.
+    - `"submitUserId": "AHJPR0846B"` $\longrightarrow$ Extracted as **`PAN: AHJPR0846B`**.
     - `"statusDesc"` $\longrightarrow$ Captured as **`ITR processed no demand no refund`** / **`Filing Submitted`**.
 * **GST Portal (`services.gst.gov.in`)**:
-  - Detects `status_cd: "1"`, `error_cd: null`, extracting `arn`, `rtn_type` (GSTR-1, GSTR-3B, CMP-08, GSTR-9), `ret_period`, and `gstin`.
+  - Detects `status_cd: "1"`, `error_cd: null`, extracting `arn`, `rtn_type` (GSTR-1, GSTR-3B, CMP-08, GSTR-9), `ret_period`, `gstin`, and `auth_name`.
 * **TRACES Portal (`tdscpc.gov.in`)**:
   - Detects `status: "SUCCESS"`, extracting `requestNo` / `ticketNo` / `tokenNo` for Conso files, Justification reports, and Form 16/16A requests.
 * **Universal Array Discovery (`findReturnArrays`)**:
-  - When staff view **"View Filed Returns"** or the **Return Dashboard**, SAD recursively searches the entire JSON tree for arrays of return objects, automatically parsing and logging all past assessment years in one pass.
+  - When staff view **"View Filed Returns"** or the **Return Dashboard**, SAD recursively searches the JSON response for arrays of return objects, automatically parsing and logging all past assessment years in one pass.
 * **Service List Scoped Execution**:
-  - **Zero Overhead on Non-Portal Domains**: SAD checks `window.location.hostname` against the configured compliance service catalog. On unconfigured websites (general browsing, search engines, banking, etc.), SAD stays completely idle and does not hook network APIs.
-  - **Dynamic Portal Synchronization**: When services are created, edited, or deleted in Sera's **Service Manager**, the allowed portal domains list is broadcast to the extension in real-time.
+  - **Zero Overhead on Non-Portal Domains**: SAD checks `window.location.hostname` against the configured compliance service catalog. On non-portal websites, SAD stays completely idle.
 * **Strict Validation Filter (`isValidArnOrAck`)**:
-  - Automatically rejects placeholder dummy strings (`_ARN`) and internal session tokens (`FOS009956...`), ensuring only genuine 10–15 digit Ack numbers and 15-char GST ARNs are stored.
-* **Session Deduplication**:
-  - Maintains an in-memory session cache (`Set`) to prevent repeated page requests or tab navigations from duplicating identical entries.
+  - Automatically rejects placeholder dummy strings (`_ARN`) and internal tokens, ensuring only genuine 10–15 digit Ack numbers and 15-character GST ARNs are stored.
 
 ---
 
 ### Tier 2: Sera DOM — DOM Detector (Visual Layer)
 `tracker.js` runs in the content script world as a visual fallback:
 * Watches rendered HTML trees via `MutationObserver` for on-screen confirmation banners (*"Submitted successfully"*, *"Acknowledgement Number: ..."*).
-* Activates when legacy portals or server-rendered HTML pages render full HTML pages without background JSON APIs.
+* Activates when legacy portals or server-rendered HTML pages render confirmation screens without background JSON APIs.
 
 ---
 
-## 3. Supported Submission & Transaction Types
+## 3. External Module: FST Classifier Engine (`FST_Classifier_1`)
 
-| Portal | Action / Transaction | Captured Identifier | Output Format |
+The **FST Classifier Engine** ([`FST_Classifier_1/fst_classifier.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/FST_Classifier_1/fst_classifier.py)) is an advanced analysis subsystem designed to process raw payload dump streams (`seraRawPayloadDump.txt`) or database tables into an executive Excel audit report (`payload_report.xlsx`).
+
+### A. The 7 Lifecycle Classification Categories
+
+| Category Code | Category Label | Highlight Color | Definition & Qualification Rules |
 | :--- | :--- | :--- | :--- |
-| **Income Tax** | ITR-1 to ITR-7 Return Filing | 15-digit Ack Number | `Income Tax (ITR-4)` |
-| **Income Tax** | ITR E-Verification (OTP / EVC) | 15-digit Ack Number | `Income Tax (ITR-4)` |
-| **Income Tax** | Statutory Forms (10-IEA, 10BA, 29B, 15CA/CB, 35) | `acknowledgementNumber` | `Income Tax (Form 10-IEA)` |
-| **Income Tax** | Rectification Request (Sec 154) | `rectificationReferenceNo` | `Income Tax (Rectification)` |
-| **Income Tax** | Response to Outstanding Demand | `responseReferenceNo` | `Income Tax (Demand Reply)` |
-| **Income Tax** | E-Proceedings Notice Submission | `submissionId` | `Income Tax (Notice Reply)` |
-| **Income Tax** | e-Pay Tax Advance/Self-Assessment Tax | `CRN` / Bank `CIN` | `Income Tax (Challan)` |
-| **GST** | Monthly/Quarterly Returns (GSTR-1, 3B, CMP-08, 9) | 15-character ARN | `GST Portal (GSTR-3B)` |
-| **GST** | Payment Challan (PMT-06) | 14-digit CPIN | `GST Portal (PMT-06)` |
-| **GST** | Revocation (REG-21) / Amendment (REG-14) | `arn` / `ref_id` | `GST Portal (REG-21)` |
-| **GST** | Refund Application (RFD-01) | `arn` / `ack_num` | `GST Portal (RFD-01)` |
-| **TRACES** | Conso File / Justification Report | `requestNo` | `TRACES Portal` |
-| **TRACES** | Form 16 / 16A Bulk Request | `requestNo` | `TRACES Portal` |
+| **Cat 1** | **1. File Submitted (NOT E-Verified)** | 🟡 `FFF2CC` (Yellow) | The ITR wizard submitted successfully (`/returns/submit/wzrd` with `httpStatus: "ACCEPTED"` and `successFlag: true`), but has **no** matching OTP validation in the dump (`evc: null`). |
+| **Cat 2** | **2. File Submitted & E-Verified (ITR)** | 🟢 `E2EFDA` (Green) | The return filing has completed full statutory e-verification (`/validateOTP` returned `"status": "SUCCESS"` with `"moduleCode": "ITR"` and message `"OTP VALIDATED"`). Correlates with submit events or standalone e-verification sessions. |
+| **Cat 3** | **3. Bank Account E-Verified (NO Return Submitted)** | 🔵 `DDEBF7` (Blue) | Bank account validation form (`FO-091-EVERI`) was authenticated via Aadhaar OTP (`moduleCode: "NON-ITR"`), but no income tax return was submitted during the session. |
+| **Cat 4** | **4. GST Return Filed & E-Verified** | 🟢 `E2EFDA` (Green) | GST return (e.g., GSTR-1, GSTR-3B) was successfully submitted and authenticated via EVC on the GST Portal (`status: "FIL"`, `evc_chk: "E"`). |
+| **Cat 5** | **5. Bank Status & Pre-Validation Matrix** | Dynamic (Green/Yellow/Red/Gray) | Evaluates all linked bank accounts into 4 accurate sub-states: <br>• **Validated (Valid & Open, Nominated for Refund)** (Green)<br>• **Validated with Warning (Name Mismatch / <50L Cap)** (Yellow)<br>• **Inactive / Legacy Account (Merged/Closed Bank, ActiveFlag: D)** (Gray)<br>• **Revalidation Required (NPCI Rejected, No Such Account)** (Red) |
+| **Cat 6** | **6. Visited But No Return Submission** | ⚪ `EDEDED` (Gray) | Identifies taxpayers who logged in, checked past records, or synced profiles, but performed **zero** ITR or GST submissions during the session. |
+| **Cat 7** | **7. Visited Site (All Visits Enumerated)** | ⚪ `F2F2F2` (Light Gray) | Full chronological interaction footprint enumerating every API step, timestamp, and sub-service endpoint accessed by each taxpayer. |
+
+---
+
+### B. Mathematical Identity Resolution (Bypassing Unstable Client IDs)
+Because modern portal frontends rotate tokens and fragment single human logins into multiple temporary session IDs, the Classifier does **not** rely on `Client ID`. Instead, it uses a two-pass algorithm:
+
+1. **Pass 1 — Absolute Anchor Extraction**:
+   Scans all payloads for explicit `PAN`s and `Acknowledgement Numbers`. Builds an immutable lookup table:
+   $$\text{AckMap}: \text{AckNumber} \longrightarrow \text{PAN}$$
+2. **Pass 2 — Retroactive & Temporal Linking**:
+   When encountering anonymous submission events (like `submit/wzrd` where `PAN` is blank):
+   * *Step A (Retroactive Link)*: If the generated Ack appears in $\text{AckMap}$ (e.g. from an e-verification or status fetch), it locks to that PAN.
+   * *Step B (Temporal Context Window)*: If unreferenced, it binds to the active chronological PAN stream currently being operated on the interceptor channel.
+3. **Deep Assessee Name Extraction**:
+   Extracts legal names from deep nested objects in ITR JSON payloads (`rp["ITR"]["ITR4"]["PersonalInfo"]["AssesseeName"]` and `["Verification"]["Declaration"]["AssesseeVerName"]`), ensuring full names like *MOHAMMAD KAMARUJJAMAN MOLLA* are accurately populated.
+
+---
+
+### C. Live Watcher & Desktop App Integration
+
+* **Continuous Live Tracking (`--watch`)**:
+  Monitors `seraRawPayloadDump.txt` via non-blocking file polling. Automatically rebuilds `payload_report.xlsx` whenever the interceptor appends new entries.
+* **In-App Preferences Integration**:
+  The desktop **Tracker Dump Workspace** exposes a direct trigger button inside the **`Preferences`** menu (`mdi.file-excel`), compiling and opening the report instantly in Microsoft Excel.
 
 ---
 
 ## 4. Tracker Dump Workspace (`TrackerDumpWindow`)
 
-All captured filings and API dumps are logged directly to SQLite table `tracker_dump` and presented in the desktop **Tracker Dump** workspace:
+All captured filings and API dumps are logged directly to SQLite table `tracker_dump` (in `rawPayload.db`) and presented in the desktop **Tracker Dump** workspace:
 
-- **Zero-Interrupt Background Logging**: Eliminates intrusive modal prompts (`FilingConfirmationDialog` unhooked); captures save silently in the background.
-- **Desktop Toast Alerts**: Non-intrusive 5-second green desktop toasts alert staff upon capture (`Captured Income Tax (ITR-4) (Sera SAD (API Detector)) — ARN: 125873710140314`).
-- **Real-Time Search & Multi-Field Filters**: Search across Client Name, PAN, GSTIN, ARN, Period, or Portal, with filters for capture method (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`) and status.
-- **Raw JSON Payload Inspector Drawer**: Click **View Payload** on any row to inspect complete API response headers, timestamps, and nested data trees.
-- **Data Management**: Delete individual rows or use **Clear All** for one-click workspace purging, plus **Export CSV** for firm audit records.
-- **Universal Client Resolution**: Automatically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), or extracted PAN (`GZEPM6367M`).
+- **Zero-Interrupt Background Logging**: Eliminates intrusive modal prompts; captures save silently.
+- **Desktop Toast Alerts**: Non-intrusive 5-second green toasts alert staff upon capture (`Captured Income Tax (ITR-4) — ARN: 125873710140314`).
 - **SRPF Containerization**: Aggregates all fragmented submissions, profile lookups, bank validations, and wizard interactions belonging to the same entity into a single unified client container.
-- **Session Audit Timeline Decoder (Tab 3 in Inspector)**:
-  - Automatically translates raw API payload sequences into an interactive, plain-English chronological narrative.
+- **Floating Preferences Menu Widget**:
+  The header card consolidates all utilities into a floating **`Preferences`** menu (`mdi.cog-outline`):
+  - 📄 **Open Dump (TXT)** (`mdi.file-document-outline`)
+  - 🔄 **Rebuild TXT Dump** (`mdi.file-sync-outline`)
+  - 🗄️ **Re-Resolve Identities (SRPF)** (`mdi.database-sync`)
+  - 📊 **FST Classifier (Excel Report)** (`mdi.file-excel`)
+  - 📤 **Export Captures (CSV)** (`mdi.file-export`)
+  - 🧹 **Clear All Captures** (`mdi.delete-sweep`)
+- **Session Audit Timeline Decoder (Inspector Tab 3)**:
+  - Translates raw API payload sequences into an interactive, plain-English chronological narrative.
   - Partitions multi-visit histories into distinct **Session Blocks** with independent `T+00s` offset baselines.
-  - Visualizes interactions using a lightweight, high-contrast monospace flow diagram with connecting arrows (`│`, `▼`, `└──▶`), badges, and metadata chips.
-  - Decodes Authentication, Profile/Contact checks, Bank validations, Return Wizard drafts, Multi-Year Assessment History, and Statutory Submissions.
+  - Automatically collapses repetitive operations with clickable expanders (`[ ▶ Expand 7 occurrences ]`).
+  - Strict classification distinguishing profile state saves (`PROFILE-*`) from genuine return e-verifications.
 
 ---
 
-## 5. Extension v2.7.2 & Network Interceptor Enhancements
+## 5. Supported Submission & Transaction Types Matrix
 
-* **Deterministic Single-Tab Session Isolation**: Generates unique `session_id` tokens in `sessionStorage`. Automatically rotates session tokens when navigating to login/logout URLs or when a different PAN is detected within the same browser tab, preventing cross-client data contamination.
-* **Dedicated Bank Account Capture (`BANK-<PAN>-<ID>`)**: Captures bank name, IFSC, validation status (`Validated (V)`), and direct refund nomination flags even when no 15-digit transaction number exists.
-* **Dedicated Return & Draft Status Capture (`ITR-STATUS-...`)**: Intercepts e-File Return Wizard status (`isDraftPresent`, `isReturnFiled`) to record in-progress draft filings.
-* **Fake Profile Clutter Filter**: Discards generic dashboard navigation menus and informational toast acknowledgments (`"Record(s) fetched successfully."`), ensuring only authentic profile records with demographic fields (`firstName`, `mobile`, `email`, `aadhaar`) are stored.
-* **Domain Disambiguation**: Enforces strict URL routing so Income Tax endpoints containing `/returns/` are never misclassified as GST Portal traffic.
+| Portal | Action / Transaction | Captured Identifier | Output Format | Classifier Category |
+| :--- | :--- | :--- | :--- | :--- |
+| **Income Tax** | ITR-1 to ITR-7 Return Filing (Unverified) | 15-digit Ack Number | `Income Tax (ITR-4)` | **Cat 1: Submitted Unverified** |
+| **Income Tax** | ITR E-Verification (Aadhaar OTP / EVC) | 15-digit Ack Number | `Income Tax (ITR-4)` | **Cat 2: Submitted & Verified** |
+| **Income Tax** | Bank Account Re-Validation (`FO-091-EVERI`) | Bank Ack Number | `Income Tax (FO-091)` | **Cat 3: Bank Verified No Return** |
+| **Income Tax** | Bank Account Status & Pre-Validation | `BANK-<PAN>-<ID>` | `Income Tax (Bank)` | **Cat 5: Bank Status Matrix** |
+| **Income Tax** | Taxpayer Profile & Contact Sync | `PROFILE-<PAN>` | `Income Tax (Profile)` | **Cat 6 / Cat 7: Visited Site** |
+| **Income Tax** | Statutory Forms (10-IEA, 10BA, 29B, 15CA/CB) | `acknowledgementNumber` | `Income Tax (Form 10-IEA)` | **Cat 2 / Cat 4** |
+| **Income Tax** | Rectification Request (Sec 154) | `rectificationReferenceNo` | `Income Tax (Rectification)` | **Cat 2** |
+| **GST Portal** | Monthly/Quarterly Returns (GSTR-1, 3B, CMP-08, 9) | 15-character ARN | `GST Portal (GSTR-1)` | **Cat 4: GST Filed & E-Verified** |
+| **GST Portal** | Payment Challan (PMT-06) | 14-digit CPIN | `GST Portal (PMT-06)` | **Cat 4** |
+| **TRACES** | Conso File / Justification Report | `requestNo` | `TRACES Portal` | **Cat 2** |
 
 ---
 
-## 6. Verification & Testing
+## 6. Execution & Operational Commands
 
-### A. Live Browser Console Verification (`F12`)
-To test the active network interceptor on any browser tab without filing taxes:
+### A. Run FST Classifier in Live Watcher Mode
+```cmd
+cd "C:\Users\Nex\Downloads\Project Sera\APP\FST_Classifier_1"
+python fst_classifier.py "..\seraRawPayloadDump.txt" "payload_report.xlsx" --watch
+```
+*(Or simply double-click `FST_Classifier_1\run.bat`)*
+
+### B. Launch from Sera Desktop UI
+Open **Tracker Dump Workspace** ➔ Click **`Preferences`** ➔ Select **`FST Classifier (Excel Report)`**.
+
+### C. Live Browser Interceptor Test (`F12` Console)
 ```javascript
 fetch('data:application/json,' + encodeURIComponent(JSON.stringify({
     status: "SUCCESS",
     acknowledgementNumber: "982348123456789",
     formName: "ITR-4",
-    assessmentYear: "2024-25",
-    pan: "ABCDE1234F"
+    assessmentYear: "2026-27",
+    pan: "AHJPR0846B"
 })));
 ```
-
-### B. Direct TCP Socket Injector (Python)
-To test the desktop receiver, database insertion, and toast alert directly:
-```bash
-python tests/test_dump_injection.py 370 "Income Tax Portal"
-```
-

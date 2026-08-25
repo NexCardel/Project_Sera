@@ -67,4 +67,7 @@ version sky/
 [Vv]ersion [Ss]ky/
 settings.ini
 seraRawPayloadDump.txt
+*.xlsx
+.obsidian/
+
 

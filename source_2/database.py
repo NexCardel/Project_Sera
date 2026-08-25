@@ -2693,7 +2693,27 @@ class SeraDatabase:
                     f.write(content)
             except Exception as e:
                 print(f"[seraRawPayloadDump] Rebuild write error ({dump_file}): {e}")
+        
+        # Trigger FST Classifier Excel sync
+        self.sync_fst_classifier()
         return len(dumps)
+
+    def sync_fst_classifier(self):
+        """Silently syncs FST_Classifier_1/payload_report.xlsx whenever dumps are updated."""
+        try:
+            workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+            classifier_dir = os.path.join(workspace_dir, "FST_Classifier_1")
+            report_path = os.path.join(classifier_dir, "payload_report.xlsx")
+            dump_file = os.path.join(workspace_dir, "seraRawPayloadDump.txt")
+            if os.path.exists(dump_file) and os.path.exists(classifier_dir):
+                import sys
+                if classifier_dir not in sys.path:
+                    sys.path.insert(0, classifier_dir)
+                import fst_classifier
+                fst_classifier.process_data(dump_file, report_path)
+        except Exception:
+            pass
+
 
     def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
         with self._connect() as conn:

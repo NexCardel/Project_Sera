@@ -731,3 +731,27 @@ graph TD
   - `arn`: `F92834710`
   - `portal`: `MCA (AOC-4)`
   - `status`: `submitted`
+
+---
+
+## 5. Session Audit Timeline Action Decoders & Mapping Matrix
+
+The **Session Audit Timeline Decoder** (`ui/utils/timeline_decoder.py`) automatically maps raw REST API responses into structured human-readable chronological actions partitioned by session:
+
+| Portal | Backend Endpoint / Signature | Decoded Category | Decoded Action Title | Decoded Plain-English Narrative Story |
+| :--- | :--- | :--- | :--- | :--- |
+| **ITD** | `loginapi/login`, `saveEntity` (Login) | `Authentication` | **User Logged In to Portal** | Authenticated via Password Login / OTP / DSC. |
+| **ITD** | `servicesapi/auth/getEntity` (`accValidity`, `bankName`) | `Bank Validation` | **Inspected Bank Account: {bank_name}** | Retrieved linked bank account. Status: Validated by Bank / Nominated for refund. |
+| **ITD** | `servicesapi/auth/getEntity` (`ackNum`, `assmentYear`) | `Filing History` | **Viewed Filed Return: {AY} ({Form})** | Loaded filed ITR return record for AY (Ack: {ack}). CPC Status: {status}. |
+| **ITD** | `returns/downloadfile`, `ITR` structure | `Download` | **Downloaded Filed Return Form ({Form})** | Downloaded official filing submission form and computational JSON. |
+| **ITD** | `itrweb/.../return/details` | `e-File Wizard` | **Checked e-File Wizard ({Form})** | Queried return filing wizard: draft presence and submission status. |
+| **ITD** | `save/wzrd`, `insertSla/wzrd` | `e-File Wizard` | **Saved In-Progress Return Draft** | Saved intermediate draft computation schedules in filing wizard. |
+| **ITD** | `validate/wzrd` | `e-File Wizard` | **Ran Return Pre-Filing Validation** | Executed validation rules on ITR schedules prior to final submission. |
+| **ITD** | `submit/wzrd` | `Filing Submission` | **Submitted Final Income Tax Return** | Successfully submitted final return filing (ARN: {arn}). |
+| **ITD** | `verificationservices/auth/validateOTP` | `E-Verification` | **Completed Return E-Verification** | Completed statutory electronic verification for return (Ack: {ack}, {AY}). |
+| **GST** | `returns/auth/api/gstr1/summary` | `GST Return` | **Viewed GSTR-1 Section Summary ({Sec})** | Loaded tax calculations for section. Total Tax: Rs. {tax} across {n} records. |
+| **GST** | `returns/auth/api/filingsnapshot` | `GST Compliance` | **Checked GST Filing Due Dates ({Form})** | Queried multi-period GST return filing obligations and historical due dates. |
+| **GST** | `returns/auth/api/signatory` | `GST Profile` | **Viewed GST Authorized Signatory** | Loaded authorized signatory profile: {name} ({designation}). |
+| **GST** | `returns/auth/internalapi/getRcmAvl` | `GST Ledger` | **Checked GST RCM & ITC Ledger Balances** | Retrieved Reverse Charge (RCM) closing balances and ITC ledger status. |
+| **GST** | `auth/api/formdetails` (`data.arn`) | `Filing Submission` | **Submitted GST Return: {Form} (ARN Issued)** | Successfully submitted official GST return for {business}. Government ARN: {arn}. |
+

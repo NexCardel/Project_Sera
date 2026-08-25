@@ -302,22 +302,32 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
             narrative = f"Submitted final return filing to Income Tax Portal (Filing Ack: {ack_no})."
             chips.append({"label": "Filing ARN", "val": str(ack_no)})
 
-        # 1.9 E-Verification / OTP Validation
-        elif "validateOTP" in url or "verificationservices" in url or "modeEVrf" in str(inner):
+        # 1.9 E-Verification / OTP Validation (Only actual validateOTP calls)
+        elif "validateOTP" in url or "modeEVrf" in str(inner):
             ack_no = inner.get("ackNum") or arn
             raw_ay = inner.get("assessmntYr") or inner.get("taxYear") or "N/A"
             ay_str = _format_ay(raw_ay)
-            step_title = "Completed Return E-Verification"
-            category = "E-Verification"
-            icon = "mdi.shield-check"
-            color = "#4CF9B7"
-            narrative = f"Completed electronic verification for return (Ack: {ack_no}, {ay_str})."
-            chips.append({"label": "Ack Number", "val": str(ack_no)})
-            if ay_str != "N/A":
-                chips.append({"label": "Assessment Year", "val": ay_str})
+            module_cd = inner.get("moduleCode", "ITR")
+            
+            if module_cd == "NON-ITR" or "FO-091" in str(inner.get("header", {}).get("formName")):
+                step_title = "E-Verified Bank Account / Form (OTP)"
+                category = "Bank Validation"
+                icon = "mdi.bank-check"
+                color = "#58A6FF"
+                narrative = f"Completed statutory electronic verification for Bank/Form (Ack: {ack_no})."
+                chips.append({"label": "Ack Number", "val": str(ack_no)})
+            else:
+                step_title = "Completed Return E-Verification"
+                category = "E-Verification"
+                icon = "mdi.shield-check"
+                color = "#4CF9B7"
+                narrative = f"Completed electronic verification for return (Ack: {ack_no}, {ay_str})."
+                chips.append({"label": "Ack Number", "val": str(ack_no)})
+                if ay_str != "N/A":
+                    chips.append({"label": "Assessment Year", "val": ay_str})
 
         # 1.10 Taxpayer Profile & Contact Details
-        elif "saveEntity" in url or "getEntity" in url or "profile" in url or "addrLine1Txt" in inner or "priMobileNum" in inner:
+        elif "saveEntity" in url or "getEntity" in url or "verificationservices" in url or "profile" in url or "addrLine1Txt" in inner or "priMobileNum" in inner:
             pan_val = inner.get("entityNum") or inner.get("pan") or capture.get("pan") or ""
             is_aadhaar_linked = (inner.get("aadhaarLinkFlag") == "Y")
             mobile = inner.get("priMobileNum") or inner.get("mobileNo")
@@ -452,9 +462,10 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
     }
 
 
-def collapse_consecutive_repeat_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def collapse_consecutive_repeat_steps(steps: List[Dict[str, Any]], session_prefix: str = "s1") -> List[Dict[str, Any]]:
     """
-    Collapses consecutive identical action steps into a single step with a repeat indicator.
+    Collapses consecutive identical action steps into a single step with a repeat indicator,
+    storing all individual sub-steps for interactive unfolding.
     """
     if not steps:
         return []
@@ -471,7 +482,10 @@ def collapse_consecutive_repeat_steps(steps: List[Dict[str, Any]]) -> List[Dict[
         else:
             rep_count = len(curr_group)
             base_step = dict(curr_group[0])
-            base_step["step_number"] = len(collapsed) + 1
+            s_num = len(collapsed) + 1
+            base_step["step_number"] = s_num
+            base_step["step_uid"] = f"{session_prefix}_step{s_num}"
+            base_step["repeat_sub_steps"] = list(curr_group)
             if rep_count > 1:
                 first_ts = curr_group[0]["timestamp_str"][11:19]
                 last_ts = curr_group[-1]["timestamp_str"][11:19]
@@ -485,7 +499,10 @@ def collapse_consecutive_repeat_steps(steps: List[Dict[str, Any]]) -> List[Dict[
     if curr_group:
         rep_count = len(curr_group)
         base_step = dict(curr_group[0])
-        base_step["step_number"] = len(collapsed) + 1
+        s_num = len(collapsed) + 1
+        base_step["step_number"] = s_num
+        base_step["step_uid"] = f"{session_prefix}_step{s_num}"
+        base_step["repeat_sub_steps"] = list(curr_group)
         if rep_count > 1:
             first_ts = curr_group[0]["timestamp_str"][11:19]
             last_ts = curr_group[-1]["timestamp_str"][11:19]
@@ -583,7 +600,7 @@ def group_captures_into_sessions(captures: List[Dict[str, Any]], gap_threshold_s
             steps.append(step)
 
         # Collapse consecutive identical actions in this session
-        collapsed_steps = collapse_consecutive_repeat_steps(steps)
+        collapsed_steps = collapse_consecutive_repeat_steps(steps, session_prefix=f"s{s_idx}")
 
         dur_clean = _format_elapsed(duration_sec).replace("T+", "")
         decoded_sessions.append({
@@ -610,10 +627,14 @@ def decode_session_timeline(captures: List[Dict[str, Any]]) -> List[Dict[str, An
     return all_steps
 
 
-def format_timeline_flow_html(decoded_sessions_or_steps: Any, title_tag: str = "Client") -> str:
+def format_timeline_flow_html(
+    decoded_sessions_or_steps: Any,
+    title_tag: str = "Client",
+    expanded_step_uids: Any = None
+) -> str:
     """
     Renders a lightweight, high-contrast, monospace terminal-style flow diagram with arrows
-    organized into clean Session Containers with repeat indicators.
+    organized into clean Session Containers with interactive expandable repeat indicators.
     """
     if not decoded_sessions_or_steps:
         return (
@@ -621,6 +642,8 @@ def format_timeline_flow_html(decoded_sessions_or_steps: Any, title_tag: str = "
             'No interaction steps recorded for this container.'
             '</div>'
         )
+
+    expanded_set = set(expanded_step_uids) if expanded_step_uids else set()
 
     # Normalize input
     if isinstance(decoded_sessions_or_steps, list) and decoded_sessions_or_steps and "steps" in decoded_sessions_or_steps[0]:
@@ -667,10 +690,30 @@ def format_timeline_flow_html(decoded_sessions_or_steps: Any, title_tag: str = "
             badge = f"[{s['step_number']:02d}]"
             cat = s["category"].upper()
             time_str = f"⏱ {s['elapsed_str']} &nbsp;•&nbsp; {s['timestamp_str'][11:19]}"
+            step_uid = s.get("step_uid", f"s{s_num}_step{s['step_number']}")
 
             rep_badge = ""
+            sub_items_html = ""
             if s.get("repeat_count", 1) > 1:
-                rep_badge = f'<span style="background-color: #388BFD22; color: #79C0FF; border: 1px solid #388BFD66; padding: 1px 6px; border-radius: 3px; font-weight: bold; margin-left: 6px;">🔄 Repeated {s["repeat_count"]}x ({s["repeat_span_str"]})</span>'
+                is_exp = (step_uid in expanded_set)
+                if is_exp:
+                    rep_badge = f'<a href="#toggle_repeat_{step_uid}" style="color: #F85149; text-decoration: none; font-weight: bold; background-color: #21262D; border: 1px solid #F85149; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px;">▼ Collapse {s["repeat_count"]} occurrences</a>'
+                    sub_list = []
+                    sub_list.append(f'<div style="margin-left: 20px; margin-top: 6px; margin-bottom: 6px; padding: 6px 10px; background-color: #161B22; border-left: 2px dashed #58A6FF; border-radius: 4px;">')
+                    sub_list.append(f'<div style="color: #8B949E; font-size: 11px; margin-bottom: 4px; font-weight: bold;">Unfolded Sub-Occurrences ({s["repeat_count"]} total calls):</div>')
+                    for sub_i, sub in enumerate(s.get("repeat_sub_steps", [])):
+                        sub_list.append(
+                            f'<div style="color: #C9D1D9; font-size: 11px; line-height: 1.45; margin-bottom: 3px;">'
+                            f'<span style="color: #79C0FF; font-weight: bold;">• #{sub_i + 1:02d}</span> &nbsp;'
+                            f'<span style="color: #D29922;">⏱ {sub["elapsed_str"]} ({sub["timestamp_str"][11:19]})</span> '
+                            f'<span style="color: #8B949E;">── {sub["narrative"]}</span>'
+                            f'</div>'
+                        )
+                    sub_list.append('</div>')
+                    sub_items_html = "\n".join(sub_list)
+                else:
+                    rep_badge = f'<a href="#toggle_repeat_{step_uid}" style="color: #58A6FF; text-decoration: none; font-weight: bold; background-color: #21262D; border: 1px solid #388BFD; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px;">▶ Expand {s["repeat_count"]} occurrences ({s["repeat_span_str"]})</a>'
+
 
             chips_html = ""
             if s["chips"]:
@@ -697,6 +740,8 @@ def format_timeline_flow_html(decoded_sessions_or_steps: Any, title_tag: str = "
             html.append(f'<div style="margin-top: 2px;"><span style="color: #8B949E; font-weight: bold;">▶ Story    :</span> <span style="color: #C9D1D9;">{s["narrative"]}</span></div>')
             if chips_html:
                 html.append(f'<div style="margin-top: 3px;"><span style="color: #8B949E; font-weight: bold;">▶ Details  :</span> {chips_html}</div>')
+            if sub_items_html:
+                html.append(sub_items_html)
             html.append('</div>')
 
             if not is_last:
@@ -706,6 +751,7 @@ def format_timeline_flow_html(decoded_sessions_or_steps: Any, title_tag: str = "
 
     html.append('</div>')
     return "\n".join(html)
+
 
 
 def format_timeline_flow_plain(decoded_sessions_or_steps: Any, title_tag: str = "Client") -> str:
