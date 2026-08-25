@@ -1,15 +1,16 @@
 """
 settings_dialog.py
--------------------
-Admin dialog for configuring password masking modes, reveal counts, clipboard clearing, and column permissions.
+-----------------------------
+Application-wide settings dialog.
 """
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -21,6 +22,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
+
+
+def _safe_icon(name, color=None):
+    if qta:
+        try:
+            if color:
+                return qta.icon(name, color=color)
+            return qta.icon(name)
+        except Exception:
+            pass
+    from PySide6.QtGui import QIcon
+    return QIcon()
+
 
 class SettingsDialog(QDialog):
     toast_requested = Signal(str, int)
@@ -31,9 +49,10 @@ class SettingsDialog(QDialog):
         self.setObjectName("ToolDialog")
         self.db = db
         self.actor = actor
-        self.setWindowTitle("Aman Associates — Application Settings")
+        self.setWindowTitle("Application Settings — Project Sera")
 
-        self.resize(500, 450)
+        self.resize(660, 580)
+        self.setMinimumSize(580, 480)
         self.setModal(True)
         
         self.mcl_columns = self.db.get_mcl_columns()
@@ -42,23 +61,78 @@ class SettingsDialog(QDialog):
         self.admin_visibility_cbs = {}
         
         self._build_ui()
-
         self._load_settings()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
-        title = QLabel("Application Settings")
-        title.setProperty("class", "DialogTitle")
-        layout.addWidget(title)
+        # Header Frame
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_safe_icon("mdi.cog-outline", color="#2E9B5F").pixmap(26, 26))
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setSpacing(2)
+        title_lbl = QLabel("Application Settings")
+        title_lbl.setStyleSheet("font-size: 17px; font-weight: 700; color: #F8FAFC;")
+        sub_lbl = QLabel("Configure display preferences, credential masking, automation daemons, and column visibility.")
+        sub_lbl.setStyleSheet("font-size: 12px; color: #8E8D88;")
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
+        layout.addWidget(divider)
 
         tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                background-color: #141414;
+                border: 1px solid #262626;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            QTabBar::tab {
+                background-color: #171717;
+                color: #8E8D88;
+                border: 1px solid #262626;
+                border-bottom: none;
+                padding: 8px 16px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 2px;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QTabBar::tab:selected {
+                background-color: #141414;
+                color: #4CF9B7;
+                border-color: #2E9B5F #2E9B5F #141414 #2E9B5F;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #1F2933;
+                color: #F8FAFC;
+            }
+        """)
         
         # --- TAB 1: General ---
         tab_general = QWidget()
-        form_general = QFormLayout(tab_general)
+        scroll_gen = QScrollArea()
+        scroll_gen.setWidgetResizable(True)
+        scroll_gen.setFrameShape(QFrame.NoFrame)
+        gen_content = QWidget()
+        form_general = QFormLayout(gen_content)
+        form_general.setSpacing(12)
+        form_general.setContentsMargins(8, 8, 8, 8)
         
         self.theme_combo = QComboBox()
         self.theme_combo.addItem("Light Mode (Default)", "light")
@@ -85,17 +159,13 @@ class SettingsDialog(QDialog):
         self.clipboard_spin.setRange(5, 300)
         self.clipboard_spin.setSuffix(" seconds")
         self.clipboard_spin.setValue(30)
-        form_general.addRow("Auto Clipboard Clear Timeout:", self.clipboard_spin)
+        form_general.addRow("Auto Clipboard Clear:", self.clipboard_spin)
 
         self.quick_copy_check = QCheckBox("Enable Quick-Copy (Master Toggle)")
         form_general.addRow("", self.quick_copy_check)
 
         # Feature Toggles
-        separator = QLabel("")
-        separator.setProperty("class", "Separator")
-        form_general.addRow(separator)
-
-        self.run_in_bg_check = QCheckBox("Keep app running in the background when closed")
+        self.run_in_bg_check = QCheckBox("Keep app running in background when closed")
         self.run_in_bg_check.setToolTip(
             "When enabled, closing the window minimises Sera to the system tray instead of exiting. "
             "Disable to fully quit the application when the window is closed."
@@ -106,18 +176,15 @@ class SettingsDialog(QDialog):
         self.autostart_check.setToolTip("Automatically launch Project Sera in background when Windows starts.")
         form_general.addRow("", self.autostart_check)
 
-        self.fst_enabled_check = QCheckBox("Enable FST (File Submission Tracker — DOM Observer 📋)")
-        self.fst_enabled_check.setEnabled(True)
-        self.fst_enabled_check.setToolTip("Toggle DOM mutation observer for capturing filing confirmations from web pages.")
+        self.fst_enabled_check = QCheckBox("Enable Sera DOM (DOM Detector — File Submission Tracker)")
+        self.fst_enabled_check.setToolTip("Toggle DOM detector for capturing on-screen filing confirmations from web pages.")
         form_general.addRow("", self.fst_enabled_check)
 
-        self.sad_enabled_check = QCheckBox("Enable SAD (Sera API Detection — Network Interceptor ⚡)")
-        self.sad_enabled_check.setEnabled(True)
-        self.sad_enabled_check.setToolTip("Toggle passive network response interceptor (fetch/XHR) for real-time JSON API capture.")
+        self.sad_enabled_check = QCheckBox("Enable Sera SAD (API Detector — File Submission Tracker)")
+        self.sad_enabled_check.setToolTip("Toggle passive network API detector (fetch/XHR) for real-time JSON capture from government backends.")
         form_general.addRow("", self.sad_enabled_check)
 
-        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist 📋)")
-        self.sca_enabled_check.setEnabled(True)
+        self.sca_enabled_check = QCheckBox("Enable SCA (Sera Clipboard Assist)")
         self.sca_enabled_check.setToolTip("When copying client User ID from Excel, arms matching credentials for portal interaction.")
         form_general.addRow("", self.sca_enabled_check)
 
@@ -127,18 +194,22 @@ class SettingsDialog(QDialog):
         self.sca_mode_combo.setToolTip("Choose whether SCA silently injects password or presents a 1-click interactive SCA Widget.")
         form_general.addRow("SCA Action Mode:", self.sca_mode_combo)
         
-        # Primary Key (ID Field) Wiring Status
+        # Primary Key Wiring Status
         id_col = self.db.get_id_column()
         if id_col:
-            id_status_text = f"'{id_col['label']}' — Wired to Client Auto-Serial Numbers (1, 2, 3...)"
+            id_status_text = f"'{id_col['label']}' — Wired to Client Auto-Serial Numbers"
             lbl_id = QLabel(id_status_text)
-            lbl_id.setStyleSheet("color: #2E9B5F; font-weight: 700;")
+            lbl_id.setStyleSheet("color: #4CF9B7; font-weight: 700;")
         else:
             lbl_id = QLabel("Not assigned (Can be assigned in Manage Master Column List)")
-            lbl_id.setStyleSheet("color: #888888; font-style: italic;")
+            lbl_id.setStyleSheet("color: #8E8D88; font-style: italic;")
             
         form_general.addRow("ID / Primary Key Column:", lbl_id)
 
+        scroll_gen.setWidget(gen_content)
+        vbox_gen = QVBoxLayout(tab_general)
+        vbox_gen.setContentsMargins(0, 0, 0, 0)
+        vbox_gen.addWidget(scroll_gen)
         tabs.addTab(tab_general, "General")
 
         # --- TAB 2: Action Buttons ---
@@ -148,22 +219,22 @@ class SettingsDialog(QDialog):
         layout_btn.setContentsMargins(14, 14, 14, 14)
 
         lbl_btn_info = QLabel("Configure visibility of service action buttons in Client Detail view:")
-        lbl_btn_info.setStyleSheet("font-weight: 600; color: #241F1B; font-size: 13px;")
+        lbl_btn_info.setStyleSheet("font-weight: 600; color: #F8FAFC; font-size: 13px;")
         layout_btn.addWidget(lbl_btn_info)
 
-        self.btn_ext_check = QCheckBox("Enable 'Ext' Button (Extension Autofill ⚡)")
+        self.btn_ext_check = QCheckBox("Enable 'Ext' Button (Extension Autofill)")
         self.btn_ext_check.setToolTip("Toggle the Ext (Extension Autofill) button in Client Detail view.")
         layout_btn.addWidget(self.btn_ext_check)
 
-        self.btn_assist_check = QCheckBox("Enable 'Assist' Button (SMTI Manual Assist 📋)")
+        self.btn_assist_check = QCheckBox("Enable 'Assist' Button (SMTI Manual Assist)")
         self.btn_assist_check.setToolTip("Toggle the Assist (SMTI Manual Assist) button in Client Detail view.")
         layout_btn.addWidget(self.btn_assist_check)
 
-        self.btn_copy_check = QCheckBox("Enable 'Copy' Button (MECP Manual Copy 📄)")
+        self.btn_copy_check = QCheckBox("Enable 'Copy' Button (MECP Manual Copy)")
         self.btn_copy_check.setToolTip("Toggle the Copy (MECP Manual Copy) button in Client Detail view.")
         layout_btn.addWidget(self.btn_copy_check)
 
-        self.show_hide_enabled_check = QCheckBox("Enable 'Show/Hide' Password Eye Buttons (👁️)")
+        self.show_hide_enabled_check = QCheckBox("Enable 'Show/Hide' Password Eye Buttons")
         self.show_hide_enabled_check.setToolTip("Toggle the Show/Hide eye button next to passwords in Client Detail view.")
         layout_btn.addWidget(self.show_hide_enabled_check)
 
@@ -177,11 +248,12 @@ class SettingsDialog(QDialog):
         
         scroll_ms = QScrollArea()
         scroll_ms.setWidgetResizable(True)
+        scroll_ms.setFrameShape(QFrame.NoFrame)
         content_ms = QWidget()
         form_ms = QVBoxLayout(content_ms)
         
         for col in self.mcl_columns:
-            cb = QCheckBox(f"{col['label']} ({col['field_type']})")
+            cb = QCheckBox(f"{col['label']} ({col.get('field_type', 'text')})")
             cb.setChecked(col["show_in_search"])
             self.visibility_cbs[col["id"]] = cb
             form_ms.addWidget(cb)
@@ -198,11 +270,12 @@ class SettingsDialog(QDialog):
         
         scroll_qc = QScrollArea()
         scroll_qc.setWidgetResizable(True)
+        scroll_qc.setFrameShape(QFrame.NoFrame)
         content_qc = QWidget()
         form_qc = QVBoxLayout(content_qc)
         
         for col in self.mcl_columns:
-            cb = QCheckBox(f"{col['label']} ({col['field_type']})")
+            cb = QCheckBox(f"{col['label']} ({col.get('field_type', 'text')})")
             cb.setChecked(col["allow_quick_copy"])
             self.quick_copy_cbs[col["id"]] = cb
             form_qc.addWidget(cb)
@@ -219,11 +292,12 @@ class SettingsDialog(QDialog):
         
         scroll_as = QScrollArea()
         scroll_as.setWidgetResizable(True)
+        scroll_as.setFrameShape(QFrame.NoFrame)
         content_as = QWidget()
         form_as = QVBoxLayout(content_as)
         
         for col in self.mcl_columns:
-            cb = QCheckBox(f"{col['label']} ({col['field_type']})")
+            cb = QCheckBox(f"{col['label']} ({col.get('field_type', 'text')})")
             cb.setChecked(col.get("admin_show_in_search", True))
             self.admin_visibility_cbs[col["id"]] = cb
             form_as.addWidget(cb)
@@ -233,23 +307,24 @@ class SettingsDialog(QDialog):
         layout_as.addWidget(scroll_as)
         tabs.addTab(tab_admin_screen, "Admin Screen")
 
-        layout.addWidget(tabs)
+        layout.addWidget(tabs, stretch=1)
 
         # --- Buttons ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        btn_save = QPushButton("Save Settings")
-        btn_save.setProperty("class", "primary")
-        btn_save.clicked.connect(self._on_save)
-        btn_row.addWidget(btn_save)
-
         btn_cancel = QPushButton("Cancel")
+        btn_cancel.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
         btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(btn_cancel)
 
-        layout.addLayout(btn_row)
+        btn_save = QPushButton("Save Settings")
+        btn_save.setProperty("class", "primary")
+        btn_save.setIcon(_safe_icon("mdi.check", color="#FFFFFF"))
+        btn_save.clicked.connect(self._on_save)
+        btn_row.addWidget(btn_save)
 
+        layout.addLayout(btn_row)
 
     def _load_settings(self):
         current_theme = self.db.get_setting("theme", "light")
@@ -287,7 +362,6 @@ class SettingsDialog(QDialog):
 
         show_hide_btn = self.db.get_setting("show_hide_btn_enabled", "1")
         self.show_hide_enabled_check.setChecked(show_hide_btn == "1")
-
 
         fst_enabled = self.db.get_setting("fst_enabled", "1")
         self.fst_enabled_check.setChecked(fst_enabled == "1")
@@ -374,7 +448,6 @@ class SettingsDialog(QDialog):
                 self.actor, "update_settings",
                 detail=f"Theme: {theme}, WindowMode: {win_mode}, Masking: {mode}, Quick-Copy Master: {quick_copy_val}, FST: {fst_val}, SAD: {sad_val}, Visibility IDs: {len(visible_ids)}, QuickCopy IDs: {len(qc_allowed_ids)}, AdminVisibility IDs: {len(admin_visible_ids)}"
             )
-
 
             self.toast_requested.emit("Application settings updated successfully!", 3000)
             self.settings_saved.emit()

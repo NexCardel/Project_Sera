@@ -40,12 +40,14 @@ class TestIdFieldAndTokens(unittest.TestCase):
     def test_client_id_token_and_auto_serial(self):
         col_id = self.db.create_mcl_column(label="Ref No", field_type="id")
         
+        pan_col = next((c for c in self.db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        pan_id = pan_col["id"] if pan_col else 5
         # Add client without providing ref no value
-        cid = self.db.add_client(values={}, notes="Test Client", service_ids=[])
+        cid = self.db.add_client(values={pan_id: "ABCDE1234F"}, notes="Test Client", service_ids=[])
         
         client = self.db.get_client(cid)
         self.assertIsNotNone(client)
-        self.assertEqual(client["client_id_token"], f"CLI-{cid:05d}")
+        self.assertEqual(client["client_id_token"], str(cid))
         self.assertEqual(client["values"].get(col_id), str(cid))
 
 if __name__ == "__main__":

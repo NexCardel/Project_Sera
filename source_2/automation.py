@@ -126,10 +126,32 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill"):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
+
+    # Base government portal domains
+    allowed_domains = [
+        "incometax.gov.in",
+        "incometaxindiaefiling.gov.in",
+        "gst.gov.in",
+        "tdscpc.gov.in",
+        "mca.gov.in"
+    ]
+    if allowed_services:
+        for s in allowed_services:
+            link = s.get("login_page_link") or s.get("url") or ""
+            if link:
+                try:
+                    from urllib.parse import urlparse
+                    raw_link = link if link.startswith("http") else f"https://{link}"
+                    host = urlparse(raw_link).hostname
+                    if host and host.lower() not in allowed_domains:
+                        allowed_domains.append(host.lower())
+                except Exception:
+                    pass
+
     payload = {
         "type": "update_settings",
         "tracker_enabled": tracker_enabled,
@@ -137,6 +159,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "sad_enabled": sad_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
+        "allowed_domains": allowed_domains,
     }
     def _do_send():
         for _ in range(5):

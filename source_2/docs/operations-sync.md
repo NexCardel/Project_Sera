@@ -5,11 +5,17 @@
 Project Sera includes **Sera Sync** (`sync_peer.py`), a built-in peer-to-peer (P2P) database synchronization service that operates over your local network (LAN) without requiring external servers or third-party software.
 
 ### How Sera Sync Works:
-- **Automatic Peer Discovery**: Broadcasts UDP beacons on **Port 49156** every 5 seconds. All devices on the LAN running Project Sera discover each other automatically.
-- **Sera Sync Panel**: Admins can open the **Sera Sync** dialog (**Admin → Sera Sync** or profile row click in Admin mode) to see real-time online workstations, hostnames, and IP addresses.
-- **One-Way Database Push**: Selecting a workstation and clicking **"Sync Database To Selected"** sends a copy of `master.db` and `sera.salt` directly over TCP (**Port 49157**).
-- **Auto-Accept & App Locking**: The receiving workstation automatically accepts the database push, locks its user interface immediately, displays a top-level mandatory restart dialog, and cleanly auto-restarts (`os.execl`) into the new database.
-- **No Shared Password Setup Needed**: `master.db` and `sera.salt` are transferred together as a matched pair, so teammates do not need to configure pre-matched master passwords before syncing.
+- **Automatic Peer Discovery**: Broadcasts UDP beacons on **Port 49156** every 5 seconds. All devices on the LAN running Project Sera discover each other automatically, sharing version numbers, database timestamps, and structural revision scores.
+- **Dual Sync Engine (Initial & Live Sync)**:
+  - **Initial Sync**: When full database and salt pair are transferred to an un-synced node, creating a pre-sync safety backup (`master.db.pre-sync-*`), locking the UI, and cleanly auto-restarting (`os.execl`) into the new database.
+  - **Live Sync**: Lightweight background syncing after initial pairing that updates open UI windows (Search Table, Admin, Client Detail) in real time without app restart.
+- **`inv_frames` Protocol (Invincibility Frames / Sovereign Node)**:
+  - **Sovereign Master (`inv_frames = ON`)**: A node with `inv_frames` enabled **rejects all incoming data, pushes, or pulls** from any other node, but can freely push its own database to nodes across the LAN.
+  - **Single Authority**: When only 1 node has `inv_frames` ON, normal nodes follow this authority and accept its database pushes. Normal nodes cannot push to each other while an authority is active.
+  - **Multi-Node Freeze (>1 `inv_frames`)**: If more than one node on the LAN enables `inv_frames`, sync across the entire LAN is immediately paused (frozen) to prevent split-brain collisions and data corruption.
+  - **Zero `inv_frames`**: Normal bidirectional P2P sync operates between all nodes with Sync Guard revision protection.
+- **Sera Sync Panel & Live Activity Stream**:
+  - Admins can open the **Sera Sync** dialog (**Admin → Sera Sync**) to toggle `inv_frames`, inspect online workstations, review revision scores (`Rev Score`), and monitor real-time sync events with colored badges (`🛡️ INV_FRAMES`, `📊 REVISION`, `🟢 BEACON`, `📥 PULL`, `📤 PUSH`).
 
 ---
 

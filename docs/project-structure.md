@@ -14,6 +14,7 @@ project_sera/
 |-- sync_peer.py               # Built-in Sera Sync LAN peer discovery (UDP 49156) & P2P push (TCP 49157)
 |-- version.py                 # Version metadata & GitHub release check/download service
 |-- version.json               # GitHub auto-updater release definition
+|-- clipboard_watch.py         # Sera Clipboard Assist (SCA) ambient background listener
 |-- requirements.txt
 |-- README.md
 |-- GEMINI.md                  # Project rules & AI developer guidelines
@@ -33,9 +34,9 @@ project_sera/
 |   `-- host.py
 |-- sera_extension/            # Browser extension companion
 |   |-- background.js          # Active tab tracker & IPC relay
-|   |-- tracker.js             # Passive DOM observer for ARN capture (File Submission Tracker - FST)
+|   |-- tracker.js             # Passive DOM observer for ARN capture (Sera DOM Detector)
 |   |-- content_scripts/
-|   |   |-- net_interceptor.js # MAIN world passive Network Response Interceptor (SAD)
+|   |   |-- net_interceptor.js # MAIN world passive Network Response Interceptor (Sera SAD API Detector)
 |   |   |-- filing_detector.js# Filing detection & extension IPC forwarding
 |   |   `-- login.js
 |   `-- manifest.json          # Extension permissions & content script definitions
@@ -57,6 +58,7 @@ project_sera/
     |   |-- mcl_manager_dialog.py
     |   |-- service_manager_dialog.py
     |   |-- settings_dialog.py # General settings & autostart configuration
+    |   |-- unified_settings_dialog.py # Unified Settings Hub with tabbed drawer navigation
     |   `-- update_dialog.py
     |-- services/
     |   `-- alert_service.py   # Toast alert message formatter

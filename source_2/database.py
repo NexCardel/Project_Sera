@@ -13,8 +13,10 @@ import sqlcipher3.dbapi2 as sqlite3
 import datetime
 import json
 import os
+import sys
 import shutil
 import time
+import threading
 from contextlib import contextmanager
 
 import security
@@ -29,6 +31,7 @@ class SeraDatabase:
     def __init__(self, db_path: str, hex_key: str):
         self.db_path = db_path
         self.hex_key = hex_key
+        self._local = threading.local()
         # Set externally by main.py once SyncPeerService exists, so this
         # module never has to import sync_peer.py directly (sync depends
         # on the db, not the other way around). Left as a no-op until then
@@ -65,8 +68,6 @@ class SeraDatabase:
             yield conn
             conn.commit()
         except sqlite3.IntegrityError as e:
-            # FIX: Properly bubble up data constraint errors (like NOT NULL)
-            # instead of masking them as a wrong master password.
             conn.rollback()
             raise e
         except sqlite3.OperationalError as e:
@@ -78,8 +79,14 @@ class SeraDatabase:
                 "Could not open the database. This almost always means "
                 "the master password was typed incorrectly."
             ) from e
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
+
+    def close(self):
+        pass
 
 
     def _ensure_column(self, conn, table: str, column: str, coldef: str):
@@ -89,6 +96,50 @@ class SeraDatabase:
         existing = {row[1] for row in cur.fetchall()}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coldef}")
+
+    def _migrate_tracker_dump_nullable(self, conn):
+        """Ensures tracker_dump.client_id is nullable (migrating legacy NOT NULL schema if present)."""
+        try:
+            cur = conn.execute("PRAGMA table_info(tracker_dump)")
+            cols = cur.fetchall()
+            if not cols:
+                return
+            needs_migration = False
+            for col in cols:
+                # col format: (cid, name, type, notnull, dflt_value, pk)
+                if col[1] == "client_id" and col[3] == 1:
+                    needs_migration = True
+                    break
+            if needs_migration:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS tracker_dump_migration_temp (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                        client_id           INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                        unassigned_identity TEXT,
+                        service_id          INTEGER,
+                        portal              TEXT,
+                        period_label        TEXT,
+                        arn_number          TEXT,
+                        capture_method      TEXT DEFAULT 'DOM_Tracker',
+                        status              TEXT DEFAULT 'submitted',
+                        raw_payload_json    TEXT,
+                        captured_by         TEXT,
+                        created_at          TEXT NOT NULL
+                    );
+                """)
+                curr_col_names = {c[1] for c in cols}
+                unassigned_expr = "unassigned_identity" if "unassigned_identity" in curr_col_names else "NULL"
+                conn.execute(f"""
+                    INSERT INTO tracker_dump_migration_temp (id, client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                    SELECT id, client_id, {unassigned_expr}, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at
+                    FROM tracker_dump;
+                """)
+                conn.execute("DROP TABLE tracker_dump;")
+                conn.execute("ALTER TABLE tracker_dump_migration_temp RENAME TO tracker_dump;")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_client ON tracker_dump(client_id);")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_arn ON tracker_dump(arn_number);")
+        except Exception as e:
+            print(f"[database] _migrate_tracker_dump_nullable notice: {e}")
 
     def _init_schema(self):
         with self._connect() as conn:
@@ -114,7 +165,7 @@ class SeraDatabase:
             self._ensure_column(conn, "mcl_columns", "show_in_search", "INTEGER NOT NULL DEFAULT 1")
             self._ensure_column(conn, "mcl_columns", "allow_quick_copy", "INTEGER NOT NULL DEFAULT 1")
             self._ensure_column(conn, "mcl_columns", "admin_show_in_search", "INTEGER NOT NULL DEFAULT 1")
-
+            self._ensure_column(conn, "mcl_columns", "is_internal_pk", "INTEGER NOT NULL DEFAULT 0")
 
             # 3. Core client row
             conn.execute("""
@@ -281,19 +332,22 @@ class SeraDatabase:
             # 12. Client Tracker Dump (SAD API Interceptor & Extension captures)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tracker_dump (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-                    service_id      INTEGER,
-                    portal          TEXT,
-                    period_label    TEXT,
-                    arn_number      TEXT,
-                    capture_method  TEXT DEFAULT 'DOM_Tracker',
-                    status          TEXT DEFAULT 'submitted',
-                    raw_payload_json TEXT,
-                    captured_by     TEXT,
-                    created_at      TEXT NOT NULL
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id           INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                    unassigned_identity TEXT,
+                    service_id          INTEGER,
+                    portal              TEXT,
+                    period_label        TEXT,
+                    arn_number          TEXT,
+                    capture_method      TEXT DEFAULT 'DOM_Tracker',
+                    status              TEXT DEFAULT 'submitted',
+                    raw_payload_json    TEXT,
+                    captured_by         TEXT,
+                    created_at          TEXT NOT NULL
                 );
             """)
+            self._ensure_column(conn, "tracker_dump", "unassigned_identity", "TEXT")
+            self._migrate_tracker_dump_nullable(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_client ON tracker_dump(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_arn ON tracker_dump(arn_number);")
 
@@ -322,12 +376,123 @@ class SeraDatabase:
             # 14. Seed default MCL columns and services if fresh database
             cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
             if cur.fetchone()[0] == 0:
-                self._seed_default_data(conn)
+                seeded = self._seed_from_ini(conn)
+                if not seeded:
+                    self._seed_default_data(conn)
 
             # Ensure serial number / row index columns are never marked as identity columns
             conn.execute(
                 "UPDATE mcl_columns SET is_identity = 0 WHERE LOWER(TRIM(label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')"
             )
+
+            # Ensure default internal PK anchor on PAN if none configured
+            cur = conn.execute("SELECT COUNT(*) FROM mcl_columns WHERE is_internal_pk = 1")
+            if cur.fetchone()[0] == 0:
+                conn.execute("""
+                    UPDATE mcl_columns SET is_internal_pk = 1 
+                    WHERE UPPER(TRIM(label)) = 'PAN' 
+                       OR (LOWER(label) LIKE '%pan%' AND LOWER(label) NOT LIKE '%pass%')
+                """)
+
+        self.load_ini_defaults()
+        try:
+            self.re_resolve_all_tracker_dumps()
+        except Exception:
+            pass
+
+    def _find_ini_file(self, ini_path: str = None) -> str:
+        if ini_path and os.path.exists(ini_path):
+            return ini_path
+        candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "settings.ini"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.ini"),
+            os.path.join(os.getcwd(), "settings.ini"),
+        ]
+        if hasattr(sys, "_MEIPASS"):
+            candidates.insert(0, os.path.join(sys._MEIPASS, "settings.ini"))
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return None
+
+    def _seed_from_ini(self, conn, ini_path: str = None) -> bool:
+        import configparser
+        ini_file = self._find_ini_file(ini_path)
+        if not ini_file:
+            return False
+        try:
+            config = configparser.ConfigParser()
+            config.read(ini_file, encoding="utf-8-sig")
+            if "MCL_Columns" not in config:
+                return False
+
+            col_ids_map = {}
+            for _, line in config["MCL_Columns"].items():
+                parts = [p.strip() for p in line.split("|")]
+                if not parts:
+                    continue
+                lbl = parts[0]
+                kwargs = {}
+                for p in parts[1:]:
+                    if "=" in p:
+                        k, v = p.split("=", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if k in ("is_identity", "is_internal_pk", "sort_order", "show_in_search", "allow_quick_copy", "admin_show_in_search"):
+                            kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
+                        else:
+                            kwargs[k] = v
+                cur = conn.execute(
+                    """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        lbl,
+                        kwargs.get("field_type", "text"),
+                        kwargs.get("is_identity", 0),
+                        kwargs.get("is_internal_pk", 0),
+                        kwargs.get("sort_order", 0),
+                        kwargs.get("show_in_search", 1),
+                        kwargs.get("allow_quick_copy", 1),
+                        kwargs.get("admin_show_in_search", 1),
+                    )
+                )
+                col_ids_map[lbl] = cur.lastrowid
+
+            if "Services" in config:
+                for _, line in config["Services"].items():
+                    parts = [p.strip() for p in line.split("|")]
+                    if not parts:
+                        continue
+                    name = parts[0]
+                    kwargs = {}
+                    for p in parts[1:]:
+                        if "=" in p:
+                            k, v = p.split("=", 1)
+                            kwargs[k.strip()] = v.strip()
+                    
+                    u_col = kwargs.get("user_col")
+                    p_col = kwargs.get("pass_col")
+                    u_id = col_ids_map.get(u_col) if u_col else None
+                    p_id = col_ids_map.get(p_col) if p_col else None
+                    s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                    conn.execute(
+                        """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            name,
+                            kwargs.get("login_link", ""),
+                            u_id,
+                            p_id,
+                            kwargs.get("user_sel", ""),
+                            kwargs.get("pass_sel", ""),
+                            kwargs.get("mode", "extension"),
+                            kwargs.get("flow", "double"),
+                            s_order,
+                        )
+                    )
+            return True
+        except Exception:
+            return False
 
     def _seed_default_data(self, conn):
         """Seeds default MCL columns and Services for fresh database installations."""
@@ -374,6 +539,11 @@ class SeraDatabase:
             row = cur.fetchone()
             return row[0] if row else default
 
+    def get_all_settings(self) -> dict:
+        with self._connect() as conn:
+            cur = conn.execute("SELECT key, value FROM app_settings")
+            return {r[0]: r[1] for r in cur.fetchall()}
+
     def set_setting(self, key: str, value: str):
         with self._connect() as conn:
             conn.execute(
@@ -381,6 +551,183 @@ class SeraDatabase:
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
                 (key, value),
             )
+
+    def set_settings_bulk(self, settings_dict: dict):
+        with self._connect() as conn:
+            conn.executemany(
+                """INSERT INTO app_settings (key, value) VALUES (?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                [(k, str(v) if v is not None else "") for k, v in settings_dict.items()]
+            )
+
+    def load_ini_defaults(self, ini_path: str = None):
+        """Loads default settings, MCL columns, and services from a .ini file if present."""
+        import sys
+        import configparser
+        if not ini_path:
+            candidates = [
+                os.path.join(os.path.dirname(os.path.abspath(self.db_path)), "settings.ini"),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.ini"),
+                os.path.join(os.getcwd(), "settings.ini"),
+            ]
+            if hasattr(sys, "_MEIPASS"):
+                candidates.insert(0, os.path.join(sys._MEIPASS, "settings.ini"))
+            for c in candidates:
+                if os.path.exists(c):
+                    ini_path = c
+                    break
+
+        if not ini_path or not os.path.exists(ini_path):
+            return
+
+        try:
+            config = configparser.ConfigParser()
+            config.read(ini_path, encoding="utf-8-sig")
+
+            if "AppSettings" in config:
+                existing = self.get_all_settings()
+                to_set = {}
+                for k, v in config["AppSettings"].items():
+                    if k not in existing:
+                        to_set[k] = v
+                if to_set:
+                    self.set_settings_bulk(to_set)
+
+            if "MCL_Columns" in config:
+                mcl_items = config["MCL_Columns"].items()
+                with self._connect() as conn:
+                    cur = conn.execute("SELECT COUNT(*) FROM mcl_columns")
+                    count = cur.fetchone()[0]
+                    if count == 0:
+                        for _, line in mcl_items:
+                            parts = [p.strip() for p in line.split("|")]
+                            if not parts:
+                                continue
+                            lbl = parts[0]
+                            kwargs = {}
+                            for p in parts[1:]:
+                                if "=" in p:
+                                    k, v = p.split("=", 1)
+                                    k = k.strip()
+                                    v = v.strip()
+                                    if k in ("is_identity", "is_internal_pk", "sort_order", "show_in_search", "allow_quick_copy", "admin_show_in_search"):
+                                        kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
+                                    else:
+                                        kwargs[k] = v
+                            conn.execute(
+                                """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    lbl,
+                                    kwargs.get("field_type", "text"),
+                                    kwargs.get("is_identity", 0),
+                                    kwargs.get("is_internal_pk", 0),
+                                    kwargs.get("sort_order", 0),
+                                    kwargs.get("show_in_search", 1),
+                                    kwargs.get("allow_quick_copy", 1),
+                                    kwargs.get("admin_show_in_search", 1),
+                                )
+                            )
+
+            if "Services" in config:
+                svc_items = config["Services"].items()
+                with self._connect() as conn:
+                    cur = conn.execute("SELECT COUNT(*) FROM services")
+                    count = cur.fetchone()[0]
+                    if count == 0:
+                        cur = conn.execute("SELECT id, label FROM mcl_columns")
+                        lbl_to_id = {r[1]: r[0] for r in cur.fetchall()}
+                        for _, line in svc_items:
+                            parts = [p.strip() for p in line.split("|")]
+                            if not parts:
+                                continue
+                            name = parts[0]
+                            kwargs = {}
+                            for p in parts[1:]:
+                                if "=" in p:
+                                    k, v = p.split("=", 1)
+                                    kwargs[k.strip()] = v.strip()
+                            
+                            u_col = kwargs.get("user_col")
+                            p_col = kwargs.get("pass_col")
+                            u_id = lbl_to_id.get(u_col) if u_col else None
+                            p_id = lbl_to_id.get(p_col) if p_col else None
+                            s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                            conn.execute(
+                                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    name,
+                                    kwargs.get("login_link", ""),
+                                    u_id,
+                                    p_id,
+                                    kwargs.get("user_sel", ""),
+                                    kwargs.get("pass_sel", ""),
+                                    kwargs.get("mode", "extension"),
+                                    kwargs.get("flow", "double"),
+                                    s_order,
+                                )
+                            )
+
+            if "ColumnVisibility" in config:
+                col_vis = config["ColumnVisibility"]
+                if "show_in_search" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["show_in_search"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_visibility(ids)
+                if "allow_quick_copy" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["allow_quick_copy"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_quick_copy(ids)
+                if "admin_show_in_search" in col_vis:
+                    ids = [int(x.strip()) for x in col_vis["admin_show_in_search"].split(",") if x.strip().isdigit()]
+                    if ids:
+                        self.bulk_update_mcl_admin_visibility(ids)
+        except Exception as e:
+            pass
+
+    def export_to_ini(self, ini_path: str):
+        """Exports current database settings, MCL columns, and services to a .ini file."""
+        import configparser
+        try:
+            config = configparser.ConfigParser()
+            config["AppSettings"] = self.get_all_settings()
+
+            mcl = self.get_mcl_columns()
+            mcl_sec = {}
+            id_to_lbl = {}
+            for idx, c in enumerate(mcl, 1):
+                id_to_lbl[c["id"]] = c["label"]
+                line = (
+                    f"{c['label']} | field_type={c.get('field_type','text')} | "
+                    f"is_identity={1 if c.get('is_identity') else 0} | "
+                    f"is_internal_pk={1 if c.get('is_internal_pk') else 0} | sort_order={c.get('sort_order',0)} | "
+                    f"show_in_search={1 if c.get('show_in_search') else 0} | "
+                    f"allow_quick_copy={1 if c.get('allow_quick_copy') else 0} | "
+                    f"admin_show_in_search={1 if c.get('admin_show_in_search') else 0}"
+                )
+                mcl_sec[f"col_{idx}"] = line
+            config["MCL_Columns"] = mcl_sec
+
+            services = self.get_services()
+            svc_sec = {}
+            for idx, s in enumerate(services, 1):
+                u_lbl = id_to_lbl.get(s.get("userid_column_id"), "")
+                p_lbl = id_to_lbl.get(s.get("password_column_id"), "")
+                line = (
+                    f"{s['name']} | login_link={s.get('login_page_link','')} | "
+                    f"user_col={u_lbl} | pass_col={p_lbl} | "
+                    f"user_sel={s.get('username_selector','')} | pass_sel={s.get('password_selector','')} | "
+                    f"mode={s.get('automation_mode','extension')} | flow={s.get('extension_flow','double')} | "
+                    f"sort_order={s.get('sort_order',1)}"
+                )
+                svc_sec[f"svc_{idx}"] = line
+            config["Services"] = svc_sec
+
+            with open(ini_path, "w", encoding="utf-8") as f:
+                config.write(f)
+        except Exception:
+            pass
 
     # ---------------- Shared staff roster ----------------
 
@@ -453,7 +800,7 @@ class SeraDatabase:
     def get_mcl_columns(self) -> list[dict]:
         with self._connect() as conn:
             cur = conn.execute(
-                """SELECT id, label, field_type, dropdown_options, is_identity, sort_order, show_in_search, allow_quick_copy, admin_show_in_search 
+                """SELECT id, label, field_type, dropdown_options, is_identity, sort_order, show_in_search, allow_quick_copy, admin_show_in_search, is_internal_pk 
                    FROM mcl_columns ORDER BY sort_order"""
             )
             return [
@@ -466,7 +813,8 @@ class SeraDatabase:
                     "sort_order": r[5],
                     "show_in_search": bool(r[6]),
                     "allow_quick_copy": bool(r[7]),
-                    "admin_show_in_search": bool(r[8]) if len(r) > 8 else True
+                    "admin_show_in_search": bool(r[8]) if len(r) > 8 else True,
+                    "is_internal_pk": bool(r[9]) if len(r) > 9 else False,
                 }
                 for r in cur.fetchall()
             ]
@@ -476,6 +824,14 @@ class SeraDatabase:
             if col.get("field_type") == "id":
                 return col
         return None
+
+    def get_internal_pk_columns(self) -> list[dict]:
+        """Returns all MCL columns designated as mandatory Internal Primary Key Anchors."""
+        mcl = self.get_mcl_columns()
+        anchors = [c for c in mcl if c.get("is_internal_pk")]
+        if not anchors:
+            anchors = [c for c in mcl if any(k in c.get("label", "").lower() for k in ("pan", "tan", "gstin")) and "pass" not in c.get("label", "").lower()]
+        return anchors
 
     def get_identity_column(self) -> Optional[dict]:
         ignored_labels = {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#"}
@@ -488,7 +844,7 @@ class SeraDatabase:
                 return col
         return None
 
-    def create_mcl_column(self, label: str, field_type: str, dropdown_options=None, is_identity: int = 0) -> int:
+    def create_mcl_column(self, label: str, field_type: str, dropdown_options=None, is_identity: int = 0, is_internal_pk: int = 0) -> int:
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
             if field_type == "id":
@@ -496,29 +852,32 @@ class SeraDatabase:
             cur = conn.execute("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM mcl_columns")
             next_order = cur.fetchone()[0]
             cur = conn.execute(
-                """INSERT INTO mcl_columns (label, field_type, dropdown_options, is_identity, sort_order)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (label.strip(), field_type, opts_json, is_identity, next_order)
+                """INSERT INTO mcl_columns (label, field_type, dropdown_options, is_identity, sort_order, is_internal_pk)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (label.strip(), field_type, opts_json, is_identity, next_order, is_internal_pk)
             )
             return cur.lastrowid
 
-    def update_mcl_column(self, column_id: int, label: str, field_type: str, dropdown_options=None, is_identity: int = None):
+    def update_mcl_column(self, column_id: int, label: str, field_type: str, dropdown_options=None, is_identity: int = None, is_internal_pk: int = None):
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
             if field_type == "id":
                 conn.execute("UPDATE mcl_columns SET field_type = 'text' WHERE field_type = 'id' AND id != ?", (column_id,))
-            if is_identity is not None:
-                conn.execute(
-                    """UPDATE mcl_columns SET label=?, field_type=?, dropdown_options=?, is_identity=? 
-                       WHERE id=?""",
-                    (label.strip(), field_type, opts_json, int(is_identity), column_id)
-                )
-            else:
-                conn.execute(
-                    """UPDATE mcl_columns SET label=?, field_type=?, dropdown_options=? 
-                       WHERE id=?""",
-                    (label.strip(), field_type, opts_json, column_id)
-                )
+            
+            # Fetch current values for unspecified flags
+            cur = conn.execute("SELECT is_identity, is_internal_pk FROM mcl_columns WHERE id = ?", (column_id,))
+            row = cur.fetchone()
+            curr_ident = row[0] if row else 0
+            curr_pk = row[1] if row and len(row) > 1 else 0
+
+            target_ident = int(is_identity) if is_identity is not None else curr_ident
+            target_pk = int(is_internal_pk) if is_internal_pk is not None else curr_pk
+
+            conn.execute(
+                """UPDATE mcl_columns SET label=?, field_type=?, dropdown_options=?, is_identity=?, is_internal_pk=? 
+                   WHERE id=?""",
+                (label.strip(), field_type, opts_json, target_ident, target_pk, column_id)
+            )
 
     def delete_mcl_column(self, column_id: int):
         with self._connect() as conn:
@@ -584,7 +943,7 @@ class SeraDatabase:
                 (['gst.gov.in', 'gst'], '#username', '#user_pass', 'https://services.gst.gov.in/services/login', 'single'),
                 (['incometax', 'itr', 'eportal'], '#panAdhaarUserId', "input[type='password']", 'https://eportal.incometax.gov.in/iec/foservices/#/login', 'double'),
                 (['gmail', 'google', 'accounts.google'], '#identifierId, input[type="email"]', "input[name='Passwd'], input[type='password']", 'https://accounts.google.com', 'double'),
-                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password']', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
+                (['epfindia', 'epfo', 'unifiedportal', 'pf'], '#userName, #username, input[name="username"]', '#password, input[type="password"]', 'https://unifiedportal-mem.epfindia.gov.in/', 'single'),
                 (['icegate'], '#userId, #userName', '#password, input[type="password"]', 'https://www.icegate.gov.in', 'single'),
                 (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double'),
             ]
@@ -966,7 +1325,35 @@ class SeraDatabase:
                 for r in cur.fetchall()
             ]
 
+    def _validate_internal_pk_values(self, values: dict[int, str], exclude_client_id: int = None):
+        """Validates that all columns flagged as Internal Primary Key Anchors are non-empty and unique across active clients."""
+        pk_cols = [c for c in self.get_mcl_columns() if c.get("is_internal_pk")]
+        if not pk_cols:
+            return
+
+        with self._connect() as conn:
+            for col in pk_cols:
+                col_id = col["id"]
+                val = str(values.get(col_id, "") or "").strip()
+                if not val:
+                    raise ValueError(f"Internal Primary Key '{col['label']}' is mandatory and cannot be empty.")
+
+                # Check uniqueness against active clients in vault
+                q = """SELECT c.id FROM clients c
+                       JOIN client_values cv ON cv.client_id = c.id
+                       WHERE c.is_archived = 0 AND cv.column_id = ? AND UPPER(TRIM(cv.value)) = ?"""
+                params = [col_id, val.upper()]
+                if exclude_client_id is not None:
+                    q += " AND c.id != ?"
+                    params.append(exclude_client_id)
+
+                cur = conn.execute(q, params)
+                existing = cur.fetchone()
+                if existing:
+                    raise ValueError(f"A client with {col['label']} '{val}' already exists (Client #{existing[0]}). Duplicate Internal Primary Keys are not permitted.")
+
     def add_client(self, values: dict[int, str], notes: str, service_ids: list[int], actor: str = "Staff") -> int:
+        self._validate_internal_pk_values(values)
         now = datetime.datetime.utcnow().isoformat()
         with self._connect() as conn:
             cur = conn.execute(
@@ -998,6 +1385,7 @@ class SeraDatabase:
         return client_id
 
     def update_client(self, client_id: int, values: dict[int, str], notes: str, service_ids: list[int], actor: str = "Staff"):
+        self._validate_internal_pk_values(values, exclude_client_id=client_id)
         now = datetime.datetime.utcnow().isoformat()
         with self._connect() as conn:
             conn.execute(
@@ -1729,6 +2117,9 @@ class SeraDatabase:
             pre_salt = os.path.join(live_dir, f"sera.salt.pre-restore-{now_str}")
             shutil.copy2(live_salt, pre_salt)
 
+        # Close any open connections before file replacement
+        self.close()
+
         # Overwrite live files with validated Syncthing conflict/backup pair
         shutil.copy2(matched_db, self.db_path)
         shutil.copy2(matched_salt, live_salt)
@@ -1905,27 +2296,102 @@ class SeraDatabase:
 
     # ---------------- Tracker Dump Subsystem (SAD & Extension) ----------------
 
-    def insert_tracker_dump(self, client_id: int, service_id: int = None, portal: str = None,
+    def _extract_identity_candidates_from_payload(self, arn_number: str = None, pan: str = None, raw_payload_json: str = None) -> list[str]:
+        """Extracts all legal identity candidates (PAN, GSTIN, TAN) from payload and ARN."""
+        import re
+        candidates = []
+
+        def _add(val):
+            if val and isinstance(val, (str, int)):
+                cleaned = str(val).strip().upper()
+                if not cleaned:
+                    return
+                # Valid 10-char PAN
+                if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", cleaned):
+                    if cleaned not in candidates:
+                        candidates.append(cleaned)
+                # Valid 15-char GSTIN
+                elif re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", cleaned):
+                    if cleaned not in candidates:
+                        candidates.append(cleaned)
+                    pan_part = cleaned[2:12]
+                    if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", pan_part) and pan_part not in candidates:
+                        candidates.append(pan_part)
+                # Valid 10-char TAN
+                elif re.match(r"^[A-Z]{4}[0-9]{5}[A-Z]$", cleaned):
+                    if cleaned not in candidates:
+                        candidates.append(cleaned)
+
+        if pan:
+            _add(pan)
+
+        if arn_number:
+            arn_str = str(arn_number).strip()
+            if arn_str.upper().startswith("PROFILE-") or arn_str.upper().startswith("PROF-"):
+                token = arn_str.split("-", 1)[1].strip()
+                _add(token)
+            elif re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", arn_str.upper()):
+                _add(arn_str)
+
+        def _scan_deep(item, depth=6):
+            if depth <= 0 or item is None:
+                return
+            if isinstance(item, dict):
+                # Priority target keys first
+                for k, v in item.items():
+                    k_lower = str(k).lower()
+                    if any(target in k_lower for target in ("entitynum", "entityid", "userpan", "pan", "gstin", "tan", "userid", "taxpayer", "submitby", "acknum")):
+                        if isinstance(v, (str, int)):
+                            _add(v)
+                # Traverse child objects and values
+                for k, v in item.items():
+                    if isinstance(v, (dict, list)):
+                        _scan_deep(v, depth - 1)
+                    elif isinstance(v, (str, int)):
+                        _add(v)
+            elif isinstance(item, list):
+                for v in item:
+                    _scan_deep(v, depth - 1)
+
+        if raw_payload_json:
+            try:
+                payload = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+                _scan_deep(payload)
+            except Exception:
+                pass
+
+        return candidates
+
+    def insert_tracker_dump(self, client_id: int = None, service_id: int = None, portal: str = None,
                             period_label: str = None, arn_number: str = None,
                             capture_method: str = "DOM_Tracker", status: str = "submitted",
-                            raw_payload_json: str = None, captured_by: str = "System") -> dict:
+                            raw_payload_json: str = None, captured_by: str = "System",
+                            pan: str = None) -> dict:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        candidates = self._extract_identity_candidates_from_payload(arn_number=arn_number, pan=pan, raw_payload_json=raw_payload_json)
+
+        valid_id = None
+        unassigned_identity = None
+
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tracker_dump (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-                    service_id      INTEGER,
-                    portal          TEXT,
-                    period_label    TEXT,
-                    arn_number      TEXT,
-                    capture_method  TEXT DEFAULT 'DOM_Tracker',
-                    status          TEXT DEFAULT 'submitted',
-                    raw_payload_json TEXT,
-                    captured_by     TEXT,
-                    created_at      TEXT NOT NULL
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id           INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                    unassigned_identity TEXT,
+                    service_id          INTEGER,
+                    portal              TEXT,
+                    period_label        TEXT,
+                    arn_number          TEXT,
+                    capture_method      TEXT DEFAULT 'DOM_Tracker',
+                    status              TEXT DEFAULT 'submitted',
+                    raw_payload_json    TEXT,
+                    captured_by         TEXT,
+                    created_at          TEXT NOT NULL
                 );
             """)
+            self._ensure_column(conn, "tracker_dump", "unassigned_identity", "TEXT")
+            self._migrate_tracker_dump_nullable(conn)
 
             # Deduplication Check: Ignore identical ARN received within last 10 seconds
             if arn_number and arn_number != "N/A":
@@ -1941,110 +2407,317 @@ class SeraDatabase:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
-            # Resolve client_id: 1. Direct ID, 2. Token (CLI-00370), 3. MCL Serial No (No. 370)
-            valid_id = None
-            if client_id:
-                # 1. Direct ID match
-                cur = conn.execute("SELECT id FROM clients WHERE id = ?", (client_id,))
-                row = cur.fetchone()
-                if row:
-                    valid_id = row[0]
+            # 1. Authoritative Match: Match extracted candidate identity against Internal Primary Key columns in vault
+            if candidates:
+                for cand in candidates:
+                    cur = conn.execute(
+                        """SELECT cv.client_id FROM client_values cv
+                           JOIN clients c ON c.id = cv.client_id
+                           JOIN mcl_columns mc ON mc.id = cv.column_id
+                           WHERE c.is_archived = 0 AND mc.is_internal_pk = 1 AND UPPER(TRIM(cv.value)) = ?
+                           LIMIT 1""",
+                        (cand.upper(),)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        valid_id = row[0]
+                        break
 
-                # 2. Token match (CLI-00370 or CLI-370)
+                # Fallback: Match candidate against any client_values column
                 if not valid_id:
-                    try:
-                        token_str = f"CLI-{int(client_id):05d}"
-                        cur = conn.execute("SELECT id FROM clients WHERE client_id_token = ? OR client_id_token = ?", (token_str, f"CLI-{client_id}"))
-                        row = cur.fetchone()
-                        if row:
-                            valid_id = row[0]
-                    except Exception:
-                        pass
-
-                # 3. MCL Serial No / SL No column match (e.g. No. 370)
-                if not valid_id:
-                    try:
+                    for cand in candidates:
                         cur = conn.execute(
-                            """SELECT cv.client_id
-                               FROM client_values cv
-                               JOIN mcl_columns mc ON mc.id = cv.column_id
-                               WHERE TRIM(cv.value) = ? AND LOWER(TRIM(mc.label)) IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')""",
-                            (str(client_id).strip(),)
+                            """SELECT cv.client_id FROM client_values cv
+                               JOIN clients c ON c.id = cv.client_id
+                               WHERE c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
+                               LIMIT 1""",
+                            (cand.upper(),)
                         )
                         row = cur.fetchone()
                         if row:
                             valid_id = row[0]
-                    except Exception:
-                        pass
+                            break
 
-                # 4. Search Grid Row Number match (e.g. Row #370 in Search Grid -> 370th client in DB)
                 if not valid_id:
-                    try:
-                        row_num = int(client_id)
-                        if row_num > 0:
-                            cur = conn.execute("SELECT id FROM clients WHERE is_archived = 0 ORDER BY id ASC LIMIT 1 OFFSET ?", (row_num - 1,))
+                    # Identity extracted from network, but client does NOT exist in vault.
+                    # Mark as unassigned to prevent false attribution to previous session client!
+                    unassigned_identity = candidates[0]
+            else:
+                # No identity extracted from network (e.g. legacy DOM or manual click)
+                if client_id:
+                    cur = conn.execute("SELECT id FROM clients WHERE id = ? AND is_archived = 0", (client_id,))
+                    row = cur.fetchone()
+                    if row:
+                        valid_id = row[0]
+                    else:
+                        try:
+                            token_str = f"CLI-{int(client_id):05d}"
+                            cur = conn.execute("SELECT id FROM clients WHERE (client_id_token = ? OR client_id_token = ?) AND is_archived = 0", (token_str, f"CLI-{client_id}"))
                             row = cur.fetchone()
                             if row:
                                 valid_id = row[0]
-                    except Exception:
-                        pass
-
-                # 5. Name / PAN / GSTIN substring match in client_values
+                        except Exception:
+                            pass
                 if not valid_id:
-                    try:
-                        search_str = f"%{str(client_id).strip()}%"
-                        cur = conn.execute(
-                            "SELECT client_id FROM client_values WHERE value LIKE ? LIMIT 1",
-                            (search_str,)
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            valid_id = row[0]
-                    except Exception:
-                        pass
-
-            if not valid_id:
-                cur = conn.execute("SELECT id FROM clients ORDER BY id ASC LIMIT 1")
-                row = cur.fetchone()
-                if row:
-                    valid_id = row[0]
-                else:
-                    cur = conn.execute("INSERT INTO clients (notes, created_at, updated_at) VALUES ('Default System Client', ?, ?)", (now, now))
-                    valid_id = cur.lastrowid
+                    unassigned_identity = "Unassigned"
 
             cur = conn.execute(
                 """INSERT INTO tracker_dump
-                   (client_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (valid_id, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
+                   (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
             )
             dump_id = cur.lastrowid
+
+        # Write/append organized raw payload entry to seraRawPayloadDump.txt
+        self._append_raw_payload_dump_file(
+            dump_id=dump_id,
+            client_id=valid_id,
+            portal=portal,
+            period_label=period_label,
+            arn_number=arn_number,
+            capture_method=capture_method,
+            status=status,
+            raw_payload_json=raw_payload_json,
+            captured_by=captured_by,
+            created_at=now
+        )
+
         return {
-            "id": dump_id, "client_id": valid_id, "service_id": service_id,
+            "id": dump_id, "client_id": valid_id, "unassigned_identity": unassigned_identity, "service_id": service_id,
             "portal": portal, "period_label": period_label, "arn_number": arn_number,
             "capture_method": capture_method, "status": status, "created_at": now
         }
+
+    def link_unassigned_tracker_dumps(self, client_id: int, identity_value: str) -> int:
+        """Retroactively links all unassigned tracker_dump rows matching identity_value (PAN/TAN/GSTIN) to client_id."""
+        clean = str(identity_value or "").strip().upper()
+        if not clean or not client_id:
+            return 0
+        with self._connect() as conn:
+            cur = conn.execute(
+                """UPDATE tracker_dump
+                   SET client_id = ?, unassigned_identity = NULL
+                   WHERE (client_id IS NULL OR client_id = 0)
+                     AND (
+                       UPPER(TRIM(unassigned_identity)) = ?
+                       OR UPPER(TRIM(arn_number)) LIKE ?
+                       OR UPPER(raw_payload_json) LIKE ?
+                     )""",
+                (client_id, clean, f"%{clean}%", f"%{clean}%")
+            )
+            return cur.rowcount
+
+    def re_resolve_all_tracker_dumps(self) -> int:
+        """Scans all rows in tracker_dump, extracts true PAN/GSTIN/TAN from ARN/payload, and re-resolves client_id."""
+        updated_count = 0
+        with self._connect() as conn:
+            self._ensure_column(conn, "tracker_dump", "unassigned_identity", "TEXT")
+            cur = conn.execute("SELECT id, client_id, arn_number, raw_payload_json FROM tracker_dump")
+            rows = cur.fetchall()
+            for dump_id, curr_cid, arn_number, raw_payload_json in rows:
+                candidates = self._extract_identity_candidates_from_payload(arn_number=arn_number, raw_payload_json=raw_payload_json)
+                if not candidates:
+                    continue
+
+                matched_id = None
+                for cand in candidates:
+                    cur_match = conn.execute(
+                        """SELECT cv.client_id FROM client_values cv
+                           JOIN clients c ON c.id = cv.client_id
+                           WHERE c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
+                           LIMIT 1""",
+                        (cand.upper(),)
+                    )
+                    r = cur_match.fetchone()
+                    if r:
+                        matched_id = r[0]
+                        break
+
+                if matched_id:
+                    if curr_cid != matched_id:
+                        conn.execute("UPDATE tracker_dump SET client_id = ?, unassigned_identity = NULL WHERE id = ?", (matched_id, dump_id))
+                        updated_count += 1
+                else:
+                    # Not found in vault -> mark as unassigned with candidate PAN
+                    cand_id = candidates[0]
+                    conn.execute("UPDATE tracker_dump SET client_id = NULL, unassigned_identity = ? WHERE id = ?", (cand_id, dump_id))
+                    updated_count += 1
+        return updated_count
+
+    def _get_dump_file_paths(self) -> list[str]:
+        """Returns all destination file paths for seraRawPayloadDump.txt."""
+        paths = []
+        # 1. Main database directory (e.g. AmanAssociates_Sera)
+        try:
+            db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            paths.append(os.path.join(db_dir, "seraRawPayloadDump.txt"))
+        except Exception:
+            pass
+
+        # 2. Primary Downloads workspace folder if present
+        workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+        if os.path.exists(workspace_dir):
+            paths.append(os.path.join(workspace_dir, "seraRawPayloadDump.txt"))
+
+        # Deduplicate paths
+        unique_paths = []
+        for p in paths:
+            norm = os.path.normpath(p)
+            if norm not in unique_paths:
+                unique_paths.append(norm)
+        return unique_paths
+
+    def _append_raw_payload_dump_file(self, dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at):
+        """Appends an organized, structured raw copy of intercepted API payloads to seraRawPayloadDump.txt across target paths."""
+        try:
+            # Format JSON cleanly with 4-space indentation
+            formatted_json = raw_payload_json or "{}"
+            try:
+                if isinstance(raw_payload_json, str):
+                    parsed = json.loads(raw_payload_json)
+                else:
+                    parsed = raw_payload_json
+                formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
+            except Exception:
+                formatted_json = str(raw_payload_json)
+
+            entry_lines = [
+                "=" * 88,
+                f"CAPTURE DUMP ENTRY #{dump_id or 'N/A'}",
+                "=" * 88,
+                f"Timestamp       : {created_at}",
+                f"Portal          : {portal or 'N/A'}",
+                f"Capture Method  : {capture_method or 'N/A'}",
+                f"Status          : {status or 'submitted'}",
+                f"ARN / Ack No    : {arn_number or 'N/A'}",
+                f"Period Label    : {period_label or 'N/A'}",
+                f"Client ID       : {client_id or 'N/A'}",
+                f"Captured By     : {captured_by or 'System'}",
+                "-" * 88,
+                "RAW JSON PAYLOAD:",
+                formatted_json,
+                "=" * 88,
+                "\n"
+            ]
+            entry_text = "\n".join(entry_lines)
+
+            for dump_file in self._get_dump_file_paths():
+                try:
+                    os.makedirs(os.path.dirname(dump_file), exist_ok=True)
+                    # Write header if file does not exist yet or is empty
+                    if not os.path.exists(dump_file) or os.path.getsize(dump_file) == 0:
+                        header = [
+                            "#" * 88,
+                            "# PROJECT SERA — RAW API PAYLOAD CAPTURE DUMP",
+                            "# Intercepted government portal API requests, responses, and FST submissions",
+                            "#" * 88,
+                            f"# Initialized at : {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                            f"# Target Database: {os.path.abspath(self.db_path)}",
+                            "#" * 88,
+                            "\n"
+                        ]
+                        with open(dump_file, "w", encoding="utf-8") as f:
+                            f.write("\n".join(header))
+
+                    with open(dump_file, "a", encoding="utf-8") as f:
+                        f.write(entry_text)
+                except Exception as file_err:
+                    print(f"[seraRawPayloadDump] File append error ({dump_file}): {file_err}")
+        except Exception as e:
+            print(f"[seraRawPayloadDump] Append error: {e}")
+
+    def sync_raw_payload_dumps_file(self):
+        """Ensures all existing tracker_dump records are synced to seraRawPayloadDump.txt."""
+        try:
+            for dump_file in self._get_dump_file_paths():
+                if os.path.exists(dump_file) and os.path.getsize(dump_file) > 100:
+                    continue
+                self.rebuild_raw_payload_dumps_file()
+                break
+        except Exception as e:
+            print(f"[seraRawPayloadDump] Sync error: {e}")
+
+    def rebuild_raw_payload_dumps_file(self) -> int:
+        """Completely rebuilds seraRawPayloadDump.txt from all records in the tracker_dump database table."""
+        dumps = self.get_tracker_dumps(limit=5000)
+        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        header = [
+            "#" * 88,
+            "# PROJECT SERA — RAW API PAYLOAD CAPTURE DUMP",
+            "# Intercepted government portal API requests, responses, and FST submissions",
+            "#" * 88,
+            f"# Rebuilt at      : {now_str}",
+            f"# Total Entries   : {len(dumps)}",
+            f"# Target Database : {os.path.abspath(self.db_path)}",
+            "#" * 88,
+            "\n"
+        ]
+        entries = []
+        for item in reversed(dumps):
+            raw_payload = item.get("raw_payload_json") or "{}"
+            try:
+                if isinstance(raw_payload, str):
+                    parsed = json.loads(raw_payload)
+                else:
+                    parsed = raw_payload
+                formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
+            except Exception:
+                formatted_json = str(raw_payload)
+
+            entry_lines = [
+                "=" * 88,
+                f"CAPTURE DUMP ENTRY #{item.get('id', 'N/A')}",
+                "=" * 88,
+                f"Timestamp       : {item.get('created_at', 'N/A')}",
+                f"Portal          : {item.get('portal', 'N/A')}",
+                f"Capture Method  : {item.get('capture_method', 'N/A')}",
+                f"Status          : {item.get('status', 'submitted')}",
+                f"ARN / Ack No    : {item.get('arn_number', 'N/A')}",
+                f"Period Label    : {item.get('period_label', 'N/A')}",
+                f"Client ID       : {item.get('client_id', 'N/A')} ({item.get('client_name', '')})",
+                f"Captured By     : {item.get('captured_by', 'System')}",
+                "-" * 88,
+                "RAW JSON PAYLOAD:",
+                formatted_json,
+                "=" * 88,
+                "\n"
+            ]
+            entries.append("\n".join(entry_lines))
+
+        content = "\n".join(header) + "\n".join(entries)
+        for dump_file in self._get_dump_file_paths():
+            try:
+                os.makedirs(os.path.dirname(dump_file), exist_ok=True)
+                with open(dump_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                print(f"[seraRawPayloadDump] Rebuild write error ({dump_file}): {e}")
+        return len(dumps)
 
     def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tracker_dump (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-                    service_id      INTEGER,
-                    portal          TEXT,
-                    period_label    TEXT,
-                    arn_number      TEXT,
-                    capture_method  TEXT DEFAULT 'DOM_Tracker',
-                    status          TEXT DEFAULT 'submitted',
-                    raw_payload_json TEXT,
-                    captured_by     TEXT,
-                    created_at      TEXT NOT NULL
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id           INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+                    unassigned_identity TEXT,
+                    service_id          INTEGER,
+                    portal              TEXT,
+                    period_label        TEXT,
+                    arn_number          TEXT,
+                    capture_method      TEXT DEFAULT 'DOM_Tracker',
+                    status              TEXT DEFAULT 'submitted',
+                    raw_payload_json    TEXT,
+                    captured_by         TEXT,
+                    created_at          TEXT NOT NULL
                 );
             """)
+            self._ensure_column(conn, "tracker_dump", "unassigned_identity", "TEXT")
+
             sql = """SELECT td.id, td.client_id, c.client_id_token, td.service_id, s.name as service_name,
                             td.portal, td.period_label, td.arn_number, td.capture_method, td.status,
-                            td.raw_payload_json, td.captured_by, td.created_at
+                            td.raw_payload_json, td.captured_by, td.created_at, td.unassigned_identity
                      FROM tracker_dump td
                      LEFT JOIN clients c ON c.id = td.client_id
                      LEFT JOIN services s ON s.id = td.service_id
@@ -2054,9 +2727,9 @@ class SeraDatabase:
                 sql += " AND td.client_id = ?"
                 params.append(client_id)
             if search_query:
-                sql += " AND (td.arn_number LIKE ? OR td.portal LIKE ? OR td.period_label LIKE ?)"
+                sql += " AND (td.arn_number LIKE ? OR td.portal LIKE ? OR td.period_label LIKE ? OR td.unassigned_identity LIKE ?)"
                 q = f"%{search_query}%"
-                params.extend([q, q, q])
+                params.extend([q, q, q, q])
             sql += " ORDER BY td.id DESC LIMIT ?"
             params.append(limit)
 
@@ -2086,19 +2759,28 @@ class SeraDatabase:
                                     pan_val = str(val).strip()
                             client_map[cid] = {
                                 "name": name_val or cdata.get("client_id_token", str(cid)),
-                                "pan": pan_val
+                                "pan": pan_val,
+                                "is_unassigned": False
                             }
                     except Exception:
                         pass
-                if cid not in client_map:
-                    client_map[cid] = {"name": f"CLI-{cid:05d}" if cid else "Unknown Client", "pan": ""}
+                if cid and cid not in client_map:
+                    client_map[cid] = {"name": f"CLI-{cid:05d}", "pan": "", "is_unassigned": False}
 
             results = []
             for r in rows:
                 cid = r[1]
-                info = client_map.get(cid, {"name": "Unknown Client", "pan": ""})
+                unassigned_id = r[13] if len(r) > 13 else None
+                if cid and cid in client_map:
+                    info = client_map[cid]
+                elif unassigned_id:
+                    info = {"name": f"Unregistered (PAN: {unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
+                else:
+                    info = {"name": "Unregistered Client", "pan": "", "is_unassigned": True}
+
                 results.append({
-                    "id": r[0], "client_id": cid,
+                    "id": r[0], "client_id": cid, "unassigned_identity": unassigned_id,
+                    "is_unassigned": info.get("is_unassigned", False),
                     "client_name": info["name"], "pan": info["pan"],
                     "service_id": r[3], "service_name": r[4] or r[5] or "Portal", "portal": r[5] or "",
                     "period_label": r[6] or "", "arn_number": r[7] or "N/A", "capture_method": r[8] or "DOM_Tracker",
@@ -2110,12 +2792,17 @@ class SeraDatabase:
     def delete_tracker_dump(self, dump_id: int) -> bool:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM tracker_dump WHERE id = ?", (dump_id,))
-            return cur.rowcount > 0
+            res = cur.rowcount > 0
+        if res:
+            self.rebuild_raw_payload_dumps_file()
+        return res
 
     def clear_tracker_dumps(self) -> int:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM tracker_dump")
-            return cur.rowcount
+            count = cur.rowcount
+        self.rebuild_raw_payload_dumps_file()
+        return count
 
 
     # ---------------- Cell Formatting (Search Grid) ----------------

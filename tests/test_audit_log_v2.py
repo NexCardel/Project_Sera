@@ -24,8 +24,10 @@ class TestAuditLogV2(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_client_name_resolution_and_token_export(self):
+        pan_col = next((c for c in self.db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        pan_id = pan_col["id"] if pan_col else 5
         col_id = self.db.create_mcl_column("Company Name", "text", is_identity=True)
-        cid = self.db.add_client({col_id: "Acme Corp"}, notes="Test notes", service_ids=[])
+        cid = self.db.add_client({col_id: "Acme Corp", pan_id: "AAAAA1111A"}, notes="Test notes", service_ids=[])
 
         self.db.log_action("Admin", "view", client_id=cid, detail="Viewed profile")
         self.db.log_action("Admin", "manual_copy", client_id=cid, detail="Copied password")

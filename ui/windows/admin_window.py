@@ -40,10 +40,20 @@ from ui.dialogs.csv_import_dialog import CSVImportDialog
 from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
 from ui.dialogs.settings_dialog import SettingsDialog
-from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget
+from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 from ui.windows.search_window import ActivityCellDelegate
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
+
+
+def _safe_qta_icon(name: str, color: str = "#FFFFFF"):
+    """Return a QIcon from qtawesome, or a blank QIcon if unavailable."""
+    try:
+        if qta:
+            return qta.icon(name, color=color)
+    except Exception:
+        pass
+    return QIcon()
 
 
 class NewClientDialog(QDialog):
@@ -55,9 +65,10 @@ class NewClientDialog(QDialog):
         self.db = db
         self._input_widgets = {}
         self._service_cbs = {}
-        self.setWindowTitle("Add Client")
+        self.setWindowTitle("Add Client — Project Sera")
         self.setModal(True)
         self.resize(680, 640)
+        self.setMinimumSize(580, 500)
         self._build_ui()
 
     def _build_ui(self):
@@ -65,15 +76,39 @@ class NewClientDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        title = QLabel("<b>Add New Client</b>")
-        title.setProperty("class", "DialogTitle")
-        layout.addWidget(title)
+        # Header Frame
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_safe_qta_icon("mdi.account-plus-outline", color="#2E9B5F").pixmap(26, 26))
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setSpacing(2)
+        title_lbl = QLabel("Add New Client")
+        title_lbl.setStyleSheet("font-size: 17px; font-weight: 700; color: #F8FAFC;")
+        sub_lbl = QLabel("Enter client identification, credentials, contact details, and compliance services.")
+        sub_lbl.setStyleSheet("font-size: 12px; color: #8E8D88;")
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # Divider
+        from PySide6.QtWidgets import QFrame
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
+        layout.addWidget(divider)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         form_widget = QWidget()
         self.form_layout = QFormLayout(form_widget)
         self.form_layout.setSpacing(10)
+        self.form_layout.setContentsMargins(8, 8, 8, 8)
         scroll.setWidget(form_widget)
         layout.addWidget(scroll, stretch=1)
 
@@ -82,26 +117,44 @@ class NewClientDialog(QDialog):
         button_row = QHBoxLayout()
         button_row.addStretch()
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(_safe_qta_icon("mdi.close", color="#8E8D88"))
+        cancel_btn.clicked.connect(self.reject)
+
         create_btn = QPushButton("Create Client")
         create_btn.setProperty("class", "primary")
-        cancel_btn.clicked.connect(self.reject)
+        create_btn.setIcon(_safe_qta_icon("mdi.check", color="#FFFFFF"))
         create_btn.clicked.connect(self._on_create)
+
         button_row.addWidget(cancel_btn)
         button_row.addWidget(create_btn)
         layout.addLayout(button_row)
 
     def _build_dynamic_form(self):
-        self.form_layout.addRow(QLabel("<b>Client Information</b>"))
+        lbl_info = QLabel("CLIENT INFORMATION")
+        lbl_info.setProperty("class", "SectionLabel")
+        self.form_layout.addRow(lbl_info)
         for col in self.db.get_mcl_columns():
             widget = make_input_widget(col, "", mask_password=False)
             self._input_widgets[col["id"]] = (col, widget)
-            self.form_layout.addRow(f"{col['label']}:", widget)
+            is_pk = col.get("is_internal_pk", False)
+            if is_pk:
+                lbl_col = QLabel(f"<span style='color:#FF5252;'>*</span> <b>{col['label']}</b>:")
+                lbl_col.setTextFormat(Qt.RichText)
+                lbl_col.setToolTip("Mandatory Internal Primary Key Anchor (e.g. PAN / TAN)")
+            else:
+                lbl_col = QLabel(f"{col['label']}:")
+            lbl_col.setProperty("class", "RowLabel")
+            self.form_layout.addRow(lbl_col, widget)
 
         self.f_notes = QTextEdit()
         self.f_notes.setMaximumHeight(80)
-        self.form_layout.addRow("Notes:", self.f_notes)
+        lbl_notes = QLabel("Notes:")
+        lbl_notes.setProperty("class", "RowLabel")
+        self.form_layout.addRow(lbl_notes, self.f_notes)
 
-        self.form_layout.addRow(QLabel("<b>Attached Services</b>"))
+        lbl_svc = QLabel("ATTACHED SERVICES")
+        lbl_svc.setProperty("class", "SectionLabel")
+        self.form_layout.addRow(lbl_svc)
         for service in self.db.get_services():
             checkbox = QCheckBox(service["name"])
             self._service_cbs[service["id"]] = checkbox
@@ -132,35 +185,82 @@ class NewClientDialog(QDialog):
             if proceed != QMessageBox.Yes:
                 return
 
-        self.db.add_client(values, notes, service_ids, actor=getattr(self, "actor", "Staff"))
-        self.client_created.emit()
-        self.accept()
+        try:
+            self.db.add_client(values, notes, service_ids, actor=getattr(self, "actor", "Staff"))
+            self.client_created.emit()
+            self.accept()
+        except ValueError as val_err:
+            QMessageBox.warning(self, "Validation Error", str(val_err))
+        except Exception as e:
+            QMessageBox.critical(self, "Creation Failed", f"Could not create client: {e}")
 
 
 class AdminPinDialog(QDialog):
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.db = db
-        self.setWindowTitle("Admin Mode")
+        self.setWindowTitle("Security Verification — Project Sera")
         self.setModal(True)
+        self.setFixedSize(380, 260)
         self._is_first_run = self.db.get_setting("admin_pin_hash") is None
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Create Admin PIN:" if self._is_first_run else "Enter Admin PIN:"))
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(14)
+
+        # Header
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_safe_qta_icon("mdi.shield-lock-outline", color="#2E9B5F").pixmap(28, 28))
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setSpacing(2)
+        title_lbl = QLabel("Create Admin PIN" if self._is_first_run else "Admin Mode Access")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
+        sub_lbl = QLabel("Enter your master PIN to access administrative features." if not self._is_first_run else "Set a master PIN to protect administrator tools.")
+        sub_lbl.setStyleSheet("font-size: 11.5px; color: #8E8D88;")
+        sub_lbl.setWordWrap(True)
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        layout.addLayout(header)
+
+        from PySide6.QtWidgets import QFrame
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
+        layout.addWidget(divider)
 
         self.pin_input = QLineEdit()
         self.pin_input.setEchoMode(QLineEdit.Password)
+        self.pin_input.setPlaceholderText("Enter 4+ digit PIN...")
+        self.pin_input.setStyleSheet("font-size: 14px; padding: 8px 12px;")
+        self.pin_input.returnPressed.connect(self._on_accept)
         layout.addWidget(self.pin_input)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(_safe_qta_icon("mdi.close", color="#8E8D88"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        unlock_btn = QPushButton("Set PIN" if self._is_first_run else "Unlock Admin")
+        unlock_btn.setProperty("class", "primary")
+        unlock_btn.setIcon(_safe_qta_icon("mdi.lock-open-outline", color="#FFFFFF"))
+        unlock_btn.clicked.connect(self._on_accept)
+        btn_row.addWidget(unlock_btn)
+
+        layout.addLayout(btn_row)
 
     def _on_accept(self):
         pin = self.pin_input.text()
         if not pin or len(pin) < 4:
-            QMessageBox.warning(self, "Too short", "PIN must be at least 4 characters.")
+            QMessageBox.warning(self, "Too Short", "PIN must be at least 4 characters.")
             return
 
         if self._is_first_run:
@@ -209,24 +309,16 @@ class AdminWindow(QWidget):
 
         page_header = QHBoxLayout()
         back_btn = QPushButton()
-        back_btn.setIcon(qta.icon("mdi.arrow-left", color="#FFFFFF"))
-        back_btn.setIconSize(QSize(22, 22))
-        back_btn.setToolTip("Back to Search")
+        back_btn.setProperty("class", "GhostIconButton")
+        back_btn.setIcon(qta.icon("mdi.arrow-left", color="#8E8D88") if qta else QIcon(BACK_ICON))
+        back_btn.setIconSize(QSize(20, 20))
+        back_btn.setFixedSize(36, 36)
+        back_btn.setToolTip("Back to Search (Esc)")
         back_btn.setCursor(Qt.PointingHandCursor)
-        back_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: 1px solid #D8CDB4;
-                border-radius: 6px;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #E6DCB8;
-            }
-        """)
         back_btn.clicked.connect(self.back_requested.emit)
         page_header.addWidget(back_btn)
-        page_title = QLabel("<b>Manage Clients</b>")
+        page_header.addSpacing(4)
+        page_title = QLabel("Manage Clients")
         page_title.setProperty("class", "PageTitle")
         page_header.addWidget(page_title)
         page_header.addStretch()
@@ -286,9 +378,7 @@ class AdminWindow(QWidget):
         self.sort_combo.addItem("ID (Descending: 3, 2, 1...)", ("id", "desc"))
         self.sort_combo.addItem("Client Identity (A → Z)", ("identity", "asc"))
         self.sort_combo.addItem("Client Identity (Z → A)", ("identity", "desc"))
-        self.sort_combo.addItem("🕒 Activity: Earliest → Later", ("activity_time", "asc"))
-        self.sort_combo.addItem("🕒 Activity: Latest → Earlier", ("activity_time", "desc"))
-        self.sort_combo.addItem("🔥 Most Viewed / Activity Count", ("activity", "desc"))
+        self.sort_combo.addItem("🔥 Most Viewed / Activity", ("activity", "desc"))
         self.sort_combo.addItem("Recently Added (Newest first)", ("created_at", "desc"))
         self.sort_combo.addItem("Recently Updated", ("updated_at", "desc"))
         self.sort_combo.currentIndexChanged.connect(self.refresh)
@@ -381,11 +471,10 @@ class AdminWindow(QWidget):
         self.filter_combo.blockSignals(True)
         self.filter_combo.clear()
         self.filter_combo.addItem("All clients", None)
-        self.filter_combo.addItem("🕒 Activity: Earliest → Later", "activity_earliest_to_latest")
-        self.filter_combo.addItem("🕒 Activity: Latest → Earlier", "activity_latest_to_earliest")
         self.filter_combo.addItem("🔥 Most Viewed / Active", "most_viewed")
         self.filter_combo.addItem("⚡ Active Today", "active_today")
         self.filter_combo.addItem("🌐 Has Attached Services", "has_services")
+        self.filter_combo.addItem("⚠️ Unassigned (No Services)", "no_services")
         self.filter_combo.addItem("🔒 Has Login Credentials", "has_passwords")
         self.filter_combo.addItem("⚠️ Missing Passwords", "missing_passwords")
         self.filter_combo.addItem("📦 Archived Only", "archived")
@@ -393,15 +482,7 @@ class AdminWindow(QWidget):
             self.filter_combo.addItem(f"Service: {s['name']}", s["id"])
         self.filter_combo.blockSignals(False)
 
-    def _build_dynamic_form(self, client_values=None, client_services=None):
-        # FIX: Properly destroy old UI rows so they don't block you from typing!
-        while self.form_layout.rowCount() > 0:
-            self.form_layout.removeRow(0)
-                
-        self._input_widgets.clear()
-        self._service_cbs.clear()
-        
-        # Defensive check: Accept client_id (int), full client object (dict), or client_values dict
+    def _resolve_client_data(self, client_values, client_services):
         if isinstance(client_values, int):
             c_data = self.db.get_client(client_values)
             if c_data:
@@ -419,55 +500,94 @@ class AdminWindow(QWidget):
             client_values = c_vals
         elif not isinstance(client_values, dict):
             client_values = {}
-
         client_services = client_services or []
+        return client_values, client_services
 
-        self.form_layout.addRow(QLabel("<b>Client Information</b>"))
+    def _build_dynamic_form(self, client_values=None, client_services=None, force_rebuild=False):
+        c_vals, c_svcs = self._resolve_client_data(client_values, client_services)
+
+        if not force_rebuild and getattr(self, "_form_built", False) and self._input_widgets:
+            for col_id, (col, widget) in self._input_widgets.items():
+                val = c_vals.get(col_id, "")
+                set_input_widget_value(col, widget, val)
+            if hasattr(self, "f_notes") and self.f_notes is not None:
+                self.f_notes.setPlainText(c_vals.get("notes", ""))
+            for sid, cb in self._service_cbs.items():
+                cb.setChecked(sid in c_svcs)
+            return
+
+        while self.form_layout.rowCount() > 0:
+            self.form_layout.removeRow(0)
+                
+        self._input_widgets.clear()
+        self._service_cbs.clear()
+
+        lbl_info = QLabel("CLIENT INFORMATION")
+        lbl_info.setProperty("class", "SectionLabel")
+        self.form_layout.addRow(lbl_info)
         for col in self.db.get_mcl_columns():
-            val = client_values.get(col["id"], "")
+            val = c_vals.get(col["id"], "")
             widget = make_input_widget(col, val, mask_password=False)
             self._input_widgets[col["id"]] = (col, widget)
-            self.form_layout.addRow(f"{col['label']}:", widget)
+            is_pk = col.get("is_internal_pk", False)
+            if is_pk:
+                lbl_col = QLabel(f"<span style='color:#FF5252;'>*</span> <b>{col['label']}</b>:")
+                lbl_col.setTextFormat(Qt.RichText)
+                lbl_col.setToolTip("Mandatory Internal Primary Key Anchor (e.g. PAN / TAN)")
+            else:
+                lbl_col = QLabel(f"{col['label']}:")
+            lbl_col.setProperty("class", "RowLabel")
+            self.form_layout.addRow(lbl_col, widget)
             
         self.f_notes = QTextEdit()
         self.f_notes.setMaximumHeight(80)
-        self.f_notes.setPlainText(client_values.get("notes", ""))
-        self.form_layout.addRow("Notes:", self.f_notes)
+        self.f_notes.setPlainText(c_vals.get("notes", ""))
+        lbl_notes = QLabel("Notes:")
+        lbl_notes.setProperty("class", "RowLabel")
+        self.form_layout.addRow(lbl_notes, self.f_notes)
 
-        self.form_layout.addRow(QLabel("<b>Attached Services</b>"))
+        lbl_svc = QLabel("ATTACHED SERVICES")
+        lbl_svc.setProperty("class", "SectionLabel")
+        self.form_layout.addRow(lbl_svc)
         for s in self.db.get_services():
             cb = QCheckBox(s["name"])
-            cb.setChecked(s["id"] in client_services)
+            cb.setChecked(s["id"] in c_svcs)
             self._service_cbs[s["id"]] = cb
             self.form_layout.addRow("", cb)
 
+        self._form_built = True
+
     def _get_identity_label(self, client, identity_cols=None):
         if identity_cols is None:
-            identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
-        vals = [client["values"].get(cid, "") for cid in identity_cols if client["values"].get(cid)]
+            identity_cols = getattr(self, "_cached_identity_cols", None)
+            if identity_cols is None:
+                identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c.get("is_identity")]
+                self._cached_identity_cols = identity_cols
+        vals = [client["values"].get(cid, "") for cid in identity_cols if client.get("values", {}).get(cid)]
         return " — ".join(vals) if vals else "[No Identity Data]"
 
     def refresh(self):
         self._check_sync_conflicts()
-        self._refresh_client_list()
+        identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c.get("is_identity")]
+        self._cached_identity_cols = identity_cols
 
-    def _refresh_client_list(self):
-        query = self.search_input.text().strip() if hasattr(self, "search_input") else ""
-        filter_val = self.filter_combo.currentData() if hasattr(self, "filter_combo") else None
+        filter_data = self.filter_combo.currentData() if hasattr(self, "filter_combo") else None
         show_archived = self.show_archived_cb.isChecked() if hasattr(self, "show_archived_cb") else False
-        
-        svc_id = filter_val if isinstance(filter_val, int) else None
-        preset = filter_val if isinstance(filter_val, str) else None
-        
+        search_query = self.search_input.text().strip() if hasattr(self, "search_input") else ""
+
+        svc_id = filter_data if isinstance(filter_data, int) else None
+        filter_preset = filter_data if isinstance(filter_data, str) else None
+        if show_archived:
+            filter_preset = "archived"
+
         clients = self.db.search_clients(
-            query=query,
+            search_query,
             service_id=svc_id,
-            include_archived=show_archived,
-            filter_preset=preset
+            archived_only=(filter_preset == "archived"),
+            filter_preset=filter_preset
         )
 
-        identity_cols = [c["id"] for c in self.db.get_mcl_columns() if c["is_identity"]]
-
+        # Apply Sort By Selection
         if hasattr(self, "sort_combo") and self.sort_combo.currentData():
             sort_key, sort_dir = self.sort_combo.currentData()
             reverse = (sort_dir == "desc")
@@ -480,96 +600,63 @@ class AdminWindow(QWidget):
                 clients.sort(key=_id_sort_key, reverse=reverse)
             elif sort_key == "identity":
                 clients.sort(key=lambda c: self._get_identity_label(c, identity_cols).lower(), reverse=reverse)
-            elif sort_key == "activity_time":
-                stats_map = self.db.get_all_activity_stats()
-                def _act_time_key(c):
-                    t = stats_map.get(c["id"], {}).get("last_action_time", 0.0)
-                    is_active = 0 if (t and t > 0) else 1
-                    time_val = -t if reverse else t
-                    return (is_active, time_val, c["id"])
-                clients.sort(key=_act_time_key)
             elif sort_key == "activity":
                 stats_map = self.db.get_all_activity_stats()
-                def _act_score_key(c):
-                    score = stats_map.get(c["id"], {}).get("view_count", 0) * 3 + stats_map.get(c["id"], {}).get("action_count", 0)
-                    is_active = 0 if score > 0 else 1
-                    score_val = -score if reverse else score
-                    return (is_active, score_val, c["id"])
-                clients.sort(key=_act_score_key)
+                clients.sort(key=lambda c: (stats_map.get(c["id"], {}).get("view_count", 0) * 3 + stats_map.get(c["id"], {}).get("action_count", 0)), reverse=reverse)
             elif sort_key == "created_at":
                 clients.sort(key=lambda c: c.get("created_at") or "", reverse=reverse)
             elif sort_key == "updated_at":
                 clients.sort(key=lambda c: c.get("updated_at") or "", reverse=reverse)
         
-        # FIX: Remember which client you had selected so the screen doesn't wipe
+        # Remember which client you had selected so the screen doesn't wipe
         old_selected = self.selected_client_id
         
         self.table.setUpdatesEnabled(False)
         self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
-        try:
-            self.table.setRowCount(len(clients))
-            self.table.setColumnCount(2)
-            self.table.setHorizontalHeaderLabels(["ID", "Client Identity"])
-            self.table.setColumnHidden(0, True)
-            self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setColumnCount(2)
+        self.table.setHorizontalHeaderLabels(["ID", "Client Identity"])
+        self.table.setColumnHidden(0, True)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setRowCount(len(clients))
+        
+        from ui.utils.theme import SmartTableWidgetItem
+        recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
+
+        row_to_select = -1
+        for r, c in enumerate(clients):
+            self.table.setItem(r, 0, SmartTableWidgetItem(str(c["id"])))
             
-            from ui.utils.theme import SmartTableWidgetItem
-            recent_acts = self.db.get_recent_client_activities()
+            lbl = self._get_identity_label(c, identity_cols)
+            item1 = SmartTableWidgetItem(lbl)
+            act_list = recent_acts.get(c["id"], [])
+            if act_list:
+                top = act_list[0]
+                action_type = top["action_type"]
+                age = top["age_seconds"]
+                rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
+                item1.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
+                tooltip_lines = [f"• {a['action_type']} ({'just now' if a['age_seconds'] < 60 else str(a['age_seconds']//60) + 'm ago'})" for a in act_list[:4]]
+                item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
 
-            def _fmt_rel(age_sec: int) -> str:
-                if age_sec < 60:
-                    return "just now"
-                if age_sec < 3600:
-                    return f"{age_sec // 60}m ago"
-                if age_sec < 86400:
-                    return f"{age_sec // 3600}h ago"
-                return f"{age_sec // 86400}d ago"
-
-            row_to_select = -1
-            for r, c in enumerate(clients):
-                self.table.setItem(r, 0, SmartTableWidgetItem(str(c["id"])))
+            self.table.setItem(r, 1, item1)
+            if c["id"] == old_selected:
+                row_to_select = r
                 
-                lbl = self._get_identity_label(c, identity_cols)
-                item1 = SmartTableWidgetItem(lbl)
-                act_list = recent_acts.get(c["id"], [])
-                if act_list:
-                    top = act_list[0]
-                    action_type = top["action_type"]
-                    age = top["age_seconds"]
-                    rel = _fmt_rel(age)
-                    item1.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
-                    tooltip_lines = [f"• {a['action_type']} ({_fmt_rel(a['age_seconds'])})" for a in act_list[:4]]
-                    item1.setToolTip(f"{lbl}\n\nRecent Activity:\n" + "\n".join(tooltip_lines))
-
-                self.table.setItem(r, 1, item1)
-                if c["id"] == old_selected:
-                    row_to_select = r
-                    
-            self.table.blockSignals(False)
-            self.table.setSortingEnabled(True)
-            self.table.horizontalHeader().setSortIndicatorShown(True)
-            self.table.horizontalHeader().setSectionsClickable(True)
-            
-            if row_to_select >= 0:
-                self.table.selectRow(row_to_select)
-            else:
-                self._on_new()
-        finally:
-            self.table.setUpdatesEnabled(True)
+        self.table.blockSignals(False)
+        self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicatorShown(True)
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.setUpdatesEnabled(True)
+        
+        if row_to_select >= 0:
+            self.table.selectRow(row_to_select)
+        else:
+            self._on_new()
 
     def _refresh_activity_tags(self):
         try:
-            recent_acts = self.db.get_recent_client_activities()
-            def _fmt_rel(age_sec: int) -> str:
-                if age_sec < 60:
-                    return "just now"
-                if age_sec < 3600:
-                    return f"{age_sec // 60}m ago"
-                if age_sec < 86400:
-                    return f"{age_sec // 3600}h ago"
-                return f"{age_sec // 86400}d ago"
-
+            recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
             for r in range(self.table.rowCount()):
                 id_item = self.table.item(r, 0)
                 name_item = self.table.item(r, 1)
@@ -584,7 +671,7 @@ class AdminWindow(QWidget):
                     top = act_list[0]
                     action_type = top["action_type"]
                     age = top["age_seconds"]
-                    rel = _fmt_rel(age)
+                    rel = "just now" if age < 60 else (f"{age // 60}m ago" if age < 3600 else f"{age // 3600}h ago")
                     name_item.setData(Qt.UserRole + 2, f"{action_type} • {rel}")
                 else:
                     name_item.setData(Qt.UserRole + 2, "")
@@ -724,16 +811,23 @@ class AdminWindow(QWidget):
                 return
 
         # FIX: Added actual popups to tell you it worked!
-        if is_new:
-            self.selected_client_id = self.db.add_client(values, notes, service_ids, actor=self.actor)
-            saved_client = self.db.get_client(self.selected_client_id)
-            c_name = self._get_identity_label(saved_client) if saved_client else ""
-            self.action_alert_requested.emit("create", c_name)
-        else:
-            self.db.update_client(self.selected_client_id, values, notes, service_ids, actor=self.actor)
-            saved_client = self.db.get_client(self.selected_client_id)
-            c_name = self._get_identity_label(saved_client) if saved_client else ""
-            self.action_alert_requested.emit("update", c_name)
+        try:
+            if is_new:
+                self.selected_client_id = self.db.add_client(values, notes, service_ids, actor=self.actor)
+                saved_client = self.db.get_client(self.selected_client_id)
+                c_name = self._get_identity_label(saved_client) if saved_client else ""
+                self.action_alert_requested.emit("create", c_name)
+            else:
+                self.db.update_client(self.selected_client_id, values, notes, service_ids, actor=self.actor)
+                saved_client = self.db.get_client(self.selected_client_id)
+                c_name = self._get_identity_label(saved_client) if saved_client else ""
+                self.action_alert_requested.emit("update", c_name)
+        except ValueError as val_err:
+            QMessageBox.warning(self, "Validation Error", str(val_err))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save client: {e}")
+            return
             
         self.refresh()
 
@@ -808,68 +902,25 @@ class AdminWindow(QWidget):
         if len(ids) == 1:
             self._on_row_selected()
 
+    def _open_unified_settings(self, page="general", on_close_callback=None):
+        if getattr(self, "_settings_dialog", None) is None:
+            from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
+            dlg = UnifiedSettingsDialog(self.db, actor=self.actor, page=page, parent=self.window())
+            dlg.toast_requested.connect(self.toast_requested.emit)
+            dlg.settings_saved.connect(self.settings_saved.emit)
+            self._settings_dialog = dlg
+        else:
+            self._settings_dialog.set_page(page)
+
+        self._settings_dialog.exec()
+        if on_close_callback:
+            on_close_callback()
+
     def _on_backup(self):
-        dest_dir = QFileDialog.getExistingDirectory(self, "Choose backup destination")
-        if not dest_dir:
-            return
-        try:
-            backup_path = self.db.backup_to(dest_dir)
-            self.db.log_action(self.actor, "backup", detail=f"Backed up to {backup_path}")
-            self.action_alert_requested.emit("backup", None)
-        except Exception as e:
-            QMessageBox.critical(self, "Backup failed", str(e))
+        self._open_unified_settings("backup", self.refresh)
 
     def _on_restore_backup(self):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Database Restore Source")
-        msg_box.setText("How would you like to locate the database backup to restore?")
-        msg_box.setInformativeText(
-            "Select 'Backup Folder' to scan a folder automatically,\n"
-            "or 'Specific File' to select a Syncthing conflict file (*.sync-conflict*.db)."
-        )
-        btn_folder = msg_box.addButton("Select Backup Folder", QMessageBox.AcceptRole)
-        btn_file = msg_box.addButton("Select Specific Database File (*.db)", QMessageBox.AcceptRole)
-        btn_cancel = msg_box.addButton(QMessageBox.Cancel)
-        msg_box.exec()
-
-        clicked = msg_box.clickedButton()
-        if clicked == btn_cancel:
-            return
-
-        if clicked == btn_file:
-            target_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Choose Database File or Syncthing Conflict File",
-                "",
-                "Database Files (*.db *.sqlite *sync-conflict*);;All Files (*)"
-            )
-        else:
-            target_path = QFileDialog.getExistingDirectory(self, "Choose backup folder to restore")
-
-        if not target_path:
-            return
-
-        confirm = QMessageBox.warning(
-            self, "Confirm Database Restore",
-            "WARNING: Restoring a database backup will overwrite your current live database.\n\n"
-            "If Syncthing is active, this restored database will also sync to other team members' computers.\n\n"
-            "Are you sure you want to proceed?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if confirm == QMessageBox.Yes:
-            try:
-                summary = self.db.restore_from(target_path)
-                self.db.log_action(self.actor, "restore", detail=summary)
-                self.action_alert_requested.emit("restore", None)
-                QMessageBox.information(
-                    self, "Restore Successful",
-                    f"{summary}\n\nThe database has been restored successfully.\n\n"
-                    "The application will now restart to initialize the restored database."
-                )
-                import version
-                version.restart_app()
-            except Exception as e:
-                QMessageBox.critical(self, "Restore Error", f"Failed to restore backup:\n{e!s}")
+        self._open_unified_settings("backup", self.refresh)
 
     def _on_view_audit_log(self):
         from ui.dialogs.audit_log_dialog import AuditLogDialog
@@ -878,107 +929,28 @@ class AdminWindow(QWidget):
         dlg.exec()
 
     def _on_export_csv(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Clients to CSV", "clients_export.csv", "CSV Files (*.csv)"
-        )
-        if path:
-            try:
-                self.db.export_clients_csv(path)
-                self.db.log_action(self.actor, "csv_export", detail=f"Exported clients to {path}")
-                self.action_alert_requested.emit("csv_export", None)
-            except Exception as e:
-                QMessageBox.critical(self, "Export Error", f"Failed to export CSV:\n{e!s}")
+        self._open_unified_settings("export", self.refresh)
 
     def _on_download_template(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Download Import Template", "clients_import_template.csv", "CSV Files (*.csv)"
-        )
-        if path:
-            try:
-                self.db.export_mcl_schema_csv(path)
-                self.toast_requested.emit(f"Successfully downloaded template to:\n{path}", 3000)
-            except Exception as e:
-                QMessageBox.critical(self, "Download Error", f"Failed to download template:\n{e!s}")
+        self._on_export_csv()
 
     def _on_manage_mcl(self):
-        dlg = MCLManagerDialog(self.db, self)
-        dlg.finished.connect(self._build_dynamic_form)
-        self.request_slide_panel.emit(dlg, "Manage Master Client List")
+        self._open_unified_settings("mcl", lambda: (self._build_dynamic_form(force_rebuild=True), self.refresh()))
 
     def _on_manage_services(self):
-        dlg = ServiceManagerDialog(self.db, self)
-        dlg.finished.connect(self._reload_filters)
-        dlg.finished.connect(self._build_dynamic_form)
-        self.request_slide_panel.emit(dlg, "Manage Services")
+        self._open_unified_settings("services", lambda: (self._reload_filters(), self._build_dynamic_form(force_rebuild=True), self.refresh()))
 
     def _on_import_csv(self):
         dlg = CSVImportDialog(self.db, self)
-        dlg.finished.connect(self.refresh)
-        self.request_slide_panel.emit(dlg, "Import CSV")
+        dlg.exec()
+        self.refresh()
 
     def _on_open_settings(self):
-        dlg = SettingsDialog(self.db, actor=self.actor, parent=self)
-        dlg.toast_requested.connect(self.toast_requested.emit)
-        dlg.settings_saved.connect(self.settings_saved.emit)
-        dlg.finished.connect(self.refresh)
-        self.request_slide_panel.emit(dlg, "Settings")
+        self._open_unified_settings("general")
 
     def _on_purge_duplicates(self):
-        confirm = QMessageBox.question(
-            self, "Purge Duplicate Clients",
-            "This will scan all non-archived clients and permanently delete "
-            "any duplicates that share the same identity column values.\n\n"
-            "For each set of duplicates, the oldest record (lowest ID) is kept "
-            "and the newer copies are deleted.\n\n"
-            "This cannot be undone. Continue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if confirm != QMessageBox.Yes:
-            return
+        self._open_unified_settings("purge", self.refresh)
 
-        try:
-            results = self.db.purge_duplicate_clients()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to purge duplicates:\n{e!s}")
-            return
-
-        if results["deleted"] == 0:
-            self.toast_requested.emit("No duplicate clients were detected.", 3000)
-            return
-
-        self.db.log_action(
-            self.actor, "purge_duplicates",
-            detail=f"Purged {results['deleted']} duplicate(s) across {results['groups']} group(s)"
-        )
-
-
-        class _DedupResultDialog(QDialog):
-            def __init__(self, res, parent=None):
-                super().__init__(parent)
-                self.setWindowTitle("Purge Duplicates — Complete")
-                self.resize(600, 400)
-                layout = QVBoxLayout(self)
-                from PySide6.QtWidgets import QTextEdit as _QTE
-                layout.addWidget(QLabel(
-                    f"<b>Deleted:</b> {res['deleted']} duplicate client(s)<br>"
-                    f"<b>Groups:</b> {res['groups']} identity group(s) had duplicates"
-                ))
-                if res.get("details"):
-                    layout.addWidget(QLabel("<b>Details:</b>"))
-                    te = _QTE()
-                    te.setReadOnly(True)
-                    te.setPlainText("\n".join(res["details"]))
-                    layout.addWidget(te, stretch=1)
-                btn = QPushButton("OK")
-                btn.setDefault(True)
-                btn.clicked.connect(self.accept)
-                brow = QHBoxLayout()
-                brow.addStretch()
-                brow.addWidget(btn)
-                layout.addLayout(brow)
-
-        dlg = _DedupResultDialog(results, self)
-        dlg.exec()
 
     def _on_open_sera_sync(self):
         """Open the Sera Sync dialog for LAN database synchronization."""

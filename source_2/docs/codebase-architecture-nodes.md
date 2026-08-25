@@ -33,6 +33,7 @@ graph TD
         SEARCH["ui/windows/search_window.py<br/><i>(Client Search & Formatting Grid)</i>"]:::page
         DETAIL["ui/windows/client_detail_window.py<br/><i>(Client Workspace & FST)</i>"]:::page
         ADMIN["ui/windows/admin_window.py<br/><i>(Admin Management)</i>"]:::page
+        TRACKER_DUMP["ui/windows/tracker_dump_window.py<br/><i>(Tracker Dump & SAD Auditor)</i>"]:::page
     end
 
     subgraph Dialogs & Modals
@@ -43,11 +44,14 @@ graph TD
         UPD_DLG["ui/dialogs/update_dialog.py<br/><i>(Update Progress Modal)</i>"]:::dialog
         LOAD_DLG["ui/dialogs/loading_dialog.py<br/><i>(Vault Unlock Modal)</i>"]:::dialog
         CRED_DLG["ui/dialogs/manual_credentials_dialog.py<br/><i>(Credential Editor)</i>"]:::dialog
+        SETTINGS_DLG["ui/dialogs/unified_settings_dialog.py<br/><i>(Unified Settings Hub)</i>"]:::dialog
     end
 
     subgraph Native Host & Browser Extension
         NH_HOST["native_host/host.py<br/><i>(Chrome Native Messaging Host)</i>"]:::native
         EXT_LISTEN["ui/extension_listener.py<br/><i>(Extension Socket Server)</i>"]:::native
+        SAD_INTERCEPT["sera_extension/content_scripts/net_interceptor.js<br/><i>(Sera SAD API Detector)</i>"]:::native
+        SAD_DETECT["sera_extension/content_scripts/filing_detector.js<br/><i>(Filing Detector Bridge)</i>"]:::native
     end
 
     %% Connections
@@ -59,6 +63,7 @@ graph TD
     MAIN --> SEARCH
     MAIN --> DETAIL
     MAIN --> ADMIN
+    MAIN --> TRACKER_DUMP
     MAIN --> EXT_LISTEN
     MAIN --> NH_HOST
 

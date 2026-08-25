@@ -1,7 +1,7 @@
 {
-  "version": "2.4.2",
-  "min_required_version": "2.4.2",
+  "version": "2.5.1",
+  "min_required_version": "2.5.1",
   "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.4.2/Amas_Sera_Setup_v2.4.2.exe",
-  "release_notes": "Project Sera v2.4.2 release: Sera API Detection (SAD) network response interceptor, Tracker Dump workspace, instant prompt-free auto-unlock, and Windows autostart."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.5.1/Amas_Sera_Setup_v2.5.1.exe",
+  "release_notes": "Project Sera v2.5.1 release: Unified Settings Hub, overlay drawer, performance and latency overhaul."
 }

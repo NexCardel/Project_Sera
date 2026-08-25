@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Project Sera Companion",
-  "version": "1.1",
+  "version": "2.6.6",
   "description": "Autofill and filing confirmation tracking for Aman Associates.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkMpDJKphBB8nE//fB0SY2nCHkAykZ6si2M7mSNjI/i8ISMb32i/6pLF7VKNklcIT5KZdjnpYpsqhHv1IGuNoAGmpUSbte3MEsmS92TyBnQhf++2cy1JUWsCfd7fHGF/czDWsPulx5uThADoDcRXShy3JYox1Fl6PnzZXrIUHCCv+f1QAv/Rvs9a/lhBQZ70WWUhZqrBoGowB+cIosDN/7lmQeEj/TUzr+xvPQZAJoUR8ORB7baHPU9lNtM1QnTFGgqQ8s/RVbenIdALslEfekgC0ZuFtnINOxc2CGbGzHAIUPpLZsljO1x8k8c5YjnuJvyQTUAFHRqNhqaCHOrEoMQIDAQAB",
   "permissions": [

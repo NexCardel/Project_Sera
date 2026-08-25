@@ -43,16 +43,20 @@ class TestSeraSync(unittest.TestCase):
         self.assertEqual(d["ip"], "192.168.1.50")
         self.assertEqual(d["app_version"], "2.3.4.1")
         self.assertEqual(d["db_mtime"], "2026-08-13 14:00")
+        self.assertFalse(d["inv_frames"])
+        self.assertEqual(d["sync_revision"], 0)
 
     def test_beacon_payload_generation(self):
         service = SyncPeerService(
             db_path=self.sender_db,
             salt_path=self.sender_salt,
             username="SenderUser",
+            inv_frames=True,
         )
         payload = service._beacon_payload()
         self.assertIn(SERA_SYNC_MAGIC.encode("utf-8"), payload)
         self.assertIn(b"SenderUser", payload)
+        self.assertIn(b'"inv_frames":true', payload)
 
     def test_loopback_tcp_push(self):
         sync_received_flag = []
@@ -99,6 +103,102 @@ class TestSeraSync(unittest.TestCase):
 
         finally:
             receiver_service.stop()
+
+    def test_inv_frames_node_rejects_incoming_push(self):
+        """A node with inv_frames = True must reject all incoming database pushes."""
+        sync_received_flag = []
+        receiver_service = SyncPeerService(
+            db_path=self.receiver_db,
+            salt_path=self.receiver_salt,
+            username="ReceiverUser",
+            sync_port=0,
+            inv_frames=True,
+            on_sync_received=lambda: sync_received_flag.append(True),
+        )
+        receiver_service.start()
+
+        try:
+            sender_service = SyncPeerService(
+                db_path=self.sender_db,
+                salt_path=self.sender_salt,
+                username="SenderUser",
+            )
+
+            res = sender_service.push_to("127.0.0.1", receiver_service._tcp_server.getsockname()[1])
+            self.assertIn("skipped", res.lower())
+            self.assertIn("inv_frames", res.lower())
+
+            time.sleep(0.3)
+
+            # Check receiver database was NOT overwritten
+            with open(self.receiver_db, "rb") as f:
+                rec_db_data = f.read()
+            self.assertEqual(rec_db_data, b"OLD_RECEIVER_DATABASE_CONTENT")
+            self.assertEqual(len(sync_received_flag), 0)
+
+        finally:
+            receiver_service.stop()
+
+    def test_inv_frames_node_can_push_to_normal_node(self):
+        """A node with inv_frames = True can push database updates to normal nodes."""
+        live_sync_flag = []
+        receiver_service = SyncPeerService(
+            db_path=self.receiver_db,
+            salt_path=self.receiver_salt,
+            username="NormalFollower",
+            sync_port=0,
+            inv_frames=False,
+            on_live_sync_received=lambda u, h: live_sync_flag.append((u, h)),
+        )
+        receiver_service.start()
+
+        try:
+            sender_service = SyncPeerService(
+                db_path=self.sender_db,
+                salt_path=self.sender_salt,
+                username="InvFramesMaster",
+                inv_frames=True,
+            )
+
+            # Live sync push from inv_frames master
+            res = sender_service.push_to("127.0.0.1", receiver_service._tcp_server.getsockname()[1], live_update=True)
+            self.assertIn("successfully", res.lower())
+
+            time.sleep(0.4)
+
+            with open(self.receiver_db, "rb") as f:
+                rec_db_data = f.read()
+            self.assertEqual(rec_db_data, b"SENDER_DATABASE_CONTENT_HEADER_12345")
+            self.assertEqual(len(live_sync_flag), 1)
+
+        finally:
+            receiver_service.stop()
+
+    def test_multi_inv_frames_freezes_lan_sync(self):
+        """When >1 node on LAN has inv_frames active, LAN sync is frozen."""
+        service = SyncPeerService(
+            db_path=self.receiver_db,
+            salt_path=self.receiver_salt,
+            username="LocalUser",
+            inv_frames=True,
+        )
+        # Register a remote peer that also has inv_frames = True
+        service._peers["REMOTE-HOST:192.168.1.100"] = PeerInfo(
+            username="RemoteUser",
+            host="REMOTE-HOST",
+            ip="192.168.1.100",
+            sync_port=49157,
+            last_seen=time.time(),
+            inv_frames=True,
+        )
+
+        state = service.get_sync_state()
+        self.assertEqual(state["status"], "LAN_SYNC_FROZEN_MULTI_INV")
+        self.assertGreater(state["total_inv_frames_count"], 1)
+
+        # Outbound sync should be blocked under frozen LAN state
+        res = service.push_to("192.168.1.100", 49157)
+        self.assertIn("frozen", res.lower())
 
 
 if __name__ == "__main__":

@@ -9,14 +9,17 @@ extension and Sera_API_detection (SAD).
 import json
 import csv
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QClipboard
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QMessageBox, QDialog, QTextEdit, QFrame,
-    QFileDialog
+    QFileDialog, QScrollArea, QFormLayout, QCheckBox, QTabWidget,
+    QApplication
 )
+
+from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 
 try:
     import qtawesome as qta
@@ -34,20 +37,271 @@ def _safe_qta_icon(icon_name, color="#FFFFFF"):
     return QIcon()
 
 
-class PayloadInspectorDialog(QDialog):
-    """Modal dialog displaying formatted raw JSON payload captured by SAD or extension."""
-    def __init__(self, item_data: dict, parent=None):
+class AddClientFromCaptureDialog(QDialog):
+    """Modal dialog allowing quick 1-click creation of a client record directly from an unassigned SAD capture."""
+    def __init__(self, db, item_data: dict, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Tracker Dump Payload - ARN: {item_data.get('arn_number', 'N/A')}")
-        self.resize(650, 500)
+        self.db = db
+        self.item_data = item_data
+        self.created_client_id = None
+        self.setWindowTitle("Create Client from Capture — Project Sera")
+        self.setModal(True)
+        self.resize(520, 580)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1A1A1A;
+                color: #F8F5F2;
+                font-family: 'Segoe UI', sans-serif;
+            }
+            QLabel {
+                color: #E6EDF3;
+                font-size: 12px;
+            }
+            QLineEdit {
+                background-color: #0D1117;
+                border: 1px solid #30363D;
+                border-radius: 5px;
+                color: #F0F6FC;
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 1px solid #2E9B5F;
+            }
+            QPushButton.PrimaryBtn {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+                font-weight: 700;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            QPushButton.PrimaryBtn:hover {
+                background-color: #247C4C;
+            }
+            QPushButton.CancelBtn {
+                background-color: #262626;
+                color: #A0A0A0;
+                border: 1px solid #444444;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            QPushButton.CancelBtn:hover {
+                background-color: #333333;
+                color: #FFFFFF;
+            }
+            QCheckBox {
+                color: #F0F6FC;
+                font-size: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
+        # Header Info Banner
+        header = QFrame()
+        header.setStyleSheet("background-color: #0A0A0A; border: 1px solid #2E9B5F; border-radius: 6px; padding: 10px;")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(8, 8, 8, 8)
+        h_layout.setSpacing(4)
+
+        title_lbl = QLabel("<b>⚡ Quick Onboard from Government Network Capture</b>")
+        title_lbl.setStyleSheet("color: #4CF9B7; font-size: 13.5px;")
+        desc_lbl = QLabel(f"Portal: <b>{self.item_data.get('portal', 'Government Portal')}</b> | ARN: <b>{self.item_data.get('arn_number', 'N/A')}</b>")
+        desc_lbl.setStyleSheet("color: #A0A0A0; font-size: 11.5px;")
+        h_layout.addWidget(title_lbl)
+        h_layout.addWidget(desc_lbl)
+        layout.addWidget(header)
+
+        # Form Scroll Area for MCL Fields
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #30363D; border-radius: 6px; background-color: #121212; }")
+        
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background-color: #121212;")
+        form = QFormLayout(scroll_content)
+        form.setContentsMargins(12, 12, 12, 12)
+        form.setSpacing(10)
+
+        # Extract profile from SRPF container or current capture payload
+        extracted_info = self._extract_info_from_payload()
+        mcl_cols = self.db.get_mcl_columns()
+        mapped_values = map_profile_to_mcl_columns(extracted_info, mcl_cols)
+
+        self.field_inputs = {}
+        
+        for col in mcl_cols:
+            col_id = col["id"]
+            lbl_text = col["label"]
+            is_pk = col.get("is_internal_pk", False)
+            field_type = col.get("field_type", "text")
+
+            # Determine prefill value
+            prefill_val = ""
+            if field_type == "id":
+                prefill_val = str(self._get_next_serial_no())
+            else:
+                prefill_val = mapped_values.get(col_id, "")
+
+            # Form Label with mandatory badge if Internal PK
+            field_label_widget = QLabel()
+            if is_pk:
+                field_label_widget.setText(f"<span style='color:#FF6B6B;'>*</span> <b>{lbl_text}</b> <span style='color:#4CF9B7; font-size:10px;'>[Internal PK]</span>")
+            else:
+                field_label_widget.setText(lbl_text)
+            field_label_widget.setTextFormat(Qt.RichText)
+
+            inp = QLineEdit(prefill_val)
+            self.field_inputs[col_id] = (inp, is_pk, lbl_text)
+            form.addRow(field_label_widget, inp)
+
+        scroll.setWidget(scroll_content)
+        layout.addWidget(scroll, stretch=1)
+
+        # Service Attachments
+        svc_frame = QFrame()
+        svc_frame.setStyleSheet("background-color: #121212; border: 1px solid #30363D; border-radius: 6px; padding: 8px;")
+        svc_layout = QVBoxLayout(svc_frame)
+        svc_layout.setContentsMargins(6, 6, 6, 6)
+        svc_layout.setSpacing(6)
+        svc_lbl = QLabel("<b>Auto-Attach Compliance Services:</b>")
+        svc_lbl.setStyleSheet("color: #E6EDF3; font-size: 11.5px;")
+        svc_layout.addWidget(svc_lbl)
+
+        svc_checks_box = QHBoxLayout()
+        self.svc_checkboxes = {}
+        all_services = self.db.get_services()
+        portal_name = (self.item_data.get("portal", "") or "").lower()
+
+        for s in all_services:
+            cb = QCheckBox(s["name"])
+            # Auto-check matching portal service
+            if s["name"].lower() in portal_name or portal_name in s["name"].lower() or ("income" in portal_name and "income" in s["name"].lower()):
+                cb.setChecked(True)
+            self.svc_checkboxes[s["id"]] = cb
+            svc_checks_box.addWidget(cb)
+        svc_checks_box.addStretch()
+        svc_layout.addLayout(svc_checks_box)
+        layout.addWidget(svc_frame)
+
+        # Button Box
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setProperty("class", "CancelBtn")
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_save = QPushButton("Save & Link Captures")
+        btn_save.setProperty("class", "PrimaryBtn")
+        btn_save.setIcon(_safe_qta_icon("mdi.check-circle", "#FFFFFF"))
+        btn_save.clicked.connect(self._on_save)
+
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_save)
+        layout.addLayout(btn_box)
+
+    def _extract_info_from_payload(self) -> dict:
+        from ui.utils.profile_parser import extract_profile_from_payload
+        unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
+        
+        # Check if SRPF container exists in rawPayload.db
+        container = self.db.get_client_raw_container(identity_key=unassigned_key) if unassigned_key else None
+        if container and (container.get("company_name") or container.get("pan") or container.get("gstin")):
+            return container
+
+        # Fallback to current payload extraction
+        raw_str = self.item_data.get("raw_payload_json") or "{}"
+        parsed = extract_profile_from_payload(raw_str)
+        if not parsed.get("pan") and unassigned_key:
+            parsed["pan"] = unassigned_key
+        return parsed
+
+    def _get_next_serial_no(self) -> int:
+        try:
+            with self.db._connect() as conn:
+                cur = conn.execute("SELECT COUNT(*) FROM clients")
+                return cur.fetchone()[0] + 1
+        except Exception:
+            return 1
+
+    def _on_save(self):
+        values = {}
+        pan_val = ""
+        for col_id, (inp, is_pk, label) in self.field_inputs.items():
+            val = inp.text().strip()
+            if is_pk:
+                if not val:
+                    QMessageBox.warning(self, "Mandatory Field Required", f"The Internal Primary Key '{label}' is mandatory and cannot be empty.")
+                    inp.setFocus()
+                    return
+                pan_val = val
+            values[col_id] = val
+
+        service_ids = [sid for sid, cb in self.svc_checkboxes.items() if cb.isChecked()]
+
+        try:
+            new_cid = self.db.add_client(values=values, notes=f"Auto-created from Tracker Dump capture (ARN: {self.item_data.get('arn_number', 'N/A')})", service_ids=service_ids, actor="Staff")
+            self.created_client_id = new_cid
+            
+            # Retroactively link all unassigned tracker dumps matching this identity
+            linked_count = self.db.link_unassigned_tracker_dumps(new_cid, pan_val or self.item_data.get("unassigned_identity") or "")
+            QMessageBox.information(
+                self, "Client Created Successfully",
+                f"Client #{new_cid} was created and successfully linked to {max(linked_count, 1)} capture(s) in Tracker Dump."
+            )
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Client Creation Failed", f"Could not create client: {e}")
+
+
+class PayloadInspectorDialog(QDialog):
+    """Modal dialog displaying formatted profile details, filing history, and raw technical JSON."""
+    def __init__(self, item_data: dict, db=None, is_container: bool = False, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.item_data = item_data
+        self.is_container = is_container or bool(item_data.get("filing_history"))
+        title_tag = item_data.get('identity_key') or item_data.get('arn_number') or 'Capture'
+        self.setWindowTitle(f"SRPF Container Inspector — {title_tag}")
+        self.resize(750, 580)
         self.setStyleSheet("""
             QDialog {
                 background-color: #121212;
                 color: #F8F5F2;
+                font-family: 'Segoe UI', sans-serif;
             }
             QLabel {
                 color: #F8F5F2;
-                font-size: 13px;
+                font-size: 12px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #30363D;
+                background-color: #161B22;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background-color: #0D1117;
+                color: #8B949E;
+                padding: 8px 16px;
+                border: 1px solid #30363D;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-weight: 600;
+            }
+            QTabBar::tab:selected {
+                background-color: #161B22;
+                color: #4CF9B7;
+                border-bottom: 2px solid #2E9B5F;
             }
             QTextEdit {
                 background-color: #0A0A0A;
@@ -57,6 +311,21 @@ class PayloadInspectorDialog(QDialog):
                 border: 1px solid #2E9B5F;
                 border-radius: 6px;
                 padding: 10px;
+            }
+            QTableWidget {
+                background-color: #0D1117;
+                gridline-color: #21262D;
+                border: none;
+                color: #F0F6FC;
+            }
+            QHeaderView::section {
+                background-color: #161B22;
+                color: #4CF9B7;
+                font-weight: 700;
+                font-size: 11.5px;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid #2E9B5F;
             }
             QPushButton {
                 background-color: #2E9B5F;
@@ -69,55 +338,261 @@ class PayloadInspectorDialog(QDialog):
             QPushButton:hover {
                 background-color: #247C4C;
             }
+            QPushButton.SecondaryBtn {
+                background-color: #262626;
+                color: #E6EDF3;
+                border: 1px solid #444444;
+            }
+            QPushButton.SecondaryBtn:hover {
+                background-color: #333333;
+            }
         """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # Header Info
-        header_lbl = QLabel(
-            f"<b>Client:</b> {item_data.get('client_name', 'N/A')} &nbsp;|&nbsp; "
-            f"<b>PAN:</b> {item_data.get('pan', 'N/A')} &nbsp;|&nbsp; "
-            f"<b>Portal:</b> {item_data.get('portal', 'N/A')}<br>"
-            f"<b>Period:</b> {item_data.get('period_label', 'N/A')} &nbsp;|&nbsp; "
-            f"<b>Capture Method:</b> <span style='color:#2E9B5F;'>{item_data.get('capture_method', 'N/A')}</span> &nbsp;|&nbsp; "
-            f"<b>Timestamp:</b> {item_data.get('created_at', 'N/A')}"
-        )
-        header_lbl.setTextFormat(Qt.RichText)
-        layout.addWidget(header_lbl)
+        # Header Info Banner
+        header = QFrame()
+        header.setStyleSheet("background-color: #0D1117; border: 1px solid #30363D; border-radius: 6px; padding: 10px;")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(8, 8, 8, 8)
+        h_layout.setSpacing(4)
 
-        # JSON Viewer
+        client_name = item_data.get('display_name') or item_data.get('client_name') or item_data.get('company_name') or "Client Container"
+        is_unreg = item_data.get('is_unassigned') or not item_data.get('client_id')
+        name_color = "#FFA657" if is_unreg else "#4CF9B7"
+
+        title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span> &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{item_data.get('pan') or item_data.get('identity_key') or 'N/A'}</span>")
+        title_lbl.setTextFormat(Qt.RichText)
+
+        sub_info = f"<b>Total Captures:</b> {item_data.get('total_captures', 1)} &nbsp;|&nbsp; <b>Portal:</b> {item_data.get('portal', 'Government Portal')} &nbsp;|&nbsp; <b>Last Updated:</b> {str(item_data.get('last_updated') or item_data.get('created_at') or '')[:19].replace('T', ' ')}"
+        sub_lbl = QLabel(sub_info)
+        sub_lbl.setTextFormat(Qt.RichText)
+        sub_lbl.setStyleSheet("color: #8B949E; font-size: 11.5px;")
+
+        h_layout.addWidget(title_lbl)
+        h_layout.addWidget(sub_lbl)
+        layout.addWidget(header)
+
+        # Tab Widget
+        tabs = QTabWidget()
+
+        # Tab 1: Profile & Filing History
+        tab_summary = QWidget()
+        sum_layout = QVBoxLayout(tab_summary)
+        sum_layout.setContentsMargins(10, 10, 10, 10)
+        sum_layout.setSpacing(10)
+
+        # Extracted Profile Key-Value Cards
+        profile_frame = QFrame()
+        profile_frame.setStyleSheet("background-color: #0D1117; border: 1px solid #21262D; border-radius: 6px; padding: 8px;")
+        pf_layout = QFormLayout(profile_frame)
+        pf_layout.setSpacing(6)
+
+        def _add_pf_row(lbl, val):
+            if val and str(val).strip():
+                l_widget = QLabel(f"<b>{lbl}:</b>")
+                l_widget.setStyleSheet("color: #8B949E;")
+                v_widget = QLabel(str(val))
+                v_widget.setStyleSheet("color: #F0F6FC; font-weight: 600;")
+                pf_layout.addRow(l_widget, v_widget)
+
+        _add_pf_row("Firm / Trade Name", item_data.get("company_name"))
+        _add_pf_row("Proprietor Name", item_data.get("proprietor_name"))
+        _add_pf_row("PAN", item_data.get("pan") or item_data.get("identity_key"))
+        _add_pf_row("GSTIN", item_data.get("gstin"))
+        _add_pf_row("TAN", item_data.get("tan"))
+        _add_pf_row("Primary Mobile", item_data.get("phone"))
+        _add_pf_row("Primary Email", item_data.get("email"))
+        _add_pf_row("DOB / Incorporation", item_data.get("dob"))
+        _add_pf_row("Portal User ID", item_data.get("user_id"))
+
+        sum_layout.addWidget(profile_frame)
+
+        # Filing History Table
+        filing_history = item_data.get("filing_history") or []
+        if not filing_history and item_data.get("arn_number"):
+            filing_history = [{
+                "portal": item_data.get("portal"),
+                "arn": item_data.get("arn_number"),
+                "period_label": item_data.get("period_label"),
+                "capture_method": item_data.get("capture_method"),
+                "created_at": item_data.get("created_at")
+            }]
+
+        hist_lbl = QLabel(f"<b>Captured Filings & Obligations ({len(filing_history)}):</b>")
+        hist_lbl.setStyleSheet("color: #4CF9B7; font-size: 12px; margin-top: 4px;")
+        sum_layout.addWidget(hist_lbl)
+
+        hist_table = QTableWidget()
+        hist_table.setColumnCount(5)
+        hist_table.setHorizontalHeaderLabels(["Period / AY", "ARN / Ack Number", "Portal", "Capture Method", "Timestamp"])
+        hist_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hist_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        hist_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hist_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hist_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hist_table.setRowCount(len(filing_history))
+
+        for idx, fh in enumerate(reversed(filing_history)):
+            p_item = QTableWidgetItem(fh.get("period_label") or "N/A")
+            p_item.setForeground(QColor("#D29922"))
+            hist_table.setItem(idx, 0, p_item)
+
+            arn_item = QTableWidgetItem(fh.get("arn") or "N/A")
+            arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
+            arn_item.setForeground(QColor("#39FF14"))
+            hist_table.setItem(idx, 1, arn_item)
+
+            port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
+            port_item.setForeground(QColor("#E6EDF3"))
+            hist_table.setItem(idx, 2, port_item)
+
+            m_item = QTableWidgetItem(fh.get("capture_method") or "SAD_API_Interceptor")
+            m_item.setForeground(QColor("#4CF9B7"))
+            hist_table.setItem(idx, 3, m_item)
+
+            ts_item = QTableWidgetItem(str(fh.get("created_at") or "")[:19].replace("T", " "))
+            ts_item.setForeground(QColor("#8B949E"))
+            hist_table.setItem(idx, 4, ts_item)
+
+        sum_layout.addWidget(hist_table, stretch=1)
+        tabs.addTab(tab_summary, "SRPF Unified Container")
+
+        # Tab 2: Raw Technical JSON
+        tab_json = QWidget()
+        json_layout = QVBoxLayout(tab_json)
+        json_layout.setContentsMargins(10, 10, 10, 10)
+
         self.txt_json = QTextEdit()
         self.txt_json.setReadOnly(True)
 
-        raw_str = item_data.get('raw_payload_json', '{}')
+        raw_str = item_data.get('raw_payload_json')
+        if not raw_str:
+            raw_str = json.dumps(item_data, indent=4)
         try:
-            parsed = json.loads(raw_str)
-            formatted = json.dumps(parsed, indent=4)
+            parsed = json.loads(raw_str) if isinstance(raw_str, str) else raw_str
+            formatted = json.dumps(parsed, indent=4, ensure_ascii=False)
         except Exception:
-            formatted = raw_str
+            formatted = str(raw_str)
 
         self.txt_json.setText(formatted)
-        layout.addWidget(self.txt_json)
+        json_layout.addWidget(self.txt_json)
+        tabs.addTab(tab_json, "Raw Intercepted JSON")
 
-        # Actions
+        # Tab 3: Timeline (Session Interaction Flow Diagram)
+        from ui.utils.timeline_decoder import group_captures_into_sessions, format_timeline_flow_html, format_timeline_flow_plain
+
+        tab_timeline = QWidget()
+        tl_layout = QVBoxLayout(tab_timeline)
+        tl_layout.setContentsMargins(10, 10, 10, 10)
+
+        self.txt_timeline = QTextEdit()
+        self.txt_timeline.setReadOnly(True)
+
+        captures = []
+        if self.db and hasattr(self.db, "get_captures_for_container"):
+            cid = item_data.get("client_id")
+            pan_val = item_data.get("pan")
+            ikey = item_data.get("identity_key")
+            try:
+                captures = self.db.get_captures_for_container(identity_key=ikey, client_id=cid, pan=pan_val)
+            except Exception:
+                captures = []
+
+        if not captures:
+            captures = [item_data]
+
+        decoded_sessions = group_captures_into_sessions(captures)
+        self.decoded_timeline_sessions = decoded_sessions
+        html_content = format_timeline_flow_html(decoded_sessions, title_tag)
+        self.txt_timeline.setHtml(html_content)
+
+        tl_layout.addWidget(self.txt_timeline)
+        tabs.addTab(tab_timeline, "Timeline")
+
+        layout.addWidget(tabs, stretch=1)
+
+        # Actions Box
         btn_box = QHBoxLayout()
+
+        if is_unreg and self.db:
+            btn_create = QPushButton("+ Create Client from Container")
+            btn_create.setIcon(_safe_qta_icon("mdi.account-plus", "#FFFFFF"))
+            btn_create.clicked.connect(self._create_client)
+            btn_box.addWidget(btn_create)
+
         btn_box.addStretch()
 
-        btn_copy = QPushButton("Copy JSON")
-        btn_copy.clicked.connect(lambda: self.txt_json.selectAll() or self.txt_json.copy())
+        btn_copy = QPushButton("Copy Container Summary")
+        btn_copy.setProperty("class", "SecondaryBtn")
+
+        def _on_tab_changed(idx):
+            if idx == 0:
+                btn_copy.setText("Copy Container Summary")
+            elif idx == 1:
+                btn_copy.setText("Copy JSON")
+            elif idx == 2:
+                btn_copy.setText("Copy Timeline")
+
+        tabs.currentChanged.connect(_on_tab_changed)
+
+        def _handle_bottom_copy():
+            curr_tab = tabs.currentIndex()
+            if curr_tab == 0:
+                summary_lines = [
+                    f"Client: {client_name} | Identity Key: {item_data.get('pan') or item_data.get('identity_key') or 'N/A'}",
+                    f"Portal: {item_data.get('portal', 'N/A')} | Captures: {item_data.get('total_captures', 1)}",
+                    f"Firm Name: {item_data.get('company_name', '')}",
+                    f"Proprietor: {item_data.get('proprietor_name', '')}",
+                    f"PAN: {item_data.get('pan', '')}",
+                    f"GSTIN: {item_data.get('gstin', '')}",
+                    f"Mobile: {item_data.get('phone', '')}",
+                    f"Email: {item_data.get('email', '')}",
+                    f"Latest ARN: {item_data.get('latest_arn') or item_data.get('arn_number') or 'N/A'}"
+                ]
+                txt = "\n".join(l for l in summary_lines if l)
+                try:
+                    QGuiApplication.clipboard().setText(txt)
+                except Exception:
+                    QApplication.clipboard().setText(txt)
+                btn_copy.setText("✓ Copied Summary!")
+                QTimer.singleShot(1500, lambda: btn_copy.setText("Copy Container Summary"))
+            elif curr_tab == 1:
+                self.txt_json.selectAll()
+                self.txt_json.copy()
+                btn_copy.setText("✓ Copied JSON!")
+                QTimer.singleShot(1500, lambda: btn_copy.setText("Copy JSON"))
+            elif curr_tab == 2:
+                txt = format_timeline_flow_plain(self.decoded_timeline_sessions, title_tag)
+                try:
+                    QGuiApplication.clipboard().setText(txt)
+                except Exception:
+                    QApplication.clipboard().setText(txt)
+                btn_copy.setText("✓ Copied Timeline!")
+                QTimer.singleShot(1500, lambda: btn_copy.setText("Copy Timeline"))
+
+        btn_copy.clicked.connect(_handle_bottom_copy)
 
         btn_close = QPushButton("Close")
+        btn_close.setProperty("class", "SecondaryBtn")
         btn_close.clicked.connect(self.accept)
 
         btn_box.addWidget(btn_copy)
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
 
+    def _create_client(self):
+        if not self.db:
+            return
+        dlg = AddClientFromCaptureDialog(self.db, self.item_data, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.accept()
+
 
 class TrackerDumpWindow(QWidget):
-    """Full-featured workspace for inspecting client tracker dumps."""
+    """Full-featured workspace for inspecting client tracker dumps and SRPF unified containers."""
     
     def __init__(self, db, parent=None):
         super().__init__(parent)
@@ -224,7 +699,7 @@ class TrackerDumpWindow(QWidget):
         title_vbox = QVBoxLayout()
         lbl_title = QLabel("Tracker Dump Workspace")
         lbl_title.setObjectName("TitleLbl")
-        lbl_sub = QLabel("Client-connected filing logs captured via Extension & Sera API Detection (SAD)")
+        lbl_sub = QLabel("Client-connected filing logs & SRPF unified containers captured via Extension & SAD")
         lbl_sub.setObjectName("SubtitleLbl")
         title_vbox.addWidget(lbl_title)
         title_vbox.addWidget(lbl_sub)
@@ -241,6 +716,24 @@ class TrackerDumpWindow(QWidget):
         btn_refresh.setIcon(_safe_qta_icon("mdi.refresh", "#FFFFFF"))
         btn_refresh.clicked.connect(self.load_data)
         header_layout.addWidget(btn_refresh)
+
+        btn_open_txt = QPushButton("Open Dump (TXT)")
+        btn_open_txt.setProperty("class", "ActionBtn")
+        btn_open_txt.setIcon(_safe_qta_icon("mdi.file-document-outline", "#FFFFFF"))
+        btn_open_txt.clicked.connect(self._open_raw_dump_txt)
+        header_layout.addWidget(btn_open_txt)
+
+        btn_rebuild_txt = QPushButton("Rebuild TXT")
+        btn_rebuild_txt.setProperty("class", "ActionBtn")
+        btn_rebuild_txt.setIcon(_safe_qta_icon("mdi.file-sync-outline", "#FFFFFF"))
+        btn_rebuild_txt.clicked.connect(self._rebuild_raw_dump_txt)
+        header_layout.addWidget(btn_rebuild_txt)
+
+        btn_reresolve = QPushButton("Re-Resolve Identity")
+        btn_reresolve.setProperty("class", "ActionBtn")
+        btn_reresolve.setIcon(_safe_qta_icon("mdi.database-sync", "#FFFFFF"))
+        btn_reresolve.clicked.connect(self._reresolve_identities)
+        header_layout.addWidget(btn_reresolve)
 
         btn_export = QPushButton("Export CSV")
         btn_export.setProperty("class", "ActionBtn")
@@ -259,6 +752,13 @@ class TrackerDumpWindow(QWidget):
         # Search & Filter Controls
         filter_layout = QHBoxLayout()
         filter_layout.setSpacing(10)
+
+        # View Mode Selector (SRPF Grouped by Client Container as default)
+        self.cmb_view_mode = QComboBox()
+        self.cmb_view_mode.addItems(["Grouped by Client Container (SRPF)", "Individual Raw Captures"])
+        self.cmb_view_mode.setStyleSheet("font-weight: 700; color: #4CF9B7; background-color: #0D1117; padding: 6px 12px;")
+        self.cmb_view_mode.currentIndexChanged.connect(self.load_data)
+        filter_layout.addWidget(self.cmb_view_mode, stretch=2)
 
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText("Search Client Name, PAN, GSTIN, ARN, Period, Portal...")
@@ -279,128 +779,331 @@ class TrackerDumpWindow(QWidget):
 
         # Data Table
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
-            "ID", "Client Name & PAN", "Service / Portal", "Period",
-            "ARN / Ack Number", "Capture Method", "Timestamp", "Actions"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.table.setAlternatingRowColors(True)
-
         main_layout.addWidget(self.table)
 
         # Initial Load
         self.load_data()
 
     def load_data(self):
-        """Fetch tracker dumps from database."""
+        """Fetch tracker dumps or SRPF unified containers from database."""
         try:
-            self._dumps_cache = self.db.get_tracker_dumps(limit=300)
+            is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+            if is_grouped:
+                self._dumps_cache = self.db.get_srpf_containers(limit=300)
+            else:
+                self._dumps_cache = self.db.get_tracker_dumps(limit=300)
             self._apply_filters()
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
 
     def _apply_filters(self):
-        """Filter cached dump records and populate table."""
+        """Filter cached records and populate table."""
+        v_val = self.table.verticalScrollBar().value()
+        h_val = self.table.horizontalScrollBar().value()
+        curr_row = self.table.currentRow()
+        curr_col = self.table.currentColumn()
+
         search_txt = self.txt_search.text().strip().lower()
         method_filter = self.cmb_method.currentText()
         status_filter = self.cmb_status.currentText()
+        is_grouped = (self.cmb_view_mode.currentIndex() == 0)
 
         filtered = []
         for d in self._dumps_cache:
-            # Method Filter
-            if method_filter != "All Capture Methods" and d.get("capture_method") != method_filter:
-                continue
+            if not is_grouped:
+                if method_filter != "All Capture Methods" and d.get("capture_method") != method_filter:
+                    continue
+                if status_filter != "All Statuses" and d.get("status") != status_filter:
+                    continue
 
-            # Status Filter
-            if status_filter != "All Statuses" and d.get("status") != status_filter:
-                continue
-
-            # Search Text
             if search_txt:
                 match_fields = [
-                    d.get("client_name", ""), d.get("pan", ""),
+                    d.get("display_name", ""), d.get("client_name", ""), d.get("pan", ""),
                     d.get("portal", ""), d.get("service_name", ""),
-                    d.get("period_label", ""), d.get("arn_number", ""),
-                    d.get("captured_by", "")
+                    d.get("period_label", ""), d.get("period_summary", ""),
+                    d.get("latest_arn", ""), d.get("arn_number", ""),
+                    d.get("company_name", ""), d.get("proprietor_name", ""),
+                    d.get("identity_key", "")
                 ]
                 if not any(search_txt in str(f).lower() for f in match_fields):
                     continue
 
             filtered.append(d)
 
-        self._populate_table(filtered)
+        self.table.setUpdatesEnabled(False)
+        try:
+            if is_grouped:
+                self._populate_grouped_table(filtered)
+            else:
+                self._populate_raw_table(filtered)
 
-    def _populate_table(self, records: list[dict]):
+            if curr_row >= 0 and curr_row < self.table.rowCount() and curr_col >= 0 and curr_col < self.table.columnCount():
+                self.table.setCurrentCell(curr_row, curr_col)
+
+            if v_val > 0:
+                self.table.verticalScrollBar().setValue(v_val)
+            if h_val > 0:
+                self.table.horizontalScrollBar().setValue(h_val)
+        finally:
+            self.table.setUpdatesEnabled(True)
+
+    def _populate_grouped_table(self, containers: list[dict]):
+        """Populates table in SRPF Grouped Container view: 1 row per unique client container."""
+        # Save user-adjusted column widths if previously set
+        prev_widths = [self.table.columnWidth(c) for c in range(self.table.columnCount())] if self.table.columnCount() == 8 else []
+
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels([
+            "Client Name & PAN", "Client ID", "Portal / Services", "Filings & History",
+            "Latest ARN / Ack", "Capture Method", "Last Updated", "Actions"
+        ])
+        
+        # Allow interactive mouse drag resizing on all columns
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(False)
+
+        default_widths = [320, 100, 180, 230, 160, 150, 140, 210]
+        for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
+            self.table.setColumnWidth(c, w)
+
         self.table.setRowCount(0)
-        self.lbl_counter.setText(f"Records: {len(records)}")
+        self.lbl_counter.setText(f"Client Containers: {len(containers)}")
+
+        for row_idx, r in enumerate(containers):
+            self.table.insertRow(row_idx)
+
+            # 0. Client Name & PAN (Primary Prominent Column)
+            disp_name = r.get('display_name') or r.get('company_name') or r.get('proprietor_name') or f"Unregistered ({r.get('identity_key')})"
+            c_item = QTableWidgetItem(disp_name)
+            c_item.setFont(QFont("Segoe UI", 10.5, QFont.Bold))
+            c_item.setToolTip(disp_name)
+            if r.get('is_unassigned'):
+                c_item.setForeground(QColor("#FFA657"))
+            else:
+                c_item.setForeground(QColor("#FFFFFF"))
+            self.table.setItem(row_idx, 0, c_item)
+
+            # 1. ID / Token
+            token_str = str(r.get("client_id_token") or (f"CLI-{r['client_id']:05d}" if r.get("client_id") else "Unregistered"))
+            id_item = QTableWidgetItem(token_str)
+            id_item.setTextAlignment(Qt.AlignCenter)
+            id_item.setToolTip(token_str)
+            if r.get('is_unassigned'):
+                id_item.setForeground(QColor("#FFA657"))
+            else:
+                id_item.setForeground(QColor("#4CF9B7"))
+            self.table.setItem(row_idx, 1, id_item)
+
+            # 2. Portal
+            portal_str = r.get("portal") or "Income Tax Portal"
+            p_item = QTableWidgetItem(portal_str)
+            p_item.setForeground(QColor("#E6EDF3"))
+            p_item.setToolTip(portal_str)
+            self.table.setItem(row_idx, 2, p_item)
+
+            # 3. Filings & History Summary
+            period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
+            hist_item = QTableWidgetItem(period_sum)
+            hist_item.setForeground(QColor("#58A6FF"))
+            hist_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            hist_item.setToolTip(period_sum)
+            self.table.setItem(row_idx, 3, hist_item)
+
+            # 4. Latest ARN
+            arn_item = QTableWidgetItem(r.get("latest_arn", "N/A"))
+            arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
+            arn_item.setForeground(QColor("#39FF14"))
+            arn_item.setToolTip(r.get("latest_arn", "N/A"))
+            self.table.setItem(row_idx, 4, arn_item)
+
+            # 5. Method
+            method_item = QTableWidgetItem(r.get("capture_method", "SAD_API_Interceptor"))
+            method_item.setTextAlignment(Qt.AlignCenter)
+            method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            method_item.setForeground(QColor("#4CF9B7"))
+            self.table.setItem(row_idx, 5, method_item)
+
+            # 6. Timestamp
+            ts_str = str(r.get("last_updated", ""))[:19].replace("T", " ")
+            ts_item = QTableWidgetItem(ts_str)
+            ts_item.setForeground(QColor("#8B949E"))
+            self.table.setItem(row_idx, 6, ts_item)
+
+            # 7. Actions
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(2, 2, 2, 2)
+            action_layout.setSpacing(4)
+
+            if r.get('is_unassigned'):
+                btn_create = QPushButton("+ Create Client")
+                btn_create.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2E9B5F;
+                        color: #FFFFFF;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background-color: #247C4C;
+                    }
+                """)
+                btn_create.clicked.connect(lambda _, item=r: self._create_client_from_capture(item))
+                action_layout.addWidget(btn_create)
+
+            tot = r.get('total_captures', 1)
+            btn_view = QPushButton(f"Inspect Container ({tot})")
+            btn_view.setStyleSheet("""
+                QPushButton {
+                    background-color: #1A382B;
+                    color: #4CF9B7;
+                    border: 1px solid #2E9B5F;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #2E9B5F;
+                    color: #FFFFFF;
+                }
+            """)
+            btn_view.clicked.connect(lambda _, item=r: self._show_container_dialog(item))
+            action_layout.addWidget(btn_view)
+
+            btn_del = QPushButton("Delete")
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background-color: #331A1A;
+                    color: #FF6B6B;
+                    border: 1px solid #882222;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #D9534F;
+                    color: #FFFFFF;
+                }
+            """)
+            btn_del.clicked.connect(lambda _, key=r["identity_key"]: self._delete_srpf_container(key))
+            action_layout.addWidget(btn_del)
+
+            self.table.setCellWidget(row_idx, 7, action_widget)
+
+    def _populate_raw_table(self, records: list[dict]):
+        """Populates table in granular Individual Raw Captures view."""
+        # Save user-adjusted column widths if previously set
+        prev_widths = [self.table.columnWidth(c) for c in range(self.table.columnCount())] if self.table.columnCount() == 8 else []
+
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels([
+            "Client Name & PAN", "ID", "Service / Portal", "Period",
+            "ARN / Ack Number", "Capture Method", "Timestamp", "Actions"
+        ])
+
+        # Allow interactive mouse drag resizing on all columns
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(False)
+
+        default_widths = [320, 80, 180, 140, 160, 150, 140, 190]
+        for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
+            self.table.setColumnWidth(c, w)
+
+        self.table.setRowCount(0)
+        self.lbl_counter.setText(f"Raw Records: {len(records)}")
 
         for row_idx, r in enumerate(records):
             self.table.insertRow(row_idx)
 
-            # ID
+            # 0. Client Name & PAN
+            client_name = r.get('client_name') or "Unknown Client"
+            pan_str = f" ({r['pan']})" if r.get('pan') and not r.get('is_unassigned') else ""
+            full_c_text = f"{client_name}{pan_str}"
+            c_item = QTableWidgetItem(full_c_text)
+            c_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            c_item.setToolTip(full_c_text)
+            if r.get('is_unassigned') or not r.get('client_id'):
+                c_item.setForeground(QColor("#FFA657"))
+            else:
+                c_item.setForeground(QColor("#FFFFFF"))
+            self.table.setItem(row_idx, 0, c_item)
+
+            # 1. ID
             id_item = QTableWidgetItem(str(r["id"]))
             id_item.setTextAlignment(Qt.AlignCenter)
             id_item.setForeground(QColor("#8B949E"))
-            self.table.setItem(row_idx, 0, id_item)
+            self.table.setItem(row_idx, 1, id_item)
 
-            # Client Name & PAN
-            client_name = r.get('client_name') or "Unknown Client"
-            pan_str = f" ({r['pan']})" if r.get('pan') else ""
-            c_item = QTableWidgetItem(f"{client_name}{pan_str}")
-            c_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-            c_item.setForeground(QColor("#FFFFFF"))
-            self.table.setItem(row_idx, 1, c_item)
-
-            # Service / Portal
+            # 2. Service / Portal
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
             portal_item = QTableWidgetItem(portal_str)
             portal_item.setForeground(QColor("#E6EDF3"))
+            portal_item.setToolTip(portal_str)
             self.table.setItem(row_idx, 2, portal_item)
 
-            # Period
+            # 3. Period
             period_val = r.get("period_label") or "N/A"
             period_item = QTableWidgetItem(period_val)
             period_item.setForeground(QColor("#D29922") if r.get("period_label") else QColor("#8B949E"))
+            period_item.setToolTip(period_val)
             self.table.setItem(row_idx, 3, period_item)
 
-            # ARN Number (High contrast bright neon emerald)
+            # 4. ARN Number
             arn_item = QTableWidgetItem(r.get("arn_number", "N/A"))
             arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
             arn_item.setForeground(QColor("#39FF14"))
+            arn_item.setToolTip(r.get("arn_number", "N/A"))
             self.table.setItem(row_idx, 4, arn_item)
 
-            # Capture Method Badge
+            # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")
             method_item = QTableWidgetItem(method)
             method_item.setTextAlignment(Qt.AlignCenter)
             method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             if method == "SAD_API_Interceptor":
-                method_item.setForeground(QColor("#4CF9B7")) # Neon Mint
+                method_item.setForeground(QColor("#4CF9B7"))
             elif method == "DOM_Tracker":
-                method_item.setForeground(QColor("#58A6FF")) # Sky Blue
+                method_item.setForeground(QColor("#58A6FF"))
             else:
-                method_item.setForeground(QColor("#FFA657")) # Warm Amber
+                method_item.setForeground(QColor("#FFA657"))
             self.table.setItem(row_idx, 5, method_item)
 
-            # Timestamp
-            ts_str = r.get("created_at", "")[:19].replace("T", " ")
+            # 6. Timestamp
+            ts_str = str(r.get("created_at", ""))[:19].replace("T", " ")
             ts_item = QTableWidgetItem(ts_str)
             ts_item.setForeground(QColor("#8B949E"))
             self.table.setItem(row_idx, 6, ts_item)
 
-            # Actions Column
+            # 7. Actions Column
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
             action_layout.setContentsMargins(2, 2, 2, 2)
             action_layout.setSpacing(4)
+
+            if r.get('is_unassigned') or not r.get('client_id'):
+                btn_create = QPushButton("+ Create Client")
+                btn_create.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2E9B5F;
+                        color: #FFFFFF;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        font-size: 11px;
+                        font-weight: 700;
+                    }
+                    QPushButton:hover {
+                        background-color: #247C4C;
+                    }
+                """)
+                btn_create.clicked.connect(lambda _, item=r: self._create_client_from_capture(item))
+                action_layout.addWidget(btn_create)
 
             btn_view = QPushButton("View Payload")
             btn_view.setStyleSheet("""
@@ -442,9 +1145,29 @@ class TrackerDumpWindow(QWidget):
 
             self.table.setCellWidget(row_idx, 7, action_widget)
 
+    def _show_container_dialog(self, container_item: dict):
+        dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            self.load_data()
+
     def _show_payload_dialog(self, dump_item: dict):
-        dlg = PayloadInspectorDialog(dump_item, self)
-        dlg.exec()
+        dlg = PayloadInspectorDialog(dump_item, db=self.db, is_container=False, parent=self)
+        if dlg.exec() == QDialog.Accepted:
+            self.load_data()
+
+    def _create_client_from_capture(self, dump_item: dict):
+        dlg = AddClientFromCaptureDialog(self.db, dump_item, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.load_data()
+
+    def _delete_srpf_container(self, identity_key: str):
+        if QMessageBox.question(
+            self, "Confirm Delete Container",
+            f"Are you sure you want to delete this client container ({identity_key}) and all its captured filings?",
+            QMessageBox.Yes | QMessageBox.No
+        ) == QMessageBox.Yes:
+            self.db.delete_srpf_container(identity_key)
+            self.load_data()
 
     def _delete_dump(self, dump_id: int):
         if QMessageBox.question(
@@ -458,10 +1181,12 @@ class TrackerDumpWindow(QWidget):
     def _clear_all_dumps(self):
         if QMessageBox.warning(
             self, "Clear All Dump Logs",
-            "Are you sure you want to clear ALL tracker dump logs?\nThis operation cannot be undone.",
+            "Are you sure you want to clear ALL tracker dump logs and containers?\nThis operation cannot be undone.",
             QMessageBox.Yes | QMessageBox.No
         ) == QMessageBox.Yes:
             self.db.clear_tracker_dumps()
+            with self.db._connect_raw() as conn:
+                conn.execute("DELETE FROM client_raw_containers")
             self.load_data()
 
     def _export_csv(self):
@@ -479,18 +1204,66 @@ class TrackerDumpWindow(QWidget):
             with open(file_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    "ID", "Client ID", "Client Name", "PAN", "Service ID", "Service Name",
-                    "Portal", "Period Label", "ARN Number", "Capture Method", "Status",
-                    "Captured By", "Created At", "Raw Payload JSON"
+                    "ID / Token", "Client Name", "PAN", "Portal",
+                    "Periods / Summary", "Latest ARN", "Capture Method",
+                    "Total Captures", "Last Updated"
                 ])
                 for r in self._dumps_cache:
                     writer.writerow([
-                        r.get("id"), r.get("client_id"), r.get("client_name"), r.get("pan"),
-                        r.get("service_id"), r.get("service_name"), r.get("portal"),
-                        r.get("period_label"), r.get("arn_number"), r.get("capture_method"),
-                        r.get("status"), r.get("captured_by"), r.get("created_at"),
-                        r.get("raw_payload_json")
+                        r.get("client_id_token") or r.get("id"),
+                        r.get("display_name") or r.get("client_name"),
+                        r.get("pan"),
+                        r.get("portal") or r.get("service_name"),
+                        r.get("period_summary") or r.get("period_label"),
+                        r.get("latest_arn") or r.get("arn_number"),
+                        r.get("capture_method"),
+                        r.get("total_captures", 1),
+                        r.get("last_updated") or r.get("created_at")
                     ])
             QMessageBox.information(self, "Export Complete", f"Exported {len(self._dumps_cache)} records to:\n{file_path}")
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write CSV: {e}")
+
+    def _open_raw_dump_txt(self):
+        """Opens seraRawPayloadDump.txt in the system's default text editor."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        dump_paths = self.db._get_dump_file_paths()
+        target_path = None
+        for p in dump_paths:
+            if os.path.exists(p):
+                target_path = p
+                break
+        if not target_path and dump_paths:
+            self.db.rebuild_raw_payload_dumps_file()
+            target_path = dump_paths[0]
+
+        if target_path and os.path.exists(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        else:
+            QMessageBox.warning(self, "File Not Found", "Could not locate seraRawPayloadDump.txt on disk.")
+
+    def _rebuild_raw_dump_txt(self):
+        """Cleanly rebuilds and syncs seraRawPayloadDump.txt from database records."""
+        try:
+            count = self.db.rebuild_raw_payload_dumps_file()
+            QMessageBox.information(
+                self, "Dump File Rebuilt",
+                f"Successfully rebuilt seraRawPayloadDump.txt with {count} records."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Rebuild Failed", f"Could not rebuild dump file: {e}")
+
+    def _reresolve_identities(self):
+        """Scans and re-resolves all captures and rebuilds SRPF containers."""
+        try:
+            count = self.db.re_resolve_all_tracker_dumps()
+            self.load_data()
+            QMessageBox.information(
+                self, "SRPF Containers Rebuilt",
+                f"Successfully re-resolved captures and rebuilt unified SRPF client containers ({count} captures updated)."
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")

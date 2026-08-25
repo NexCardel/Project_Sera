@@ -24,11 +24,13 @@ Back navigation is available on detail/workspace views and slide-panel tools, wi
 
 ## Tracker Dump Subsystem
 
-The **Tracker Dump** workspace (`TrackerDumpWindow`) serves as a central hub for all network response captures recorded by **Sera_API_detection (SAD)** and the companion browser extension:
+The **Tracker Dump** workspace (`TrackerDumpWindow`) serves as a central audit repository for all network API responses and visual filing confirmations captured by **Sera FST** (**Sera SAD** and **Sera DOM**):
 
-- **Real-Time Data Table**: Displays Client Name, PAN/GSTIN, Portal, Submission Period, ARN/Ack Number, Capture Method (`SAD_API_Interceptor` in neon emerald, `DOM_Tracker`, `Manual_Fallback`), Timestamp, and Actions.
-- **Payload Inspector**: Click **View Payload** on any row to open the raw JSON drawer, inspecting exact API response headers, HTTP codes, and body objects.
+- **Real-Time Data Table**: Displays ID, Client Name & PAN/GSTIN, Service/Portal (`Income Tax (ITR-4S)`, `GST (GSTR-3B)`), Period (`AY 2024-25`), ARN/Ack Number, Capture Method (`SAD_API_Interceptor` in neon emerald, `DOM_Tracker`), Timestamp, and Actions.
+- **Payload Inspector Drawer**: Click **View Payload** on any row to open the raw JSON drawer, inspecting exact API response headers, timestamps, and nested data trees.
 - **Multi-Field Filtering & CSV Export**: Real-time search across Client Name, PAN, GSTIN, ARN, Period, or Portal, with capture method and status filter dropdowns, and one-click CSV export.
+- **Row Deletion & Bulk Purge**: Individual **Delete** button per row for immediate removal, plus a **Clear All** action button to wipe stale test dumps.
+- **Automatic Client Resolution**: Automatically maps incoming PAN numbers (`GZEPM6367M`), token IDs (`CLI-00370`), or MCL Serial numbers to the corresponding client in SQLite.
 
 ---
 

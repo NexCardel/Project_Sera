@@ -19,12 +19,22 @@ function connectToNativeHost() {
         const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
+        const allowedDomains = message.allowed_domains || [];
         const overallTracker = fst || sad;
-        if (!overallTracker) {
-          chrome.storage.local.set({ trackerEnabled: false, fstEnabled: false, sadEnabled: false, scaEnabled: sca, scaMode: scaMode, activeAutofillPayload: null });
-        } else {
-          chrome.storage.local.set({ trackerEnabled: true, fstEnabled: fst, sadEnabled: sad, scaEnabled: sca, scaMode: scaMode });
+        const storageObj = {
+          trackerEnabled: overallTracker,
+          fstEnabled: fst,
+          sadEnabled: sad,
+          scaEnabled: sca,
+          scaMode: scaMode
+        };
+        if (allowedDomains && allowedDomains.length > 0) {
+          storageObj.allowedDomains = allowedDomains;
         }
+        if (!overallTracker) {
+          storageObj.activeAutofillPayload = null;
+        }
+        chrome.storage.local.set(storageObj);
       }
     });
     nativePort.onDisconnect.addListener(() => {

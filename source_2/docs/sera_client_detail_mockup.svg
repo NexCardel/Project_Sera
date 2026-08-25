@@ -1,0 +1,76 @@
+<svg viewBox="0 0 560 500" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Redesigned Sera client detail panel</title>
+<desc>A single flowing panel for A. P. Enterprise with identity, security credentials, and services grouped by hairline dividers instead of nested cards.</desc>
+
+<rect x="0" y="0" width="560" height="500" rx="12" fill="#1C1C1C"/>
+
+<line x1="0" y1="56" x2="560" y2="56" stroke="#2A2A2A" stroke-width="1"/>
+<path d="M28 24 l-8 8 l8 8" stroke="#B4B2A9" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="50" y="28" font-family="Arial, sans-serif" font-size="14" font-weight="600" fill="#F5F5F0">A. P. Enterprise</text>
+<text x="50" y="44" font-family="Arial, sans-serif" font-size="11" fill="#888780">Md. Ashraf Ali</text>
+<rect x="470" y="16" width="70" height="20" rx="10" fill="#123B31"/>
+<text x="505" y="30" font-family="Arial, sans-serif" font-size="10" font-weight="600" fill="#5DCAA5" text-anchor="middle">CLI-00012</text>
+
+<text x="28" y="76" font-family="Arial, sans-serif" font-size="10" font-weight="600" letter-spacing="0.5" fill="#6E6D67">IDENTITY</text>
+
+<text x="28" y="98" font-family="Arial, sans-serif" font-size="10" fill="#7A7972">PAN</text>
+<text x="28" y="113" font-family="Arial, sans-serif" font-size="12" fill="#E8E8E3">AKVPA6032B</text>
+<text x="300" y="98" font-family="Arial, sans-serif" font-size="10" fill="#7A7972">Phone</text>
+<text x="300" y="113" font-family="Arial, sans-serif" font-size="12" fill="#E8E8E3">9903418983</text>
+
+<text x="28" y="138" font-family="Arial, sans-serif" font-size="10" fill="#7A7972">DOB</text>
+<text x="28" y="153" font-family="Arial, sans-serif" font-size="12" fill="#57564F">Not set</text>
+<text x="300" y="138" font-family="Arial, sans-serif" font-size="10" fill="#7A7972">User ID</text>
+<text x="300" y="153" font-family="Arial, sans-serif" font-size="12" fill="#E8E8E3">apen_6032</text>
+
+<line x1="28" y1="172" x2="532" y2="172" stroke="#2A2A2A" stroke-width="1"/>
+
+<text x="28" y="192" font-family="Arial, sans-serif" font-size="10" font-weight="600" letter-spacing="0.5" fill="#6E6D67">SECURITY CREDENTIALS</text>
+
+<g font-family="Arial, sans-serif">
+<text x="28" y="214" font-size="10" fill="#7A7972">Email</text>
+<text x="28" y="229" font-size="12" fill="#E8E8E3">apent**********</text>
+<rect x="270" y="217" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.2"/>
+
+<text x="300" y="214" font-size="10" fill="#7A7972">GST password</text>
+<text x="300" y="229" font-size="12" fill="#E8E8E3">Digit*****</text>
+<rect x="514" y="217" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.2"/>
+
+<line x1="28" y1="246" x2="532" y2="246" stroke="#232323" stroke-width="1"/>
+
+<text x="28" y="266" font-size="10" fill="#7A7972">IT password</text>
+<text x="28" y="281" font-size="12" fill="#E8E8E3">akvp@*****</text>
+<rect x="270" y="269" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.2"/>
+
+<text x="300" y="266" font-size="10" fill="#7A7972">Email password</text>
+<text x="300" y="281" font-size="12" fill="#E8E8E3">Class*****</text>
+<rect x="514" y="269" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.2"/>
+</g>
+
+<line x1="28" y1="302" x2="532" y2="302" stroke="#2A2A2A" stroke-width="1"/>
+
+<text x="28" y="322" font-family="Arial, sans-serif" font-size="10" font-weight="600" letter-spacing="0.5" fill="#6E6D67">SERVICES</text>
+
+<g font-family="Arial, sans-serif">
+<circle cx="34" cy="340" r="7" fill="none" stroke="#D85A30" stroke-width="1.4"/>
+<text x="52" y="344" font-size="12" fill="#E8E8E3">GST</text>
+<circle cx="480" cy="340" r="8" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+<rect x="508" y="334" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+<line x1="28" y1="358" x2="532" y2="358" stroke="#232323" stroke-width="1"/>
+
+<circle cx="34" cy="376" r="7" fill="none" stroke="#378ADD" stroke-width="1.4"/>
+<text x="52" y="380" font-size="12" fill="#E8E8E3">Income tax</text>
+<circle cx="480" cy="376" r="8" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+<rect x="508" y="370" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+<line x1="28" y1="394" x2="532" y2="394" stroke="#232323" stroke-width="1"/>
+
+<circle cx="34" cy="412" r="7" fill="none" stroke="#7F77DD" stroke-width="1.4"/>
+<text x="52" y="416" font-size="12" fill="#E8E8E3">Email</text>
+<circle cx="480" cy="412" r="8" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+<rect x="508" y="406" width="12" height="12" rx="3" fill="none" stroke="#6E6D67" stroke-width="1.1"/>
+</g>
+
+<rect x="28" y="440" width="504" height="32" rx="8" fill="none" stroke="#262626" stroke-width="1"/>
+<text x="42" y="460" font-family="Arial, sans-serif" font-size="11" fill="#57564F">Add a note for this client</text>
+
+</svg>

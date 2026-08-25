@@ -28,7 +28,9 @@ class TestUndoRedoFormatting(unittest.TestCase):
         self.db = SeraDatabase(self.db_path, self.key)
 
     def test_undo_redo_simulation(self):
-        client_id = self.db.add_client(values={}, notes="Undo test", service_ids=[])
+        pan_col = next((c for c in self.db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        pan_id = pan_col["id"] if pan_col else 5
+        client_id = self.db.add_client(values={pan_id: "AAAAA1111A"}, notes="Undo test", service_ids=[])
         
         # 1. Initial State: no formatting
         retrieved = self.db.get_cell_formatting_for_clients([client_id])

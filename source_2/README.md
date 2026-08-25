@@ -10,6 +10,7 @@ This README is the quick orientation page. The detailed implementation and archi
 - [Features & Security Controls](docs/features-security.md)
 - [Browser Automation & Extension](docs/browser-automation-extension.md)
 - [File Submission Tracker](docs/file-submission-tracker.md)
+- [Government API Payload & Interception Matrix](docs/api-payloads-matrix.md)
 - [Build & Release Guide](docs/build-release.md)
 - [Operations & LAN Synchronization](docs/operations-sync.md)
 
@@ -17,25 +18,32 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.3.4.1)
+## Latest Features (v2.5.1)
 
-- **Sera Sync (Zero-Configuration LAN Database Pushing)**:
-  - Built-in P2P LAN peer discovery over UDP broadcast (`Port 49156`).
-  - Admin-accessible **Sera Sync** panel (`sera_sync_dialog.py`) displaying real-time online workstations, hostnames, and IP addresses.
-  - One-way TCP database push (`Port 49157`) transferring `master.db` + `sera.salt` directly to a target peer without requiring pre-configured identical master passwords.
-  - **Instant UI Locking & Modal Restart**: Receiving machine automatically locks UI interactions, pops a mandatory modal restart prompt, and cleanly auto-restarts (`os.execl`) to re-authenticate SQLCipher.
-- **Smart Syncthing & Peer Backup Restore**:
-  - `restore_from()` automatically scans, pairs, and decrypts Syncthing conflict files (`master.sync-conflict-*.db`, `sera.salt.sync-conflict-*`) and `sync_peer` conflict files (`.conflict-`, `.pre-sync-`).
-  - Validates SQLCipher HMAC decryption (`SELECT count(*) FROM sqlite_master;`) prior to overwriting live database files.
-- **Permanent Chrome Native Messaging Infrastructure**:
-  - Native host manifest and scripts stored in permanent directory `~/AmanAssociates_Sera/native_host/` to prevent PyInstaller temporary `_MEIPASS` registry path leaks.
-  - Handled `--native-host` CLI flag interception before `QApplication` initialization to isolate binary STDIN/STDOUT pipes from GUI logs.
-- **Branding & Taskbar Grouping**:
-  - Updated visual branding vector (`Flogo.svg`) rendered into multi-resolution native Windows `.ico` files (`256x256` down to `16x16`).
-  - Explicit `AppUserModelID` registration (`AmanAssociates.ProjectSera.Vault.2.3.3`) for clean Windows Taskbar preview grouping.
-  - Windows Desktop and Start Menu shortcut name configured as **`CompanyInfo1`**.
-- **Excel-Style Grid Copying (`Ctrl+C`)**: Select cells or cell blocks and copy formatted data directly to Excel with a 500 ms green highlight flash (`#2E9B5F`).
-- **Master Column List (MCL) ID Tokens**: Added `ID` field type (`"ID (Primary Key / Auto-Serial)"`) with single-column exclusivity, auto-serial numbers, and backend Client ID tokens (`CLI-XXXXX`).
+- **Sera FST (File Submission Tracker Subsystem)**:
+  - **Sera SAD — API Detector (Network Layer)**:
+    - Passive Network Response Interceptor (`net_interceptor.js`) running in the page `MAIN` execution world.
+    - Intercepts `window.fetch()` and `XMLHttpRequest` calls in real-time across GST (`status_cd: "1"` / ARNs), Income Tax (15-digit Ack Numbers, `assmentYear`, `formTypeCd`, `submitUserId`), TRACES (`requestNo`), and statutory forms (10-IEA, 10BA, 29B, 15CA/CB, 35, 10-IB/IC).
+    - Robust Angular `responseType: "json"` handling ensuring zero dropped XHR API calls on modern government Single Page Applications.
+    - Universal array discovery (`findReturnArrays`) that automatically ingests and syncs complete multi-year filed return histories when viewing portal dashboards.
+    - Strict Ack/ARN validation (`isValidArnOrAck`) filtering out internal session tokens (`FOS...`) and DOM placeholders (`_ARN`).
+  - **Sera DOM — DOM Detector (Visual Layer)**:
+    - `MutationObserver` visual fallback (`tracker.js`) monitoring on-screen confirmation banners and rendered HTML elements for legacy/server-rendered portal forms.
+- **Tracker Dump Workspace (`TrackerDumpWindow`)**:
+  - Dedicated desktop workspace logging all raw SAD captures and extension dumps into SQLite table `tracker_dump`.
+  - Features real-time multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`), raw JSON payload inspector drawer, CSV export, single-row deletion, and one-click bulk purge.
+  - Universal client resolution dynamically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), and Name/PAN/GSTIN substring queries.
+- **Sera Clipboard Assist (SCA — Ambient Password Autofill)**:
+  - Automatically arms password in memory when staff copy client User IDs from Excel, Sheets, Notepad, or CSV rosters.
+  - Zero-touch autofill immediately injects matching credentials when the User ID is pasted into any recognized web portal.
+  - Floats an on-page notification banner displaying client business name, owner name, and portal autofill confirmation.
+- **Modernized SMTI (Manual Assist) Widget**:
+  - Upgraded Obsidian & Emerald UI design matching desktop design tokens.
+  - Emerald action buttons for independent User ID and Password injection with instant visual click confirmation.
+  - Integrated 30-second live auto-dismiss countdown timer with strict masking safeguards.
+- **Instant Prompt-Free Auto-Unlock & Windows Autostart**:
+  - Auto-derives and decrypts vault on startup using local keyfile (`sera.key`).
+  - Launches instantly into your workspace without popping up a master password login prompt on launch, while preserving full Admin PIN protection for administrative tasks.
 
 ---
 
@@ -49,7 +57,7 @@ playwright install chromium
 python main.py
 ```
 
-First run prompts for a workstation user name and a master password. The master password is never stored on disk; it is used to derive the SQLCipher database encryption key via PBKDF2.
+On first launch, Project Sera auto-derives and secures your vault using `sera.key`. Admin Mode remains protected by the Admin PIN (`1234` or custom PIN).
 
 ---
 
@@ -61,6 +69,7 @@ Project Sera stores encrypted vault data in:
 ~/AmanAssociates_Sera/
 |-- master.db
 |-- sera.salt
+|-- sera.key
 |-- device_identity.txt
 `-- native_host/
     |-- com.amanassociates.sera.json
@@ -68,7 +77,7 @@ Project Sera stores encrypted vault data in:
     `-- host.py
 ```
 
-`master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key from the master password. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.
+`master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.
 
 ---
 
@@ -84,4 +93,4 @@ venv\Scripts\python build_tools\build_package.py
 & "C:\Program Files\Inno Setup 7\ISCC.exe" build_tools\installer_setup.iss
 ```
 
-Compiled installer executables are saved to `installer_output\Amas_Sera_Setup_v2.3.4.1.exe`.
+Compiled installer executables are saved to `installer_output\Amas_Sera_Setup_v2.4.2.exe`.

@@ -223,6 +223,7 @@ class SeraApp:
             self.db = SeraDatabase(self.db_path, hex_key)
             import threading
             threading.Thread(target=self.db.auto_populate_service_selectors, daemon=True).start()
+            threading.Thread(target=self.db.sync_raw_payload_dumps_file, daemon=True).start()
 
             # Ensure FST, SAD, SCA, and tracker settings are initialized
             if self.db.get_setting("fst_enabled") is None:
@@ -324,44 +325,57 @@ class SeraApp:
             return
 
         raw_client_id = msg.get('client_id')
-        if not raw_client_id:
-            print("[main._handle_extension_result] Missing client_id in message, using 1")
-            raw_client_id = 1
-        
-        try:
-            client_id = int(raw_client_id)
-        except (ValueError, TypeError):
-            client_id = 1
-
+        pan = str(msg.get('pan') or "").strip()
         arn = msg.get('arn', 'N/A')
         portal = msg.get('portal', 'Portal')
+        filing_type = str(msg.get('filing_type') or "").strip()
+        portal_display = f"{portal} ({filing_type})" if filing_type else portal
         capture_method = msg.get("capture_method", "DOM_Tracker")
         
-        # Directly record into Tracker Dump database (Unhooked from modal prompt)
+        # Directly record into Tracker Dump database with authoritative identity resolution
         try:
             res = self.db.insert_tracker_dump(
-                client_id=client_id,
+                client_id=raw_client_id,
                 service_id=None,
-                portal=portal,
+                portal=portal_display,
                 period_label=msg.get("period_label", ""),
                 arn_number=arn,
                 capture_method=capture_method,
-                status="submitted",
+                status=msg.get("status", "submitted"),
                 raw_payload_json=json.dumps(msg),
-                captured_by=self.actor
+                captured_by=self.actor,
+                pan=pan
             )
             print(f"[main._handle_extension_result] Successfully inserted tracker_dump row: {res}")
             if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
                 self.tracker_dump_win.load_data()
 
             # Non-intrusive toast notification on desktop shell
-            method_label = "SAD API Interceptor" if capture_method == "SAD_API_Interceptor" else "Extension Observer"
+            method_label = "Sera SAD (API Detector)" if capture_method in ("SAD_API_Interceptor", "SAD_API_Detector") else "Sera DOM (DOM Detector)"
+            
+            client_display = ""
+            if res.get("client_id"):
+                try:
+                    c_full = self.db.get_client(res["client_id"])
+                    c_name = ""
+                    if c_full:
+                        id_col = self.db.get_identity_column()
+                        c_name = c_full.get("values", {}).get(id_col["id"] if id_col else 1, "")
+                    res_cid = res["client_id"]
+                    fallback_tok = f"CLI-{int(res_cid):05d}" if isinstance(res_cid, (int, str)) and str(res_cid).isdigit() else f"#{res_cid}"
+                    client_display = f"Client: {c_name or fallback_tok} | "
+                except Exception:
+                    client_display = f"Client #{res.get('client_id')} | "
+            elif res.get("unassigned_identity"):
+                client_display = f"Unregistered ({res['unassigned_identity']}) | "
+
+            toast_msg = f"Captured {portal} Filing ({method_label}) — {client_display}ARN: {arn}"
             if hasattr(self, "shell") and self.shell and self.shell.isVisible() and not self.shell.isMinimized():
-                self.shell.show_toast(f"Captured {portal} Filing ({method_label}) — ARN: {arn}", duration=5000)
+                self.shell.show_toast(toast_msg, duration=5000)
             elif hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
                 self.tray_icon.showMessage(
                     f"Filing Captured — {portal}",
-                    f"ARN: {arn} ({method_label})",
+                    f"{client_display}ARN: {arn} ({method_label})",
                     QSystemTrayIcon.Information,
                     4500
                 )
@@ -517,21 +531,14 @@ class SeraApp:
         sidebar = self.shell.sidebar
         sidebar.go_to_search.connect(self._show_search_from_admin)
         sidebar.action_import_csv.connect(self.admin_win._on_import_csv)
-        sidebar.action_download_template.connect(self.admin_win._on_download_template)
-        sidebar.action_purge_duplicates.connect(self.admin_win._on_purge_duplicates)
         sidebar.action_manage_clients.connect(self._show_manage_clients)
         sidebar.action_tracker_dump.connect(self._show_tracker_dump)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
-        sidebar.action_manage_mcl.connect(self.admin_win._on_manage_mcl)
-        sidebar.action_manage_services.connect(self.admin_win._on_manage_services)
         sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
-        sidebar.action_export_csv.connect(self.admin_win._on_export_csv)
-        sidebar.action_backup.connect(self.admin_win._on_backup)
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
-        sidebar.action_restore.connect(self.admin_win._on_restore_backup)
         sidebar.action_enter_admin.connect(self._request_admin_mode)
         sidebar.action_exit_admin.connect(self._exit_admin_mode)
         
@@ -708,7 +715,6 @@ class SeraApp:
 
     def _show_search_from_admin(self):
         self.shell.dismiss_detail_on_outside = False
-        self._apply_theme()
         self.search_win.refresh()
         self.shell.set_current_page(0)
         self.shell.slide_panel.slide_out()

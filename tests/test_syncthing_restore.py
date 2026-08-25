@@ -20,7 +20,9 @@ class TestSyncthingRestore(unittest.TestCase):
         
         self.db = SeraDatabase(self.live_db_path, self.hex_key)
         self.col_id = self.db.create_mcl_column("Company Name", "text")
-        self.db.add_client({self.col_id: "Original Live Company"}, notes="", service_ids=[])
+        pan_col = next((c for c in self.db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        pan_id = pan_col["id"] if pan_col else 5
+        self.db.add_client({self.col_id: "Original Live Company", pan_id: "AAAAA1111A"}, notes="", service_ids=[])
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -42,7 +44,9 @@ class TestSyncthingRestore(unittest.TestCase):
         
         backup_db_inst = SeraDatabase(conflict_db, conflict_hex_key)
         col_id_bk = backup_db_inst.create_mcl_column("Company Name", "text", is_identity=True)
-        backup_db_inst.add_client({col_id_bk: "Syncthing Conflict Restored Client"}, notes="", service_ids=[])
+        bk_pan_col = next((c for c in backup_db_inst.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        bk_pan_id = bk_pan_col["id"] if bk_pan_col else 5
+        backup_db_inst.add_client({col_id_bk: "Syncthing Conflict Restored Client", bk_pan_id: "BBBBB2222B"}, notes="", service_ids=[])
         
         # Test 1: Restore by selecting the folder
         res_summary = self.db.restore_from(backup_dir, master_password=self.password)

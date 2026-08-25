@@ -128,7 +128,7 @@
     div.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
     div.style.zIndex = '9999999';
     div.style.fontFamily = 'Segoe UI, Arial, sans-serif';
-    const methodBadge = method === 'SAD_API_Interceptor' ? '⚡ SAD API Interceptor' : '👁️ DOM Observer';
+    const methodBadge = method === 'SAD_API_Interceptor' ? '⚡ Sera SAD (API Detector)' : '👁️ Sera DOM (DOM Detector)';
     div.innerHTML = `
       <h3 style="margin:0 0 6px 0; font-size:16px; color:#4CF9B7;">✅ Return Filing Captured!</h3>
       <p style="margin:0 0 4px 0; font-size:12px; color:#A0A0A0;">Method: <strong style="color:#2E9B5F;">${methodBadge}</strong></p>

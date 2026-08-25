@@ -4,7 +4,7 @@ service_manager_dialog.py
 Admin Mode -> "Manage Services". Maps login endpoints to MCL columns.
 """
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -17,7 +17,27 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QFrame,
+    QLabel,
+    QWidget,
 )
+
+try:
+    import qtawesome as qta
+except Exception:
+    qta = None
+
+
+def _safe_icon(name, color=None):
+    if qta:
+        try:
+            if color:
+                return qta.icon(name, color=color)
+            return qta.icon(name)
+        except Exception:
+            pass
+    from PySide6.QtGui import QIcon
+    return QIcon()
 
 
 class ServiceEditDialog(QDialog):
@@ -25,24 +45,67 @@ class ServiceEditDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("ToolDialog")
         self.db = db
-        self.setWindowTitle("Service Configuration")
+        self.setWindowTitle("Service Configuration — Compliance Automation")
         self.setModal(True)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(500)
+        self.resize(540, 580)
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(14)
+
+        # Header Frame
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_safe_icon("mdi.server-network", color="#2E9B5F").pixmap(24, 24))
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setSpacing(2)
+        title_lbl = QLabel("Edit Compliance Service" if service_data else "New Compliance Service")
+        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
+        sub_lbl = QLabel("Map portal login credentials, automation modes, and extension selectors.")
+        sub_lbl.setStyleSheet("font-size: 11.5px; color: #8E8D88;")
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        main_layout.addLayout(header)
+
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
+        main_layout.addWidget(divider)
+
+        # Form Container
+        form_frame = QFrame()
+        form_frame.setStyleSheet("""
+            QFrame {
+                background-color: #141414;
+                border: 1px solid #262626;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        form = QFormLayout(form_frame)
+        form.setSpacing(10)
+        form.setContentsMargins(8, 8, 8, 8)
 
         self.name_input = QLineEdit(service_data["name"] if service_data else "")
+        self.name_input.setPlaceholderText("e.g. GST Returns, Income Tax, TRACES (TDS)")
         form.addRow("Service Name:", self.name_input)
 
         self.url_input = QLineEdit(service_data["login_page_link"] if service_data else "")
+        self.url_input.setPlaceholderText("e.g. https://services.gst.gov.in/services/login")
         form.addRow("Login URL:", self.url_input)
 
         mcl = self.db.get_mcl_columns()
         self.uid_combo = QComboBox()
         self.pwd_combo = QComboBox()
-        self.uid_combo.addItem("-- Select --", None)
-        self.pwd_combo.addItem("-- Select --", None)
+        self.uid_combo.addItem("-- Select User ID Column --", None)
+        self.pwd_combo.addItem("-- Select Password Column --", None)
         
         for c in mcl:
             self.uid_combo.addItem(c["label"], c["id"])
@@ -89,7 +152,7 @@ class ServiceEditDialog(QDialog):
             self.ext_flow_combo.setCurrentIndex(max(idx_ext_flow, 0))
         
         form.addRow("Extension Login Flow:", self.ext_flow_combo)
-        layout.addLayout(form)
+        main_layout.addWidget(form_frame)
 
         # Wire real-time portal selector presets on typing
         self.name_input.textChanged.connect(self._auto_detect_portal_presets)
@@ -98,10 +161,22 @@ class ServiceEditDialog(QDialog):
         if not service_data or not self.uid_sel.text().strip():
             self._auto_detect_portal_presets()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self._on_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        # Action Buttons
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        save_btn = QPushButton("Save Service")
+        save_btn.setProperty("class", "primary")
+        save_btn.setIcon(_safe_icon("mdi.check", color="#FFFFFF"))
+        save_btn.clicked.connect(self._on_accept)
+        btn_row.addWidget(save_btn)
+
+        main_layout.addLayout(btn_row)
 
     def _auto_detect_portal_presets(self):
         name = self.name_input.text().strip().lower()
@@ -165,14 +240,16 @@ class ServiceEditDialog(QDialog):
             "arn_selector": self.arn_sel.text().strip()
         }
 
+
 class ServiceManagerDialog(QDialog):
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.setObjectName("ToolDialog")
         self.db = db
-        self.setWindowTitle("Manage Services")
+        self.setWindowTitle("Manage Services — Compliance Catalog")
         self.setModal(True)
-        self.resize(450, 400)
+        self.resize(540, 520)
+        self.setMinimumSize(480, 440)
         self._build_ui()
         try:
             self.db.auto_populate_service_selectors()
@@ -182,36 +259,114 @@ class ServiceManagerDialog(QDialog):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        # Header Frame
+        header = QHBoxLayout()
+        header.setSpacing(10)
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(_safe_icon("mdi.server-network", color="#2E9B5F").pixmap(26, 26))
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_vbox.setSpacing(2)
+        title_lbl = QLabel("Compliance Services Catalog")
+        title_lbl.setStyleSheet("font-size: 17px; font-weight: 700; color: #F8FAFC;")
+        sub_lbl = QLabel("Configure portal login links, automation modes, and credentials integration.")
+        sub_lbl.setStyleSheet("font-size: 12px; color: #8E8D88;")
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 4px 0;")
+        layout.addWidget(divider)
+
         self.list_widget = QListWidget()
-        layout.addWidget(self.list_widget)
+        self.list_widget.setStyleSheet("""
+            QListWidget {
+                background-color: #141414;
+                border: 1px solid #262626;
+                border-radius: 8px;
+                padding: 6px;
+                color: #F8FAFC;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 9px 12px;
+                border-radius: 6px;
+                margin-bottom: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #1F2933;
+            }
+            QListWidget::item:selected {
+                background-color: #1E3A2F;
+                color: #4CF9B7;
+                border: 1px solid #2E9B5F;
+            }
+        """)
+        layout.addWidget(self.list_widget, stretch=1)
 
         btn_row = QHBoxLayout()
-        add_btn = QPushButton("Add")
+        btn_row.setSpacing(8)
+
+        add_btn = QPushButton("Add Service")
+        add_btn.setProperty("class", "primary")
+        add_btn.setIcon(_safe_icon("mdi.plus", color="#FFFFFF"))
+
         edit_btn = QPushButton("Edit")
+        edit_btn.setIcon(_safe_icon("mdi.pencil-outline", color="#F8FAFC"))
+
         del_btn = QPushButton("Delete")
+        del_btn.setProperty("class", "danger")
+        del_btn.setIcon(_safe_icon("mdi.delete-outline", color="#FF5252"))
         
         add_btn.clicked.connect(self._on_add)
         edit_btn.clicked.connect(self._on_edit)
         del_btn.clicked.connect(self._on_delete)
         
-        for btn in (add_btn, edit_btn, del_btn):
-            btn_row.addWidget(btn)
-        layout.addLayout(btn_row)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(edit_btn)
+        btn_row.addWidget(del_btn)
+        btn_row.addStretch()
 
         close_btn = QPushButton("Close")
+        close_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn, alignment=Qt.AlignRight)
+        btn_row.addWidget(close_btn)
+
+        layout.addLayout(btn_row)
 
     def _reload_services(self):
         self.list_widget.clear()
         for s in self.db.get_services():
-            item = QListWidgetItem(f"{s['name']} ({s['automation_mode']})")
+            mode = s.get("automation_mode", "manual").capitalize()
+            item = QListWidgetItem(f"{s['name']}  [{mode}]")
             item.setData(Qt.UserRole, s["id"])
             self.list_widget.addItem(item)
 
     def _selected_id(self):
         items = self.list_widget.selectedItems()
         return items[0].data(Qt.UserRole) if items else None
+
+    def _sync_extension_services(self):
+        try:
+            from automation import update_extension_settings
+            update_extension_settings(
+                fst_enabled=(self.db.get_setting("fst_enabled", "1") == "1"),
+                sad_enabled=(self.db.get_setting("sad_enabled", "1") == "1"),
+                tracker_enabled=(self.db.get_setting("tracker_enabled", "1") == "1"),
+                sca_enabled=(self.db.get_setting("sca_enabled", "1") == "1"),
+                allowed_services=self.db.get_services()
+            )
+        except Exception:
+            pass
 
     def _on_add(self):
         dlg = ServiceEditDialog(self.db, self)
@@ -220,23 +375,29 @@ class ServiceManagerDialog(QDialog):
                 self.db.create_service(**dlg.result_data())
                 self.db.auto_populate_service_selectors()
                 self._reload_services()
+                self._sync_extension_services()
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
 
     def _on_edit(self):
         sid = self._selected_id()
-        if not sid: return
+        if not sid:
+            return
         current = next((s for s in self.db.get_services() if s["id"] == sid), None)
-        if not current: return
+        if not current:
+            return
         dlg = ServiceEditDialog(self.db, self, current)
         if dlg.exec() == QDialog.Accepted:
             self.db.update_service(sid, **dlg.result_data())
             self.db.auto_populate_service_selectors()
             self._reload_services()
+            self._sync_extension_services()
 
     def _on_delete(self):
         sid = self._selected_id()
-        if not sid: return
-        if QMessageBox.question(self, "Confirm", "Delete this service? It will be unattached from all clients.") == QMessageBox.Yes:
+        if not sid:
+            return
+        if QMessageBox.question(self, "Confirm Deletion", "Delete this service? It will be detached from all client profiles.") == QMessageBox.Yes:
             self.db.delete_service(sid)
             self._reload_services()
+            self._sync_extension_services()
