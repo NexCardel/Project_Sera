@@ -10,3 +10,4 @@ Events below were not assigned to a client because the evidence was missing or c
 - Entry #64 — **ambiguous** — conflicting-context — ACK/ARN `ITR000883708089` — `https://eportal.incometax.gov.in/iec/itrweb/auth/v0.1/returns/submit/wzrd`
 - Entry #125 — **unresolved** — no-evidence — ACK/ARN `616637720290726` — `https://eportal.incometax.gov.in/iec/itrweb/auth/v0.1/return/details`
 - Entry #303 — **unresolved** — no-evidence — ACK/ARN `ITR-STATUS-CLIENT-ITR` — `https://eportal.incometax.gov.in/iec/itrweb/auth/v0.1/return/details`
+- Entry #377 — **unresolved** — no-evidence — ACK/ARN `327109240110826` — `https://eportal.incometax.gov.in/iec/itrweb/auth/v0.1/return/details`
