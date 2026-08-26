@@ -6,6 +6,14 @@ import socket
 import threading
 import time
 
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_log.txt')
+def log(msg):
+    try:
+        with open(LOG_FILE, 'a') as f:
+            f.write(f"{time.time()}: {msg}\n")
+    except:
+        pass
+
 if sys.platform == "win32":
     try:
         import msvcrt
@@ -24,37 +32,46 @@ def read_message():
     message_bytes = sys.stdin.buffer.read(message_length)
     if len(message_bytes) < message_length:
         sys.exit(0)
-    return json.loads(message_bytes.decode('utf-8'))
+    msg = json.loads(message_bytes.decode('utf-8'))
+    log(f"read_message from browser: {msg}")
+    return msg
 
 def send_message(message_dict):
+    log(f"send_message to browser: {message_dict}")
     try:
         encoded = json.dumps(message_dict).encode('utf-8')
         sys.stdout.buffer.write(struct.pack('@I', len(encoded)))
         sys.stdout.buffer.write(encoded)
         sys.stdout.buffer.flush()
-    except Exception:
+    except Exception as e:
+        log(f"send_message error: {e}")
         pass
 
 def forward_to_app(msg):
+    log(f"forward_to_app: {msg}")
     for attempt in range(3):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(2.0)
                 s.connect(('127.0.0.1', IPC_PORT))
                 s.sendall(json.dumps(msg).encode('utf-8'))
+                log(f"forward_to_app success on attempt {attempt}")
                 return True
-        except (ConnectionRefusedError, OSError):
+        except (ConnectionRefusedError, OSError) as e:
+            log(f"forward_to_app failed attempt {attempt}: {e}")
             time.sleep(0.3)
     
     send_message({"status": "disconnected", "error": "Desktop app not running"})
     return False
 
 def listen_to_browser():
+    log("listen_to_browser started")
     while True:
         try:
             msg = read_message()
             forward_to_app(msg)
-        except Exception:
+        except Exception as e:
+            log(f"listen_to_browser exception: {e}")
             sys.exit(0)
 
 def listen_to_app():
@@ -68,6 +85,8 @@ def listen_to_app():
             break
         except Exception:
             pass
+    
+    log(f"listen_to_app bound to port: {bound_port}")
     if not bound_port:
         return
 
@@ -78,11 +97,13 @@ def listen_to_app():
                 data = conn.recv(65536)
                 if data:
                     msg = json.loads(data.decode('utf-8'))
+                    log(f"listen_to_app received from app: {msg}")
                     send_message(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"listen_to_app error: {e}")
 
 def main():
+    log("host.py started")
     threading.Thread(target=listen_to_app, daemon=True).start()
     listen_to_browser()
 

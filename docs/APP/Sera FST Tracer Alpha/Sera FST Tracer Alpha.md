@@ -3,11 +3,11 @@
 > Auto-generated Obsidian vault for evidence-first raw API timelines.
 > Refresh this folder from the Sera Tracker Dump pipeline; do not edit generated notes.
 
-- Generated: `2026-08-26T14:08:49.155879+00:00`
-- Input entries: **359**
-- Resolved entries: **351**
-- Client containers: **44**
-- Sessions: **175**
+- Generated: `2026-08-26T14:13:52.154986+00:00`
+- Input entries: **361**
+- Resolved entries: **353**
+- Client containers: **45**
+- Sessions: **177**
 - Quarantined entries: **8**
 
 ## Client containers
@@ -26,6 +26,7 @@
 - [[Clients/PAN_AHJPR0846B|AHJPR0846B — SEKH MONIRUL RAHAMAN; SK MONIRUL RAHAMAN]]
 - [[Clients/PAN_AITPM8877G|AITPM8877G]]
 - [[Clients/PAN_AIUPA2571J|AIUPA2571J]]
+- [[Clients/PAN_AJJPM8458L|AJJPM8458L]]
 - [[Clients/PAN_AJQPN5168H|AJQPN5168H]]
 - [[Clients/PAN_AKFPM2212B|AKFPM2212B]]
 - [[Clients/PAN_AKPPB1896A|AKPPB1896A — FARIDA BEGUM]]
