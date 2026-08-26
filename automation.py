@@ -219,7 +219,7 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
                         return  # Ack received!
             
             try:
-                for p in range(49153, 49162):
+                for p in range(49153, 49156):
                     try:
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                             s.settimeout(0.2)
@@ -282,7 +282,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         for _ in range(5):
             success = False
             try:
-                for p in range(49153, 49162):
+                for p in range(49153, 49156):
                     try:
                         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                             s.settimeout(0.2)

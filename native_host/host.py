@@ -60,7 +60,7 @@ def listen_to_browser():
 def listen_to_app():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     bound_port = None
-    for p in range(IPC_PORT + 1, IPC_PORT + 10):
+    for p in range(IPC_PORT + 1, IPC_PORT + 4):
         try:
             server.bind(('127.0.0.1', p))
             server.listen(5)
