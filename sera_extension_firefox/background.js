@@ -8,6 +8,18 @@ function connectToNativeHost() {
     console.log('Sera native host connection established');
     nativePort.onMessage.addListener((message) => {
       console.log("Received from Sera desktop:", message);
+      if (message.type && message.type.startsWith("SCA_")) {
+        if (message.command_id) {
+          try {
+            nativePort.postMessage({ type: "SCA_ACK", command_id: message.command_id });
+          } catch(e) {}
+          if (!self.seenScaCommands) self.seenScaCommands = new Set();
+          if (self.seenScaCommands.has(message.command_id)) return;
+          self.seenScaCommands.add(message.command_id);
+        }
+        handleScaCommand(message, {id: "nativeHost"}, () => {});
+        return;
+      }
       if (message.type === "autofill" && message.url) {
         if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
         else if (message.mode === "manual_assist") handleManualAssistTab(message);

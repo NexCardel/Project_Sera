@@ -3,7 +3,7 @@
 > Auto-generated Obsidian vault for evidence-first raw API timelines.
 > Refresh this folder from the Sera Tracker Dump pipeline; do not edit generated notes.
 
-- Generated: `2026-08-26T13:54:42.174373+00:00`
+- Generated: `2026-08-26T13:57:25.067667+00:00`
 - Input entries: **359**
 - Resolved entries: **351**
 - Client containers: **44**
