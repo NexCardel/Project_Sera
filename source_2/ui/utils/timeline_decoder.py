@@ -15,8 +15,13 @@ def _parse_iso_datetime(ts_str: Optional[str]) -> Optional[datetime.datetime]:
     if not ts_str:
         return None
     try:
-        clean = ts_str.replace("Z", "+00:00")
-        return datetime.datetime.fromisoformat(clean)
+        clean = str(ts_str).strip()
+        if clean.endswith("Z"):
+            clean = clean[:-1] + "+00:00"
+        dt = datetime.datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone()
     except Exception:
         return None
 
@@ -307,24 +312,46 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
             ack_no = inner.get("ackNum") or arn
             raw_ay = inner.get("assessmntYr") or inner.get("taxYear") or "N/A"
             ay_str = _format_ay(raw_ay)
-            module_cd = inner.get("moduleCode", "ITR")
+            module_cd = inner.get("moduleCode", "")
+            form_cd = inner.get("formCd") or inner.get("formTypeCd")
+            ver_mode = inner.get("verMode") or "OTP"
+            status_val = inner.get("status") or "SUCCESS"
             
-            if module_cd == "NON-ITR" or "FO-091" in str(inner.get("header", {}).get("formName")):
+            form_label = f"ITR-{form_cd}" if form_cd else "ITR Return"
+            if form_cd == "4":
+                form_label = "ITR-4 (Sugam)"
+            elif form_cd == "1":
+                form_label = "ITR-1 (Sahaj)"
+            elif form_cd == "2":
+                form_label = "ITR-2"
+            elif form_cd == "3":
+                form_label = "ITR-3"
+            
+            is_itr = (module_cd == "ITR" or form_cd is not None or (ack_no and len(str(ack_no)) == 15 and str(ack_no).isdigit()))
+
+            if not is_itr and (module_cd == "NON-ITR" or "BANK" in str(module_cd).upper()):
                 step_title = "E-Verified Bank Account / Form (OTP)"
                 category = "Bank Validation"
                 icon = "mdi.bank-check"
                 color = "#58A6FF"
                 narrative = f"Completed statutory electronic verification for Bank/Form (Ack: {ack_no})."
                 chips.append({"label": "Ack Number", "val": str(ack_no)})
+                if status_val:
+                    chips.append({"label": "Status", "val": str(status_val)})
             else:
-                step_title = "Completed Return E-Verification"
+                mode_label = f" ({ver_mode})" if ver_mode else ""
+                ay_disp = f": {ay_str}" if ay_str != "N/A" else ""
+                step_title = f"E-Verified Return{ay_disp} ({form_label}){mode_label}"
                 category = "E-Verification"
                 icon = "mdi.shield-check"
                 color = "#4CF9B7"
-                narrative = f"Completed electronic verification for return (Ack: {ack_no}, {ay_str})."
-                chips.append({"label": "Ack Number", "val": str(ack_no)})
+                ay_info = f", {ay_str}" if ay_str != "N/A" else ""
+                narrative = f"Completed statutory electronic verification for {form_label} (Ack: {ack_no}{ay_info})."
                 if ay_str != "N/A":
                     chips.append({"label": "Assessment Year", "val": ay_str})
+                chips.append({"label": "Ack Number", "val": str(ack_no)})
+                if status_val:
+                    chips.append({"label": "Status", "val": str(status_val)})
 
         # 1.10 Taxpayer Profile & Contact Details
         elif "saveEntity" in url or "getEntity" in url or "verificationservices" in url or "profile" in url or "addrLine1Txt" in inner or "priMobileNum" in inner:
@@ -446,10 +473,13 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
             step_title = f"Interaction on {portal}"
             narrative = f"Portal API exchange recorded on {portal}."
 
+    dt_local = _parse_iso_datetime(timestamp)
+    ts_formatted = dt_local.strftime("%Y-%m-%d %H:%M:%S") if dt_local else str(timestamp)[:19].replace("T", " ")
+
     return {
         "step_number": index,
         "elapsed_str": _format_elapsed(elapsed_sec),
-        "timestamp_str": str(timestamp)[:19].replace("T", " "),
+        "timestamp_str": ts_formatted,
         "title": step_title,
         "category": category,
         "icon": icon,
@@ -530,6 +560,44 @@ def group_captures_into_sessions(captures: List[Dict[str, Any]], gap_threshold_s
         return dt.timestamp() if dt else 0.0
 
     sorted_caps = sorted(captures, key=_get_sort_key)
+
+    def _portal_group(cap: Dict[str, Any], raw_p: Any) -> str:
+        """Normalize endpoint-specific display labels to a portal identity."""
+        value = cap.get("portal_code") or cap.get("portal")
+        if not value and isinstance(raw_p, dict):
+            value = raw_p.get("portal_code") or raw_p.get("portal")
+        text = str(value or "").strip().lower()
+        if "income tax" in text or "incometax" in text or text == "it":
+            return "IT"
+        if "gst" in text or text == "gst":
+            return "GST"
+        if "traces" in text:
+            return "TRACES"
+        return text
+
+    def _capture_text(cap: Dict[str, Any], raw_p: Any) -> str:
+        values = [cap.get("action"), cap.get("category"), cap.get("status")]
+        if isinstance(raw_p, dict):
+            values.extend([raw_p.get("url"), raw_p.get("type"), raw_p.get("status")])
+        return " ".join(str(value or "") for value in values).lower()
+
+    def _is_lifecycle_boundary(cap: Dict[str, Any], raw_p: Any, group: List[Dict[str, Any]]) -> bool:
+        text = _capture_text(cap, raw_p)
+        if any(term in text for term in ("logout", "logged out", "signout", "sign out")):
+            return True
+        is_login = any(term in text for term in ("login", "logged in", "authentication"))
+        has_non_auth = False
+        for previous in group:
+            previous_raw = previous.get("raw_payload_json") or previous.get("raw_payload") or {}
+            if isinstance(previous_raw, str):
+                try:
+                    previous_raw = json.loads(previous_raw)
+                except Exception:
+                    previous_raw = {}
+            if "authentication" not in _capture_text(previous, previous_raw):
+                has_non_auth = True
+                break
+        return is_login and has_non_auth
     
     sessions_raw = []
     curr_caps = []
@@ -553,10 +621,24 @@ def group_captures_into_sessions(captures: List[Dict[str, Any]], gap_threshold_s
         is_new_session = False
         if not curr_caps:
             is_new_session = True
-        elif ses_id and curr_ses_id and ses_id != curr_ses_id:
-            is_new_session = True
         elif dt and last_dt and (dt.timestamp() - last_dt.timestamp()) > gap_threshold_sec:
             is_new_session = True
+        elif ses_id and curr_ses_id and ses_id != curr_ses_id:
+            # The interceptor may refresh its token during one continuous
+            # visit. Do not split the visible timeline when the captures are
+            # close together and belong to the same normalized portal.
+            previous_raw = curr_caps[-1].get("raw_payload_json") or curr_caps[-1].get("raw_payload") or {}
+            if isinstance(previous_raw, str):
+                try:
+                    previous_raw = json.loads(previous_raw)
+                except Exception:
+                    previous_raw = {}
+            if _portal_group(curr_caps[-1], previous_raw) != _portal_group(cap, raw_p):
+                is_new_session = True
+            elif dt and last_dt and (dt.timestamp() - last_dt.timestamp()) > 180:
+                # A later explicit login after an idle workflow is a new visit;
+                # short reauthentication/token refreshes remain merged.
+                is_new_session = _is_lifecycle_boundary(cap, raw_p, curr_caps)
 
         if is_new_session and curr_caps:
             sessions_raw.append(curr_caps)
@@ -603,11 +685,16 @@ def group_captures_into_sessions(captures: List[Dict[str, Any]], gap_threshold_s
         collapsed_steps = collapse_consecutive_repeat_steps(steps, session_prefix=f"s{s_idx}")
 
         dur_clean = _format_elapsed(duration_sec).replace("T+", "")
+        start_full = t0.strftime("%Y-%m-%d %H:%M:%S") if t0 else "N/A"
+        start_clock = t0.strftime("%H:%M:%S") if t0 else ""
+        date_str = t0.strftime("%Y-%m-%d") if t0 else "N/A"
+
         decoded_sessions.append({
             "session_num": s_idx,
             "session_id": s_id or f"Session-{s_idx}",
-            "start_time_str": str(t0)[:19].replace("T", " ") if t0 else "N/A",
-            "date_str": str(t0)[:10] if t0 else "N/A",
+            "start_time_str": start_full,
+            "start_clock_str": start_clock,
+            "date_str": date_str,
             "duration_str": dur_clean if dur_clean != "00s" else "< 1s",
             "raw_total_captures": len(s_caps),
             "steps": collapsed_steps
@@ -678,8 +765,10 @@ def format_timeline_flow_html(
 
         # Session Header Box
         dur_label = f" | Duration: {s_dur}" if s_dur else ""
+        s_start = session.get("start_clock_str") or (session.get("start_time_str", "")[11:19] if session.get("start_time_str") and session.get("start_time_str") != "N/A" else "")
+        time_chip = f' &nbsp;•&nbsp; <span style="color: #F8B449; font-weight: 600;">⏰ Started: {s_start}</span>' if s_start else ""
         html.append(f'<div style="margin-top: {20 if s_idx > 0 else 4}px; margin-bottom: 12px; border: 1px solid #238636; border-left: 4px solid #2EA043; background-color: #161B22; border-radius: 4px; padding: 6px 10px;">')
-        html.append(f'<span style="color: #4CF9B7; font-weight: bold;">🔷 SESSION {s_num}</span> &nbsp;──&nbsp; <span style="color: #E6EDF3; font-weight: 600;">{s_date}</span> <span style="color: #8B949E; font-size: 11px;">({len(steps)} Steps{dur_label})</span>')
+        html.append(f'<span style="color: #4CF9B7; font-weight: bold;">🔷 SESSION {s_num}</span> &nbsp;──&nbsp; <span style="color: #E6EDF3; font-weight: 600;">{s_date}</span>{time_chip} <span style="color: #8B949E; font-size: 11px;">({len(steps)} Steps{dur_label})</span>')
         if s_id and s_id != f"Session-{s_num}":
             html.append(f'<br><span style="color: #8B949E; font-size: 10.5px;">Session Token: <code style="color: #79C0FF;">{s_id}</code></span>')
         html.append('</div>')
@@ -788,7 +877,9 @@ def format_timeline_flow_plain(decoded_sessions_or_steps: Any, title_tag: str = 
         steps = session.get("steps", [])
 
         dur_label = f" | Duration: {s_dur}" if s_dur else ""
-        lines.append(f"┌── 🔷 SESSION {s_num} ── {s_date} ({len(steps)} Steps{dur_label}) " + "─" * max(5, 45 - len(s_date) - len(dur_label)) + "┐")
+        s_start = session.get("start_clock_str") or (session.get("start_time_str", "")[11:19] if session.get("start_time_str") and session.get("start_time_str") != "N/A" else "")
+        start_label = f" • Started: {s_start}" if s_start else ""
+        lines.append(f"┌── 🔷 SESSION {s_num} ── {s_date}{start_label} ({len(steps)} Steps{dur_label}) " + "─" * max(5, 45 - len(s_date) - len(start_label) - len(dur_label)) + "┐")
         if s_id and s_id != f"Session-{s_num}":
             lines.append(f"│   Token: {s_id}")
         lines.append("└" + "─" * 80 + "┘")
@@ -817,6 +908,4 @@ def format_timeline_flow_plain(decoded_sessions_or_steps: Any, title_tag: str = 
         lines.append("")
 
     return "\n".join(lines)
-
-
 

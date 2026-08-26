@@ -9,6 +9,7 @@ extension and Sera_API_detection (SAD).
 import json
 import csv
 from pathlib import Path
+from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QClipboard
 from PySide6.QtWidgets import (
@@ -25,6 +26,25 @@ try:
     import qtawesome as qta
 except Exception:
     qta = None
+
+
+def _format_to_local_time(iso_str: str) -> str:
+    """Converts a UTC/ISO timestamp string to local time (IST) in 'YYYY-MM-DD HH:MM:SS' format."""
+    if not iso_str:
+        return ""
+    clean = str(iso_str).strip()
+    if not clean:
+        return ""
+    try:
+        if clean.endswith("Z"):
+            clean = clean[:-1] + "+00:00"
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return clean[:19].replace("T", " ")
 
 
 def _safe_qta_icon(icon_name, color="#FFFFFF"):
@@ -366,7 +386,7 @@ class PayloadInspectorDialog(QDialog):
         title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span> &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{item_data.get('pan') or item_data.get('identity_key') or 'N/A'}</span>")
         title_lbl.setTextFormat(Qt.RichText)
 
-        sub_info = f"<b>Total Captures:</b> {item_data.get('total_captures', 1)} &nbsp;|&nbsp; <b>Portal:</b> {item_data.get('portal', 'Government Portal')} &nbsp;|&nbsp; <b>Last Updated:</b> {str(item_data.get('last_updated') or item_data.get('created_at') or '')[:19].replace('T', ' ')}"
+        sub_info = f"<b>Total Captures:</b> {item_data.get('total_captures', 1)} &nbsp;|&nbsp; <b>Portal:</b> {item_data.get('portal', 'Government Portal')} &nbsp;|&nbsp; <b>Last Updated:</b> {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}"
         sub_lbl = QLabel(sub_info)
         sub_lbl.setTextFormat(Qt.RichText)
         sub_lbl.setStyleSheet("color: #8B949E; font-size: 11.5px;")
@@ -453,7 +473,7 @@ class PayloadInspectorDialog(QDialog):
             m_item.setForeground(QColor("#4CF9B7"))
             hist_table.setItem(idx, 3, m_item)
 
-            ts_item = QTableWidgetItem(str(fh.get("created_at") or "")[:19].replace("T", " "))
+            ts_item = QTableWidgetItem(_format_to_local_time(fh.get("created_at") or ""))
             ts_item.setForeground(QColor("#8B949E"))
             hist_table.setItem(idx, 4, ts_item)
 
@@ -861,14 +881,14 @@ class TrackerDumpWindow(QWidget):
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Client Name & PAN", "Client ID", "Portal / Services", "Filings & History",
-            "Latest ARN / Ack", "Capture Method", "Last Updated", "Actions"
+            "Latest ARN / Ack", "Actions", "Last Updated", "Capture Method"
         ])
         
         # Allow interactive mouse drag resizing on all columns
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [320, 100, 180, 230, 160, 150, 140, 210]
+        default_widths = [320, 100, 180, 230, 160, 210, 140, 150]
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
@@ -927,10 +947,10 @@ class TrackerDumpWindow(QWidget):
             method_item.setTextAlignment(Qt.AlignCenter)
             method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             method_item.setForeground(QColor("#4CF9B7"))
-            self.table.setItem(row_idx, 5, method_item)
+            self.table.setItem(row_idx, 7, method_item)
 
             # 6. Timestamp
-            ts_str = str(r.get("last_updated", ""))[:19].replace("T", " ")
+            ts_str = _format_to_local_time(r.get("last_updated", ""))
             ts_item = QTableWidgetItem(ts_str)
             ts_item.setForeground(QColor("#8B949E"))
             self.table.setItem(row_idx, 6, ts_item)
@@ -999,7 +1019,7 @@ class TrackerDumpWindow(QWidget):
             btn_del.clicked.connect(lambda _, key=r["identity_key"]: self._delete_srpf_container(key))
             action_layout.addWidget(btn_del)
 
-            self.table.setCellWidget(row_idx, 7, action_widget)
+            self.table.setCellWidget(row_idx, 5, action_widget)
 
     def _populate_raw_table(self, records: list[dict]):
         """Populates table in granular Individual Raw Captures view."""
@@ -1009,14 +1029,14 @@ class TrackerDumpWindow(QWidget):
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Client Name & PAN", "ID", "Service / Portal", "Period",
-            "ARN / Ack Number", "Capture Method", "Timestamp", "Actions"
+            "ARN / Ack Number", "Actions", "Timestamp", "Capture Method"
         ])
 
         # Allow interactive mouse drag resizing on all columns
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [320, 80, 180, 140, 160, 150, 140, 190]
+        default_widths = [320, 80, 180, 140, 160, 190, 140, 150]
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
@@ -1077,10 +1097,10 @@ class TrackerDumpWindow(QWidget):
                 method_item.setForeground(QColor("#58A6FF"))
             else:
                 method_item.setForeground(QColor("#FFA657"))
-            self.table.setItem(row_idx, 5, method_item)
+            self.table.setItem(row_idx, 7, method_item)
 
             # 6. Timestamp
-            ts_str = str(r.get("created_at", ""))[:19].replace("T", " ")
+            ts_str = _format_to_local_time(r.get("created_at", ""))
             ts_item = QTableWidgetItem(ts_str)
             ts_item.setForeground(QColor("#8B949E"))
             self.table.setItem(row_idx, 6, ts_item)
@@ -1148,7 +1168,7 @@ class TrackerDumpWindow(QWidget):
             btn_del.clicked.connect(lambda _, dump_id=r["id"]: self._delete_dump(dump_id))
             action_layout.addWidget(btn_del)
 
-            self.table.setCellWidget(row_idx, 7, action_widget)
+            self.table.setCellWidget(row_idx, 5, action_widget)
 
     def _show_container_dialog(self, container_item: dict):
         dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
@@ -1250,13 +1270,86 @@ class TrackerDumpWindow(QWidget):
         else:
             QMessageBox.warning(self, "File Not Found", "Could not locate seraRawPayloadDump.txt on disk.")
 
+    def _open_daily_dump_txt(self):
+        """Opens today's Raw_Payload_Dump/seraRawPayloadDump_dd_mm_yy.txt in default text editor."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        today_key = self.db._extract_dump_date_key(None)
+        daily_paths = self.db._get_daily_dump_file_paths(today_key)
+        target_path = None
+        for p in daily_paths:
+            if os.path.exists(p):
+                target_path = p
+                break
+        if not target_path and daily_paths:
+            self.db.rebuild_raw_payload_dumps_file()
+            for p in daily_paths:
+                if os.path.exists(p):
+                    target_path = p
+                    break
+
+        if target_path and os.path.exists(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        else:
+            QMessageBox.warning(self, "File Not Found", f"Could not locate seraRawPayloadDump_{today_key}.txt on disk.")
+
+    def _open_backup_dump_txt(self):
+        """Opens seraRawPayloadDumpBackup.txt (append-only master archive) in default text editor."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        backup_paths = self.db._get_backup_dump_file_paths()
+        target_path = None
+        for p in backup_paths:
+            if os.path.exists(p):
+                target_path = p
+                break
+        if not target_path and backup_paths:
+            self.db.rebuild_raw_payload_dumps_file()
+            for p in backup_paths:
+                if os.path.exists(p):
+                    target_path = p
+                    break
+
+        if target_path and os.path.exists(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        else:
+            QMessageBox.warning(self, "File Not Found", "Could not locate seraRawPayloadDumpBackup.txt on disk.")
+
+    def _open_dump_folder(self):
+        """Opens the Raw_Payload_Dump folder in Windows Explorer."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        folder_paths = self.db._get_dump_folder_paths()
+        target_path = None
+        for p in folder_paths:
+            if os.path.exists(p):
+                target_path = p
+                break
+        if not target_path and folder_paths:
+            self.db.rebuild_raw_payload_dumps_file()
+            for p in folder_paths:
+                if os.path.exists(p):
+                    target_path = p
+                    break
+
+        if target_path and os.path.exists(target_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
+        else:
+            QMessageBox.warning(self, "Folder Not Found", "Could not locate Raw_Payload_Dump folder on disk.")
+
     def _rebuild_raw_dump_txt(self):
-        """Cleanly rebuilds and syncs seraRawPayloadDump.txt from database records."""
+        """Cleanly rebuilds and syncs all daily dumps, canonical dump, and master backup."""
         try:
             count = self.db.rebuild_raw_payload_dumps_file()
             QMessageBox.information(
-                self, "Dump File Rebuilt",
-                f"Successfully rebuilt seraRawPayloadDump.txt with {count} records."
+                self, "Dump Files Rebuilt",
+                f"Successfully rebuilt all daily partitioned dumps, canonical dump, and master backup with {count} records."
             )
         except Exception as e:
             QMessageBox.critical(self, "Rebuild Failed", f"Could not rebuild dump file: {e}")
@@ -1307,6 +1400,94 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Classifier Error", f"Failed to run FST Classifier: {e}")
 
+    def _open_fst_tracer_report(self):
+        """Refreshes and opens the evidence-first FST Tracer Alpha workbook."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        tracer_dir = os.path.join(app_dir, "FST_Tracer_Alpha")
+        report_path = os.path.join(tracer_dir, "fst_tracer_alpha_report.xlsx")
+        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
+
+        try:
+            if not target_dump and dump_paths:
+                self.db.rebuild_raw_payload_dumps_file()
+                target_dump = dump_paths[0]
+            if not target_dump or not os.path.exists(target_dump):
+                QMessageBox.warning(self, "Tracer Notice", "Could not locate a raw payload dump to trace.")
+                return
+
+            from FST_Tracer_Alpha.tracer import process_dump
+            os.makedirs(tracer_dir, exist_ok=True)
+            vault_path = os.path.join(app_dir, "docs", "APP", "Sera FST Tracer Alpha")
+            result = process_dump(target_dump, report_path, vault_path)
+            actual_report = result.get("outputs", {}).get("excel_path", report_path)
+            if os.path.exists(actual_report):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(actual_report))
+            else:
+                QMessageBox.warning(self, "Tracer Notice", "Could not generate the FST Tracer Alpha report.")
+        except Exception as e:
+            QMessageBox.critical(self, "Tracer Error", f"Failed to run FST Tracer Alpha: {e}")
+
+    def _open_simple_parser_report(self):
+        """Refreshes and opens the conservative Simple Parser workbook."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        parser_dir = os.path.join(app_dir, "simpleParser")
+        report_path = os.path.join(parser_dir, "simple_parser_report.xlsx")
+        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
+        try:
+            # Tracker Dump UI reads rawPayload.db directly, while Simple Parser
+            # reads the text dump. Rebuild first so newly captured rows cannot
+            # be missing from the generated workbook.
+            if dump_paths and hasattr(self.db, "rebuild_raw_payload_dumps_file"):
+                self.db.rebuild_raw_payload_dumps_file()
+                target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
+            if not target_dump and dump_paths:
+                target_dump = dump_paths[0]
+            if not target_dump or not os.path.exists(target_dump):
+                QMessageBox.warning(self, "Simple Parser Notice", "Could not locate a raw payload dump to parse.")
+                return
+
+            from simpleParser.simple_parser import process_dump
+            os.makedirs(parser_dir, exist_ok=True)
+            result = process_dump(
+                target_dump,
+                report_path,
+                master_pans=self.db._get_master_pans_for_reports() if hasattr(self.db, "_get_master_pans_for_reports") else set(),
+            )
+            actual_report = result.get("outputs", {}).get("excel_path", report_path)
+            if os.path.exists(actual_report):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(actual_report))
+            else:
+                QMessageBox.warning(self, "Simple Parser Notice", "Could not generate the Simple Parser report.")
+        except Exception as e:
+            QMessageBox.critical(self, "Simple Parser Error", f"Failed to run Simple Parser: {e}")
+
+    def _open_fst_obsidian_vault(self):
+        """Refreshes and opens the generated Obsidian timeline folder."""
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        vault_path = os.path.join(app_dir, "docs", "APP", "Sera FST Tracer Alpha")
+        try:
+            self.db.sync_fst_reports()
+            if os.path.isdir(vault_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(vault_path))
+            else:
+                QMessageBox.warning(self, "Vault Notice", "The Obsidian timeline vault could not be generated.")
+        except Exception as e:
+            QMessageBox.critical(self, "Vault Error", f"Failed to refresh the Obsidian timeline vault: {e}")
+
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
         from PySide6.QtWidgets import QMenu
@@ -1336,10 +1517,19 @@ class TrackerDumpWindow(QWidget):
             }
         """)
 
-        act_open_txt = menu.addAction(_safe_qta_icon("mdi.file-document-outline", "#4CF9B7"), "Open Dump (TXT)")
+        act_open_daily = menu.addAction(_safe_qta_icon("mdi.calendar-today", "#4CF9B7"), "Open Today's Dump (TXT)")
+        act_open_daily.triggered.connect(self._open_daily_dump_txt)
+
+        act_open_backup = menu.addAction(_safe_qta_icon("mdi.shield-lock-outline", "#4CF9B7"), "Open Master Backup (TXT)")
+        act_open_backup.triggered.connect(self._open_backup_dump_txt)
+
+        act_open_txt = menu.addAction(_safe_qta_icon("mdi.file-document-outline", "#4CF9B7"), "Open Full Dump (TXT)")
         act_open_txt.triggered.connect(self._open_raw_dump_txt)
 
-        act_rebuild_txt = menu.addAction(_safe_qta_icon("mdi.file-sync-outline", "#4CF9B7"), "Rebuild TXT Dump")
+        act_open_folder = menu.addAction(_safe_qta_icon("mdi.folder-open-outline", "#4CF9B7"), "Open Raw_Payload_Dump Folder")
+        act_open_folder.triggered.connect(self._open_dump_folder)
+
+        act_rebuild_txt = menu.addAction(_safe_qta_icon("mdi.file-sync-outline", "#4CF9B7"), "Rebuild & Sync All Dumps")
         act_rebuild_txt.triggered.connect(self._rebuild_raw_dump_txt)
 
         act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
@@ -1349,6 +1539,15 @@ class TrackerDumpWindow(QWidget):
 
         act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
         act_classifier.triggered.connect(self._open_fst_classifier_report)
+
+        act_tracer = menu.addAction(_safe_qta_icon("mdi.timeline-text-outline", "#4CF9B7"), "FST Tracer Alpha (Excel Report)")
+        act_tracer.triggered.connect(self._open_fst_tracer_report)
+
+        act_simple_parser = menu.addAction(_safe_qta_icon("mdi.file-table-outline", "#4CF9B7"), "Simple Parser (Excel Report)")
+        act_simple_parser.triggered.connect(self._open_simple_parser_report)
+
+        act_vault = menu.addAction(_safe_qta_icon("mdi.notebook-outline", "#4CF9B7"), "Open Obsidian FST Timeline Vault")
+        act_vault.triggered.connect(self._open_fst_obsidian_vault)
 
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
@@ -1364,5 +1563,4 @@ class TrackerDumpWindow(QWidget):
             menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
         else:
             menu.exec_(self.cursor().pos())
-
 

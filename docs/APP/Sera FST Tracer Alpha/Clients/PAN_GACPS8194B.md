@@ -1,0 +1,17 @@
+# GACPS8194B — SWAPAN SAU
+
+- Client key: `PAN:GACPS8194B`
+- PAN(s): `GACPS8194B`
+- GSTIN(s): `19GACPS8194B1Z9`
+- Event count: `18`
+- Session count: `3`
+
+## Sessions
+
+- [[Sessions/PAN_GACPS8194B__S01|Session 01]] — 2026-08-23T15:38:23.441679+00:00 → 2026-08-23T16:33:41.170413+00:00
+- [[Sessions/PAN_GACPS8194B__S02|Session 02]] — 2026-08-23T16:34:22.560320+00:00 → 2026-08-23T16:34:22.560320+00:00
+- [[Sessions/PAN_GACPS8194B__S03|Session 03]] — 2026-08-23T16:36:06.541401+00:00 → 2026-08-23T16:36:18.435926+00:00
+
+## Filing events
+
+- Entry #41: **GST return filing** — filed — `AB190726085446K`

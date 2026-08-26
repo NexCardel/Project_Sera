@@ -1,6 +1,6 @@
 # Sera FST — File Submission Tracker & Lifecycle Intelligence Engine
 
-**Sera FST (File Submission Tracker)** is the complete file submission tracking, verification, audit, and lifecycle analysis subsystem in Project Sera. It automatically intercepts, captures, validates, resolves taxpayer identities, and logs tax return filings, statutory forms, e-verifications, Ack/ARN numbers, JSON response payloads, and submission timestamps into the vault's `tracker_dump` (SQLite / `rawPayload.db`) and `filing_status` database tables.
+**Sera FST (File Submission Tracker)** is the complete file submission tracking, verification, audit, and lifecycle analysis subsystem in Project Sera. It automatically intercepts, captures, validates, resolves taxpayer identities, and logs tax return filings, statutory forms, e-verifications, Ack/ARN numbers, JSON response payloads, and submission timestamps into the vault's `tracker_dump` (SQLite / `rawPayload.db`).
 
 In addition to live browser-level interception, Sera FST includes the **FST Classifier Engine (`FST_Classifier_1`)**, an automated analytical module that performs cross-entry lifecycle correlation, multi-session deduplication, and generates formatted audit spreadsheets (`payload_report.xlsx`).
 
@@ -77,12 +77,13 @@ In addition to live browser-level interception, Sera FST includes the **FST Clas
 
 Sera FST employs a multi-tier detection architecture to ensure 100% filing capture reliability across all government tax portals:
 
-### Tier 1: Sera SAD — API Detector (Network Layer)
+### Tier 1: Sera SAD — API Detector (Network Layer — v2.7.4)
 `net_interceptor.js` is injected into the web page's `MAIN` execution world at `document_start`. It passively intercepts `window.fetch()` and `XMLHttpRequest` JSON responses without modifying or delaying page network traffic:
 
-* **Angular `responseType: "json"` Compatibility**: Directly inspects `xhr.response` parsed objects when `xhr.responseType === "json"`, preventing browser `DOMException` errors on Angular SPAs.
+* **Asynchronous `Blob` & `ArrayBuffer` Stream Decoding**: Directly unpacks `responseType: "blob"` and `responseType: "arraybuffer"` payloads using `blob.text()` and `TextDecoder('utf-8')`. Prevents browser `DOMException` errors on Angular SPAs and captures file downloads in-flight.
+* **Monolithic Computational Document Guard**: Detects complete tax return schema objects (e.g. `/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the entire 100% root computational dataset (Turnover u/s 44AD, Cash, Bank balance, Debtors, Inventory, Deductions, and Tax computations) as a single un-truncated capture without splitting internal sub-arrays.
 * **Income Tax Department (ITD 2.0)**:
-  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, and `/iec/servicesapi/auth/getEntity`.
+  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, `/iec/itrweb/auth/v0.1/returns/downloadfile`, and `/iec/servicesapi/auth/getEntity`.
   - **ITD Key Normalization**:
     - `"assmentYear": "2026"` $\longrightarrow$ Automatically formatted as **`AY 2026-27`**.
     - `"formTypeCd": "4S"` / `"formTypeCd": "4"` $\longrightarrow$ Formatted as **`ITR-4S`** / **`ITR-4`**.

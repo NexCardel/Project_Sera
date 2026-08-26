@@ -6,7 +6,7 @@ Window 2: shows client info, masked passwords, and autofill buttons.
 
 import webbrowser
 
-from PySide6.QtCore import Qt, QTimer, QSize, Signal
+from PySide6.QtCore import Qt, QTimer, QSize, Signal, QMimeData
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -202,7 +202,10 @@ class ClientDetailWindow(QWidget):
 
     def _copy_token_to_clipboard(self, token: str):
         from PySide6.QtWidgets import QApplication
-        QApplication.clipboard().setText(token)
+        mime = QMimeData()
+        mime.setText(token)
+        mime.setData("application/x-sera-uid", b"1")
+        QApplication.clipboard().setMimeData(mime)
         self.toast_requested.emit(f"Copied Client Token: {token}", 2000)
 
     def _restore_back_inputs(self):
@@ -853,7 +856,10 @@ class ClientDetailWindow(QWidget):
 
     def _copy_to_clipboard(self, val: str, label_name: str, is_secret: bool, timeout_sec: int):
         from PySide6.QtWidgets import QApplication
-        QApplication.clipboard().setText(val)
+        mime = QMimeData()
+        mime.setText(val)
+        mime.setData("application/x-sera-uid", b"1")
+        QApplication.clipboard().setMimeData(mime)
         
         c_name = self._get_identity_label(self.client) if self.client else label_name
         self.action_alert_requested.emit("manual_copy", c_name)

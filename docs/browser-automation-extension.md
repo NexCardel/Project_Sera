@@ -23,8 +23,11 @@ The injected `fillCredentialsInPage()` function:
 
 ## Sera Clipboard Assist (SCA — Ambient Password Autofill)
 
-- **Ambient Trigger**: When staff copy a User ID (PAN, GSTIN, UID) from Excel, Sheets, Notepad, or any client roster, Sera silently arms the matching client password in memory with a 45-second TTL timer.
-- **Zero-Touch Autofill**: When the user pastes that User ID into any recognized portal login field in the browser, the password field autofills itself immediately.
+- **Multi-Identifier Candidate Array (`candidate_uids`)**: Gathers all potential client identifiers (PAN, full GSTIN, custom Portal User IDs, and Client Tokens) into a unified matching pool during arming, ensuring autofill triggers seamlessly whether staff copy a PAN or a full 15-character GSTIN.
+- **Service Configuration Fallback**: If a client lacks explicit rows in `client_services`, SCA falls back automatically to all active portal services (`all_services`), ensuring zero silent arming drops.
+- **Single-Page AngularJS & SPA Event Dispatching**: Emits native `InputEvent` (`insertText`), `input`, `change`, and `blur` events so reactive frameworks (like AngularJS on GST Portal `services.gst.gov.in` and Angular 17 on Income Tax 2.0) synchronize model bindings (`$viewValue`) immediately and activate submit buttons.
+- **MV3 Tab Host Disambiguation**: Resolves active portal host across `sender.tab.url`, `sender.url`, `pendingUrl`, and `req.portal` with explicit subdomain matching across GST (`services.gst.gov.in`, `gst.gov.in`) and Income Tax domains.
+- **Ambient Trigger & Timer**: Silently arms matching client credentials in memory with a 45-second TTL timer upon copy.
 - **Floating Confirmation Banner**: Simultaneously displays a sleek, non-intrusive floating card in the top-right corner of the page showing the client business name, owner name, and `"Password was autofilled for <Portal>"` confirmation.
 - **Privacy & Safety**: Never persists raw clipboard text, scopes checkbox clicks away from `"Show password"` controls, and can be toggled via **Settings → General**.
 
@@ -35,10 +38,12 @@ The injected `fillCredentialsInPage()` function:
 - **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
 - **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
-## Sera FST: API Detector (SAD) & DOM Detector (DOM)
+## Sera FST: API Detector (SAD v2.7.4) & DOM Detector (DOM)
 
-- **Sera SAD (`net_interceptor.js`)**:
+- **Sera SAD (`net_interceptor.js` — v2.7.4)**:
   - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.
+  - **Asynchronous Blob & ArrayBuffer Decoding**: Automatically unpacks `responseType: 'blob'` and `responseType: 'arraybuffer'` streams via `blob.text()` and `TextDecoder('utf-8')`, capturing files downloaded through Angular `$http` or fetch streams without DOM exceptions.
+  - **Monolithic Document Guard**: Identifies full computational tax return documents (`/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the complete root JSON schema in one un-truncated payload rather than fragmenting internal sub-arrays.
   - Automatically captures filing confirmations, e-verifications, statutory forms, challans, and full multi-year filed return histories from ITD, GST, and TRACES backends.
   - Dispatches `CustomEvent("SeraFSTApiCapture")` containing normalized Ack/ARN numbers, Assessment Years, Form types, and client PANs.
 - **Sera Filing Detector (`filing_detector.js`)**:

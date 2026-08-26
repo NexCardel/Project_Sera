@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "Project Sera Companion",
+  "version": "2.8.5",
+  "description": "Autofill and filing confirmation tracking for Aman Associates.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sera-companion@amanassociates.com",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "alarms",
+    "browsingData",
+    "cookies"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
+    "default_title": "Show Sera Manual Assist"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "tracker.js",
+        "content_scripts/login.js",
+        "content_scripts/filing_detector.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "config.json",
+        "content_scripts/net_interceptor.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

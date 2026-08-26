@@ -2,7 +2,7 @@
 automation.py
 --------------
 Routes autofill, SMTI (Manual Assist), and MECP (Manual Extension Copy/Paste)
-payloads to the Chrome Extension via the native host socket.
+payloads to the Companion Extension via the native host socket.
 """
 
 import threading
@@ -10,8 +10,27 @@ import socket
 import json
 import time
 import webbrowser
+import os
+import shutil
+import subprocess
 from typing import Optional
+from pathlib import Path
 from PySide6.QtCore import QObject, Signal
+
+try:
+    import sca_protocol
+except ImportError:
+    sca_protocol = None
+
+# Registry for tracking extension acknowledgements
+_pending_acks = set()
+_pending_acks_lock = threading.Lock()
+
+def register_ack(command_id: str):
+    """Called by extension_listener when an SCA_ACK is received."""
+    with _pending_acks_lock:
+        if command_id in _pending_acks:
+            _pending_acks.remove(command_id)
 
 class _AutofillBridge(QObject):
     failed = Signal(str, str)
@@ -43,6 +62,61 @@ def trigger_manual_assist(service: dict, user_id: str, password: str, client_id:
 def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
     """Open the portal and ask the companion extension to show the MECP floating card widget."""
     _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
+
+
+def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
+    """
+    Opens the URL in the single designated default browser to avoid opening duplicate tabs
+    or causing double-login confusion when multiple browsers have the Sera extension enabled.
+    """
+    if not url:
+        return
+
+    browser_pref = str(preferred_browser or "").strip().lower()
+    if not browser_pref or browser_pref == "system_default":
+        try:
+            app_dir = Path.home() / "AmanAssociates_Sera"
+            settings_file = app_dir / "settings.ini"
+            if settings_file.exists():
+                import configparser
+                cfg = configparser.ConfigParser()
+                cfg.read(str(settings_file))
+                browser_pref = cfg.get("Automation", "browser", fallback="system_default").lower()
+        except Exception:
+            browser_pref = "system_default"
+
+    paths = {
+        "chrome": [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            shutil.which("chrome"),
+            shutil.which("google-chrome")
+        ],
+        "firefox": [
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
+            shutil.which("firefox")
+        ],
+        "edge": [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            shutil.which("msedge")
+        ]
+    }
+
+    if browser_pref in paths:
+        for candidate in paths[browser_pref]:
+            if candidate and os.path.exists(candidate):
+                try:
+                    subprocess.Popen([candidate, url])
+                    return
+                except Exception:
+                    pass
+
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
@@ -84,49 +158,87 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
                 if not launched_browser:
                     launched_browser = True
                     try:
-                        webbrowser.open(service["login_page_link"])
+                        open_in_default_browser(service.get("login_page_link", ""))
                     except Exception:
                         pass
                 time.sleep(0.5)
-
-        if on_error:
-            on_error(
-                "Could not connect to Sera Extension host after 10 seconds.\n"
-                "Please ensure the extension is installed and enabled in Edge/Chrome."
-            )
+                if on_error and attempt == max_attempts:
+                    on_error(
+                        "Could not connect to Sera Extension host after 10 seconds.\n"
+                        "Please ensure the extension is installed and enabled in your browser."
+                    )
 
     threading.Thread(target=_attempt_send, daemon=True).start()
 
 
-def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000, sca_mode: str = "autofill"):
-    """Sends SCA_ARM payload to native_host -> background.js over TCP 49153."""
-    payload = {
-        "type": "SCA_ARM",
-        "client_id": client_id,
-        "client_id_token": client_token,
-        "matched_uid": matched_uid,
-        "business_name": business_name,
-        "owner_name": owner_name,
-        "services": services,
-        "ttl_ms": ttl_ms,
-        "sca_mode": sca_mode,
-    }
+def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000, sca_mode: str = "autofill", max_uses: int = 1, candidate_uids: Optional[list[str]] = None):
+    """Sends SCA_ARM payload to native_host -> background.js over TCP 49153, retrying until acked."""
+    if sca_protocol:
+        payload = sca_protocol.build_arm_request(
+            client_id=client_id,
+            client_token=client_token,
+            matched_uid=matched_uid,
+            candidate_uids=candidate_uids or [matched_uid],
+            services=services,
+            business_name=business_name,
+            owner_name=owner_name,
+            ttl_ms=ttl_ms,
+            sca_mode=sca_mode,
+            max_uses=max_uses
+        )
+        cmd_id = payload["command_id"]
+        with _pending_acks_lock:
+            _pending_acks.add(cmd_id)
+    else:
+        # Legacy fallback if sca_protocol missing
+        cmd_id = "legacy"
+        payload = {
+            "type": "SCA_ARM",
+            "client_id": client_id,
+            "client_id_token": client_token,
+            "matched_uid": matched_uid,
+            "candidate_uids": candidate_uids or [matched_uid],
+            "business_name": business_name,
+            "owner_name": owner_name,
+            "services": services,
+            "ttl_ms": ttl_ms,
+            "sca_mode": sca_mode,
+            "max_uses": max(1, min(int(max_uses), 20)),
+        }
+
     def _do_send():
-        # Retry for up to 35 seconds so startup copy reaches the extension as soon as browser opens
-        max_attempts = int(min(ttl_ms, 35000) / 500)
-        for _ in range(max_attempts):
+        # Retry logic: Phase 1 says desktop retries an unacknowledged command
+        # We try every 1s for up to 35 seconds (handles browser cold start)
+        max_attempts = int(min(ttl_ms, 35000) / 1000)
+        
+        for attempt in range(max_attempts):
+            if cmd_id != "legacy":
+                with _pending_acks_lock:
+                    if cmd_id not in _pending_acks:
+                        print(f"automation.py: Received ack for {cmd_id}, stopping retries.")
+                        return  # Ack received!
+            
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(1.0)
                     s.connect(('127.0.0.1', 49153))
                     s.sendall(json.dumps(payload).encode('utf-8'))
-                    return
+                    if cmd_id == "legacy":
+                        return # Fire and forget for legacy
             except Exception:
-                time.sleep(0.5)
+                pass
+                
+            time.sleep(1.0)
+            
+        print(f"automation.py: Warning: Never received SCA_ACK for {cmd_id} after {max_attempts} attempts.")
+        if cmd_id != "legacy":
+            with _pending_acks_lock:
+                _pending_acks.discard(cmd_id)
+
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -159,6 +271,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "sad_enabled": sad_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
+        "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,
     }
     def _do_send():

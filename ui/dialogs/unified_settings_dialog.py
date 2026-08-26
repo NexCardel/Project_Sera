@@ -665,6 +665,12 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("SCA Action Mode",
             "Whether SCA silently injects credentials or shows a 1-click floating prompt.", self.sca_mode_combo))
 
+        self.sca_max_uses_spin = QSpinBox()
+        self.sca_max_uses_spin.setRange(1, 20)
+        self.sca_max_uses_spin.setSuffix(" uses")
+        lay.addWidget(_setting_row("SCA Uses per Copied UID",
+            "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
+
         lay.addWidget(_sub_header("Schema Info"))
 
         id_col = self.db.get_id_column()
@@ -689,6 +695,7 @@ class UnifiedSettingsDialog(QDialog):
         self.sad_check.toggled.connect(self._on_control_changed)
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
+        self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
@@ -937,6 +944,7 @@ class UnifiedSettingsDialog(QDialog):
             state["sad"] = self.sad_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
+            state["sca_max_uses"] = self.sca_max_uses_spin.value()
         if hasattr(self, "btn_ext_check"):
             state["btn_ext"] = self.btn_ext_check.isChecked()
             state["btn_assist"] = self.btn_assist_check.isChecked()
@@ -989,6 +997,10 @@ class UnifiedSettingsDialog(QDialog):
             self.fst_check.setChecked(g("fst_enabled", "1") == "1")
             self.sad_check.setChecked(g("sad_enabled", "1") == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
+            try:
+                self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
+            except (TypeError, ValueError):
+                self.sca_max_uses_spin.setValue(1)
 
             sca_mode = g("sca_action_mode", "autofill")
             if sca_mode == "assist":
@@ -1025,6 +1037,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sad_enabled"]             = b(self.sad_check)
                 bulk_settings["sca_enabled"]             = b(self.sca_check)
                 bulk_settings["sca_action_mode"]         = self.sca_mode_combo.currentData() or "autofill"
+                bulk_settings["sca_max_uses"]             = str(self.sca_max_uses_spin.value())
                 bulk_settings["tracker_enabled"]         = "1" if (self.fst_check.isChecked() or self.sad_check.isChecked()) else "0"
 
                 try:
@@ -1035,6 +1048,7 @@ class UnifiedSettingsDialog(QDialog):
                         tracker_enabled=(self.fst_check.isChecked() or self.sad_check.isChecked()),
                         sca_enabled=self.sca_check.isChecked(),
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
+                        sca_max_uses=self.sca_max_uses_spin.value(),
                         allowed_services=self.db.get_services(),
                     )
                 except Exception:

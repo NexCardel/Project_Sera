@@ -23,3 +23,6 @@ cryptography>=43.0     # PBKDF2 key derivation for the DB encryption key
 
 # --- Packaging ---
 pyinstaller>=6.10
+
+# FST Classifier and FST Tracer Alpha Excel report generation
+openpyxl>=3.1.2

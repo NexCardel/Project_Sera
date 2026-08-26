@@ -4,7 +4,7 @@ search_window.py
 Window 1: employee-facing search bar + spreadsheet-style results.
 """
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize, QMimeData
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -437,7 +437,14 @@ class SearchWindow(QWidget):
 
         if rows_data:
             text = "\n".join(rows_data)
-            QApplication.clipboard().setText(text)
+            mime = QMimeData()
+            mime.setText(text)
+            # Preserve the Sera-origin marker for a single UID copied from
+            # the employee search grid; multi-cell copies remain ordinary
+            # spreadsheet text and are not eligible for SCA arming.
+            if len(rows_data) == 1 and "\t" not in text:
+                mime.setData("application/x-sera-uid", b"1")
+            QApplication.clipboard().setMimeData(mime)
             self._flash_copied_items()
             
             if len(rows_data) == 1 and "\t" not in text:

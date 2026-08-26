@@ -1,6 +1,5 @@
 import json
 import socket
-
 from PySide6.QtCore import QThread, Signal
 
 IPC_PORT = 49152
@@ -8,6 +7,9 @@ IPC_PORT = 49152
 class ExtensionListener(QThread):
     filing_result_received = Signal(dict)
     uncertain_result_received = Signal(dict)
+    sca_state_received = Signal(dict)
+    sca_error_received = Signal(dict)
+    sca_fill_result_received = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -26,7 +28,6 @@ class ExtensionListener(QThread):
                 self.quit()
                 self.wait(150)
         except RuntimeError:
-            # C++ object already deleted by Qt — nothing to do.
             pass
 
     def run(self):
@@ -36,7 +37,7 @@ class ExtensionListener(QThread):
         self._server = server
         try:
             server.bind(('127.0.0.1', IPC_PORT))
-            server.listen(5)
+            server.listen(10)
         except Exception as e:
             print(f"ExtensionListener failed to bind: {e}")
             return
@@ -65,15 +66,24 @@ class ExtensionListener(QThread):
                         raw_data = b"".join(chunks).decode('utf-8')
                         try:
                             msg = json.loads(raw_data)
-                            print(f"[ExtensionListener] Received message: {msg.get('type')} (ARN: {msg.get('arn', 'N/A')})")
-                            if msg.get('type') == 'filing_result':
+                            mtype = msg.get('type')
+                            if mtype in ('filing_result', 'audit_event'):
                                 self.filing_result_received.emit(msg)
-                            elif msg.get('type') == 'uncertain_result':
+                            elif mtype == 'uncertain_result':
                                 self.uncertain_result_received.emit(msg)
-                            elif msg.get('type') == 'audit_event':
-                                self.filing_result_received.emit(msg)
-                        except json.JSONDecodeError as jde:
-                            print(f"[ExtensionListener] JSON Decode Error: {jde}")
+                            elif mtype == 'SCA_ACK':
+                                cmd_id = msg.get('command_id')
+                                if cmd_id:
+                                    import automation
+                                    automation.register_ack(cmd_id)
+                            elif mtype == 'SCA_STATE':
+                                self.sca_state_received.emit(msg)
+                            elif mtype == 'SCA_ERROR':
+                                self.sca_error_received.emit(msg)
+                            elif mtype == 'SCA_FILL_RESULT':
+                                self.sca_fill_result_received.emit(msg)
+                        except json.JSONDecodeError:
+                            pass
             except Exception as e:
                 if self._running:
                     print(f"ExtensionListener error: {e}")
@@ -87,6 +97,4 @@ class ExtensionListener(QThread):
         try:
             self.stop()
         except RuntimeError:
-            # Qt has already destroyed the underlying C++ object; ignore.
             pass
-

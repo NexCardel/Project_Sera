@@ -6,6 +6,7 @@ Assembles chronological per-client timelines, stitches sessions, and detects dat
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from tracker_dump_parser.session_stitcher import stitch_sessions, _parse_ts
+from tracker_dump_parser.name_resolver import choose_client_name
 
 
 def detect_data_quality_flags(events: List[Dict[str, Any]]) -> List[str]:
@@ -62,7 +63,8 @@ def detect_data_quality_flags(events: List[Dict[str, Any]]) -> List[str]:
 
 def assemble_client_timelines(
     decoded_events: List[Dict[str, Any]],
-    rolling_window_sec: int = 90
+    rolling_window_sec: int = 90,
+    temporal_context_sec: int = 900
 ) -> Dict[str, Any]:
     """
     Groups all decoded dump events by client/PAN, stitches into sessions,
@@ -74,6 +76,12 @@ def assemble_client_timelines(
     for ev in decoded_events:
         cid = ev.get("resolved_client_id")
         pan = ev.get("resolved_pan")
+        timeline_key = ev.get("timeline_key")
+
+        if timeline_key:
+            group_key = timeline_key
+            grouped.setdefault(group_key, []).append(ev)
+            continue
         
         if cid is not None:
             group_key = f"CLI-{cid:05d}" if isinstance(cid, int) else f"CLI-{cid}"
@@ -95,6 +103,7 @@ def assemble_client_timelines(
         # Primary metadata
         primary_cid = None
         primary_pan = None
+        name_candidates = []
         confidence_levels = set()
 
         for e in client_events:
@@ -102,20 +111,17 @@ def assemble_client_timelines(
                 primary_cid = e.get("resolved_client_id")
             if primary_pan is None and e.get("resolved_pan"):
                 primary_pan = e.get("resolved_pan")
+            name_candidates.extend(e.get("client_name_candidates", []))
             confidence_levels.add(e.get("identity_confidence", "unresolved"))
 
-        # Best confidence
-        if "exact_id" in confidence_levels:
-            best_conf = "exact_id"
-        elif "header_id" in confidence_levels:
-            best_conf = "header_id"
-        elif "pan_match" in confidence_levels:
-            best_conf = "pan_match"
-        else:
-            best_conf = "unresolved"
+        # Best confidence, retaining the new evidence vocabulary while
+        # remaining compatible with older confidence labels.
+        confidence_rank = {"high": 4, "exact_id": 4, "header_id": 3, "medium": 3, "pan_match": 3, "low": 2, "none": 1, "unresolved": 1}
+        best_conf = max(confidence_levels or {"unresolved"}, key=lambda value: confidence_rank.get(value, 0))
+        name_info = choose_client_name(name_candidates)
 
         # Stitched sessions
-        sessions = stitch_sessions(client_events, rolling_window_sec=rolling_window_sec)
+        sessions = stitch_sessions(client_events, rolling_window_sec=rolling_window_sec, temporal_context_sec=temporal_context_sec)
 
         # Data quality audit flags
         flags = detect_data_quality_flags(client_events)
@@ -124,10 +130,14 @@ def assemble_client_timelines(
             "entity_key": key,
             "client_id": primary_cid,
             "pan": primary_pan,
+            "client_name": name_info["client_name"],
+            "client_name_confidence": name_info["client_name_confidence"],
+            "client_name_candidates": name_info["client_name_candidates"],
             "identity_confidence": best_conf,
             "total_events": len(client_events),
             "total_sessions": len(sessions),
             "flags": flags,
+            "quarantine_events": [e.get("source_entry") for e in client_events if e.get("identity_status") == "ambiguous"],
             "sessions": sessions,
             "events": client_events
         }

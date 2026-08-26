@@ -125,9 +125,16 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
 
     # 6. Company / Firm Name Extraction
     company_keys = ("tradename", "trade_name", "legalname", "legal_name", "companyname", "firmname", "businessname", "entityname", "taxpayername", "name")
+    # Bank-account responses contain fields such as bankName and accountHolder
+    # alongside taxpayer identity. They are institution/account metadata, not
+    # company or proprietor names.
+    non_identity_name_keys = ("bank", "account", "branch", "ifsc", "institution", "holdertype")
     for target in company_keys:
         for k, v in flat_kv:
-            if k == target or (target in k and "first" not in k and "last" not in k and "user" not in k):
+            if any(part in k for part in non_identity_name_keys):
+                continue
+            matches = k == target or (target != "name" and target in k and "first" not in k and "last" not in k and "user" not in k)
+            if matches:
                 if len(v) >= 3 and not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", v.upper()) and "@" not in v:
                     extracted["company_name"] = v
                     break
@@ -142,6 +149,9 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
             first_name = v
         elif k in ("lastname", "last_name", "lname", "sur_name", "surname"):
             last_name = v
+        elif k in ("fullname", "full_name", "assesseename", "assessee_name", "nameasperbank"):
+            if not extracted["proprietor_name"] and len(v) >= 3:
+                extracted["proprietor_name"] = v
         elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name"):
             if not extracted["proprietor_name"] and len(v) >= 3:
                 extracted["proprietor_name"] = v
@@ -151,10 +161,8 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         if full and not extracted["proprietor_name"]:
             extracted["proprietor_name"] = full
 
-    if not extracted["company_name"] and extracted["proprietor_name"]:
-        extracted["company_name"] = extracted["proprietor_name"]
-    elif not extracted["proprietor_name"] and extracted["company_name"]:
-        extracted["proprietor_name"] = extracted["company_name"]
+    # Do not mirror one field into the other. A bank name or a single legal
+    # name is not sufficient evidence for both company and proprietor fields.
 
     # 8. Date of Birth / Incorporation Date
     for k, v in flat_kv:

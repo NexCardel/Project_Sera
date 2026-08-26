@@ -1,11 +1,20 @@
 import sys
+import os
 import json
 import struct
 import socket
 import threading
 import time
 
-IPC_PORT = 49152 
+if sys.platform == "win32":
+    try:
+        import msvcrt
+        msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+        msvcrt.setmode(sys.stdout.fileno(), os.O_BINARY)
+    except Exception:
+        pass
+
+IPC_PORT = 49152
 
 def read_message():
     raw_length = sys.stdin.buffer.read(4)

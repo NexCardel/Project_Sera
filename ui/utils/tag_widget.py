@@ -1,7 +1,7 @@
 """
 tag_widget.py
 -------------
-Reusable PySide6 colored tag / badge component for DRS statuses and categories.
+Reusable PySide6 colored tag / badge component for tracker statuses and categories.
 Supports: Submitted (Green), Pending (Red), In-Progress (Amber), Overdue (Dark Red),
 Service (Blue), Filing Code (Purple), and Neutral.
 """

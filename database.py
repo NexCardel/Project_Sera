@@ -17,6 +17,8 @@ import sys
 import shutil
 import time
 import threading
+import re
+from typing import Optional
 from contextlib import contextmanager
 
 import security
@@ -28,9 +30,10 @@ class DatabaseError(Exception):
 
 
 class SeraDatabase:
-    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None):
+    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False):
         self.db_path = db_path
         self.hex_key = hex_key
+        self.defer_startup_maintenance = defer_startup_maintenance
         if raw_db_path:
             self.raw_db_path = raw_db_path
         else:
@@ -46,7 +49,28 @@ class SeraDatabase:
         self._init_schema()
         self._init_raw_schema()
         self._migrate_tracker_dump_to_raw_payload_db()
+        if not defer_startup_maintenance:
+            self.run_startup_maintenance()
+
+    def run_startup_maintenance(self):
+        """Run non-essential derived-data work after the vault is available.
+
+        The desktop app uses this from a daemon thread so report generation and
+        historical tracker repair do not block the first usable UI frame.
+        Other database callers retain the original synchronous behavior because
+        ``defer_startup_maintenance`` defaults to False.
+        """
         self.resequence_client_serial_numbers()
+        if self.defer_startup_maintenance:
+            try:
+                self.re_resolve_all_tracker_dumps()
+            except Exception as exc:
+                print(f"[database] Startup tracker re-resolution skipped: {exc}")
+            self.auto_populate_service_selectors()
+            self.sync_raw_payload_dumps_file()
+        # Refresh derived FST workbooks from the current dump. This is
+        # best-effort and must never prevent the vault from opening.
+        self.sync_fst_reports()
 
     def set_sync_revision_hook(self, fn):
         """fn is called with no arguments after any write that should
@@ -387,54 +411,11 @@ class SeraDatabase:
                     conn.execute("INSERT INTO staff_users (name, alias) VALUES (?, ?)", (f"User {i}", None))
 
 
-            # 8. DRS: Filing Types (Compliance Obligations attached to Services)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS filing_types (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    service_id       INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-                    code             TEXT NOT NULL,
-                    name             TEXT NOT NULL,
-                    frequency        TEXT NOT NULL,
-                    start_period     TEXT NOT NULL,
-                    due_day          INTEGER,
-                    due_day_absolute TEXT,
-                    grace_days       INTEGER DEFAULT 0,
-                    notes            TEXT,
-                    variants_json    TEXT,
-                    active           INTEGER DEFAULT 1,
-                    imported_at      TEXT,
-                    imported_by      TEXT,
-                    UNIQUE(service_id, code)
-                );
-            """)
-
-            # 9. DRS: Client Filing Types (Client Attachment & Variant Assignment)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS client_filing_types (
-                    client_id        INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-                    filing_type_id   INTEGER NOT NULL REFERENCES filing_types(id) ON DELETE CASCADE,
-                    variant_tag      TEXT,
-                    is_enabled       INTEGER DEFAULT 1,
-                    PRIMARY KEY (client_id, filing_type_id)
-                );
-            """)
-            self._ensure_column(conn, "client_filing_types", "is_enabled", "INTEGER DEFAULT 1")
-
-            # 10. DRS: Filing Status (Period Filing Statuses)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS filing_status (
-                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-                    client_id        INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-                    filing_type_id   INTEGER NOT NULL REFERENCES filing_types(id) ON DELETE CASCADE,
-                    period_label     TEXT NOT NULL,
-                    status           TEXT NOT NULL DEFAULT 'pending',
-                    arn_number       TEXT,
-                    submitted_at     TEXT,
-                    updated_at       TEXT NOT NULL,
-                    updated_by       TEXT NOT NULL,
-                    UNIQUE(client_id, filing_type_id, period_label)
-                );
-            """)
+            # DRS removal migration. FST now uses tracker_dump/raw-payload
+            # records directly and no longer depends on the legacy DRS tables.
+            conn.execute("DROP TABLE IF EXISTS filing_status")
+            conn.execute("DROP TABLE IF EXISTS client_filing_types")
+            conn.execute("DROP TABLE IF EXISTS filing_types")
 
             # 11. Search Grid Cell Formatting (Excel-style cell & text colors)
             conn.execute("""
@@ -492,10 +473,11 @@ class SeraDatabase:
                 """)
 
         self.load_ini_defaults()
-        try:
-            self.re_resolve_all_tracker_dumps()
-        except Exception:
-            pass
+        if not self.defer_startup_maintenance:
+            try:
+                self.re_resolve_all_tracker_dumps()
+            except Exception:
+                pass
 
     def _find_ini_file(self, ini_path: str = None) -> str:
         if ini_path and os.path.exists(ini_path):
@@ -2325,72 +2307,6 @@ class SeraDatabase:
         except Exception:
             pass
 
-    # ---------------- File Submission Tracker (FST) ----------------
-
-    def get_client_filing_types(self, client_id: int, enabled_only: bool = False) -> list[dict]:
-        with self._connect() as conn:
-            sql = """SELECT ft.id, ft.service_id, s.name as service_name, ft.code, ft.name,
-                            ft.frequency, ft.start_period, ft.due_day, ft.due_day_absolute,
-                            ft.grace_days, ft.notes, ft.variants_json, cft.variant_tag,
-                            COALESCE(cft.is_enabled, 1) as is_enabled
-                     FROM client_services cs
-                     JOIN filing_types ft ON ft.service_id = cs.service_id
-                     JOIN services s ON s.id = ft.service_id
-                     LEFT JOIN client_filing_types cft ON (cft.client_id = cs.client_id AND cft.filing_type_id = ft.id)
-                     WHERE cs.client_id = ? AND ft.active = 1"""
-            params = [client_id]
-            if enabled_only:
-                sql += " AND COALESCE(cft.is_enabled, 1) = 1"
-            sql += " ORDER BY s.sort_order, ft.code"
-
-            cur = conn.execute(sql, params)
-            return [
-                {
-                    "id": r[0], "service_id": r[1], "service_name": r[2], "code": r[3], "name": r[4],
-                    "frequency": r[5], "start_period": r[6], "due_day": r[7], "due_day_absolute": r[8],
-                    "grace_days": r[9], "notes": r[10],
-                    "variants": json.loads(r[11]) if r[11] else [],
-                    "variant_tag": r[12],
-                    "is_enabled": bool(r[13])
-                }
-                for r in cur.fetchall()
-            ]
-
-    def set_filing_status(self, client_id: int, filing_type_id: int, period_label: str,
-                          status: str, updated_by: str, arn_number: str = None, submitted_at: str = None) -> dict:
-        now = datetime.datetime.utcnow().isoformat()
-        if status == "submitted" and not submitted_at:
-            submitted_at = now
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO filing_status
-                   (client_id, filing_type_id, period_label, status, arn_number, submitted_at, updated_at, updated_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(client_id, filing_type_id, period_label) DO UPDATE SET
-                       status = excluded.status,
-                       arn_number = COALESCE(excluded.arn_number, filing_status.arn_number),
-                       submitted_at = COALESCE(excluded.submitted_at, filing_status.submitted_at),
-                       updated_at = excluded.updated_at,
-                       updated_by = excluded.updated_by""",
-                (client_id, filing_type_id, period_label, status, arn_number, submitted_at, now, updated_by)
-            )
-            
-        # Log action in audit trail outside of _connect to avoid recursive connection DB lock
-        action_type = "filing_submitted" if status == "submitted" else "filing_status_update"
-        arn_info = f" (ARN: {arn_number})" if arn_number else ""
-        self.log_action(
-            actor=updated_by,
-            action=action_type,
-            client_id=client_id,
-            detail=f"Filing status for period '{period_label}' set to '{status}'{arn_info}"
-        )
-        return {
-            "client_id": client_id, "filing_type_id": filing_type_id,
-            "period_label": period_label, "status": status,
-            "arn_number": arn_number, "submitted_at": submitted_at,
-            "updated_at": now, "updated_by": updated_by
-        }
-
     # ---------------- Tracker Dump Subsystem (SAD & Extension) ----------------
 
     def _extract_identity_candidates_from_payload(self, arn_number: str = None, pan: str = None, raw_payload_json: str = None) -> list[str]:
@@ -2464,9 +2380,9 @@ class SeraDatabase:
         from ui.utils.profile_parser import extract_profile_from_payload
         if not identity_key:
             return
-
         clean_key = str(identity_key).strip().upper()
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        dump_ts = dump_row.get("created_at") or now
         cur = r_conn.execute("SELECT * FROM client_raw_containers WHERE identity_key = ?", (clean_key,))
         existing = cur.fetchone()
 
@@ -2504,15 +2420,18 @@ class SeraDatabase:
                     "arn": arn_str,
                     "period_label": dump_row.get("period_label"),
                     "capture_method": dump_row.get("capture_method"),
-                    "created_at": dump_row.get("created_at", now)
+                    "created_at": dump_ts
                 })
 
             tot_caps = (existing[14] or 0) + 1
+            existing_ts = str(existing[15] or "")
+            final_last_updated = max(existing_ts, dump_ts) if existing_ts else dump_ts
+
             r_conn.execute("""
                 UPDATE client_raw_containers
                 SET client_id = ?, company_name = ?, proprietor_name = ?, pan = ?, gstin = ?, tan = ?, phone = ?, email = ?, dob = ?, user_id = ?, filing_history = ?, total_captures = ?, last_updated = ?
                 WHERE identity_key = ?
-            """, (cid, comp, prop, pan_val, gst_val, tan_val, ph_val, em_val, dob_val, uid_val, json.dumps(hist), tot_caps, now, clean_key))
+            """, (cid, comp, prop, pan_val, gst_val, tan_val, ph_val, em_val, dob_val, uid_val, json.dumps(hist), tot_caps, final_last_updated, clean_key))
         else:
             hist = []
             arn_str = dump_row.get("arn_number")
@@ -2522,7 +2441,7 @@ class SeraDatabase:
                     "arn": arn_str,
                     "period_label": dump_row.get("period_label"),
                     "capture_method": dump_row.get("capture_method"),
-                    "created_at": dump_row.get("created_at", now)
+                    "created_at": dump_ts
                 })
             r_conn.execute("""
                 INSERT INTO client_raw_containers
@@ -2533,8 +2452,34 @@ class SeraDatabase:
                 new_profile.get("company_name", ""), new_profile.get("proprietor_name", ""),
                 new_profile.get("pan", ""), new_profile.get("gstin", ""), new_profile.get("tan", ""),
                 new_profile.get("phone", ""), new_profile.get("email", ""), new_profile.get("dob", ""),
-                new_profile.get("user_id", ""), "{}", json.dumps(hist), "{}", 1, now
+                new_profile.get("user_id", ""), "{}", json.dumps(hist), "{}", 1, dump_ts
             ))
+
+    def enrich_client_mcl_from_tracker_history(self, client_id: int) -> dict[int, str]:
+        """Enrich blank/incomplete MCL values from all captures for a client."""
+        if not client_id:
+            return {}
+        from ui.utils.profile_parser import extract_profile_from_payload
+        from tracker_dump_parser.mcl_enricher import build_mcl_updates
+
+        with self._connect_raw() as conn:
+            cur = conn.execute("SELECT raw_payload_json FROM tracker_dump WHERE client_id = ? ORDER BY created_at", (client_id,))
+            payloads = [row[0] for row in cur.fetchall()]
+        profiles = [extract_profile_from_payload(payload) for payload in payloads]
+        columns = self.get_mcl_columns()
+        client = self.get_client(client_id)
+        existing = client.get("values", {}) if client else {}
+        updates = build_mcl_updates(columns, existing, profiles)
+        if not updates:
+            return {}
+        with self._connect() as conn:
+            for column_id, value in updates.items():
+                conn.execute(
+                    "INSERT INTO client_values (client_id, column_id, value) VALUES (?, ?, ?) "
+                    "ON CONFLICT(client_id, column_id) DO UPDATE SET value = excluded.value",
+                    (client_id, column_id, value),
+                )
+        return updates
 
     def get_client_raw_container(self, client_id: int = None, identity_key: str = None) -> Optional[dict]:
         """SRPF Stage 1: Retrieves unified raw container by client_id or identity_key (PAN/GSTIN/TAN) from rawPayload.db."""
@@ -2890,6 +2835,12 @@ class SeraDatabase:
                 }
             )
 
+        # Re-scan the client's complete capture history so later, more
+        # complete API names can improve the saved MCL record. Blank relevant
+        # fields are filled; existing non-name values remain untouched.
+        if valid_id:
+            self.enrich_client_mcl_from_tracker_history(valid_id)
+
         # Write/append organized raw payload entry to seraRawPayloadDump.txt
         self._append_raw_payload_dump_file(
             dump_id=dump_id,
@@ -2903,6 +2854,9 @@ class SeraDatabase:
             captured_by=captured_by,
             created_at=now
         )
+
+        # Keep both derived FST workbooks current after every new capture.
+        self.sync_fst_reports()
 
         return {
             "id": dump_id, "client_id": valid_id, "unassigned_identity": unassigned_identity, "service_id": service_id,
@@ -3023,19 +2977,99 @@ class SeraDatabase:
                     }
                 )
 
+        self.sync_fst_reports()
         return updated_count
 
-    def _get_dump_file_paths(self) -> list[str]:
-        """Returns all destination file paths for seraRawPayloadDump.txt."""
+    @staticmethod
+    def _extract_dump_date_key(ts_str: Optional[str]) -> str:
+        """Returns DD_MM_YY formatted local date string (e.g. 26_08_26) for the given ISO timestamp."""
+        if not ts_str:
+            return datetime.datetime.now().strftime("%d_%m_%y")
+        try:
+            clean = str(ts_str).strip().replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(clean)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            local_dt = dt.astimezone()
+            return local_dt.strftime("%d_%m_%y")
+        except Exception:
+            return datetime.datetime.now().strftime("%d_%m_%y")
+
+    def _get_daily_dump_file_paths(self, date_key: str) -> list[str]:
+        """Returns all destination file paths for Raw_Payload_Dump/seraRawPayloadDump_dd_mm_yy.txt."""
+        filename = f"seraRawPayloadDump_{date_key}.txt"
         paths = []
         try:
             db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            paths.append(os.path.join(db_dir, "Raw_Payload_Dump", filename))
+        except Exception:
+            pass
+
+        workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+        if os.path.exists(workspace_dir):
+            paths.append(os.path.join(workspace_dir, "Raw_Payload_Dump", filename))
+
+        unique_paths = []
+        for p in paths:
+            norm = os.path.normpath(p)
+            if norm not in unique_paths:
+                unique_paths.append(norm)
+        return unique_paths
+
+    def _get_backup_dump_file_paths(self) -> list[str]:
+        """Returns destination file paths for Raw_Payload_Dump/seraRawPayloadDumpBackup.txt (append-only master archive)."""
+        filename = "seraRawPayloadDumpBackup.txt"
+        paths = []
+        try:
+            db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            paths.append(os.path.join(db_dir, "Raw_Payload_Dump", filename))
+        except Exception:
+            pass
+
+        workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+        if os.path.exists(workspace_dir):
+            paths.append(os.path.join(workspace_dir, "Raw_Payload_Dump", filename))
+
+        unique_paths = []
+        for p in paths:
+            norm = os.path.normpath(p)
+            if norm not in unique_paths:
+                unique_paths.append(norm)
+        return unique_paths
+
+    def _get_dump_folder_paths(self) -> list[str]:
+        """Returns all destination folder paths for Raw_Payload_Dump directory."""
+        paths = []
+        try:
+            db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            paths.append(os.path.join(db_dir, "Raw_Payload_Dump"))
+        except Exception:
+            pass
+
+        workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+        if os.path.exists(workspace_dir):
+            paths.append(os.path.join(workspace_dir, "Raw_Payload_Dump"))
+
+        unique_paths = []
+        for p in paths:
+            norm = os.path.normpath(p)
+            if norm not in unique_paths:
+                unique_paths.append(norm)
+        return unique_paths
+
+    def _get_dump_file_paths(self) -> list[str]:
+        """Returns destination file paths for canonical seraRawPayloadDump.txt."""
+        paths = []
+        try:
+            db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            paths.append(os.path.join(db_dir, "Raw_Payload_Dump", "seraRawPayloadDump.txt"))
             paths.append(os.path.join(db_dir, "seraRawPayloadDump.txt"))
         except Exception:
             pass
 
         workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
         if os.path.exists(workspace_dir):
+            paths.append(os.path.join(workspace_dir, "Raw_Payload_Dump", "seraRawPayloadDump.txt"))
             paths.append(os.path.join(workspace_dir, "seraRawPayloadDump.txt"))
 
         unique_paths = []
@@ -3045,39 +3079,108 @@ class SeraDatabase:
                 unique_paths.append(norm)
         return unique_paths
 
-    def _append_raw_payload_dump_file(self, dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at):
-        """Appends an organized, structured raw copy of intercepted API payloads to seraRawPayloadDump.txt across target paths."""
+    @staticmethod
+    def _format_dump_entry_block(dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name="") -> str:
+        """Formats a standardized, high-contrast dump text block for an intercepted payload."""
+        formatted_json = raw_payload_json or "{}"
         try:
-            formatted_json = raw_payload_json or "{}"
-            try:
-                if isinstance(raw_payload_json, str):
-                    parsed = json.loads(raw_payload_json)
-                else:
-                    parsed = raw_payload_json
-                formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
-            except Exception:
-                formatted_json = str(raw_payload_json)
+            if isinstance(raw_payload_json, str):
+                parsed = json.loads(raw_payload_json)
+            else:
+                parsed = raw_payload_json
+            formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
+        except Exception:
+            formatted_json = str(raw_payload_json)
 
-            entry_lines = [
-                "=" * 88,
-                f"CAPTURE DUMP ENTRY #{dump_id or 'N/A'}",
-                "=" * 88,
-                f"Timestamp       : {created_at}",
-                f"Portal          : {portal or 'N/A'}",
-                f"Capture Method  : {capture_method or 'N/A'}",
-                f"Status          : {status or 'submitted'}",
-                f"ARN / Ack No    : {arn_number or 'N/A'}",
-                f"Period Label    : {period_label or 'N/A'}",
-                f"Client ID       : {client_id or 'N/A'}",
-                f"Captured By     : {captured_by or 'System'}",
-                "-" * 88,
-                "RAW JSON PAYLOAD:",
-                formatted_json,
-                "=" * 88,
-                "\n"
-            ]
-            entry_text = "\n".join(entry_lines)
+        client_str = f"{client_id} ({client_name})" if client_name else (str(client_id) if client_id else "N/A")
+        entry_lines = [
+            "=" * 88,
+            f"CAPTURE DUMP ENTRY #{dump_id or 'N/A'}",
+            "=" * 88,
+            f"Timestamp       : {created_at}",
+            f"Portal          : {portal or 'N/A'}",
+            f"Capture Method  : {capture_method or 'N/A'}",
+            f"Status          : {status or 'submitted'}",
+            f"ARN / Ack No    : {arn_number or 'N/A'}",
+            f"Period Label    : {period_label or 'N/A'}",
+            f"Client ID       : {client_str}",
+            f"Captured By     : {captured_by or 'System'}",
+            "-" * 88,
+            "RAW JSON PAYLOAD:",
+            formatted_json,
+            "=" * 88,
+            "\n"
+        ]
+        return "\n".join(entry_lines)
 
+    def _append_raw_payload_dump_file(self, dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name=""):
+        """Appends raw payload entry to today's daily dump, the append-only master backup, and the canonical dump file."""
+        try:
+            entry_text = self._format_dump_entry_block(
+                dump_id=dump_id, client_id=client_id, portal=portal, period_label=period_label,
+                arn_number=arn_number, capture_method=capture_method, status=status,
+                raw_payload_json=raw_payload_json, captured_by=captured_by, created_at=created_at,
+                client_name=client_name
+            )
+            date_key = self._extract_dump_date_key(created_at)
+
+            # 1. Append to today's daily dump file: seraRawPayload_date(DD-MM-YY).txt
+            for daily_file in self._get_daily_dump_file_paths(date_key):
+                try:
+                    os.makedirs(os.path.dirname(daily_file), exist_ok=True)
+                    if not os.path.exists(daily_file) or os.path.getsize(daily_file) == 0:
+                        header = [
+                            "#" * 88,
+                            f"# PROJECT SERA — DAILY RAW API PAYLOAD DUMP [{date_key}]",
+                            f"# Intercepted government portal API submissions for 24-hour cycle: {date_key}",
+                            "#" * 88,
+                            f"# Initialized at : {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                            f"# Target Database: {os.path.abspath(self.raw_db_path)}",
+                            "#" * 88,
+                            "\n"
+                        ]
+                        with open(daily_file, "w", encoding="utf-8") as f:
+                            f.write("\n".join(header))
+                    with open(daily_file, "a", encoding="utf-8") as f:
+                        f.write(entry_text)
+                except Exception as file_err:
+                    print(f"[DailyDump] File append error ({daily_file}): {file_err}")
+
+            # 2. Append to Master Backup Dump: seraRawPayloadDumpBackup.txt (Append-only guarantee)
+            for backup_file in self._get_backup_dump_file_paths():
+                try:
+                    os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+                    if not os.path.exists(backup_file) or os.path.getsize(backup_file) == 0:
+                        header = [
+                            "#" * 88,
+                            "# PROJECT SERA — MASTER RAW PAYLOAD BACKUP ARCHIVE (APPEND-ONLY)",
+                            "# Permanent, immutable historical repository of all portal captures (Never deleted)",
+                            "#" * 88,
+                            f"# Initialized at : {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                            f"# Target Database: {os.path.abspath(self.raw_db_path)}",
+                            "#" * 88,
+                            "\n"
+                        ]
+                        with open(backup_file, "w", encoding="utf-8") as f:
+                            f.write("\n".join(header))
+
+                    entry_header_tag = f"CAPTURE DUMP ENTRY #{dump_id or 'N/A'}"
+                    already_present = False
+                    if os.path.exists(backup_file) and dump_id:
+                        try:
+                            with open(backup_file, "r", encoding="utf-8", errors="ignore") as f:
+                                if entry_header_tag in f.read():
+                                    already_present = True
+                        except Exception:
+                            pass
+
+                    if not already_present:
+                        with open(backup_file, "a", encoding="utf-8") as f:
+                            f.write(entry_text)
+                except Exception as file_err:
+                    print(f"[BackupDump] File append error ({backup_file}): {file_err}")
+
+            # 3. Append to canonical full dump: seraRawPayloadDump.txt
             for dump_file in self._get_dump_file_paths():
                 try:
                     os.makedirs(os.path.dirname(dump_file), exist_ok=True)
@@ -3103,7 +3206,7 @@ class SeraDatabase:
             print(f"[seraRawPayloadDump] Append error: {e}")
 
     def sync_raw_payload_dumps_file(self):
-        """Ensures all existing tracker_dump records are synced to seraRawPayloadDump.txt."""
+        """Ensures all existing tracker_dump records are synced across daily dumps, the canonical dump, and backup."""
         try:
             for dump_file in self._get_dump_file_paths():
                 if os.path.exists(dump_file) and os.path.getsize(dump_file) > 100:
@@ -3114,10 +3217,49 @@ class SeraDatabase:
             print(f"[seraRawPayloadDump] Sync error: {e}")
 
     def rebuild_raw_payload_dumps_file(self) -> int:
-        """Completely rebuilds seraRawPayloadDump.txt from all records in rawPayload.db."""
+        """Completely rebuilds all daily partitioned dumps, the canonical dump, and synchronizes the append-only backup."""
         dumps = self.get_tracker_dumps(limit=5000)
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        header = [
+
+        # Group dumps by daily date key (DD-MM-YY)
+        daily_groups: dict[str, list[dict]] = {}
+        for item in reversed(dumps):
+            d_key = self._extract_dump_date_key(item.get("created_at"))
+            daily_groups.setdefault(d_key, []).append(item)
+
+        # 1. Rebuild each daily partitioned dump file: seraRawPayload_date(DD-MM-YY).txt
+        for d_key, group_items in daily_groups.items():
+            header = [
+                "#" * 88,
+                f"# PROJECT SERA — DAILY RAW API PAYLOAD DUMP [{d_key}]",
+                f"# Intercepted government portal API submissions for 24-hour cycle: {d_key}",
+                "#" * 88,
+                f"# Rebuilt at      : {now_str}",
+                f"# Total Entries   : {len(group_items)}",
+                f"# Target Database : {os.path.abspath(self.raw_db_path)}",
+                "#" * 88,
+                "\n"
+            ]
+            entries = []
+            for item in group_items:
+                entries.append(self._format_dump_entry_block(
+                    dump_id=item.get("id"), client_id=item.get("client_id"), portal=item.get("portal"),
+                    period_label=item.get("period_label"), arn_number=item.get("arn_number"),
+                    capture_method=item.get("capture_method"), status=item.get("status"),
+                    raw_payload_json=item.get("raw_payload_json"), captured_by=item.get("captured_by"),
+                    created_at=item.get("created_at"), client_name=item.get("client_name", "")
+                ))
+            daily_content = "\n".join(header) + "\n".join(entries)
+            for daily_path in self._get_daily_dump_file_paths(d_key):
+                try:
+                    os.makedirs(os.path.dirname(daily_path), exist_ok=True)
+                    with open(daily_path, "w", encoding="utf-8") as f:
+                        f.write(daily_content)
+                except Exception as e:
+                    print(f"[DailyDump] Rebuild write error ({daily_path}): {e}")
+
+        # 2. Rebuild canonical dump: seraRawPayloadDump.txt
+        full_header = [
             "#" * 88,
             "# PROJECT SERA — RAW API PAYLOAD CAPTURE DUMP",
             "# Intercepted government portal API requests, responses, and FST submissions",
@@ -3128,55 +3270,131 @@ class SeraDatabase:
             "#" * 88,
             "\n"
         ]
-        entries = []
+        full_entries = []
         for item in reversed(dumps):
-            raw_payload = item.get("raw_payload_json") or "{}"
-            try:
-                if isinstance(raw_payload, str):
-                    parsed = json.loads(raw_payload)
-                else:
-                    parsed = raw_payload
-                formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
-            except Exception:
-                formatted_json = str(raw_payload)
-
-            entry_lines = [
-                "=" * 88,
-                f"CAPTURE DUMP ENTRY #{item.get('id', 'N/A')}",
-                "=" * 88,
-                f"Timestamp       : {item.get('created_at', 'N/A')}",
-                f"Portal          : {item.get('portal', 'N/A')}",
-                f"Capture Method  : {item.get('capture_method', 'N/A')}",
-                f"Status          : {item.get('status', 'submitted')}",
-                f"ARN / Ack No    : {item.get('arn_number', 'N/A')}",
-                f"Period Label    : {item.get('period_label', 'N/A')}",
-                f"Client ID       : {item.get('client_id', 'N/A')} ({item.get('client_name', '')})",
-                f"Captured By     : {item.get('captured_by', 'System')}",
-                "-" * 88,
-                "RAW JSON PAYLOAD:",
-                formatted_json,
-                "=" * 88,
-                "\n"
-            ]
-            entries.append("\n".join(entry_lines))
-
-        content = "\n".join(header) + "\n".join(entries)
+            full_entries.append(self._format_dump_entry_block(
+                dump_id=item.get("id"), client_id=item.get("client_id"), portal=item.get("portal"),
+                period_label=item.get("period_label"), arn_number=item.get("arn_number"),
+                capture_method=item.get("capture_method"), status=item.get("status"),
+                raw_payload_json=item.get("raw_payload_json"), captured_by=item.get("captured_by"),
+                created_at=item.get("created_at"), client_name=item.get("client_name", "")
+            ))
+        full_content = "\n".join(full_header) + "\n".join(full_entries)
         for dump_file in self._get_dump_file_paths():
             try:
                 os.makedirs(os.path.dirname(dump_file), exist_ok=True)
                 with open(dump_file, "w", encoding="utf-8") as f:
-                    f.write(content)
+                    f.write(full_content)
             except Exception as e:
                 print(f"[seraRawPayloadDump] Rebuild write error ({dump_file}): {e}")
-        
-        # Trigger FST Classifier Excel sync
-        self.sync_fst_classifier()
+
+        # 3. Synchronize Master Backup Dump: seraRawPayloadDumpBackup.txt (Append-only guarantee)
+        for backup_path in self._get_backup_dump_file_paths():
+            try:
+                os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+                existing_backup_text = ""
+                if os.path.exists(backup_path):
+                    try:
+                        with open(backup_path, "r", encoding="utf-8", errors="ignore") as f:
+                            existing_backup_text = f.read()
+                    except Exception:
+                        existing_backup_text = ""
+
+                if not existing_backup_text or len(existing_backup_text.strip()) == 0:
+                    b_header = [
+                        "#" * 88,
+                        "# PROJECT SERA — MASTER RAW PAYLOAD BACKUP ARCHIVE (APPEND-ONLY)",
+                        "# Permanent, immutable historical repository of all portal captures (Never deleted)",
+                        "#" * 88,
+                        f"# Initialized at : {now_str}",
+                        f"# Target Database: {os.path.abspath(self.raw_db_path)}",
+                        "#" * 88,
+                        "\n"
+                    ]
+                    existing_backup_text = "\n".join(b_header)
+                    with open(backup_path, "w", encoding="utf-8") as f:
+                        f.write(existing_backup_text)
+
+                to_append = []
+                for item in reversed(dumps):
+                    tag = f"CAPTURE DUMP ENTRY #{item.get('id', 'N/A')}"
+                    if tag not in existing_backup_text:
+                        to_append.append(self._format_dump_entry_block(
+                            dump_id=item.get("id"), client_id=item.get("client_id"), portal=item.get("portal"),
+                            period_label=item.get("period_label"), arn_number=item.get("arn_number"),
+                            capture_method=item.get("capture_method"), status=item.get("status"),
+                            raw_payload_json=item.get("raw_payload_json"), captured_by=item.get("captured_by"),
+                            created_at=item.get("created_at"), client_name=item.get("client_name", "")
+                        ))
+
+                if to_append:
+                    with open(backup_path, "a", encoding="utf-8") as f:
+                        f.write("\n" + "\n".join(to_append))
+            except Exception as e:
+                print(f"[BackupDump] Sync error ({backup_path}): {e}")
+
+        # Trigger both derived FST report pipelines after rebuilding the dump.
+        self.sync_fst_reports()
         return len(dumps)
+
+    def sync_fst_reports(self):
+        """Refresh all FST-derived reports from the active raw dump.
+
+        This method is intentionally best-effort: capture/storage must remain
+        reliable even when Excel/reporting dependencies are not installed.
+        """
+        workspace_dir = os.path.dirname(os.path.abspath(__file__))
+        dump_file = os.path.join(workspace_dir, "seraRawPayloadDump.txt")
+        if not os.path.exists(dump_file) or os.path.getsize(dump_file) <= 100:
+            return
+
+        master_pans = self._get_master_pans_for_reports()
+        self.sync_fst_classifier()
+
+        try:
+            tracer_dir = os.path.join(workspace_dir, "FST_Tracer_Alpha")
+            report_path = os.path.join(tracer_dir, "fst_tracer_alpha_report.xlsx")
+            vault_path = os.path.join(workspace_dir, "docs", "APP", "Sera FST Tracer Alpha")
+            if os.path.isdir(tracer_dir):
+                from FST_Tracer_Alpha.tracer import process_dump
+                result = process_dump(dump_file, report_path, vault_path, master_pans=master_pans)
+                actual_report = result.get("outputs", {}).get("excel_path", report_path)
+                if actual_report != report_path:
+                    print(f"[FST Tracer Alpha] Canonical workbook is locked; refreshed fallback: {actual_report}")
+        except Exception as e:
+            print(f"[FST Tracer Alpha] Report sync skipped: {e}")
+
+        try:
+            simple_dir = os.path.join(workspace_dir, "simpleParser")
+            report_path = os.path.join(simple_dir, "simple_parser_report.xlsx")
+            if os.path.isdir(simple_dir):
+                from simpleParser.simple_parser import process_dump
+                result = process_dump(dump_file, report_path, master_pans=master_pans)
+                actual_report = result.get("outputs", {}).get("excel_path", report_path)
+                if actual_report != report_path:
+                    print(f"[Simple Parser] Canonical workbook is locked; refreshed fallback: {actual_report}")
+        except Exception as e:
+            print(f"[Simple Parser] Report sync skipped: {e}")
+
+    def _get_master_pans_for_reports(self) -> set[str]:
+        """Return active Master DB PANs for report-side identity validation."""
+        pan_re = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$", re.I)
+        pan_column_ids = {
+            c["id"] for c in self.get_mcl_columns()
+            if "pan" in str(c.get("label", "")).lower()
+        }
+        master_pans = set()
+        for client in self.search_clients("", include_archived=False):
+            for column_id in pan_column_ids:
+                value = str(client.get("values", {}).get(column_id, "")).strip().upper()
+                if pan_re.fullmatch(value):
+                    master_pans.add(value)
+        return master_pans
 
     def sync_fst_classifier(self):
         """Silently syncs FST_Classifier_1/payload_report.xlsx whenever dumps are updated."""
         try:
-            workspace_dir = r"C:\Users\Nex\Downloads\Project Sera\APP"
+            workspace_dir = os.path.dirname(os.path.abspath(__file__))
             classifier_dir = os.path.join(workspace_dir, "FST_Classifier_1")
             report_path = os.path.join(classifier_dir, "payload_report.xlsx")
             dump_file = os.path.join(workspace_dir, "seraRawPayloadDump.txt")

@@ -417,6 +417,7 @@ def create_excel(entries, entities, summary_list, out_path):
     ws_all.column_dimensions['E'].width = 75
 
     wb.save(out_path)
+    wb.close()
 
 def process_data(input_dump, output_excel):
     try:

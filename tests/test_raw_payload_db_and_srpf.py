@@ -199,6 +199,28 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         if dob_col:
             self.assertEqual(mapped.get(dob_col["id"]), "1990-11-20")
 
+    def test_srpf_does_not_map_bank_name_to_taxpayer_names(self):
+        profile = extract_profile_from_payload({
+            "entityNum": "ASDPM3313P",
+            "bankName": "AXIS BANK",
+            "accountHolderType": " ",
+            "accountStatus": "Account Valid and Open",
+            "ifscCd": "UTIB0000439",
+            "status": "E",
+        })
+
+        self.assertEqual(profile["pan"], "ASDPM3313P")
+        self.assertEqual(profile["company_name"], "")
+        self.assertEqual(profile["proprietor_name"], "")
+
+        profile_with_full_name = extract_profile_from_payload({
+            "entityNum": "ASDPM3313P",
+            "bankName": "AXIS BANK",
+            "fullName": "MOHAMMAD MOLLA",
+        })
+        self.assertEqual(profile_with_full_name["proprietor_name"], "MOHAMMAD MOLLA")
+        self.assertEqual(profile_with_full_name["company_name"], "")
+
     def test_get_srpf_containers_grouping_eliminates_duplicate_rows(self):
         """
         Verifies that when 10 different assessment year filings are captured for the same client (e.g. DHANAJ TIWARI),
@@ -306,5 +328,3 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

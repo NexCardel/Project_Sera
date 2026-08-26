@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTENSION_DIR = ROOT / "sera_extension"
+FIREFOX_EXTENSION_DIR = ROOT / "sera_extension_firefox"
 NATIVE_MANIFEST = ROOT / "native_host" / "com.amanassociates.sera.json"
 KEY_PATH = ROOT / "build_tools" / "sera_extension.pem"
 OUTPUT_DIR = ROOT / "package_assets" / "extension"
@@ -54,12 +55,12 @@ def get_key() -> rsa.RSAPrivateKey:
     return key
 
 
-def create_zip(destination: Path) -> None:
+def create_zip(destination: Path, source_dir: Path = EXTENSION_DIR) -> None:
     excluded = {".git", "__pycache__", ".DS_Store"}
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in EXTENSION_DIR.rglob("*"):
+        for path in source_dir.rglob("*"):
             if path.is_file() and not any(part in excluded for part in path.parts):
-                archive.write(path, path.relative_to(EXTENSION_DIR).as_posix())
+                archive.write(path, path.relative_to(source_dir).as_posix())
 
 
 def create_crx(zip_bytes: bytes, key: rsa.RSAPrivateKey, public_key_der: bytes) -> bytes:
@@ -92,6 +93,13 @@ def build() -> tuple[str, str]:
 
     zip_path = OUTPUT_DIR / "ProjectSeraCompanion.zip"
     create_zip(zip_path)
+    # Firefox uses its Firefox-specific manifest (background scripts rather than
+    # Chromium's service worker) but shares the synchronized runtime files.
+    xpi_path = OUTPUT_DIR / "ProjectSeraCompanion.xpi"
+    firefox_zip_path = OUTPUT_DIR / "ProjectSeraCompanion.firefox.zip"
+    create_zip(firefox_zip_path, FIREFOX_EXTENSION_DIR)
+    xpi_path.write_bytes(firefox_zip_path.read_bytes())
+    firefox_zip_path.unlink()
     crx_path = OUTPUT_DIR / "ProjectSeraCompanion.crx"
     crx_path.write_bytes(create_crx(zip_path.read_bytes(), key, public_key_der))
     zip_path.unlink()
@@ -99,6 +107,7 @@ def build() -> tuple[str, str]:
     (OUTPUT_DIR / "extension_id.txt").write_text(ext_id + "\n", encoding="ascii")
     (OUTPUT_DIR / "extension_version.txt").write_text(str(manifest["version"]) + "\n", encoding="ascii")
     print(f"Built {crx_path}")
+    print(f"Built {xpi_path}")
     print(f"Extension ID: {ext_id}")
     return ext_id, manifest["version"]
 

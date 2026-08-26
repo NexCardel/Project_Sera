@@ -65,3 +65,11 @@ package_dist/
 Version SKY/
 version sky/
 [Vv]ersion [Ss]ky/
+settings.ini
+seraRawPayloadDump.txt
+seraRawPayload*.txt
+Raw_Payload_Dump/
+*.xlsx
+.obsidian/
+
+

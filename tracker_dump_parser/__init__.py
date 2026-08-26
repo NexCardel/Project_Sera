@@ -9,16 +9,24 @@ from typing import Dict, Any, List, Optional
 from tracker_dump_parser.entry_splitter import split_entries
 from tracker_dump_parser.header_parser import parse_header
 from tracker_dump_parser.json_parser import parse_json_body
-from tracker_dump_parser.identity_resolver import resolve_identity
+from tracker_dump_parser.identity_resolver import (
+    resolve_identity,
+    extract_identity_evidence,
+    extract_session_token,
+    resolve_context_identities,
+)
 from tracker_dump_parser.action_decoder import decode_action
 from tracker_dump_parser.session_stitcher import stitch_sessions
 from tracker_dump_parser.timeline_assembler import assemble_client_timelines, detect_data_quality_flags
+from tracker_dump_parser.name_resolver import extract_name_evidence, choose_client_name
+from tracker_dump_parser.mcl_enricher import build_mcl_updates
 
 
 def parse_dump_to_timelines(
     dump_source: str,
     client_roster: Optional[Dict[str, Any]] = None,
-    rolling_window_sec: int = 90
+    rolling_window_sec: int = 90,
+    temporal_context_sec: int = 900,
 ) -> Dict[str, Any]:
     """
     Executes the full 8-Stage Tracker Dump Parsing and Action Decoding Pipeline:
@@ -67,6 +75,15 @@ def parse_dump_to_timelines(
 
         # Stage D: Identity Resolution
         ident = resolve_identity(header, json_body, client_roster=client_roster)
+        evidence = extract_identity_evidence(header, json_body)
+        name_info = choose_client_name(extract_name_evidence(header, json_body))
+        # Prefer explicit PAN/GSTIN-derived PAN evidence over legacy client ID
+        # ownership when the original resolver could not extract it.
+        if not ident.get("resolved_pan") and len(evidence.get("pans", [])) == 1:
+            ident["resolved_pan"] = evidence["pans"][0]
+            ident["identity_confidence"] = "pan_match"
+            ident["identity_flags"] = list(ident.get("identity_flags", []))
+            ident["identity_flags"].append("explicit_pan_or_gstin_evidence")
 
         # Stage E: Action Decoding & Outcome Assessment
         url = json_body.get("url") or ""
@@ -80,7 +97,7 @@ def parse_dump_to_timelines(
                 raw_p = _j.loads(raw_p)
             except Exception:
                 raw_p = {}
-        ses_id = json_body.get("session_id") or (raw_p.get("session_id") if isinstance(raw_p, dict) else None)
+        ses_id = extract_session_token(json_body)
 
         event_record = {
             "source_entry": entry_num,
@@ -103,6 +120,13 @@ def parse_dump_to_timelines(
             "resolved_pan": ident.get("resolved_pan"),
             "identity_confidence": ident.get("identity_confidence"),
             "identity_flags": ident.get("identity_flags"),
+            "identity_status": "direct" if ident.get("resolved_pan") else "pending_context",
+            "identity_method": "direct" if ident.get("resolved_pan") else "pending_context",
+            "identity_candidates": [ident.get("resolved_pan")] if ident.get("resolved_pan") else [],
+            "identity_evidence": evidence,
+            "client_name": name_info["client_name"],
+            "client_name_confidence": name_info["client_name_confidence"],
+            "client_name_candidates": name_info["client_name_candidates"],
             "body_client_id": ident.get("body_client_id"),
             "header_client_id": ident.get("header_client_id"),
 
@@ -110,8 +134,34 @@ def parse_dump_to_timelines(
         }
         decoded_events.append(event_record)
 
+    # Global second pass: identity ownership requires seeing the complete dump.
+    resolve_context_identities(
+        decoded_events,
+        timestamp_window_sec=rolling_window_sec,
+        temporal_window_sec=temporal_context_sec,
+    )
+
+    # Ambiguous events stay in decoded_events and therefore in normal
+    # timelines; quarantine is an audit side-channel, not a filter.
+    for event in decoded_events:
+        if event.get("identity_status") == "ambiguous":
+            quarantine.append({
+                "source_entry": event.get("source_entry"),
+                "type": "ambiguous_identity",
+                "identity_status": event.get("identity_status"),
+                "identity_method": event.get("identity_method"),
+                "identity_confidence": event.get("identity_confidence"),
+                "identity_candidates": event.get("identity_candidates", []),
+                "timeline_key": event.get("timeline_key"),
+                "reason": "; ".join(event.get("identity_flags", [])),
+            })
+
     # Stage G & H: Assemble per-client timelines and detect flags
-    clients = assemble_client_timelines(decoded_events, rolling_window_sec=rolling_window_sec)
+    clients = assemble_client_timelines(
+        decoded_events,
+        rolling_window_sec=rolling_window_sec,
+        temporal_context_sec=temporal_context_sec,
+    )
 
     # Collect global flags
     global_flags = []

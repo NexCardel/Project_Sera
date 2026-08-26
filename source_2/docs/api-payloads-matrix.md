@@ -367,6 +367,108 @@ graph TD
 
 ---
 
+### 1.8 Canonical Computational ITR JSON Schema (`/returns/downloadfile`)
+* **Trigger Action**: Clicking **"Download JSON"** on the View Filed Returns screen or fetching return computations.
+* **API Endpoint**: `GET /iec/itrweb/auth/v0.1/returns/downloadfile`
+* **Multi-Layer Server Response Payload**:
+```json
+{
+  "ITR": {
+    "ITR4": {
+      "CreationInfo": {
+        "Digest": "Qi0xSiE9k2EeW120RmTNIKgwBF8inYrX53eeqKcGcVc=",
+        "JSONCreationDate": "2026-08-23",
+        "SWCreatedBy": "SW10012627",
+        "SWVersionNo": "R1"
+      },
+      "Form_ITR4": {
+        "AssessmentYear": "2026",
+        "FormName": "ITR-4",
+        "Description": "Indls, HUFs and Firms having Inc u/s 44AD, 44ADA or 44AE",
+        "SchemaVer": "Ver1.0"
+      },
+      "PersonalInfo": {
+        "PAN": "AHJPR0846B",
+        "AadhaarCardNo": "713381439029",
+        "AssesseeName": {
+          "FirstName": "SEKH",
+          "MiddleName": "MONIRUL",
+          "SurNameOrOrgName": "RAHAMAN"
+        },
+        "DOB": "1973-05-19",
+        "Address": {
+          "ResidenceName": "CHANDANNAGAR",
+          "LocalityOrArea": "Boga nowapara",
+          "CityOrTownOrDistrict": "SOUTH 24 PARGANAS",
+          "PinCode": 700141,
+          "MobileNo": 9339236172,
+          "EmailAddress": "fazlerabbimolla@gmail.com"
+        }
+      },
+      "ScheduleBP": {
+        "NatOfBus44AD": [
+          {
+            "CodeAD": "04028",
+            "NameOfBusiness": "S. N. LAUNDRY",
+            "Description": "Garments Processors"
+          }
+        ],
+        "PersumptiveInc44AD": {
+          "GrsTotalTrnOver": 3784550,
+          "GrsTotalTrnOverInCash": 3784550,
+          "PersumptiveInc44AD8Per": 755010,
+          "TotPersumptiveInc44AD": 755010
+        },
+        "FinanclPartclrOfBusiness": {
+          "CashInHand": 363923,
+          "BalWithBanks": 504002,
+          "SundryDebtors": 388985,
+          "Inventories": 784590,
+          "TotalAssets": 2041500,
+          "OthrCurrLiab": 11697
+        }
+      },
+      "IncomeDeductions": {
+        "GrossTotIncome": 755010,
+        "IncomeFromBusinessProf": 755010,
+        "TotalChapVIADeductions": 0,
+        "TotalIncome": 755010
+      },
+      "TaxComputation": {
+        "TotalTaxPayable": 17751,
+        "Rebate87A": 17751,
+        "NetTaxLiability": 0
+      },
+      "Refund": {
+        "BankAccountDtls": {
+          "AddtnlBankDetails": [
+            {
+              "BankName": "AXIS BANK",
+              "BankAccountNo": "915020064404953",
+              "IFSCCode": "UTIB0000439",
+              "AccountType": "CA",
+              "UseForRefund": "true"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+* **Deep Path Traversal & Extraction Rules**:
+  - `PAN`: `ITR.ITR4.PersonalInfo.PAN`
+  - `Assessment Year`: `ITR.ITR4.Form_ITR4.AssessmentYear` $\longrightarrow$ Formatted as **`AY 2026-27`**
+  - `Form Name`: `ITR.ITR4.Form_ITR4.FormName` $\longrightarrow$ **`ITR-4`**
+  - `Turnover u/s 44AD`: `ScheduleBP.PersumptiveInc44AD.GrsTotalTrnOver`
+  - `Presumptive Income`: `ScheduleBP.PersumptiveInc44AD.TotPersumptiveInc44AD`
+  - `Cash & Bank`: `ScheduleBP.FinanclPartclrOfBusiness.CashInHand`, `BalWithBanks`
+  - `Gross / Net Income`: `IncomeDeductions.GrossTotIncome`, `TotalIncome`
+  - `Tax / Rebate`: `TaxComputation.TotalTaxPayable`, `TaxComputation.Rebate87A`
+  - `Monolithic Guard`: Prevented from sub-array fragmentation; captured as complete root document into `master.db` / `seraRawPayloadDump.txt`.
+
+---
+
 ## 2. GST Portal (Goods & Services Tax Network)
 **Base Host**: `https://services.gst.gov.in`
 

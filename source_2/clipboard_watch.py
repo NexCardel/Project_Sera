@@ -32,16 +32,26 @@ EXCEL_MIME_MARKERS = {
     "application/x-qt-windows-mime;value=\"link\"",
     "link",
 }
+SERA_CLIPBOARD_MARKER = "application/x-sera-uid"
+
+
+def is_allowed_clipboard_identifier(value: str) -> bool:
+    """Shape gate for PAN/GSTIN and configured service user IDs."""
+    clean = str(value or "").strip().upper()
+    # Service user IDs are configurable and may contain dots, hyphens,
+    # underscores, @, colon, or slashes. They are still constrained to a
+    # compact token so ordinary prose is never treated as a UID.
+    return bool(RE_PAN.fullmatch(clean) or RE_GSTIN.fullmatch(clean) or (3 <= len(clean) <= 80 and re.fullmatch(r"[A-Z0-9][A-Z0-9._@:/-]*", clean)))
 
 
 def is_excel_source(mime_data) -> bool:
-    """Checks if the clipboard mimeData carries Excel-specific format signatures."""
+    """Checks for Excel data or a UID explicitly copied from Sera."""
     if not mime_data:
         return False
     formats = mime_data.formats()
     for fmt in formats:
         fmt_lower = fmt.lower()
-        if any(marker in fmt_lower for marker in EXCEL_MIME_MARKERS):
+        if SERA_CLIPBOARD_MARKER in fmt_lower or any(marker in fmt_lower for marker in EXCEL_MIME_MARKERS):
             return True
     return False
 
@@ -60,7 +70,7 @@ class ClipboardWatchService(QObject):
         self._uid_index: Dict[str, int] = {}  # {normalized_uid: client_id}
         self._last_armed_token: Optional[str] = None
         self._last_armed_time: float = 0.0
-        self._debounce_window = 2.0  # seconds (allows quick re-copy to re-arm)
+        self._debounce_window = 15.0  # seconds; suppress repeat copy/re-arm noise
         
         self.refresh_index()
         self._connect_clipboard()
@@ -83,22 +93,41 @@ class ClipboardWatchService(QObject):
         """
         try:
             clients = self.db.search_clients("", include_archived=False)
+            mcl_cols = {c["id"]: c for c in self.db.get_mcl_columns()}
+            allowed_column_ids = set()
+            for col_id, col in mcl_cols.items():
+                label = str(col.get("label", "")).lower()
+                if any(term in label for term in ("pan", "gstin", "user id", "userid", "username", "login id", "login user")):
+                    allowed_column_ids.add(col_id)
+
+            # Service-specific user-ID columns are authoritative even when
+            # their labels are custom (for example, "ITD Login").
+            for service in self.db.get_services():
+                if service.get("userid_column_id"):
+                    allowed_column_ids.add(service["userid_column_id"])
+
             new_index = {}
+            collisions = set()
             for c in clients:
                 cid = c["id"]
                 vals = c.get("values", {})
                 for col_id, val in vals.items():
-                    if val and isinstance(val, str):
-                        clean_val = val.strip().upper()
-                        if 3 <= len(clean_val) <= 100:
-                            new_index[clean_val] = cid
+                    if col_id in allowed_column_ids and val is not None:
+                        clean_val = str(val).strip().upper()
+                        if is_allowed_clipboard_identifier(clean_val):
+                            if clean_val in new_index and new_index[clean_val] != cid:
+                                collisions.add(clean_val)
+                            else:
+                                new_index[clean_val] = cid
 
                 token = c.get("client_id_token")
                 if token and isinstance(token, str):
                     new_index[token.strip().upper()] = cid
 
+            for duplicate in collisions:
+                new_index.pop(duplicate, None)
             self._uid_index = new_index
-            print(f"[SCA] In-memory UID index built with {len(self._uid_index)} keys.")
+            print(f"[SCA] In-memory approved-identifier index built with {len(self._uid_index)} keys; {len(collisions)} ambiguous duplicates suppressed.")
         except Exception as e:
             print(f"[SCA] Index build error: {e}")
 
@@ -116,11 +145,19 @@ class ClipboardWatchService(QObject):
             return
 
         text_clean = text.strip()
+        normalized_candidate = text_clean.upper()
+        # Sera/Excel MIME markers are preferred, but browser copies and some
+        # Qt table paths can expose plain text only. An exact match in the
+        # approved UID index is sufficient and remains safe because arbitrary
+        # unmatched clipboard text is still ignored below.
+        if not is_excel_source(clipboard.mimeData()) and normalized_candidate not in self._uid_index:
+            return
         length = len(text_clean)
-        if length < 3 or length > 100:
+        if length < 3 or length > 80:
             return
 
-        normalized_candidate = text_clean.upper()
+        if not is_allowed_clipboard_identifier(normalized_candidate):
+            return
 
         # In-memory dictionary lookup
         client_id = self._uid_index.get(normalized_candidate)
@@ -148,8 +185,11 @@ class ClipboardWatchService(QObject):
 
             client_services = self.db.get_client_services(client_id)
             all_services = self.db.get_services()
-            # If client has no specific services attached, allow all configured services as candidate portals
+            # If client has specific services attached, use them; otherwise allow all configured services as candidate portals
             target_services = client_services if client_services else all_services
+            if not target_services:
+                print(f"[SCA] Client {client_id} has no attached or configured services; not arming.")
+                return
 
             mcl_cols = {c["id"]: c for c in self.db.get_mcl_columns()}
             values = client.get("values", {})
@@ -169,6 +209,17 @@ class ClipboardWatchService(QObject):
 
             if not business_name:
                 business_name = f"Client #{client_token}"
+
+            # Collect candidate UIDs (PAN, GSTIN, User IDs, Client Token)
+            candidate_uids = [matched_uid.upper()]
+            service_uid_column_ids = {s.get("userid_column_id") for s in target_services if s.get("userid_column_id")}
+            for c_id, val in values.items():
+                if val is not None and 3 <= len(str(val).strip()) <= 80:
+                    clean_v = str(val).strip().upper()
+                    if (c_id in service_uid_column_ids or is_allowed_clipboard_identifier(clean_v)) and clean_v not in candidate_uids:
+                        candidate_uids.append(clean_v)
+            if client_token and str(client_token).upper() not in candidate_uids:
+                candidate_uids.append(str(client_token).upper())
 
             # Find potential password columns
             pwd_col_ids = [c["id"] for c in mcl_cols.values() if "pass" in c.get("label", "").lower() or c.get("field_type") == "password"]
@@ -212,6 +263,10 @@ class ClipboardWatchService(QObject):
 
             if service_payloads:
                 sca_mode = self.db.get_setting("sca_action_mode", "autofill")
+                try:
+                    max_uses = max(1, min(int(self.db.get_setting("sca_max_uses", "1")), 20))
+                except (TypeError, ValueError):
+                    max_uses = 1
                 print(f"[SCA] Arming {len(service_payloads)} services for client {client_token} ({business_name}) [mode: {sca_mode}]")
                 from automation import arm_sca
                 arm_sca(
@@ -222,7 +277,9 @@ class ClipboardWatchService(QObject):
                     business_name=business_name,
                     owner_name=owner_name,
                     ttl_ms=45000,
-                    sca_mode=sca_mode
+                    sca_mode=sca_mode,
+                    max_uses=max_uses,
+                    candidate_uids=candidate_uids
                 )
                 try:
                     self.db.record_client_activity(client_id, "SCA", f"Copied UID: {matched_uid}")

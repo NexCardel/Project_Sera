@@ -116,30 +116,17 @@
   }
 
   function showBrowserSuccessPopup(ctx, arn, method = "DOM_Tracker") {
-    const div = document.createElement('div');
-    div.style.position = 'fixed';
-    div.style.top = '20px';
-    div.style.right = '20px';
-    div.style.padding = '18px 22px';
-    div.style.backgroundColor = '#161B22';
-    div.style.color = '#F0F6FC';
-    div.style.border = '2px solid #2E9B5F';
-    div.style.borderRadius = '8px';
-    div.style.boxShadow = '0 8px 24px rgba(0,0,0,0.5)';
-    div.style.zIndex = '9999999';
-    div.style.fontFamily = 'Segoe UI, Arial, sans-serif';
-    const methodBadge = method === 'SAD_API_Interceptor' ? '⚡ Sera SAD (API Detector)' : '👁️ Sera DOM (DOM Detector)';
-    div.innerHTML = `
-      <h3 style="margin:0 0 6px 0; font-size:16px; color:#4CF9B7;">✅ Return Filing Captured!</h3>
-      <p style="margin:0 0 4px 0; font-size:12px; color:#A0A0A0;">Method: <strong style="color:#2E9B5F;">${methodBadge}</strong></p>
-      ${arn ? '<p style="margin:4px 0 0 0; font-size:13px; font-weight:700; font-family:monospace; color:#39FF14;">ARN: ' + arn + '</p>' : ''}
-    `;
-    document.body.appendChild(div);
-    
-    setTimeout(() => {
-      div.style.opacity = '0';
-      div.style.transition = 'opacity 0.5s';
-      setTimeout(() => div.remove(), 500);
-    }, 6000);
+    const detail = {
+      portal: (ctx && ctx.portal) || "Portal",
+      arn: arn || "N/A",
+      filing_type: (ctx && ctx.filing_type) || "Filing Confirmation",
+      period_label: (ctx && ctx.period_label) || "",
+      pan: (ctx && ctx.pan) || "",
+      capture_method: method
+    };
+
+    if (window.__SERA_TOAST_NOTIFIER__ && typeof window.__SERA_TOAST_NOTIFIER__.notify === 'function') {
+      window.__SERA_TOAST_NOTIFIER__.notify(detail);
+    }
   }
 })();

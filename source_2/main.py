@@ -9,6 +9,7 @@ import os
 import socket
 import json
 from pathlib import Path
+from datetime import datetime
 
 # Qt probes a couple of legacy Windows bitmap fonts during platform startup;
 # suppress that harmless diagnostic while keeping other Qt warnings visible.
@@ -53,8 +54,6 @@ from ui.windows.admin_window import AdminWindow, AdminPinDialog, NewClientDialog
 from ui.windows.tracker_dump_window import TrackerDumpWindow
 from ui.utils.theme import get_theme_stylesheet
 from ui.extension_listener import ExtensionListener
-from ui.dialogs.filing_confirmation_dialog import FilingConfirmationDialog
-from datetime import datetime
 
 APP_DIR = Path.home() / "AmanAssociates_Sera"
 
@@ -63,8 +62,10 @@ def ensure_permanent_extension() -> Path:
     try:
         if getattr(sys, 'frozen', False):
             source_ext = Path(sys._MEIPASS) / "sera_extension"
+            source_ff = Path(sys._MEIPASS) / "sera_extension_firefox"
         else:
             source_ext = Path(__file__).resolve().parent / "sera_extension"
+            source_ff = Path(__file__).resolve().parent / "sera_extension_firefox"
 
         target_ext = APP_DIR / "sera_extension"
         if source_ext.exists():
@@ -75,6 +76,17 @@ def ensure_permanent_extension() -> Path:
                     dest_file = target_ext / rel_path
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(item, dest_file)
+
+        target_ff = APP_DIR / "sera_extension_firefox"
+        if source_ff.exists():
+            target_ff.mkdir(parents=True, exist_ok=True)
+            for item in source_ff.glob("**/*"):
+                if item.is_file():
+                    rel_path = item.relative_to(source_ff)
+                    dest_file = target_ff / rel_path
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, dest_file)
+
         return target_ext
     except Exception as e:
         print(f"Could not sync permanent extension folder: {e}")
@@ -107,12 +119,13 @@ def register_native_messaging_host():
                         pass
 
         json_path = perm_native_dir / "com.amanassociates.sera.json"
+        firefox_json_path = perm_native_dir / "com.amanassociates.sera.firefox.json"
         host_bat_path = perm_native_dir / "host.bat"
 
         # Explicitly configure host.bat with the exact active Python/Executable path
         if not getattr(sys, 'frozen', False):
             python_exe = sys.executable
-            bat_content = f'@echo off\n"{python_exe}" -u "%~dp0host.py" %* 2> "%~dp0host_error.log"\n'
+            bat_content = f'@echo off\n"{python_exe}" -u "%~dp0host.py" %*\n'
             try:
                 host_bat_path.write_text(bat_content, encoding="utf-8")
             except Exception:
@@ -128,17 +141,33 @@ def register_native_messaging_host():
             except Exception as e:
                 print(f"Could not update native host JSON path: {e}")
 
-            targets = [
-                r"Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera",
-                r"Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera",
-            ]
-            
-            for subkey in targets:
-                try:
-                    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
-                        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(json_path.resolve()))
-                except Exception:
-                    pass
+        if firefox_json_path.exists():
+            try:
+                with open(firefox_json_path, "r", encoding="utf-8") as f:
+                    ff_data = json.load(f)
+                ff_data["path"] = str(host_bat_path.resolve())
+                with open(firefox_json_path, "w", encoding="utf-8") as f:
+                    json.dump(ff_data, f, indent=2)
+            except Exception as e:
+                print(f"Could not update Firefox native host JSON path: {e}")
+
+        targets = []
+        if json_path.exists():
+            targets.extend([
+                (r"Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera", str(json_path.resolve())),
+                (r"Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera", str(json_path.resolve())),
+            ])
+        if firefox_json_path.exists():
+            targets.append(
+                (r"Software\Mozilla\NativeMessagingHosts\com.amanassociates.sera", str(firefox_json_path.resolve()))
+            )
+        
+        for subkey, target_json in targets:
+            try:
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
+                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, target_json)
+            except Exception:
+                pass
     except Exception as e:
         print(f"Could not register native messaging host: {e}")
 
@@ -977,3 +1006,5 @@ if __name__ == "__main__":
         run_native_host()
         sys.exit(0)
     SeraApp().run()
+
+
