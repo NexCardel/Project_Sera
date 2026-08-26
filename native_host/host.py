@@ -59,11 +59,16 @@ def listen_to_browser():
 
 def listen_to_app():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind(('127.0.0.1', IPC_PORT + 1))
-        server.listen(5)
-    except Exception:
+    bound_port = None
+    for p in range(IPC_PORT + 1, IPC_PORT + 10):
+        try:
+            server.bind(('127.0.0.1', p))
+            server.listen(5)
+            bound_port = p
+            break
+        except Exception:
+            pass
+    if not bound_port:
         return
 
     while True:

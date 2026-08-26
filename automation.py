@@ -219,12 +219,16 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
                         return  # Ack received!
             
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(('127.0.0.1', 49153))
-                    s.sendall(json.dumps(payload).encode('utf-8'))
-                    if cmd_id == "legacy":
-                        return # Fire and forget for legacy
+                for p in range(49153, 49162):
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(0.2)
+                            s.connect(('127.0.0.1', p))
+                            s.sendall(json.dumps(payload).encode('utf-8'))
+                    except Exception:
+                        pass
+                if cmd_id == "legacy":
+                    return # Fire and forget for legacy
             except Exception:
                 pass
                 
@@ -276,12 +280,20 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
     }
     def _do_send():
         for _ in range(5):
+            success = False
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(('127.0.0.1', 49153))
-                    s.sendall(json.dumps(payload).encode('utf-8'))
+                for p in range(49153, 49162):
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(0.2)
+                            s.connect(('127.0.0.1', p))
+                            s.sendall(json.dumps(payload).encode('utf-8'))
+                            success = True
+                    except Exception:
+                        pass
+                if success:
                     return
             except Exception:
-                time.sleep(0.2)
+                pass
+            time.sleep(0.2)
     threading.Thread(target=_do_send, daemon=True).start()
