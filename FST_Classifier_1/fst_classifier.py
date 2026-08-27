@@ -38,12 +38,86 @@ def resolve_target_dump(path):
         os.path.join("..", "seraRawPayloadDump.txt"),
         "seraRawPayloadDump.txt",
         os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "seraRawPayloadDump.txt"),
-        os.path.join(os.path.dirname(__file__), "..", "seraRawPayloadDump.txt")
+        os.path.join(os.path.dirname(__file__), "..", "seraRawPayloadDump.txt"),
+        os.path.join(os.path.dirname(__file__), "raw_dump.txt"),
+        r"C:\Users\Nex\AmanAssociates_Sera\seraRawPayloadDump.txt",
+        r"I:\Project Sera\APP\FST_Classifier_1\raw_dump.txt",
     ]
     for c in candidates:
         if os.path.exists(c):
             return os.path.abspath(c)
     return path
+
+
+def load_master_db_client_names():
+    """Extracts PAN -> Client Name mappings from master.db if available."""
+    pan_names = {}
+    try:
+        candidates = [
+            os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "master.db"),
+            os.path.join("..", "master.db"),
+            os.path.join(os.path.dirname(__file__), "..", "master.db"),
+            r"C:\Users\Nex\AmanAssociates_Sera\master.db",
+            r"c:\Users\Nex\Downloads\Project Sera\APP\master.db",
+            r"I:\Project Sera\APP\master.db"
+        ]
+        salt_candidates = [
+            os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "sera.salt"),
+            os.path.join("..", "sera.salt"),
+            os.path.join(os.path.dirname(__file__), "..", "sera.salt"),
+            r"C:\Users\Nex\AmanAssociates_Sera\sera.salt",
+            r"c:\Users\Nex\Downloads\Project Sera\APP\sera.salt",
+        ]
+        key_candidates = [
+            os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "sera.key"),
+            os.path.join("..", "sera.key"),
+            os.path.join(os.path.dirname(__file__), "..", "sera.key"),
+            r"C:\Users\Nex\AmanAssociates_Sera\sera.key",
+            r"c:\Users\Nex\Downloads\Project Sera\APP\sera.key",
+        ]
+
+        app_dirs = [
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+            r"c:\Users\Nex\Downloads\Project Sera\APP",
+            r"I:\Project Sera\APP"
+        ]
+        for ad in app_dirs:
+            if os.path.exists(ad) and ad not in sys.path:
+                sys.path.insert(0, ad)
+
+        import security
+        from database import SeraDatabase
+
+        for mdb in candidates:
+            if os.path.exists(mdb):
+                k_file = next((k for k in key_candidates if os.path.exists(k)), None)
+                s_file = next((s for s in salt_candidates if os.path.exists(s)), None)
+                if k_file and s_file:
+                    with open(k_file, 'r', encoding='utf-8') as f:
+                        pwd = f.read().strip()
+                    salt = security.load_salt(s_file)
+                    hex_key = security.derive_key_hex(pwd, salt)
+                    db = SeraDatabase(mdb, hex_key, defer_startup_maintenance=True)
+                    clients = db.search_clients("")
+                    mcl_cols = db.get_mcl_columns()
+                    id_col_ids = [c["id"] for c in mcl_cols if c.get("is_identity")]
+                    for c in clients:
+                        vals = c.get("values", {})
+                        names = [str(vals.get(cid, "")).strip() for cid in id_col_ids if vals.get(cid)]
+                        c_name = " ".join(names).strip()
+                        if not c_name or c_name == "Client Profile":
+                            c_name = c.get("name") or ""
+                        for val in vals.values():
+                            if isinstance(val, str) and re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', val.strip().upper()):
+                                pan_names[val.strip().upper()] = c_name
+                    break
+    except Exception:
+        pass
+    return pan_names
+
+
+GLOBAL_DB_NAMES = load_master_db_client_names()
+
 
 def parse_dump(filepath):
     filepath = resolve_target_dump(filepath)
@@ -94,12 +168,14 @@ def parse_dump(filepath):
 
 
 def extract_identifiers(e):
-    rp = e.get("json", {}).get("raw_payload", {}) if isinstance(e.get("json"), dict) else {}
+    js = e.get("json", {}) if isinstance(e.get("json"), dict) else {}
+    rp = js.get("raw_payload", {}) if isinstance(js.get("raw_payload"), dict) else {}
     
     pan = e.get("PAN")
-    if not pan or pan == "N/A": pan = e.get("json", {}).get("pan")
+    if not pan or pan == "N/A": pan = js.get("pan")
     if not pan: pan = rp.get("panNumber")
     if not pan: pan = rp.get("entityNum")
+    if not pan: pan = rp.get("pan")
     if not pan: pan = rp.get("gstin")
     if not pan and isinstance(rp.get("data"), dict): pan = rp.get("data", {}).get("gstin")
     
@@ -113,24 +189,35 @@ def extract_identifiers(e):
                     break
     
     if pan and isinstance(pan, str) and len(pan.strip()) >= 10:
-        pan = pan.strip()
+        pan = pan.strip().upper()
     else:
         pan = None
         
     name = None
-    if "firstName" in rp:
+    # 1. Direct fields in raw_payload
+    if rp.get("fullName"):
+        name = rp.get("fullName")
+    elif rp.get("firstName"):
         n = f"{rp.get('firstName', '')} {rp.get('midName', '')} {rp.get('lastName', '')}".strip()
         name = re.sub(r'\s+', ' ', n).replace('None', '').strip()
-    elif "bn" in rp:
-        name = rp.get("bn")
-    elif "nameAsPerBank" in rp:
+    elif rp.get("assesseeName"):
+        name = rp.get("assesseeName")
+    elif rp.get("taxPayerName"):
+        name = rp.get("taxPayerName")
+    elif rp.get("nameAsPerBank"):
         name = rp.get("nameAsPerBank")
-    elif isinstance(rp.get("data"), dict) and "bn" in rp.get("data", {}):
+    elif rp.get("bn"):
+        name = rp.get("bn")
+    elif isinstance(rp.get("data"), dict) and rp.get("data", {}).get("bn"):
         name = rp.get("data", {}).get("bn")
-    elif isinstance(rp.get("data"), dict) and "auth_name" in rp.get("data", {}):
+    elif isinstance(rp.get("data"), dict) and rp.get("data", {}).get("auth_name"):
         name = rp.get("data", {}).get("auth_name")
+    elif rp.get("entityName"):
+        name = rp.get("entityName")
+    elif js.get("client_name"):
+        name = js.get("client_name")
         
-    # Deep Assessee Name extraction from downloaded ITR files
+    # 2. Deep Assessee Name extraction from downloaded ITR files
     if not name and isinstance(rp.get("ITR"), dict):
         for form_k in ["ITR1", "ITR2", "ITR3", "ITR4", "ITR5", "ITR6", "ITR7"]:
             if form_k in rp["ITR"]:
@@ -143,9 +230,31 @@ def extract_identifiers(e):
                 if not name and "AssesseeVerName" in v_info:
                     name = v_info.get("AssesseeVerName")
                 break
+                
+    # 3. Header client ID extraction
+    if not name and e.get("Client ID"):
+        c_str = e.get("Client ID", "")
+        m = re.search(r'\(([^)]+)\)', c_str)
+        if m:
+            cand = m.group(1).replace("//", "").strip()
+            if cand and not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', cand):
+                name = cand
+                
+    # 4. Master DB lookup
+    if not name and pan and pan in GLOBAL_DB_NAMES:
+        name = GLOBAL_DB_NAMES[pan]
         
-    ack = rp.get("arnNumber")
-    if not ack: ack = rp.get("ackNum")
+    ack = None
+    # 15-digit Government Ack prioritization
+    for k in ["ackNumber", "arnNumber", "arn", "ackNum", "transactionNo"]:
+        val = rp.get(k) or js.get(k)
+        if val and isinstance(val, (str, int)):
+            s_val = str(val).strip()
+            if re.match(r'^\d{15}$', s_val):
+                ack = s_val
+                break
+    if not ack:
+        ack = rp.get("arnNumber") or rp.get("ackNum") or js.get("arn")
     if not ack:
         hdr_ack = e.get("ARN / Ack No", "")
         if hdr_ack and not hdr_ack.startswith("PROFILE") and "EVERIFY" not in hdr_ack and "ITR-" not in hdr_ack:
@@ -158,6 +267,7 @@ def resolve_identities_without_client_id(entries):
     entities = {} 
     ack_to_pan = {}
     
+    # First pass: collect PANs and names
     for e in entries:
         pan, name, ack = extract_identifiers(e)
         if pan:
@@ -167,6 +277,7 @@ def resolve_identities_without_client_id(entries):
                 
     current_temporal_pan = None
     
+    # Second pass: bind temporal entries
     for e in entries:
         pan, name, ack = extract_identifiers(e)
         if not pan:
@@ -184,12 +295,13 @@ def resolve_identities_without_client_id(entries):
             
         entities[target_pan]["entries"].append(e)
         if name: entities[target_pan]["names"].add(name)
+        elif target_pan in GLOBAL_DB_NAMES:
+            entities[target_pan]["names"].add(GLOBAL_DB_NAMES[target_pan])
                 
     return entities
 
 
 def classify_bank_entry(rp):
-    """Accurately classifies bank account status from portal payload fields."""
     bank_name = rp.get("bankName", "BANK ACCOUNT")
     acc_validity = rp.get("accValidity", "")
     acc_status = rp.get("accountStatus", "")
@@ -207,12 +319,12 @@ def classify_bank_entry(rp):
             "details": f"Status: Valid & Open | {refund_status} | EVC Eligible: {rp.get('evcFlag', 'N')}"
         }
         
-    # 2. Validated with Restriction / Warning (e.g. Name Mismatch)
-    if acc_validity == "V" and ("Invalid" in acc_status or "NAME_MATCH" in remarks or "mismatch" in error_cd.lower()):
+    # 2. Validated with Restriction / Warning
+    if acc_validity == "V" and ("Invalid" in acc_status or "NAME_MATCH" in remarks or "mismatch" in str(error_cd).lower()):
         return {
             "label": f"5. Bank Status: Validated with Warning ({bank_name})",
             "color": COLORS["bank_warn"],
-            "details": f"Status: {acc_status} | Warning: {remarks or error_cd[:60]} | Refund Cap: <50L>"
+            "details": f"Status: {acc_status} | Warning: {remarks or str(error_cd)[:60]} | Refund Cap: <50L>"
         }
         
     # 3. Disabled / Legacy Inactive Account
@@ -223,12 +335,12 @@ def classify_bank_entry(rp):
             "details": f"Status: Disabled/Historical Account | Merged/Closed Bank Record | ActiveFlag: D"
         }
         
-    # 4. Actual Failure / Rejection
+    # 4. Revalidation Required / Rejection
     fail_reason = remarks or error_cd or acc_status or "Validation Failed"
     return {
         "label": f"5. Bank Status: Revalidation Required ({bank_name})",
         "color": COLORS["bank_failed"],
-        "details": f"Status: {acc_status or 'Validation Inactive'} | Reason: {fail_reason[:75]}"
+        "details": f"Status: {acc_status or 'Validation Inactive'} | Reason: {str(fail_reason)[:75]}"
     }
 
 
@@ -236,7 +348,15 @@ def analyze_lifecycle(entities):
     summary_list = [] 
     for pan, data in entities.items():
         if pan == "UNKNOWN": continue 
-        names = "\n".join(list(data["names"]))
+        
+        # Deduplicate and format client names cleanly
+        raw_names = [n.strip() for n in data["names"] if n and str(n).strip()]
+        unique_names = []
+        for n in raw_names:
+            if not any(n.lower() == un.lower() for un in unique_names):
+                unique_names.append(n)
+        names = "\n".join(unique_names) if unique_names else (GLOBAL_DB_NAMES.get(pan, "") or "N/A")
+        
         has_submit, has_gst, has_itr_everified = False, False, False
         
         for e in data["entries"]:
@@ -262,7 +382,7 @@ def analyze_lifecycle(entities):
                 })
                     
         submit_events = [e for e in data["entries"] if "submit/wzrd" in e.get("json",{}).get("url","") and e.get("json",{}).get("raw_payload",{}).get("httpStatus") == "ACCEPTED"]
-        everify_events = [e for e in data["entries"] if "validateOTP" in e.get("json",{}).get("url","") and e.get("json",{}).get("raw_payload",{}).get("status") == "SUCCESS"]
+        everify_events = [e for e in data["entries"] if "validateOTP" in e.get("json",{}).get("url","") and (e.get("json",{}).get("raw_payload",{}).get("status") == "SUCCESS" or e.get("json",{}).get("raw_payload",{}).get("code") == "OTP VALIDATED")]
         
         handled_everify_acks = set()
         
@@ -271,16 +391,20 @@ def analyze_lifecycle(entities):
             has_submit = True
             for sub_e in submit_events:
                 sub_ack = sub_e.get("assigned_ack")
-                matching_ev = next((ev for ev in everify_events if ev.get("assigned_ack") == sub_ack and ev.get("json",{}).get("raw_payload",{}).get("moduleCode") == "ITR"), None)
+                
+                # Check for matching e-verification by ACK or by SAME CLIENT SESSION
+                matching_ev = next((ev for ev in everify_events if (ev.get("assigned_ack") == sub_ack or ev.get("assigned_pan") == pan)), None)
                 
                 if matching_ev:
                     has_itr_everified = True
+                    handled_everify_acks.add(matching_ev.get("assigned_ack"))
                     handled_everify_acks.add(sub_ack)
+                    ev_txn = matching_ev.get("json",{}).get("raw_payload",{}).get("aadhaarTxnId") or matching_ev.get('ARN / Ack No') or sub_ack
                     summary_list.append({ 
                         "cat": "2. File Submitted & E-Verified (ITR)", "color": COLORS["cat2"],
                         "entries": f"Submit #{sub_e['Entry #']}, E-Verify #{matching_ev['Entry #']}",
                         "pan": pan, "name": names, "ack": sub_ack,
-                        "details": f"Complete ITR lifecycle: JSON submission + OTP E-Verification via Aadhaar (Txn: {matching_ev.get('ARN / Ack No')})"
+                        "details": f"Complete ITR lifecycle: JSON submission + OTP E-Verification via Aadhaar (Txn: {ev_txn})"
                     })
                 else:
                     summary_list.append({ 
@@ -290,11 +414,11 @@ def analyze_lifecycle(entities):
                         "details": "ITR Return submitted via wizard with HTTP status ACCEPTED, but EVC/OTP e-verification is pending."
                     })
                     
-        # Handle Standalone ITR E-Verification (e.g. Entry #54 where return was submitted prior to session)
+        # Handle Standalone ITR E-Verification (when return was submitted in prior session)
         for ev in everify_events:
             ev_rp = ev.get("json", {}).get("raw_payload", {})
             ev_ack = ev.get("assigned_ack")
-            if ev_rp.get("moduleCode") == "ITR" and ev_ack not in handled_everify_acks:
+            if ev_ack not in handled_everify_acks:
                 has_itr_everified = True
                 form_num = ev_rp.get("formCd", "ITR")
                 summary_list.append({ 
@@ -416,21 +540,52 @@ def create_excel(entries, entities, summary_list, out_path):
     ws_all.column_dimensions['D'].width = 25
     ws_all.column_dimensions['E'].width = 75
 
-    wb.save(out_path)
-    wb.close()
+    # Safe Save with Retry & Fallback if file is open in Excel
+    saved = False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            wb.save(out_path)
+            wb.close()
+            saved = True
+            break
+        except PermissionError:
+            time.sleep(0.4)
+        except Exception as e:
+            print(f"[-] Error saving {out_path}: {e}")
+            break
+
+    if not saved:
+        # Save to fallback mirror file
+        dir_name = os.path.dirname(out_path) or "."
+        base_name = os.path.basename(out_path)
+        name_no_ext, ext = os.path.splitext(base_name)
+        fallback_path = os.path.join(dir_name, f"{name_no_ext}_latest{ext}")
+        try:
+            wb.save(fallback_path)
+            wb.close()
+            print(f"[!] '{out_path}' is currently open in Excel.")
+            print(f"[+] Saved updated copy to '{fallback_path}'. Will sync to '{out_path}' once Excel is closed.")
+            return True, fallback_path
+        except Exception as e:
+            print(f"[-] Fallback save failed: {e}")
+            return False, None
+
+    return True, out_path
+
 
 def process_data(input_dump, output_excel):
     try:
         real_dump_path = resolve_target_dump(input_dump)
         entries = parse_dump(real_dump_path)
-        if not entries: return False
+        if not entries: return False, None
         entities = resolve_identities_without_client_id(entries)
         summary = analyze_lifecycle(entities)
-        create_excel(entries, entities, summary, output_excel)
-        return True
+        return create_excel(entries, entities, summary, output_excel)
     except Exception as e:
         print(f"[-] Error processing dump: {e}")
-        return False
+        return False, None
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -446,21 +601,28 @@ def main():
         print(f"[*] Watching '{target_dump}' for updates...")
         
         last_mtime = -1
+        pending_retry = False
         while True:
             try:
                 if os.path.exists(target_dump):
                     current_mtime = os.path.getmtime(target_dump)
-                    if current_mtime > last_mtime:
-                        if last_mtime != -1:
+                    if current_mtime > last_mtime or pending_retry:
+                        if last_mtime != -1 and not pending_retry:
                             print(f"\n[+] Detected new payloads at {time.strftime('%H:%M:%S')}. Recompiling tracker...")
-                        else:
+                        elif last_mtime == -1:
                             print(f"[*] Compiling initial tracker dump...")
                             
-                        success = process_data(target_dump, args.output_excel)
+                        success, actual_path = process_data(target_dump, args.output_excel)
                         if success:
-                            print(f"[+] Tracker successfully updated: {args.output_excel}")
-                            
-                        last_mtime = current_mtime
+                            if actual_path == args.output_excel:
+                                print(f"[+] Tracker successfully updated: {args.output_excel}")
+                                last_mtime = current_mtime
+                                pending_retry = False
+                            else:
+                                # Saved to fallback mirror while main file was open in Excel
+                                pending_retry = True
+                        else:
+                            pending_retry = True
                 else:
                     if last_mtime != -2:
                         print(f"[-] Waiting for '{target_dump}' to be created...")
@@ -474,8 +636,9 @@ def main():
             time.sleep(2)
     else:
         print(f"[*] Processing dump from '{target_dump}'...")
-        success = process_data(target_dump, args.output_excel)
-        if success: print(f"[+] Success! Tracker saved to {args.output_excel}")
+        success, actual_path = process_data(target_dump, args.output_excel)
+        if success: print(f"[+] Success! Tracker saved to {actual_path}")
+
 
 if __name__ == "__main__":
     main()
