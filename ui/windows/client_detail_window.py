@@ -6,7 +6,7 @@ Window 2: shows client info, masked passwords, and autofill buttons.
 
 import webbrowser
 
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QMimeData
+from PySide6.QtCore import Qt, QTimer, QSize, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -202,10 +202,7 @@ class ClientDetailWindow(QWidget):
 
     def _copy_token_to_clipboard(self, token: str):
         from PySide6.QtWidgets import QApplication
-        mime = QMimeData()
-        mime.setText(token)
-        mime.setData("application/x-sera-uid", b"1")
-        QApplication.clipboard().setMimeData(mime)
+        QApplication.clipboard().setText(token)
         self.toast_requested.emit(f"Copied Client Token: {token}", 2000)
 
     def _restore_back_inputs(self):
@@ -689,6 +686,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
@@ -748,6 +746,7 @@ class ClientDetailWindow(QWidget):
             sad_on = self.db.get_setting("sad_enabled", "1") == "1"
             service["_fst_enabled"] = fst_on
             service["_sad_enabled"] = sad_on
+            service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
             service["_tracker_enabled"] = fst_on or sad_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
@@ -780,6 +779,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
@@ -806,6 +806,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(
@@ -856,10 +857,7 @@ class ClientDetailWindow(QWidget):
 
     def _copy_to_clipboard(self, val: str, label_name: str, is_secret: bool, timeout_sec: int):
         from PySide6.QtWidgets import QApplication
-        mime = QMimeData()
-        mime.setText(val)
-        mime.setData("application/x-sera-uid", b"1")
-        QApplication.clipboard().setMimeData(mime)
+        QApplication.clipboard().setText(val)
         
         c_name = self._get_identity_label(self.client) if self.client else label_name
         self.action_alert_requested.emit("manual_copy", c_name)

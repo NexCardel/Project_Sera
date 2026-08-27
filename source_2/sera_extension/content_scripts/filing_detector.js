@@ -161,16 +161,26 @@
 
         console.log("Sera Filing Detector: Received SAD API Capture event", detail);
 
-        // Display sleek compact in-browser toast notification
-        SeraToastManager.notify(detail);
-
         if (!chrome.runtime || !chrome.runtime.id) {
             console.log("Sera Filing Detector: Extension context reloaded.");
             return;
         }
 
         try {
-            chrome.storage.local.get(['activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled', 'allowedDomains'], (data) => {
+            chrome.storage.local.get(['sadBrowserNotifEnabled', 'sad_browser_notif_enabled', 'activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled', 'allowedDomains'], (data) => {
+                // Check if in-browser toast notification is enabled
+                let showToast = true;
+                if (data) {
+                    if (data.sadBrowserNotifEnabled === false || data.sad_browser_notif_enabled === false) {
+                        showToast = false;
+                    } else if (data.activeAutofillPayload && data.activeAutofillPayload.sad_browser_notif_enabled === false) {
+                        showToast = false;
+                    }
+                }
+                if (showToast) {
+                    SeraToastManager.notify(detail);
+                }
+
                 if (chrome.runtime.lastError || !chrome.runtime || !chrome.runtime.id) return;
                 if (data && (data.trackerEnabled === false || data.sadEnabled === false)) {
                     return;

@@ -686,6 +686,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
@@ -745,6 +746,7 @@ class ClientDetailWindow(QWidget):
             sad_on = self.db.get_setting("sad_enabled", "1") == "1"
             service["_fst_enabled"] = fst_on
             service["_sad_enabled"] = sad_on
+            service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
             service["_tracker_enabled"] = fst_on or sad_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
@@ -777,6 +779,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
@@ -803,6 +806,7 @@ class ClientDetailWindow(QWidget):
         sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
         service["_sad_enabled"] = sad_on
+        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(

@@ -141,6 +141,7 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "tracker_enabled": service.get("_tracker_enabled", True),
         "fst_enabled": service.get("_fst_enabled", True),
         "sad_enabled": service.get("_sad_enabled", True),
+        "sad_browser_notif_enabled": service.get("_sad_browser_notif_enabled", True),
     }
 
     def _attempt_send():
@@ -242,7 +243,7 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -273,6 +274,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "tracker_enabled": tracker_enabled,
         "fst_enabled": fst_enabled,
         "sad_enabled": sad_enabled,
+        "sad_browser_notif_enabled": sad_browser_notif_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),

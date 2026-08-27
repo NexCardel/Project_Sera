@@ -1,14 +1,3 @@
-function getHost(urlStr) {
-  if (!urlStr) return '';
-  try {
-    const raw = String(urlStr).trim();
-    const withScheme = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw}`;
-    return new URL(withScheme).hostname.toLowerCase();
-  } catch (_) {
-    return String(urlStr).toLowerCase();
-  }
-}
-
 let nativePort = null;
 
 function connectToNativeHost() {
@@ -19,31 +8,40 @@ function connectToNativeHost() {
     console.log('Sera native host connection established');
     nativePort.onMessage.addListener((message) => {
       console.log("Received from Sera desktop:", message);
+      if (message.type && message.type.startsWith("SCA_")) {
+        if (message.command_id) {
+          try {
+            nativePort.postMessage({ type: "SCA_ACK", command_id: message.command_id });
+          } catch(e) {}
+          if (!self.seenScaCommands) self.seenScaCommands = new Set();
+          if (self.seenScaCommands.has(message.command_id)) return;
+          self.seenScaCommands.add(message.command_id);
+        }
+        handleScaCommand(message, {id: "nativeHost"}, () => {});
+        return;
+      }
       if (message.type === "autofill" && message.url) {
         if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
         else if (message.mode === "manual_assist") handleManualAssistTab(message);
         else handleAutofillTab(message);
       } else if (message.type === "SCA_ARM") {
-        handleScaArm(message); // Legacy fallback
-      } else if (message.type === "SCA_ARM_REQUEST" || message.type === "SCA_DISARM_REQUEST" || message.type === "SCA_STATE_REQUEST" || message.type === "SCA_PING") {
-        handleScaCommand(message);
+        handleScaArm(message);
       } else if (message.type === "update_settings") {
         const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
         const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
+        const sadNotif = message.sad_browser_notif_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
-        const scaMaxUses = Math.max(1, Math.min(Number(message.sca_max_uses || 1), 20));
         const allowedDomains = message.allowed_domains || [];
         const overallTracker = fst || sad;
         const storageObj = {
           trackerEnabled: overallTracker,
           fstEnabled: fst,
           sadEnabled: sad,
+          sadBrowserNotifEnabled: sadNotif,
           scaEnabled: sca,
-          scaMode: scaMode,
-          scaMaxUses: scaMaxUses
+          scaMode: scaMode
         };
-        if (!sca) clearScaArm();
         if (allowedDomains && allowedDomains.length > 0) {
           storageObj.allowedDomains = allowedDomains;
         }
@@ -406,11 +404,13 @@ function handleAutofillTab(message) {
   const isTrackerEnabled = message.tracker_enabled === true;
   const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
   const isSadEnabled = message.sad_enabled !== false && isTrackerEnabled;
+  const isSadNotifEnabled = message.sad_browser_notif_enabled !== false;
   chrome.storage.local.set({ 
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, ts: Date.now() },
+    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, sad_browser_notif_enabled: isSadNotifEnabled, ts: Date.now() },
     trackerEnabled: isTrackerEnabled,
     fstEnabled: isFstEnabled,
-    sadEnabled: isSadEnabled
+    sadEnabled: isSadEnabled,
+    sadBrowserNotifEnabled: isSadNotifEnabled
   });
 
   chrome.tabs.query({}, (tabs) => {
@@ -1497,56 +1497,46 @@ function injectMECP(tabId, message) {
 let armedSCAPayload = null;
 let armedSCATimer = null;
 
-// Chrome MV3: service worker can be killed while SCA is armed.
-// Re-hydrate in-memory armedSCAPayload from storage on every cold start so
-// the sca_paste_matched handler can find it without a storage round-trip.
+// Recover state on service worker restart
 chrome.storage.local.get(['armedSCAPayload'], (data) => {
   if (data.armedSCAPayload && data.armedSCAPayload.expiresAt > Date.now()) {
     armedSCAPayload = data.armedSCAPayload;
     const remaining = data.armedSCAPayload.expiresAt - Date.now();
     armedSCATimer = setTimeout(() => {
-      console.log("Sera SCA: Armed state expired (restored from storage).");
       clearScaArm();
     }, remaining);
-    console.log(`Sera SCA: Restored armed payload from storage for client ${armedSCAPayload.client_id_token || armedSCAPayload.client_id} (${Math.round(remaining / 1000)}s remaining).`);
   } else {
-    console.log('Sera SCA: No armed payload found in storage on startup.');
+    chrome.storage.local.remove(['armedSCAPayload']);
   }
 });
 
 
+function notifyStateChange(state) {
+  try {
+    if (nativePort && armedSCAPayload) {
+      nativePort.postMessage({
+        type: "SCA_STATE",
+        arm: { ...armedSCAPayload, state: state }
+      });
+    } else if (nativePort) {
+      nativePort.postMessage({
+        type: "SCA_STATE",
+        arm: { state: state }
+      });
+    }
+  } catch(e) {}
+}
 function clearScaArm() {
+  notifyStateChange("IDLE");
+  armedSCAPayload = null;
   if (armedSCATimer) {
     clearTimeout(armedSCATimer);
     armedSCATimer = null;
   }
-  armedSCAPayload = null;
   chrome.storage.local.remove(['armedSCAPayload']);
 }
 
-let lastScaCommandId = null;
-
-function handleScaCommand(req) {
-  if (!nativePort) return;
-  const cmd_id = req.command_id;
-  
-  // 1. Send Ack immediately
-  try {
-    nativePort.postMessage({
-      type: "SCA_ACK",
-      command_id: cmd_id,
-      accepted: true
-    });
-  } catch (e) {}
-
-  // 2. Deduplicate
-  if (cmd_id && cmd_id === lastScaCommandId) {
-    console.log(`Sera SCA: Ignored duplicate command ${cmd_id}`);
-    return;
-  }
-  lastScaCommandId = cmd_id;
-
-  // 3. Dispatch
+function handleScaCommand(req, sender, sendResponse) {
   if (req.type === "SCA_PING") {
     return; // Ack was enough
   } else if (req.type === "SCA_STATE_REQUEST") {
@@ -1567,18 +1557,13 @@ function handleScaCommand(req) {
       
       console.log(`Sera SCA: Coordinator arming for client ${newArm.client_id_token || newArm.client_id}`);
       
-      if (armedSCATimer) {
-        clearTimeout(armedSCATimer);
-      }
+      if (armedSCATimer) clearTimeout(armedSCATimer);
       
       armedSCAPayload = newArm;
       
       const remaining = newArm.expires_at - Date.now();
       if (remaining > 0) {
-        armedSCATimer = setTimeout(() => {
-          console.log("Sera SCA: Armed state expired (Coordinator).");
-          clearScaArm();
-        }, remaining);
+        armedSCATimer = setTimeout(() => clearScaArm(), remaining);
       } else {
         clearScaArm();
         return;
@@ -1586,17 +1571,19 @@ function handleScaCommand(req) {
       
       chrome.storage.local.remove(['manualAssistPayload']);
       chrome.storage.local.set({ armedSCAPayload: armedSCAPayload });
+      notifyStateChange("ARMED");
     });
   }
 }
 
+
 function handleScaArm(message) {
-  chrome.storage.local.get(['scaEnabled', 'scaMaxUses'], (data) => {
+  chrome.storage.local.get(['scaEnabled'], (data) => {
     if (data.scaEnabled === false) {
       console.log("Sera SCA: SCA is disabled in settings. Skipping arm.");
       return;
     }
-    console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id, "mode:", message.sca_mode);
+    console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id);
     if (armedSCATimer) {
       clearTimeout(armedSCATimer);
       armedSCATimer = null;
@@ -1604,18 +1591,14 @@ function handleScaArm(message) {
     const ttl = message.ttl_ms || 45000;
     armedSCAPayload = {
       ...message,
-      remainingUses: Math.max(1, Math.min(Number(message.max_uses || data.scaMaxUses || 1), 20)),
-      fillCompletionHandled: false,
-      fillInProgress: false,
       expiresAt: Date.now() + ttl
     };
     armedSCATimer = setTimeout(() => {
       console.log("Sera SCA: Armed state expired.");
-      clearScaArm();
+      armedSCAPayload = null;
+      armedSCATimer = null;
     }, ttl);
 
-    // Clear stale manualAssistPayload so SMTI doesn't block newly armed SCA
-    chrome.storage.local.remove(['manualAssistPayload']);
     // Broadcast armed payload to active tabs for instantaneous paste readiness
     chrome.storage.local.set({ armedSCAPayload: armedSCAPayload });
   });
@@ -1623,6 +1606,29 @@ function handleScaArm(message) {
 
 // Global runtime message listener from content scripts (e.g. paste triggered)
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+  if (req.type && req.type.startsWith("SCA_")) {
+    // Send ACK immediately if it's a request from native host
+    if (req.command_id) {
+      try {
+        nativePort.postMessage({ type: "SCA_ACK", command_id: req.command_id });
+      } catch(e) {}
+      
+      // Check dedup
+      if (!self.seenScaCommands) self.seenScaCommands = new Set();
+      if (self.seenScaCommands.has(req.command_id)) return;
+      self.seenScaCommands.add(req.command_id);
+    }
+    
+    if (req.type === "SCA_ERROR" || req.type === "SCA_FILL_RESULT") {
+      try {
+        nativePort.postMessage(req);
+      } catch(e) {}
+      return;
+    }
+    
+    handleScaCommand(req, sender, sendResponse);
+  }
+
   if (req.type === "sca_fill_completed") {
     chrome.storage.local.get(['armedSCAPayload'], (stored) => {
       console.log("Sera SCA: Successful fill reported; consuming one use.");
@@ -1634,8 +1640,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       if (payload.remainingUses <= 0) {
         clearScaArm();
       } else {
-        // Keep the arm alive for the configured number of uses, but reopen it
-        // only after the current successful fill has been accounted for.
         payload.fillCompletionHandled = false;
         armedSCAPayload = payload;
         chrome.storage.local.set({ armedSCAPayload: payload });
@@ -1643,79 +1647,47 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     });
     return;
   }
-  if (req.type === "sca_paste_matched") {
-    const senderTabId = sender.tab && sender.tab.id;
-    console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", senderTabId || "unknown (service worker cold-start?)");
 
-    // Chrome MV3: service worker can cold-start on first message; sender.tab may be null.
-    // Fall back to querying the active tab by hostname match from req.portal.
-    const processScaForTab = (tabId, tabUrl) => {
-      chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode', 'manualAssistPayload'], (data) => {
-        if (data.scaEnabled === false) return;
-        const payload = data.armedSCAPayload || armedSCAPayload;
-        if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
-          console.log("Sera SCA: No active armed payload found for paste event.");
-          return;
-        }
-        if (Number(payload.remainingUses || 0) <= 0) {
-          clearScaArm();
-          return;
-        }
-        const tHost = getHost(tabUrl) || getHost(req.portal);
+  if (req.type === "sca_paste_matched" || req.type === "SCA_MATCH_CANDIDATE") {
+    console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
+    if (!sender.tab || !sender.tab.id) return;
+
+    chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode', 'manualAssistPayload'], (data) => {
+      if (data.scaEnabled === false) return;
+      // Don't trigger SCA if SMTI (Manual Assist) widget is currently active
+      const smtiActive = data.manualAssistPayload && data.manualAssistPayload.expiresAt && data.manualAssistPayload.expiresAt > Date.now();
+      if (smtiActive) {
+        console.log("Sera SCA: Skipping — SMTI (Manual Assist) is currently active on this tab.");
+        return;
+      }
+      const payload = data.armedSCAPayload || armedSCAPayload;
+      if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
+        console.log("Sera SCA: No active armed payload found for paste event.");
+        return;
+      }
 
       const matchedService = (payload.services || []).find(s => {
         try {
-          const uHost = getHost(s.url);
-          if (!uHost || !tHost) return true;
-          return (
-            tHost === uHost ||
-            tHost.includes(uHost) ||
-            uHost.includes(tHost) ||
-            (tHost.includes('gst.gov.in') && uHost.includes('gst.gov.in')) ||
-            (tHost.includes('incometax') && uHost.includes('incometax')) ||
-            (tHost.includes('tdscpc') && uHost.includes('tdscpc')) ||
-            (tHost.includes('mca.gov.in') && uHost.includes('mca.gov.in'))
-          );
+          const uHost = new URL(s.url).hostname.toLowerCase();
+          const targetPortal = (req.portal || '').toLowerCase();
+          let tHost = '';
+          if (sender.tab && sender.tab.url) {
+            try { tHost = new URL(sender.tab.url).hostname.toLowerCase(); } catch (_) {}
+          }
+          return (tHost && (tHost.includes(uHost) || uHost.includes(tHost))) ||
+                 (targetPortal && (targetPortal.includes(uHost) || uHost.includes(targetPortal)));
         } catch (_) {
-          return false;
+          return true;
         }
       }) || (payload.services && payload.services[0]);
 
-      if (!matchedService) {
-        console.log("Sera SCA: No attached service matches the active tab; refusing autofill.");
-        return;
-      }
-      payload.fillInProgress = true;
-      chrome.storage.local.set({ armedSCAPayload: payload });
+      if (matchedService && matchedService.password) {
+        const isWidgetMode = (payload.sca_mode === "widget" || payload.sca_mode === "assist") || (data.scaMode === "widget" || data.scaMode === "assist");
 
-      // Guard: must have a password to fill. Log clearly so the bug is visible.
-      if (!matchedService.password) {
-        console.warn(`Sera SCA: Matched service "${matchedService.name || matchedService.url}" has no password stored — cannot autofill. Disarming.`);
-        payload.fillInProgress = false;
-        chrome.storage.local.set({ armedSCAPayload: payload });
-        return;
-      }
-
-      const isWidgetMode = (payload.sca_mode === "widget" || payload.sca_mode === "assist") || (data.scaMode === "widget" || data.scaMode === "assist");
-
-      if (isWidgetMode) {
-          // Direct content script message dispatch
-          try {
-            chrome.tabs.sendMessage(tabId, {
-              type: "SHOW_SCA_WIDGET",
-              password: matchedService.password,
-              password_selector: matchedService.password_selector,
-              business_name: payload.business_name || "",
-              owner_name: payload.owner_name || "",
-              portal_name: matchedService.name || "Portal",
-              matched_uid: payload.matched_uid || "",
-              client_id: payload.client_id || 0,
-              client_id_token: payload.client_id_token || ""
-            });
-          } catch (_) {}
+        if (isWidgetMode) {
           // Trigger interactive SCA Widget on this tab
           chrome.scripting.executeScript({
-            target: { tabId: tabId, allFrames: true },
+            target: { tabId: sender.tab.id, allFrames: true },
             func: (pwd, pwdSel, bizName, ownName, portalName, matchedUid, clientId, clientToken) => {
               function isVis(el) {
                 if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
@@ -1732,21 +1704,13 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                   setter.call(el, val);
                 } catch (_) { el.value = val; }
-                try {
-                  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
-                } catch (_) {}
-                try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-                try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-                try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (_) {}
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
               }
 
               const fallbacks = [
                 pwdSel,
-                "#user_pass",
-                "input[id='user_pass']",
-                "input[name='user_pass']",
-                "input[id*='user_pass']",
-                "input[name*='user_pass']",
                 "input[id*='psw']",
                 "input[name*='psw']",
                 "input[id$='psw']",
@@ -1759,6 +1723,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 "input[name*='password']",
                 "#password",
                 "#passwordInput",
+                "#user_pass",
                 "input[name='password']",
                 "input[name='pass']"
               ].filter(Boolean);
@@ -1913,7 +1878,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   const currentField = targetField && isVis(targetField) ? targetField : findPassField();
                   if (currentField) {
                     simType(currentField, pwd);
-                    window.postMessage({ source: "sera_sca", type: "filled" }, "*");
                     clearTimeout(autoTimer);
                     injectBtn.className = "btn-inject done";
                     injectBtn.innerHTML = "✓  Password Injected";
@@ -1932,10 +1896,18 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               if (initialField) {
                 renderAndShowWidget(initialField);
               } else {
-                // Two-page logins (including GST) may not expose the password
-                // field until after the username/Next step. Render the widget
-                // now; its button resolves the password field at click time.
-                renderAndShowWidget(null);
+                // Two-page login: wait up to 45s for user to click Next and password field to appear
+                let attempts = 0;
+                const waitInterval = setInterval(() => {
+                  attempts++;
+                  const pf = findPassField();
+                  if (pf) {
+                    clearInterval(waitInterval);
+                    renderAndShowWidget(pf);
+                  } else if (attempts >= 300) {
+                    clearInterval(waitInterval);
+                  }
+                }, 150);
               }
             },
             args: [
@@ -1964,7 +1936,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         } else {
           // Trigger ambient silent password fill on this tab
           chrome.scripting.executeScript({
-            target: { tabId: tabId, allFrames: true },
+            target: { tabId: sender.tab.id, allFrames: true },
             func: (pwd, pwdSel, flow, bizName, ownName, portalName) => {
               function isVis(el) {
                 if (!el) return false;
@@ -1981,12 +1953,9 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                   setter.call(el, val);
                 } catch (_) { el.value = val; }
-                try {
-                  el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
-                } catch (_) {}
-                try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-                try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
-                try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (_) {}
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
               }
 
               function showScaToast() {
@@ -2074,11 +2043,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               // Find password field (includes TRACES and Google's Passwd field)
               const fallbacks = [
                 pwdSel,
-                "#user_pass",
-                "input[id='user_pass']",
-                "input[name='user_pass']",
-                "input[id*='user_pass']",
-                "input[name*='user_pass']",
                 "input[id*='psw']",
                 "input[name*='psw']",
                 "input[id$='psw']",
@@ -2091,6 +2055,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 "input[name*='password']",
                 "#password",
                 "#passwordInput",
+                "#user_pass",
                 "input[name='password']",
                 "input[name='pass']"
               ].filter(Boolean);
@@ -2114,7 +2079,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   clearInterval(interval);
                   setTimeout(() => {
                     simType(passField, pwd);
-                    window.postMessage({ source: "sera_sca", type: "filled" }, "*");
                     showScaToast();
                     console.log("Sera SCA: Password filled safely & notification banner displayed.");
                   }, 100);
@@ -2145,27 +2109,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               } catch (_) {}
             }
           }).catch(err => console.error("Sera SCA: Injection error", err));
-      }
-      }); // end chrome.storage.local.get
-    }; // end processScaForTab
-
-    if (senderTabId) {
-      // Normal path: sender.tab is available
-      processScaForTab(senderTabId, (sender.tab && sender.tab.url) || '');
-    } else {
-      // Chrome service worker cold-start fallback: query active tab matching the reported portal hostname
-      const portalHost = getHost(req.portal);
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const match = tabs.find(t => {
-          try { return getHost(t.url || '').includes(portalHost) || portalHost.includes(getHost(t.url || '')); } catch (_) { return false; }
-        }) || tabs[0];
-        if (match && match.id) {
-          console.log("Sera SCA: Resolved tab via tabs.query fallback:", match.id, match.url);
-          processScaForTab(match.id, match.url || '');
-        } else {
-          console.warn("Sera SCA: Could not resolve a tab for SCA fill (cold-start, no active tab found).");
         }
-      });
-    }
+      }
+    });
   }
 });

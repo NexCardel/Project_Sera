@@ -18,7 +18,7 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.6.0)
+## Latest Features (v2.6.1)
 
 - **Sera FST (File Submission Tracker Subsystem)**:
   - **Sera SAD — API Detector (Network Layer)**:

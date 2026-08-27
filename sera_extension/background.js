@@ -29,6 +29,7 @@ function connectToNativeHost() {
       } else if (message.type === "update_settings") {
         const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
         const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
+        const sadNotif = message.sad_browser_notif_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
         const allowedDomains = message.allowed_domains || [];
@@ -37,6 +38,7 @@ function connectToNativeHost() {
           trackerEnabled: overallTracker,
           fstEnabled: fst,
           sadEnabled: sad,
+          sadBrowserNotifEnabled: sadNotif,
           scaEnabled: sca,
           scaMode: scaMode
         };
@@ -402,11 +404,13 @@ function handleAutofillTab(message) {
   const isTrackerEnabled = message.tracker_enabled === true;
   const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
   const isSadEnabled = message.sad_enabled !== false && isTrackerEnabled;
+  const isSadNotifEnabled = message.sad_browser_notif_enabled !== false;
   chrome.storage.local.set({ 
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, ts: Date.now() },
+    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, sad_browser_notif_enabled: isSadNotifEnabled, ts: Date.now() },
     trackerEnabled: isTrackerEnabled,
     fstEnabled: isFstEnabled,
-    sadEnabled: isSadEnabled
+    sadEnabled: isSadEnabled,
+    sadBrowserNotifEnabled: isSadNotifEnabled
   });
 
   chrome.tabs.query({}, (tabs) => {

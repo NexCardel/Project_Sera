@@ -222,6 +222,23 @@ class SeraApp:
         else:
             self.app_icon = None
         
+        base_dir = Path(__file__).resolve().parent
+        icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "icon_here.png"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.ico"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.png"
+        if not icon_path.exists():
+            icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
+
+        if icon_path.exists():
+            self.app_icon = QIcon(str(icon_path))
+            self.app.setWindowIcon(self.app_icon)
+        else:
+            self.app_icon = None
+        
         self.db_path = str(APP_DIR / "master.db")
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
@@ -264,6 +281,8 @@ class SeraApp:
                 self.db.set_setting("fst_enabled", "1")
             if self.db.get_setting("sad_enabled") is None:
                 self.db.set_setting("sad_enabled", "1")
+            if self.db.get_setting("sad_browser_notif_enabled") is None:
+                self.db.set_setting("sad_browser_notif_enabled", "1")
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
             if self.db.get_setting("tracker_enabled") is None:

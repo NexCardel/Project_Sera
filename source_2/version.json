@@ -1,7 +1,7 @@
 {
-  "version": "2.6.0",
-  "min_required_version": "2.6.0",
+  "version": "2.6.1",
+  "min_required_version": "2.6.1",
   "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.6.0/Amas_Sera_Setup_v2.6.0.exe",
-  "release_notes": "Project Sera v2.6.0 release: Strict 15-digit Government ARN prioritization, e-Verify Later status correlation, entity-aware name parsing (ITR-4 Schedule BP/44AD), and startup deferral support."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.6.1/Amas_Sera_Setup_v2.6.1.exe",
+  "release_notes": "Project Sera v2.6.1 release: Added in-browser notification toggle for Sera SAD, enhanced extension settings synchronization, and SAD v2.8.5.5 update."
 }

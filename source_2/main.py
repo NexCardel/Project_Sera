@@ -8,6 +8,8 @@ import sys
 import os
 import socket
 import json
+import queue
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -23,7 +25,7 @@ if "--native-host" in sys.argv or any(arg.startswith("chrome-extension://") for 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy, QSystemTrayIcon, QMenu
 from ui.shell.app_shell import AppShell
 from PySide6.QtGui import QFont, QShortcut, QKeySequence, QIcon, QAction
-from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtCore import Qt, QObject, Signal, QTimer
 
 try:
     import qtawesome as qta
@@ -45,6 +47,7 @@ class SyncSignalBridge(QObject):
     live_sync_received_signal = Signal(str, str)
     peer_logs_received_signal = Signal(str)
     sync_sent_signal = Signal(int, int)
+    capture_processed_signal = Signal(dict, dict)
 
 import security
 from database import SeraDatabase
@@ -196,6 +199,28 @@ class SeraApp:
         self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
         self.sync_bridge.peer_logs_received_signal.connect(self._handle_peer_logs_received_main_thread)
         self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
+        self.sync_bridge.capture_processed_signal.connect(self._on_capture_processed_ui)
+        self._capture_ui_refresh_pending = False
+        self._capture_queue = queue.Queue()
+        self._capture_worker = threading.Thread(target=self._capture_worker_loop, daemon=True)
+        self._capture_worker.start()
+        
+        base_dir = Path(__file__).resolve().parent
+        icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "icon_here.png"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.ico"
+        if not icon_path.exists():
+            icon_path = base_dir / "assets" / "logo" / "sera_icon.png"
+        if not icon_path.exists():
+            icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
+
+        if icon_path.exists():
+            self.app_icon = QIcon(str(icon_path))
+            self.app.setWindowIcon(self.app_icon)
+        else:
+            self.app_icon = None
         
         base_dir = Path(__file__).resolve().parent
         icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
@@ -249,16 +274,15 @@ class SeraApp:
             hex_key = security.derive_key_hex(master_password, salt)
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
-            self.db = SeraDatabase(self.db_path, hex_key)
-            import threading
-            threading.Thread(target=self.db.auto_populate_service_selectors, daemon=True).start()
-            threading.Thread(target=self.db.sync_raw_payload_dumps_file, daemon=True).start()
+            self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
 
             # Ensure FST, SAD, SCA, and tracker settings are initialized
             if self.db.get_setting("fst_enabled") is None:
                 self.db.set_setting("fst_enabled", "1")
             if self.db.get_setting("sad_enabled") is None:
                 self.db.set_setting("sad_enabled", "1")
+            if self.db.get_setting("sad_browser_notif_enabled") is None:
+                self.db.set_setting("sad_browser_notif_enabled", "1")
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
             if self.db.get_setting("tracker_enabled") is None:
@@ -324,6 +348,23 @@ class SeraApp:
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.ext_listener.start()
 
+        # Heavy historical repair/report work is intentionally deferred until
+        # after the main window and extension listener are available.
+        threading.Thread(
+            target=self._run_deferred_startup_maintenance,
+            name="sera-startup-maintenance",
+            daemon=True,
+        ).start()
+
+    def _run_deferred_startup_maintenance(self):
+        try:
+            self.db.run_startup_maintenance()
+            print("[Startup] Deferred maintenance completed")
+        except Exception as exc:
+            # Startup maintenance is best-effort; the already-open app remains
+            # usable and the error is visible in the diagnostic console.
+            print(f"[Startup] Deferred maintenance failed: {exc}")
+
     def _on_sca_armed(self, client_id: int, client_token: str, services: list):
         try:
             self.db.record_client_activity(client_id, "SCA", f"Armed {len(services)} portal(s)")
@@ -332,7 +373,62 @@ class SeraApp:
         except Exception:
             pass
 
+    def _capture_worker_loop(self):
+        """Serially process incoming captures without blocking the Qt thread."""
+        while True:
+            msg = self._capture_queue.get()
+            try:
+                result = self._process_extension_result(msg)
+                if result:
+                    self.sync_bridge.capture_processed_signal.emit(msg, result)
+            except Exception as e:
+                print(f"[Capture Worker Error] {e}")
+            finally:
+                self._capture_queue.task_done()
+
+    def _on_capture_processed_ui(self, msg: dict, res: dict):
+        """Apply only UI updates on the Qt main thread after background work."""
+        if not self._capture_ui_refresh_pending:
+            self._capture_ui_refresh_pending = True
+            QTimer.singleShot(300, self._refresh_tracker_dump_ui)
+        portal = msg.get("portal", "Portal")
+        arn = msg.get("arn", "N/A")
+        capture_method = msg.get("capture_method", "DOM_Tracker")
+        method_label = "Sera SAD (API Detector)" if capture_method in ("SAD_API_Interceptor", "SAD_API_Detector") else "Sera DOM (DOM Detector)"
+        client_display = ""
+        if res.get("client_id"):
+            try:
+                c_full = self.db.get_client(res["client_id"])
+                c_name = ""
+                if c_full:
+                    id_col = self.db.get_identity_column()
+                    c_name = c_full.get("values", {}).get(id_col["id"] if id_col else 1, "")
+                fallback_name = f"CLI-{int(res['client_id']):05d}"
+                client_display = f"Client: {c_name or fallback_name} | "
+            except Exception:
+                client_display = f"Client #{res.get('client_id')} | "
+        elif res.get("unassigned_identity"):
+            client_display = f"Unregistered ({res['unassigned_identity']}) | "
+        toast_msg = f"Captured {portal} Filing ({method_label}) — {client_display}ARN: {arn}"
+        if hasattr(self, "shell") and self.shell and self.shell.isVisible() and not self.shell.isMinimized():
+            self.shell.show_toast(toast_msg, duration=5000)
+        elif hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(f"Filing Captured — {portal}", f"{client_display}ARN: {arn} ({method_label})", QSystemTrayIcon.Information, 4500)
+
+    def _refresh_tracker_dump_ui(self):
+        self._capture_ui_refresh_pending = False
+        if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
+            self.tracker_dump_win.load_data()
+
     def _handle_extension_result(self, msg: dict):
+        # Queue all extension captures; the database/report pipeline is too
+        # expensive to execute in the Qt signal handler during burst traffic.
+        if msg.get("type") != "audit_event":
+            self._capture_queue.put(msg)
+            return
+        self._process_extension_result(msg)
+
+    def _process_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
         if msg.get("type") == "audit_event":
             try:
@@ -376,40 +472,10 @@ class SeraApp:
                 pan=pan
             )
             print(f"[main._handle_extension_result] Successfully inserted tracker_dump row: {res}")
-            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-                self.tracker_dump_win.load_data()
-
-            # Non-intrusive toast notification on desktop shell
-            method_label = "Sera SAD (API Detector)" if capture_method in ("SAD_API_Interceptor", "SAD_API_Detector") else "Sera DOM (DOM Detector)"
-            
-            client_display = ""
-            if res.get("client_id"):
-                try:
-                    c_full = self.db.get_client(res["client_id"])
-                    c_name = ""
-                    if c_full:
-                        id_col = self.db.get_identity_column()
-                        c_name = c_full.get("values", {}).get(id_col["id"] if id_col else 1, "")
-                    res_cid = res["client_id"]
-                    fallback_tok = f"CLI-{int(res_cid):05d}" if isinstance(res_cid, (int, str)) and str(res_cid).isdigit() else f"#{res_cid}"
-                    client_display = f"Client: {c_name or fallback_tok} | "
-                except Exception:
-                    client_display = f"Client #{res.get('client_id')} | "
-            elif res.get("unassigned_identity"):
-                client_display = f"Unregistered ({res['unassigned_identity']}) | "
-
-            toast_msg = f"Captured {portal} Filing ({method_label}) — {client_display}ARN: {arn}"
-            if hasattr(self, "shell") and self.shell and self.shell.isVisible() and not self.shell.isMinimized():
-                self.shell.show_toast(toast_msg, duration=5000)
-            elif hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-                self.tray_icon.showMessage(
-                    f"Filing Captured — {portal}",
-                    f"{client_display}ARN: {arn} ({method_label})",
-                    QSystemTrayIcon.Information,
-                    4500
-                )
+            return res
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
+            return None
 
     def _get_master_password(self) -> str:
         key_file = APP_DIR / "sera.key"
@@ -671,6 +737,9 @@ class SeraApp:
 
         action_sync = tray_menu.addAction(_safe_qta_icon("mdi.sync", "#4CF9B7"), "Sera Sync")
         action_sync.triggered.connect(lambda: (self.admin_win._on_open_sera_sync(), self._restore_from_tray()))
+
+        action_sca_diag = tray_menu.addAction(_safe_qta_icon("mdi.clipboard-pulse-outline", "#4CF9B7"), "SCA Diagnostics")
+        action_sca_diag.triggered.connect(lambda: (self._show_sca_diagnostics(), self._restore_from_tray()))
 
         tray_menu.addSeparator()
 
@@ -947,6 +1016,14 @@ class SeraApp:
                     print(f"[Live Auto-Sync] Broadcast exception: {e}")
 
             threading.Thread(target=bg_push_all, daemon=True).start()
+
+    def _show_sca_diagnostics(self):
+        from ui.dialogs.sca_diagnostics_dialog import ScaDiagnosticsDialog
+        if not hasattr(self, "sca_diag") or self.sca_diag is None:
+            self.sca_diag = ScaDiagnosticsDialog(listener=self.ext_listener, parent=self.shell)
+        self.sca_diag.show()
+        self.sca_diag.raise_()
+        self.sca_diag.activateWindow()
 
     def _lock_and_force_restart(self):
         """Disables main UI completely and pops a non-dismissable modal dialog requiring application restart."""

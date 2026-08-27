@@ -141,6 +141,7 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "tracker_enabled": service.get("_tracker_enabled", True),
         "fst_enabled": service.get("_fst_enabled", True),
         "sad_enabled": service.get("_sad_enabled", True),
+        "sad_browser_notif_enabled": service.get("_sad_browser_notif_enabled", True),
     }
 
     def _attempt_send():
@@ -219,12 +220,16 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
                         return  # Ack received!
             
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(('127.0.0.1', 49153))
-                    s.sendall(json.dumps(payload).encode('utf-8'))
-                    if cmd_id == "legacy":
-                        return # Fire and forget for legacy
+                for p in range(49153, 49156):
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(0.2)
+                            s.connect(('127.0.0.1', p))
+                            s.sendall(json.dumps(payload).encode('utf-8'))
+                    except Exception:
+                        pass
+                if cmd_id == "legacy":
+                    return # Fire and forget for legacy
             except Exception:
                 pass
                 
@@ -238,7 +243,7 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -269,6 +274,7 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "tracker_enabled": tracker_enabled,
         "fst_enabled": fst_enabled,
         "sad_enabled": sad_enabled,
+        "sad_browser_notif_enabled": sad_browser_notif_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
@@ -276,12 +282,20 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
     }
     def _do_send():
         for _ in range(5):
+            success = False
             try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(('127.0.0.1', 49153))
-                    s.sendall(json.dumps(payload).encode('utf-8'))
+                for p in range(49153, 49156):
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(0.2)
+                            s.connect(('127.0.0.1', p))
+                            s.sendall(json.dumps(payload).encode('utf-8'))
+                            success = True
+                    except Exception:
+                        pass
+                if success:
                     return
             except Exception:
-                time.sleep(0.2)
+                pass
+            time.sleep(0.2)
     threading.Thread(target=_do_send, daemon=True).start()
