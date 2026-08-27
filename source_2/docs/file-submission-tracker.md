@@ -77,13 +77,22 @@ In addition to live browser-level interception, Sera FST includes the **FST Clas
 
 Sera FST employs a multi-tier detection architecture to ensure 100% filing capture reliability across all government tax portals:
 
-### Tier 1: Sera SAD — API Detector (Network Layer — v2.7.4)
+### Tier 1: Sera SAD — API Detector (Network Layer — v2.8.5.4)
 `net_interceptor.js` is injected into the web page's `MAIN` execution world at `document_start`. It passively intercepts `window.fetch()` and `XMLHttpRequest` JSON responses without modifying or delaying page network traffic:
 
+* **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
+* **E-Verification State & Intent Detection**:
+  - **`Submitted (e-Verified)`**: Confirmed when `/verificationservices/auth/validateOTP` returns `"status": "SUCCESS"` with message `"OTP VALIDATED"`, or when `/submit/wzrd` carries a generated EVC token.
+  - **`Submitted (Not e-Verified / e-Verify Later)`**: Accurately classified when `/verificationservices/auth/saveEntity` records `"selectionFlag": "L"` (*Later*) and `/submit/wzrd` returns `evc: null` alongside the 15-digit Government ARN.
+  - **`Other EVC`**: Separates Non-ITR OTP validations (bank account revalidations, profile contact OTPs) from actual return filings.
+* **Entity-Aware PAN Intelligence (`profile_parser.py`)**:
+  - Distinguishes between Individual (`PAN` 4th character `P`) and Corporate/Firm entities (`C`, `F`, `L`, `T`).
+  - Keeps Proprietor Name and Company Name strictly separated.
+  - Automatically extracts business trade names from ITR-4 & ITR-3 Schedule BP / Section 44AD/44ADA (`natOfBus44AD`, `nameOfBusiness`, `tradeName`).
 * **Asynchronous `Blob` & `ArrayBuffer` Stream Decoding**: Directly unpacks `responseType: "blob"` and `responseType: "arraybuffer"` payloads using `blob.text()` and `TextDecoder('utf-8')`. Prevents browser `DOMException` errors on Angular SPAs and captures file downloads in-flight.
 * **Monolithic Computational Document Guard**: Detects complete tax return schema objects (e.g. `/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the entire 100% root computational dataset (Turnover u/s 44AD, Cash, Bank balance, Debtors, Inventory, Deductions, and Tax computations) as a single un-truncated capture without splitting internal sub-arrays.
 * **Income Tax Department (ITD 2.0)**:
-  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, `/iec/itrweb/auth/v0.1/returns/downloadfile`, and `/iec/servicesapi/auth/getEntity`.
+  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, `/iec/verificationservices/auth/saveEntity`, `/iec/itrweb/auth/v0.1/returns/downloadfile`, and `/iec/servicesapi/auth/getEntity`.
   - **ITD Key Normalization**:
     - `"assmentYear": "2026"` $\longrightarrow$ Automatically formatted as **`AY 2026-27`**.
     - `"formTypeCd": "4S"` / `"formTypeCd": "4"` $\longrightarrow$ Formatted as **`ITR-4S`** / **`ITR-4`**.

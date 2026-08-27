@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Project Sera Companion",
-  "version": "2.8.5",
+  "version": "2.8.5.4",
   "description": "Autofill and filing confirmation tracking for Aman Associates.",
   "browser_specific_settings": {
     "gecko": {
@@ -57,12 +57,15 @@
     },
     {
       "matches": [
-        "<all_urls>"
+        "http://*/*",
+        "https://*/*",
+        "file://*/*"
       ],
       "js": [
-        "tracker.js",
+        "content_scripts/sca_adapters.js",
         "content_scripts/login.js",
-        "content_scripts/filing_detector.js"
+        "content_scripts/filing_detector.js",
+        "tracker.js"
       ],
       "run_at": "document_end",
       "all_frames": true

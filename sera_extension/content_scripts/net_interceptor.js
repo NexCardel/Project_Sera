@@ -8,7 +8,7 @@
  */
 
 (function() {
-    const SAD_VERSION = "2.8.5.2";
+    const SAD_VERSION = "2.8.5.4";
     if (window.__SERA_SAD_VERSION__ === SAD_VERSION) return;
     window.__SERA_SAD_VERSION__ = SAD_VERSION;
     window.__SERA_SAD_INTERCEPTOR_LOADED__ = true;
@@ -175,6 +175,18 @@
             if (transactionKeys.has(key) && text && !/^(N\/A|NA|NONE|NULL|-)$/i.test(text)) {
                 const role = upper.startsWith("EVERIFY") ? "everification_transaction" : ((key.includes("ack") || key.includes("arn")) ? "acknowledgement" : "portal_transaction");
                 addUnique(transactions, { value: text, source: entry.path, role });
+            }
+        }
+
+        // Synthesize full client name if individual components (first, middle, last) exist
+        const fn = values.find(e => ["firstname", "first_name", "fname"].includes(e.key));
+        const mn = values.find(e => ["middlename", "midname", "middle_name", "mname"].includes(e.key));
+        const ln = values.find(e => ["lastname", "last_name", "lname", "surnameororgname", "sur_name", "surname"].includes(e.key));
+        if (fn || mn || ln) {
+            const parts = [fn && fn.value, mn && mn.value, ln && ln.value].filter(Boolean).map(s => String(s).trim()).filter(Boolean);
+            const compoundName = parts.join(" ").trim();
+            if (compoundName && compoundName.length >= 3 && !/^(N\/A|NA|NONE|NULL)$/i.test(compoundName)) {
+                addUnique(names, { value: compoundName, source: "composed.name_components", role: "client_name" });
             }
         }
 
@@ -383,13 +395,22 @@
             }
 
             const itAckKeys = [
-                "acknowledgementNumber", "acknowledgmentNumber", "acknowledgementNo", "acknowledgmentNo",
+                "arnNumber", "arn_number", "acknowledgementNumber", "acknowledgmentNumber", "acknowledgementNo", "acknowledgmentNo",
                 "ackNum", "ackNumber", "ackNo", "itrAckNo", "itrAckNum", "itrAcknowledgementNo", "itrAcknowledgmentNo",
+                "ack_num", "ack_no", "ack_number", "ackDtls", "acknowledgementDetails", "ack_id",
                 "receiptNo", "receiptNumber", "rectificationReferenceNo", "responseReferenceNo", "submissionId",
-                "grievanceNumber", "crn", "cin", "transId", "transactionNo", "transactionId", "tokenNo", "tokenNumber", "refNo", "referenceNumber", "arn",
-                "ack_num", "ack_no", "ackNo", "ack_number", "ackDtls", "acknowledgementDetails", "ack_id", "token"
+                "grievanceNumber", "crn", "cin", "arn",
+                "transId", "transactionNo", "transactionId", "tokenNo", "tokenNumber", "refNo", "referenceNumber", "token"
             ];
-            if (!isNonItrOtp) capturedArn = findValueDeep(record, itAckKeys);
+            if (!isNonItrOtp) {
+                // Strict priority: If an explicit 15-digit numeric Government ARN is present, use it immediately
+                const directArn = findValueDeep(record, ["arnNumber", "arn_number", "ackNum", "ackNumber", "acknowledgementNumber", "acknowledgementNo"]);
+                if (directArn && /^\d{15}$/.test(String(directArn).trim())) {
+                    capturedArn = String(directArn).trim();
+                } else {
+                    capturedArn = findValueDeep(record, itAckKeys);
+                }
+            }
             
             // Extract Assessment Year (handles ITD's 'assmentYear', 'asmtYear', etc.)
             const rawAy = findValueDeep(record, ["assessmentYear", "assessment_year", "asmtYear", "assmentYear", "asmtYr", "ay", "ayDesc", "ayYr", "assessmentYr", "financialYear", "finYr", "fy", "period"]);

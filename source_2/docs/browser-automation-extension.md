@@ -38,10 +38,18 @@ The injected `fillCredentialsInPage()` function:
 - **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
 - **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
-## Sera FST: API Detector (SAD v2.7.4) & DOM Detector (DOM)
+## Sera FST: API Detector (SAD v2.8.5.4) & DOM Detector (DOM)
 
-- **Sera SAD (`net_interceptor.js` — v2.7.4)**:
+- **Sera SAD (`net_interceptor.js` — v2.8.5.4)**:
   - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.
+  - **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
+  - **E-Verification State & Intent Detection**:
+    - **`Submitted (e-Verified)`**: Detects completed OTP confirmations (`/verificationservices/auth/validateOTP` returning `"OTP VALIDATED"`) or submissions carrying active EVC tokens.
+    - **`Submitted (Not e-Verified / e-Verify Later)`**: Accurately classifies submissions where the taxpayer chose *"e-Verify Later"* (`selectionFlag: "L"` in `/saveEntity` with `evc: null` in `/submit/wzrd`), capturing the 15-digit Government ARN while preserving pending verification status.
+    - **`Other EVC`**: Separates Non-ITR validations (bank account revalidations, profile OTPs) from actual return filings.
+  - **Entity-Aware PAN Intelligence (`profile_parser.py`)**:
+    - Disables duplication of individual proprietor names into Company Name.
+    - Extracts business and trade names from ITR-4 & ITR-3 Schedule BP / Section 44AD/44ADA (`natOfBus44AD`, `nameOfBusiness`, `tradeName`).
   - **Asynchronous Blob & ArrayBuffer Decoding**: Automatically unpacks `responseType: 'blob'` and `responseType: 'arraybuffer'` streams via `blob.text()` and `TextDecoder('utf-8')`, capturing files downloaded through Angular `$http` or fetch streams without DOM exceptions.
   - **Monolithic Document Guard**: Identifies full computational tax return documents (`/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the complete root JSON schema in one un-truncated payload rather than fragmenting internal sub-arrays.
   - Automatically captures filing confirmations, e-verifications, statutory forms, challans, and full multi-year filed return histories from ITD, GST, and TRACES backends.

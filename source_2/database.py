@@ -29,7 +29,7 @@ class DatabaseError(Exception):
 
 
 class SeraDatabase:
-    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None):
+    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False):
         self.db_path = db_path
         self.hex_key = hex_key
         if raw_db_path:
@@ -47,11 +47,19 @@ class SeraDatabase:
         self._init_schema()
         self._init_raw_schema()
         self._migrate_tracker_dump_to_raw_payload_db()
-        self.resequence_client_serial_numbers()
-        # Refresh derived FST workbooks from the current dump on startup.
-        # Report generation is best-effort and must never prevent the vault
-        # from opening if an optional reporting dependency is unavailable.
-        self.sync_fst_reports()
+        if not defer_startup_maintenance:
+            self.run_startup_maintenance()
+
+    def run_startup_maintenance(self):
+        """Runs background resequencing and FST report generation."""
+        try:
+            self.resequence_client_serial_numbers()
+        except Exception as e:
+            print(f"[-] Startup serial resequence skipped: {e}")
+        try:
+            self.sync_fst_reports()
+        except Exception as e:
+            print(f"[-] Startup FST report sync skipped: {e}")
 
     def set_sync_revision_hook(self, fn):
         """fn is called with no arguments after any write that should
@@ -2637,32 +2645,47 @@ class SeraDatabase:
         return True
 
     def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None) -> Optional[str]:
-        """Resolves PAN/GSTIN candidate from contemporaneous session captures or exact session_id match."""
+        """Resolves PAN/GSTIN candidate from the immediate most recent session capture (registered or unregistered)."""
         if not portal or not timestamp_str:
             return None
             
         base_portal = portal.split(" (")[0].strip().lower()
         
         try:
+            import re
             from datetime import datetime, timezone
             t0 = datetime.fromisoformat(timestamp_str)
             with self._connect_raw() as r_conn:
-                # If session_id is provided, search specifically for it first
+                # 1. If session_id is provided, search specifically for it first
                 if session_id:
                     cur = r_conn.execute(
-                        "SELECT arn_number, raw_payload_json FROM tracker_dump WHERE raw_payload_json LIKE ? ORDER BY created_at DESC LIMIT 50",
+                        "SELECT arn_number, unassigned_identity, raw_payload_json, created_at, client_id FROM tracker_dump WHERE raw_payload_json LIKE ? ORDER BY id DESC LIMIT 50",
                         (f'%"{session_id}"%',)
                     )
-                    for arn_num, raw_json in cur.fetchall():
+                    for arn_num, unassigned_id, raw_json, c_at, cid in cur.fetchall():
+                        if unassigned_id and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(unassigned_id).strip().upper()):
+                            return str(unassigned_id).strip().upper()
                         cands = self._extract_identity_candidates_from_payload(arn_number=arn_num, raw_payload_json=raw_json)
                         if cands:
                             return cands[0]
+                        if cid:
+                            with self._connect() as m_conn:
+                                cur_m = m_conn.execute(
+                                    "SELECT cv.value FROM client_values cv JOIN mcl_columns mc ON mc.id = cv.column_id WHERE cv.client_id = ? AND mc.is_internal_pk = 1 LIMIT 1",
+                                    (cid,)
+                                )
+                                row_m = cur_m.fetchone()
+                                if row_m and row_m[0] and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(row_m[0]).strip().upper()):
+                                    return str(row_m[0]).strip().upper()
 
-                # Fallback to time-based proximity matching
+                # 2. Fallback to time-based proximity matching (ordered by ID descending to get immediate last PAN)
                 cur = r_conn.execute(
-                    "SELECT arn_number, raw_payload_json, created_at, portal FROM tracker_dump WHERE created_at IS NOT NULL ORDER BY created_at DESC LIMIT 100"
+                    """SELECT arn_number, unassigned_identity, raw_payload_json, created_at, portal, client_id 
+                       FROM tracker_dump 
+                       WHERE created_at IS NOT NULL 
+                       ORDER BY id DESC LIMIT 100"""
                 )
-                for arn_num, raw_json, c_at, p_name in cur.fetchall():
+                for arn_num, unassigned_id, raw_json, c_at, p_name, cid in cur.fetchall():
                     if not c_at or not p_name:
                         continue
                         
@@ -2672,9 +2695,20 @@ class SeraDatabase:
                     try:
                         tn = datetime.fromisoformat(c_at)
                         if abs((t0 - tn).total_seconds()) <= max_seconds:
+                            if unassigned_id and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(unassigned_id).strip().upper()):
+                                return str(unassigned_id).strip().upper()
                             cands = self._extract_identity_candidates_from_payload(arn_number=arn_num, raw_payload_json=raw_json)
                             if cands:
                                 return cands[0]
+                            if cid:
+                                with self._connect() as m_conn:
+                                    cur_m = m_conn.execute(
+                                        "SELECT cv.value FROM client_values cv JOIN mcl_columns mc ON mc.id = cv.column_id WHERE cv.client_id = ? AND mc.is_internal_pk = 1 LIMIT 1",
+                                        (cid,)
+                                    )
+                                    row_m = cur_m.fetchone()
+                                    if row_m and row_m[0] and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(row_m[0]).strip().upper()):
+                                        return str(row_m[0]).strip().upper()
                     except Exception:
                         pass
         except Exception:

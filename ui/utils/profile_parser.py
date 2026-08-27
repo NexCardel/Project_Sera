@@ -66,6 +66,12 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
                     s_val = _clean_str(v)
                     if s_val:
                         flat_kv.append((str(k).lower(), s_val))
+                        # Unpack stringified JSON blobs (e.g. ITD prefill content: "{...}")
+                        if (s_val.startswith("{") or s_val.startswith("[")) and len(s_val) < 300000:
+                            try:
+                                _collect(json.loads(s_val), depth - 1)
+                            except Exception:
+                                pass
                 elif isinstance(v, (dict, list)):
                     _collect(v, depth - 1)
         elif isinstance(item, list):
@@ -123,17 +129,33 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
                 extracted["phone"] = digits
                 break
 
+    pan_val = extracted.get("pan", "").strip().upper()
+    is_individual = bool(len(pan_val) == 10 and pan_val[3] == "P")
+
     # 6. Company / Firm Name Extraction
-    company_keys = ("tradename", "trade_name", "legalname", "legal_name", "companyname", "firmname", "businessname", "entityname", "taxpayername", "name")
-    # Bank-account responses contain fields such as bankName and accountHolder
-    # alongside taxpayer identity. They are institution/account metadata, not
-    # company or proprietor names.
+    # Specifically targets Trade Names and Business Names from ITR Schedule BP (natOfBus44AD, sec44AD, etc.) and GST
+    if is_individual:
+        company_keys = (
+            "nameofbusiness", "name_of_business", "nameofbus", "name_of_bus", "busdtlsname",
+            "tradename", "trade_name", "tradenm", "trade_nm", "trdnm", "tradename_itr",
+            "businessname", "business_name", "bussinessname", "bussiness_name",
+            "firmname", "firm_name", "concernname", "concern_name",
+            "shopname", "shop_name", "storename", "store_name", "enterprisename", "enterprise_name",
+            "entityname", "entity_name", "orgname", "org_name"
+        )
+    else:
+        company_keys = (
+            "nameofbusiness", "name_of_business", "tradename", "trade_name", "tradenm", "trade_nm",
+            "legalname", "legal_name", "companyname", "firmname", "firm_name", "businessname", "business_name",
+            "entityname", "entity_name", "taxpayername", "name", "surnameororgname", "orgname", "org_name"
+        )
+
     non_identity_name_keys = ("bank", "account", "branch", "ifsc", "institution", "holdertype")
     for target in company_keys:
         for k, v in flat_kv:
             if any(part in k for part in non_identity_name_keys):
                 continue
-            matches = k == target or (target != "name" and target in k and "first" not in k and "last" not in k and "user" not in k)
+            matches = k == target or (target not in ("name", "trade") and target in k and "first" not in k and "last" not in k and "user" not in k)
             if matches:
                 if len(v) >= 3 and not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", v.upper()) and "@" not in v:
                     extracted["company_name"] = v
@@ -141,28 +163,38 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         if extracted["company_name"]:
             break
 
-    # 7. Proprietor / Individual Name (Income Tax firstName + lastName or authSignatory)
+    # 7. Proprietor / Individual Name (Full First + Middle + Last Name Assembly)
     first_name = ""
+    middle_name = ""
     last_name = ""
     for k, v in flat_kv:
-        if k in ("firstname", "first_name", "fname"):
+        if k in ("firstname", "first_name", "fname") and not first_name:
             first_name = v
-        elif k in ("lastname", "last_name", "lname", "sur_name", "surname"):
+        elif k in ("midname", "mid_name", "middlename", "middle_name", "mname") and not middle_name:
+            middle_name = v
+        elif k in ("lastname", "last_name", "lname", "sur_name", "surname", "surnameororgname") and not last_name:
             last_name = v
-        elif k in ("fullname", "full_name", "assesseename", "assessee_name", "nameasperbank"):
+        elif k in ("fullname", "full_name", "assesseename", "assessee_name", "assessee_ver_name", "assessevername", "nameasperbank"):
             if not extracted["proprietor_name"] and len(v) >= 3:
                 extracted["proprietor_name"] = v
-        elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name"):
+        elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name", "taxpayername"):
             if not extracted["proprietor_name"] and len(v) >= 3:
                 extracted["proprietor_name"] = v
 
-    if first_name or last_name:
-        full = f"{first_name} {last_name}".strip()
-        if full and not extracted["proprietor_name"]:
+    if first_name or middle_name or last_name:
+        parts = [p for p in (first_name, middle_name, last_name) if p]
+        full = " ".join(parts).strip()
+        if full and (not extracted["proprietor_name"] or len(full) > len(extracted["proprietor_name"])):
             extracted["proprietor_name"] = full
 
-    # Do not mirror one field into the other. A bank name or a single legal
-    # name is not sufficient evidence for both company and proprietor fields.
+    # For individual accounts (4th char 'P'), ensure company_name does NOT mirror the proprietor's human name
+    if is_individual:
+        if extracted["company_name"] and extracted["proprietor_name"]:
+            if extracted["company_name"].strip().upper() == extracted["proprietor_name"].strip().upper():
+                extracted["company_name"] = ""
+    elif not is_individual and extracted["company_name"] and not extracted["proprietor_name"]:
+        # For non-individuals (Firms/Companies), if proprietor_name got set to company_name, clear it
+        pass
 
     # 8. Date of Birth / Incorporation Date
     for k, v in flat_kv:
@@ -253,8 +285,9 @@ def map_profile_to_mcl_columns(extracted_profile: Dict[str, str], mcl_columns: L
                 mapped[col_id] = extracted_profile["user_id"]
                 continue
 
-        # Fallback: General identity column (if company name not already assigned)
-        if col.get("is_identity") and "name" in lbl:
+        # Fallback: General identity column (only if no separate company/proprietor columns are configured)
+        has_proprietor_col = any("proprietor" in c.get("label", "").lower() or "prop" in c.get("label", "").lower() for c in mcl_columns)
+        if col.get("is_identity") and "name" in lbl and not has_proprietor_col:
             cand = extracted_profile.get("company_name") or extracted_profile.get("proprietor_name")
             if cand and col_id not in mapped:
                 mapped[col_id] = cand

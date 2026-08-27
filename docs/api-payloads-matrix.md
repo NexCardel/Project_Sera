@@ -106,60 +106,101 @@ graph TD
 }
 ```
 * **Deep Path Traversal**:
-  - `acknowledgementNumber`: `serviceResponse.body.filingSummary.acknowledgementDetails.acknowledgementNumber`
-  - `formName`: `serviceResponse.body.filingSummary.formMetadata.formName`
-  - `assessmentYear`: `serviceResponse.body.filingSummary.formMetadata.assessmentYear`
-  - `pan`: `serviceResponse.body.filingSummary.taxPayerProfile.pan`
+  - `acknowledgementNumber`: `serviceResponse.body.filingSummary.acknowledgementDetails.acknowledgementNumber` or `arnNumber`
+  - `formName`: `serviceResponse.body.filingSummary.formMetadata.formName` or `formTypeCd`
+  - `assessmentYear`: `serviceResponse.body.filingSummary.formMetadata.assessmentYear` or `assmentYear`
+  - `pan`: `serviceResponse.body.filingSummary.taxPayerProfile.pan` or `submitUserId`
 * **Sera SAD Extraction Output**:
-  - `arn`: `827916720300726`
+  - `arn`: `827916720300726` (15-digit Government Filing ARN)
   - `portal`: `Income Tax (ITR-4)`
-  - `period_label`: `AY 2024-25`
+  - `period_label`: `AY 2026-27`
   - `pan`: `GZEPM6367M`
   - `status`: `submitted`
+
+#### 1.1.1 Online Wizard Submit Endpoint (`/submit/wzrd`)
+* **Trigger Action**: Submitting online return form through portal wizard.
+* **API Endpoint**: `POST /iec/itrweb/auth/v0.1/returns/submit/wzrd`
+* **Response Payload (15-digit ARN & Session Transaction)**:
+```json
+{
+  "httpStatus": "ACCEPTED",
+  "arnNumber": "815375340260826",
+  "transactionNo": "ITR000886242481",
+  "evc": null,
+  "successFlag": true
+}
+```
+* **Sera SAD Extraction Rule (v2.8.5.4)**:
+  - `arnNumber` (15-digit numeric `815375340260826`) is prioritized as the primary **ARN**.
+  - `transactionNo` (`ITR000886242481`) is stored in payload metadata as the Audit Transaction ID.
+  - If `evc: null` and `selectionFlag: "L"`, status is classified as **`Submitted (Not e-Verified)`**.
 
 ---
 
 ### 1.2 ITR E-Verification (OTP / EVC / DSC)
-* **Trigger Action**: Submitting Aadhaar OTP, NetBanking EVC, or attaching DSC token.
-* **API Endpoint**: `POST /iec/foservices/api/e-verify/submit`
-* **Multi-Layer Server Response Payload**:
+* **Trigger Action**: Submitting Aadhaar OTP, NetBanking EVC, or selecting verification intent.
+* **API Endpoints**:
+  - `POST /iec/verificationservices/auth/validateOTP` (Actual OTP authentication)
+  - `POST /iec/verificationservices/auth/saveEntity` (Verification intent / "e-Verify Later")
+  - `POST /iec/foservices/api/e-verify/submit`
+
+#### 1.2.1 Actual OTP Validation Response (`/validateOTP`)
 ```json
 {
-  "responseEnvelope": {
-    "status": "SUCCESS",
-    "result": {
-      "verificationSession": {
-        "authType": "AADHAAR_OTP",
-        "verifiedAt": 1721645100000,
-        "token": "EVC_AUTH_9012398412"
-      },
-      "filingRecord": {
-        "receiptInfo": {
-          "ackNum": "604142750150925",
-          "itrForm": "ITR-1",
-          "ay": "2024-25",
-          "statusDesc": "Return successfully e-Verified"
-        },
-        "userCredentials": {
-          "userId": "BKAPM7233A",
-          "userCategory": "INDIVIDUAL"
-        }
-      }
+  "status": "SUCCESS",
+  "moduleCode": "ITR",
+  "formCd": "4",
+  "assessmntYr": "2026",
+  "panNumber": "DHGPM9027K",
+  "aadhaarTxnId": "0004200000:1787766415349:506275",
+  "transactionNo": "EVERIFY000924764406",
+  "messages": [
+    {
+      "code": "OTP VALIDATED",
+      "desc": "OTP VALIDATED",
+      "type": "INFO"
     }
-  }
+  ],
+  "verMode": "OTP"
 }
 ```
-* **Deep Path Traversal**:
-  - `ackNum`: `responseEnvelope.result.filingRecord.receiptInfo.ackNum`
-  - `itrForm`: `responseEnvelope.result.filingRecord.receiptInfo.itrForm`
-  - `ay`: `responseEnvelope.result.filingRecord.receiptInfo.ay`
-  - `userId`: `responseEnvelope.result.filingRecord.userCredentials.userId`
-* **Sera SAD Extraction Output**:
-  - `arn`: `604142750150925`
-  - `portal`: `Income Tax (ITR-1)`
-  - `period_label`: `AY 2024-25`
-  - `pan`: `BKAPM7233A`
-  - `status`: `Return successfully e-Verified`
+* **Verdict**: 🟢 **Submitted (e-Verified)**.
+
+#### 1.2.2 "e-Verify Later" Intent Response (`/saveEntity`)
+```json
+{
+  "status": "SUCCESS",
+  "moduleCode": "ITR",
+  "formCd": "4",
+  "panNumber": "DHGPM9027K",
+  "selectionFlag": "L",
+  "transactionNo": "EVERIFY000924746863",
+  "messages": [
+    {
+      "code": "DATA_INSERTION_SUCCESS_FLAG",
+      "desc": "Data saved successfully",
+      "type": "INFO"
+    }
+  ]
+}
+```
+* **Verdict**: 🟡 **Submitted (Not e-Verified / e-Verify Later)**.
+
+---
+
+### 1.2.3 Prefill Business Extraction (`/returns/getPrefillCurrentYr`)
+* **Trigger Action**: Portal initializes return wizard by loading prefilled personal and Schedule BP business details.
+* **API Endpoint**: `GET /iec/itrweb/auth/v0.1/returns/getPrefillCurrentYr`
+* **JSON Structure**:
+```json
+{
+  "content": "{\"personalInfo\":{\"assesseeName\":{\"firstName\":\"SAHABUDDIN\",\"surNameOrOrgName\":\"MOLLA\"},\"pan\":\"DHGPM9027K\"},\"scheduleBP\":{\"natOfBus44AD\":[{\"codeAD\":\"04028\",\"nameOfBusiness\":\"SAHABUDDIN MOLLA\"}]}}"
+}
+```
+* **Sera SAD Extraction Mapping (`profile_parser.py`)**:
+  - `NAME OF PROPRIETOR`: `SAHABUDDIN MOLLA` (Human Assessee Name)
+  - `NAME OF COMPANY`: `SAHABUDDIN MOLLA` (Extracted from `natOfBus44AD[0].nameOfBusiness` or `tradeName`)
+  - `PAN`: `DHGPM9027K`
 
 ---
 

@@ -1,19 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Project Sera Companion",
-  "version": "2.8.5",
+  "version": "2.8.5.4",
   "description": "Autofill and filing confirmation tracking for Aman Associates.",
   "browser_specific_settings": {
     "gecko": {
       "id": "sera-companion@amanassociates.com",
-      "strict_min_version": "109.0",
-      "data_collection_permissions": {
-        "required": [
-          "none"
-        ]
-      }
+      "strict_min_version": "109.0"
     }
   },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkMpDJKphBB8nE//fB0SY2nCHkAykZ6si2M7mSNjI/i8ISMb32i/6pLF7VKNklcIT5KZdjnpYpsqhHv1IGuNoAGmpUSbte3MEsmS92TyBnQhf++2cy1JUWsCfd7fHGF/czDWsPulx5uThADoDcRXShy3JYox1Fl6PnzZXrIUHCCv+f1QAv/Rvs9a/lhBQZ70WWUhZqrBoGowB+cIosDN/7lmQeEj/TUzr+xvPQZAJoUR8ORB7baHPU9lNtM1QnTFGgqQ8s/RVbenIdALslEfekgC0ZuFtnINOxc2CGbGzHAIUPpLZsljO1x8k8c5YjnuJvyQTUAFHRqNhqaCHOrEoMQIDAQAB",
   "permissions": [
     "nativeMessaging",
     "storage",
@@ -25,12 +21,12 @@
     "cookies"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "http://*/*",
+    "https://*/*",
+    "file://*/*"
   ],
   "background": {
-    "scripts": [
-      "background.js"
-    ]
+    "service_worker": "background.js"
   },
   "icons": {
     "16": "icon16.png",
@@ -53,11 +49,25 @@
         "<all_urls>"
       ],
       "js": [
-        "tracker.js",
-        "content_scripts/login.js",
-        "content_scripts/filing_detector.js"
+        "content_scripts/net_interceptor.js"
       ],
       "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file://*/*"
+      ],
+      "js": [
+        "content_scripts/sca_adapters.js",
+        "content_scripts/login.js",
+        "content_scripts/filing_detector.js",
+        "tracker.js"
+      ],
+      "run_at": "document_end",
       "all_frames": true
     }
   ],
