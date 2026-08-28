@@ -474,7 +474,7 @@
 
     SDC.register({
       name: 'ITR Portal',
-      hostMatch: /(?:incometax\.gov\.in|incometaxindiaefiling\.gov\.in)/,
+      hostMatch: /(?:incometax\.gov\.in|incometaxindiaefiling\.gov\.in|localhost|127\.0\.0\.1|^$)/,
       crosshairs: [
         {
           // PRIORITY 0: Login/logout detection — must run before any capture crosshair

@@ -144,22 +144,80 @@
   }
 
   // ─── Capture Emit ────────────────────────────────────────────────────────────
-  // Re-dispatches as 'SeraFSTApiCapture' so filing_detector.js picks it up unchanged.
+  // Formats full filing payload and sends directly to background native host pipeline
   function _emitCapture(capture, protocolName, crosshairId) {
+    const captureMethod = `SDC_${crosshairId}`;
+    const portalName = capture.portal || protocolName || "income tax";
+    const clientName = capture.client_name || capture.name || capture.taxpayer_name || "";
+    const pan = capture.pan || "";
+    const arn = capture.arn || "N/A";
+    const period = capture.period_label || "";
+    const filingType = capture.filing_type || "ITR";
+    const status = capture.status || "Submitted";
+    const timestamp = new Date().toISOString();
+
     const detail = {
-      ...capture,
-      capture_method: `SDC_${crosshairId}`,
-      portal: capture.portal || protocolName,
+      type: "filing_result",
+      client_id: capture.client_id || null,
+      client_name: clientName,
+      name: clientName,
+      taxpayer_name: clientName,
+      portal: portalName,
+      arn: arn,
+      capture_method: captureMethod,
+      period_label: period,
+      filing_type: filingType,
+      status: status,
+      pan: pan,
+      gstin: capture.gstin || "",
       url: window.location.href,
-      timestamp: new Date().toISOString()
+      page_key: window.location.href.split('?')[0].replace(/\/+$/, '').toLowerCase(),
+      is_page_update: true,
+      site_link_history: capture.site_link_history || "",
+      dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
+      confirmation_message: capture.confirmation_message || "",
+      scraped_data: capture.scraped_data || null,
+      raw_payload: {
+        source: "Sera_SDC",
+        detection_type: captureMethod,
+        client_name: clientName,
+        name: clientName,
+        taxpayer_name: clientName,
+        portal: portalName,
+        arn: arn,
+        pan: pan,
+        gstin: capture.gstin || "",
+        period: period,
+        filing_type: filingType,
+        status: status,
+        url: window.location.href,
+        timestamp: timestamp,
+        dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
+        confirmation_message: capture.confirmation_message || ""
+      }
     };
 
     console.log(`⚡ Sera SDC CAPTURE [${crosshairId}]:`, JSON.stringify(detail).substring(0, 300));
 
-    // Fire on SeraFSTApiCapture → picked up by filing_detector.js
-    window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail }));
+    // 1. Direct Chrome Extension Runtime Dispatch to Desktop Host
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage(detail, (res) => {
+          if (chrome.runtime.lastError) {
+            // Ignored - background worker might be handling it
+          }
+        });
+      }
+    } catch (err) {
+      console.warn("⚡ Sera SDC: chrome.runtime.sendMessage failed:", err);
+    }
 
-    // Also show toast via the existing notifier if available
+    // 2. Dispatch event for page-level scripts / test harness
+    try {
+      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail }));
+    } catch (_) {}
+
+    // 3. Show left-side toast notification
     try {
       if (window.__SERA_TOAST_NOTIFIER__ && typeof window.__SERA_TOAST_NOTIFIER__.notify === 'function') {
         window.__SERA_TOAST_NOTIFIER__.notify(detail);

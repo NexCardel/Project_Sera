@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sera SDC — ITR Protocol Test Suite & Simulation Harness</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --border: #334155;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --primary: #38bdf8;
+            --success: #34d399;
+            --warning: #fbbf24;
+            --danger: #f87171;
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 24px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 22px;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--primary);
+        }
+        .badge {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--primary);
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .card h2 {
+            font-size: 16px;
+            margin-top: 0;
+            margin-bottom: 12px;
+            color: #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .nav-btn-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        button.action-btn {
+            background: #2563eb;
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 10px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            text-align: left;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s;
+        }
+        button.action-btn:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+        }
+        button.action-btn.secondary {
+            background: #334155;
+        }
+        button.action-btn.secondary:hover {
+            background: #475569;
+        }
+        button.action-btn.danger {
+            background: #991b1b;
+        }
+        button.action-btn.danger:hover {
+            background: #b91c1c;
+        }
+        .log-box {
+            background: #090d16;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 14px;
+            height: 380px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #a7f3d0;
+        }
+        .log-entry { margin-bottom: 6px; }
+        .log-time { color: var(--muted); }
+        .log-info { color: #38bdf8; }
+        .log-capture { color: #34d399; font-weight: bold; }
+        .log-reset { color: #f87171; font-weight: bold; }
+
+        /* Simulated DOM Area */
+        #simulatedDomArea {
+            margin-top: 20px;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+        }
+        .dom-view {
+            background: #0f172a;
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 10px;
+        }
+        .mock-field {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 8px;
+            align-items: center;
+        }
+        .mock-field label {
+            width: 140px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        .mock-field input, .mock-field output {
+            background: #1e293b;
+            border: 1px solid var(--border);
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .mock-banner {
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .banner-success { background: rgba(52, 211, 153, 0.2); border: 1px solid var(--success); color: var(--success); }
+        .banner-warning { background: rgba(251, 191, 36, 0.2); border: 1px solid var(--warning); color: var(--warning); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>⚡ Sera SDC (DOM Crosshair) Interactive Test Suite</h1>
+        <div>
+            <span id="sdcStatus" class="badge">SDC Loading...</span>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Control Panel -->
+        <div class="card">
+            <h2>🎯 Simulation Step Trigger</h2>
+            <p style="font-size: 13px; color: var(--muted); margin-bottom: 16px;">
+                Click any step below to change the route hash and simulate real ITR portal navigation.
+            </p>
+            <div class="nav-btn-list">
+                <button class="action-btn danger" onclick="simulateRoute('#/logout', 'logout')">
+                    <span>1. Logout / Login Route</span>
+                    <small>Nukes Client Session</small>
+                </button>
+
+                <button class="action-btn secondary" onclick="simulateRoute('#/foreturns-ay26/fo-select-itr-form', 'form_select')">
+                    <span>2. Select ITR Form</span>
+                    <small>Locks ITR-4 + AY 26-27</small>
+                </button>
+
+                <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr4-ay2026/personal_information', 'personal_info')">
+                    <span>3. Personal Info (Part A General)</span>
+                    <small>T1 Name + PAN Lock</small>
+                </button>
+
+                <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr-shared/fo-e-verify-later', 'submit_pending')">
+                    <span>4. Submitted Pending e-Verify</span>
+                    <small>ACK15 + Status Lock</small>
+                </button>
+
+                <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr-shared/fo-e-verify-now-success', 'filed_verified')">
+                    <span>5. Filed & e-Verified Success</span>
+                    <small>ACK15 + Verified Lock</small>
+                </button>
+            </div>
+
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <button class="action-btn secondary" style="flex: 1;" onclick="testSessionClear()">
+                    🧹 Test Clear All Sessions
+                </button>
+                <button class="action-btn secondary" style="flex: 1;" onclick="clearLogs()">
+                    Clear Log Box
+                </button>
+            </div>
+        </div>
+
+        <!-- Live Capture Inspector -->
+        <div class="card">
+            <h2>📡 Live SDC Event Inspector</h2>
+            <div id="logBox" class="log-box">
+                <div class="log-entry log-info">[Init] Listening for SDC captures & route changes...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Simulated DOM View -->
+    <div id="simulatedDomArea">
+        <h3 style="font-size: 15px; color: var(--muted); margin-bottom: 8px;">
+            Simulated Portal DOM Container: <span id="currentRouteLabel" style="color: var(--primary);">#/login</span>
+        </h3>
+        <div id="activeDomContainer" class="dom-view">
+            <!-- Dynamically replaced by simulateRoute -->
+        </div>
+    </div>
+</div>
+
+<!-- Load SDC Scripts for direct in-page execution when testing directly -->
+<script src="../sera_extension/sdc/sdc_core.js"></script>
+<script src="../sera_extension/sdc/protocols/itr_protocol.js"></script>
+
+<script>
+    const logBox = document.getElementById('logBox');
+    const sdcStatus = document.getElementById('sdcStatus');
+    const currentRouteLabel = document.getElementById('currentRouteLabel');
+    const activeDomContainer = document.getElementById('activeDomContainer');
+
+    function addLog(msg, type = 'info') {
+        const time = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `log-entry log-${type}`;
+        entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+        logBox.appendChild(entry);
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function clearLogs() {
+        logBox.innerHTML = '';
+        addLog('Log cleared.', 'info');
+    }
+
+    // Listen to SeraFSTApiCapture emitted by SDC
+    window.addEventListener('SeraFSTApiCapture', (e) => {
+        const detail = e.detail || {};
+        addLog(`🎯 <b>CAPTURE DISPATCHED [${detail.capture_method}]</b>: Status="${detail.status}", PAN="${detail.pan}", Name="${detail.client_name}", Form="${detail.filing_type}", AY="${detail.period_label}", ARN="${detail.arn}"`, 'capture');
+    });
+
+    // Check SDC initialization
+    setTimeout(() => {
+        if (window.__SERA_SDC__) {
+            sdcStatus.textContent = `SDC Active (v${window.__SERA_SDC__.version})`;
+            sdcStatus.style.color = '#34d399';
+            addLog(`✅ SDC Core v${window.__SERA_SDC__.version} successfully initialized.`, 'info');
+        } else {
+            sdcStatus.textContent = 'SDC Not Found';
+            sdcStatus.style.color = '#f87171';
+            addLog('⚠️ SDC Core not found on window object.', 'reset');
+        }
+    }, 200);
+
+    function simulateRoute(routeHash, mode) {
+        currentRouteLabel.textContent = routeHash;
+        window.location.hash = routeHash;
+
+        // Render DOM corresponding to the stage
+        if (mode === 'logout') {
+            activeDomContainer.innerHTML = `
+                <div class="mock-banner banner-warning">User logged out. Login screen active.</div>
+                <div class="mock-field"><label>Username / PAN:</label><input type="text" value="GZEPM6367M"></div>
+            `;
+            addLog(`🔄 Route changed to <b>${routeHash}</b> (Login/Logout Guard Triggered)`, 'reset');
+        } else if (mode === 'form_select') {
+            activeDomContainer.innerHTML = `
+                <nav aria-label="breadcrumb">Dashboard > e-File > Income Tax Return > Select Status > Filing Returns for A.Y. 2026-27</nav>
+                <div style="margin-top: 10px;">
+                    <h3>Select ITR Form</h3>
+                    <p>Filing ITR-4 (Sugam) for Assessment Year 2026-27</p>
+                </div>
+            `;
+            addLog(`📍 Route changed to <b>${routeHash}</b> (Form Select)`, 'info');
+        } else if (mode === 'personal_info') {
+            activeDomContainer.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <nav aria-label="breadcrumb">Filing Returns for A.Y. 2026-27 > ITR > Return Summary > Part A General - Personal Information</nav>
+                    <button id="loginUsername" style="background: transparent; color: #fff; border: 1px solid #475569; padding: 4px 8px; border-radius: 4px;">
+                        <span class="user-profile-name">MANZUR ALI MOLL...</span>
+                    </button>
+                </div>
+                <div class="mock-field"><label>First Name:</label><output id="FirstName" name="Personal_Information.Profile.FirstName">MANZUR</output></div>
+                <div class="mock-field"><label>Middle Name:</label><output id="MiddleName" name="Personal_Information.Profile.MiddleName">ALI</output></div>
+                <div class="mock-field"><label>Last Name:</label><output id="LastName" name="Personal_Information.Profile.LastName">MOLLA</output></div>
+                <div class="mock-field"><label>PAN:</label><output id="pan" name="pan">ABCDE1234F</output></div>
+            `;
+            addLog(`📍 Route changed to <b>${routeHash}</b> (Personal Info Form - Part A General)`, 'info');
+        } else if (mode === 'submit_pending') {
+            activeDomContainer.innerHTML = `
+                <nav aria-label="breadcrumb">Dashboard > e-File > Income Tax Return > Submit Level Validation</nav>
+                <div class="mock-banner banner-warning">
+                    You have successfully submitted your return! However, you still need to e-Verify within 30 days.
+                </div>
+                <div class="mock-field"><label>Acknowledgement No:</label><strong>123456789012345</strong></div>
+                <button style="margin-top: 10px; background: #2563eb; color: #fff; padding: 6px 12px; border-radius: 4px; border: none;">Download ITR-V</button>
+            `;
+            addLog(`📍 Route changed to <b>${routeHash}</b> (Submitted Pending e-Verify)`, 'info');
+        } else if (mode === 'filed_verified') {
+            activeDomContainer.innerHTML = `
+                <nav aria-label="breadcrumb">Dashboard > e-File > Income Tax Return > Verification Complete</nav>
+                <div class="mock-banner banner-success">
+                    You have successfully filed and verified your return!
+                </div>
+                <div class="mock-field"><label>Acknowledgement No:</label><strong>987654321098765</strong></div>
+                <button style="margin-top: 10px; background: #16a34a; color: #fff; padding: 6px 12px; border-radius: 4px; border: none;">Download Receipt</button>
+            `;
+            addLog(`📍 Route changed to <b>${routeHash}</b> (Filed & Verified Success)`, 'info');
+        }
+
+        // Trigger SDC scan
+        if (window.__SERA_SDC__) {
+            window.__SERA_SDC__.scanNow();
+        }
+    }
+
+    function testSessionClear() {
+        if (window.__SERA_SDC__) {
+            window.__SERA_SDC__.clearAllSessions();
+            addLog('🧹 <b>SDC.clearAllSessions() executed manually</b>. All protocol caches purged.', 'reset');
+        }
+    }
+</script>
+
+</body>
+</html>

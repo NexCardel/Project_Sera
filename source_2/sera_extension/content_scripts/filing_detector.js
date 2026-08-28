@@ -164,6 +164,11 @@
         if (!event || !event.detail) return;
         const detail = event.detail;
 
+        // If this capture was already sent directly by SDC, skip re-sending from filing_detector
+        if (detail.capture_method && detail.capture_method.startsWith('SDC_')) {
+            return;
+        }
+
         console.log("Sera Filing Detector: Received SAD API Capture event", detail);
 
         if (!chrome.runtime || !chrome.runtime.id) {
@@ -187,7 +192,7 @@
                 }
 
                 if (chrome.runtime.lastError || !chrome.runtime || !chrome.runtime.id) return;
-                if (data && (data.trackerEnabled === false || data.sadEnabled === false)) {
+                if (data && (data.trackerEnabled === false)) {
                     return;
                 }
                 // Verify host is in allowed service domains if configured
@@ -200,9 +205,6 @@
                     }
                 }
                 const payload = (data && (data.activeAutofillPayload || data.manualAssistPayload || data.mecpPayload)) || {};
-                if (payload.sad_enabled === false) {
-                    return;
-                }
                 
                 let effectiveClientId = detail.client_id || null;
                 if (!effectiveClientId && payload.client_id) {
