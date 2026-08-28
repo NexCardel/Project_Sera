@@ -104,6 +104,13 @@
     return false;
   }
 
+  // Prevent duplicate execution if injected multiple times
+  if (window.__SERA_DOM_TRACKER_ACTIVE__) return;
+  window.__SERA_DOM_TRACKER_ACTIVE__ = true;
+
+  let activeObserver = null;
+  let isMonitoringActive = false;
+
   // Check extension settings and context from chrome.storage.local
   chrome.storage.local.get([
     'activeAutofillPayload',
@@ -146,20 +153,52 @@
         }
       }
     }
-    // NEVER fall back to payloads[0] if it belongs to a completely different portal!
 
     console.log("⚡ Sera DOM: Monitoring active on portal [" + currentHost + "].");
     startDomMonitoring(matchedContext);
   });
 
   function startDomMonitoring(initialContext) {
+    if (isMonitoringActive) return;
+    isMonitoringActive = true;
     let context = initialContext || {};
     let debounceTimer = null;
 
-    // Listen for storage changes in case context is set after page load
+    function scheduleScan() {
+      if (!isMonitoringActive) return;
+      if (window.location.href !== seraNav.lastUrl) {
+        recordNavigation(window.location.href);
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (isMonitoringActive) {
+          scanDomForFiling(context);
+        }
+      }, 350);
+    }
+
+    // Listen for storage changes to dynamic attach/detach or update context
     try {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local') {
+          if (changes.trackerEnabled !== undefined || changes.fstEnabled !== undefined) {
+            const tEn = changes.trackerEnabled ? changes.trackerEnabled.newValue : true;
+            const fEn = changes.fstEnabled ? changes.fstEnabled.newValue : true;
+            if (tEn === false || fEn === false) {
+              console.log("Sera DOM: Tracker dynamically disabled. Detaching observer.");
+              isMonitoringActive = false;
+              if (activeObserver) {
+                activeObserver.disconnect();
+                activeObserver = null;
+              }
+              if (debounceTimer) clearTimeout(debounceTimer);
+            } else if (tEn !== false && fEn !== false && !isMonitoringActive) {
+              console.log("Sera DOM: Tracker dynamically re-enabled. Attaching observer.");
+              isMonitoringActive = true;
+              attachObserver();
+              scheduleScan();
+            }
+          }
           if (changes.activeAutofillPayload && changes.activeAutofillPayload.newValue) {
             context = Object.assign({}, context, changes.activeAutofillPayload.newValue);
           }
@@ -170,33 +209,41 @@
       });
     } catch (_) {}
 
-    function scheduleScan() {
-      if (window.location.href !== seraNav.lastUrl) {
-        recordNavigation(window.location.href);
+    // Runtime message listener for state updates
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg.type === "SERA_TRACKER_STATE_CHANGED") {
+          if (msg.trackerEnabled === false) {
+            isMonitoringActive = false;
+            if (activeObserver) {
+              activeObserver.disconnect();
+              activeObserver = null;
+            }
+            if (debounceTimer) clearTimeout(debounceTimer);
+          }
+        }
+      });
+    } catch (_) {}
+
+    function attachObserver() {
+      const targetNode = document.body || document.documentElement;
+      if (targetNode && !activeObserver) {
+        activeObserver = new MutationObserver(() => {
+          scheduleScan();
+        });
+        activeObserver.observe(targetNode, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
       }
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        scanDomForFiling(context);
-      }, 350);
     }
 
-    // Initial scans
+    // Initial scans & observer attachment
+    attachObserver();
     scheduleScan();
     setTimeout(scheduleScan, 1000);
     setTimeout(scheduleScan, 2500);
-
-    // MutationObserver to catch dynamically rendered SPAs (Angular / React)
-    const targetNode = document.body || document.documentElement;
-    if (targetNode) {
-      const observer = new MutationObserver(() => {
-        scheduleScan();
-      });
-      observer.observe(targetNode, {
-        childList: true,
-        subtree: true,
-        characterData: true
-      });
-    }
   }
 
   // Helper: extract all visible text from an element without children restriction

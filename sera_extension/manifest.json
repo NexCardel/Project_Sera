@@ -41,20 +41,10 @@
       "48": "icon48.png",
       "128": "icon128.png"
     },
-    "default_title": "Show Sera Manual Assist"
+    "default_title": "Project Sera Companion",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content_scripts/net_interceptor.js"
-      ],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": true
-    },
     {
       "matches": [
         "http://*/*",
@@ -63,9 +53,7 @@
       ],
       "js": [
         "content_scripts/sca_adapters.js",
-        "content_scripts/login.js",
-        "content_scripts/filing_detector.js",
-        "tracker.js"
+        "content_scripts/login.js"
       ],
       "run_at": "document_end",
       "all_frames": true
@@ -75,7 +63,14 @@
     {
       "resources": [
         "config.json",
-        "content_scripts/net_interceptor.js"
+        "content_scripts/net_interceptor.js",
+        "content_scripts/filing_detector.js",
+        "tracker.js",
+        "sdc/sdc_core.js",
+        "sdc/protocols/itr_protocol.js",
+        "sdc/protocols/gst_protocol.js",
+        "sdc/protocols/traces_protocol.js",
+        "sdc/protocols/mca_protocol.js"
       ],
       "matches": [
         "<all_urls>"

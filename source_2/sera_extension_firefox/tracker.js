@@ -104,6 +104,13 @@
     return false;
   }
 
+  // Prevent duplicate execution if injected multiple times
+  if (window.__SERA_DOM_TRACKER_ACTIVE__) return;
+  window.__SERA_DOM_TRACKER_ACTIVE__ = true;
+
+  let activeObserver = null;
+  let isMonitoringActive = false;
+
   // Check extension settings and context from chrome.storage.local
   chrome.storage.local.get([
     'activeAutofillPayload',
@@ -146,20 +153,52 @@
         }
       }
     }
-    // NEVER fall back to payloads[0] if it belongs to a completely different portal!
 
     console.log("⚡ Sera DOM: Monitoring active on portal [" + currentHost + "].");
     startDomMonitoring(matchedContext);
   });
 
   function startDomMonitoring(initialContext) {
+    if (isMonitoringActive) return;
+    isMonitoringActive = true;
     let context = initialContext || {};
     let debounceTimer = null;
 
-    // Listen for storage changes in case context is set after page load
+    function scheduleScan() {
+      if (!isMonitoringActive) return;
+      if (window.location.href !== seraNav.lastUrl) {
+        recordNavigation(window.location.href);
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (isMonitoringActive) {
+          scanDomForFiling(context);
+        }
+      }, 350);
+    }
+
+    // Listen for storage changes to dynamic attach/detach or update context
     try {
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local') {
+          if (changes.trackerEnabled !== undefined || changes.fstEnabled !== undefined) {
+            const tEn = changes.trackerEnabled ? changes.trackerEnabled.newValue : true;
+            const fEn = changes.fstEnabled ? changes.fstEnabled.newValue : true;
+            if (tEn === false || fEn === false) {
+              console.log("Sera DOM: Tracker dynamically disabled. Detaching observer.");
+              isMonitoringActive = false;
+              if (activeObserver) {
+                activeObserver.disconnect();
+                activeObserver = null;
+              }
+              if (debounceTimer) clearTimeout(debounceTimer);
+            } else if (tEn !== false && fEn !== false && !isMonitoringActive) {
+              console.log("Sera DOM: Tracker dynamically re-enabled. Attaching observer.");
+              isMonitoringActive = true;
+              attachObserver();
+              scheduleScan();
+            }
+          }
           if (changes.activeAutofillPayload && changes.activeAutofillPayload.newValue) {
             context = Object.assign({}, context, changes.activeAutofillPayload.newValue);
           }
@@ -170,33 +209,41 @@
       });
     } catch (_) {}
 
-    function scheduleScan() {
-      if (window.location.href !== seraNav.lastUrl) {
-        recordNavigation(window.location.href);
+    // Runtime message listener for state updates
+    try {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg.type === "SERA_TRACKER_STATE_CHANGED") {
+          if (msg.trackerEnabled === false) {
+            isMonitoringActive = false;
+            if (activeObserver) {
+              activeObserver.disconnect();
+              activeObserver = null;
+            }
+            if (debounceTimer) clearTimeout(debounceTimer);
+          }
+        }
+      });
+    } catch (_) {}
+
+    function attachObserver() {
+      const targetNode = document.body || document.documentElement;
+      if (targetNode && !activeObserver) {
+        activeObserver = new MutationObserver(() => {
+          scheduleScan();
+        });
+        activeObserver.observe(targetNode, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
       }
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        scanDomForFiling(context);
-      }, 350);
     }
 
-    // Initial scans
+    // Initial scans & observer attachment
+    attachObserver();
     scheduleScan();
     setTimeout(scheduleScan, 1000);
     setTimeout(scheduleScan, 2500);
-
-    // MutationObserver to catch dynamically rendered SPAs (Angular / React)
-    const targetNode = document.body || document.documentElement;
-    if (targetNode) {
-      const observer = new MutationObserver(() => {
-        scheduleScan();
-      });
-      observer.observe(targetNode, {
-        childList: true,
-        subtree: true,
-        characterData: true
-      });
-    }
   }
 
   // Helper: extract all visible text from an element without children restriction
@@ -357,10 +404,14 @@
       const pageFullText = (document.body ? (document.body.innerText || document.body.textContent || "") : "").replace(/\s+/g, ' ');
       const lowerFullText = pageFullText.toLowerCase();
 
+      console.log(`⚡ Sera DOM [scan]: URL=${window.location.href.substring(0,80)}, isFilingUrl=${isFilingUrl}, urlForm=${urlForm}, textLen=${pageFullText.length}`);
+
       let hasPositiveCue = false;
+      let matchedPhrase = "";
       for (const phrase of CONFIRMATION_PHRASES) {
         if (lowerFullText.includes(phrase)) {
           hasPositiveCue = true;
+          matchedPhrase = phrase;
           break;
         }
       }
@@ -368,12 +419,14 @@
       for (const neg of NEGATIVE_PHRASES) {
         // If error message is prominent and no real confirmation exists
         if (lowerFullText.includes(neg) && !lowerFullText.includes("submitted successfully") && !lowerFullText.includes("filed successfully") && !lowerFullText.includes("status - filed")) {
+          console.warn(`⚡ Sera DOM: Blocked by NEGATIVE_PHRASE: "${neg}"`);
           return;
         }
       }
 
       // 3. Extract Live Identity (Name & PAN/GSTIN) via Multi-Vector Scanning (ALWAYS RUNS ON EVERY PAGE/STEP)
       const identity = extractIdentityFromPage(context, pageFullText);
+      console.log(`⚡ Sera DOM [identity]: pan="${identity.pan}", name="${identity.client_name}", gstin="${identity.gstin}", positiveCue="${matchedPhrase}"`);
 
       // Clean Identity Isolation: If live DOM shows a different PAN/GSTIN than in-memory session, reset memory
       if (identity.pan && window.__SERA_SESSION_IDENTITY__.pan && identity.pan !== window.__SERA_SESSION_IDENTITY__.pan) {
@@ -389,8 +442,10 @@
 
       // Gate: Must have at least a client identity or positive filing cue to record
       if (!finalPan && !finalClientName && !hasPositiveCue && !isFilingUrl) {
+        console.warn(`⚡ Sera DOM: Gate blocked - no pan="${finalPan}", no name="${finalClientName}", hasPositiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
         return;
       }
+      console.log(`⚡ Sera DOM [gate passed]: pan="${finalPan}", name="${finalClientName}", positiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
 
       // 4. Extract ARN / Ack Number
       let extractedArn = null;
@@ -401,9 +456,10 @@
         extractedArn = ackMatch[1].trim();
       }
 
-      // B. GST ARN Pattern (Handles "AB190726085446K" with exact GST format: 2 state digits + 13 alphanum)
+      // B. GST ARN Pattern - Real ARNs: 2 digits + 6 digits (YYMMDD) + 6 digits + 1 alpha (e.g. "AA190726085446K")
+      // IMPORTANT: exclude GSTINs ([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]) which are 15 chars but different structure
       if (!extractedArn || extractedArn === "N/A") {
-        const gstArnMatch = pageFullText.match(/\b([0-9]{2}[A-Z0-9]{13})\b/);
+        const gstArnMatch = pageFullText.match(/\b((?:AA|AD|AN|AP|AR|AS|BR|CG|DD|DL|DN|GA|GJ|HP|HR|JH|JK|KA|KL|LA|LD|MH|ML|MN|MP|MZ|NL|OD|PB|PY|RJ|SK|TG|TN|TR|TS|UK|UP|UT|WB)\d{12}[A-Z])\b/);
         if (gstArnMatch && gstArnMatch[1] && isValidArn(gstArnMatch[1])) {
           extractedArn = gstArnMatch[1].trim();
         }
@@ -519,6 +575,8 @@
 
   // Multi-Vector Identity Scanner: Browser Storage, Form Inputs, Profile Badges, and Full Text
   function extractIdentityFromPage(context, pageFullText) {
+    const currentHost = (window.location.hostname || "").toLowerCase();
+    
     // ALWAYS start clean so all live DOM and storage vectors run fresh
     let result = {
       client_name: "",
@@ -533,7 +591,22 @@
       "user", "password", "continue", "skip", "instructions", "file",
       "first name", "middle name", "last name", "surname", "org name",
       "assessee name", "taxpayer name", "legal name", "trade name",
-      "part a", "general information", "schedule"
+      "part a", "general information", "schedule",
+      // UI navigation & button text
+      "toggle", "toggle navigation", "toggle menu", "toggle sidebar",
+      "navigation", "navbar", "sidebar", "menu", "main menu",
+      "close", "open", "collapse", "expand", "close menu", "open menu",
+      "click here", "read more", "learn more", "know more", "show more",
+      "next", "previous", "back", "cancel", "reset", "clear", "edit",
+      "delete", "remove", "update", "save", "apply", "confirm",
+      "loading", "please wait", "processing", "fetching",
+      "sign in", "sign out", "log in", "log out", "register",
+      "forgot password", "change password", "new password",
+      "notifications", "notification", "alert", "alerts", "news",
+      "print", "export", "import", "download", "upload",
+      "breadcrumb", "footer", "header", "banner",
+      "payment", "pay now", "proceed", "submit now",
+      "go back", "go to", "click", "tap", "swipe"
     ];
 
     function cleanExtractedName(str) {
@@ -568,6 +641,21 @@
 
       const lower = s.toLowerCase();
       if (invalidTokens.some(tok => lower === tok || lower.startsWith(tok + " ") || lower.endsWith(" " + tok))) return false;
+
+      // Reject strings whose FIRST word is a common UI action verb (catches "Toggle navigation", "Close menu", etc.)
+      const firstWord = lower.split(/\s+/)[0];
+      const uiActionVerbs = [
+        "toggle", "close", "open", "collapse", "expand", "show", "hide",
+        "click", "tap", "scroll", "navigate", "go", "back", "next", "skip",
+        "cancel", "reset", "clear", "delete", "remove", "edit", "save",
+        "print", "export", "import", "download", "upload", "proceed",
+        "loading", "processing", "fetching", "please", "select", "choose"
+      ];
+      if (uiActionVerbs.includes(firstWord)) return false;
+
+      // Reject strings with no alphabetic word >= 2 chars (pure label/code noise)
+      if (!/[A-Za-z]{2,}/.test(s)) return false;
+
       return true;
     }
 
@@ -601,15 +689,67 @@
         }
       }
 
-      // 2. Top Header Profile Badge (e.g. "ARUN BAIDYA \n 19ATYPB6533F2ZX")
-      const gstHeaderBadge = text.match(/([A-Za-z\s.]{3,60})\s+([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/);
-      if (gstHeaderBadge) {
-        if (!result.gstin) {
-          result.gstin = gstHeaderBadge[2].toUpperCase();
-          result.pan = gstHeaderBadge[2].slice(2, 12).toUpperCase();
-        }
-        if (!result.client_name && isValidClientName(gstHeaderBadge[1])) {
-          result.client_name = cleanExtractedName(gstHeaderBadge[1]);
+      // 2. Angular ng-bind directives: busName / udata.bname (GST Dashboard)
+      if (!result.client_name) {
+        try {
+          const ngBindSelectors = [
+            '[data-ng-bind="busName"]',
+            '[ng-bind="busName"]',
+            '[data-ng-bind*="bname"]',
+            '[ng-bind*="bname"]'
+          ];
+          for (const sel of ngBindSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+              const val = (el.innerText || el.textContent || "").trim();
+              if (val && isValidClientName(val)) {
+                result.client_name = cleanExtractedName(val);
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 3. GSTIN from ng-bind uid field (e.g. data-ng-bind="uid")
+      if (!result.gstin) {
+        try {
+          const uidEl = document.querySelector('[data-ng-bind="uid"], [ng-bind="uid"]');
+          if (uidEl) {
+            const uidVal = (uidEl.innerText || uidEl.textContent || "").trim().toUpperCase();
+            if (/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(uidVal)) {
+              result.gstin = uidVal;
+              result.pan = uidVal.slice(2, 12);
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 4. Header dropdown-toggle title attribute (e.g. <a class="dropdown-toggle lang-dpwn" title="MASUD ALI MALI">)
+      if (!result.client_name) {
+        try {
+          const dropdownEls = document.querySelectorAll('a[class*="dropdown-toggle"][title], a[class*="lang-dpwn"][title]');
+          for (const el of dropdownEls) {
+            const titleVal = (el.getAttribute('title') || "").trim();
+            if (titleVal && isValidClientName(titleVal) && !/^(?:Goods|GST|Services|Home|Portal)/i.test(titleVal)) {
+              result.client_name = cleanExtractedName(titleVal);
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 5. Top Header Profile Badge text (e.g. "ARUN BAIDYA \n 19ATYPB6533F2ZX")
+      if (!result.client_name) {
+        const gstHeaderBadge = text.match(/([A-Za-z\s.]{3,60})\s+([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/);
+        if (gstHeaderBadge) {
+          if (!result.gstin) {
+            result.gstin = gstHeaderBadge[2].toUpperCase();
+            result.pan = gstHeaderBadge[2].slice(2, 12).toUpperCase();
+          }
+          if (isValidClientName(gstHeaderBadge[1])) {
+            result.client_name = cleanExtractedName(gstHeaderBadge[1]);
+          }
         }
       }
     }
@@ -701,9 +841,9 @@
     const profileSelectors = [
       '#loginUsername', 'button[id*="loginUsername" i]', 'button[id*="loginUsername" i] *',
       '.user-profile-name', '.user-name', '.username', 'span.header-username', 'span.user-name',
-      '.user-details', '.user-details *', 'div[class*="user-name" i]', 'div[class*="profile-name" i]',
+      '.user-details', 'div[class*="user-name" i]', 'div[class*="profile-name" i]',
       'span[class*="profile-name" i]', 'div.login-user-name', 'span.welcome-user', '.userInfoName',
-      'app-header .user-name', 'app-header .profile-name', 'app-header button', 'header button',
+      'app-header .user-name', 'app-header .profile-name',
       'header .dropdown-toggle', 'nav .dropdown-toggle', '.navbar-nav .dropdown-toggle',
       '[data-testid*="assessee-name" i]', '[data-testid*="taxpayer-name" i]',
       '[id*="assesseeName" i]', '[id*="taxpayerName" i]',
@@ -738,8 +878,7 @@
       } catch (_) {}
     }
 
-    // VECTOR 5: Full Page Text Matching (Fallback)
-    const text = pageFullText || (document.body ? (document.body.innerText || document.body.textContent || "") : "");
+    // VECTOR 5: Full Page Text Matching (Fallback - text already declared above)
 
     // GSTIN from page text (e.g. 19AFAPM7143K1Z7) -> auto-derive PAN (AFAPM7143K)
     const gstinMatch = text.match(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/);
@@ -897,9 +1036,16 @@
         if (portalName === "income tax" && p.includes("gst")) safeCtx = null;
         if (portalName === "gst" && (p.includes("income") || p.includes("itd"))) safeCtx = null;
       }
-      // If live PAN/GSTIN was extracted on page and safeCtx has a different PAN, discard safeCtx to prevent embedding wrong client data!
-      if (meta && meta.pan && safeCtx && safeCtx.pan && meta.pan.toUpperCase() !== safeCtx.pan.toUpperCase()) {
-        safeCtx = null;
+      // If live PAN was extracted on page, discard safeCtx if:
+      //   (a) safeCtx has a DIFFERENT pan (cross-client pollution), OR
+      //   (b) safeCtx has NO pan at all (stale payload from a different client session — e.g. Jeniya Garments client_id)
+      if (meta && meta.pan && safeCtx) {
+        const livePan = meta.pan.toUpperCase();
+        if (safeCtx.pan && safeCtx.pan.toUpperCase() !== livePan) {
+          safeCtx = null; // Different PAN → wrong client context
+        } else if (!safeCtx.pan) {
+          safeCtx = null; // No PAN in context → can't verify ownership, discard to let backend resolve from PAN
+        }
       }
     }
 
@@ -910,6 +1056,7 @@
     const filingType = (meta && meta.filing_type) || (safeCtx && safeCtx.filing_type) || "Filing Confirmation";
     const status = (meta && meta.status) || (meta && meta.scraped_data && meta.scraped_data.summary_labels && meta.scraped_data.summary_labels.Status) || "Submitted";
     const clientId = (safeCtx && safeCtx.client_id) || null;
+
 
     const currentPageKey = getNormalizedPageKey(window.location.href);
     const formFieldsSample = (meta && meta.scraped_data && meta.scraped_data.form_fields) ? JSON.stringify(meta.scraped_data.form_fields) : "";
