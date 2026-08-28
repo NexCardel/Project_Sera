@@ -148,21 +148,21 @@ function broadcastTrackerState(enabled) {
 
 // SAD & DOM Tracker & SDC: Inject scripts with strict setting gates
 function injectSAD(tabId, reason) {
-  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled', 'legacyDomEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
     const sadEnabled = data.sadEnabled !== false && trackerEnabled;
     const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-    // SDC follows the fstEnabled gate (it's the lightweight replacement option)
-    // Both tracker.js (heavy) and sdc (light) are injected when fstEnabled.
-    // In a future toggle, sdcEnabled can override tracker.js to skip it.
-    const sdcEnabled = data.sdcEnabled !== false && fstEnabled;
+    // SDC is the primary DOM engine (active by default when FST is enabled)
+    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled && (data.legacyDomEnabled !== true);
+    // Legacy DOM tracker (tracker.js) ONLY runs if explicitly requested and SDC is OFF
+    const legacyTrackerEnabled = (data.legacyDomEnabled === true || (!sdcEnabled && fstEnabled));
 
-    if (!sadEnabled && !fstEnabled) {
-      console.log(`Sera SAD/DOM: Injections disabled by settings (tracker=${trackerEnabled}, sad=${sadEnabled}, fst=${fstEnabled}). Skipping tab ${tabId}.`);
+    if (!sadEnabled && !fstEnabled && !sdcEnabled) {
+      console.log(`Sera SAD/DOM: Injections disabled by settings (tracker=${trackerEnabled}, sad=${sadEnabled}, fst=${fstEnabled}, sdc=${sdcEnabled}). Skipping tab ${tabId}.`);
       return;
     }
 
-    console.log(`Sera SAD: injectSAD called for tab ${tabId} | reason: ${reason} | SAD: ${sadEnabled}, FST: ${fstEnabled}, SDC: ${sdcEnabled}`);
+    console.log(`Sera SAD: injectSAD called for tab ${tabId} | reason: ${reason} | SAD: ${sadEnabled}, SDC (Exclusive): ${sdcEnabled}, Legacy DOM: ${legacyTrackerEnabled && !sdcEnabled}`);
     
     // 1. Inject API Net Interceptor into MAIN world if SAD is enabled
     if (sadEnabled) {
@@ -177,18 +177,19 @@ function injectSAD(tabId, reason) {
       });
     }
 
-    // 2. Inject Filing Detector (always, so toast notifier is available for SDC too)
+    // 2. Inject Filing Detector (toast notifier engine)
     const contentFiles = ['content_scripts/filing_detector.js'];
-    if (fstEnabled) {
+    // Strict Mutual Exclusion: Only inject legacy tracker.js if SDC is NOT active
+    if (legacyTrackerEnabled && !sdcEnabled) {
       contentFiles.push('tracker.js');
     }
     chrome.scripting.executeScript({
       target: { tabId: tabId, allFrames: true },
       files: contentFiles
     }).then(() => {
-      console.log('Sera DOM: ✅ injected', contentFiles.join(', '), 'into tab', tabId);
+      console.log('Sera Base Content: ✅ injected', contentFiles.join(', '), 'into tab', tabId);
 
-      // 3. Inject SDC after filing_detector is ready (so __SERA_TOAST_NOTIFIER__ exists)
+      // 3. Inject SDC (Route-Gated Crosshair Engine) — strictly exclusive to legacy tracker
       if (sdcEnabled) {
         const sdcFiles = [
           'sdc/sdc_core.js',
@@ -201,13 +202,13 @@ function injectSAD(tabId, reason) {
           target: { tabId: tabId, allFrames: false }, // top frame only for SDC
           files: sdcFiles
         }).then(() => {
-          console.log('Sera SDC: ✅ injected SDC core + protocols into tab', tabId);
+          console.log('Sera SDC: ✅ injected SDC core + protocols exclusively into tab', tabId);
         }).catch(err => {
           console.log('Sera SDC: ❌ inject SDC failed for tab', tabId, ':', err.message);
         });
       }
     }).catch(err => {
-      console.log('Sera DOM: ❌ inject content scripts failed for tab', tabId, ':', err.message);
+      console.log('Sera Base Content: ❌ inject content scripts failed for tab', tabId, ':', err.message);
     });
   });
 }
