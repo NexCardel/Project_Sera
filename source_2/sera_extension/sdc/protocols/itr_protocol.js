@@ -172,26 +172,92 @@
       return false;
     }
 
+    // ─── One-shot form-value watcher (for Angular lazy-render) ───────────────
+    // Called when T1 returns nothing on personal_information because the API
+    // hasn't pre-filled the form fields yet. Watches for value to appear,
+    // updates session.name, then self-destructs.
+
+    function _watchForFormValues(url) {
+      // Only run once per page visit
+      if (window.__SDC_ITR_FORM_WATCHER__) return;
+      window.__SDC_ITR_FORM_WATCHER__ = true;
+
+      const FORM_SELECTOR =
+        'input[name*="FirstName" i], input[id*="FirstName" i], ' +
+        'output[name*="FirstName" i], output[id*="FirstName" i]';
+
+      let attempts = 0;
+      const MAX_ATTEMPTS = 20; // 20 × 500ms = 10s max wait
+
+      const poll = setInterval(() => {
+        attempts++;
+        const el = u.$q(FORM_SELECTOR);
+        const val = el ? (el.value || el.innerText || el.textContent || '').trim() : '';
+
+        if (val && val.length >= 2) {
+          clearInterval(poll);
+          window.__SDC_ITR_FORM_WATCHER__ = false;
+
+          // Re-run full name extraction now that fields are populated
+          const fullName = _extractName();
+          const pan = session.pan || _extractPan();
+
+          if (fullName) {
+            session.name = fullName;
+            console.log(`⚡ Sera SDC [itr_personal_info]: ✅ Lazy-render name resolved → "${fullName}"`);
+          }
+          if (pan && !session.pan) session.pan = pan;
+          return;
+        }
+
+        if (attempts >= MAX_ATTEMPTS) {
+          clearInterval(poll);
+          window.__SDC_ITR_FORM_WATCHER__ = false;
+          console.log('⚡ Sera SDC [itr_personal_info]: Form fields not populated after 10s — using badge/T3 fallback.');
+        }
+      }, 500);
+    }
+
     // ─── CROSSHAIR 1: Personal Info / Profile ────────────────────────────────
     // Target: .../personal_information OR .../profile pages
     // Purpose: Capture PAN + Full Legal Name + AY + Form type
     // Extracted: PAN (primary key), Legal Name (3-tier), Form type, AY
+    //
+    // Name extraction flow:
+    //   T1 (form inputs: FirstName + MiddleName + SurName) — most accurate
+    //     └─ If empty (Angular hasn't rendered yet): starts _watchForFormValues()
+    //   T2 (header profile badge) — available immediately but may be truncated
+    //   T3 (page text near PAN) — last resort
 
     function _handlePersonalInfo(url) {
       if (!_isItrContext(url)) return null;
 
+      // Reset watcher guard on every fresh navigation to this page
+      window.__SDC_ITR_FORM_WATCHER__ = false;
+
       const pan = _extractPan();
-      const name = _extractName();
+      const name = _extractName(); // tries T1 first
       const { ay, form } = _extractAyAndForm(url);
 
-      // Update session cache
+      // If T1 gave us nothing (Angular lazy), fire background watcher
+      const t1InputEl = u.$q(
+        'input[name*="FirstName" i], input[id*="FirstName" i], ' +
+        'output[name*="FirstName" i], output[id*="FirstName" i]'
+      );
+      const t1HasValue = t1InputEl && (t1InputEl.value || t1InputEl.innerText || '').trim().length > 0;
+      if (!t1HasValue) {
+        _watchForFormValues(url);
+        console.log('⚡ Sera SDC [itr_personal_info]: T1 empty — waiting for Angular to populate form fields.');
+      }
+
+      // Update session cache with whatever we have now (watcher will upgrade name later)
       if (pan) session.pan = pan;
       if (name) session.name = name;
       if (ay) session.ay = ay;
       if (form) session.form = form;
 
       if (!pan && !name) {
-        console.log('Sera SDC [itr_personal_info]: No PAN or name found. Skipping.');
+        console.log('Sera SDC [itr_personal_info]: No PAN or name found yet. Skipping dispatch (watcher active).');
         return null;
       }
 
@@ -209,6 +275,7 @@
         confirmation_message: ''
       };
     }
+
 
     // ─── CROSSHAIR 2: ITR Form Selection Page ────────────────────────────────
     // Target: .../fo-select-itr-form
