@@ -494,7 +494,7 @@
         },
         {
           id: 'itr_form_select',
-          pattern: /(?:fo-select-itr-form|select.?itr.?form|fo-lets-get-started|fileIncomeTaxReturn)/i,
+          pattern: /(?:fo-select-itr-form|select.?itr.?form|fo-lets-get-started)/i,
           handler: _handleFormSelect
         },
         {

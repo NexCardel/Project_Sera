@@ -88,24 +88,38 @@
   // Session-clear callback registry (populated by protocols via SDC.onSessionClear)
   const _sessionClearCallbacks = [];
 
-  // ─── Route Change Detection (SPA-safe for Angular/React) ───────────────────
+  // ─── Route Change Detection (SPA-safe with Loop Protection) ───────────────
   let _lastScannedUrl = '';
   let _lastObservedUrl = window.location.href;
   let _debounceTimer = null;
+  let _pendingRetryTimers = [];
 
-  function _onUrlChange(url) {
-    if (_debounceTimer) clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(() => _dispatch(url), 200);
+  function _clearPendingRetries() {
+    if (_debounceTimer) {
+      clearTimeout(_debounceTimer);
+      _debounceTimer = null;
+    }
+    for (const t of _pendingRetryTimers) {
+      clearTimeout(t);
+    }
+    _pendingRetryTimers = [];
   }
 
-  // 1. Lightweight 250ms URL change poller (catches Angular router transitions across isolated worlds)
+  function _onUrlChange(url) {
+    if (url === _lastScannedUrl) return;
+    _clearPendingRetries();
+    _lastScannedUrl = url; // Lock URL immediately to prevent duplicate runs
+    _debounceTimer = setTimeout(() => _dispatch(url, 0), 200);
+  }
+
+  // 1. Lightweight 300ms URL change poller (catches Angular router transitions)
   setInterval(() => {
     const currentHref = window.location.href;
     if (currentHref !== _lastObservedUrl) {
       _lastObservedUrl = currentHref;
       _onUrlChange(currentHref);
     }
-  }, 250);
+  }, 300);
 
   // 2. Intercept pushState / replaceState for SPA navigation
   ['pushState', 'replaceState'].forEach(method => {
@@ -113,19 +127,32 @@
       const original = history[method];
       history[method] = function (...args) {
         const result = original.apply(this, args);
-        setTimeout(() => _onUrlChange(window.location.href), 0);
+        setTimeout(() => {
+          const currentHref = window.location.href;
+          if (currentHref !== _lastObservedUrl) {
+            _lastObservedUrl = currentHref;
+            _onUrlChange(currentHref);
+          }
+        }, 0);
         return result;
       };
     } catch (_) {}
   });
 
   // 3. hashchange & popstate listeners
-  window.addEventListener('hashchange', () => _onUrlChange(window.location.href));
-  window.addEventListener('popstate', () => _onUrlChange(window.location.href));
+  window.addEventListener('hashchange', () => {
+    _lastObservedUrl = window.location.href;
+    _onUrlChange(window.location.href);
+  });
+  window.addEventListener('popstate', () => {
+    _lastObservedUrl = window.location.href;
+    _onUrlChange(window.location.href);
+  });
 
   // ─── Dispatch: Match URL → Protocol → Crosshair → Handler ──────────────────
   async function _dispatch(url, retryCount = 0) {
-    if (url === _lastScannedUrl && retryCount === 0) return;
+    // Abort if the user has navigated away while a retry was pending
+    if (window.location.href !== url) return;
 
     const host = (window.location.hostname || '').toLowerCase();
 
@@ -135,17 +162,23 @@
       for (const crosshair of protocol.crosshairs) {
         if (!crosshair.pattern.test(url)) continue;
 
-        console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" (attempt #${retryCount + 1}) for URL: ${url.substring(0, 120)}`);
+        console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" (attempt #${retryCount + 1})`);
 
         try {
           const capture = await crosshair.handler(url);
           if (capture) {
-            _lastScannedUrl = url;
+            _clearPendingRetries();
             _emitCapture(capture, protocol.name, crosshair.id);
-            return; // Capture completed successfully
-          } else if (crosshair.id !== 'itr_login' && retryCount < 4) {
-            // Angular component might still be loading API data / template — retry in 600ms
-            setTimeout(() => _dispatch(url, retryCount + 1), 600);
+            return;
+          } else if (crosshair.id !== 'itr_login' && retryCount < 2) {
+            // Schedule up to 2 retries (at +600ms and +1500ms) for Angular rendering
+            const delay = (retryCount + 1) * 700;
+            const timer = setTimeout(() => {
+              if (window.location.href === url) {
+                _dispatch(url, retryCount + 1);
+              }
+            }, delay);
+            _pendingRetryTimers.push(timer);
           }
         } catch (err) {
           console.warn(`⚡ Sera SDC: Handler error in crosshair "${crosshair.id}":`, err);
