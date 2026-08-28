@@ -3048,14 +3048,25 @@ class SeraDatabase:
     def _format_dump_entry_block(dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name="") -> str:
         """Formats a standardized, high-contrast dump text block for an intercepted payload."""
         formatted_json = raw_payload_json or "{}"
+        parsed = {}
         try:
             if isinstance(raw_payload_json, str):
                 parsed = json.loads(raw_payload_json)
             else:
-                parsed = raw_payload_json
+                parsed = raw_payload_json or {}
             formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
         except Exception:
             formatted_json = str(raw_payload_json)
+            parsed = {}
+
+        if not client_name and isinstance(parsed, dict):
+            client_name = (
+                parsed.get("client_name") 
+                or parsed.get("taxpayer_name") 
+                or parsed.get("name") 
+                or (parsed.get("raw_payload", {}).get("client_name") if isinstance(parsed.get("raw_payload"), dict) else "")
+                or (parsed.get("raw_payload", {}).get("taxpayer_name") if isinstance(parsed.get("raw_payload"), dict) else "")
+            )
 
         client_str = f"{client_id} ({client_name})" if client_name else (str(client_id) if client_id else "N/A")
         entry_lines = [
@@ -3309,12 +3320,13 @@ class SeraDatabase:
         reliable even when Excel/reporting dependencies are not installed.
         """
         workspace_dir = os.path.dirname(os.path.abspath(__file__))
+        master_pans = self._get_master_pans_for_reports()
+        self.sync_fst_classifier()
+        self.sync_dom_parser()
+
         dump_file = os.path.join(workspace_dir, "seraRawPayloadDump.txt")
         if not os.path.exists(dump_file) or os.path.getsize(dump_file) <= 100:
             return
-
-        master_pans = self._get_master_pans_for_reports()
-        self.sync_fst_classifier()
 
         try:
             tracer_dir = os.path.join(workspace_dir, "FST_Tracer_Alpha")
@@ -3369,6 +3381,22 @@ class SeraDatabase:
                     sys.path.insert(0, classifier_dir)
                 import fst_classifier
                 fst_classifier.process_data(dump_file, report_path)
+        except Exception:
+            pass
+
+    def sync_dom_parser(self):
+        """Silently syncs DOM_Parser_1/dom_audit_report.xlsx whenever dumps or databases are updated."""
+        try:
+            workspace_dir = os.path.dirname(os.path.abspath(__file__))
+            parser_dir = os.path.join(workspace_dir, "DOM_Parser_1")
+            report_path = os.path.join(parser_dir, "dom_audit_report.xlsx")
+            db_file = os.path.join(workspace_dir, "rawPayload.db")
+            if os.path.exists(parser_dir):
+                import sys
+                if parser_dir not in sys.path:
+                    sys.path.insert(0, parser_dir)
+                import dom_parser
+                dom_parser.process_data(db_file, report_path)
         except Exception:
             pass
 

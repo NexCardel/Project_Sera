@@ -175,10 +175,10 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         elif k in ("lastname", "last_name", "lname", "sur_name", "surname", "surnameororgname") and not last_name:
             last_name = v
         elif k in ("fullname", "full_name", "assesseename", "assessee_name", "assessee_ver_name", "assessevername", "nameasperbank"):
-            if not extracted["proprietor_name"] and len(v) >= 3:
+            if not extracted["proprietor_name"] and len(v) >= 3 and not any(part in v.lower() for part in ("first name", "last name", "general information")):
                 extracted["proprietor_name"] = v
-        elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name", "taxpayername"):
-            if not extracted["proprietor_name"] and len(v) >= 3:
+        elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name", "taxpayername", "client_name", "clientname", "name"):
+            if not extracted["proprietor_name"] and len(v) >= 3 and not any(part in v.lower() for part in ("first name", "last name", "general information")):
                 extracted["proprietor_name"] = v
 
     if first_name or middle_name or last_name:

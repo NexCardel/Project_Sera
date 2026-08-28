@@ -1432,6 +1432,34 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Tracer Error", f"Failed to run FST Tracer Alpha: {e}")
 
+
+    def _open_dom_parser_report(self):
+        """Generates and opens the latest DOM Parser 1 audit Excel report."""
+        import os, sys
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        parser_dir = os.path.join(app_dir, "DOM_Parser_1")
+        report_path = os.path.join(parser_dir, "dom_audit_report.xlsx")
+        db_path = os.path.join(app_dir, "rawPayload.db")
+        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        target_dump = db_path if os.path.exists(db_path) else next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
+
+        try:
+            if parser_dir not in sys.path:
+                sys.path.insert(0, parser_dir)
+            import dom_parser
+
+            os.makedirs(parser_dir, exist_ok=True)
+            success = dom_parser.process_data(target_dump, report_path)
+            if success and os.path.exists(report_path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
+            else:
+                QMessageBox.warning(self, "DOM Parser Notice", "Could not generate DOM audit report from available captures.")
+        except Exception as e:
+            QMessageBox.critical(self, "DOM Parser Error", f"Failed to run DOM Parser 1: {e}")
+
     def _open_simple_parser_report(self):
         """Refreshes and opens the conservative Simple Parser workbook."""
         import os
@@ -1542,6 +1570,9 @@ class TrackerDumpWindow(QWidget):
 
         act_tracer = menu.addAction(_safe_qta_icon("mdi.timeline-text-outline", "#4CF9B7"), "FST Tracer Alpha (Excel Report)")
         act_tracer.triggered.connect(self._open_fst_tracer_report)
+
+        act_dom_parser = menu.addAction(_safe_qta_icon("mdi.view-dashboard-outline", "#4CF9B7"), "DOM Parser 1 (Excel Report)")
+        act_dom_parser.triggered.connect(self._open_dom_parser_report)
 
         act_simple_parser = menu.addAction(_safe_qta_icon("mdi.file-table-outline", "#4CF9B7"), "Simple Parser (Excel Report)")
         act_simple_parser.triggered.connect(self._open_simple_parser_report)

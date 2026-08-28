@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>e-Filing Portal | Submit Success</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; margin: 0; padding: 0; }
+        header { background: #0c2340; color: #fff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 18px; font-weight: bold; }
+        .user-profile { display: flex; align-items: center; gap: 10px; }
+        .user-profile button { background: transparent; border: 1px solid #ffffff44; color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; text-align: right; }
+        .container { max-width: 900px; margin: 50px auto; }
+        .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); padding: 40px; border-left: 6px solid #16a34a; }
+        .success-header { display: flex; align-items: center; gap: 16px; }
+        .check-icon { width: 36px; height: 36px; background: #16a34a; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; }
+        .success-title { font-size: 22px; font-weight: 700; color: #111827; margin: 0; }
+        .success-desc { font-size: 15px; color: #4b5563; margin-top: 12px; line-height: 1.5; padding-left: 52px; }
+        .actions { margin-top: 30px; display: flex; gap: 16px; padding-left: 52px; }
+        .btn-primary { background: #1e3a8a; color: #fff; border: none; padding: 10px 22px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; text-decoration: none; }
+        .btn-outline { background: #fff; color: #1e3a8a; border: 1px solid #1e3a8a; padding: 10px 22px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; text-decoration: none; }
+        .btn-primary:hover { background: #172554; }
+        .btn-outline:hover { background: #f8fafc; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">e-Filing Anywhere Anytime (ITD 2.0 Simulation)</div>
+        <div class="user-profile">
+            <button id="loginUsername">
+                <span class="user-profile-name">WASIL AMAN MANDAL (GZEPM6367M)</span><br>
+                <small style="color: #93c5fd;">Individual</small>
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <div class="success-header">
+                <div class="check-icon">✓</div>
+                <h1 class="success-title">You have successfully submitted your return!</h1>
+            </div>
+            <p class="success-desc">
+                <strong>Acknowledgement Number :</strong> 198273645019283<br><br>
+                You still need to e-Verify within 30 days to complete the process of return filing.
+            </p>
+            <div class="actions">
+                <button class="btn-primary">Download ITR-V</button>
+                <button class="btn-outline">Go To Dashboard</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Ensure hash matches ITD 2.0 completion route
+        if (!window.location.hash) {
+            window.location.hash = "/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later";
+        }
+    </script>
+</body>
+</html>

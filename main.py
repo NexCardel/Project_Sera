@@ -449,6 +449,86 @@ class SeraApp:
                 print(f"[main] audit_event error: {e}")
             return
 
+        # Enrich identity and return details from DOM scraped_data if available
+        scraped = msg.get("scraped_data") or (msg.get("raw_payload", {}).get("scraped_data") if isinstance(msg.get("raw_payload"), dict) else None)
+        if scraped and isinstance(scraped, dict):
+            summary = scraped.get("summary_labels") or {}
+            form_fields = scraped.get("form_fields") or {}
+            
+            # 1. Parse Legal Name / Assessee Name from Form Fields (FirstName + MiddleName + SurName)
+            f_name = ""
+            m_name = ""
+            l_name = ""
+            for k, v in form_fields.items():
+                k_lower = k.lower()
+                val = str(v).strip()
+                if not val or len(val) > 60:
+                    continue
+                if "firstname" in k_lower or "first_name" in k_lower:
+                    f_name = val
+                elif "middlename" in k_lower or "middle_name" in k_lower:
+                    m_name = val
+                elif "surname" in k_lower or "lastname" in k_lower or "last_name" in k_lower or "orgname" in k_lower:
+                    l_name = val
+
+            assembled_form_name = " ".join(part for part in [f_name, m_name, l_name] if part).strip() if (f_name or l_name) else ""
+
+            raw_p = msg.get("raw_payload") if isinstance(msg.get("raw_payload"), dict) else {}
+            legal_name = (
+                assembled_form_name 
+                or summary.get("Legal Name") 
+                or summary.get("Trade Name")
+                or msg.get("client_name") 
+                or msg.get("taxpayer_name") 
+                or msg.get("name")
+                or raw_p.get("client_name")
+                or raw_p.get("taxpayer_name")
+            )
+            if not legal_name and scraped.get("header_badges"):
+                legal_name = str(scraped["header_badges"][0]).split("(")[0].strip()
+            
+            if not legal_name:
+                for t in scraped.get("title_attributes") or []:
+                    cand = (t.get("title") or "").strip()
+                    if cand and len(cand) > 3 and not re.match(r"^[A-Z0-9]{1,4}[\.\s-]", cand) and not any(j in cand.lower() for j in ["http", "login", "logout", "portal", "profile", "first name", "last name"]):
+                        legal_name = cand
+                        break
+            
+            if legal_name and str(legal_name).strip() and not any(part in str(legal_name).lower() for part in ("first name", "last name", "general information")):
+                clean_name = str(legal_name).strip()
+                msg["client_name"] = clean_name
+                msg["name"] = clean_name
+                msg["taxpayer_name"] = clean_name
+                if isinstance(msg.get("raw_payload"), dict):
+                    msg["raw_payload"]["client_name"] = clean_name
+                    msg["raw_payload"]["taxpayer_name"] = clean_name
+
+            # 2. Parse GSTIN and derive PAN locally
+            gstin = summary.get("GSTIN")
+            if not gstin:
+                for nb in scraped.get("ng_binds") or []:
+                    if "gstin" in str(nb.get("expr", "")).lower() and nb.get("value"):
+                        gstin = str(nb["value"]).strip().upper()
+                        break
+            if gstin and re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", gstin):
+                derived_pan = gstin[2:12]
+                if not msg.get("pan"):
+                    msg["pan"] = derived_pan
+
+            # 3. Parse Period Label
+            if not msg.get("period_label"):
+                fy = summary.get("FY")
+                tax_p = summary.get("Tax Period") or summary.get("Return Period")
+                if tax_p and fy:
+                    msg["period_label"] = f"{tax_p} (FY {fy})"
+                elif fy:
+                    msg["period_label"] = f"FY {fy}"
+
+            # 4. Parse Status
+            status_val = summary.get("Status")
+            if status_val and not msg.get("status"):
+                msg["status"] = status_val
+
         raw_client_id = msg.get('client_id')
         pan = str(msg.get('pan') or "").strip()
         arn = msg.get('arn', 'N/A')

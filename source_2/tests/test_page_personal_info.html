@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>e-Filing Portal | Personal Information</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; margin: 0; padding: 0; }
+        header { background: #0c2340; color: #fff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 18px; font-weight: bold; }
+        .user-profile { display: flex; align-items: center; gap: 10px; }
+        .user-profile button { background: transparent; border: 1px solid #ffffff44; color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; text-align: right; }
+        .container { max-width: 900px; margin: 30px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 30px; }
+        h2 { color: #1e3a8a; border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; margin-top: 0; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+        .field-group { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 13px; font-weight: 600; color: #4b5563; }
+        output, input { padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #f9fafb; font-size: 15px; color: #111827; font-weight: bold; }
+        .btn-submit { margin-top: 30px; background: #2563eb; color: #fff; border: none; padding: 12px 24px; font-size: 15px; font-weight: bold; border-radius: 6px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn-submit:hover { background: #1d4ed8; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">e-Filing Anywhere Anytime (ITD 2.0 Simulation)</div>
+        <div class="user-profile">
+            <button id="loginUsername">
+                <span class="user-profile-name">WASIL AMAN MANDAL (GZEPM6367M)</span><br>
+                <small style="color: #93c5fd;">Individual</small>
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+        <h2>Part A General — Personal Information</h2>
+        <p style="color: #6b7280; font-size: 14px;">Details of personal information, contact details, and bank account details</p>
+
+        <div class="form-grid">
+            <div class="field-group">
+                <label>First Name</label>
+                <output id="Personal_Information.Profile.FirstName" name="Personal_Information.Profile.FirstName">WASIL</output>
+            </div>
+            <div class="field-group">
+                <label>Middle Name</label>
+                <output id="Personal_Information.Profile.MiddleName" name="Personal_Information.Profile.MiddleName">AMAN</output>
+            </div>
+            <div class="field-group">
+                <label>Last Name</label>
+                <output id="Personal_Information.Profile.LastName" name="Personal_Information.Profile.LastName">MANDAL</output>
+            </div>
+            <div class="field-group">
+                <label>PAN</label>
+                <output id="pan" name="pan">GZEPM6367M</output>
+            </div>
+        </div>
+
+        <div style="margin-top: 40px; text-align: right;">
+            <a href="test_page_submit_success.html#/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later" class="btn-submit">
+                Proceed to Submit Return →
+            </a>
+        </div>
+    </div>
+
+    <script>
+        // Simulate ITD sessionStorage authentication
+        sessionStorage.setItem("user_details", JSON.stringify({
+            pan: "GZEPM6367M",
+            name: "WASIL AMAN MANDAL",
+            userFullName: "WASIL AMAN MANDAL"
+        }));
+    </script>
+</body>
+</html>

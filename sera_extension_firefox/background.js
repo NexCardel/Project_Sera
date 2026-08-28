@@ -121,18 +121,29 @@ ensureConnected();
 
 console.log('Sera SAD: background.js module loaded, registering listeners.');
 
-// SAD: Inject net_interceptor.js into a tab's MAIN world.
-// chrome.scripting.executeScript with world:'MAIN' bypasses page CSP entirely.
+// SAD & DOM Tracker: Inject net_interceptor.js (MAIN world) and tracker.js (ISOLATED world)
 function injectSAD(tabId, reason) {
   console.log('Sera SAD: injectSAD called for tab', tabId, '| reason:', reason);
+  
+  // 1. Inject API Net Interceptor into MAIN world
   chrome.scripting.executeScript({
     target: { tabId: tabId, allFrames: true },
     files: ['content_scripts/net_interceptor.js'],
     world: 'MAIN'
   }).then(() => {
-    console.log('Sera SAD: ✅ injected into tab', tabId);
+    console.log('Sera SAD: ✅ injected net_interceptor into tab', tabId);
   }).catch(err => {
-    console.log('Sera SAD: ❌ inject failed for tab', tabId, ':', err.message);
+    console.log('Sera SAD: ❌ inject net_interceptor failed for tab', tabId, ':', err.message);
+  });
+
+  // 2. Inject DOM Tracker and Filing Detector into content world
+  chrome.scripting.executeScript({
+    target: { tabId: tabId, allFrames: true },
+    files: ['content_scripts/filing_detector.js', 'tracker.js']
+  }).then(() => {
+    console.log('Sera DOM: ✅ injected tracker.js into tab', tabId);
+  }).catch(err => {
+    console.log('Sera DOM: ❌ inject tracker.js failed for tab', tabId, ':', err.message);
   });
 }
 

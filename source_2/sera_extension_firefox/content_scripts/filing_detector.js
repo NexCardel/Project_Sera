@@ -65,6 +65,7 @@
                 const filingType = detail.filing_type || "Filing Record";
                 const arn = (detail.arn || "").trim();
                 const pan = (detail.pan || "").trim().toUpperCase();
+                const clientName = (detail.client_name || detail.name || detail.taxpayer_name || "").trim();
                 const period = (detail.period_label || "").trim();
                 const method = detail.capture_method === "DOM_Tracker" ? "DOM" : "SAD API";
 
@@ -78,6 +79,10 @@
                         <button type="button" class="sera-close-btn" style="background:none; border:none; color:#8B949E; cursor:pointer; font-size:11px; line-height:1; padding:0 0 0 4px; margin:0; transition:color 0.15s;">✕</button>
                     </div>
                     <div style="display:flex; flex-direction:column; gap:1.5px; font-size:10.5px;">
+                        ${clientName ? `
+                        <div style="color:#FFFFFF; font-weight:600; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:235px;" title="${escapeHtml(clientName)}">
+                            <span style="color:#8B949E; font-weight:400; font-size:9px;">Name: </span>${escapeHtml(clientName)}
+                        </div>` : ''}
                         ${arn && arn !== "N/A" ? `
                         <div style="display:flex; justify-content:space-between; align-items:baseline;">
                             <span style="color:#8B949E; font-size:9.5px;">ACK:</span>
@@ -215,6 +220,9 @@
                 chrome.runtime.sendMessage({
                     type: "filing_result",
                     client_id: effectiveClientId,
+                    client_name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
+                    name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
+                    taxpayer_name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
                     portal: detail.portal || payload.portal || "Portal",
                     arn: detail.arn || "N/A",
                     capture_method: detail.capture_method || "SAD_API_Interceptor",
