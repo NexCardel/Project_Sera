@@ -224,11 +224,12 @@ function injectAllOpenTabs(reason) {
   });
 }
 
-// Inject into every tab that finishes loading
+// Inject into every tab that finishes loading or updates its SPA URL
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== 'complete') return;
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
-  injectSAD(tabId, 'onUpdated');
+  if (changeInfo.status === 'complete' || changeInfo.url) {
+    injectSAD(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
+  }
 });
 
 // Also scan open tabs on worker startup

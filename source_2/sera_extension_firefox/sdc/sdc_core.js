@@ -88,34 +88,44 @@
   // Session-clear callback registry (populated by protocols via SDC.onSessionClear)
   const _sessionClearCallbacks = [];
 
-  // ─── Route Change Detection (SPA-safe) ──────────────────────────────────────
+  // ─── Route Change Detection (SPA-safe for Angular/React) ───────────────────
   let _lastScannedUrl = '';
+  let _lastObservedUrl = window.location.href;
   let _debounceTimer = null;
 
   function _onUrlChange(url) {
     if (_debounceTimer) clearTimeout(_debounceTimer);
-    _debounceTimer = setTimeout(() => _dispatch(url), 400);
+    _debounceTimer = setTimeout(() => _dispatch(url), 200);
   }
 
-  // Intercept pushState / replaceState for SPA navigation
+  // 1. Lightweight 250ms URL change poller (catches Angular router transitions across isolated worlds)
+  setInterval(() => {
+    const currentHref = window.location.href;
+    if (currentHref !== _lastObservedUrl) {
+      _lastObservedUrl = currentHref;
+      _onUrlChange(currentHref);
+    }
+  }, 250);
+
+  // 2. Intercept pushState / replaceState for SPA navigation
   ['pushState', 'replaceState'].forEach(method => {
-    const original = history[method];
-    history[method] = function (...args) {
-      const result = original.apply(this, args);
-      setTimeout(() => _onUrlChange(window.location.href), 0);
-      return result;
-    };
+    try {
+      const original = history[method];
+      history[method] = function (...args) {
+        const result = original.apply(this, args);
+        setTimeout(() => _onUrlChange(window.location.href), 0);
+        return result;
+      };
+    } catch (_) {}
   });
 
-  // hashchange for hash-routed apps (ITD portal uses Angular with hash routing)
+  // 3. hashchange & popstate listeners
   window.addEventListener('hashchange', () => _onUrlChange(window.location.href));
-
-  // popstate for browser back/forward
   window.addEventListener('popstate', () => _onUrlChange(window.location.href));
 
   // ─── Dispatch: Match URL → Protocol → Crosshair → Handler ──────────────────
-  async function _dispatch(url) {
-    if (url === _lastScannedUrl) return;
+  async function _dispatch(url, retryCount = 0) {
+    if (url === _lastScannedUrl && retryCount === 0) return;
 
     const host = (window.location.hostname || '').toLowerCase();
 
@@ -125,19 +135,23 @@
       for (const crosshair of protocol.crosshairs) {
         if (!crosshair.pattern.test(url)) continue;
 
-        console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" for URL: ${url.substring(0, 120)}`);
+        console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" (attempt #${retryCount + 1}) for URL: ${url.substring(0, 120)}`);
 
         try {
           const capture = await crosshair.handler(url);
           if (capture) {
             _lastScannedUrl = url;
             _emitCapture(capture, protocol.name, crosshair.id);
+            return; // Capture completed successfully
+          } else if (crosshair.id !== 'itr_login' && retryCount < 4) {
+            // Angular component might still be loading API data / template — retry in 600ms
+            setTimeout(() => _dispatch(url, retryCount + 1), 600);
           }
         } catch (err) {
           console.warn(`⚡ Sera SDC: Handler error in crosshair "${crosshair.id}":`, err);
         }
 
-        // Only one crosshair fires per URL change per protocol (first match wins)
+        // First matching crosshair handled
         break;
       }
     }

@@ -477,31 +477,31 @@
       hostMatch: /(?:incometax\.gov\.in|incometaxindiaefiling\.gov\.in|localhost|127\.0\.0\.1|^$)/,
       crosshairs: [
         {
-          // PRIORITY 0: Login/logout detection — must run before any capture crosshair
-          id: 'itr_login',
-          pattern: /(?:^[^#]*$|[/#](?:login|logout|password|user-login|sign-in|signout|sign-out)(?:[?/]|$))/i,
-          handler: _handleLoginLogout
-        },
-        {
           id: 'itr_filed_verified',
           // Highest capture priority: check success routes first
-          pattern: /(?:fo-e-verify-now-success|fo-return-success|e-verify.*success)/i,
+          pattern: /(?:fo-e-verify-now-success|fo-return-success|e-verify.*success|filing-success)/i,
           handler: _handleFiledVerified
         },
         {
           id: 'itr_submitted_pending',
-          pattern: /(?:fo-e-verify-later|complete-verification|fo-verify-later)/i,
+          pattern: /(?:fo-e-verify-later|complete-verification|fo-verify-later|fo-return-submitted)/i,
           handler: _handleSubmittedPending
         },
         {
           id: 'itr_personal_info',
-          pattern: /(?:personal.?information|personal.?info|profile|partA_gen|parta.?gen)/i,
+          pattern: /(?:personal.?information|personal.?info|profile|partA_gen|parta.?gen|part-a-general)/i,
           handler: _handlePersonalInfo
         },
         {
           id: 'itr_form_select',
-          pattern: /(?:fo-select-itr-form|select.?itr.?form|fo-lets-get-started)/i,
+          pattern: /(?:fo-select-itr-form|select.?itr.?form|fo-lets-get-started|fileIncomeTaxReturn)/i,
           handler: _handleFormSelect
+        },
+        {
+          // Login/logout detection: only matches explicit auth routes (NOT general hash-less URLs)
+          id: 'itr_login',
+          pattern: /[/#](?:login|logout|password|user-login|sign-in|signout|sign-out)(?:[?/#]|$)/i,
+          handler: _handleLoginLogout
         }
       ]
     });
