@@ -273,7 +273,7 @@ def extract_dom_details(entry):
 
     # Filter section headings and UI noise names
     NOISE_NAMES = {"menu", "close", "help", "refresh", "download", "button", "profile", "login", "logout", "submit", "first name", "last name", "part a", "general information", "a1. first name"}
-    if client_name and (re.match(r"^[A-Z0-9]{1,4}[\.\s-]", client_name) or client_name.strip().lower() in NOISE_NAMES):
+    if client_name and (re.match(r"^(?:[A-Z]?\d{1,3}\.|\d+[\.\s-])", client_name) or client_name.strip().lower() in NOISE_NAMES):
         client_name = assembled_form_name or ""
 
     # 3. Form / Filing Type
@@ -285,14 +285,19 @@ def extract_dom_details(entry):
     )
     if not filing_type or filing_type == "Filing Confirmation" or filing_type == "Dashboard / Profile":
         bc_text = str(scraped.get("breadcrumbs") or raw.get("dom_breadcrumbs") or "")
-        itr_m = re.search(r"\b(ITR-[1-7][A-Z]?|GSTR-[1234789][AB]?|CMP-08|GSTR-9|GSTR-9C|Form\s*16[A]?|Form\s*24Q|Form\s*26Q)\b", bc_text, re.I)
+        itr_m = re.search(r"\b(ITR-[1-7][A-Z]?|GSTR-1\/IFF|GSTR-[1234789][AB]?|CMP-08|GSTR-9|GSTR-9C|Form\s*16[A]?|Form\s*24Q|Form\s*26Q)\b", bc_text, re.I)
         if itr_m:
             filing_type = itr_m.group(1).upper()
         else:
-            url_text = str(raw.get("url") or "")
-            url_m = re.search(r"fo-itr([1-7][a-z]?)", url_text, re.I)
-            if url_m:
-                filing_type = f"ITR-{url_m.group(1).upper()}"
+            url_text = str(raw.get("url") or rp.get("url") or "")
+            gst_url_m = re.search(r"(?:returns\/auth\/gstr|returns\/auth\/|gstr[-_]?)(1|3b|4|9|9c|cmp08)", url_text, re.I)
+            if gst_url_m:
+                g_code = gst_url_m.group(1).upper()
+                filing_type = "CMP-08" if g_code == "CMP08" else f"GSTR-{g_code}"
+            else:
+                url_m = re.search(r"fo-itr([1-7][a-z]?)", url_text, re.I)
+                if url_m:
+                    filing_type = f"ITR-{url_m.group(1).upper()}"
 
     if not filing_type:
         filing_type = "ITR Return"
@@ -530,9 +535,13 @@ def classify_entries(entries):
         elif submit_events:
             classified["cat2"].extend(submit_events)
         
-        # Drafts are retained in Cat 3
+        # Drafts are retained in Cat 3 (Constraint Rule: latest capture from same page URL supersedes older snapshots)
         if draft_events:
-            classified["cat3"].extend(draft_events)
+            latest_drafts_by_page = {}
+            for d_rec in draft_events:
+                p_key = (d_rec.get("url") or d_rec.get("form") or "").strip().split("?")[0].rstrip("/").lower()
+                latest_drafts_by_page[p_key] = d_rec
+            classified["cat3"].extend(latest_drafts_by_page.values())
 
     return classified
 

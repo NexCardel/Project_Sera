@@ -17,6 +17,29 @@
 
   const currentHost = (window.location.hostname || "").toLowerCase();
 
+  // Page Route & Normalization Helper
+  function getNormalizedPageKey(url) {
+    try {
+      const u = new URL(url || window.location.href);
+      let path = u.pathname || "";
+      let hashRoute = "";
+      if (u.hash) {
+        hashRoute = u.hash.split('?')[0];
+      }
+      let key = (u.origin + path + (hashRoute ? hashRoute : "")).toLowerCase();
+      return key.replace(/\/+$/, '');
+    } catch (e) {
+      return (url || window.location.href || "").toLowerCase().split('?')[0].replace(/\/+$/, '');
+    }
+  }
+
+  // Page visit & re-entry tracker for DOM capture replacement
+  const seraPageTracker = window.__SERA_DOM_PAGE_TRACKER__ || {
+    activePageKey: getNormalizedPageKey(window.location.href),
+    pageDataHashes: {}
+  };
+  window.__SERA_DOM_PAGE_TRACKER__ = seraPageTracker;
+
   // Route / Site Link History Tracker
   const seraNav = window.__SERA_NAV_TRACKER__ || {
     history: [],
@@ -38,6 +61,14 @@
   }
 
   function recordNavigation(url) {
+    const newPageKey = getNormalizedPageKey(url);
+    const prevPageKey = seraPageTracker.activePageKey;
+    if (newPageKey !== prevPageKey) {
+      seraPageTracker.activePageKey = newPageKey;
+      // Reset capture hash for the new active page upon transition so returning to it captures a fresh snapshot
+      delete seraPageTracker.pageDataHashes[newPageKey];
+    }
+
     if (seraNav.history.length === 0) {
       seraNav.history.push(`[#${seraNav.step} @ 0.000000] - ${getShortPath(url)}`);
     } else {
@@ -56,7 +87,7 @@
   // Initialize first route
   if (seraNav.history.length === 0) recordNavigation(window.location.href);
 
-  // Deduplication set to avoid re-firing for the exact same ARN in the same browser session
+  // Deduplication set for legacy/cross-session guards
   window.__SERA_DOM_CAPTURED_SET__ = window.__SERA_DOM_CAPTURED_SET__ || new Set();
 
   function isAllowedDomain(allowedList) {
@@ -221,9 +252,9 @@
           urlPeriod = y.length === 4 ? `AY ${y}-${parseInt(y.slice(2)) + 1}` : `AY 20${y}-${parseInt(y) + 1}`;
         }
       } else {
-        const gstMatch = currentUrl.match(/(?:gstr|returns\/auth\/)(1|3b|4|9|9c|cmp08)/i);
+        const gstMatch = currentUrl.match(/(?:returns\/auth\/gstr|returns\/auth\/|gstr[-_]?)(1|3b|4|9|9c|cmp08|cmp-08)/i);
         if (gstMatch) {
-          const gType = gstMatch[1].toUpperCase();
+          const gType = gstMatch[1].toUpperCase().replace("-", "");
           urlForm = gType === "CMP08" ? "CMP-08" : `GSTR-${gType}`;
         } else {
           const ayMatch = currentUrl.match(/foreturns-ay(\d{2})/);
@@ -233,7 +264,7 @@
         }
       }
 
-      // Check for Filing Completion / Status Endpoints
+      // Check for Filing Completion / Status / Active Return Endpoints
       const isFilingUrl = (
         currentUrl.includes("fo-e-verify-later") ||
         currentUrl.includes("e-verify-return/success") ||
@@ -244,6 +275,8 @@
         currentUrl.includes("gstr1") ||
         currentUrl.includes("gstr3b") ||
         currentUrl.includes("cmp08") ||
+        currentUrl.includes("gstr9") ||
+        currentUrl.includes("returns/auth") ||
         currentUrl.includes("view-filed-returns")
       );
 
@@ -342,14 +375,17 @@
       // 3. Extract Live Identity (Name & PAN/GSTIN) via Multi-Vector Scanning (ALWAYS RUNS ON EVERY PAGE/STEP)
       const identity = extractIdentityFromPage(context, pageFullText);
 
-      // Accumulate into persistent in-memory session identity across the user's journey
+      // Clean Identity Isolation: If live DOM shows a different PAN/GSTIN than in-memory session, reset memory
+      if (identity.pan && window.__SERA_SESSION_IDENTITY__.pan && identity.pan !== window.__SERA_SESSION_IDENTITY__.pan) {
+        window.__SERA_SESSION_IDENTITY__ = { pan: "", client_name: "", form: "", period: "", gstin: "" };
+      }
       if (identity.pan) window.__SERA_SESSION_IDENTITY__.pan = identity.pan;
       if (identity.client_name) window.__SERA_SESSION_IDENTITY__.client_name = identity.client_name;
-      if (urlForm) window.__SERA_SESSION_IDENTITY__.form = urlForm;
-      if (urlPeriod) window.__SERA_SESSION_IDENTITY__.period = urlPeriod;
+      if (identity.gstin) window.__SERA_SESSION_IDENTITY__.gstin = identity.gstin;
 
       const finalPan = identity.pan || window.__SERA_SESSION_IDENTITY__.pan || (context && context.pan) || "";
       const finalClientName = identity.client_name || window.__SERA_SESSION_IDENTITY__.client_name || (context && (context.client_name || context.name)) || "";
+      const finalGstin = identity.gstin || window.__SERA_SESSION_IDENTITY__.gstin || "";
 
       // Gate: Must have at least a client identity or positive filing cue to record
       if (!finalPan && !finalClientName && !hasPositiveCue && !isFilingUrl) {
@@ -390,37 +426,51 @@
       }
 
       // 5. Extract Assessment Year / Period (Handles ITD AY and GST FY + Tax Period)
-      let extractedPeriod = urlPeriod || window.__SERA_SESSION_IDENTITY__.period || (context && context.period_label) || "";
-      if (!extractedPeriod) {
-        const fyMatch = pageFullText.match(/\b(?:FY|F\.Y\.|Financial\s*Year)\s*[-:]?\s*(\d{4}[-–]\d{2,4})\b/i);
-        const taxPeriodMatch = pageFullText.match(/\b(?:Tax\s*Period|Return\s*Period)\s*[-:]\s*([A-Za-z0-9()]+)/i);
-        if (taxPeriodMatch && fyMatch) {
-          extractedPeriod = `${taxPeriodMatch[1]} (FY ${fyMatch[1]})`;
-        } else if (fyMatch) {
-          extractedPeriod = `FY ${fyMatch[1]}`;
-        } else {
-          const ayMatch = pageFullText.match(/\b(?:AY|A\.Y\.|Assessment\s*Year)\s*[:#-]?\s*(\d{4}[-–]\d{2,4})\b/i);
-          if (ayMatch && ayMatch[1]) {
-            let y = ayMatch[1].replace('–', '-');
-            extractedPeriod = `AY ${y}`;
-          } else if (taxPeriodMatch) {
-            extractedPeriod = taxPeriodMatch[1];
-          }
+      let extractedPeriod = urlPeriod || "";
+      const taxPeriodMatch = pageFullText.match(/\b(?:Tax\s*Period|Return\s*Period)\s*[-:]\s*([A-Za-z0-9()]+)/i);
+      const fyMatch = pageFullText.match(/\b(?:FY|F\.Y\.|Financial\s*Year)\s*[-:]?\s*(\d{4}[-–]\d{2,4})\b/i);
+      if (taxPeriodMatch && fyMatch) {
+        extractedPeriod = `${taxPeriodMatch[1].trim()} (FY ${fyMatch[1].trim()})`;
+      } else if (taxPeriodMatch) {
+        extractedPeriod = taxPeriodMatch[1].trim();
+      } else if (fyMatch) {
+        extractedPeriod = `FY ${fyMatch[1].trim()}`;
+      } else {
+        const ayMatch = pageFullText.match(/\b(?:AY|A\.Y\.|Assessment\s*Year)\s*[:#-]?\s*(\d{4}[-–]\d{2,4})\b/i);
+        if (ayMatch && ayMatch[1]) {
+          let y = ayMatch[1].replace('–', '-');
+          extractedPeriod = `AY ${y}`;
         }
       }
+      if (!extractedPeriod) {
+        extractedPeriod = window.__SERA_SESSION_IDENTITY__.period || (context && context.period_label) || "";
+      }
+      if (extractedPeriod) window.__SERA_SESSION_IDENTITY__.period = extractedPeriod;
 
       // 6. Extract Filing / Form Type (Handles all ITD ITR-1..7 and GST GSTR-1..9)
-      let extractedForm = urlForm || window.__SERA_SESSION_IDENTITY__.form || (context && context.filing_type) || "";
-      if (!extractedForm) {
-        const formMatch = pageFullText.match(/\b(ITR-[1-7][A-Z]?|GSTR-1\/IFF|GSTR-[1234789][AB]?|CMP-08|GSTR-9|GSTR-9C|Form\s*16[A]?|Form\s*24Q|Form\s*26Q|Form\s*27Q|Form\s*27EQ)\b/i);
+      let extractedForm = urlForm || "";
+      if (!extractedForm || extractedForm === "Filing Confirmation" || extractedForm === "Dashboard / Profile") {
+        const formMatch = pageFullText.match(/\b(GSTR-1\/IFF|GSTR-1|GSTR-3B|CMP-08|GSTR-9C|GSTR-9|GSTR-2B|GSTR-4|ITR-[1-7][A-Z]?|Form\s*16[A]?|Form\s*24Q|Form\s*26Q|Form\s*27Q|Form\s*27EQ)\b/i);
         if (formMatch && formMatch[1]) {
           extractedForm = formMatch[1].toUpperCase().replace(/\s+/, '-');
         } else {
-          extractedForm = hasPositiveCue ? "Filing Confirmation" : "Dashboard / Profile";
+          extractedForm = window.__SERA_SESSION_IDENTITY__.form || (context && context.filing_type) || (hasPositiveCue ? "Filing Confirmation" : "Dashboard / Profile");
         }
       }
+      if (extractedForm) window.__SERA_SESSION_IDENTITY__.form = extractedForm;
 
-      // 7. Extract Exact Breadcrumbs from DOM
+      // 7. Extract Status from Summary Card or Confirmation Banners (e.g. "Status - Filed", "Status - Submitted")
+      let extractedStatus = "";
+      const statusCardMatch = pageFullText.match(/\bStatus\s*[-:]\s*([A-Za-z]+)/i);
+      if (statusCardMatch) {
+        extractedStatus = statusCardMatch[1].trim();
+      } else if (lowerFullText.includes("filed successfully") || lowerFullText.includes("successfully filed")) {
+        extractedStatus = "Filed";
+      } else if (lowerFullText.includes("submitted successfully") || lowerFullText.includes("successfully submitted")) {
+        extractedStatus = "Submitted";
+      }
+
+      // 8. Extract Exact Breadcrumbs from DOM
       let domBreadcrumbs = "";
       try {
         const bcEl = document.querySelector('nav[aria-label*="breadcrumb" i], .breadcrumb, .breadcrumbs, app-breadcrumb, [class*="breadcrumb" i], [class*="routing" i]');
@@ -433,20 +483,26 @@
         }
       } catch (_) {}
 
-      // 8. Extract Full Confirmation / Status Message from DOM
+      // 9. Extract Full Confirmation / Status Message from DOM
       let confirmationMessage = "";
       const msgMatch = pageFullText.match(/(?:You\s*have\s*successfully\s*(?:submitted|filed)[^.]*?\.\s*(?:you\s*still\s*need\s*to\s*e-Verify[^.]*?\.)?|[A-Za-z0-9\s-]*?has\s*been\s*successfully\s*filed[^.]*?\.|\bStatus\s*[-:]\s*Filed\b|\bStatus\s*[-:]\s*Submitted\b)/i);
-      // 9. Harvest Complete DOM Attribute Snapshot as scraped_data
+      if (msgMatch) {
+        confirmationMessage = msgMatch[0].trim();
+      }
+
+      // 10. Harvest Complete DOM Attribute Snapshot as scraped_data
       const scrapedData = harvestDomSnapshot(pageFullText);
 
       const finalArn = extractedArn || "N/A";
 
-      // If we got here, we have either a positive confirmation cue or a verified filing URL
+      // Dispatch capture result
       dispatchFilingResult(context, finalArn, "DOM_Detector", {
         client_name: finalClientName,
         pan: finalPan,
+        gstin: finalGstin,
         period_label: extractedPeriod,
         filing_type: extractedForm,
+        status: extractedStatus || (hasPositiveCue ? "Filed" : "Draft"),
         site_link_history: seraNav.history.join("\n"),
         dom_breadcrumbs: domBreadcrumbs,
         confirmation_message: confirmationMessage,
@@ -483,7 +539,7 @@
     function cleanExtractedName(str) {
       if (!str) return "";
       let s = str.replace(/\s+/g, ' ').trim();
-      s = s.replace(/^[A-Z0-9]{1,4}[\.\s-]+/i, ''); // Strip section numbering e.g. "A1. " or "1. "
+      s = s.replace(/^(?:[A-Z]?\d{1,3}\.|\d+[\.\s-])\s*/i, ''); // Strip section numbering e.g. "A1. " or "1. "
       s = s.replace(/\s*[\(|-]?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*[\)]?$/i, ''); // Strip trailing PAN with or without () / - / |
       s = s.replace(/\s*[\(|-]?\s*[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\s*[\)]?$/i, ''); // Strip trailing GSTIN
       s = s.replace(/(?:\s*[|•–—]\s*.*$)/, ''); // Remove anything after separator
@@ -506,7 +562,7 @@
       if (/^(?:first\s*name|middle\s*name|last\s*name|surname|org\s*name|assessee\s*name|taxpayer\s*name|legal\s*name|trade\s*name)$/i.test(s)) {
         return false;
       }
-      if (/^[A-Z0-9]{1,4}[\.\s-]+(?:First|Middle|Last|Sur|Org|Assessee|Taxpayer|Legal|Trade|Father|Mother|Address|Status|Part|General)/i.test(raw)) {
+      if (/^(?:[A-Z]?\d{1,3}\.|\d+[\.\s-])\s*(?:First|Middle|Last|Sur|Org|Assessee|Taxpayer|Legal|Trade|Father|Mother|Address|Status|Part|General)/i.test(raw)) {
         return false;
       }
 
@@ -520,6 +576,42 @@
       const s = p.trim().toUpperCase();
       if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(s)) return false;
       return !["AAAAA0000A", "ABCDE1234F", "XXXXX0000X"].includes(s);
+    }
+
+    const text = pageFullText || (document.body ? (document.body.innerText || document.body.textContent || "") : "");
+
+    // VECTOR 0: Dedicated GST Portal Extraction (Header Profile & Summary Cards)
+    if (currentHost.includes("gst.gov.in") || text.includes("Goods and Services Tax") || text.includes("GSTIN")) {
+      // 1. Summary Card: GSTIN - ..., Legal Name - ..., Trade Name - ...
+      const gstinCard = text.match(/\bGSTIN\s*[-:]\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/i);
+      if (gstinCard) {
+        result.gstin = gstinCard[1].toUpperCase();
+        result.pan = gstinCard[1].slice(2, 12).toUpperCase();
+      }
+
+      const legalNameCard = text.match(/\bLegal\s*Name\s*[-:]\s*([A-Za-z0-9\s.'&-]{2,80}?)(?=\s+(?:Trade|Tax|Status|FY|Due|\*|$))/i);
+      if (legalNameCard && isValidClientName(legalNameCard[1])) {
+        result.client_name = cleanExtractedName(legalNameCard[1]);
+      }
+
+      if (!result.client_name) {
+        const tradeNameCard = text.match(/\bTrade\s*Name\s*[-:]\s*([A-Za-z0-9\s.'&-]{2,80}?)(?=\s+(?:Status|FY|Tax|Due|\*|$))/i);
+        if (tradeNameCard && isValidClientName(tradeNameCard[1])) {
+          result.client_name = cleanExtractedName(tradeNameCard[1]);
+        }
+      }
+
+      // 2. Top Header Profile Badge (e.g. "ARUN BAIDYA \n 19ATYPB6533F2ZX")
+      const gstHeaderBadge = text.match(/([A-Za-z\s.]{3,60})\s+([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/);
+      if (gstHeaderBadge) {
+        if (!result.gstin) {
+          result.gstin = gstHeaderBadge[2].toUpperCase();
+          result.pan = gstHeaderBadge[2].slice(2, 12).toUpperCase();
+        }
+        if (!result.client_name && isValidClientName(gstHeaderBadge[1])) {
+          result.client_name = cleanExtractedName(gstHeaderBadge[1]);
+        }
+      }
     }
 
     // VECTOR 1: Browser Storage (sessionStorage & localStorage)
@@ -797,28 +889,40 @@
   function dispatchFilingResult(ctx, arn, captureType, meta = {}) {
     const portalName = getPortalName(ctx);
 
-    // Cross-Portal Context Sanitizer: prevent stale GST context from polluting ITD, or vice versa
+    // Cross-Portal & Cross-Client Context Sanitizer: prevent stale GST context from polluting ITD, or vice versa
     let safeCtx = ctx;
-    if (ctx && ctx.portal) {
-      const p = ctx.portal.toLowerCase();
-      if (portalName === "income tax" && p.includes("gst")) safeCtx = null;
-      if (portalName === "gst" && (p.includes("income") || p.includes("itd"))) safeCtx = null;
+    if (safeCtx) {
+      if (safeCtx.portal) {
+        const p = safeCtx.portal.toLowerCase();
+        if (portalName === "income tax" && p.includes("gst")) safeCtx = null;
+        if (portalName === "gst" && (p.includes("income") || p.includes("itd"))) safeCtx = null;
+      }
+      // If live PAN/GSTIN was extracted on page and safeCtx has a different PAN, discard safeCtx to prevent embedding wrong client data!
+      if (meta && meta.pan && safeCtx && safeCtx.pan && meta.pan.toUpperCase() !== safeCtx.pan.toUpperCase()) {
+        safeCtx = null;
+      }
     }
 
     const clientName = (meta && meta.client_name) || (safeCtx && safeCtx.client_name) || (safeCtx && safeCtx.name) || "";
     const pan = (meta && meta.pan) || (safeCtx && safeCtx.pan) || "";
+    const gstin = (meta && meta.gstin) || (meta && meta.scraped_data && meta.scraped_data.summary_labels && meta.scraped_data.summary_labels.GSTIN) || "";
     const period = (meta && meta.period_label) || (safeCtx && safeCtx.period_label) || "";
     const filingType = (meta && meta.filing_type) || (safeCtx && safeCtx.filing_type) || "Filing Confirmation";
+    const status = (meta && meta.status) || (meta && meta.scraped_data && meta.scraped_data.summary_labels && meta.scraped_data.summary_labels.Status) || "Submitted";
     const clientId = (safeCtx && safeCtx.client_id) || null;
 
-    // Deduplication Key: prevent multiple firings for the exact same event
-    const dedupKey = `${portalName}|${arn}|${pan}|${period}|${clientName}`;
-    if (window.__SERA_DOM_CAPTURED_SET__.has(dedupKey)) {
+    const currentPageKey = getNormalizedPageKey(window.location.href);
+    const formFieldsSample = (meta && meta.scraped_data && meta.scraped_data.form_fields) ? JSON.stringify(meta.scraped_data.form_fields) : "";
+    const dataHash = `${portalName}|${arn}|${pan}|${period}|${clientName}|${status}|${(meta && meta.confirmation_message) || ''}|${formFieldsSample}`;
+
+    // Constraint Rule: Avoid continuous re-firing while on the same page visit with unchanged data,
+    // but ALWAYS allow fresh captures when navigating away and coming back to the page link.
+    if (seraPageTracker.pageDataHashes[currentPageKey] === dataHash) {
       return;
     }
-    window.__SERA_DOM_CAPTURED_SET__.add(dedupKey);
+    seraPageTracker.pageDataHashes[currentPageKey] = dataHash;
 
-    console.log(`⚡ Sera DOM Captured [${captureType}]: Portal=${portalName}, Name=${clientName}, ARN=${arn}, PAN=${pan}, Period=${period}`);
+    console.log(`⚡ Sera DOM Captured [${captureType}]: Portal=${portalName}, Name=${clientName}, ARN=${arn}, PAN=${pan}, GSTIN=${gstin}, Period=${period}, Status=${status}, PageKey=${currentPageKey}`);
 
     const payload = {
       type: "filing_result",
@@ -831,8 +935,12 @@
       capture_method: "DOM_Tracker",
       period_label: period,
       filing_type: filingType,
+      status: status,
       pan: pan,
+      gstin: gstin,
       url: window.location.href,
+      page_key: currentPageKey,
+      is_page_update: true,
       site_link_history: (meta && meta.site_link_history) || "",
       dom_breadcrumbs: (meta && meta.dom_breadcrumbs) || "",
       confirmation_message: (meta && meta.confirmation_message) || "",
@@ -846,9 +954,13 @@
         portal: portalName,
         arn: arn,
         pan: pan,
+        gstin: gstin,
         period: period,
         filing_type: filingType,
+        status: status,
         url: window.location.href,
+        page_key: currentPageKey,
+        is_page_update: true,
         timestamp: new Date().toISOString(),
         site_link_history: (meta && meta.site_link_history) || "",
         dom_breadcrumbs: (meta && meta.dom_breadcrumbs) || "",

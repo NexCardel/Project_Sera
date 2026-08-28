@@ -490,7 +490,7 @@ class SeraApp:
             if not legal_name:
                 for t in scraped.get("title_attributes") or []:
                     cand = (t.get("title") or "").strip()
-                    if cand and len(cand) > 3 and not re.match(r"^[A-Z0-9]{1,4}[\.\s-]", cand) and not any(j in cand.lower() for j in ["http", "login", "logout", "portal", "profile", "first name", "last name"]):
+                    if cand and len(cand) > 3 and not re.match(r"^(?:[A-Z]?\d{1,3}\.|\d+[\.\s-])", cand) and not any(j in cand.lower() for j in ["http", "login", "logout", "portal", "profile", "first name", "last name"]):
                         legal_name = cand
                         break
             
@@ -531,11 +531,31 @@ class SeraApp:
 
         raw_client_id = msg.get('client_id')
         pan = str(msg.get('pan') or "").strip()
+        
+        # Cross-client guard: Only trust raw_client_id if it matches the parsed PAN in master.db
+        if raw_client_id and pan:
+            try:
+                with self.db._connect() as m_conn:
+                    cur = m_conn.execute(
+                        """SELECT cv.client_id FROM client_values cv
+                           JOIN clients c ON c.id = cv.client_id
+                           JOIN mcl_columns mc ON mc.id = cv.column_id
+                           WHERE c.id = ? AND c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
+                           LIMIT 1""",
+                        (raw_client_id, pan.upper())
+                    )
+                    if not cur.fetchone():
+                        # Discard mismatched client_id from stale extension storage
+                        raw_client_id = None
+            except Exception:
+                pass
+
         arn = msg.get('arn', 'N/A')
         portal = msg.get('portal', 'Portal')
         filing_type = str(msg.get('filing_type') or "").strip()
         portal_display = f"{portal} ({filing_type})" if filing_type else portal
         capture_method = msg.get("capture_method", "DOM_Tracker")
+        capture_status = msg.get("status") or (scraped.get("summary_labels", {}).get("Status") if scraped else None) or "Submitted"
         
         # Directly record into Tracker Dump database with authoritative identity resolution
         try:
@@ -546,7 +566,7 @@ class SeraApp:
                 period_label=msg.get("period_label", ""),
                 arn_number=arn,
                 capture_method=capture_method,
-                status=msg.get("status", "submitted"),
+                status=capture_status,
                 raw_payload_json=json.dumps(msg),
                 captured_by=self.actor,
                 pan=pan

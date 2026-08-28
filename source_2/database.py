@@ -2777,9 +2777,23 @@ class SeraDatabase:
                 if not valid_id:
                     unassigned_identity = f"Pending_{arn_number}" if arn_number and arn_number != "N/A" else "Unassigned"
 
+        # Check for Sera DOM page-revisit replacement constraint
+        page_url_norm = None
+        if raw_payload_json and capture_method == "DOM_Tracker":
+            try:
+                p_obj = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+                if isinstance(p_obj, dict):
+                    raw_p = p_obj.get("raw_payload") if isinstance(p_obj.get("raw_payload"), dict) else {}
+                    page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
+                    if page_url and isinstance(page_url, str):
+                        page_url_norm = page_url.strip().split("?")[0].rstrip("/").lower()
+            except Exception:
+                page_url_norm = None
+
         # 2. Write capture to rawPayload.db and update SRPF container
+        is_replaced = False
         with self._connect_raw() as r_conn:
-            # Deduplication Check
+            # Deduplication Check (for immediate identical bursts)
             if arn_number and arn_number != "N/A":
                 cur = r_conn.execute(
                     "SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ?",
@@ -2793,13 +2807,66 @@ class SeraDatabase:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
-            cur = r_conn.execute(
-                """INSERT INTO tracker_dump
-                   (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
-            )
-            dump_id = cur.lastrowid
+            # Sera DOM Constraint Rule:
+            # If data is captured from a page link and users navigate away then return to the same page link,
+            # the new data captured replaces the old one for data management.
+            existing_dump_id = None
+            candidate_rows = []
+            if page_url_norm and capture_method == "DOM_Tracker":
+                query = "SELECT id, raw_payload_json FROM tracker_dump WHERE capture_method = 'DOM_Tracker' "
+                q_params = []
+                if valid_id:
+                    query += "AND client_id = ? "
+                    q_params.append(valid_id)
+                elif unassigned_identity:
+                    query += "AND unassigned_identity = ? "
+                    q_params.append(unassigned_identity)
+                query += "ORDER BY id DESC"
+                cur = r_conn.execute(query, q_params)
+                candidate_rows = cur.fetchall()
+                for r_id, r_json in candidate_rows:
+                    if r_json:
+                        try:
+                            cj = json.loads(r_json)
+                            c_raw_p = cj.get("raw_payload") if isinstance(cj.get("raw_payload"), dict) else {}
+                            c_url = cj.get("page_key") or cj.get("url") or c_raw_p.get("page_key") or c_raw_p.get("url")
+                            if c_url and c_url.strip().split("?")[0].rstrip("/").lower() == page_url_norm:
+                                existing_dump_id = r_id
+                                break
+                        except Exception:
+                            continue
+
+            if existing_dump_id:
+                # Update existing record in place with newly captured data
+                r_conn.execute(
+                    """UPDATE tracker_dump
+                       SET client_id = ?, unassigned_identity = ?, service_id = ?, portal = ?,
+                           period_label = ?, arn_number = ?, capture_method = ?, status = ?,
+                           raw_payload_json = ?, captured_by = ?, created_at = ?
+                       WHERE id = ?""",
+                    (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now, existing_dump_id)
+                )
+                dump_id = existing_dump_id
+                is_replaced = True
+                # Clean up any older duplicate rows matching this exact page URL
+                for r_id, r_json in candidate_rows:
+                    if r_id != existing_dump_id and r_json:
+                        try:
+                            cj = json.loads(r_json)
+                            c_raw_p = cj.get("raw_payload") if isinstance(cj.get("raw_payload"), dict) else {}
+                            c_url = cj.get("page_key") or cj.get("url") or c_raw_p.get("page_key") or c_raw_p.get("url")
+                            if c_url and c_url.strip().split("?")[0].rstrip("/").lower() == page_url_norm:
+                                r_conn.execute("DELETE FROM tracker_dump WHERE id = ?", (r_id,))
+                        except Exception:
+                            pass
+            else:
+                cur = r_conn.execute(
+                    """INSERT INTO tracker_dump
+                       (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (valid_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, now)
+                )
+                dump_id = cur.lastrowid
 
             # Update SRPF Unified Container (Key normalized by client_id if registered)
             if valid_id:
@@ -2823,19 +2890,23 @@ class SeraDatabase:
                 }
             )
 
-        # Write/append organized raw payload entry to seraRawPayloadDump.txt
-        self._append_raw_payload_dump_file(
-            dump_id=dump_id,
-            client_id=valid_id,
-            portal=portal,
-            period_label=period_label,
-            arn_number=arn_number,
-            capture_method=capture_method,
-            status=status,
-            raw_payload_json=raw_payload_json,
-            captured_by=captured_by,
-            created_at=now
-        )
+        if is_replaced:
+            # Synchronize text dump files after in-place replacement
+            self.rebuild_raw_payload_dumps_file()
+        else:
+            # Write/append organized raw payload entry to seraRawPayloadDump.txt
+            self._append_raw_payload_dump_file(
+                dump_id=dump_id,
+                client_id=valid_id,
+                portal=portal,
+                period_label=period_label,
+                arn_number=arn_number,
+                capture_method=capture_method,
+                status=status,
+                raw_payload_json=raw_payload_json,
+                captured_by=captured_by,
+                created_at=now
+            )
 
         # Keep both derived FST workbooks current after every new capture.
         self.sync_fst_reports()
@@ -2843,7 +2914,7 @@ class SeraDatabase:
         return {
             "id": dump_id, "client_id": valid_id, "unassigned_identity": unassigned_identity, "service_id": service_id,
             "portal": portal, "period_label": period_label, "arn_number": arn_number,
-            "capture_method": capture_method, "status": status, "created_at": now
+            "capture_method": capture_method, "status": status, "created_at": now, "replaced": is_replaced
         }
 
     def link_unassigned_tracker_dumps(self, client_id: int, identity_value: str) -> int:
