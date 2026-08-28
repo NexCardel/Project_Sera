@@ -269,6 +269,17 @@
     window.addEventListener('SeraFSTApiCapture', (e) => {
         const detail = e.detail || {};
         addLog(`🎯 <b>CAPTURE DISPATCHED [${detail.capture_method}]</b>: Status="${detail.status}", PAN="${detail.pan}", Name="${detail.client_name}", Form="${detail.filing_type}", AY="${detail.period_label}", ARN="${detail.arn}"`, 'capture');
+
+        // Direct confirmation ping to desktop app
+        fetch('http://127.0.0.1:49152', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(detail)
+        }).then(() => {
+            addLog(`💻 <b>Desktop App IPC</b>: Successfully delivered to Project Sera on port 49152!`, 'info');
+        }).catch((err) => {
+            addLog(`⚠️ <b>Desktop App IPC</b>: Could not reach port 49152 (${err.message}). Is Project Sera running?`, 'reset');
+        });
     });
 
     // Check SDC initialization

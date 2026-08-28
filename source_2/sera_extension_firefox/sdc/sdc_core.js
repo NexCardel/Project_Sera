@@ -199,25 +199,36 @@
 
     console.log(`⚡ Sera SDC CAPTURE [${crosshairId}]:`, JSON.stringify(detail).substring(0, 300));
 
-    // 1. Direct Chrome Extension Runtime Dispatch to Desktop Host
+    // 1. Chrome Extension Runtime Dispatch (via Service Worker -> Native Host)
     try {
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage(detail, (res) => {
-          if (chrome.runtime.lastError) {
+        chrome.runtime.sendMessage(detail, () => {
+          if (chrome.runtime && chrome.runtime.lastError) {
             // Ignored - background worker might be handling it
           }
         });
       }
     } catch (err) {
-      console.warn("⚡ Sera SDC: chrome.runtime.sendMessage failed:", err);
+      // Ignored
     }
 
-    // 2. Dispatch event for page-level scripts / test harness
+    // 2. Direct Local IPC Dispatch (connects directly to Project Sera Desktop App on port 49152)
+    try {
+      if (typeof fetch === 'function') {
+        fetch('http://127.0.0.1:49152', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(detail)
+        }).catch(() => {});
+      }
+    } catch (_) {}
+
+    // 3. Dispatch event for page-level scripts / test harness
     try {
       window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail }));
     } catch (_) {}
 
-    // 3. Show left-side toast notification
+    // 4. Show left-side toast notification
     try {
       if (window.__SERA_TOAST_NOTIFIER__ && typeof window.__SERA_TOAST_NOTIFIER__.notify === 'function') {
         window.__SERA_TOAST_NOTIFIER__.notify(detail);

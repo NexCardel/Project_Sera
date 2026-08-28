@@ -60,9 +60,28 @@ class ExtensionListener(QThread):
                         except socket.timeout:
                             break
                     if chunks:
-                        raw_data = b"".join(chunks).decode('utf-8')
+                        raw_data = b"".join(chunks).decode('utf-8', errors='ignore')
                         try:
-                            msg = json.loads(raw_data)
+                            # If received via HTTP POST / OPTIONS from browser fetch or local simulation harness
+                            if raw_data.startswith("OPTIONS "):
+                                # Respond to CORS preflight
+                                response = (
+                                    b"HTTP/1.1 200 OK\r\n"
+                                    b"Access-Control-Allow-Origin: *\r\n"
+                                    b"Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+                                    b"Access-Control-Allow-Headers: Content-Type\r\n"
+                                    b"Content-Length: 0\r\n\r\n"
+                                )
+                                conn.sendall(response)
+                                continue
+
+                            json_str = raw_data
+                            is_http = False
+                            if "HTTP/" in raw_data and ("\r\n\r\n" in raw_data or "\n\n" in raw_data):
+                                is_http = True
+                                json_str = raw_data.split("\r\n\r\n", 1)[-1] if "\r\n\r\n" in raw_data else raw_data.split("\n\n", 1)[-1]
+
+                            msg = json.loads(json_str)
                             mtype = msg.get('type')
                             if mtype in ('filing_result', 'audit_event'):
                                 self.filing_result_received.emit(msg)
@@ -76,6 +95,16 @@ class ExtensionListener(QThread):
                             elif mtype == 'SCA_STATE':
                                 # Phase 1: We receive state, we can log it for now
                                 print(f"SCA State Sync: {msg.get('arm', {}).get('state')} - client {msg.get('arm', {}).get('client_id')}")
+
+                            if is_http:
+                                resp = (
+                                    b"HTTP/1.1 200 OK\r\n"
+                                    b"Access-Control-Allow-Origin: *\r\n"
+                                    b"Content-Type: application/json\r\n"
+                                    b"Content-Length: 15\r\n\r\n"
+                                    b'{"status":"ok"}'
+                                )
+                                conn.sendall(resp)
                         except json.JSONDecodeError:
                             pass
             except Exception as e:
