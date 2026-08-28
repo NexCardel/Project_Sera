@@ -371,6 +371,38 @@
       return '';
     }
 
+    // ─── Session Reset: Clear all ITR client data ────────────────────────────
+    // Called on every login/logout route detection to ensure stale PAN/Name
+    // from a previous client does not bleed into the next session.
+
+    function _resetItrSession() {
+      session.pan  = '';
+      session.name = '';
+      session.form = '';
+      session.ay   = '';
+      // Also clear the global window object so no stale carry-forward exists
+      window.__SDC_ITR_SESSION__ = session;
+      console.log('⚡ Sera SDC [ITR]: 🧹 Session cleared — ready for new client.');
+    }
+
+    // ─── CROSSHAIR 0 (Priority): Login / Logout Route Guard ─────────────────
+    // Target: /login, /logout, /password (ITD portal login funnel)
+    // Site history order: logout → login → password → fileIncomeTaxReturn → ...
+    //
+    // On ANY of these routes: clear all cached session data immediately.
+    // Returns null (no capture to dispatch — this is a session hygiene crosshair).
+
+    function _handleLoginLogout(url) {
+      _resetItrSession();
+      SDC.clearAllSessions(); // notify all protocols (extensible for GST, etc.)
+      return null; // no capture to emit — just a session wipe
+    }
+
+    // ─── Register SDC.onSessionClear for ITR ────────────────────────────────
+    // So that if clearAllSessions() is triggered from any OTHER protocol's
+    // login detection (e.g., in future GST logout), ITR cache also gets wiped.
+    SDC.onSessionClear(_resetItrSession);
+
     // ─── Register Protocol ───────────────────────────────────────────────────
 
     SDC.register({
@@ -378,8 +410,14 @@
       hostMatch: /(?:incometax\.gov\.in|incometaxindiaefiling\.gov\.in)/,
       crosshairs: [
         {
+          // PRIORITY 0: Login/logout detection — must run before any capture crosshair
+          id: 'itr_login',
+          pattern: /(?:^[^#]*$|[/#](?:login|logout|password|user-login|sign-in|signout|sign-out)(?:[?/]|$))/i,
+          handler: _handleLoginLogout
+        },
+        {
           id: 'itr_filed_verified',
-          // Highest priority: check success routes first
+          // Highest capture priority: check success routes first
           pattern: /(?:fo-e-verify-now-success|fo-return-success|e-verify.*success)/i,
           handler: _handleFiledVerified
         },

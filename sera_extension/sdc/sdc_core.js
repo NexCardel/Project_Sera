@@ -57,11 +57,36 @@
       console.log(`⚡ Sera SDC: Registered protocol "${protocol.name}" with ${protocol.crosshairs.length} crosshair(s).`);
     },
 
+    /**
+     * onSessionClear(fn)
+     * Protocols call this to register a cleanup handler.
+     * All handlers are called when SDC detects a login/logout route.
+     */
+    onSessionClear(fn) {
+      if (typeof fn === 'function') _sessionClearCallbacks.push(fn);
+    },
+
+    /**
+     * clearAllSessions()
+     * Wipes all protocol session caches and resets the last-scanned URL so
+     * the next page gets a fresh scan. Called automatically on login/logout.
+     */
+    clearAllSessions() {
+      console.log('⚡ Sera SDC: 🔄 New login detected — clearing all protocol session caches.');
+      _lastScannedUrl = ''; // force re-scan on the next route
+      for (const fn of _sessionClearCallbacks) {
+        try { fn(); } catch (_) {}
+      }
+    },
+
     /** Manually trigger a scan for the current URL (used for testing or forced re-scans). */
     scanNow() {
       _onUrlChange(window.location.href);
     }
   };
+
+  // Session-clear callback registry (populated by protocols via SDC.onSessionClear)
+  const _sessionClearCallbacks = [];
 
   // ─── Route Change Detection (SPA-safe) ──────────────────────────────────────
   let _lastScannedUrl = '';
