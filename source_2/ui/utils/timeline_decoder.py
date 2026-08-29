@@ -524,7 +524,7 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
             chips.append({"label": "Identifier", "val": str(arn)})
         else:
             step_title = f"Interaction on {portal}"
-            narrative = f"Portal API exchange recorded on {portal}."
+            narrative = f"Portal activity and page navigation recorded on {portal}."
 
     dt_local = _parse_iso_datetime(timestamp)
     ts_formatted = dt_local.strftime("%Y-%m-%d %H:%M:%S") if dt_local else str(timestamp)[:19].replace("T", " ")
