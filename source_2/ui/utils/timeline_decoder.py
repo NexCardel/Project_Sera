@@ -149,9 +149,13 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
         session_id = payload_data.get("session_id") or ""
     if not url and isinstance(payload_data, dict):
         url = payload_data.get("url") or ""
-
     step_title = "Portal Activity Detected"
     category = "General"
+    icon = "mdi.web"
+    color = "#58A6FF"
+    narrative = "Activity recorded on portal."
+    chips: List[Dict[str, str]] = []
+
     # =========================================================================
     # 0. SDC Specific Nodes (Termination, Logout, Page Routes, Crosshairs)
     # =========================================================================
