@@ -1,16 +1,16 @@
 /**
- * sdc_toast.js — Ultra-Stealth, Zero-Lag SDC Toast Notification Engine
+ * sdc_toast.js — Ultra-Stealth, Compact SDC Toast Notification Engine
  * ---------------------------------------------------------------------
  * Features:
- * 1. Closed Shadow DOM encapsulation (100% invisible to portal scripts & page CSS).
- * 2. Pure GPU transform/opacity transitions (NO expensive backdrop-filter or repaints).
- * 3. Single-instance queue with in-place morphing (no duplicate toast storms).
- * 4. Theme Modes:
+ * 1. Compact Mini-Pill Design (Width: 245px, bottom-left corner).
+ * 2. Rapid 1.1s auto-dismiss (snappy, non-intrusive, zero obstruction).
+ * 3. Closed Shadow DOM encapsulation (100% invisible to portal scripts).
+ * 4. Pure GPU transform/opacity transitions (NO blur or repaints).
+ * 5. Theme Modes:
  *    - 'start':   🟢 Emerald Green (#4CF9B7)
  *    - 'capture': 🟢 Glowing Green / Gold (#39FF14 / #FFA657)
  *    - 'update':  🔷 Sapphire Blue (#388BFD) for in-place updates on page revisits
  *    - 'logout':  ⚪ Slate Gray (#8B949E)
- * 5. Hover-to-pause and instant dismiss.
  */
 
 (function () {
@@ -45,12 +45,11 @@
   function _ensureContainer() {
     if (_host && _shadow) return _shadow;
 
-    // Attach to documentElement so it doesn't get wiped if portal resets document.body
+    // Attach to documentElement positioned at BOTTOM-LEFT corner (out of way of portal action buttons)
     _host = document.createElement('div');
     _host.id = 'sera-sdc-notify-root';
-    _host.style.cssText = 'all: initial !important; position: fixed !important; top: 16px !important; right: 16px !important; z-index: 2147483647 !important; pointer-events: none !important;';
+    _host.style.cssText = 'all: initial !important; position: fixed !important; bottom: 16px !important; left: 16px !important; z-index: 2147483647 !important; pointer-events: none !important;';
 
-    // Closed shadow root prevents any portal script from piercing or detecting the widget
     try {
       _shadow = _host.attachShadow({ mode: 'closed' });
     } catch (_) {
@@ -68,24 +67,24 @@
       .sera-toast-container {
         display: flex;
         flex-direction: column;
-        align-items: flex-end;
+        align-items: flex-start;
         pointer-events: none;
       }
       .sera-toast-card {
         pointer-events: auto;
-        width: 340px;
+        width: 250px;
         max-width: calc(100vw - 32px);
         background: #161B22;
-        border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
-        padding: 12px 14px;
+        border-radius: 6px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
+        padding: 7px 10px;
         color: #F0F6FC;
         opacity: 0;
-        transform: translateY(-16px) scale(0.97);
-        transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease-out;
+        transform: translateY(8px) scale(0.97);
+        transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.16s ease-out;
         will-change: transform, opacity;
         border: 1px solid #30363D;
-        border-left-width: 4px;
+        border-left-width: 3.5px;
         cursor: default;
         user-select: none;
       }
@@ -94,7 +93,7 @@
         transform: translateY(0) scale(1);
       }
       .sera-toast-card.pulse {
-        animation: sera-pulse 0.3s ease-in-out;
+        animation: sera-pulse 0.25s ease-in-out;
       }
       @keyframes sera-pulse {
         0% { transform: scale(1); }
@@ -121,20 +120,20 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 6px;
+        margin-bottom: 3px;
       }
       .sera-title-group {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
         overflow: hidden;
       }
       .sera-badge {
-        font-size: 10px;
+        font-size: 8.5px;
         font-weight: 700;
         text-transform: uppercase;
-        padding: 2px 6px;
-        border-radius: 4px;
+        padding: 1px 4px;
+        border-radius: 3px;
         letter-spacing: 0.3px;
         white-space: nowrap;
       }
@@ -160,7 +159,7 @@
       }
 
       .sera-title {
-        font-size: 12.5px;
+        font-size: 11px;
         font-weight: 600;
         color: #FFFFFF;
         overflow: hidden;
@@ -172,11 +171,10 @@
         border: none;
         color: #8B949E;
         cursor: pointer;
-        font-size: 14px;
+        font-size: 11px;
         line-height: 1;
-        padding: 2px 4px;
-        border-radius: 3px;
-        transition: color 0.15s, background 0.15s;
+        padding: 1px 3px;
+        border-radius: 2px;
       }
       .sera-close-btn:hover {
         color: #F0F6FC;
@@ -184,25 +182,28 @@
       }
 
       .sera-body {
-        font-size: 11.5px;
-        line-height: 1.4;
-        color: #C9D1D9;
-        margin-bottom: 6px;
+        font-size: 10px;
+        line-height: 1.35;
+        color: #8B949E;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .sera-details-grid {
         display: flex;
         flex-wrap: wrap;
-        gap: 4px;
-        margin-top: 4px;
+        gap: 3px;
+        margin-top: 3px;
       }
       .sera-chip {
-        font-size: 10.5px;
+        font-size: 9.5px;
         background: #21262D;
         border: 1px solid #30363D;
-        border-radius: 4px;
-        padding: 2px 6px;
+        border-radius: 3px;
+        padding: 1px 4px;
         color: #E6EDF3;
+        white-space: nowrap;
       }
       .theme-update .sera-chip {
         background: #1E293B;
@@ -210,7 +211,7 @@
       }
       .sera-chip-label {
         color: #8B949E;
-        margin-right: 3px;
+        margin-right: 2px;
       }
       .sera-chip-value-ack {
         font-family: Consolas, monospace;
@@ -243,17 +244,17 @@
      * @param {string} options.title - Header title
      * @param {string} options.message - Descriptive text
      * @param {Array<{label: string, value: string, isAck?: boolean, isPan?: boolean}>} [options.chips] - Data chips
-     * @param {number} [options.duration=4000] - Duration in ms before auto-dismiss
+     * @param {number} [options.duration=1100] - Duration in ms before auto-dismiss (default ~1.1s)
      */
     show(options = {}) {
       if (!_toastEnabled) return;
 
       const type = options.type || 'capture';
       const badge = options.badge || (type === 'update' ? 'UPDATED' : (type === 'start' ? 'SDC ACTIVE' : (type === 'logout' ? 'LOGOUT' : 'CAPTURED')));
-      const title = options.title || 'Sera SDC Tracking';
+      const title = options.title || 'Sera SDC';
       const message = options.message || '';
       const chips = options.chips || [];
-      const duration = options.duration !== undefined ? options.duration : 4000;
+      const duration = options.duration !== undefined ? options.duration : 1100;
 
       const shadow = _ensureContainer();
       const container = shadow.querySelector('.sera-toast-container');
@@ -269,7 +270,7 @@
         _activeCard.className = `sera-toast-card visible theme-${type} pulse`;
         setTimeout(() => {
           if (_activeCard) _activeCard.classList.remove('pulse');
-        }, 350);
+        }, 250);
 
         _activeCard.querySelector('.sera-badge').textContent = badge;
         _activeCard.querySelector('.sera-title').textContent = title;
@@ -277,7 +278,7 @@
 
         const detailsEl = _activeCard.querySelector('.sera-details-grid');
         detailsEl.innerHTML = '';
-        chips.forEach(c => {
+        chips.slice(0, 3).forEach(c => {
           if (!c.value) return;
           const chipEl = document.createElement('span');
           chipEl.className = 'sera-chip';
@@ -295,7 +296,7 @@
       card.className = `sera-toast-card theme-${type}`;
 
       let chipsHtml = '';
-      chips.forEach(c => {
+      chips.slice(0, 3).forEach(c => {
         if (!c.value) return;
         const valClass = c.isAck ? 'sera-chip-value-ack' : (c.isPan ? 'sera-chip-value-pan' : '');
         chipsHtml += `<span class="sera-chip"><span class="sera-chip-label">${c.label}:</span><span class="${valClass}">${c.value}</span></span>`;
@@ -325,7 +326,7 @@
       });
       card.addEventListener('mouseleave', () => {
         _isPaused = false;
-        _startDismissTimer(1800);
+        _startDismissTimer(1000);
       });
 
       container.innerHTML = '';
@@ -341,7 +342,7 @@
     },
 
     /**
-     * Dismiss current toast with fade out.
+     * Dismiss current toast with fast fade out.
      */
     dismiss() {
       if (_dismissTimer) {
@@ -355,7 +356,7 @@
             _activeCard.parentNode.removeChild(_activeCard);
           }
           _activeCard = null;
-        }, 220);
+        }, 160);
       }
     }
   };

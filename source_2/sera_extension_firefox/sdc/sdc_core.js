@@ -226,12 +226,12 @@
             type: 'logout',
             badge: 'LOGOUT',
             title: 'Session Finalized',
-            message: `Clean logout recorded. Session clickstream (${tl.length} steps) saved.`,
+            message: `Clean logout (${tl.length} steps).`,
             chips: [
               { label: 'Client', value: this.data.name || 'Taxpayer' },
               { label: 'PAN', value: this.data.pan || '', isPan: true }
             ],
-            duration: 3500
+            duration: 1100
           });
         }
       },
@@ -288,12 +288,12 @@
           type: 'start',
           badge: 'SDC ACTIVE',
           title: `Live Session Started`,
-          message: `Active tracking on ${portalName.toUpperCase()} for ${name || 'Taxpayer'}.`,
+          message: `Active on ${portalName.toUpperCase()} for ${name || 'Taxpayer'}.`,
           chips: [
             { label: 'Client', value: name || 'Taxpayer' },
             { label: 'PAN', value: pan, isPan: true }
           ],
-          duration: 4000
+          duration: 1100
         });
       }
     },
@@ -600,36 +600,34 @@
           // Sapphire Blue Toast for in-place updates from previously visited page
           window.SDCToast.show({
             type: 'update',
-            badge: 'UPDATED IN-PLACE',
-            title: `Refreshed: ${filingType || 'Form'} Parameters`,
-            message: `Updated parameters from previously visited page in this session.`,
+            badge: 'UPDATED',
+            title: `Refreshed: ${filingType || 'Form'}`,
+            message: `Updated parameters for ${clientName || 'Taxpayer'}.`,
             chips: [
               { label: 'Client', value: clientName },
               { label: 'PAN', value: pan, isPan: true },
               { label: 'Form', value: filingType },
               { label: 'AY', value: period },
-              { label: 'Status', value: status },
               { label: 'Ack', value: (arn && arn !== 'N/A') ? arn : '', isAck: true }
             ],
-            duration: 4000
+            duration: 1100
           });
         } else {
           // Glowing Green / Gold Toast for fresh crosshair captures
           const isAck = arn && arn !== 'N/A';
           window.SDCToast.show({
             type: 'capture',
-            badge: isAck ? 'FILED & ACKNOWLEDGED' : 'CROSSHAIR CAPTURED',
+            badge: isAck ? 'ACKNOWLEDGED' : 'CAPTURED',
             title: `${filingType || 'Filing Data'} Captured`,
-            message: isAck ? `Official acknowledgement captured on portal.` : `Recorded filing verification data on portal.`,
+            message: isAck ? `Ack captured on portal.` : `Recorded filing parameters.`,
             chips: [
               { label: 'Client', value: clientName },
               { label: 'PAN', value: pan, isPan: true },
               { label: 'Form', value: filingType },
               { label: 'AY', value: period },
-              { label: 'Status', value: status },
               { label: 'Ack', value: isAck ? arn : '', isAck: true }
             ],
-            duration: 4000
+            duration: 1100
           });
         }
       }
