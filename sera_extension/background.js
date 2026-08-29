@@ -78,6 +78,37 @@ function ensureConnected() {
   if (!nativePort) connectToNativeHost();
 }
 
+async function sendToDesktop(msg) {
+  let sent = false;
+  if (!nativePort) {
+    ensureConnected();
+  }
+  if (nativePort) {
+    try {
+      nativePort.postMessage(msg);
+      sent = true;
+    } catch (e) {
+      console.warn("Sera background: native postMessage failed, falling back to HTTP:", e);
+    }
+  }
+  if (!sent) {
+    try {
+      const resp = await fetch('http://127.0.0.1:49152', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg)
+      });
+      sent = resp.ok;
+      if (sent) {
+        console.log("Sera background: successfully delivered to desktop via HTTP port 49152");
+      }
+    } catch (err) {
+      console.warn("Sera background: direct HTTP delivery failed:", err);
+    }
+  }
+  return sent;
+}
+
 // Reopen the last Manual Assist widget from the browser toolbar if clicked directly
 if (chrome.action && chrome.action.onClicked) {
   chrome.action.onClicked.addListener((tab) => {
@@ -1293,12 +1324,24 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   console.log("Sera background: received runtime message:", msg);
   if (msg.type === "CHECK_NATIVE_STATUS") {
-    sendResponse({ connected: !!nativePort });
+    if (nativePort) {
+      sendResponse({ connected: true, mode: "native" });
+      return true;
+    }
+    fetch('http://127.0.0.1:49152', { method: 'OPTIONS' })
+      .then(r => sendResponse({ connected: r.ok, mode: "http" }))
+      .catch(() => sendResponse({ connected: false }));
     return true;
   }
   if (msg.type === "RECONNECT_NATIVE_HOST") {
     ensureConnected();
-    sendResponse({ connected: !!nativePort });
+    if (nativePort) {
+      sendResponse({ connected: true, mode: "native" });
+      return true;
+    }
+    fetch('http://127.0.0.1:49152', { method: 'OPTIONS' })
+      .then(r => sendResponse({ connected: r.ok, mode: "http" }))
+      .catch(() => sendResponse({ connected: false }));
     return true;
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
@@ -1308,18 +1351,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     } else {
       broadcastTrackerState(false);
     }
-    if (nativePort) {
-      try {
-        nativePort.postMessage({
-          type: "extension_settings_updated",
-          sad_enabled: s.sadEnabled,
-          fst_enabled: s.fstEnabled,
-          tracker_enabled: s.trackerEnabled,
-          sad_browser_notif_enabled: s.sadBrowserNotifEnabled,
-          sca_enabled: s.scaEnabled
-        });
-      } catch (_) {}
-    }
+    sendToDesktop({
+      type: "extension_settings_updated",
+      sad_enabled: s.sadEnabled,
+      fst_enabled: s.fstEnabled,
+      tracker_enabled: s.trackerEnabled,
+      sad_browser_notif_enabled: s.sadBrowserNotifEnabled,
+      sca_enabled: s.scaEnabled
+    });
     sendResponse({ status: "ok" });
     return true;
   }
@@ -1341,23 +1380,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "filing_result") {
-    console.log("Sera background: handling filing_result, nativePort is", nativePort ? "connected" : "null");
-    if (nativePort) {
-      try {
-        nativePort.postMessage(msg);
-        console.log("Sera background: successfully posted filing_result to native host");
-      } catch (err) {
-        console.error("Sera background: failed to postMessage to nativePort:", err);
-      }
-    } else {
-      console.warn("Sera background: nativePort is null, reconnecting and caching...");
-      ensureConnected();
-      chrome.storage.local.get({ pendingResults: [] }, data => {
-        chrome.storage.local.set({ pendingResults: [...data.pendingResults, msg] });
-      });
-    }
+    console.log("Sera background: handling filing_result, sending to desktop...");
+    sendToDesktop(msg);
     // Clear tracking state so we don't fire uncertain_result when tab closes
     chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
+    sendResponse({ status: "ok" });
+    return true;
   }
 });
 
@@ -2038,17 +2066,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               payload.client_id_token || ""
             ]
           }).then(() => {
-            if (!nativePort) ensureConnected();
-            if (nativePort) {
-              try {
-                nativePort.postMessage({
-                  type: "audit_event",
-                  action: "SCA widget armed",
-                  client_id: payload.client_id,
-                  detail: `SCA widget armed — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
-                });
-              } catch (_) {}
-            }
+            sendToDesktop({
+              type: "audit_event",
+              action: "SCA widget armed",
+              client_id: payload.client_id,
+              detail: `SCA widget armed — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
+            });
           }).catch(err => console.error("Sera SCA: Widget injection error", err));
         } else {
           // Trigger ambient silent password fill on this tab
@@ -2214,17 +2237,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             ]
           }).then(() => {
             // Send audit trail notification back to desktop app
-            if (!nativePort) ensureConnected();
-            if (nativePort) {
-              try {
-                nativePort.postMessage({
-                  type: "audit_event",
-                  action: "SCA autofill triggered",
-                  client_id: payload.client_id,
-                  detail: `SCA ambient autofill — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
-                });
-              } catch (_) {}
-            }
+            sendToDesktop({
+              type: "audit_event",
+              action: "SCA autofill triggered",
+              client_id: payload.client_id,
+              detail: `SCA ambient autofill — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
+            });
           }).catch(err => console.error("Sera SCA: Injection error", err));
         }
       }

@@ -5,6 +5,7 @@ echo ====================================================
 
 REG DELETE "HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera" /f >nul 2>&1
 REG DELETE "HKEY_CURRENT_USER\Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera" /f >nul 2>&1
+REG DELETE "HKEY_CURRENT_USER\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.amanassociates.sera" /f >nul 2>&1
 REG DELETE "HKEY_CURRENT_USER\Software\Mozilla\NativeMessagingHosts\com.amanassociates.sera" /f >nul 2>&1
 
 echo.
