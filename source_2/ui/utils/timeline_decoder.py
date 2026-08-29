@@ -820,11 +820,10 @@ def format_timeline_flow_html(
     summary_note += ")"
 
     html = [
-        '<div style="font-family: \'Consolas\', \'Courier New\', monospace; font-size: 12px; line-height: 1.45; color: #C9D1D9; background-color: #0D1117; padding: 14px;">',
-        f'<div style="border: 1px solid #30363D; border-radius: 6px; padding: 8px 12px; margin-bottom: 16px; background-color: #161B22;">'
-        f'<span style="color: #4CF9B7; font-weight: bold;">⚡ SESSION INTERACTION TIMELINE FLOW</span> &nbsp;|&nbsp; '
-        f'<span style="color: #58A6FF;">Target: {title_tag}</span> &nbsp;|&nbsp; '
-        f'<span style="color: #D29922;">{summary_note}</span>'
+        '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 1.5; color: #C9D1D9; background-color: #0D1117; padding: 14px;">',
+        f'<div style="border: 1px solid #30363D; border-radius: 6px; padding: 10px 14px; margin-bottom: 18px; background-color: #161B22; display: flex; justify-content: space-between; align-items: center;">',
+        f'<div><span style="color: #4CF9B7; font-weight: 700; font-size: 13px;">⚡ SESSION INTERACTION TIMELINE</span> &nbsp;|&nbsp; <span style="color: #58A6FF; font-weight: 600;">Target: {title_tag}</span></div>',
+        f'<div style="color: #D29922; font-weight: 600; font-size: 11.5px;">{summary_note}</div>',
         f'</div>'
     ]
 
@@ -839,19 +838,32 @@ def format_timeline_flow_html(
         dur_label = f" | Duration: {s_dur}" if s_dur else ""
         s_start = session.get("start_clock_str") or (session.get("start_time_str", "")[11:19] if session.get("start_time_str") and session.get("start_time_str") != "N/A" else "")
         time_chip = f' &nbsp;•&nbsp; <span style="color: #F8B449; font-weight: 600;">⏰ Started: {s_start}</span>' if s_start else ""
-        html.append(f'<div style="margin-top: {20 if s_idx > 0 else 4}px; margin-bottom: 12px; border: 1px solid #238636; border-left: 4px solid #2EA043; background-color: #161B22; border-radius: 4px; padding: 6px 10px;">')
-        html.append(f'<span style="color: #4CF9B7; font-weight: bold;">🔷 SESSION {s_num}</span> &nbsp;──&nbsp; <span style="color: #E6EDF3; font-weight: 600;">{s_date}</span>{time_chip} <span style="color: #8B949E; font-size: 11px;">({len(steps)} Steps{dur_label})</span>')
+        
+        html.append(f'<div style="margin-top: {22 if s_idx > 0 else 4}px; margin-bottom: 14px; border: 1px solid #238636; border-left: 4px solid #2EA043; background-color: #161B22; border-radius: 6px; padding: 8px 12px;">')
+        html.append(f'<div style="display: flex; justify-content: space-between; align-items: center;">')
+        html.append(f'<div><span style="color: #4CF9B7; font-weight: 700; font-size: 13px;">🔷 SESSION {s_num}</span> &nbsp;──&nbsp; <span style="color: #E6EDF3; font-weight: 600;">{s_date}</span>{time_chip}</div>')
+        html.append(f'<span style="color: #8B949E; font-size: 11px;">({len(steps)} Steps{dur_label})</span>')
+        html.append(f'</div>')
         if s_id and s_id != f"Session-{s_num}":
-            html.append(f'<br><span style="color: #8B949E; font-size: 10.5px;">Session Token: <code style="color: #79C0FF;">{s_id}</code></span>')
+            html.append(f'<div style="margin-top: 3px;"><span style="color: #8B949E; font-size: 11px;">Session Token: <code style="color: #79C0FF; font-family: Consolas, monospace;">{s_id}</code></span></div>')
         html.append('</div>')
+
+        # Vertical Timeline Track
+        html.append('<div style="border-left: 2px solid #30363D; margin-left: 14px; padding-left: 18px; margin-bottom: 20px;">')
 
         for i, s in enumerate(steps):
             is_last = (i == len(steps) - 1)
             step_color = s.get("color", "#58A6FF")
-            badge = f"[{s['step_number']:02d}]"
             cat = s["category"].upper()
-            time_str = f"⏱ {s['elapsed_str']} &nbsp;•&nbsp; {s['timestamp_str'][11:19]}"
+            time_str = f"⏱ {s['elapsed_str']} • {s['timestamp_str'][11:19]}"
             step_uid = s.get("step_uid", f"s{s_num}_step{s['step_number']}")
+            is_termination = s.get("category") == "Abrupt Termination" or "abruptly" in s.get("title", "").lower()
+            is_logout = s.get("category") == "Authentication" and "logout" in s.get("title", "").lower()
+
+            # Node card styling
+            card_border = "#F85149" if is_termination else ("#238636" if step_color in ("#4CF9B7", "#39FF14") else "#30363D")
+            card_bg = "rgba(248, 81, 73, 0.06)" if is_termination else "#0D1117"
+            dot_color = "#F85149" if is_termination else ("#39FF14" if is_logout else step_color)
 
             rep_badge = ""
             sub_items_html = ""
@@ -860,7 +872,7 @@ def format_timeline_flow_html(
                 if is_exp:
                     rep_badge = f'<a href="#toggle_repeat_{step_uid}" style="color: #F85149; text-decoration: none; font-weight: bold; background-color: #21262D; border: 1px solid #F85149; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px;">▼ Collapse {s["repeat_count"]} occurrences</a>'
                     sub_list = []
-                    sub_list.append(f'<div style="margin-left: 20px; margin-top: 6px; margin-bottom: 6px; padding: 6px 10px; background-color: #161B22; border-left: 2px dashed #58A6FF; border-radius: 4px;">')
+                    sub_list.append(f'<div style="margin-left: 10px; margin-top: 6px; margin-bottom: 6px; padding: 6px 10px; background-color: #161B22; border-left: 2px dashed #58A6FF; border-radius: 4px;">')
                     sub_list.append(f'<div style="color: #8B949E; font-size: 11px; margin-bottom: 4px; font-weight: bold;">Unfolded Sub-Occurrences ({s["repeat_count"]} total calls):</div>')
                     for sub_i, sub in enumerate(s.get("repeat_sub_steps", [])):
                         sub_list.append(
@@ -875,44 +887,56 @@ def format_timeline_flow_html(
                 else:
                     rep_badge = f'<a href="#toggle_repeat_{step_uid}" style="color: #58A6FF; text-decoration: none; font-weight: bold; background-color: #21262D; border: 1px solid #388BFD; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px;">▶ Expand {s["repeat_count"]} occurrences ({s["repeat_span_str"]})</a>'
 
-
             chips_html = ""
-            if s["chips"]:
+            if s.get("chips"):
                 chips_parts = []
                 for c in s["chips"]:
+                    is_arn = "arn" in c["label"].lower() or "ack" in c["label"].lower()
+                    chip_border = "#238636" if is_arn else "#30363D"
+                    chip_color = "#39FF14" if is_arn else "#E6EDF3"
+                    chip_font = "font-family: Consolas, monospace; font-weight: 700;" if is_arn else ""
                     chips_parts.append(
-                        f'<span style="background-color: #21262D; color: #E6EDF3; padding: 1px 6px; border-radius: 3px; border: 1px solid #30363D; margin-right: 4px;">'
-                        f'<b>{c["label"]}:</b> {c["val"]}</span>'
+                        f'<span style="background-color: #161B22; color: {chip_color}; {chip_font} padding: 2px 8px; border-radius: 4px; border: 1px solid {chip_border}; margin-right: 6px; margin-top: 4px; display: inline-block;">'
+                        f'<span style="color: #8B949E; font-size: 10px; font-weight: 400;">{c["label"]}:</span> {c["val"]}</span>'
                     )
-                chips_html = " ".join(chips_parts)
+                chips_html = "".join(chips_parts)
 
-            html.append('<div style="margin-bottom: 0px;">')
-            html.append(
-                f'<span style="color: {step_color}; font-weight: bold;">{badge}</span> '
-                f'<span style="color: #30363D;">──</span> '
-                f'<span style="color: #D29922; font-weight: 600;">{time_str}</span> '
-                f'<span style="color: #30363D;">────</span> '
-                f'<span style="background-color: #161B22; color: {step_color}; font-weight: 600; padding: 1px 6px; border-radius: 3px; border: 1px solid #30363D;">[ {cat} ]</span>'
-                f'{rep_badge}'
-            )
-            html.append('</div>')
-            html.append('<div style="border-left: 2px solid #30363D; margin-left: 12px; padding-left: 14px; padding-top: 3px; padding-bottom: 4px;">')
-            html.append(f'<div><span style="color: #58A6FF; font-weight: bold;">▶ Action   :</span> <span style="color: #FFFFFF; font-weight: 600;">{s["title"]}</span></div>')
-            html.append(f'<div style="margin-top: 2px;"><span style="color: #8B949E; font-weight: bold;">▶ Story    :</span> <span style="color: #C9D1D9;">{s["narrative"]}</span></div>')
+            # Node Card
+            html.append(f'<div style="position: relative; margin-bottom: 14px; background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 6px; padding: 10px 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">' )
+            
+            # Step header
+            html.append(f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">')
+            html.append(f'<div style="display: flex; align-items: center; gap: 8px;">')
+            html.append(f'<span style="background-color: {dot_color}; color: #0D1117; font-weight: 800; font-size: 10px; padding: 1px 6px; border-radius: 10px;">{s["step_number"]:02d}</span>')
+            html.append(f'<span style="color: {dot_color}; font-weight: 700; font-size: 13px;">{s["title"]}</span>')
+            html.append(f'<span style="background-color: rgba(110,118,129,0.15); color: #8B949E; border: 1px solid #30363D; border-radius: 3px; padding: 0 5px; font-size: 9.5px; font-weight: 600;">{cat}</span>')
+            html.append(f'{rep_badge}')
+            html.append(f'</div>')
+            html.append(f'<span style="color: #8B949E; font-size: 11px; font-weight: 500;">{time_str}</span>')
+            html.append(f'</div>')
+
+            # Narrative story
+            html.append(f'<div style="color: #C9D1D9; font-size: 11.5px; margin-top: 4px;">{s["narrative"]}</div>')
+
+            # Chips
             if chips_html:
-                html.append(f'<div style="margin-top: 3px;"><span style="color: #8B949E; font-weight: bold;">▶ Details  :</span> {chips_html}</div>')
+                html.append(f'<div style="margin-top: 6px; display: flex; flex-wrap: wrap;">{chips_html}</div>')
+
             if sub_items_html:
                 html.append(sub_items_html)
+
             html.append('</div>')
 
-            if not is_last:
-                html.append('<div style="margin-left: 9px; color: #30363D; font-size: 13px; line-height: 1;">▼</div>')
-            else:
-                html.append(f'<div style="margin-left: 9px; color: #2EA043; font-weight: bold; padding-top: 2px;">└──▶ <span style="color: #8B949E; font-weight: normal;">[SESSION {s_num} COMPLETED]</span></div>')
+        html.append('</div>') # end vertical track
+
+        # Session completion marker
+        if session.get("status") == "terminated_abruptly":
+            html.append(f'<div style="margin-left: 14px; margin-bottom: 24px; color: #F85149; font-weight: 600; font-size: 11.5px;">⚠️ [SESSION {s_num} TERMINATED ABRUPTLY — TAB CLOSED WITHOUT LOGOUT]</div>')
+        else:
+            html.append(f'<div style="margin-left: 14px; margin-bottom: 24px; color: #2EA043; font-weight: 600; font-size: 11.5px;">🏁 [SESSION {s_num} COMPLETED]</div>')
 
     html.append('</div>')
     return "\n".join(html)
-
 
 
 def format_timeline_flow_plain(decoded_sessions_or_steps: Any, title_tag: str = "Client") -> str:
