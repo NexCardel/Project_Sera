@@ -184,6 +184,7 @@ function injectSAD(tabId, reason) {
 
     // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
     const sdcFiles = [
+      'sdc/sdc_toast.js',
       'sdc/sdc_core.js',
       'sdc/protocols/itr_protocol.js',
       'sdc/protocols/gst_protocol.js',

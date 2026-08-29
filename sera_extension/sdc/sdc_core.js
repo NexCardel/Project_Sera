@@ -220,6 +220,20 @@
 
         this._emitTimelineSync();
         console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
+
+        if (window.SDCToast) {
+          window.SDCToast.show({
+            type: 'logout',
+            badge: 'LOGOUT',
+            title: 'Session Finalized',
+            message: `Clean logout recorded. Session clickstream (${tl.length} steps) saved.`,
+            chips: [
+              { label: 'Client', value: this.data.name || 'Taxpayer' },
+              { label: 'PAN', value: this.data.pan || '', isPan: true }
+            ],
+            duration: 3500
+          });
+        }
       },
 
       _emitTimelineSync() {
@@ -267,6 +281,21 @@
       };
       // Send via both pipelines (HTTP + runtime)
       _emitDual(payload);
+
+      // Show in-browser emerald toast
+      if (window.SDCToast) {
+        window.SDCToast.show({
+          type: 'start',
+          badge: 'SDC ACTIVE',
+          title: `Live Session Started`,
+          message: `Active tracking on ${portalName.toUpperCase()} for ${name || 'Taxpayer'}.`,
+          chips: [
+            { label: 'Client', value: name || 'Taxpayer' },
+            { label: 'PAN', value: pan, isPan: true }
+          ],
+          duration: 4000
+        });
+      }
     },
 
     /**
@@ -558,6 +587,55 @@
 
     console.log(`⚡ Sera SDC CAPTURE [${crosshairId}]:`, JSON.stringify(detail).substring(0, 300));
     _emitDual(detail);
+
+    // ─── Trigger In-Browser Toast Notification ────────────────────────────────
+    try {
+      if (window.SDCToast) {
+        const currentUrlKey = window.location.href.split('?')[0].replace(/\/+$/, '').toLowerCase();
+        const historyNodes = SDC.session.data.timeline || [];
+        const matchingPriorVisits = historyNodes.filter(node => (node.url || '').split('?')[0].replace(/\/+$/, '').toLowerCase() === currentUrlKey);
+        const isRevisitUpdate = matchingPriorVisits.length > 1;
+
+        if (isRevisitUpdate) {
+          // Sapphire Blue Toast for in-place updates from previously visited page
+          window.SDCToast.show({
+            type: 'update',
+            badge: 'UPDATED IN-PLACE',
+            title: `Refreshed: ${filingType || 'Form'} Parameters`,
+            message: `Updated parameters from previously visited page in this session.`,
+            chips: [
+              { label: 'Client', value: clientName },
+              { label: 'PAN', value: pan, isPan: true },
+              { label: 'Form', value: filingType },
+              { label: 'AY', value: period },
+              { label: 'Status', value: status },
+              { label: 'Ack', value: (arn && arn !== 'N/A') ? arn : '', isAck: true }
+            ],
+            duration: 4000
+          });
+        } else {
+          // Glowing Green / Gold Toast for fresh crosshair captures
+          const isAck = arn && arn !== 'N/A';
+          window.SDCToast.show({
+            type: 'capture',
+            badge: isAck ? 'FILED & ACKNOWLEDGED' : 'CROSSHAIR CAPTURED',
+            title: `${filingType || 'Filing Data'} Captured`,
+            message: isAck ? `Official acknowledgement captured on portal.` : `Recorded filing verification data on portal.`,
+            chips: [
+              { label: 'Client', value: clientName },
+              { label: 'PAN', value: pan, isPan: true },
+              { label: 'Form', value: filingType },
+              { label: 'AY', value: period },
+              { label: 'Status', value: status },
+              { label: 'Ack', value: isAck ? arn : '', isAck: true }
+            ],
+            duration: 4000
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('⚡ Sera SDC Toast Notice:', e);
+    }
   }
 
   // ─── Dual Dispatch Pipeline ──────────────────────────────────────────────────

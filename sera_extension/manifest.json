@@ -66,6 +66,7 @@
         "content_scripts/net_interceptor.js",
         "content_scripts/filing_detector.js",
         "tracker.js",
+        "sdc/sdc_toast.js",
         "sdc/sdc_core.js",
         "sdc/protocols/itr_protocol.js",
         "sdc/protocols/gst_protocol.js",
