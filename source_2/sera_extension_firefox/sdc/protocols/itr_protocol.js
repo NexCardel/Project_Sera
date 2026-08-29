@@ -473,6 +473,39 @@
       return null; // Not a filing capture, but synchronizes identity
     }
 
+    // ─── CROSSHAIR 6: View Filed Returns (15-Digit ACK Extractor) ───────────
+    function _handleViewFiledReturns(url) {
+      const pageText = u.getPageText();
+      const pan = getSession().pan || _extractPan();
+      const name = getSession().name || _extractName();
+      if (pan) getSession().pan = pan;
+      if (name) getSession().name = name;
+
+      const ackMatch = pageText.match(/\b(\d{15})\b/);
+      const ack = ackMatch ? ackMatch[1] : '';
+      const ayMatch = pageText.match(/\b(20\d{2}-\d{2})\b/);
+      const ay = ayMatch ? ayMatch[1] : (getSession().ay || '');
+      const formMatch = pageText.match(/\b(ITR-[1-7]|ITR-V|ITR-U)\b/i);
+      const form = formMatch ? formMatch[1].toUpperCase() : (getSession().form || 'ITR');
+
+      if (!ack) return null;
+
+      console.log(`⚡ Sera SDC [itr_view_filed_returns]: Extracted 15-digit ACK ${ack} for AY ${ay}`);
+      return {
+        portal: 'income tax',
+        pan: pan,
+        client_name: name,
+        name: name,
+        taxpayer_name: name,
+        filing_type: form,
+        period_label: ay,
+        arn: ack,
+        status: 'Filed & Verified (Portal Confirmed)',
+        dom_breadcrumbs: u.getBreadcrumbs(),
+        confirmation_message: 'Official 15-digit Acknowledgement captured from portal return history.'
+      };
+    }
+
     // ─── Register SDC.onSessionClear for ITR ────────────────────────────────
     // So that if clearAllSessions() is triggered from any OTHER protocol's
     // login detection (e.g., in future GST logout), ITR cache also gets wiped.
@@ -494,6 +527,11 @@
           id: 'itr_submitted_pending',
           pattern: /(?:fo-e-verify-later|complete-verification|fo-verify-later|fo-return-submitted)/i,
           handler: _handleSubmittedPending
+        },
+        {
+          id: 'itr_view_filed_returns',
+          pattern: /(?:view-filed-returns|fo-view-filed-returns|viewreturns|view-returns)/i,
+          handler: _handleViewFiledReturns
         },
         {
           id: 'itr_personal_info',
