@@ -2777,9 +2777,9 @@ class SeraDatabase:
                 if not valid_id:
                     unassigned_identity = f"Pending_{arn_number}" if arn_number and arn_number != "N/A" else "Unassigned"
 
-        # Check for Sera DOM page-revisit replacement constraint
+        # Check for Sera DOM / SDC page-revisit replacement constraint
         page_url_norm = None
-        if raw_payload_json and capture_method == "DOM_Tracker":
+        if raw_payload_json and (capture_method == "DOM_Tracker" or capture_method.startswith("SDC_")):
             try:
                 p_obj = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
                 if isinstance(p_obj, dict):
@@ -2807,13 +2807,14 @@ class SeraDatabase:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
-            # Sera DOM Constraint Rule:
+            # Sera DOM / SDC Constraint Rule:
             # If data is captured from a page link and users navigate away then return to the same page link,
             # the new data captured replaces the old one for data management.
             existing_dump_id = None
             candidate_rows = []
-            if page_url_norm and capture_method == "DOM_Tracker":
-                query = "SELECT id, raw_payload_json FROM tracker_dump WHERE capture_method = 'DOM_Tracker' "
+            if page_url_norm and (capture_method == "DOM_Tracker" or capture_method.startswith("SDC_")):
+                # Check for either DOM_Tracker or SDC captures for this identity
+                query = "SELECT id, raw_payload_json FROM tracker_dump WHERE (capture_method = 'DOM_Tracker' OR capture_method LIKE 'SDC_%') "
                 q_params = []
                 if valid_id:
                     query += "AND client_id = ? "

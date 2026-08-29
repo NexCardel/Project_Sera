@@ -235,14 +235,21 @@
           // 2. Execute protocol handler synchronously against loaded memory
           const capture = await crosshair.handler(url);
 
+          if (crosshair.id === 'itr_login') {
+            // Auth route: session was already wiped by handler — skip save to avoid recreating stale session
+            return;
+          }
+
           // 3. Save any memory changes back to shared storage
           await SDC.session.save();
 
-          // 4. Session Start Ping (if this is the first time we learned their identity)
-          if (SDC.session.data.pan && SDC.session.data.name && !SDC.session.data._startedPingSent) {
-            SDC.session.data._startedPingSent = true;
+          // 4. Session Start Trigger: fires whenever a valid PAN is identified for a new/switched client
+          const activePan = SDC.session.data.pan;
+          const activeName = SDC.session.data.name;
+          if (activePan && activePan !== SDC.session.data._lastStartedPan) {
+            SDC.session.data._lastStartedPan = activePan;
             await SDC.session.save();
-            SDC.emitSessionStart(protocol.name, SDC.session.data.pan, SDC.session.data.name);
+            SDC.emitSessionStart(protocol.name, activePan, activeName || 'Taxpayer');
           }
 
           if (capture) {
@@ -250,7 +257,7 @@
             _emitCapture(capture, protocol.name, crosshair.id);
             return;
           } else if (crosshair.id !== 'itr_login' && retryCount < 2) {
-            // Schedule up to 2 retries (at +600ms and +1500ms) for Angular rendering
+            // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering
             const delay = (retryCount + 1) * 700;
             const timer = setTimeout(() => {
               if (window.location.href === url) {

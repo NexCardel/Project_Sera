@@ -458,6 +458,17 @@
       return null; // no capture to emit — just a session wipe
     }
 
+    // ─── CROSSHAIR 5: Dashboard Post-Login Identity Capture ────────────────
+    // Target: #/dashboard, #/home, #/welcome (landing page after logging in)
+    function _handleDashboard(url) {
+      const pan = _extractPan();
+      const name = _extractName();
+      if (pan) getSession().pan = pan;
+      if (name) getSession().name = name;
+      console.log(`⚡ Sera SDC [itr_dashboard]: Active dashboard for ${name || 'Client'} (${pan || 'No PAN'})`);
+      return null; // Not a filing capture, but synchronizes identity
+    }
+
     // ─── Register SDC.onSessionClear for ITR ────────────────────────────────
     // So that if clearAllSessions() is triggered from any OTHER protocol's
     // login detection (e.g., in future GST logout), ITR cache also gets wiped.
@@ -491,9 +502,14 @@
           handler: _handleFormSelect
         },
         {
-          // Login/logout detection: only matches explicit auth routes (NOT general hash-less URLs)
+          id: 'itr_dashboard',
+          pattern: /(?:dashboard|landing|home|welcome)/i,
+          handler: _handleDashboard
+        },
+        {
+          // Login/logout detection: matches all auth/login/logout subroutes
           id: 'itr_login',
-          pattern: /[/#](?:login|logout|password|user-login|sign-in|signout|sign-out)(?:[?/#]|$)/i,
+          pattern: /[/#](?:login|logout|sign-?in|sign-?out|password|pre-login|auth)(?:[?/#]|$)/i,
           handler: _handleLoginLogout
         }
       ]
