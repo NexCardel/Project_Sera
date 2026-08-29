@@ -47,7 +47,7 @@ def _utc_now_iso() -> str:
 
 
 class PeerInfo:
-    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count")
+    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count", "tracker_count", "timeline_count")
 
     def __init__(
         self,
@@ -61,6 +61,8 @@ class PeerInfo:
         inv_frames=False,
         sync_revision=0,
         client_count=0,
+        tracker_count=0,
+        timeline_count=0,
     ):
         self.username = username
         self.host = host
@@ -72,6 +74,8 @@ class PeerInfo:
         self.inv_frames = bool(inv_frames)
         self.sync_revision = int(sync_revision)
         self.client_count = int(client_count)
+        self.tracker_count = int(tracker_count)
+        self.timeline_count = int(timeline_count)
 
     def key(self) -> str:
         return f"{self.host}:{self.ip}"
@@ -88,6 +92,8 @@ class PeerInfo:
             "inv_frames": self.inv_frames,
             "sync_revision": self.sync_revision,
             "client_count": self.client_count,
+            "tracker_count": self.tracker_count,
+            "timeline_count": self.timeline_count,
         }
 
 
@@ -298,6 +304,8 @@ class SyncPeerService:
             "db_mtime": db_mtime_str,
             "db_mtime_ts": db_mtime_ts,
             "client_count": metrics.get("client_count", 0),
+            "tracker_count": metrics.get("tracker_count", 0),
+            "timeline_count": metrics.get("timeline_count", 0),
             "sync_revision": metrics.get("sync_revision", 0),
             "latest_timestamp": metrics.get("latest_timestamp", ""),
             "inv_frames": self.inv_frames,
@@ -353,6 +361,8 @@ class SyncPeerService:
         inv_frames = bool(body.get("inv_frames", False))
         sync_rev = int(body.get("sync_revision", 0))
         client_cnt = int(body.get("client_count", 0))
+        tracker_cnt = int(body.get("tracker_count", 0))
+        timeline_cnt = int(body.get("timeline_count", 0))
 
         peer = PeerInfo(
             username=body.get("username", "Unknown"),
@@ -365,6 +375,8 @@ class SyncPeerService:
             inv_frames=inv_frames,
             sync_revision=sync_rev,
             client_count=client_cnt,
+            tracker_count=tracker_cnt,
+            timeline_count=timeline_cnt,
         )
 
         pk = peer.key()
@@ -376,10 +388,12 @@ class SyncPeerService:
         # Log node discovery and revision score updates in live activity stream
         if not prev_peer:
             inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
-            self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}")
+            tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
+            self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}{tracker_info}")
         elif prev_peer.sync_revision != sync_rev or prev_peer.inv_frames != inv_frames:
             inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
-            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}")
+            tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
+            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}{tracker_info}")
 
         self._safe_call(self.on_peer_table_changed, self._peer_list())
 

@@ -1058,10 +1058,22 @@ class SeraApp:
                 self.search_win.refresh()
             if hasattr(self, "admin_win") and self.admin_win:
                 self.admin_win.refresh()
+            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
+                self.tracker_dump_win.load_data()
+            if hasattr(self, "detail_win") and self.detail_win and self.detail_win.isVisible():
+                if getattr(self.detail_win, "client_id", None):
+                    self.detail_win.load_client(self.detail_win.client_id)
             if hasattr(self, "sidebar") and self.sidebar:
                 self.sidebar.notify_sync_received(sender_username, sender_host)
             if hasattr(self, "shell") and self.shell:
-                self.shell.show_alert(f"🔄 Database auto-synced live from {sender_username} ({sender_host})", level="success", duration=4500)
+                self.shell.show_alert(f"🔄 Database & Tracker auto-synced live from {sender_username} ({sender_host})", level="success", duration=4500)
+
+            # Re-sync allied reports & workbooks in background thread
+            threading.Thread(
+                target=lambda: (self.db.sync_fst_reports(), self.db.sync_dom_parser(), self.db.re_resolve_all_tracker_dumps()),
+                name="sync-live-allied-reports",
+                daemon=True
+            ).start()
         except Exception as e:
             print(f"[Live Auto-Sync] Error refreshing UI: {e}")
 

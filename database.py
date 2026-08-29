@@ -1976,8 +1976,10 @@ class SeraDatabase:
         - client_count: Total active non-deleted client records
         - archived_count: Total archived client records
         - log_count: Total SSAL audit log entries
-        - latest_timestamp: ISO timestamp of most recent audit log entry
-        - sync_revision: Structural database revision score (client_count * 1000 + log_count)
+        - tracker_count: Total tracker dump captures in rawPayload.db
+        - timeline_count: Total SDC session timelines in rawPayload.db
+        - latest_timestamp: ISO timestamp of most recent audit log / capture entry
+        - sync_revision: Structural database revision score
         """
         try:
             with self._connect() as conn:
@@ -1992,20 +1994,43 @@ class SeraDatabase:
                 log_count = row[0] if row and row[0] else 0
                 latest_ts = row[1] if row and row[1] else ""
 
-                sync_revision = (client_count * 1000) + log_count
+            tracker_count = 0
+            timeline_count = 0
+            latest_dump_ts = ""
+            try:
+                with self._connect_raw() as r_conn:
+                    cur = r_conn.execute("SELECT COUNT(*), MAX(created_at) FROM tracker_dump")
+                    r_row = cur.fetchone()
+                    tracker_count = r_row[0] if r_row and r_row[0] else 0
+                    latest_dump_ts = r_row[1] if r_row and r_row[1] else ""
 
-                return {
-                    "client_count": client_count,
-                    "archived_count": archived_count,
-                    "log_count": log_count,
-                    "latest_timestamp": latest_ts,
-                    "sync_revision": sync_revision,
-                }
+                    cur = r_conn.execute("SELECT COUNT(*), MAX(last_updated) FROM sdc_session_timelines")
+                    t_row = cur.fetchone()
+                    timeline_count = t_row[0] if t_row and t_row[0] else 0
+            except Exception:
+                pass
+
+            if latest_dump_ts and latest_dump_ts > latest_ts:
+                latest_ts = latest_dump_ts
+
+            sync_revision = (client_count * 10000) + (log_count * 10) + (tracker_count * 5) + timeline_count
+
+            return {
+                "client_count": client_count,
+                "archived_count": archived_count,
+                "log_count": log_count,
+                "tracker_count": tracker_count,
+                "timeline_count": timeline_count,
+                "latest_timestamp": latest_ts,
+                "sync_revision": sync_revision,
+            }
         except Exception:
             return {
                 "client_count": 0,
                 "archived_count": 0,
                 "log_count": 0,
+                "tracker_count": 0,
+                "timeline_count": 0,
                 "latest_timestamp": "",
                 "sync_revision": 0,
             }
@@ -2948,8 +2973,10 @@ class SeraDatabase:
             except Exception as e:
                 print(f"[database] auto-upsert SDC timeline notice: {e}")
 
-        # Keep both derived FST workbooks current after every new capture.
+        # Keep derived FST and SDC workbooks current after every new capture.
         self.sync_fst_reports()
+        self.sync_dom_parser()
+        self._bump_sync_revision_if_configured()
 
         return {
             "id": dump_id, "client_id": valid_id, "unassigned_identity": unassigned_identity, "service_id": service_id,
@@ -3009,6 +3036,9 @@ class SeraDatabase:
                        last_updated = excluded.last_updated""",
                 (session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, now)
             )
+
+        self.sync_dom_parser()
+        self._bump_sync_revision_if_configured()
 
         return {
             "session_id": session_id,

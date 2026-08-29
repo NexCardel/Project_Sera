@@ -138,11 +138,11 @@ class SeraSyncDialog(QDialog):
         desc.setStyleSheet("font-size: 12px; color: #B0B0B0;")
         left_layout.addWidget(desc)
 
-        # Peer Table (7 Columns: Username, Hostname, IP, Version, DB Modified, Rev Score, Mode / Status)
+        # Peer Table (8 Columns: Username, Hostname, IP, Version, DB Modified, Rev Score, Clients / Dumps, Mode / Status)
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "Username", "Hostname", "IP Address", "App Version", "DB Modified", "Rev Score", "Mode / Status"
+            "Username", "Hostname", "IP Address", "App Version", "DB Modified", "Rev Score", "Clients / Dumps", "Mode / Status"
         ])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -151,6 +151,7 @@ class SeraSyncDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -405,6 +406,13 @@ class SeraSyncDialog(QDialog):
             rev_item.setForeground(QColor("#38D9A9"))
             self.table.setItem(r_idx, 5, rev_item)
 
+            c_cnt = peer.get("client_count", 0)
+            t_cnt = peer.get("tracker_count", 0)
+            data_item = QTableWidgetItem(f"{c_cnt} CLI | {t_cnt} Dumps")
+            data_item.setTextAlignment(Qt.AlignCenter)
+            data_item.setForeground(QColor("#7DD3FC"))
+            self.table.setItem(r_idx, 6, data_item)
+
             is_peer_inv = peer.get("inv_frames", False)
             if is_peer_inv:
                 status_item = QTableWidgetItem("🛡️ Inv-Frames")
@@ -412,7 +420,7 @@ class SeraSyncDialog(QDialog):
             else:
                 status_item = QTableWidgetItem("🟢 Normal")
                 status_item.setForeground(QColor("#4CF9B7"))
-            self.table.setItem(r_idx, 6, status_item)
+            self.table.setItem(r_idx, 7, status_item)
 
         if new_sel_row >= 0:
             self.table.selectRow(new_sel_row)

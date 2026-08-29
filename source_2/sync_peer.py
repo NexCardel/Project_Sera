@@ -47,7 +47,7 @@ def _utc_now_iso() -> str:
 
 
 class PeerInfo:
-    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count")
+    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count", "tracker_count", "timeline_count")
 
     def __init__(
         self,
@@ -61,6 +61,8 @@ class PeerInfo:
         inv_frames=False,
         sync_revision=0,
         client_count=0,
+        tracker_count=0,
+        timeline_count=0,
     ):
         self.username = username
         self.host = host
@@ -72,6 +74,8 @@ class PeerInfo:
         self.inv_frames = bool(inv_frames)
         self.sync_revision = int(sync_revision)
         self.client_count = int(client_count)
+        self.tracker_count = int(tracker_count)
+        self.timeline_count = int(timeline_count)
 
     def key(self) -> str:
         return f"{self.host}:{self.ip}"
@@ -88,6 +92,8 @@ class PeerInfo:
             "inv_frames": self.inv_frames,
             "sync_revision": self.sync_revision,
             "client_count": self.client_count,
+            "tracker_count": self.tracker_count,
+            "timeline_count": self.timeline_count,
         }
 
 
@@ -298,6 +304,8 @@ class SyncPeerService:
             "db_mtime": db_mtime_str,
             "db_mtime_ts": db_mtime_ts,
             "client_count": metrics.get("client_count", 0),
+            "tracker_count": metrics.get("tracker_count", 0),
+            "timeline_count": metrics.get("timeline_count", 0),
             "sync_revision": metrics.get("sync_revision", 0),
             "latest_timestamp": metrics.get("latest_timestamp", ""),
             "inv_frames": self.inv_frames,
@@ -353,6 +361,8 @@ class SyncPeerService:
         inv_frames = bool(body.get("inv_frames", False))
         sync_rev = int(body.get("sync_revision", 0))
         client_cnt = int(body.get("client_count", 0))
+        tracker_cnt = int(body.get("tracker_count", 0))
+        timeline_cnt = int(body.get("timeline_count", 0))
 
         peer = PeerInfo(
             username=body.get("username", "Unknown"),
@@ -365,6 +375,8 @@ class SyncPeerService:
             inv_frames=inv_frames,
             sync_revision=sync_rev,
             client_count=client_cnt,
+            tracker_count=tracker_cnt,
+            timeline_count=timeline_cnt,
         )
 
         pk = peer.key()
@@ -376,10 +388,12 @@ class SyncPeerService:
         # Log node discovery and revision score updates in live activity stream
         if not prev_peer:
             inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
-            self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}")
+            tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
+            self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}{tracker_info}")
         elif prev_peer.sync_revision != sync_rev or prev_peer.inv_frames != inv_frames:
             inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
-            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}")
+            tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
+            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}{tracker_info}")
 
         self._safe_call(self.on_peer_table_changed, self._peer_list())
 
@@ -512,6 +526,7 @@ class SyncPeerService:
 
             db_size = int(header["db_size"])
             salt_size = int(header["salt_size"])
+            raw_db_size = int(header.get("raw_db_size", 0))
 
             # ---------------- PROTOCOL RULE 4: Normal P2P Sync Guard ----------------
             # If in Normal P2P mode (not following a sovereign Inv-Frames node), enforce standard revision protection
@@ -547,6 +562,10 @@ class SyncPeerService:
             db_bytes = _recv_exact(conn, db_size)
             # Receive salt bytes
             salt_bytes = _recv_exact(conn, salt_size)
+            # Receive raw payload db bytes if present
+            raw_db_bytes = b""
+            if raw_db_size > 0:
+                raw_db_bytes = _recv_exact(conn, raw_db_size)
 
             # Create safety backup of current live files
             live_dir = os.path.dirname(self.db_path)
@@ -559,6 +578,11 @@ class SyncPeerService:
             if os.path.exists(self.salt_path):
                 backup_salt = os.path.join(live_dir, f"sera.salt.pre-sync-{now_str}")
                 shutil.copy2(self.salt_path, backup_salt)
+
+            raw_db_path = os.path.join(live_dir, "rawPayload.db")
+            if os.path.exists(raw_db_path):
+                backup_raw = os.path.join(live_dir, f"rawPayload.db.pre-sync-{now_str}.db")
+                shutil.copy2(raw_db_path, backup_raw)
 
             # Write files with fallback if Windows holds a temporary file lock
             def safe_write_file(target_path, content_bytes):
@@ -578,6 +602,8 @@ class SyncPeerService:
 
             safe_write_file(self.db_path, db_bytes)
             safe_write_file(self.salt_path, salt_bytes)
+            if raw_db_size > 0:
+                safe_write_file(raw_db_path, raw_db_bytes)
 
             # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal)
             for ext in ["-wal", "-shm", "-journal"]:
@@ -585,6 +611,12 @@ class SyncPeerService:
                 if os.path.exists(sidecar):
                     try:
                         os.remove(sidecar)
+                    except OSError:
+                        pass
+                raw_sidecar = raw_db_path + ext
+                if os.path.exists(raw_sidecar):
+                    try:
+                        os.remove(raw_sidecar)
                     except OSError:
                         pass
 
@@ -636,6 +668,12 @@ class SyncPeerService:
         with open(self.salt_path, "rb") as f:
             salt_bytes = f.read()
 
+        raw_db_path = os.path.join(os.path.dirname(self.db_path), "rawPayload.db")
+        raw_db_bytes = b""
+        if os.path.exists(raw_db_path):
+            with open(raw_db_path, "rb") as f:
+                raw_db_bytes = f.read()
+
         local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
         metrics = self._get_local_metrics()
         local_sync_rev = metrics.get("sync_revision", 0)
@@ -652,6 +690,7 @@ class SyncPeerService:
                     "sync_port": self.sync_port,
                     "db_size": len(db_bytes),
                     "salt_size": len(salt_bytes),
+                    "raw_db_size": len(raw_db_bytes),
                     "live_update": live_update,
                     "force_override": force_override,
                     "client_count": local_client_cnt,
@@ -673,6 +712,8 @@ class SyncPeerService:
                 # Send database + salt
                 conn.sendall(db_bytes)
                 conn.sendall(salt_bytes)
+                if len(raw_db_bytes) > 0:
+                    conn.sendall(raw_db_bytes)
 
                 # Wait for confirmation
                 result_raw = _recv_framed(conn)

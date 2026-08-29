@@ -238,6 +238,25 @@ class SeraDatabase:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_containers_cid ON client_raw_containers(client_id);")
 
+            # SDC Session Timelines: Chronological clickstream audit trail per client filing session
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sdc_session_timelines (
+                    session_id          TEXT PRIMARY KEY,
+                    client_id           INTEGER,
+                    pan                 TEXT,
+                    client_name         TEXT,
+                    portal              TEXT,
+                    status              TEXT DEFAULT 'active',
+                    start_time          TEXT NOT NULL,
+                    end_time            TEXT,
+                    total_steps         INTEGER DEFAULT 0,
+                    timeline_json       TEXT NOT NULL,
+                    last_updated        TEXT NOT NULL
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")
+
     def _migrate_tracker_dump_to_raw_payload_db(self):
         """One-time migration: moves any historical tracker_dump rows from master.db to rawPayload.db, then drops tracker_dump in master.db."""
         try:
@@ -1957,8 +1976,10 @@ class SeraDatabase:
         - client_count: Total active non-deleted client records
         - archived_count: Total archived client records
         - log_count: Total SSAL audit log entries
-        - latest_timestamp: ISO timestamp of most recent audit log entry
-        - sync_revision: Structural database revision score (client_count * 1000 + log_count)
+        - tracker_count: Total tracker dump captures in rawPayload.db
+        - timeline_count: Total SDC session timelines in rawPayload.db
+        - latest_timestamp: ISO timestamp of most recent audit log / capture entry
+        - sync_revision: Structural database revision score
         """
         try:
             with self._connect() as conn:
@@ -1973,20 +1994,43 @@ class SeraDatabase:
                 log_count = row[0] if row and row[0] else 0
                 latest_ts = row[1] if row and row[1] else ""
 
-                sync_revision = (client_count * 1000) + log_count
+            tracker_count = 0
+            timeline_count = 0
+            latest_dump_ts = ""
+            try:
+                with self._connect_raw() as r_conn:
+                    cur = r_conn.execute("SELECT COUNT(*), MAX(created_at) FROM tracker_dump")
+                    r_row = cur.fetchone()
+                    tracker_count = r_row[0] if r_row and r_row[0] else 0
+                    latest_dump_ts = r_row[1] if r_row and r_row[1] else ""
 
-                return {
-                    "client_count": client_count,
-                    "archived_count": archived_count,
-                    "log_count": log_count,
-                    "latest_timestamp": latest_ts,
-                    "sync_revision": sync_revision,
-                }
+                    cur = r_conn.execute("SELECT COUNT(*), MAX(last_updated) FROM sdc_session_timelines")
+                    t_row = cur.fetchone()
+                    timeline_count = t_row[0] if t_row and t_row[0] else 0
+            except Exception:
+                pass
+
+            if latest_dump_ts and latest_dump_ts > latest_ts:
+                latest_ts = latest_dump_ts
+
+            sync_revision = (client_count * 10000) + (log_count * 10) + (tracker_count * 5) + timeline_count
+
+            return {
+                "client_count": client_count,
+                "archived_count": archived_count,
+                "log_count": log_count,
+                "tracker_count": tracker_count,
+                "timeline_count": timeline_count,
+                "latest_timestamp": latest_ts,
+                "sync_revision": sync_revision,
+            }
         except Exception:
             return {
                 "client_count": 0,
                 "archived_count": 0,
                 "log_count": 0,
+                "tracker_count": 0,
+                "timeline_count": 0,
                 "latest_timestamp": "",
                 "sync_revision": 0,
             }
@@ -2777,9 +2821,9 @@ class SeraDatabase:
                 if not valid_id:
                     unassigned_identity = f"Pending_{arn_number}" if arn_number and arn_number != "N/A" else "Unassigned"
 
-        # Check for Sera DOM page-revisit replacement constraint
+        # Check for Sera DOM / SDC page-revisit replacement constraint
         page_url_norm = None
-        if raw_payload_json and capture_method == "DOM_Tracker":
+        if raw_payload_json and (capture_method == "DOM_Tracker" or capture_method.startswith("SDC_")):
             try:
                 p_obj = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
                 if isinstance(p_obj, dict):
@@ -2807,13 +2851,14 @@ class SeraDatabase:
                         "capture_method": capture_method, "status": status, "created_at": now, "duplicate": True
                     }
 
-            # Sera DOM Constraint Rule:
+            # Sera DOM / SDC Constraint Rule:
             # If data is captured from a page link and users navigate away then return to the same page link,
             # the new data captured replaces the old one for data management.
             existing_dump_id = None
             candidate_rows = []
-            if page_url_norm and capture_method == "DOM_Tracker":
-                query = "SELECT id, raw_payload_json FROM tracker_dump WHERE capture_method = 'DOM_Tracker' "
+            if page_url_norm and (capture_method == "DOM_Tracker" or capture_method.startswith("SDC_")):
+                # Check for either DOM_Tracker or SDC captures for this identity
+                query = "SELECT id, raw_payload_json FROM tracker_dump WHERE (capture_method = 'DOM_Tracker' OR capture_method LIKE 'SDC_%') "
                 q_params = []
                 if valid_id:
                     query += "AND client_id = ? "
@@ -2908,14 +2953,170 @@ class SeraDatabase:
                 created_at=now
             )
 
-        # Keep both derived FST workbooks current after every new capture.
+        # Auto-upsert SDC session timeline if present in payload
+        if raw_payload_json:
+            try:
+                p_dict = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
+                tl = p_dict.get("session_timeline") or (p_dict.get("raw_payload", {}).get("session_timeline") if isinstance(p_dict.get("raw_payload"), dict) else None)
+                sess_id = p_dict.get("session_id") or (p_dict.get("raw_payload", {}).get("session_id") if isinstance(p_dict.get("raw_payload"), dict) else None)
+                if sess_id and tl:
+                    self.upsert_sdc_session_timeline({
+                        "session_id": sess_id,
+                        "client_id": valid_id,
+                        "pan": pan or candidates[0] if candidates else "",
+                        "client_name": p_dict.get("client_name") or p_dict.get("name") or "",
+                        "portal": portal or "Income Tax",
+                        "status": p_dict.get("status") or "active",
+                        "start_time": p_dict.get("timestamp") or now,
+                        "timeline": tl
+                    })
+            except Exception as e:
+                print(f"[database] auto-upsert SDC timeline notice: {e}")
+
+        # Keep derived FST and SDC workbooks current after every new capture.
         self.sync_fst_reports()
+        self.sync_dom_parser()
+        self._bump_sync_revision_if_configured()
 
         return {
             "id": dump_id, "client_id": valid_id, "unassigned_identity": unassigned_identity, "service_id": service_id,
             "portal": portal, "period_label": period_label, "arn_number": arn_number,
             "capture_method": capture_method, "status": status, "created_at": now, "replaced": is_replaced
         }
+
+    def upsert_sdc_session_timeline(self, session_data: dict) -> dict:
+        """Upserts a full SDC Session Timeline audit trail in rawPayload.db."""
+        if not session_data or not isinstance(session_data, dict):
+            return None
+        session_id = str(session_data.get("session_id") or "").strip()
+        if not session_id:
+            return None
+
+        pan = str(session_data.get("pan") or "").strip().upper()
+        client_name = str(session_data.get("client_name") or session_data.get("name") or "").strip()
+        portal = str(session_data.get("portal") or "Income Tax").strip()
+        status = str(session_data.get("status") or "active").strip()
+        start_time = str(session_data.get("start_time") or datetime.datetime.now(datetime.timezone.utc).isoformat())
+        end_time = session_data.get("end_time")
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        timeline = session_data.get("timeline") or []
+        timeline_json = json.dumps(timeline, ensure_ascii=False)
+        total_steps = len(timeline)
+
+        # Resolve client_id if PAN exists
+        client_id = session_data.get("client_id")
+        if not client_id and pan:
+            with self._connect() as m_conn:
+                cur = m_conn.execute(
+                    """SELECT cv.client_id FROM client_values cv
+                       JOIN clients c ON c.id = cv.client_id
+                       WHERE c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
+                       LIMIT 1""",
+                    (pan,)
+                )
+                row = cur.fetchone()
+                if row:
+                    client_id = row[0]
+
+        with self._connect_raw() as r_conn:
+            r_conn.execute(
+                """INSERT INTO sdc_session_timelines
+                   (session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, last_updated)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       client_id = COALESCE(excluded.client_id, sdc_session_timelines.client_id),
+                       pan = CASE WHEN excluded.pan != '' THEN excluded.pan ELSE sdc_session_timelines.pan END,
+                       client_name = CASE WHEN excluded.client_name != '' THEN excluded.client_name ELSE sdc_session_timelines.client_name END,
+                       portal = excluded.portal,
+                       status = excluded.status,
+                       end_time = excluded.end_time,
+                       total_steps = excluded.total_steps,
+                       timeline_json = excluded.timeline_json,
+                       last_updated = excluded.last_updated""",
+                (session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, now)
+            )
+
+        self.sync_dom_parser()
+        self._bump_sync_revision_if_configured()
+
+        return {
+            "session_id": session_id,
+            "client_id": client_id,
+            "pan": pan,
+            "client_name": client_name,
+            "status": status,
+            "total_steps": total_steps
+        }
+
+    def get_sdc_session_timelines(self, client_id: int = None, pan: str = None, limit: int = 50) -> list:
+        """Retrieves chronological SDC session timelines from rawPayload.db."""
+        with self._connect_raw() as r_conn:
+            query = "SELECT session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, last_updated FROM sdc_session_timelines "
+            params = []
+            conditions = []
+            if client_id:
+                conditions.append("client_id = ?")
+                params.append(client_id)
+            if pan:
+                conditions.append("UPPER(pan) = ?")
+                params.append(pan.strip().upper())
+            if conditions:
+                query += "WHERE " + " AND ".join(conditions) + " "
+            query += "ORDER BY last_updated DESC LIMIT ?"
+            params.append(limit)
+
+            cur = r_conn.execute(query, params)
+            rows = []
+            for r in cur.fetchall():
+                try:
+                    tl_parsed = json.loads(r[9]) if r[9] else []
+                except Exception:
+                    tl_parsed = []
+                rows.append({
+                    "session_id": r[0],
+                    "client_id": r[1],
+                    "pan": r[2],
+                    "client_name": r[3],
+                    "portal": r[4],
+                    "status": r[5],
+                    "start_time": r[6],
+                    "end_time": r[7],
+                    "total_steps": r[8],
+                    "timeline": tl_parsed,
+                    "last_updated": r[10]
+                })
+            return rows
+
+    def get_sdc_timeline_by_session_id(self, session_id: str) -> dict:
+        """Retrieves a specific SDC session timeline by session_id."""
+        if not session_id:
+            return None
+        with self._connect_raw() as r_conn:
+            cur = r_conn.execute(
+                "SELECT session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, last_updated FROM sdc_session_timelines WHERE session_id = ?",
+                (session_id,)
+            )
+            r = cur.fetchone()
+            if not r:
+                return None
+            try:
+                tl_parsed = json.loads(r[9]) if r[9] else []
+            except Exception:
+                tl_parsed = []
+            return {
+                "session_id": r[0],
+                "client_id": r[1],
+                "pan": r[2],
+                "client_name": r[3],
+                "portal": r[4],
+                "status": r[5],
+                "start_time": r[6],
+                "end_time": r[7],
+                "total_steps": r[8],
+                "timeline": tl_parsed,
+                "last_updated": r[10]
+            }
 
     def link_unassigned_tracker_dumps(self, client_id: int, identity_value: str) -> int:
         """Retroactively links all unassigned tracker_dump rows matching identity_value (PAN/TAN/GSTIN) to client_id in rawPayload.db."""
