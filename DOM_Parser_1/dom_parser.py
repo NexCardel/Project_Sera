@@ -27,10 +27,13 @@ THIN_BORDER = Border(
 COLORS = {
     "cat1": PatternFill(start_color="DEF7EC", end_color="DEF7EC", fill_type="solid"), # 1. Filed & Verified (Green)
     "cat2": PatternFill(start_color="FEF08A", end_color="FEF08A", fill_type="solid"), # 2. Submitted Pending (Yellow)
-    "cat3": PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid"), # 3. Drafts & Schedules (Blue)
-    "cat4": PatternFill(start_color="F3E8FF", end_color="F3E8FF", fill_type="solid"), # 4. Taxpayer Identity (Purple)
-    "cat5": PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid"), # 5. Navigation Journey (Slate)
-    "card_bg": PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid"),
+    "cat3": PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid"), # 3. SDC Timelines (Cyan/Blue)
+    "cat4": PatternFill(start_color="E0E7FF", end_color="E0E7FF", fill_type="solid"), # 4. Drafts & Schedules (Indigo)
+    "cat5": PatternFill(start_color="F3E8FF", end_color="F3E8FF", fill_type="solid"), # 5. Taxpayer Identity (Purple)
+    "cat6": PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid"), # 6. Navigation Journey (Slate)
+    "status_completed": PatternFill(start_color="DEF7EC", end_color="DEF7EC", fill_type="solid"),
+    "status_abrupt": PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid"),
+    "status_active": PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid"),
 }
 
 def get_db_hex_key():
@@ -81,47 +84,35 @@ def get_db_hex_key():
             pass
     return None
 
-def resolve_target_dump(path=None):
-    """Auto-detects live database or text dump if path is generic or missing."""
+def resolve_target_dump(input_arg=None):
+    """Finds the most appropriate dump source file or rawPayload.db."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.abspath(os.path.join(base_dir, ".."))
+    live_app_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
+    
+    if input_arg and os.path.exists(input_arg):
+        return os.path.abspath(input_arg)
 
-    if path:
-        if os.path.isabs(path) and os.path.exists(path):
-            return path
-        local_p = os.path.join(app_dir, os.path.basename(path))
-        if os.path.exists(local_p):
-            return local_p
-        if os.path.exists(path):
-            return os.path.abspath(path)
-
-    # Primary target: SQLite rawPayload.db
-    db_candidates = [
+    candidates = [
+        os.path.join(live_app_dir, "rawPayload.db"),
         os.path.join(app_dir, "rawPayload.db"),
-        os.path.join("..", "rawPayload.db"),
-        os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "rawPayload.db"),
-    ]
-    for c in db_candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-
-    # Secondary fallback: text dump
-    txt_candidates = [
+        os.path.join(live_app_dir, "seraRawPayloadDump.txt"),
         os.path.join(app_dir, "seraRawPayloadDump.txt"),
-        os.path.join("..", "seraRawPayloadDump.txt"),
-        os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "seraRawPayloadDump.txt"),
+        os.path.join(app_dir, "Raw_Payload_Dump", "seraRawPayloadDumpBackup.txt")
     ]
-    for c in txt_candidates:
+
+    for c in candidates:
         if os.path.exists(c):
             return os.path.abspath(c)
 
     return os.path.join(app_dir, "rawPayload.db")
 
 def parse_entries_from_sqlite(db_path):
-    """Fetches and parses raw DOM captures directly from rawPayload.db."""
+    """Fetches and parses raw DOM captures and SDC session timelines directly from rawPayload.db."""
     if not os.path.exists(db_path):
-        return []
+        return [], []
     entries = []
+    timelines = []
     try:
         conn = sqlite3.connect(db_path)
         hex_key = get_db_hex_key()
@@ -129,44 +120,82 @@ def parse_entries_from_sqlite(db_path):
             conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("""
-            SELECT id, client_id, unassigned_identity, portal, period_label, 
-                   arn_number, capture_method, status, raw_payload_json, created_at
-            FROM tracker_dump
-            ORDER BY id ASC
-        """)
-        rows = cur.fetchall()
-        for r in rows:
-            entry_id = str(r["id"])
-            raw_json = {}
-            if r["raw_payload_json"]:
-                try:
-                    raw_json = json.loads(r["raw_payload_json"])
-                except Exception:
-                    raw_json = {"raw": r["raw_payload_json"]}
-            
-            entry = {
-                "Entry #": entry_id,
-                "Timestamp": r["created_at"] or "",
-                "Portal": r["portal"] or "Portal",
-                "PAN": r["unassigned_identity"] or "",
-                "Client ID": str(r["client_id"] or ""),
-                "ARN / Ack No": r["arn_number"] or "N/A",
-                "Period": r["period_label"] or "",
-                "Method": r["capture_method"] or "DOM_Tracker",
-                "Status": r["status"] or "captured",
-                "json": raw_json
-            }
-            entries.append(entry)
+        
+        # 1. Fetch tracker_dump entries
+        try:
+            cur.execute("""
+                SELECT id, client_id, unassigned_identity, portal, period_label, 
+                       arn_number, capture_method, status, raw_payload_json, created_at
+                FROM tracker_dump
+                ORDER BY id ASC
+            """)
+            rows = cur.fetchall()
+            for r in rows:
+                entry_id = str(r["id"])
+                raw_json = {}
+                if r["raw_payload_json"]:
+                    try:
+                        raw_json = json.loads(r["raw_payload_json"])
+                    except Exception:
+                        raw_json = {"raw": r["raw_payload_json"]}
+                
+                entry = {
+                    "Entry #": entry_id,
+                    "Timestamp": r["created_at"] or "",
+                    "Portal": r["portal"] or "Portal",
+                    "PAN": r["unassigned_identity"] or "",
+                    "Client ID": str(r["client_id"] or ""),
+                    "ARN / Ack No": r["arn_number"] or "N/A",
+                    "Period": r["period_label"] or "",
+                    "Method": r["capture_method"] or "DOM_Tracker",
+                    "Status": r["status"] or "captured",
+                    "json": raw_json
+                }
+                entries.append(entry)
+        except Exception as e:
+            print(f"[DOM_Parser_1] tracker_dump read notice: {e}")
+
+        # 2. Fetch sdc_session_timelines
+        try:
+            cur.execute("""
+                SELECT session_id, client_id, pan, client_name, portal, status,
+                       start_time, end_time, total_steps, timeline_json, last_updated
+                FROM sdc_session_timelines
+                ORDER BY last_updated DESC
+            """)
+            s_rows = cur.fetchall()
+            for sr in s_rows:
+                tl_data = []
+                if sr["timeline_json"]:
+                    try:
+                        tl_data = json.loads(sr["timeline_json"])
+                    except Exception:
+                        pass
+                timelines.append({
+                    "session_id": sr["session_id"],
+                    "client_id": sr["client_id"],
+                    "pan": sr["pan"] or "",
+                    "client_name": sr["client_name"] or "",
+                    "portal": sr["portal"] or "income tax",
+                    "status": sr["status"] or "completed",
+                    "start_time": sr["start_time"] or "",
+                    "end_time": sr["end_time"] or "",
+                    "total_steps": sr["total_steps"] or len(tl_data),
+                    "timeline": tl_data,
+                    "created_at": sr["last_updated"] or ""
+                })
+        except Exception as e:
+            print(f"[DOM_Parser_1] sdc_session_timelines read notice: {e}")
+
         conn.close()
     except Exception as e:
-        print(f"[DOM_Parser_1] SQLite read notice: {e}")
-    return entries
+        print(f"[DOM_Parser_1] SQLite connection notice: {e}")
+    return entries, timelines
 
 def parse_entries_from_text(filepath):
     """Parses entries from seraRawPayloadDump.txt."""
     if not os.path.exists(filepath):
-        return []
+        return [], []
     entries = []
     current_entry = None
     json_lines = []
@@ -207,13 +236,13 @@ def parse_entries_from_text(filepath):
             except: current_entry['json'] = {"error": "Failed to parse JSON"}
         entries.append(current_entry)
 
-    return entries
+    return entries, []
 
 def load_data(filepath=None):
-    """Loads entries from SQLite (preferred) or text dump."""
+    """Loads entries and timelines from SQLite (preferred) or text dump."""
     target = resolve_target_dump(filepath)
     if not target or not os.path.exists(target):
-        return []
+        return [], []
     if target.endswith(".db"):
         return parse_entries_from_sqlite(target)
     else:
@@ -342,7 +371,7 @@ def extract_dom_details(entry):
 
 def resolve_identities_bi_directionally(entries):
     """
-    FST Classifier 1 Algorithm:
+    FST Classifier Algorithm:
     Runs bi-directional (forward + backward) sweep to propagate taxpayer PAN
     and legal name across all setup and navigation entries in the same session.
     """
@@ -350,72 +379,81 @@ def resolve_identities_bi_directionally(entries):
     if n == 0:
         return {}
 
-    direct_pans = [None] * n
-    direct_gstins = [None] * n
-    direct_names = [None] * n
-    direct_acks = [None] * n
-    ack_to_pan = {}
+    direct_pans = []
+    direct_names = []
+    direct_gstins = []
+    session_bounds = [False] * n
 
     for i, e in enumerate(entries):
-        d = extract_dom_details(e)
-        p = d["pan"] if d["pan"] != "UNKNOWN" else None
-        g = d["gstin"] if d["gstin"] else None
-        nm = d["name"] if d["name"] != "Unknown Assessee" else None
-        ack = d["arn"] if d["arn"] != "N/A" else None
+        details = extract_dom_details(e)
+        pan = details["pan"] if details["pan"] != "UNKNOWN" else ""
+        name = details["name"] if details["name"] != "Unknown Assessee" else ""
+        gstin = details["gstin"]
 
-        direct_pans[i] = p
-        direct_gstins[i] = g
-        direct_names[i] = nm
-        direct_acks[i] = ack
+        url_str = str(e.get("json", {}).get("url") or "").lower()
+        if "logout" in url_str or "signout" in url_str or "sign-out" in url_str:
+            session_bounds[i] = True
 
-        if p and ack:
-            ack_to_pan[ack] = p
+        direct_pans.append(pan)
+        direct_names.append(name)
+        direct_gstins.append(gstin)
 
-    # 1. Forward carry: Once seen, applies to subsequent entries
-    forward_pans = [None] * n
-    forward_names = [None] * n
-    cur_p = None
-    cur_n = None
+    # 1. Forward Propagation
+    curr_pan = ""
+    curr_name = ""
+    curr_gstin = ""
+    fwd_pans = []
+    fwd_names = []
+    fwd_gstins = []
+
     for i in range(n):
-        if direct_pans[i]:
-            cur_p = direct_pans[i]
-        elif direct_acks[i] and direct_acks[i] in ack_to_pan:
-            cur_p = ack_to_pan[direct_acks[i]]
-        if direct_names[i]:
-            cur_n = direct_names[i]
-        forward_pans[i] = cur_p
-        forward_names[i] = cur_n
+        if session_bounds[i]:
+            curr_pan = ""
+            curr_name = ""
+            curr_gstin = ""
 
-    # 2. Backward carry: Retroactively resolves leading login/setup entries
-    backward_pans = [None] * n
-    backward_names = [None] * n
-    cur_p = None
-    cur_n = None
+        if direct_pans[i]: curr_pan = direct_pans[i]
+        if direct_names[i]: curr_name = direct_names[i]
+        if direct_gstins[i]: curr_gstin = direct_gstins[i]
+
+        fwd_pans.append(curr_pan)
+        fwd_names.append(curr_name)
+        fwd_gstins.append(curr_gstin)
+
+    # 2. Backward Sweep
+    rev_pan = ""
+    rev_name = ""
+    rev_gstin = ""
+    final_pans = [""] * n
+    final_names = [""] * n
+    final_gstins = [""] * n
+
     for i in range(n - 1, -1, -1):
-        if direct_pans[i]:
-            cur_p = direct_pans[i]
-        elif direct_acks[i] and direct_acks[i] in ack_to_pan:
-            cur_p = ack_to_pan[direct_acks[i]]
-        if direct_names[i]:
-            cur_n = direct_names[i]
-        backward_pans[i] = cur_p
-        backward_names[i] = cur_n
+        if session_bounds[i]:
+            rev_pan = ""
+            rev_name = ""
+            rev_gstin = ""
 
-    # 3. Consolidate into Entity Containers
+        if direct_pans[i]: rev_pan = direct_pans[i]
+        if direct_names[i]: rev_name = direct_names[i]
+        if direct_gstins[i]: rev_gstin = direct_gstins[i]
+
+        final_pans[i] = direct_pans[i] or fwd_pans[i] or rev_pan or "UNKNOWN"
+        final_names[i] = direct_names[i] or fwd_names[i] or rev_name or "Unknown Assessee"
+        final_gstins[i] = direct_gstins[i] or fwd_gstins[i] or rev_gstin or ""
+
+    # Group into Entities
     entities = {}
     for i, e in enumerate(entries):
-        resolved_pan = forward_pans[i] or backward_pans[i] or "UNKNOWN"
-        resolved_name = direct_names[i] or forward_names[i] or backward_names[i] or "Unknown Assessee"
-        
-        e["assigned_pan"] = resolved_pan
-        e["assigned_name"] = resolved_name
-        e["assigned_ack"] = direct_acks[i] or "N/A"
+        p = final_pans[i]
+        g = final_gstins[i]
+        target_key = p if p != "UNKNOWN" else (g if g else f"UNASSIGNED_ENTRY_{i+1}")
+        resolved_name = final_names[i]
 
-        target_key = resolved_pan if resolved_pan != "UNKNOWN" else (direct_gstins[i] or resolved_name)
         if target_key not in entities:
             entities[target_key] = {
-                "pan": resolved_pan,
-                "gstin": direct_gstins[i] or "",
+                "pan": p,
+                "gstin": g,
                 "names": set(),
                 "entries": []
             }
@@ -428,25 +466,83 @@ def resolve_identities_bi_directionally(entries):
 
     return entities
 
-def classify_entries(entries):
+def classify_entries(entries, timelines=None):
     """
-    Pinpoint Multi-Layer Classifier (DOM 3-Factor + FST Multi-Event Lifecycle):
-    1. Bi-directional entity reconciliation (Forward & Backward timeline sweep).
+    Pinpoint Multi-Layer Classifier (SDC + DOM 3-Factor Lifecycle):
+    1. Bi-directional entity reconciliation.
     2. Event Pairing: Correlates Submit and e-Verify banners across taxpayer history.
-    3. Categorizes into 5 distinct lifecycle groups:
-       Cat 1: Filed & Verified Returns (Valid Ack + Confirmed Verification)
-       Cat 2: Submitted Pending e-Verification (15-digit Ack + ITR-V Generated)
-       Cat 3: Return Drafts & Active Schedules (PartA_GEN, Schedule Editing)
-       Cat 4: Taxpayer Identity Ledger (Reconciled Master PAN/GSTIN Ledger)
-       Cat 5: User Navigation Journey Trace (Step-by-Step link history)
+    3. Categorizes into 6 distinct lifecycle groups:
+       Cat 1: Filed & Verified Returns
+       Cat 2: Submitted Pending e-Verification
+       Cat 3: SDC Session Timelines & Clickstream Trace
+       Cat 4: Return Drafts & Active Schedules
+       Cat 5: Taxpayer Identity Ledger
+       Cat 6: User Navigation Journey Trace
     """
     classified = {
         "cat1": [], # Filed & Verified
         "cat2": [], # Submitted (Pending)
-        "cat3": [], # Drafts & Schedules
-        "cat4": {}, # Taxpayer Profiles (keyed by PAN/GSTIN)
-        "cat5": []  # Navigation Journeys
+        "cat3": [], # SDC Timelines
+        "cat4": [], # Drafts & Schedules
+        "cat5": {}, # Taxpayer Profiles (keyed by PAN/GSTIN)
+        "cat6": []  # Navigation Journeys
     }
+
+    # Populate Cat 3 from rawPayload.db sdc_session_timelines
+    if timelines:
+        for t in timelines:
+            sess_id = t.get("session_id", "")
+            p_name = t.get("client_name") or "Taxpayer"
+            p_pan = t.get("pan") or ""
+            p_portal = t.get("portal") or "income tax"
+            p_status = t.get("status") or "completed"
+            
+            tl_steps = t.get("timeline") or []
+            if not tl_steps:
+                classified["cat3"].append({
+                    "session_id": sess_id,
+                    "client_name": p_name,
+                    "pan": p_pan,
+                    "portal": p_portal,
+                    "session_status": p_status,
+                    "step": 1,
+                    "timestamp": t.get("start_time", ""),
+                    "action_title": "Session Recorded",
+                    "url": "Portal Session",
+                    "crosshair_id": "sdc_session",
+                    "parameters": f"Status: {p_status.upper()}"
+                })
+            else:
+                for step_obj in tl_steps:
+                    st_num = step_obj.get("step", 1)
+                    st_time = step_obj.get("time") or step_obj.get("timestamp") or t.get("start_time", "")
+                    st_title = step_obj.get("route_title") or step_obj.get("title") or "Page Navigation"
+                    st_url = step_obj.get("url") or ""
+                    st_crosshair = step_obj.get("crosshair") or step_obj.get("crosshair_id") or "sdc_navigation"
+                    
+                    # Format parameters
+                    cap = step_obj.get("capture") or {}
+                    param_parts = []
+                    if cap.get("filing_type"): param_parts.append(f"Form: {cap['filing_type']}")
+                    if cap.get("period_label"): param_parts.append(f"AY: {cap['period_label']}")
+                    if cap.get("arn") and cap["arn"] != "N/A": param_parts.append(f"Ack: {cap['arn']}")
+                    if cap.get("status"): param_parts.append(f"Status: {cap['status']}")
+                    
+                    param_str = " | ".join(param_parts) if param_parts else "-"
+                    
+                    classified["cat3"].append({
+                        "session_id": sess_id,
+                        "client_name": p_name,
+                        "pan": p_pan,
+                        "portal": p_portal,
+                        "session_status": p_status,
+                        "step": st_num,
+                        "timestamp": st_time,
+                        "action_title": st_title,
+                        "url": st_url,
+                        "crosshair_id": st_crosshair,
+                        "parameters": param_str
+                    })
 
     if not entries:
         return classified
@@ -458,9 +554,9 @@ def classify_entries(entries):
         best_name = "Unknown Assessee"
         valid_names = [n for n in entity["names"] if n and n != "Unknown Assessee" and not any(t in n.lower() for t in ("menu", "close", "help", "refresh", "button", "first name", "last name"))]
         if valid_names:
-            best_name = max(valid_names, key=len) # Longest assembled legal name
+            best_name = max(valid_names, key=len)
 
-        # Populate Cat 4: Taxpayer Ledger
+        # Populate Cat 5: Taxpayer Ledger
         forms_seen = set()
         latest_period = "AY 2026-27"
         latest_url = ""
@@ -470,7 +566,7 @@ def classify_entries(entries):
             if d["period"]: latest_period = d["period"]
             if d["url"]: latest_url = d["url"]
 
-        classified["cat4"][pan_key] = {
+        classified["cat5"][pan_key] = {
             "pan": entity["pan"],
             "gstin": entity["gstin"],
             "name": best_name,
@@ -480,7 +576,7 @@ def classify_entries(entries):
             "total_captures": len(entity["entries"])
         }
 
-        # Multi-Event Lifecycle Pass for this Taxpayer
+        # Multi-Event Lifecycle Pass
         submit_events = []
         everify_events = []
         draft_events = []
@@ -499,23 +595,22 @@ def classify_entries(entries):
             conf_lower = (d.get("confirmation_text") or "").lower()
             status_lower = (d["status"] or "").lower()
 
-            # Always add to Cat 5 Journey Trace
-            classified["cat5"].append(e_rec)
+            classified["cat6"].append(e_rec)
 
             # Signal 1: Completed & Verified Filing (Cat 1)
             is_verified = (
-                ("successfully filed" in conf_lower or "verified successfully" in conf_lower or "e-verification completed" in conf_lower or "filing-success" in url_lower)
-                or (d["arn"] != "N/A" and re.search(r"\d{7,}", str(d["arn"])) and "filed" in status_lower)
+                ("successfully filed" in conf_lower or "verified successfully" in conf_lower or "e-verification completed" in conf_lower or "filing-success" in url_lower or "view-filed-returns" in url_lower)
+                or (d["arn"] != "N/A" and re.search(r"\d{7,}", str(d["arn"])) and ("filed" in status_lower or "verified" in status_lower))
                 or (status_lower == "fil" or "gstr1/success" in url_lower or "gstr3b/summary" in url_lower)
             )
 
-            # Signal 2: Submitted Pending e-Verification (Cat 2 / ITR-V)
+            # Signal 2: Submitted Pending e-Verification (Cat 2)
             is_submitted_pending = (
                 ("fo-e-verify-later" in url_lower or "everifylater" in url_lower or "e-verify later" in conf_lower or "successfully submitted" in conf_lower or "download itr-v" in conf_lower)
                 and not any(nav in url_lower for nav in ("login", "dashboard", "select-status", "personal_information", "parta"))
             )
 
-            # Signal 3: Active Schedules, Drafts & Computations (Cat 3)
+            # Signal 3: Active Schedules & Drafts (Cat 4)
             is_draft_schedule = (
                 any(s in url_lower for s in ("personal_information", "parta", "schedule", "fo-itr", "foreturns", "select-status", "returns", "computation", "gross"))
                 or any(s in bc_lower for s in ("personal information", "part a", "select status", "schedule", "filing returns"))
@@ -529,19 +624,17 @@ def classify_entries(entries):
             elif is_draft_schedule:
                 draft_events.append(e_rec)
 
-        # Correlate Submit vs Verified
         if everify_events:
             classified["cat1"].extend(everify_events)
         elif submit_events:
             classified["cat2"].extend(submit_events)
         
-        # Drafts are retained in Cat 3 (Constraint Rule: latest capture from same page URL supersedes older snapshots)
         if draft_events:
             latest_drafts_by_page = {}
             for d_rec in draft_events:
                 p_key = (d_rec.get("url") or d_rec.get("form") or "").strip().split("?")[0].rstrip("/").lower()
                 latest_drafts_by_page[p_key] = d_rec
-            classified["cat3"].extend(latest_drafts_by_page.values())
+            classified["cat4"].extend(latest_drafts_by_page.values())
 
     return classified
 
@@ -551,19 +644,30 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
     using openpyxl.
     """
     wb = openpyxl.Workbook()
-    # Remove default sheet
     wb.remove(wb.active)
+
+    # Count unique sessions
+    sessions_seen = set()
+    completed_sessions = set()
+    abrupt_sessions = set()
+    for row in classified.get("cat3", []):
+        s_id = row.get("session_id")
+        if s_id:
+            sessions_seen.add(s_id)
+            if row.get("session_status") == "completed":
+                completed_sessions.add(s_id)
+            elif row.get("session_status") == "terminated_abruptly":
+                abrupt_sessions.add(s_id)
 
     # --- TAB 1: EXECUTIVE SUMMARY & DASHBOARD ---
     ws_summary = wb.create_sheet(title="Executive Summary")
     ws_summary.views.sheetView[0].showGridLines = True
 
-    ws_summary["A1"] = "PROJECT SERA — DOM PARSER 1 AUDIT REPORT"
+    ws_summary["A1"] = "PROJECT SERA — SDC & DOM CLASSIFIER AUDIT REPORT"
     ws_summary["A1"].font = TITLE_FONT
-    ws_summary["A2"] = f"Visual Layer DOM Tracking & Taxpayer Identity Reconciled on {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    ws_summary["A2"] = f"Visual Layer DOM Tracking, SDC Timelines & Taxpayer Reconciliations on {time.strftime('%Y-%m-%d %H:%M:%S')}"
     ws_summary["A2"].font = SUB_TITLE_FONT
 
-    # KPI Summary Cards
     ws_summary.append([]) # Row 3 blank
     ws_summary.append(["Category Metric", "Count", "Classification Description"])
     sum_hdr_row = 4
@@ -576,9 +680,10 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
     summary_rows = [
         ("1. Filed & Verified Returns", len(classified["cat1"]), "Completed filings with confirmed Ack/ARN numbers.", COLORS["cat1"]),
         ("2. Submitted (Pending Verification)", len(classified["cat2"]), "Submissions pending 30-day e-verification (ITR-V generated).", COLORS["cat2"]),
-        ("3. Active Return Drafts & Schedules", len(classified["cat3"]), "Active computation schedules, PartA_GEN, and GSTR details.", COLORS["cat3"]),
-        ("4. Reconciled Taxpayers", len(classified["cat4"]), "Unique PAN & GSTIN identity containers with resolved legal names.", COLORS["cat4"]),
-        ("5. Navigation Link Journeys", len(classified["cat5"]), "Audit trail of user page-by-page link navigation timestamps.", COLORS["cat5"]),
+        ("3. SDC Session Timelines & Steps", len(classified["cat3"]), f"Chronological clickstream trace ({len(sessions_seen)} unique sessions: {len(completed_sessions)} completed, {len(abrupt_sessions)} abrupt).", COLORS["cat3"]),
+        ("4. Active Return Drafts & Schedules", len(classified["cat4"]), "Active computation schedules, PartA_GEN, and GSTR details.", COLORS["cat4"]),
+        ("5. Reconciled Taxpayers", len(classified["cat5"]), "Unique PAN & GSTIN identity containers with resolved legal names.", COLORS["cat5"]),
+        ("6. Navigation Link Journeys", len(classified["cat6"]), "Audit trail of user page-by-page link navigation timestamps.", COLORS["cat6"]),
     ]
 
     for idx, (cat_name, count, desc, fill_c) in enumerate(summary_rows, start=5):
@@ -607,9 +712,9 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
 
     for r_idx, item in enumerate(classified["cat1"], start=2):
         ws_cat1.append([
-            item["entry_num"], item["timestamp"], item["Portal"], item["name"],
-            item["pan"], item["gstin"], item["form"], item["period"],
-            item["arn"], item["status"]
+            item.get("entry_num", ""), item.get("timestamp", ""), item.get("Portal", "Income Tax"), item.get("name", ""),
+            item.get("pan", ""), item.get("gstin", ""), item.get("form", ""), item.get("period", ""),
+            item.get("arn", "N/A"), item.get("status", "Filed & Verified")
         ])
         for c in range(1, len(headers_cat1) + 1):
             cell = ws_cat1.cell(row=r_idx, column=c)
@@ -632,19 +737,19 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
 
     for r_idx, item in enumerate(classified["cat2"], start=2):
         ws_cat2.append([
-            item["entry_num"], item["timestamp"], item["Portal"], item["name"],
-            item["pan"], item["form"], item["period"], item.get("confirmation_text") or "ITR-V Download / e-Verify Later",
-            item["url"]
+            item.get("entry_num", ""), item.get("timestamp", ""), item.get("Portal", "Income Tax"), item.get("name", ""),
+            item.get("pan", ""), item.get("form", ""), item.get("period", ""), item.get("confirmation_text") or "ITR-V Download / e-Verify Later",
+            item.get("url", "")
         ])
         for c in range(1, len(headers_cat2) + 1):
             cell = ws_cat2.cell(row=r_idx, column=c)
             cell.border = THIN_BORDER
             cell.font = Font(name="Segoe UI", size=9.5)
 
-    # --- TAB 4: ACTIVE DRAFTS & SCHEDULES (CAT 3) ---
-    ws_cat3 = wb.create_sheet(title="3. Return Drafts & Schedules")
+    # --- TAB 4: SDC SESSION TIMELINES (CAT 3) ---
+    ws_cat3 = wb.create_sheet(title="3. SDC Session Timelines")
     ws_cat3.views.sheetView[0].showGridLines = True
-    headers_cat3 = ["Entry #", "Timestamp", "Portal", "Assessee Name", "PAN", "Form", "Period", "Active Section / Breadcrumbs", "URL Route"]
+    headers_cat3 = ["Session ID", "Step #", "Timestamp", "Client Name", "PAN", "Portal", "Session Status", "Action / Route Title", "Portal URL", "Crosshair Trigger", "Captured Parameters"]
     ws_cat3.append(headers_cat3)
     for col in range(1, len(headers_cat3) + 1):
         cell = ws_cat3.cell(row=1, column=col)
@@ -654,19 +759,34 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
 
     for r_idx, item in enumerate(classified["cat3"], start=2):
         ws_cat3.append([
-            item["entry_num"], item["timestamp"], item["Portal"], item["name"],
-            item["pan"], item["form"], item["period"], item["breadcrumbs"] or "Schedule Editing",
-            item["url"]
+            item.get("session_id", ""), item.get("step", 1), item.get("timestamp", ""),
+            item.get("client_name", ""), item.get("pan", ""), item.get("portal", ""),
+            item.get("session_status", "completed").upper(), item.get("action_title", ""),
+            item.get("url", ""), item.get("crosshair_id", ""), item.get("parameters", "-")
         ])
         for c in range(1, len(headers_cat3) + 1):
             cell = ws_cat3.cell(row=r_idx, column=c)
             cell.border = THIN_BORDER
             cell.font = Font(name="Segoe UI", size=9.5)
+            if c == 1:
+                cell.font = Font(name="Consolas", size=9, bold=True, color="1A365D")
+            elif c == 7: # Session Status
+                st = item.get("session_status", "")
+                if st == "completed":
+                    cell.fill = COLORS["status_completed"]
+                    cell.font = Font(name="Segoe UI", size=9, bold=True, color="008000")
+                elif st == "terminated_abruptly":
+                    cell.fill = COLORS["status_abrupt"]
+                    cell.font = Font(name="Segoe UI", size=9, bold=True, color="C53030")
+                else:
+                    cell.fill = COLORS["status_active"]
+                    cell.font = Font(name="Segoe UI", size=9, bold=True, color="D97706")
+                cell.alignment = Alignment(horizontal="center")
 
-    # --- TAB 5: TAXPAYER IDENTITY LEDGER (CAT 4) ---
-    ws_cat4 = wb.create_sheet(title="4. Taxpayer Identity Ledger")
+    # --- TAB 5: ACTIVE DRAFTS & SCHEDULES (CAT 4) ---
+    ws_cat4 = wb.create_sheet(title="4. Return Drafts & Schedules")
     ws_cat4.views.sheetView[0].showGridLines = True
-    headers_cat4 = ["PAN", "GSTIN", "Reconciled Taxpayer Name", "Forms Observed", "Latest Period", "Total DOM Captures"]
+    headers_cat4 = ["Entry #", "Timestamp", "Portal", "Assessee Name", "PAN", "Form", "Period", "Active Section / Breadcrumbs", "URL Route"]
     ws_cat4.append(headers_cat4)
     for col in range(1, len(headers_cat4) + 1):
         cell = ws_cat4.cell(row=1, column=col)
@@ -674,14 +794,36 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    for r_idx, (k, p_obj) in enumerate(classified["cat4"].items(), start=2):
+    for r_idx, item in enumerate(classified["cat4"], start=2):
         ws_cat4.append([
+            item.get("entry_num", ""), item.get("timestamp", ""), item.get("Portal", "Income Tax"), item.get("name", ""),
+            item.get("pan", ""), item.get("form", ""), item.get("period", ""), item.get("breadcrumbs") or "Schedule Editing",
+            item.get("url", "")
+        ])
+        for c in range(1, len(headers_cat4) + 1):
+            cell = ws_cat4.cell(row=r_idx, column=c)
+            cell.border = THIN_BORDER
+            cell.font = Font(name="Segoe UI", size=9.5)
+
+    # --- TAB 6: TAXPAYER IDENTITY LEDGER (CAT 5) ---
+    ws_cat5 = wb.create_sheet(title="5. Taxpayer Identity Ledger")
+    ws_cat5.views.sheetView[0].showGridLines = True
+    headers_cat5 = ["PAN", "GSTIN", "Reconciled Taxpayer Name", "Forms Observed", "Latest Period", "Total DOM Captures"]
+    ws_cat5.append(headers_cat5)
+    for col in range(1, len(headers_cat5) + 1):
+        cell = ws_cat5.cell(row=1, column=col)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for r_idx, (k, p_obj) in enumerate(classified["cat5"].items(), start=2):
+        ws_cat5.append([
             p_obj["pan"], p_obj["gstin"], p_obj["name"],
             ", ".join(sorted(p_obj["forms_seen"])), p_obj["latest_period"],
             p_obj["total_captures"]
         ])
-        for c in range(1, len(headers_cat4) + 1):
-            cell = ws_cat4.cell(row=r_idx, column=c)
+        for c in range(1, len(headers_cat5) + 1):
+            cell = ws_cat5.cell(row=r_idx, column=c)
             cell.border = THIN_BORDER
             cell.font = Font(name="Segoe UI", size=9.5)
             if c == 1:
@@ -690,24 +832,24 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
                 cell.alignment = Alignment(horizontal="center")
                 cell.font = Font(name="Segoe UI", size=10, bold=True)
 
-    # --- TAB 6: NAVIGATION JOURNEYS (CAT 5) ---
-    ws_cat5 = wb.create_sheet(title="5. Navigation Journey Trace")
-    ws_cat5.views.sheetView[0].showGridLines = True
-    headers_cat5 = ["Entry #", "Timestamp", "Assessee Name", "PAN", "Portal Route / Breadcrumbs", "Step-by-Step Link History"]
-    ws_cat5.append(headers_cat5)
-    for col in range(1, len(headers_cat5) + 1):
-        cell = ws_cat5.cell(row=1, column=col)
+    # --- TAB 7: NAVIGATION JOURNEYS (CAT 6) ---
+    ws_cat6 = wb.create_sheet(title="6. Navigation Journey Trace")
+    ws_cat6.views.sheetView[0].showGridLines = True
+    headers_cat6 = ["Entry #", "Timestamp", "Assessee Name", "PAN", "Portal Route / Breadcrumbs", "Step-by-Step Link History"]
+    ws_cat6.append(headers_cat6)
+    for col in range(1, len(headers_cat6) + 1):
+        cell = ws_cat6.cell(row=1, column=col)
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    for r_idx, item in enumerate(classified["cat5"], start=2):
-        ws_cat5.append([
-            item["entry_num"], item["timestamp"], item["name"], item["pan"],
-            item["breadcrumbs"], item["link_history"]
+    for r_idx, item in enumerate(classified["cat6"], start=2):
+        ws_cat6.append([
+            item.get("entry_num", ""), item.get("timestamp", ""), item.get("name", ""), item.get("pan", ""),
+            item.get("breadcrumbs", ""), item.get("link_history", "")
         ])
-        for c in range(1, len(headers_cat5) + 1):
-            cell = ws_cat5.cell(row=r_idx, column=c)
+        for c in range(1, len(headers_cat6) + 1):
+            cell = ws_cat6.cell(row=r_idx, column=c)
             cell.border = THIN_BORDER
             cell.font = Font(name="Segoe UI", size=9.5)
             if c == 6:
@@ -744,8 +886,8 @@ def process_data(dump_path=None, report_path=None):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         report_path = os.path.join(base_dir, "dom_audit_report.xlsx")
     target_dump = resolve_target_dump(dump_path)
-    entries = load_data(target_dump)
-    classified = classify_entries(entries)
+    entries, timelines = load_data(target_dump)
+    classified = classify_entries(entries, timelines)
     return generate_excel_report(classified, report_path)
 
 def main():
@@ -758,32 +900,25 @@ def main():
     args = parser.parse_args()
 
     input_file = resolve_target_dump(args.input)
-    output_file = args.output
-
     print(f"=== DOM_Parser_1 (Sera Visual Layer Classifier) ===")
     print(f"Target Input:  {input_file}")
-    print(f"Output Report: {output_file}")
+    print(f"Output Report: {args.output}")
 
     if args.watch:
-        print(f"[*] Watch mode active. Polling every 2.5s for updates...")
+        print(f"[DOM_Parser_1] Watching for updates on {input_file} (Polling every 3s)...")
         last_mtime = 0
         while True:
             try:
                 if os.path.exists(input_file):
                     mtime = os.path.getmtime(input_file)
-                    if mtime > last_mtime:
+                    if mtime != last_mtime:
                         last_mtime = mtime
-                        print(f"[{time.strftime('%H:%M:%S')}] Detected dump update. Rebuilding DOM audit report...")
-                        process_data(input_file, output_file)
-                time.sleep(2.5)
-            except KeyboardInterrupt:
-                print("\n[!] Watcher stopped by user.")
-                break
+                        process_data(input_file, args.output)
             except Exception as e:
-                print(f"[!] Watcher error: {e}")
-                time.sleep(3)
+                print(f"[DOM_Parser_1] Watcher error: {e}")
+            time.sleep(3)
     else:
-        process_data(input_file, output_file)
+        process_data(input_file, args.output)
 
 if __name__ == "__main__":
     main()

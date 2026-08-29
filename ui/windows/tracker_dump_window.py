@@ -784,6 +784,12 @@ class TrackerDumpWindow(QWidget):
         btn_refresh.clicked.connect(self.load_data)
         header_layout.addWidget(btn_refresh)
 
+        btn_excel_report = QPushButton("SDC Audit Report (Excel)")
+        btn_excel_report.setProperty("class", "ActionBtn")
+        btn_excel_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
+        btn_excel_report.clicked.connect(self._open_dom_parser_report)
+        header_layout.addWidget(btn_excel_report)
+
         self.btn_preferences = QPushButton("Preferences")
         self.btn_preferences.setProperty("class", "ActionBtn")
         self.btn_preferences.setIcon(_safe_qta_icon("mdi.cog-outline", "#FFFFFF"))
