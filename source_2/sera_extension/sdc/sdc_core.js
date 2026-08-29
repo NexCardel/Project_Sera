@@ -41,29 +41,60 @@
     version: SDC_VERSION,
 
     /**
-     * SDC Session Manager
+     * SDC Session & Timeline Manager
      * Syncs memory to chrome.storage.local for cross-tab persistence with 30m TTL.
+     * Records an exclusive, unbroken timeline of every visited page on compliance portals.
      */
     session: {
       data: {},
+
+      _generateSessionId() {
+        return 'SDC-SESS-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 7).toUpperCase();
+      },
+
+      _initCleanSession(portal = 'income tax') {
+        this.data = {
+          session_id: this._generateSessionId(),
+          pan: '',
+          name: '',
+          form: '',
+          ay: '',
+          portal: portal,
+          status: 'active', // 'active' | 'completed' | 'terminated_abruptly'
+          start_time: new Date().toISOString(),
+          end_time: null,
+          timeline: [],
+          _lastStartedPan: '',
+          _ts: Date.now()
+        };
+      },
+
       async load() {
         return new Promise(resolve => {
           try {
             chrome.storage.local.get(['__SDC_SESSION__'], (res) => {
-              const sess = res.__SDC_SESSION__ || { _ts: 0 };
-              // 30 minute TTL expiry
-              if (Date.now() - sess._ts > 30 * 60 * 1000) {
-                this.data = {};
+              const sess = res.__SDC_SESSION__;
+              const now = Date.now();
+
+              if (!sess || !sess.session_id || (now - (sess._ts || 0) > 30 * 60 * 1000)) {
+                // Check if previous session was active when expiring -> retrospectively finalize as terminated
+                if (sess && sess.session_id && sess.status === 'active') {
+                  this._retrospectivelyFinalizeAbrupt(sess);
+                }
+                this._initCleanSession();
               } else {
                 this.data = sess;
+                if (!Array.isArray(this.data.timeline)) this.data.timeline = [];
               }
               resolve();
             });
           } catch (e) {
+            this._initCleanSession();
             resolve();
           }
         });
       },
+
       async save() {
         return new Promise(resolve => {
           this.data._ts = Date.now();
@@ -74,9 +105,143 @@
           }
         });
       },
+
+      // Retrospectively records "Tab terminated abruptly" on an abandoned session
+      _retrospectivelyFinalizeAbrupt(staleSession) {
+        if (!staleSession || staleSession.status !== 'active') return;
+        console.log(`⚡ Sera SDC: ⚠️ Previous session [${staleSession.session_id}] was not logged out. Retrospectively marking "Tab terminated abruptly".`);
+        
+        staleSession.status = 'terminated_abruptly';
+        staleSession.end_time = new Date().toISOString();
+        const tl = staleSession.timeline || [];
+        const lastUrl = tl.length > 0 ? tl[tl.length - 1].url : '';
+        
+        tl.push({
+          step: tl.length + 1,
+          title: "Tab terminated abruptly",
+          url: lastUrl,
+          route: "TERMINATION_EVENT",
+          timestamp: staleSession.end_time,
+          is_termination: true,
+          note: "Session abandoned, browser closed, or timeout occurred without clicking Log Out."
+        });
+
+        // Dispatch finalized timeline to Desktop App
+        _emitDual({
+          type: 'sdc_session_timeline',
+          session_id: staleSession.session_id,
+          pan: staleSession.pan || "",
+          client_name: staleSession.name || "",
+          portal: staleSession.portal || "income tax",
+          status: 'terminated_abruptly',
+          start_time: staleSession.start_time,
+          end_time: staleSession.end_time,
+          total_steps: tl.length,
+          timeline: tl,
+          timestamp: staleSession.end_time
+        });
+      },
+
+      /**
+       * Records a navigation step in the timeline regardless of crosshair matches
+       */
+      async recordStep(url, crosshairId = null, capture = null) {
+        if (!this.data.timeline) this.data.timeline = [];
+        const tl = this.data.timeline;
+
+        // Skip recording exact same URL consecutively within 1 second
+        if (tl.length > 0) {
+          const last = tl[tl.length - 1];
+          if (last.url === url && last.crosshair_id === crosshairId) {
+            // Update capture if newly resolved
+            if (capture && !last.captured_data) {
+              last.captured_data = {
+                pan: capture.pan || this.data.pan || "",
+                client_name: capture.client_name || capture.name || this.data.name || "",
+                form: capture.filing_type || this.data.form || "",
+                ay: capture.period_label || this.data.ay || "",
+                arn: capture.arn || "N/A",
+                status: capture.status || "Captured"
+              };
+              await this.save();
+              this._emitTimelineSync();
+            }
+            return;
+          }
+        }
+
+        const stepNumber = tl.length + 1;
+        const title = _formatRouteTitle(url, crosshairId);
+        const route = (url.split('#')[1] || url.split('?')[0] || '').split('?')[0];
+
+        const node = {
+          step: stepNumber,
+          title: title,
+          url: url,
+          route: route,
+          timestamp: new Date().toISOString(),
+          crosshair_id: crosshairId || null,
+          is_crosshair: Boolean(crosshairId),
+          captured_data: capture ? {
+            pan: capture.pan || this.data.pan || "",
+            client_name: capture.client_name || capture.name || this.data.name || "",
+            form: capture.filing_type || this.data.form || "",
+            ay: capture.period_label || this.data.ay || "",
+            arn: capture.arn || "N/A",
+            status: capture.status || "Captured"
+          } : null
+        };
+
+        tl.push(node);
+        await this.save();
+        this._emitTimelineSync();
+      },
+
+      /**
+       * Finalizes session on clean logout
+       */
+      async finalizeLogout(url) {
+        if (!this.data.session_id) return;
+        const tl = this.data.timeline || [];
+        const logoutTime = new Date().toISOString();
+
+        tl.push({
+          step: tl.length + 1,
+          title: "Log Out",
+          url: url,
+          route: "#/logout",
+          timestamp: logoutTime,
+          is_logout: true
+        });
+
+        this.data.status = 'completed';
+        this.data.end_time = logoutTime;
+        await this.save();
+
+        this._emitTimelineSync();
+        console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
+      },
+
+      _emitTimelineSync() {
+        if (!this.data.session_id) return;
+        _emitDual({
+          type: 'sdc_session_timeline',
+          session_id: this.data.session_id,
+          pan: this.data.pan || "",
+          client_name: this.data.name || "",
+          portal: this.data.portal || "income tax",
+          status: this.data.status || "active",
+          start_time: this.data.start_time,
+          end_time: this.data.end_time || null,
+          total_steps: (this.data.timeline || []).length,
+          timeline: this.data.timeline || [],
+          timestamp: new Date().toISOString()
+        });
+      },
+
       async clear() {
         return new Promise(resolve => {
-          this.data = {};
+          this._initCleanSession();
           try {
             chrome.storage.local.remove(['__SDC_SESSION__'], resolve);
           } catch (e) {
@@ -90,13 +255,14 @@
      * Emits a session_start ping to the desktop app
      */
     emitSessionStart(portalName, pan, name) {
-      if (!pan || !name) return;
-      console.log(`⚡ Sera SDC: 🟢 Session Start Ping [${portalName}] - ${pan} - ${name}`);
+      if (!pan) return;
+      console.log(`⚡ Sera SDC: 🟢 Session Start Ping [${portalName}] - ${pan} - ${name || 'Client'}`);
       const payload = {
         type: 'session_start',
+        session_id: this.session.data.session_id,
         portal: portalName,
         pan: pan,
-        client_name: name,
+        client_name: name || "Taxpayer",
         timestamp: new Date().toISOString()
       };
       // Send via both pipelines (HTTP + runtime)
@@ -213,6 +379,48 @@
     _onUrlChange(window.location.href);
   });
 
+  // ─── Human-Readable Route Title Formatter ──────────────────────────────────
+  function _formatRouteTitle(url, crosshairId) {
+    if (!url) return "Page Navigation";
+    const lower = url.toLowerCase();
+
+    if (crosshairId === 'itr_filed_verified' || lower.includes('e-verify-now-success') || lower.includes('return-success')) {
+      return "Filing Successful & e-Verified";
+    }
+    if (crosshairId === 'itr_submitted_pending' || lower.includes('e-verify-later') || lower.includes('complete-verification')) {
+      return "Return Submitted (Pending e-Verification)";
+    }
+    if (crosshairId === 'itr_personal_info' || lower.includes('personal_information') || lower.includes('parta_gen')) {
+      return "Personal Information";
+    }
+    if (crosshairId === 'itr_form_select' || lower.includes('select-itr-form') || lower.includes('lets-get-started')) {
+      return "Select ITR Form";
+    }
+    if (crosshairId === 'itr_dashboard' || lower.includes('dashboard') || lower.includes('home')) {
+      return "Dashboard";
+    }
+    if (crosshairId === 'itr_login' || lower.includes('login') || lower.includes('auth')) {
+      return lower.includes('logout') ? "Log Out" : "Login Screen";
+    }
+    if (lower.includes('profile')) return "Profile & Contact";
+    if (lower.includes('fileincometaxreturn') || lower.includes('file-income-tax-return')) return "e-File Income Tax Return";
+    if (lower.includes('download')) return "Download Form / Receipt";
+    if (lower.includes('challan') || lower.includes('etaxpayment')) return "e-Pay Tax / Challan";
+    if (lower.includes('26as') || lower.includes('ais')) return "View AIS / Form 26AS";
+    if (lower.includes('view-returns') || lower.includes('view-filed-returns')) return "View Filed Returns";
+
+    // Fallback: extract last hash segment nicely formatted
+    try {
+      const hashPart = url.split('#')[1] || url.split('?')[0];
+      const segments = hashPart.split('/').filter(Boolean);
+      if (segments.length > 0) {
+        const last = segments[segments.length - 1].replace(/^fo-/, '').replace(/[-_]/g, ' ');
+        return last.charAt(0).toUpperCase() + last.slice(1);
+      }
+    } catch (_) {}
+    return "Page Navigation";
+  }
+
   // ─── Dispatch: Match URL → Protocol → Crosshair → Handler ──────────────────
   async function _dispatch(url, retryCount = 0) {
     // Abort if the user has navigated away while a retry was pending
@@ -220,59 +428,73 @@
 
     const host = (window.location.hostname || '').toLowerCase();
 
+    // 1. Load shared cross-tab session data
+    await SDC.session.load();
+
+    let matchedProtocol = null;
+    let matchedCrosshair = null;
+
     for (const protocol of _protocols) {
       if (!protocol.hostMatch.test(host)) continue;
+      matchedProtocol = protocol;
 
       for (const crosshair of protocol.crosshairs) {
         if (!crosshair.pattern.test(url)) continue;
-
-        console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" (attempt #${retryCount + 1})`);
-
-        try {
-          // 1. Load shared cross-tab session data
-          await SDC.session.load();
-
-          // 2. Execute protocol handler synchronously against loaded memory
-          const capture = await crosshair.handler(url);
-
-          if (crosshair.id === 'itr_login') {
-            // Auth route: session was already wiped by handler — skip save to avoid recreating stale session
-            return;
-          }
-
-          // 3. Save any memory changes back to shared storage
-          await SDC.session.save();
-
-          // 4. Session Start Trigger: fires whenever a valid PAN is identified for a new/switched client
-          const activePan = SDC.session.data.pan;
-          const activeName = SDC.session.data.name;
-          if (activePan && activePan !== SDC.session.data._lastStartedPan) {
-            SDC.session.data._lastStartedPan = activePan;
-            await SDC.session.save();
-            SDC.emitSessionStart(protocol.name, activePan, activeName || 'Taxpayer');
-          }
-
-          if (capture) {
-            _clearPendingRetries();
-            _emitCapture(capture, protocol.name, crosshair.id);
-            return;
-          } else if (crosshair.id !== 'itr_login' && retryCount < 2) {
-            // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering
-            const delay = (retryCount + 1) * 700;
-            const timer = setTimeout(() => {
-              if (window.location.href === url) {
-                _dispatch(url, retryCount + 1);
-              }
-            }, delay);
-            _pendingRetryTimers.push(timer);
-          }
-        } catch (err) {
-          console.warn(`⚡ Sera SDC: Handler error in crosshair "${crosshair.id}":`, err);
-        }
-
-        // First matching crosshair handled
+        matchedCrosshair = crosshair;
         break;
       }
+      if (matchedCrosshair) break;
+    }
+
+    if (matchedCrosshair && matchedProtocol) {
+      console.log(`⚡ Sera SDC: Crosshair matched → [${matchedProtocol.name}] "${matchedCrosshair.id}" (attempt #${retryCount + 1})`);
+
+      try {
+        // Execute protocol handler
+        const capture = await matchedCrosshair.handler(url);
+
+        if (matchedCrosshair.id === 'itr_login') {
+          // Auth / logout route: session was finalized & wiped by handler — skip save
+          return;
+        }
+
+        // Record timeline step with capture
+        await SDC.session.recordStep(url, matchedCrosshair.id, capture);
+
+        // Save memory changes back to shared storage
+        await SDC.session.save();
+
+        // Session Start Trigger: fires whenever a valid PAN is identified for a new/switched client
+        const activePan = SDC.session.data.pan;
+        const activeName = SDC.session.data.name;
+        if (activePan && activePan !== SDC.session.data._lastStartedPan) {
+          SDC.session.data._lastStartedPan = activePan;
+          await SDC.session.save();
+          SDC.emitSessionStart(matchedProtocol.name, activePan, activeName || 'Taxpayer');
+        }
+
+        if (capture) {
+          _clearPendingRetries();
+          _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
+          return;
+        } else if (matchedCrosshair.id !== 'itr_login' && retryCount < 2) {
+          // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering
+          const delay = (retryCount + 1) * 700;
+          const timer = setTimeout(() => {
+            if (window.location.href === url) {
+              _dispatch(url, retryCount + 1);
+            }
+          }, delay);
+          _pendingRetryTimers.push(timer);
+        }
+      } catch (err) {
+        console.warn(`⚡ Sera SDC: Handler error in crosshair "${matchedCrosshair.id}":`, err);
+      }
+    } else if (matchedProtocol && retryCount === 0) {
+      // Non-crosshair navigation on compliance portal: record timeline step anyway
+      try {
+        await SDC.session.recordStep(url, null, null);
+      } catch (_) {}
     }
   }
 
@@ -282,15 +504,16 @@
     const captureMethod = `SDC_${crosshairId}`;
     const portalName = capture.portal || protocolName || "income tax";
     const clientName = capture.client_name || capture.name || capture.taxpayer_name || "";
-    const pan = capture.pan || "";
+    const pan = capture.pan || SDC.session.data.pan || "";
     const arn = capture.arn || "N/A";
-    const period = capture.period_label || "";
-    const filingType = capture.filing_type || "ITR";
+    const period = capture.period_label || SDC.session.data.ay || "";
+    const filingType = capture.filing_type || SDC.session.data.form || "ITR";
     const status = capture.status || "Submitted";
     const timestamp = new Date().toISOString();
 
     const detail = {
       type: "filing_result",
+      session_id: SDC.session.data.session_id || "",
       client_id: capture.client_id || null,
       client_name: clientName,
       name: clientName,
@@ -306,12 +529,14 @@
       url: window.location.href,
       page_key: window.location.href.split('?')[0].replace(/\/+$/, '').toLowerCase(),
       is_page_update: true,
-      site_link_history: capture.site_link_history || "",
+      site_link_history: (SDC.session.data.timeline || []).map(t => t.url).join('\n'),
+      session_timeline: SDC.session.data.timeline || [],
       dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
       confirmation_message: capture.confirmation_message || "",
       scraped_data: capture.scraped_data || null,
       raw_payload: {
         source: "Sera_SDC",
+        session_id: SDC.session.data.session_id || "",
         detection_type: captureMethod,
         client_name: clientName,
         name: clientName,
@@ -325,6 +550,7 @@
         status: status,
         url: window.location.href,
         timestamp: timestamp,
+        session_timeline: SDC.session.data.timeline || [],
         dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
         confirmation_message: capture.confirmation_message || ""
       }

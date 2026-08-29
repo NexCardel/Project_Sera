@@ -152,15 +152,64 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
 
     step_title = "Portal Activity Detected"
     category = "General"
-    icon = "mdi.web"
-    color = "#58A6FF"
-    narrative = "Activity recorded on portal."
-    chips: List[Dict[str, str]] = []
+    # =========================================================================
+    # 0. SDC Specific Nodes (Termination, Logout, Page Routes, Crosshairs)
+    # =========================================================================
+    if capture.get("is_termination") or capture.get("title") == "Tab terminated abruptly" or inner.get("is_termination"):
+        step_title = "Tab Terminated Abruptly"
+        category = "Abrupt Termination"
+        icon = "mdi.alert-octagon"
+        color = "#F85149"
+        narrative = "The portal tab was closed or the filing session abandoned without clicking Log Out."
+        chips.append({"label": "Lifecycle State", "val": "Terminated Abruptly"})
+        if url:
+            chips.append({"label": "Last Visited URL", "val": url})
+
+    elif capture.get("is_logout") or capture.get("title") == "Log Out" or "logout" in url.lower() or "signout" in url.lower():
+        step_title = "User Logged Out of Portal"
+        category = "Authentication"
+        icon = "mdi.logout-variant"
+        color = "#8B949E"
+        narrative = "User completed activities and cleanly logged out of the portal session."
+        chips.append({"label": "Session State", "val": "Completed & Logged Out"})
+
+    elif capture.get("title") and capture.get("is_crosshair") is not None:
+        raw_title = capture.get("title")
+        step_title = raw_title
+        is_cross = bool(capture.get("is_crosshair"))
+        category = "Crosshair Capture" if is_cross else "Page Navigation"
+        icon = "mdi.crosshairs-gps" if is_cross else "mdi.compass-outline"
+        color = "#4CF9B7" if is_cross else "#58A6FF"
+        
+        cap_data = capture.get("captured_data") or {}
+        if cap_data:
+            pan_val = cap_data.get("pan") or capture.get("pan")
+            name_val = cap_data.get("client_name") or capture.get("client_name")
+            form_val = cap_data.get("form") or capture.get("filing_type")
+            ay_val = cap_data.get("ay") or capture.get("period_label")
+            arn_val = cap_data.get("arn") or capture.get("arn_number")
+            
+            narrative = f"Crosshair matched '{raw_title}' on portal. Captured client parameters."
+            if name_val:
+                chips.append({"label": "Client Name", "val": str(name_val)})
+            if pan_val:
+                chips.append({"label": "PAN", "val": str(pan_val)})
+            if form_val:
+                chips.append({"label": "Form", "val": str(form_val)})
+            if ay_val:
+                chips.append({"label": "AY", "val": str(ay_val)})
+            if arn_val and arn_val != "N/A":
+                chips.append({"label": "ARN / Ack", "val": str(arn_val)})
+                color = "#39FF14"
+        else:
+            narrative = f"Navigated to portal route: {raw_title}."
+            if url:
+                chips.append({"label": "Route", "val": url})
 
     # =========================================================================
     # 1. Income Tax Portal Endpoints
     # =========================================================================
-    if "incometax" in url or "Income Tax" in portal or "iec" in url:
+    elif "incometax" in url or "Income Tax" in portal or "iec" in url:
         
         # 1.1 Login & Authentication
         if "loginapi/login" in url or "loginapi/auth/saveEntity" in url or "ActivityLogDetlFlag" in inner or "LastLogin" in inner:
@@ -673,13 +722,32 @@ def group_captures_into_sessions(captures: List[Dict[str, Any]], gap_threshold_s
                 s_id = c.get("session_id")
                 break
 
+        # Check if this session contains SDC structured timeline steps
+        sdc_timeline_steps = []
+        for c in s_caps:
+            rp = c.get("raw_payload_json") or c.get("raw_payload") or {}
+            if isinstance(rp, str):
+                try: rp = json.loads(rp)
+                except Exception: rp = {}
+            tl_candidate = c.get("timeline") or c.get("session_timeline") or (rp.get("session_timeline") if isinstance(rp, dict) else None)
+            if isinstance(tl_candidate, list) and len(tl_candidate) > len(sdc_timeline_steps):
+                sdc_timeline_steps = tl_candidate
+
         steps = []
-        for step_idx, cap in enumerate(s_caps, start=1):
-            ts = cap.get("created_at") or cap.get("timestamp") or ""
-            dt = _parse_iso_datetime(ts)
-            elapsed_sec = (dt.timestamp() - t0.timestamp()) if (dt and t0) else 0.0
-            step = decode_single_capture(cap, index=step_idx, elapsed_sec=max(elapsed_sec, 0.0))
-            steps.append(step)
+        if sdc_timeline_steps:
+            for step_idx, step_node in enumerate(sdc_timeline_steps, start=1):
+                ts = step_node.get("timestamp") or ""
+                dt = _parse_iso_datetime(ts)
+                elapsed_sec = (dt.timestamp() - t0.timestamp()) if (dt and t0) else 0.0
+                step = decode_single_capture(step_node, index=step_idx, elapsed_sec=max(elapsed_sec, 0.0))
+                steps.append(step)
+        else:
+            for step_idx, cap in enumerate(s_caps, start=1):
+                ts = cap.get("created_at") or cap.get("timestamp") or ""
+                dt = _parse_iso_datetime(ts)
+                elapsed_sec = (dt.timestamp() - t0.timestamp()) if (dt and t0) else 0.0
+                step = decode_single_capture(cap, index=step_idx, elapsed_sec=max(elapsed_sec, 0.0))
+                steps.append(step)
 
         # Collapse consecutive identical actions in this session
         collapsed_steps = collapse_consecutive_repeat_steps(steps, session_prefix=f"s{s_idx}")

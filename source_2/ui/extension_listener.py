@@ -11,6 +11,7 @@ class ExtensionListener(QThread):
     sca_error_received = Signal(dict)
     sca_fill_result_received = Signal(dict)
     session_started_received = Signal(dict)
+    sdc_timeline_received = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -104,6 +105,8 @@ class ExtensionListener(QThread):
                                 self.sca_fill_result_received.emit(msg)
                             elif mtype == 'session_start':
                                 self.session_started_received.emit(msg)
+                            elif mtype == 'sdc_session_timeline':
+                                self.sdc_timeline_received.emit(msg)
 
                             if is_http:
                                 resp = (

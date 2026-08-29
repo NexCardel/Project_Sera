@@ -452,10 +452,14 @@
     // On ANY of these routes: clear all cached session data immediately.
     // Returns null (no capture to dispatch — this is a session hygiene crosshair).
 
-    function _handleLoginLogout(url) {
+    async function _handleLoginLogout(url) {
+      const lower = (url || '').toLowerCase();
+      if (lower.includes('logout') || lower.includes('signout') || lower.includes('sign-out')) {
+        await SDC.session.finalizeLogout(url);
+      }
       _resetItrSession();
-      SDC.clearAllSessions(); // notify all protocols (extensible for GST, etc.)
-      return null; // no capture to emit — just a session wipe
+      await SDC.clearAllSessions(); // notify all protocols (extensible for GST, etc.)
+      return null; // no capture to emit — session wipe
     }
 
     // ─── CROSSHAIR 5: Dashboard Post-Login Identity Capture ────────────────

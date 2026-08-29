@@ -346,6 +346,7 @@ class SeraApp:
         self.ext_listener.filing_result_received.connect(self._handle_extension_result)
         self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
         self.ext_listener.session_started_received.connect(self._handle_session_started)
+        self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.ext_listener.start()
 
@@ -591,6 +592,14 @@ class SeraApp:
                 QSystemTrayIcon.Information, 
                 3000
             )
+
+    def _handle_sdc_timeline(self, msg: dict):
+        """Persists SDC session timeline updates from browser into SQLite database."""
+        try:
+            res = self.db.upsert_sdc_session_timeline(msg)
+            print(f"[main._handle_sdc_timeline] Timeline synced for session {msg.get('session_id')}: {res}")
+        except Exception as e:
+            print(f"[main._handle_sdc_timeline Error] {e}")
 
     def _get_master_password(self) -> str:
         key_file = APP_DIR / "sera.key"

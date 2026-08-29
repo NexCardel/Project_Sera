@@ -523,6 +523,25 @@ class PayloadInspectorDialog(QDialog):
             except Exception:
                 captures = []
 
+        # Also merge any dedicated SDC session timelines for this client/PAN
+        if self.db and hasattr(self.db, "get_sdc_session_timelines"):
+            try:
+                sdc_tls = self.db.get_sdc_session_timelines(client_id=item_data.get("client_id"), pan=item_data.get("pan"))
+                for st in sdc_tls:
+                    captures.append({
+                        "session_id": st.get("session_id"),
+                        "client_id": st.get("client_id"),
+                        "pan": st.get("pan"),
+                        "client_name": st.get("client_name"),
+                        "portal": st.get("portal"),
+                        "status": st.get("status"),
+                        "timestamp": st.get("start_time"),
+                        "created_at": st.get("start_time"),
+                        "timeline": st.get("timeline")
+                    })
+            except Exception:
+                pass
+
         if not captures:
             captures = [item_data]
 
