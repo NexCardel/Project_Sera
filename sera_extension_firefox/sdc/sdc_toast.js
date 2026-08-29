@@ -76,7 +76,7 @@
         max-width: calc(100vw - 32px);
         background: #161B22;
         border-radius: 6px;
-        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         padding: 7px 10px;
         color: #F0F6FC;
         opacity: 0;
