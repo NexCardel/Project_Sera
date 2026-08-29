@@ -169,69 +169,33 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
   });
 }
 
-// SAD & DOM Tracker & SDC: Inject scripts with strict setting gates
+// SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
 function injectSAD(tabId, reason) {
-  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled', 'legacyDomEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
-    const sadEnabled = data.sadEnabled !== false && trackerEnabled;
     const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-    // SDC is the primary DOM engine (active by default when FST is enabled)
-    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled && (data.legacyDomEnabled !== true);
-    // Legacy DOM tracker (tracker.js) ONLY runs if explicitly requested and SDC is OFF
-    const legacyTrackerEnabled = (data.legacyDomEnabled === true || (!sdcEnabled && fstEnabled));
+    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
 
-    if (!sadEnabled && !fstEnabled && !sdcEnabled) {
-      console.log(`Sera SAD/DOM: Injections disabled by settings (tracker=${trackerEnabled}, sad=${sadEnabled}, fst=${fstEnabled}, sdc=${sdcEnabled}). Skipping tab ${tabId}.`);
-      return;
+    if (!trackerEnabled || !sdcEnabled) {
+      return; // All visual and DOM scanning disabled
     }
 
-    console.log(`Sera SAD: injectSAD called for tab ${tabId} | reason: ${reason} | SAD: ${sadEnabled}, SDC (Exclusive): ${sdcEnabled}, Legacy DOM: ${legacyTrackerEnabled && !sdcEnabled}`);
-    
-    // 1. Inject API Net Interceptor into MAIN world if SAD is enabled
-    if (sadEnabled) {
-      chrome.scripting.executeScript({
-        target: { tabId: tabId, allFrames: true },
-        files: ['content_scripts/net_interceptor.js'],
-        world: 'MAIN'
-      }).then(() => {
-        console.log('Sera SAD: ✅ injected net_interceptor into tab', tabId);
-      }).catch(err => {
-        console.log('Sera SAD: ❌ inject net_interceptor failed for tab', tabId, ':', err.message);
-      });
-    }
+    console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
 
-    // 2. Inject Filing Detector (toast notifier engine)
-    const contentFiles = ['content_scripts/filing_detector.js'];
-    // Strict Mutual Exclusion: Only inject legacy tracker.js if SDC is NOT active
-    if (legacyTrackerEnabled && !sdcEnabled) {
-      contentFiles.push('tracker.js');
-    }
+    // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
+    const sdcFiles = [
+      'sdc/sdc_core.js',
+      'sdc/protocols/itr_protocol.js',
+      'sdc/protocols/gst_protocol.js',
+      'sdc/protocols/traces_protocol.js',
+      'sdc/protocols/mca_protocol.js'
+    ];
+
     chrome.scripting.executeScript({
-      target: { tabId: tabId, allFrames: true },
-      files: contentFiles
-    }).then(() => {
-      console.log('Sera Base Content: ✅ injected', contentFiles.join(', '), 'into tab', tabId);
-
-      // 3. Inject SDC (Route-Gated Crosshair Engine) — strictly exclusive to legacy tracker
-      if (sdcEnabled) {
-        const sdcFiles = [
-          'sdc/sdc_core.js',
-          'sdc/protocols/itr_protocol.js',
-          'sdc/protocols/gst_protocol.js',
-          'sdc/protocols/traces_protocol.js',
-          'sdc/protocols/mca_protocol.js'
-        ];
-        chrome.scripting.executeScript({
-          target: { tabId: tabId, allFrames: false }, // top frame only for SDC
-          files: sdcFiles
-        }).then(() => {
-          console.log('Sera SDC: ✅ injected SDC core + protocols exclusively into tab', tabId);
-        }).catch(err => {
-          console.log('Sera SDC: ❌ inject SDC failed for tab', tabId, ':', err.message);
-        });
-      }
+      target: { tabId: tabId, allFrames: false }, // top frame only for SDC
+      files: sdcFiles
     }).catch(err => {
-      console.log('Sera Base Content: ❌ inject content scripts failed for tab', tabId, ':', err.message);
+      // Ignored for non-matching or restricted URLs
     });
   });
 }

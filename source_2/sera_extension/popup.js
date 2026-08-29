@@ -1,9 +1,7 @@
 // popup.js - Project Sera Extension Companion Toolbar UI Logic
 
 document.addEventListener('DOMContentLoaded', () => {
-  const toggleSad = document.getElementById('toggle-sad');
   const toggleFst = document.getElementById('toggle-fst');
-  const toggleNotif = document.getElementById('toggle-notif');
   const toggleSca = document.getElementById('toggle-sca');
   const statusDot = document.getElementById('status-dot');
   const statusLabel = document.getElementById('status-label');
@@ -25,23 +23,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadSettings() {
     chrome.storage.local.get([
       'trackerEnabled',
-      'sadEnabled',
       'fstEnabled',
-      'sadBrowserNotifEnabled',
+      'sdcEnabled',
       'scaEnabled',
       'manualAssistPayload',
       'mecpPayload'
     ], (data) => {
       const tracker = data.trackerEnabled !== false;
-      const sad = data.sadEnabled !== false && tracker;
       const fst = data.fstEnabled !== false && tracker;
-      const notif = data.sadBrowserNotifEnabled !== false;
       const sca = data.scaEnabled !== false;
 
-      toggleSad.checked = sad;
-      toggleFst.checked = fst;
-      toggleNotif.checked = notif;
-      toggleSca.checked = sca;
+      if (toggleFst) toggleFst.checked = fst;
+      if (toggleSca) toggleSca.checked = sca;
 
       // Update manual assist button status
       const hasPendingAssist = (data.manualAssistPayload && data.manualAssistPayload.expiresAt > Date.now()) ||
@@ -82,17 +75,15 @@ document.addEventListener('DOMContentLoaded', () => {
     syncStatus.textContent = 'Saving...';
     syncStatus.style.color = '#f59e0b';
 
-    const sadVal = toggleSad.checked;
-    const fstVal = toggleFst.checked;
-    const notifVal = toggleNotif.checked;
-    const scaVal = toggleSca.checked;
-    const overallTracker = sadVal || fstVal;
+    const fstVal = toggleFst ? toggleFst.checked : true;
+    const scaVal = toggleSca ? toggleSca.checked : true;
 
     const storageUpdate = {
-      sadEnabled: sadVal,
+      sadEnabled: false, // Permanently purged
       fstEnabled: fstVal,
-      trackerEnabled: overallTracker,
-      sadBrowserNotifEnabled: notifVal,
+      sdcEnabled: fstVal,
+      trackerEnabled: fstVal,
+      sadBrowserNotifEnabled: false,
       scaEnabled: scaVal
     };
 
@@ -105,14 +96,17 @@ document.addEventListener('DOMContentLoaded', () => {
         type: 'SETTINGS_CHANGED_FROM_POPUP',
         settings: storageUpdate
       });
+
+      setTimeout(() => {
+        syncStatus.textContent = 'Saved';
+        syncStatus.style.color = '#6b7280';
+      }, 1500);
     });
   }
 
   // Attach toggle change listeners
-  toggleSad.addEventListener('change', () => saveSettings('sadEnabled'));
-  toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
-  toggleNotif.addEventListener('change', () => saveSettings('sadBrowserNotifEnabled'));
-  toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
+  if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
+  if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
 
   // Reconnect button
   btnReconnect.addEventListener('click', () => {
