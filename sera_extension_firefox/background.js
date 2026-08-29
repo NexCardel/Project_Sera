@@ -127,19 +127,42 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Broadcast changes to open tabs whenever settings change in storage
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  if (changes.sadEnabled || changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
+    chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+      const trackerEnabled = data.trackerEnabled !== false;
+      const sadEnabled = data.sadEnabled !== false && trackerEnabled;
+      const fstEnabled = data.fstEnabled !== false && trackerEnabled;
+      broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled);
+    });
+  }
+});
+
 ensureConnected();
 
 console.log('Sera SAD: background.js module loaded, registering listeners.');
 
-// Helper to broadcast tracker state changes to open tabs
-function broadcastTrackerState(enabled) {
+// Helper to broadcast tracker & SAD state changes to open tabs
+function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
+  const tOn = trackerEnabled !== false;
+  const sOn = (sadEnabled !== undefined ? (sadEnabled !== false) : tOn) && tOn;
+  const fOn = (fstEnabled !== undefined ? (fstEnabled !== false) : tOn) && tOn;
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
       if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
       try {
         chrome.tabs.sendMessage(tab.id, {
           type: "SERA_TRACKER_STATE_CHANGED",
-          trackerEnabled: enabled
+          trackerEnabled: tOn,
+          sadEnabled: sOn,
+          fstEnabled: fOn
+        }).catch(() => {});
+        chrome.tabs.sendMessage(tab.id, {
+          type: "SERA_SAD_STATE_CHANGED",
+          sadEnabled: sOn,
+          trackerEnabled: tOn
         }).catch(() => {});
       } catch (_) {}
     }

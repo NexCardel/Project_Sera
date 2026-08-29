@@ -43,6 +43,16 @@
         return;
     }
 
+    // Live Runtime Killswitch state (defaults to true on initial injection, toggleable via postMessage)
+    window.__SERA_SAD_ENABLED__ = window.__SERA_SAD_ENABLED__ !== false;
+
+    window.addEventListener('message', (event) => {
+        if (event && event.data && event.data.type === 'SERA_SAD_KILLSWITCH') {
+            window.__SERA_SAD_ENABLED__ = Boolean(event.data.enabled);
+            console.log(`⚡ Sera SAD: Interceptor live state updated -> enabled=${window.__SERA_SAD_ENABLED__}`);
+        }
+    });
+
     console.log(`⚡ Sera SAD (API Detector v${SAD_VERSION}): Scoped interceptor active for portal domain [${currentHost}].`);
 
     // Session cache to prevent duplicate events for the same Ack/ARN within a session
@@ -661,15 +671,21 @@
 
     // Helper: Safely inspect JSON object or array for filing confirmations
     function inspectPayload(url, jsonObj) {
+        if (window.__SERA_SAD_ENABLED__ === false) return;
         if (!jsonObj || typeof jsonObj !== 'object') return;
-
         try {
             const host = window.location.hostname.toLowerCase();
-            let globalPan = findValueDeep(jsonObj, [
-                "entityNum", "entity_num", "entityId", "entity_id", "loggedInUserId", "userId",
-                "submitUserId", "userPan", "taxpayerId", "clientPan", "pan", "panNumber", "panNo",
-                "loginId", "createdByUser", "updatedByUser", "gstin"
-            ]) || "";
+
+            // Ignore internal browser extension / telemetry endpoints
+            if (url.includes("google-analytics") || url.includes("dynatrace") || url.includes("telemetry")) {
+                return;
+            }
+
+            // Extract context PAN if present at root level
+            let globalPan = findValueDeep(jsonObj, ["pan", "panNumber", "entityPan", "userPan", "taxpayerPan", "loggedInPan", "entityNum"]);
+            if (!globalPan && jsonObj.userId && /^[A-Z]{5}[0-9]{4}[A-Z]$/i.test(jsonObj.userId)) {
+                globalPan = jsonObj.userId.toUpperCase();
+            }
 
             if (!globalPan) {
                 try {
@@ -686,8 +702,6 @@
                     if (m) globalPan = m[1];
                 } catch (_) {}
             }
-
-            console.log("🔍 Sera SAD Inspecting API Response:", url, "Keys:", Object.keys(jsonObj), "Global PAN:", globalPan);
 
             // If response is a single monolithic computational ITR schema or file download, inspect root object directly
             const isMonolithicItr = Boolean(

@@ -44,20 +44,19 @@
                 const toast = document.createElement('div');
                 Object.assign(toast.style, {
                     position: 'relative',
-                    background: 'rgba(10, 17, 24, 0.95)',
+                    background: '#0D1117',
                     color: '#F0F6FC',
-                    border: '1px solid rgba(46, 213, 115, 0.3)',
+                    border: '1px solid #30363D',
                     borderLeft: '3px solid #2ED573',
                     borderRadius: '6px',
-                    boxShadow: '0 6px 20px rgba(0, 0, 0, 0.45), 0 0 10px rgba(46, 213, 115, 0.12)',
-                    backdropFilter: 'blur(8px)',
-                    padding: '5px 9px 7px 9px',
+                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.65)',
+                    padding: '6px 10px 8px 10px',
                     fontSize: '11px',
                     lineHeight: '1.35',
                     pointerEvents: 'auto',
                     transform: 'translateX(-115%)',
                     opacity: '0',
-                    transition: 'transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease, max-height 0.22s ease, margin 0.22s ease, padding 0.22s ease',
+                    transition: 'transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, max-height 0.2s ease',
                     boxSizing: 'border-box',
                     overflow: 'hidden'
                 });
@@ -178,6 +177,10 @@
 
         try {
             chrome.storage.local.get(['sadBrowserNotifEnabled', 'sad_browser_notif_enabled', 'activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled', 'allowedDomains'], (data) => {
+                if (data && (data.sadEnabled === false || data.trackerEnabled === false)) {
+                    return; // SAD is disabled
+                }
+
                 // Check if in-browser toast notification is enabled
                 let showToast = true;
                 if (data) {
@@ -192,9 +195,7 @@
                 }
 
                 if (chrome.runtime.lastError || !chrome.runtime || !chrome.runtime.id) return;
-                if (data && (data.trackerEnabled === false)) {
-                    return;
-                }
+                
                 // Verify host is in allowed service domains if configured
                 const currentHost = window.location.hostname.toLowerCase();
                 const allowed = data && data.allowedDomains;
@@ -241,4 +242,14 @@
             console.warn("Sera Filing Detector: Extension context error:", e);
         }
     });
+
+    // Listen for live toggle changes from background worker and forward killswitch to main world
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((msg) => {
+            if (msg.type === "SERA_SAD_STATE_CHANGED" || msg.type === "SERA_TRACKER_STATE_CHANGED") {
+                const isEnabled = msg.sadEnabled !== false && msg.trackerEnabled !== false;
+                window.postMessage({ type: 'SERA_SAD_KILLSWITCH', enabled: isEnabled }, '*');
+            }
+        });
+    }
 })();

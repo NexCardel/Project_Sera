@@ -362,16 +362,9 @@
       }
     } catch (err) {}
 
-    // 3. Dispatch event for page-level scripts / test harness
+    // 3. Dispatch event for page-level test harness
     try {
-      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));
-    } catch (_) {}
-
-    // 4. Show left-side toast notification
-    try {
-      if (window.__SERA_TOAST_NOTIFIER__ && typeof window.__SERA_TOAST_NOTIFIER__.notify === 'function') {
-        window.__SERA_TOAST_NOTIFIER__.notify(payload);
-      }
+      window.dispatchEvent(new CustomEvent('SeraSDCApiCapture', { detail: payload }));
     } catch (_) {}
   }
 
