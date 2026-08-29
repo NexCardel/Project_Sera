@@ -361,6 +361,14 @@
     }
   };
 
+  function _startDismissTimer(ms) {
+    if (ms <= 0 || _isPaused) return;
+    if (_dismissTimer) clearTimeout(_dismissTimer);
+    _dismissTimer = setTimeout(() => {
+      if (!_isPaused) SDCToast.dismiss();
+    }, ms);
+  }
+
   // Expose globally to SDC engine
   window.SDCToast = SDCToast;
 })();
