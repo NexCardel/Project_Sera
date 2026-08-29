@@ -599,14 +599,20 @@ def classify_entries(entries, timelines=None):
 
             # Signal 1: Completed & Verified Filing (Cat 1)
             is_verified = (
-                ("successfully filed" in conf_lower or "verified successfully" in conf_lower or "e-verification completed" in conf_lower or "filing-success" in url_lower or "view-filed-returns" in url_lower)
+                ("successfully filed" in conf_lower or "verified successfully" in conf_lower or "e-verification completed" in conf_lower 
+                 or "filing-success" in url_lower or "view-filed-returns" in url_lower or "fo-e-verify-now-success" in url_lower or "fo-return-success" in url_lower)
+                or (status_lower in ("filed & verified", "filed and verified", "e-verified", "filed & verified (portal confirmed)", "fil"))
                 or (d["arn"] != "N/A" and re.search(r"\d{7,}", str(d["arn"])) and ("filed" in status_lower or "verified" in status_lower))
-                or (status_lower == "fil" or "gstr1/success" in url_lower or "gstr3b/summary" in url_lower)
+                or ("gstr1/success" in url_lower or "gstr3b/summary" in url_lower)
             )
 
             # Signal 2: Submitted Pending e-Verification (Cat 2)
             is_submitted_pending = (
-                ("fo-e-verify-later" in url_lower or "everifylater" in url_lower or "e-verify later" in conf_lower or "successfully submitted" in conf_lower or "download itr-v" in conf_lower)
+                not is_verified and (
+                    ("fo-e-verify-later" in url_lower or "everifylater" in url_lower or "e-verify later" in conf_lower 
+                     or "successfully submitted" in conf_lower or "download itr-v" in conf_lower or "complete-verification" in url_lower)
+                    or ("submitted (pending" in status_lower or "pending e-verification" in status_lower)
+                )
                 and not any(nav in url_lower for nav in ("login", "dashboard", "select-status", "personal_information", "parta"))
             )
 
@@ -678,8 +684,8 @@ def generate_excel_report(classified, output_path="dom_audit_report.xlsx"):
         cell.alignment = Alignment(horizontal="left" if col != 2 else "center", vertical="center")
 
     summary_rows = [
-        ("1. Filed & Verified Returns", len(classified["cat1"]), "Completed filings with confirmed Ack/ARN numbers.", COLORS["cat1"]),
-        ("2. Submitted (Pending Verification)", len(classified["cat2"]), "Submissions pending 30-day e-verification (ITR-V generated).", COLORS["cat2"]),
+        ("1. Filed & Verified Returns", len(classified["cat1"]), "Completed & e-verified returns (confirmed via route, success banner, or Ack).", COLORS["cat1"]),
+        ("2. Submitted (Pending Verification)", len(classified["cat2"]), "Submissions pending 30-day e-verification (ITR-V / e-Verify Later route).", COLORS["cat2"]),
         ("3. SDC Session Timelines & Steps", len(classified["cat3"]), f"Chronological clickstream trace ({len(sessions_seen)} unique sessions: {len(completed_sessions)} completed, {len(abrupt_sessions)} abrupt).", COLORS["cat3"]),
         ("4. Active Return Drafts & Schedules", len(classified["cat4"]), "Active computation schedules, PartA_GEN, and GSTR details.", COLORS["cat4"]),
         ("5. Reconciled Taxpayers", len(classified["cat5"]), "Unique PAN & GSTIN identity containers with resolved legal names.", COLORS["cat5"]),
