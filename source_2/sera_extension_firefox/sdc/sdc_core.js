@@ -41,6 +41,69 @@
     version: SDC_VERSION,
 
     /**
+     * SDC Session Manager
+     * Syncs memory to chrome.storage.local for cross-tab persistence with 30m TTL.
+     */
+    session: {
+      data: {},
+      async load() {
+        return new Promise(resolve => {
+          try {
+            chrome.storage.local.get(['__SDC_SESSION__'], (res) => {
+              const sess = res.__SDC_SESSION__ || { _ts: 0 };
+              // 30 minute TTL expiry
+              if (Date.now() - sess._ts > 30 * 60 * 1000) {
+                this.data = {};
+              } else {
+                this.data = sess;
+              }
+              resolve();
+            });
+          } catch (e) {
+            resolve();
+          }
+        });
+      },
+      async save() {
+        return new Promise(resolve => {
+          this.data._ts = Date.now();
+          try {
+            chrome.storage.local.set({ __SDC_SESSION__: this.data }, resolve);
+          } catch (e) {
+            resolve();
+          }
+        });
+      },
+      async clear() {
+        return new Promise(resolve => {
+          this.data = {};
+          try {
+            chrome.storage.local.remove(['__SDC_SESSION__'], resolve);
+          } catch (e) {
+            resolve();
+          }
+        });
+      }
+    },
+
+    /**
+     * Emits a session_start ping to the desktop app
+     */
+    emitSessionStart(portalName, pan, name) {
+      if (!pan || !name) return;
+      console.log(`⚡ Sera SDC: 🟢 Session Start Ping [${portalName}] - ${pan} - ${name}`);
+      const payload = {
+        type: 'session_start',
+        portal: portalName,
+        pan: pan,
+        client_name: name,
+        timestamp: new Date().toISOString()
+      };
+      // Send via both pipelines (HTTP + runtime)
+      _emitDual(payload);
+    },
+
+    /**
      * register(protocol)
      * protocol = {
      *   name:       string           (e.g. "ITR Portal")
@@ -71,9 +134,10 @@
      * Wipes all protocol session caches and resets the last-scanned URL so
      * the next page gets a fresh scan. Called automatically on login/logout.
      */
-    clearAllSessions() {
+    async clearAllSessions() {
       console.log('⚡ Sera SDC: 🔄 New login detected — clearing all protocol session caches.');
       _lastScannedUrl = ''; // force re-scan on the next route
+      await this.session.clear();
       for (const fn of _sessionClearCallbacks) {
         try { fn(); } catch (_) {}
       }
@@ -165,7 +229,22 @@
         console.log(`⚡ Sera SDC: Crosshair matched → [${protocol.name}] "${crosshair.id}" (attempt #${retryCount + 1})`);
 
         try {
+          // 1. Load shared cross-tab session data
+          await SDC.session.load();
+
+          // 2. Execute protocol handler synchronously against loaded memory
           const capture = await crosshair.handler(url);
+
+          // 3. Save any memory changes back to shared storage
+          await SDC.session.save();
+
+          // 4. Session Start Ping (if this is the first time we learned their identity)
+          if (SDC.session.data.pan && SDC.session.data.name && !SDC.session.data._startedPingSent) {
+            SDC.session.data._startedPingSent = true;
+            await SDC.session.save();
+            SDC.emitSessionStart(protocol.name, SDC.session.data.pan, SDC.session.data.name);
+          }
+
           if (capture) {
             _clearPendingRetries();
             _emitCapture(capture, protocol.name, crosshair.id);
@@ -245,11 +324,15 @@
     };
 
     console.log(`⚡ Sera SDC CAPTURE [${crosshairId}]:`, JSON.stringify(detail).substring(0, 300));
+    _emitDual(detail);
+  }
 
+  // ─── Dual Dispatch Pipeline ──────────────────────────────────────────────────
+  function _emitDual(payload) {
     // 1. Chrome Extension Runtime Dispatch (via Service Worker -> Native Host)
     try {
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage(detail, () => {
+        chrome.runtime.sendMessage(payload, () => {
           if (chrome.runtime && chrome.runtime.lastError) {
             // Ignored - background worker might be handling it
           }
@@ -265,20 +348,22 @@
         fetch('http://127.0.0.1:49152', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(detail)
+          body: JSON.stringify(payload),
+          mode: 'cors',
+          credentials: 'omit'
         }).catch(() => {});
       }
-    } catch (_) {}
+    } catch (err) {}
 
     // 3. Dispatch event for page-level scripts / test harness
     try {
-      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail }));
+      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));
     } catch (_) {}
 
     // 4. Show left-side toast notification
     try {
       if (window.__SERA_TOAST_NOTIFIER__ && typeof window.__SERA_TOAST_NOTIFIER__.notify === 'function') {
-        window.__SERA_TOAST_NOTIFIER__.notify(detail);
+        window.__SERA_TOAST_NOTIFIER__.notify(payload);
       }
     } catch (_) {}
   }

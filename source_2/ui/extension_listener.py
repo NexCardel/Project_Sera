@@ -7,6 +7,10 @@ IPC_PORT = 49152
 class ExtensionListener(QThread):
     filing_result_received = Signal(dict)
     uncertain_result_received = Signal(dict)
+    sca_state_received = Signal(dict)
+    sca_error_received = Signal(dict)
+    sca_fill_result_received = Signal(dict)
+    session_started_received = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,8 +97,13 @@ class ExtensionListener(QThread):
                                     import automation
                                     automation.register_ack(cmd_id)
                             elif mtype == 'SCA_STATE':
-                                # Phase 1: We receive state, we can log it for now
-                                print(f"SCA State Sync: {msg.get('arm', {}).get('state')} - client {msg.get('arm', {}).get('client_id')}")
+                                self.sca_state_received.emit(msg)
+                            elif mtype == 'SCA_ERROR':
+                                self.sca_error_received.emit(msg)
+                            elif mtype == 'SCA_FILL_RESULT':
+                                self.sca_fill_result_received.emit(msg)
+                            elif mtype == 'session_start':
+                                self.session_started_received.emit(msg)
 
                             if is_http:
                                 resp = (

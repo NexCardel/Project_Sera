@@ -345,6 +345,7 @@ class SeraApp:
         self.ext_listener = ExtensionListener(self.app)
         self.ext_listener.filing_result_received.connect(self._handle_extension_result)
         self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
+        self.ext_listener.session_started_received.connect(self._handle_session_started)
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.ext_listener.start()
 
@@ -576,6 +577,20 @@ class SeraApp:
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
+
+    def _handle_session_started(self, msg: dict):
+        """Displays a toast notification when a new client session starts."""
+        portal = msg.get("portal", "Income Tax").upper()
+        pan = msg.get("pan", "")
+        name = msg.get("client_name", "")
+        
+        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(
+                "Sera SDC Tracking Active", 
+                f"Live tracking started for {name} ({pan}) on {portal}.", 
+                QSystemTrayIcon.Information, 
+                3000
+            )
 
     def _get_master_password(self) -> str:
         key_file = APP_DIR / "sera.key"

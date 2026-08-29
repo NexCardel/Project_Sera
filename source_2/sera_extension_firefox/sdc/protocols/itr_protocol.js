@@ -39,15 +39,8 @@
 
     const u = SDC.utils;
 
-    // ─── Session Identity Cache (per page-load) ──────────────────────────────
-    // Persists PAN + Name discovered on personal_info so later crosshairs can use them.
-    const session = window.__SDC_ITR_SESSION__ = window.__SDC_ITR_SESSION__ || {
-      pan: '',
-      name: '',
-      form: '',
-      ay: ''
-    };
-
+    // ─── Session Identity Cache (cross-tab via sdc_core.js) ──────────────────
+    const getSession = () => SDC.session.data;
     // ─── Shared: Name Extraction (3-Tier) ───────────────────────────────────
 
     function _extractName() {
@@ -115,7 +108,7 @@
         }
       } catch (_) {}
 
-      return session.name || '';
+      return getSession().name || '';
     }
 
     // ─── Shared: PAN Extraction ──────────────────────────────────────────────
@@ -140,14 +133,14 @@
         if (u.isValidPan(m[1])) return m[1];
       }
 
-      return session.pan || '';
+      return getSession().pan || '';
     }
 
     // ─── Shared: AY + Form from Context ─────────────────────────────────────
 
     function _extractAyAndForm(url) {
-      const ay = u.extractAY(url) || session.ay || '';
-      const form = u.extractItrForm(url, u.getPageText()) || session.form || '';
+      const ay = u.extractAY(url) || getSession().ay || '';
+      const form = u.extractItrForm(url, u.getPageText()) || getSession().form || '';
       return { ay, form };
     }
 
@@ -175,7 +168,7 @@
     // ─── One-shot form-value watcher (for Angular lazy-render) ───────────────
     // Called when T1 returns nothing on personal_information because the API
     // hasn't pre-filled the form fields yet. Watches for value to appear,
-    // updates session.name, then self-destructs.
+    // updates getSession().name, then self-destructs.
 
     function _watchForFormValues(url) {
       // Only run once per page visit
@@ -200,13 +193,13 @@
 
           // Re-run full name extraction now that fields are populated
           const fullName = _extractName();
-          const pan = session.pan || _extractPan();
+          const pan = getSession().pan || _extractPan();
 
           if (fullName) {
-            session.name = fullName;
+            getSession().name = fullName;
             console.log(`⚡ Sera SDC [itr_personal_info]: ✅ Lazy-render name resolved → "${fullName}"`);
           }
-          if (pan && !session.pan) session.pan = pan;
+          if (pan && !getSession().pan) getSession().pan = pan;
           return;
         }
 
@@ -251,10 +244,10 @@
       }
 
       // Update session cache with whatever we have now (watcher will upgrade name later)
-      if (pan) session.pan = pan;
-      if (name) session.name = name;
-      if (ay) session.ay = ay;
-      if (form) session.form = form;
+      if (pan) getSession().pan = pan;
+      if (name) getSession().name = name;
+      if (ay) getSession().ay = ay;
+      if (form) getSession().form = form;
 
       if (!pan && !name) {
         console.log('Sera SDC [itr_personal_info]: No PAN or name found yet. Skipping dispatch (watcher active).');
@@ -285,11 +278,11 @@
       if (!_isItrContext(url)) return null;
 
       const { ay, form } = _extractAyAndForm(url);
-      if (form) session.form = form;
-      if (ay) session.ay = ay;
+      if (form) getSession().form = form;
+      if (ay) getSession().ay = ay;
 
-      const pan = session.pan || _extractPan();
-      const name = session.name || _extractName();
+      const pan = getSession().pan || _extractPan();
+      const name = getSession().name || _extractName();
 
       if (!form) return null; // Nothing interesting yet
 
@@ -335,13 +328,13 @@
       // Extract 15-digit ACK
       const ack = u.extractAck15(pageText) || 'N/A';
 
-      const pan = session.pan || _extractPan();
-      const name = session.name || _extractName();
+      const pan = getSession().pan || _extractPan();
+      const name = getSession().name || _extractName();
       const { ay, form } = _extractAyAndForm(url);
 
       // Update session
-      if (pan) session.pan = pan;
-      if (name) session.name = name;
+      if (pan) getSession().pan = pan;
+      if (name) getSession().name = name;
 
       const msg = _extractBannerText(
         'successfully filed and verified',
@@ -392,12 +385,12 @@
       if (lower.includes('successfully filed and verified')) return null;
 
       const ack = u.extractAck15(pageText) || 'N/A';
-      const pan = session.pan || _extractPan();
-      const name = session.name || _extractName();
+      const pan = getSession().pan || _extractPan();
+      const name = getSession().name || _extractName();
       const { ay, form } = _extractAyAndForm(url);
 
-      if (pan) session.pan = pan;
-      if (name) session.name = name;
+      if (pan) getSession().pan = pan;
+      if (name) getSession().name = name;
 
       const msg = _extractBannerText(
         'successfully submitted your return',
@@ -443,12 +436,12 @@
     // from a previous client does not bleed into the next session.
 
     function _resetItrSession() {
-      session.pan  = '';
-      session.name = '';
-      session.form = '';
-      session.ay   = '';
+      getSession().pan  = '';
+      getSession().name = '';
+      getSession().form = '';
+      getSession().ay   = '';
       // Also clear the global window object so no stale carry-forward exists
-      window.__SDC_ITR_SESSION__ = session;
+      
       console.log('⚡ Sera SDC [ITR]: 🧹 Session cleared — ready for new client.');
     }
 
