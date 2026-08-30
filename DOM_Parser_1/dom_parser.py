@@ -412,6 +412,14 @@ def resolve_identities_bi_directionally(entries):
             curr_name = ""
             curr_gstin = ""
 
+        # Check for hard identity switches
+        if direct_pans[i] and curr_pan and direct_pans[i] != curr_pan:
+            curr_name = ""
+            curr_gstin = ""
+        if direct_gstins[i] and curr_gstin and direct_gstins[i] != curr_gstin:
+            curr_name = ""
+            curr_pan = ""
+
         if direct_pans[i]: curr_pan = direct_pans[i]
         if direct_names[i]: curr_name = direct_names[i]
         if direct_gstins[i]: curr_gstin = direct_gstins[i]
@@ -433,6 +441,14 @@ def resolve_identities_bi_directionally(entries):
             rev_pan = ""
             rev_name = ""
             rev_gstin = ""
+
+        # Check for hard identity switches
+        if direct_pans[i] and rev_pan and direct_pans[i] != rev_pan:
+            rev_name = ""
+            rev_gstin = ""
+        if direct_gstins[i] and rev_gstin and direct_gstins[i] != rev_gstin:
+            rev_name = ""
+            rev_pan = ""
 
         if direct_pans[i]: rev_pan = direct_pans[i]
         if direct_names[i]: rev_name = direct_names[i]
