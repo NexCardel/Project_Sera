@@ -233,17 +233,25 @@ class AddClientFromCaptureDialog(QDialog):
         from ui.utils.profile_parser import extract_profile_from_payload
         unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
         
+        extracted = {}
         # Check if SRPF container exists in rawPayload.db
         container = self.db.get_client_raw_container(identity_key=unassigned_key) if unassigned_key else None
         if container and (container.get("company_name") or container.get("pan") or container.get("gstin")):
-            return container
+            extracted = container
+        else:
+            # Fallback to current payload extraction
+            raw_str = self.item_data.get("raw_payload_json") or "{}"
+            extracted = extract_profile_from_payload(raw_str)
+            if not extracted.get("pan") and unassigned_key:
+                extracted["pan"] = unassigned_key
 
-        # Fallback to current payload extraction
-        raw_str = self.item_data.get("raw_payload_json") or "{}"
-        parsed = extract_profile_from_payload(raw_str)
-        if not parsed.get("pan") and unassigned_key:
-            parsed["pan"] = unassigned_key
-        return parsed
+        # HIGHEST PRIORITY: If the tracker_dump row itself has a valid client_name, 
+        # use it to override proprietor_name to ensure we don't fall back to client_header_name
+        dump_client_name = (self.item_data.get("client_name") or "").strip()
+        if dump_client_name:
+            extracted["proprietor_name"] = dump_client_name
+
+        return extracted
 
     def _get_next_serial_no(self) -> int:
         try:

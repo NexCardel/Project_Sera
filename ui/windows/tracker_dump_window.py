@@ -784,6 +784,13 @@ class TrackerDumpWindow(QWidget):
         btn_refresh.clicked.connect(self.load_data)
         header_layout.addWidget(btn_refresh)
 
+        btn_ltt_report = QPushButton("Live Tracking Table (LTT)")
+        btn_ltt_report.setProperty("class", "ActionBtn")
+        btn_ltt_report.setStyleSheet("background-color: #2F6BA8; color: #FFFFFF; font-weight: 700;")
+        btn_ltt_report.setIcon(_safe_qta_icon("mdi.table-large", "#FFFFFF"))
+        btn_ltt_report.clicked.connect(self._generate_ltt)
+        header_layout.addWidget(btn_ltt_report)
+
         btn_excel_report = QPushButton("SDC Audit Report (Excel)")
         btn_excel_report.setProperty("class", "ActionBtn")
         btn_excel_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
@@ -1620,3 +1627,33 @@ class TrackerDumpWindow(QWidget):
         else:
             menu.exec_(self.cursor().pos())
 
+
+    def _generate_ltt(self):
+        """Executes the independent SDC Parser and opens the resulting LTT Excel file."""
+        import os, sys
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
+        if getattr(sys, 'frozen', False):
+            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
+        if sdc_parser_dir not in sys.path:
+            sys.path.insert(0, sdc_parser_dir)
+            
+        ltt_output = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_LTT.xlsx")
+        
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            import sdc_parser
+            import importlib
+            importlib.reload(sdc_parser)
+            sdc_parser.generate_ltt_excel()
+            QApplication.restoreOverrideCursor()
+            if os.path.exists(ltt_output):
+                QMessageBox.information(self, "Success", f"Live Tracking Table (LTT) generated successfully!\nSaved to:\n{ltt_output}")
+                try:
+                    os.startfile(ltt_output)
+                except Exception: pass
+            else:
+                QMessageBox.warning(self, "Warning", "Parser ran, but the LTT Excel file was not found.")
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Failed to generate LTT: {e}")

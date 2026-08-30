@@ -57,6 +57,8 @@
           session_id: this._generateSessionId(),
           pan: '',
           name: '',
+          client_temp_name: '',
+          dob: '',
           form: '',
           ay: '',
           portal: portal,
@@ -71,25 +73,34 @@
 
       async load() {
         return new Promise(resolve => {
-          try {
-            chrome.storage.local.get(['__SDC_SESSION__'], (res) => {
-              const sess = res.__SDC_SESSION__;
-              const now = Date.now();
-
-              if (!sess || !sess.session_id || (now - (sess._ts || 0) > 30 * 60 * 1000)) {
-                // Check if previous session was active when expiring -> retrospectively finalize as terminated
-                if (sess && sess.session_id && sess.status === 'active') {
-                  this._retrospectivelyFinalizeAbrupt(sess);
-                }
-                this._initCleanSession();
-              } else {
-                this.data = sess;
-                if (!Array.isArray(this.data.timeline)) this.data.timeline = [];
+          const onLoaded = (sess) => {
+            const now = Date.now();
+            if (!sess || !sess.session_id || (now - (sess._ts || 0) > 30 * 60 * 1000)) {
+              if (sess && sess.session_id && sess.status === 'active') {
+                this._retrospectivelyFinalizeAbrupt(sess);
               }
+              this._initCleanSession();
+            } else {
+              this.data = sess;
+              if (!Array.isArray(this.data.timeline)) this.data.timeline = [];
+            }
+            resolve();
+          };
+
+          try {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+              chrome.storage.local.get(['__SDC_SESSION__'], (res) => {
+                onLoaded(res ? res.__SDC_SESSION__ : null);
+              });
+            } else if (typeof localStorage !== 'undefined') {
+              const raw = localStorage.getItem('__SDC_SESSION__');
+              onLoaded(raw ? JSON.parse(raw) : (this.data && this.data.session_id ? this.data : null));
+            } else {
+              if (!this.data || !this.data.session_id) this._initCleanSession();
               resolve();
-            });
+            }
           } catch (e) {
-            this._initCleanSession();
+            if (!this.data || !this.data.session_id) this._initCleanSession();
             resolve();
           }
         });
@@ -99,7 +110,14 @@
         return new Promise(resolve => {
           this.data._ts = Date.now();
           try {
-            chrome.storage.local.set({ __SDC_SESSION__: this.data }, resolve);
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+              chrome.storage.local.set({ __SDC_SESSION__: this.data }, resolve);
+            } else if (typeof localStorage !== 'undefined') {
+              localStorage.setItem('__SDC_SESSION__', JSON.stringify(this.data));
+              resolve();
+            } else {
+              resolve();
+            }
           } catch (e) {
             resolve();
           }
@@ -157,7 +175,9 @@
             if (capture && !last.captured_data) {
               last.captured_data = {
                 pan: capture.pan || this.data.pan || "",
-                client_name: capture.client_name || capture.name || this.data.name || "",
+                client_name: capture.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
+                client_temp_name: capture.client_temp_name || this.data.client_temp_name || "",
+                dob: capture.dob || this.data.dob || "",
                 form: capture.filing_type || this.data.form || "",
                 ay: capture.period_label || this.data.ay || "",
                 arn: capture.arn || "N/A",
@@ -184,7 +204,9 @@
           is_crosshair: Boolean(crosshairId),
           captured_data: capture ? {
             pan: capture.pan || this.data.pan || "",
-            client_name: capture.client_name || capture.name || this.data.name || "",
+            client_name: capture.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
+            client_temp_name: capture.client_temp_name || this.data.client_temp_name || "",
+            dob: capture.dob || this.data.dob || "",
             form: capture.filing_type || this.data.form || "",
             ay: capture.period_label || this.data.ay || "",
             arn: capture.arn || "N/A",
@@ -257,7 +279,14 @@
         return new Promise(resolve => {
           this._initCleanSession();
           try {
-            chrome.storage.local.remove(['__SDC_SESSION__'], resolve);
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+              chrome.storage.local.remove(['__SDC_SESSION__'], resolve);
+            } else if (typeof localStorage !== 'undefined') {
+              localStorage.removeItem('__SDC_SESSION__');
+              resolve();
+            } else {
+              resolve();
+            }
           } catch (e) {
             resolve();
           }
@@ -339,8 +368,18 @@
     },
 
     /** Manually trigger a scan for the current URL (used for testing or forced re-scans). */
-    scanNow() {
+    async scanNow(force = true) {
+      if (force) {
+        _clearPendingRetries();
+        _lastScannedUrl = window.location.href;
+        return await _dispatch(window.location.href, 0);
+      }
       _onUrlChange(window.location.href);
+    },
+
+    /** Public capture emitter for protocols */
+    emitCapture(capture, protocolName, crosshairId) {
+      _emitCapture(capture, protocolName, crosshairId);
     }
   };
 
@@ -420,19 +459,26 @@
       return "Return Submitted (Pending e-Verification)";
     }
     if (crosshairId === 'itr_personal_info' || lower.includes('personal_information') || lower.includes('parta_gen')) {
+      if (lower.includes('myprofile') || lower.includes('profiledetail') || lower.includes('profile')) {
+        return "Profile & Personal Details";
+      }
       return "Personal Information";
     }
     if (crosshairId === 'itr_form_select' || lower.includes('select-itr-form') || lower.includes('lets-get-started')) {
       return "Select ITR Form";
     }
+    if (crosshairId === 'itr_landing' || lower.includes('fileincometaxreturn') || lower.includes('file-income-tax-return')) {
+      return "Landing Page / e-File ITR";
+    }
     if (crosshairId === 'itr_dashboard' || lower.includes('dashboard') || lower.includes('home')) {
       return "Dashboard";
     }
-    if (crosshairId === 'itr_login' || lower.includes('login') || lower.includes('auth')) {
+    if (crosshairId === 'itr_login' || lower.includes('login') || lower.includes('auth') || lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') || lower.includes('session-expired')) {
+      if (lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') || lower.includes('session-expired') || lower.includes('timeout')) return "Session Expired";
       return lower.includes('logout') ? "Log Out" : "Login Screen";
     }
-    if (lower.includes('profile')) return "Profile & Contact";
-    if (lower.includes('fileincometaxreturn') || lower.includes('file-income-tax-return')) return "e-File Income Tax Return";
+    if (lower.includes('myprofile') || lower.includes('profiledetail') || lower.includes('profile')) return "Profile & Personal Details";
+    if (lower.includes('fileincometaxreturn') || lower.includes('file-income-tax-return')) return "Landing Page / e-File ITR";
     if (lower.includes('download')) return "Download Form / Receipt";
     if (lower.includes('challan') || lower.includes('etaxpayment')) return "e-Pay Tax / Challan";
     if (lower.includes('26as') || lower.includes('ais')) return "View AIS / Form 26AS";
@@ -532,8 +578,17 @@
   function _emitCapture(capture, protocolName, crosshairId) {
     const captureMethod = `SDC_${crosshairId}`;
     const portalName = capture.portal || protocolName || "income tax";
-    const clientName = capture.client_name || capture.name || capture.taxpayer_name || "";
+    const clientTempName = capture.client_temp_name || SDC.session.data.client_temp_name || "";
+    // Priority: capture.client_name > capture.name > session.data.name > capture.taxpayer_name > clientTempName
+    // session.data.name is only preferred if it came from a profile/personal-info scan (not a header badge copy).
+    // The capture payload's client_name is the most freshly-extracted value for this crosshair.
+    const captureClientName = capture.client_name || capture.name || capture.taxpayer_name || "";
+    const sessionName = SDC.session.data.name || "";
+    // If session name is identical to the header badge, it was a landing-page fallback — prefer captureClientName.
+    const sessionNameIsHeaderFallback = sessionName && sessionName === SDC.session.data.client_temp_name;
+    const clientName = captureClientName || (!sessionNameIsHeaderFallback ? sessionName : "") || clientTempName || "";
     const pan = capture.pan || SDC.session.data.pan || "";
+    const dob = capture.dob || SDC.session.data.dob || "";
     const arn = capture.arn || "N/A";
     const period = capture.period_label || SDC.session.data.ay || "";
     const filingType = capture.filing_type || SDC.session.data.form || "ITR";
@@ -545,8 +600,10 @@
       session_id: SDC.session.data.session_id || "",
       client_id: capture.client_id || null,
       client_name: clientName,
+      client_temp_name: clientTempName,
       name: clientName,
       taxpayer_name: clientName,
+      dob: dob,
       portal: portalName,
       arn: arn,
       capture_method: captureMethod,
@@ -568,8 +625,10 @@
         session_id: SDC.session.data.session_id || "",
         detection_type: captureMethod,
         client_name: clientName,
+        client_temp_name: clientTempName,
         name: clientName,
         taxpayer_name: clientName,
+        dob: dob,
         portal: portalName,
         arn: arn,
         pan: pan,
@@ -664,9 +723,11 @@
       }
     } catch (err) {}
 
-    // 3. Dispatch event for page-level test harness
+    // 3. Dispatch events for page-level test harness & filing detector listeners
     try {
       window.dispatchEvent(new CustomEvent('SeraSDCApiCapture', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('SeraSDCCapture', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));
     } catch (_) {}
   }
 
@@ -717,13 +778,23 @@
       return m ? m[1] : '';
     },
 
+    /**
+     * Extract Date of Birth (DOB) from text or DOM element value
+     * Matches DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, DD-Mon-YYYY (e.g. 16-Jun-1985)
+     */
+    extractDob(str) {
+      if (!str) return '';
+      const m = str.match(/\b(\d{2}[\/\-\.]\d{2}[\/\-\.]\d{4}|\d{4}[\/\-\.]\d{2}[\/\-\.]\d{2}|\d{2}[\/\-\.](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\/\-\.]\d{4})\b/i);
+      return m ? m[1].replace(/\./g, '/') : '';
+    },
+
     /** Validate PAN strictly */
     isValidPan(str) {
       if (!str || str.length !== 10) return false;
       if (/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(str.toUpperCase())) {
         // 4th char of PAN indicates entity type - basic sanity
         const fourth = str[3].toUpperCase();
-        return 'PCHABGJLFTE'.includes(fourth);
+        return 'PCHABGJLFTED'.includes(fourth);
       }
       return false;
     },

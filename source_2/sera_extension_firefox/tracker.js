@@ -341,6 +341,20 @@
         }
       }
 
+      // Suppress scraping on contact / communication details subpages as requested
+      const lowerHref = (window.location.href || '').toLowerCase();
+      if (
+        lowerHref.includes('personal_information-contact') ||
+        lowerHref.includes('personal_information_contact') ||
+        lowerHref.includes('contact-details') ||
+        lowerHref.includes('contact_details') ||
+        lowerHref.includes('/contact') ||
+        lowerHref.includes('bank-details') ||
+        lowerHref.includes('bank_details')
+      ) {
+        return;
+      }
+
       // Positive confirmation & active tracking cues
       const CONFIRMATION_PHRASES = [
         "submitted successfully",

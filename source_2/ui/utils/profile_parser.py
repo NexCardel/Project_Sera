@@ -136,7 +136,7 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
     # Specifically targets Trade Names and Business Names from ITR Schedule BP (natOfBus44AD, sec44AD, etc.) and GST
     if is_individual:
         company_keys = (
-            "nameofbusiness", "name_of_business", "nameofbus", "name_of_bus", "busdtlsname",
+            "legalname", "legal_name", "nameofbusiness", "name_of_business", "nameofbus", "name_of_bus", "busdtlsname",
             "tradename", "trade_name", "tradenm", "trade_nm", "trdnm", "tradename_itr",
             "businessname", "business_name", "bussinessname", "bussiness_name",
             "firmname", "firm_name", "concernname", "concern_name",
@@ -163,29 +163,75 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         if extracted["company_name"]:
             break
 
-    # 7. Proprietor / Individual Name (Full First + Middle + Last Name Assembly)
+    # 7. Proprietor / Individual Name (Full First + Middle + Last Name Assembly & SDC Header Priority)
     first_name = ""
     middle_name = ""
     last_name = ""
+    header_name = ""
+
+    def _sanitize_name(n_str: str) -> str:
+        if not n_str:
+            return ""
+        # Strip Material Icon ligatures FIRST — they can concatenate directly onto names/role-tags without spaces
+        clean = re.sub(r"(?:EXPAND[_\s]*MORE|EXPANDMORE|EXPAND[_\s]*LESS|EXPANDLESS|KEYBOARD[_\s]*ARROW[_\s]*(?:DOWN|UP|RIGHT|LEFT)|ARROW[_\s]*(?:DOWN|UP|DROP)|MORE[_\s]*VERT|MORE[_\s]*HORIZ|ACCOUNT[_\s]*CIRCLE|PERSON(?=\s|$)|USER(?=\s|$))", " ", n_str, flags=re.IGNORECASE)
+        # Now strip role tags — word boundaries work correctly after ligatures are removed
+        clean = re.sub(r"\b(?:Individual|Taxpayer|HUFs?|Company|Representative|Director|Partners?|Proprietor)\b", "", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"[\u02C0-\u02FF\u25A0-\u25FF\u2300-\u23FF\uFE00-\uFE0F⌵▼▽˅^<>|•\-_:]+", " ", clean)
+        clean = re.sub(r"\.\.\.$", "", clean)
+        clean = re.sub(r"[^A-Za-z\s.'-]", " ", clean)
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean
+
+    # (a) HIGHEST PRIORITY: client_name and taxpayer_name in the payload contain the full legal name
+    #     extracted from profile/personal-info pages. Check these FIRST before client_temp_name.
+    for k, v in flat_kv:
+        if k in ("client_name", "clientname", "taxpayer_name", "taxpayername", "name") and not extracted["proprietor_name"]:
+            v_clean = _sanitize_name(v)
+            if len(v_clean) >= 3 and not any(part in v_clean.lower() for part in ("first name", "last name", "general information")):
+                extracted["proprietor_name"] = v_clean
+                break
+
+    # (b) client_temp_name from SDC top-level payload: ONLY use as a fallback when no full name is found above.
+    #     Header badge names are often truncated (e.g. "INDRAJIT CHATTE...") so we treat them last.
+    raw_p = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
+    cand_header = payload.get("client_temp_name") or raw_p.get("client_temp_name") or ""
+    if not cand_header:
+        for k, v in flat_kv:
+            if "client_temp_name" in k or "clientheadername" in k or "header_name" in k or "headername" in k:
+                cand_header = v
+                break
+    if cand_header:
+        clean_h = _sanitize_name(cand_header)
+        if len(clean_h) >= 3 and not any(part in clean_h.lower() for part in ("first name", "last name", "general information")):
+            header_name = clean_h
+
+    # (c) Scan form inputs and general name keys (FirstName + MiddleName + LastName assembly)
     for k, v in flat_kv:
         if k in ("firstname", "first_name", "fname") and not first_name:
-            first_name = v
+            first_name = _sanitize_name(v)
         elif k in ("midname", "mid_name", "middlename", "middle_name", "mname") and not middle_name:
-            middle_name = v
+            middle_name = _sanitize_name(v)
         elif k in ("lastname", "last_name", "lname", "sur_name", "surname", "surnameororgname") and not last_name:
-            last_name = v
+            last_name = _sanitize_name(v)
         elif k in ("fullname", "full_name", "assesseename", "assessee_name", "assessee_ver_name", "assessevername", "nameasperbank"):
             if not extracted["proprietor_name"] and len(v) >= 3 and not any(part in v.lower() for part in ("first name", "last name", "general information")):
-                extracted["proprietor_name"] = v
+                extracted["proprietor_name"] = _sanitize_name(v)
         elif k in ("authsignatory", "auth_signatory", "proprietorname", "proprietor_name", "taxpayer_name", "taxpayername", "client_name", "clientname", "name"):
             if not extracted["proprietor_name"] and len(v) >= 3 and not any(part in v.lower() for part in ("first name", "last name", "general information")):
-                extracted["proprietor_name"] = v
+                extracted["proprietor_name"] = _sanitize_name(v)
 
     if first_name or middle_name or last_name:
         parts = [p for p in (first_name, middle_name, last_name) if p]
         full = " ".join(parts).strip()
-        if full and (not extracted["proprietor_name"] or len(full) > len(extracted["proprietor_name"])):
-            extracted["proprietor_name"] = full
+        if full and len(full) >= 3:
+            # Override proprietor_name only if assembled name is longer (more complete) or not yet set
+            if not extracted["proprietor_name"] or len(full) > len(extracted["proprietor_name"]):
+                extracted["proprietor_name"] = full
+
+    # Personal Info & Profile Page Name has HIGHEST PRIORITY:
+    # Use header_name only as absolute last resort when no full name is available
+    if not extracted["proprietor_name"] and header_name:
+        extracted["proprietor_name"] = header_name
 
     # For individual accounts (4th char 'P'), ensure company_name does NOT mirror the proprietor's human name
     if is_individual:
@@ -197,11 +243,11 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         pass
 
     # 8. Date of Birth / Incorporation Date
+    # Supports YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, DD-Mon-YYYY (e.g. 21-Sep-2003)
     for k, v in flat_kv:
         if any(t in k for t in ("dob", "birth", "incorporation", "incorp_dt", "incorpdt", "creationdt")):
-            # YYYY-MM-DD or DD/MM/YYYY or DD-MM-YYYY
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", v) or re.match(r"^\d{2}[/-]\d{2}[/-]\d{4}$", v):
-                extracted["dob"] = v
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", v) or re.match(r"^\d{2}[/-]\d{2}[/-]\d{4}$", v) or re.match(r"^\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{4}$", v, flags=re.IGNORECASE) or re.match(r"^\d{2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$", v, flags=re.IGNORECASE):
+                extracted["dob"] = v.strip()
                 break
 
     # 9. User ID / Login ID

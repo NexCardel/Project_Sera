@@ -186,27 +186,37 @@
             </p>
             <div class="nav-btn-list">
                 <button class="action-btn danger" onclick="simulateRoute('#/logout', 'logout')">
-                    <span>1. Logout / Login Route</span>
+                    <span>0. Logout / Login Route</span>
                     <small>Nukes Client Session</small>
                 </button>
 
+                <button class="action-btn secondary" onclick="simulateRoute('#/dashboard/fileIncomeTaxReturn', 'landing_page')">
+                    <span>1. Landing Page (Post-Login)</span>
+                    <small>Header Name "WASIL MANDAL"</small>
+                </button>
+
+                <button class="action-btn secondary" onclick="simulateRoute('#/dashboard/myProfile/profileDetail', 'profile_detail')">
+                    <span>2. Profile Details Page</span>
+                    <small>DOB + Legal Name + PAN</small>
+                </button>
+
                 <button class="action-btn secondary" onclick="simulateRoute('#/foreturns-ay26/fo-select-itr-form', 'form_select')">
-                    <span>2. Select ITR Form</span>
+                    <span>3. Select ITR Form</span>
                     <small>Locks ITR-4 + AY 26-27</small>
                 </button>
 
                 <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr4-ay2026/personal_information', 'personal_info')">
-                    <span>3. Personal Info (Part A General)</span>
-                    <small>T1 Name + PAN Lock</small>
+                    <span>4. Personal Info (Part A General)</span>
+                    <small>T1 Name + PAN + DOB Lock</small>
                 </button>
 
                 <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr-shared/fo-e-verify-later', 'submit_pending')">
-                    <span>4. Submitted Pending e-Verify</span>
+                    <span>5. Submitted Pending e-Verify</span>
                     <small>ACK15 + Status Lock</small>
                 </button>
 
                 <button class="action-btn" onclick="simulateRoute('#/foreturns-ay26/fo-itr-shared/fo-e-verify-now-success', 'filed_verified')">
-                    <span>5. Filed & e-Verified Success</span>
+                    <span>6. Filed & e-Verified Success</span>
                     <small>ACK15 + Verified Lock</small>
                 </button>
             </div>
@@ -268,7 +278,9 @@
     // Listen to SeraFSTApiCapture emitted by SDC
     window.addEventListener('SeraFSTApiCapture', (e) => {
         const detail = e.detail || {};
-        addLog(`🎯 <b>CAPTURE DISPATCHED [${detail.capture_method}]</b>: Status="${detail.status}", PAN="${detail.pan}", Name="${detail.client_name}", Form="${detail.filing_type}", AY="${detail.period_label}", ARN="${detail.arn}"`, 'capture');
+        const hName = detail.client_header_name ? `, HeaderName="${detail.client_header_name}"` : '';
+        const dob = detail.dob ? `, DOB="${detail.dob}"` : '';
+        addLog(`🎯 <b>CAPTURE DISPATCHED [${detail.capture_method || 'SDC'}]</b>: Status="${detail.status}", PAN="${detail.pan}", Name="${detail.client_name}"${hName}${dob}, Form="${detail.filing_type}", AY="${detail.period_label}", ARN="${detail.arn}"`, 'capture');
 
         // Direct confirmation ping to desktop app
         fetch('http://127.0.0.1:49152', {
@@ -278,7 +290,7 @@
         }).then(() => {
             addLog(`💻 <b>Desktop App IPC</b>: Successfully delivered to Project Sera on port 49152!`, 'info');
         }).catch((err) => {
-            addLog(`⚠️ <b>Desktop App IPC</b>: Could not reach port 49152 (${err.message}). Is Project Sera running?`, 'reset');
+            // Ignore if app not running
         });
     });
 
@@ -306,6 +318,67 @@
                 <div class="mock-field"><label>Username / PAN:</label><input type="text" value="GZEPM6367M"></div>
             `;
             addLog(`🔄 Route changed to <b>${routeHash}</b> (Login/Logout Guard Triggered)`, 'reset');
+        } else if (mode === 'landing_page') {
+            activeDomContainer.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: #1e293b; padding: 10px 14px; border-radius: 6px;">
+                    <nav aria-label="breadcrumb">Dashboard > e-File > Income Tax Return > File Income Tax Return</nav>
+                    <div id="loginUsername" style="display: flex; flex-direction: column; align-items: flex-end; color: #fff; cursor: pointer;">
+                        <span class="user-profile-name" style="font-weight: 700;">WASIL MANDAL ⌵</span>
+                        <small style="color: #94a3b8; font-size: 11px;">Individual</small>
+                    </div>
+                </div>
+                <div style="margin-top: 10px;">
+                    <h2>Income Tax Return (ITR)</h2>
+                    <div class="mock-banner banner-warning" style="background: rgba(56, 189, 248, 0.15); border-color: #38bdf8; color: #38bdf8;">
+                        You've been directed to the "File Income Tax Return" page right after login to make it easier to file your return.
+                    </div>
+                    <div class="mock-field"><label>Select AY:</label><output id="ay">AY 2026-27</output></div>
+                    <div class="mock-field"><label>Mode of Filing:</label><span>Online (Recommended)</span></div>
+                </div>
+            `;
+            addLog(`📍 Route changed to <b>${routeHash}</b> (Landing Page - Header Name: "WASIL MANDAL")`, 'info');
+        } else if (mode === 'profile_detail') {
+            activeDomContainer.innerHTML = `
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; background: #1e293b; padding: 10px 14px; border-radius: 6px;">
+                    <nav aria-label="breadcrumb">Dashboard > My Profile > Profile Details</nav>
+                    <button id="loginUsername" style="background: transparent; color: #fff; border: 1px solid #475569; padding: 4px 8px; border-radius: 4px;">
+                        <span class="user-profile-name">INDRAJIT CHATTE... <mat-icon>expand_more</mat-icon></span>
+                    </button>
+                </div>
+                <div class="profile-card" style="background: #ffffff; color: #1e293b; padding: 20px; border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 style="margin: 0; font-size: 20px; font-weight: bold; color: #0f172a;">Profile</h3>
+                        <button style="border: 1px solid #2563eb; color: #2563eb; background: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer;">✎ Edit</button>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">Name</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">INDRAJIT CHATTERJEE</div>
+                        </div>
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">Date of Birth</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">06-Aug-1971</div>
+                        </div>
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">PAN</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">APFPC0458J</div>
+                        </div>
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">Gender</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">Male</div>
+                        </div>
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">PAN Status</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">Active</div>
+                        </div>
+                        <div>
+                            <div style="color: #64748b; font-size: 13px;">Aadhaar Number</div>
+                            <div style="font-weight: bold; font-size: 15px; color: #0f172a;">XXXX-XXXX-XXXX</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            addLog(`👤 Route changed to <b>${routeHash}</b> (Profile Details - Full Legal Name: "INDRAJIT CHATTERJEE", PAN: "APFPC0458J", DOB: "06-Aug-1971")`, 'info');
         } else if (mode === 'form_select') {
             activeDomContainer.innerHTML = `
                 <nav aria-label="breadcrumb">Dashboard > e-File > Income Tax Return > Select Status > Filing Returns for A.Y. 2026-27</nav>
@@ -351,9 +424,9 @@
             addLog(`📍 Route changed to <b>${routeHash}</b> (Filed & Verified Success)`, 'info');
         }
 
-        // Trigger SDC scan
+        // Trigger SDC scan immediately
         if (window.__SERA_SDC__) {
-            window.__SERA_SDC__.scanNow();
+            window.__SERA_SDC__.scanNow(true);
         }
     }
 

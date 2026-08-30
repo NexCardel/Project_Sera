@@ -135,9 +135,9 @@ class TestDomPageRevisitReplace(unittest.TestCase):
                 "json": json.loads(d["raw_payload_json"]) if isinstance(d["raw_payload_json"], str) else d["raw_payload_json"]
             })
         classified = classify_entries(entries)
-        self.assertEqual(len(classified["cat3"]), 2)
-        cat3_names = [e.get("name") for e in classified["cat3"]]
-        self.assertTrue(any("Johnny Doe" in n for n in cat3_names))
+        self.assertEqual(len(classified["cat4"]), 2)
+        cat4_names = [e.get("name") for e in classified["cat4"]]
+        self.assertTrue(any("Johnny Doe" in n for n in cat4_names))
 
 
 if __name__ == "__main__":

@@ -57,9 +57,78 @@ class SeraDatabase:
         except Exception as e:
             print(f"[-] Startup serial resequence skipped: {e}")
         try:
+            self._clean_ligature_noise_from_names()
+        except Exception as e:
+            print(f"[-] Startup ligature name cleanup skipped: {e}")
+        try:
             self.sync_fst_reports()
         except Exception as e:
             print(f"[-] Startup FST report sync skipped: {e}")
+
+    # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
+    _ICON_LIGATURE_RE = re.compile(
+        r'(?:EXPAND[\s_]*MORE|EXPANDMORE|EXPAND[\s_]*LESS|EXPANDLESS'
+        r'|KEYBOARD[\s_]*ARROW[\s_]*(?:DOWN|UP|RIGHT|LEFT)'
+        r'|ARROW[\s_]*(?:DOWN|UP|DROP)'
+        r'|MORE[\s_]*VERT|MORE[\s_]*HORIZ'
+        r'|ACCOUNT[\s_]*CIRCLE|MAT[\s_]*ICON'
+        r'|PERSON(?=\s|$)|USER(?=\s|$))',
+        re.IGNORECASE,
+    )
+    _ROLE_TAG_RE = re.compile(
+        r'\b(?:Individual|Taxpayer|HUFs?|Company|Representative|Director|Partners?|Proprietor)\b',
+        re.IGNORECASE,
+    )
+
+    def _clean_name_retrofix(self, raw: str) -> str:
+        """Strips Material Icon ligature strings from a stored name value."""
+        if not raw:
+            return raw
+        # Strip ligatures FIRST — they concatenate directly onto names/role-tags without spaces
+        s = self._ICON_LIGATURE_RE.sub(' ', raw)
+        # Now strip role tags — word boundaries now work correctly
+        s = self._ROLE_TAG_RE.sub('', s)
+        s = re.sub(r'\.\.\.$', '', s)
+        s = re.sub(r'[^A-Za-z\s.\'\-]', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip().upper()
+        return s if s else raw
+
+    def _clean_ligature_noise_from_names(self):
+        """
+        One-time retrospective fix: scans tracker_dump (rawPayload.db) and
+        sdc_session_timelines (rawPayload.db) for client_name values that
+        contain Material Icon ligature noise (e.g. 'SERAJ MOLLAEXPAND MORE')
+        and re-cleans them in-place.
+        Idempotent — safe to run on every startup.
+        """
+        total_fixed = 0
+        try:
+            with self._connect_raw() as conn:
+                # Fix tracker_dump
+                rows = conn.execute(
+                    "SELECT id, client_name FROM tracker_dump WHERE client_name IS NOT NULL AND client_name != ''"
+                ).fetchall()
+                for row_id, cname in rows:
+                    if self._ICON_LIGATURE_RE.search(cname or ''):
+                        fixed = self._clean_name_retrofix(cname)
+                        conn.execute("UPDATE tracker_dump SET client_name = ? WHERE id = ?", (fixed, row_id))
+                        print(f"[database] Ligature fix tracker_dump #{row_id}: {cname!r} -> {fixed!r}")
+                        total_fixed += 1
+
+                # Fix sdc_session_timelines
+                rows = conn.execute(
+                    "SELECT session_id, client_name FROM sdc_session_timelines WHERE client_name IS NOT NULL AND client_name != ''"
+                ).fetchall()
+                for sid, cname in rows:
+                    if self._ICON_LIGATURE_RE.search(cname or ''):
+                        fixed = self._clean_name_retrofix(cname)
+                        conn.execute("UPDATE sdc_session_timelines SET client_name = ? WHERE session_id = ?", (fixed, sid))
+                        print(f"[database] Ligature fix sdc_timelines {sid}: {cname!r} -> {fixed!r}")
+                        total_fixed += 1
+        except Exception as e:
+            print(f"[database] _clean_ligature_noise_from_names notice: {e}")
+        if total_fixed:
+            print(f"[database] Retrospective ligature cleanup: {total_fixed} name(s) fixed.")
 
     def set_sync_revision_hook(self, fn):
         """fn is called with no arguments after any write that should
