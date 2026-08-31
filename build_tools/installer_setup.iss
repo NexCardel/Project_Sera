@@ -2,7 +2,7 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.9.0"
+#define MyAppVersion "2.9.1"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
 #define ShortcutName "CompanyInfo1"
@@ -118,8 +118,6 @@ begin
 end;
 
 [Run]
-Filename: "{sys}\cmd.exe"; Parameters: "/C ""{app}\_internal\native_host\register_native_host.bat"" --silent"; StatusMsg: "Registering browser native host..."; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-Filename: "{sys}\cmd.exe"; Parameters: "/C ""{app}\_internal\native_host\unregister_native_host.bat"" --silent"; StatusMsg: "Removing browser native host..."; Flags: runhidden waituntilterminated
+

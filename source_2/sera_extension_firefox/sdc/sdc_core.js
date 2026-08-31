@@ -177,11 +177,15 @@
                 pan: capture.pan || this.data.pan || "",
                 client_name: capture.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
                 client_temp_name: capture.client_temp_name || this.data.client_temp_name || "",
+                company_name: capture.company_name || capture.trade_name || "",
+                proprietor_name: capture.proprietor_name || capture.legal_name || "",
                 dob: capture.dob || this.data.dob || "",
                 form: capture.filing_type || this.data.form || "",
                 ay: capture.period_label || this.data.ay || "",
                 arn: capture.arn || "N/A",
-                status: capture.status || "Captured"
+                status: capture.status || "Captured",
+                due_date: capture.due_date || "",
+                gstin: capture.gstin || ""
               };
               await this.save();
               this._emitTimelineSync();
@@ -206,11 +210,15 @@
             pan: capture.pan || this.data.pan || "",
             client_name: capture.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
             client_temp_name: capture.client_temp_name || this.data.client_temp_name || "",
+            company_name: capture.company_name || capture.trade_name || "",
+            proprietor_name: capture.proprietor_name || capture.legal_name || "",
             dob: capture.dob || this.data.dob || "",
             form: capture.filing_type || this.data.form || "",
             ay: capture.period_label || this.data.ay || "",
             arn: capture.arn || "N/A",
-            status: capture.status || "Captured"
+            status: capture.status || "Captured",
+            due_date: capture.due_date || "",
+            gstin: capture.gstin || ""
           } : null
         };
 
@@ -528,9 +536,15 @@
         // Execute protocol handler
         const capture = await matchedCrosshair.handler(url);
 
-        if (matchedCrosshair.id === 'itr_login') {
-          // Auth / logout route: session was finalized & wiped by handler — skip save
-          return;
+        // Handle itr_login explicitly so we don't abort on PAN captures
+        if (matchedCrosshair.id === 'itr_login' && !capture) {
+            const urlL = (url || '').toLowerCase();
+            const isLogout = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sign-out') || 
+                             urlL.includes('sessionexpire') || urlL.includes('session-expire') || 
+                             urlL.includes('sessionexpired') || urlL.includes('session-expired') || urlL.includes('timeout');
+            if (isLogout) {
+                return; // Auth / logout route: session was finalized & wiped by handler — skip save
+            }
         }
 
         // Record timeline step with capture
@@ -552,7 +566,7 @@
           _clearPendingRetries();
           _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
           return;
-        } else if (matchedCrosshair.id !== 'itr_login' && retryCount < 2) {
+        } else if (retryCount < 2) {
           // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering
           const delay = (retryCount + 1) * 700;
           const timer = setTimeout(() => {
@@ -610,6 +624,9 @@
       period_label: period,
       filing_type: filingType,
       status: status,
+      due_date: capture.due_date || "",
+      company_name: capture.company_name || capture.trade_name || "",
+      proprietor_name: capture.proprietor_name || capture.legal_name || "",
       pan: pan,
       gstin: capture.gstin || "",
       url: window.location.href,

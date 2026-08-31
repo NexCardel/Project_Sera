@@ -8,6 +8,7 @@
  */
 
 (function() {
+    const SAD_VERSION = "2.9.1";
     // SAD Permanently Retired: Deactivated for compliance & safety. Zero network hooking.
     return;
     if (window.__SERA_SAD_VERSION__ === SAD_VERSION) return;
@@ -850,3 +851,4 @@
     };
 
 })();
+

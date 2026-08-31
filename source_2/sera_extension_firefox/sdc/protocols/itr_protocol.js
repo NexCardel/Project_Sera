@@ -1022,13 +1022,67 @@
     // ─── CROSSHAIR 0 (Priority): Login / Logout / Session Expired Route Guard ───
     async function _handleLoginLogout(url) {
       const lower = (url || '').toLowerCase();
-      if (lower.includes('logout') || lower.includes('signout') || lower.includes('sign-out') ||
+      const isLogout = lower.includes('logout') || lower.includes('signout') || lower.includes('sign-out') ||
           lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') ||
-          lower.includes('session-expired') || lower.includes('timeout')) {
+          lower.includes('session-expired') || lower.includes('timeout');
+
+      if (isLogout) {
         await SDC.session.finalizeLogout(url);
+        _resetItrSession();
+        await SDC.clearAllSessions();
+        return null;
       }
-      _resetItrSession();
-      await SDC.clearAllSessions();
+
+      // If it is a login/password page, capture PAN if visible
+      let pan = '';
+      const entityDivs = document.querySelectorAll('div.entity');
+      for (const div of entityDivs) {
+        if (div.textContent.includes('PAN')) {
+          const boldSpan = div.querySelector('span.boldfont');
+          if (boldSpan) {
+            pan = boldSpan.textContent.trim();
+          } else {
+            const match = div.textContent.match(/PAN\s*:\s*([A-Z]{5}[0-9]{4}[A-Z]{1})/i);
+            if (match) pan = match[1].trim();
+          }
+        }
+      }
+
+      // Generic PAN regex scan fallback (replaces hardcoded input ID)
+      if (!pan) {
+         const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/i;
+         const boundaryRegex = /\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/i;
+         
+         // 1. Scan all input values generically
+         const inputs = document.querySelectorAll('input');
+         for (const input of inputs) {
+           const val = (input.value || '').trim();
+           if (panRegex.test(val)) {
+             pan = val.toUpperCase();
+             break;
+           }
+         }
+         
+         // 2. Scan visible text body as absolute last resort
+         if (!pan && document.body && document.body.innerText) {
+           const match = document.body.innerText.match(boundaryRegex);
+           if (match) {
+             pan = match[1].toUpperCase();
+           }
+         }
+      }
+
+      if (pan) {
+        return {
+          pan: pan,
+          client_name: '',
+          client_temp_name: '',
+          dob: '',
+          form: '',
+          ay: '',
+          status: 'Pre-Login / Password'
+        };
+      }
       return null;
     }
 
