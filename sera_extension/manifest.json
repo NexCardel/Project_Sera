@@ -1,81 +1,81 @@
 {
-    "manifest_version":  3,
-    "name":  "Project Sera Companion",
-    "version":  "2.9.1",
-    "description":  "Autofill and filing confirmation tracking for Aman Associates.",
-    "browser_specific_settings":  {
-                                      "gecko":  {
-                                                    "id":  "sera-companion@amanassociates.com",
-                                                    "strict_min_version":  "109.0"
-                                                }
-                                  },
-    "key":  "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkMpDJKphBB8nE//fB0SY2nCHkAykZ6si2M7mSNjI/i8ISMb32i/6pLF7VKNklcIT5KZdjnpYpsqhHv1IGuNoAGmpUSbte3MEsmS92TyBnQhf++2cy1JUWsCfd7fHGF/czDWsPulx5uThADoDcRXShy3JYox1Fl6PnzZXrIUHCCv+f1QAv/Rvs9a/lhBQZ70WWUhZqrBoGowB+cIosDN/7lmQeEj/TUzr+xvPQZAJoUR8ORB7baHPU9lNtM1QnTFGgqQ8s/RVbenIdALslEfekgC0ZuFtnINOxc2CGbGzHAIUPpLZsljO1x8k8c5YjnuJvyQTUAFHRqNhqaCHOrEoMQIDAQAB",
-    "permissions":  [
-                        "nativeMessaging",
-                        "storage",
-                        "activeTab",
-                        "scripting",
-                        "tabs",
-                        "alarms",
-                        "browsingData",
-                        "cookies"
-                    ],
-    "host_permissions":  [
-                             "http://*/*",
-                             "https://*/*",
-                             "file://*/*"
-                         ],
-    "background":  {
-                       "service_worker":  "background.js"
-                   },
-    "icons":  {
-                  "16":  "icon16.png",
-                  "32":  "icon32.png",
-                  "48":  "icon48.png",
-                  "128":  "icon128.png"
-              },
-    "action":  {
-                   "default_icon":  {
-                                        "16":  "icon16.png",
-                                        "32":  "icon32.png",
-                                        "48":  "icon48.png",
-                                        "128":  "icon128.png"
-                                    },
-                   "default_title":  "Project Sera Companion",
-                   "default_popup":  "popup.html"
-               },
-    "content_scripts":  [
-                            {
-                                "matches":  [
-                                                "http://*/*",
-                                                "https://*/*",
-                                                "file://*/*"
-                                            ],
-                                "js":  [
-                                           "content_scripts/sca_adapters.js",
-                                           "content_scripts/login.js"
-                                       ],
-                                "run_at":  "document_end",
-                                "all_frames":  true
-                            }
-                        ],
-    "web_accessible_resources":  [
-                                     {
-                                         "resources":  [
-                                                           "config.json",
-                                                           "content_scripts/net_interceptor.js",
-                                                           "content_scripts/filing_detector.js",
-                                                           "tracker.js",
-                                                           "sdc/sdc_toast.js",
-                                                           "sdc/sdc_core.js",
-                                                           "sdc/protocols/itr_protocol.js",
-                                                           "sdc/protocols/gst_protocol.js",
-                                                           "sdc/protocols/traces_protocol.js",
-                                                           "sdc/protocols/mca_protocol.js"
-                                                       ],
-                                         "matches":  [
-                                                         "\u003call_urls\u003e"
-                                                     ]
-                                     }
-                                 ]
+  "manifest_version": 3,
+  "name": "Project Sera Companion",
+  "version": "2.9.1",
+  "description": "Autofill and filing confirmation tracking for Aman Associates.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sera-companion@amanassociates.com",
+      "strict_min_version": "109.0"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkMpDJKphBB8nE//fB0SY2nCHkAykZ6si2M7mSNjI/i8ISMb32i/6pLF7VKNklcIT5KZdjnpYpsqhHv1IGuNoAGmpUSbte3MEsmS92TyBnQhf++2cy1JUWsCfd7fHGF/czDWsPulx5uThADoDcRXShy3JYox1Fl6PnzZXrIUHCCv+f1QAv/Rvs9a/lhBQZ70WWUhZqrBoGowB+cIosDN/7lmQeEj/TUzr+xvPQZAJoUR8ORB7baHPU9lNtM1QnTFGgqQ8s/RVbenIdALslEfekgC0ZuFtnINOxc2CGbGzHAIUPpLZsljO1x8k8c5YjnuJvyQTUAFHRqNhqaCHOrEoMQIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "alarms",
+    "browsingData",
+    "cookies"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "file://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
+    "default_title": "Project Sera Companion",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file://*/*"
+      ],
+      "js": [
+        "content_scripts/sca_adapters.js",
+        "content_scripts/login.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "config.json",
+        "content_scripts/net_interceptor.js",
+        "content_scripts/filing_detector.js",
+        "tracker.js",
+        "sdc/sdc_toast.js",
+        "sdc/sdc_core.js",
+        "sdc/protocols/itr_protocol.js",
+        "sdc/protocols/gst_protocol.js",
+        "sdc/protocols/traces_protocol.js",
+        "sdc/protocols/mca_protocol.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }
