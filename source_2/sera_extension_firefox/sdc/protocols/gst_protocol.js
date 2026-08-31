@@ -1,29 +1,614 @@
 /**
- * gst_protocol.js — SDC GST Portal Protocol (Stub)
- * =================================================
- * Crosshairs for the GST portal (gst.gov.in).
- * To be developed in a subsequent sprint.
- *
- * Planned crosshairs:
- *   gst_dashboard      — Dashboard landing (GSTIN + Legal Name capture)
- *   gst_gstr1_filed    — GSTR-1/IFF filed success confirmation + ARN
- *   gst_gstr3b_filed   — GSTR-3B filed success confirmation + ARN
- *   gst_gstr9_filed    — GSTR-9 / GSTR-9C filed confirmation + ARN
- *   gst_cmp08_filed    — CMP-08 filed confirmation + ARN
+ * gst_protocol.js — SDC GST Portal Protocol
+ * ==========================================
+ * Registers SDC Crosshairs for the GST Common Portal (services.gst.gov.in / return.gst.gov.in / gst.gov.in).
+ * 
+ * Crosshair Map:
+ * ┌────────────────────────────────────────────────────────────────────────────────────────┐
+ * │ ID                      │ Route Pattern / Scope                                        │
+ * ├────────────────────────────────────────────────────────────────────────────────────────┤
+ * │ gst_welcome_calendar    │ …/services/auth/fowelcome OR …/dashboard                     │
+ * │                         │ (Captures GSTIN, PAN, Legal Name, Filing Preference &       │
+ * │                         │  parses Returns Calendar to log all historical filing states)│
+ * │ gst_form_details        │ …/returns/auth/gstr1, …/gstr3b, …/cmp08, …/iff               │
+ * │                         │ (Captures GSTIN, Legal Name, Trade Name, FY, Tax Period,     │
+ * │                         │  Status, and Due Date)                                       │
+ * │ gst_returns_dashboard   │ …/services/auth/returns OR …/quicklinks/returns              │
+ * │ gst_filing_success      │ …/gstr1/success, …/gstr3b/success, …/filing/success          │
+ * │ gst_login_logout        │ …/login, …/logout, …/session-expired                         │
+ * └────────────────────────────────────────────────────────────────────────────────────────┘
  */
 
 (function () {
   'use strict';
 
+  // ─── Local GST Session State Cache ──────────────────────────────────────────
+  let _gstSession = {
+    gstin: '',
+    pan: '',
+    legal_name: '',
+    trade_name: '',
+    client_name: '',
+    client_temp_name: '',
+    fy: '',
+    tax_period: '',
+    due_date: '',
+    preference: '',
+    calendar: []
+  };
+
+  function _resetGstSession() {
+    _gstSession = {
+      gstin: '',
+      pan: '',
+      legal_name: '',
+      trade_name: '',
+      client_name: '',
+      client_temp_name: '',
+      fy: '',
+      tax_period: '',
+      due_date: '',
+      preference: '',
+      calendar: []
+    };
+  }
+
+  function _cleanNameString(raw) {
+    if (!raw) return '';
+    let s = String(raw).trim();
+    // Strip common UI clutter and Material/Bootstrap icons
+    s = s.replace(/(?:expand_more|keyboard_arrow_down|account_circle|person|user|profile|logout|settings)/gi, ' ');
+    s = s.replace(/\s+/g, ' ').trim();
+    return s;
+  }
+
+  // ─── Extract GSTIN and PAN from Text / Elements ─────────────────────────────
+  function _extractGstinAndPan() {
+    let gstin = '';
+    let pan = '';
+
+    const gstinRegex = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i;
+    const panRegex = /\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/i;
+
+    // 1. Check metadata headers: "GSTIN - 19EJQPS3779M1ZU" or "GSTIN: 19EJQPS3779M1ZU"
+    if (document.body) {
+      const gstinMatch = document.body.innerText.match(/GSTIN\s*[-:]\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})/i);
+      if (gstinMatch) {
+        gstin = gstinMatch[1].toUpperCase();
+        pan = gstin.substring(2, 12);
+        return { gstin, pan };
+      }
+    }
+
+    // 2. Check profile info card on the right
+    const rightCards = document.querySelectorAll('.card, .profile-card, .dashboard-profile, div[class*="profile"], div[class*="user"]');
+    for (const card of rightCards) {
+      const match = card.innerText.match(gstinRegex);
+      if (match) {
+        gstin = match[1].toUpperCase();
+        pan = gstin.substring(2, 12);
+        break;
+      }
+    }
+
+    // 3. Full document body text search
+    if (!gstin && document.body) {
+      const match = document.body.innerText.match(gstinRegex);
+      if (match) {
+        gstin = match[1].toUpperCase();
+        pan = gstin.substring(2, 12);
+      }
+    }
+
+    // 4. Fallback PAN search
+    if (!pan && document.body) {
+      const pMatch = document.body.innerText.match(panRegex);
+      if (pMatch) {
+        pan = pMatch[1].toUpperCase();
+      }
+    }
+
+    return { gstin, pan };
+  }
+
+  // ─── Extract Taxpayer Names (Legal & Trade) ─────────────────────────────────
+  function _extractTaxpayerNames() {
+    let legalName = '';
+    let tradeName = '';
+    let tempName = '';
+
+    if (document.body) {
+      const bodyText = document.body.innerText;
+
+      // 1. Structured table: "Legal Name - AMEJUDDIN SK"
+      const legalMatch = bodyText.match(/Legal\s+Name\s*[-:]\s*([A-Z0-9\s\.\-_&]+?)(?=\s*(?:Trade\s+Name|GSTIN|FY|Tax\s+Period|Status|Due\s+Date|\n|$))/i);
+      if (legalMatch && legalMatch[1]) {
+        legalName = _cleanNameString(legalMatch[1]);
+      }
+
+      // 2. Structured table: "Trade Name - A. SHABNAM DRESSES"
+      const tradeMatch = bodyText.match(/Trade\s+Name\s*[-:]\s*([A-Z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s+Name|GSTIN|FY|Tax\s+Period|Status|Due\s+Date|Indicates|\n|$))/i);
+      if (tradeMatch && tradeMatch[1]) {
+        tradeName = _cleanNameString(tradeMatch[1]);
+      }
+
+      // 3. Welcome banner: "Welcome <NAME> to GST Common Portal"
+      if (!legalName) {
+        const welcomeMatch = bodyText.match(/Welcome\s+([A-Z0-9\s\.\-_&]+?)\s+to\s+GST\s+Common\s+Portal/i);
+        if (welcomeMatch && welcomeMatch[1]) {
+          legalName = _cleanNameString(welcomeMatch[1]);
+        }
+      }
+    }
+
+    // 4. Header user badge (e.g. top right menu)
+    const headerBadges = document.querySelectorAll('header, nav, .navbar, .user-name, #user-dropdown, a[class*="user"], span[class*="user"]');
+    for (const badge of headerBadges) {
+      const text = badge.innerText || '';
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (/^[A-Z\s\.\-_&]{3,45}$/i.test(line) && !/^(dashboard|services|gst law|downloads|search|help|e-invoice|news|skip)/i.test(line)) {
+          tempName = _cleanNameString(line);
+          break;
+        }
+      }
+      if (tempName) break;
+    }
+
+    const primaryName = legalName || tradeName || tempName || '';
+
+    return {
+      legal_name: legalName,
+      trade_name: tradeName,
+      client_name: primaryName,
+      client_temp_name: tempName || primaryName
+    };
+  }
+
+  // ─── Extract Form Details (FY, Tax Period, Status, Due Date) ────────────────
+  function _extractFormMetadata() {
+    if (!document.body) return {};
+
+    const bodyText = document.body.innerText;
+
+    // FY: "FY - 2026-27"
+    let fy = '';
+    const fyMatch = bodyText.match(/FY\s*[-:]\s*([0-9]{4}\s*-\s*[0-9]{2,4})/i);
+    if (fyMatch) fy = fyMatch[1].replace(/\s+/g, '');
+
+    // Tax Period: "Tax Period - June(Q)" or "Tax Period - June"
+    let taxPeriod = '';
+    const periodMatch = bodyText.match(/Tax\s+Period\s*[-:]\s*([A-Za-z0-9\(\)\s\-_]+?)(?=\s*(?:Status|Due\s+Date|FY|Trade|Legal|\n|$))/i);
+    if (periodMatch) taxPeriod = periodMatch[1].trim();
+
+    // Status: "Status - Filed" or "Status - Not Filed"
+    let status = '';
+    const statusMatch = bodyText.match(/Status\s*[-:]\s*([A-Za-z0-9\s\-_]+?)(?=\s*(?:Due\s+Date|FY|Tax\s+Period|Trade|Legal|\n|$))/i);
+    if (statusMatch) status = statusMatch[1].trim();
+
+    // Due Date: "Due Date - 13/07/2026" or "Due Date : 13/07/2026"
+    let dueDate = '';
+    const dueMatch = bodyText.match(/Due\s+Date\s*[-:]\s*([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})/i);
+    if (dueMatch) dueDate = dueMatch[1].trim();
+
+    // Form Title / Type: from Banner / Breadcrumb (e.g. "GSTR-1/IFF", "GSTR-3B")
+    let formType = '';
+    const formTitleElem = document.querySelector('h1, h2, h3, .page-title, .panel-title, .breadcrumb');
+    if (formTitleElem && /(GSTR-[1-9A-Z]+|CMP-[0-9]+|IFF)/i.test(formTitleElem.innerText)) {
+      const m = formTitleElem.innerText.match(/(GSTR-[1-9A-Z]+(?:\s*\/\s*IFF)?|CMP-[0-9]+|IFF)/i);
+      if (m) formType = m[1].replace(/\s+/g, ' ').toUpperCase();
+    }
+    if (!formType) {
+      const urlM = window.location.href.match(/(gstr1|gstr3b|cmp08|gstr4|gstr9|iff)/i);
+      if (urlM) formType = urlM[1].toUpperCase();
+    }
+
+    // Nil filing checkbox
+    const nilCheckbox = document.querySelector('input[type="checkbox"][id*="nil" i], input[type="checkbox"][name*="nil" i]');
+    const isNil = Boolean(nilCheckbox && nilCheckbox.checked);
+
+    return {
+      fy,
+      tax_period: taxPeriod,
+      status: status || 'Initiated',
+      due_date: dueDate,
+      form_type: formType || 'GSTR-1',
+      is_nil: isNil
+    };
+  }
+
+  // ─── Extract Return Filing Preference ───────────────────────────────────────
+  function _extractFilingPreference() {
+    if (!document.body) return '';
+    const match = document.body.innerText.match(/Return\s+filing\s+preference\s*(?:\([^)]*\))?\s*:\s*([A-Za-z]+)/i);
+    return match ? match[1].trim() : '';
+  }
+
+  // ─── Utility: Wait for SPA DOM Rendering ─────────────────────────────────────
+  async function _waitForReady(testFn, timeoutMs = 15000, intervalMs = 500) {
+    const startTime = Date.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (testFn()) {
+          resolve(true);
+          return;
+        }
+        if (Date.now() - startTime >= timeoutMs) {
+          resolve(false); // Timeout, proceed anyway
+          return;
+        }
+        setTimeout(check, intervalMs);
+      };
+      check();
+    });
+  }
+
+  // ─── Parse Returns Calendar (Last 5 return periods) ─────────────────────────
+  function _parseReturnsCalendar() {
+    const calendarEntries = [];
+
+    // Find table containing "Returns Calendar" or table structure
+    const tables = document.querySelectorAll('table, .table, div[class*="calendar"], div[class*="return-status"]');
+    let targetTable = null;
+
+    for (const tbl of tables) {
+      const txt = tbl.innerText || '';
+      if (txt.includes('GSTR-1') || txt.includes('GSTR-3B') || txt.includes('Returns Calendar')) {
+        targetTable = tbl;
+        break;
+      }
+    }
+
+    if (targetTable) {
+      const rows = targetTable.querySelectorAll('tr, div[class*="row"]');
+      let periodHeaders = [];
+
+      // Look for the header row containing periods (e.g. "Mar - 2026", "Apr - 2026")
+      for (const row of rows) {
+        const cells = row.querySelectorAll('th, td, div[class*="col"], div[class*="cell"]');
+        const cellTexts = Array.from(cells).map(c => (c.innerText || '').trim());
+        const dateMatchCount = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/.test(t)).length;
+        if (dateMatchCount >= 2) {
+          periodHeaders = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/.test(t));
+          break;
+        }
+      }
+
+      // If headers found, extract data rows
+      if (periodHeaders.length > 0) {
+        for (const row of rows) {
+          const cells = row.querySelectorAll('th, td, div[class*="col"], div[class*="cell"]');
+          if (cells.length < 2) continue;
+
+          const rowLabel = (cells[0].innerText || '').trim();
+          if (/GSTR-1|GSTR-3B|CMP-08|GSTR-4|GSTR-9/i.test(rowLabel)) {
+            const formType = rowLabel.replace(/\s+/g, ' ');
+            for (let i = 1; i < cells.length && (i - 1) < periodHeaders.length; i++) {
+              const statusCell = (cells[i].innerText || '').trim();
+              const period = periodHeaders[i - 1];
+              
+              let statusClean = statusCell.replace(/\s+/g, ' ');
+              if (/not filed/i.test(statusClean)) statusClean = 'Not Filed';
+              else if (/filed/i.test(statusClean)) statusClean = 'Filed';
+              else if (/pending/i.test(statusClean)) statusClean = 'Pending';
+              else if (/expired/i.test(statusClean)) statusClean = 'NA Option expired';
+              else if (/^na$/i.test(statusClean)) statusClean = 'NA';
+
+              calendarEntries.push({
+                form: formType,
+                period: period,
+                status: statusClean,
+                raw_status: statusCell
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: Text-based regex parsing if Angular table markup is deeply nested
+    if (calendarEntries.length === 0 && document.body) {
+      const bodyText = document.body.innerText;
+      const gstr1Section = bodyText.match(/GSTR-1(?:\s*\/\s*IFF)?[\s\S]*?(?=GSTR-3B|CMP-08|$)/i);
+      const gstr3bSection = bodyText.match(/GSTR-3B[\s\S]*?(?=You can navigate|CMP-08|$)/i);
+
+      function parseSection(secText, formName) {
+        if (!secText) return;
+        // Match 3-letter month + year, then the next words indicating status
+        const periodRegex = /([A-Za-z]{3}\s*[-]?\s*\d{2,4})[\s\n\r]+((?:Not\s+Filed|Filed|Pending|NA(?:\s+Option\s+expired)?))/gi;
+        let match;
+        while ((match = periodRegex.exec(secText)) !== null) {
+          const period = match[1].trim();
+          let st = match[2].trim().replace(/\s+/g, ' ');
+
+          if (/not filed/i.test(st)) st = 'Not Filed';
+          else if (/filed/i.test(st)) st = 'Filed';
+          else if (/pending/i.test(st)) st = 'Pending';
+          else if (/expired/i.test(st)) st = 'NA Option expired';
+          else if (/^na$/i.test(st)) st = 'NA';
+
+          calendarEntries.push({
+            form: formName,
+            period: period,
+            status: st,
+            raw_status: match[2].trim()
+          });
+        }
+      }
+
+      if (gstr1Section) parseSection(gstr1Section[0], 'GSTR-1 / IFF');
+      if (gstr3bSection) parseSection(gstr3bSection[0], 'GSTR-3B');
+    }
+
+    return calendarEntries;
+  }
+
+  // ─── Handler 1: Welcome Dashboard & Calendar ────────────────────────────────
+  async function _handleWelcomeCalendar(url) {
+    // Wait for Angular SPA to render the GSTIN and Returns Calendar
+    await _waitForReady(() => {
+      const txt = document.body ? document.body.innerText : '';
+      const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
+      const hasCalendar = /(Returns Calendar|GSTR-1|GSTR-3B)/i.test(txt);
+      return hasGstin && hasCalendar;
+    }, 12000, 500);
+
+    const { gstin, pan } = _extractGstinAndPan();
+    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const preference = _extractFilingPreference();
+    const calendar = _parseReturnsCalendar();
+
+    if (gstin) _gstSession.gstin = gstin;
+    if (pan) _gstSession.pan = pan;
+    if (legal_name) _gstSession.legal_name = legal_name;
+    if (trade_name) _gstSession.trade_name = trade_name;
+    if (client_name) _gstSession.client_name = client_name;
+    if (client_temp_name) _gstSession.client_temp_name = client_temp_name;
+    if (preference) _gstSession.preference = preference;
+    _gstSession.calendar = calendar;
+
+    const SDC = window.__SERA_SDC__;
+
+    // Emit individual calendar filings to SDC Core & Database
+    if (calendar.length > 0 && SDC && typeof SDC._emitCapture === 'function') {
+      for (const item of calendar) {
+        const itemCapture = {
+          gstin: gstin || _gstSession.gstin,
+          pan: pan || _gstSession.pan,
+          client_name: client_name || _gstSession.client_name,
+          client_temp_name: client_temp_name || _gstSession.client_temp_name,
+          company_name: trade_name || _gstSession.trade_name,
+          proprietor_name: legal_name || _gstSession.legal_name,
+          portal: 'GST Portal',
+          filing_type: item.form,
+          period_label: item.period,
+          status: item.status,
+          arn: 'N/A',
+          confirmation_message: 'GST Returns Calendar: ' + item.form + ' for ' + item.period + ' is ' + item.status,
+          scraped_data: {
+            returns_calendar_item: item,
+            legal_name: legal_name || _gstSession.legal_name,
+            trade_name: trade_name || _gstSession.trade_name,
+            filing_preference: preference,
+            scanned_at: new Date().toISOString()
+          }
+        };
+
+        SDC._emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
+      }
+    }
+
+    const filedCount = calendar.filter(c => c.status === 'Filed').length;
+    const summaryStatus = calendar.length > 0 ? (calendar.length + ' Periods Scanned (' + filedCount + ' Filed)') : 'Dashboard Visited';
+    const periodSummary = calendar.length > 0 ? (calendar[0].period + ' - ' + calendar[calendar.length - 1].period) : 'Recent Periods';
+
+    return {
+      gstin: gstin || _gstSession.gstin,
+      pan: pan || _gstSession.pan,
+      client_name: client_name || _gstSession.client_name,
+      client_temp_name: client_temp_name || _gstSession.client_temp_name,
+      company_name: trade_name || _gstSession.trade_name,
+      proprietor_name: legal_name || _gstSession.legal_name,
+      filing_type: 'GST Returns Calendar',
+      period_label: periodSummary,
+      status: summaryStatus,
+      arn: 'N/A',
+      scraped_data: {
+        returns_calendar: calendar,
+        legal_name: legal_name || _gstSession.legal_name,
+        trade_name: trade_name || _gstSession.trade_name,
+        preference: preference,
+        total_periods: calendar.length,
+        filed_periods: filedCount
+      }
+    };
+  }
+
+  // ─── Handler 2: Form Preparation & Summary Details (New Crosshair) ──────────
+  async function _handleFormDetails(url) {
+    // Wait for Form details to populate
+    await _waitForReady(() => {
+      const txt = document.body ? document.body.innerText : '';
+      const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
+      const hasMeta = /(Status|Due Date|Tax Period|FY)/i.test(txt);
+      return hasGstin && hasMeta;
+    }, 10000, 500);
+
+    const { gstin, pan } = _extractGstinAndPan();
+    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const meta = _extractFormMetadata();
+
+    if (gstin) _gstSession.gstin = gstin;
+    if (pan) _gstSession.pan = pan;
+    if (legal_name) _gstSession.legal_name = legal_name;
+    if (trade_name) _gstSession.trade_name = trade_name;
+    if (client_name) _gstSession.client_name = client_name;
+    if (client_temp_name) _gstSession.client_temp_name = client_temp_name;
+    if (meta.fy) _gstSession.fy = meta.fy;
+    if (meta.tax_period) _gstSession.tax_period = meta.tax_period;
+    if (meta.due_date) _gstSession.due_date = meta.due_date;
+
+    const fullPeriodLabel = meta.tax_period ? (meta.tax_period + (meta.fy ? ' (FY ' + meta.fy + ')' : '')) : (meta.fy || 'Current Period');
+    const finalStatus = meta.status || 'Initiated';
+
+    return {
+      gstin: gstin || _gstSession.gstin,
+      pan: pan || _gstSession.pan,
+      client_name: client_name || _gstSession.client_name,
+      client_temp_name: client_temp_name || _gstSession.client_temp_name,
+      company_name: trade_name || _gstSession.trade_name,
+      proprietor_name: legal_name || _gstSession.legal_name,
+      filing_type: meta.form_type || 'GSTR-1',
+      period_label: fullPeriodLabel,
+      status: finalStatus,
+      due_date: meta.due_date || '',
+      arn: 'N/A',
+      scraped_data: {
+        gstin: gstin || _gstSession.gstin,
+        pan: pan || _gstSession.pan,
+        legal_name: legal_name || _gstSession.legal_name,
+        trade_name: trade_name || _gstSession.trade_name,
+        fy: meta.fy || _gstSession.fy,
+        tax_period: meta.tax_period || _gstSession.tax_period,
+        status: finalStatus,
+        due_date: meta.due_date || _gstSession.due_date,
+        form_type: meta.form_type,
+        is_nil: meta.is_nil,
+        captured_at: new Date().toISOString()
+      }
+    };
+  }
+
+  // ─── Handler 3: Returns Filing Dashboard Selection ──────────────────────────
+  async function _handleReturnsDashboard(url) {
+    await _waitForReady(() => {
+      const txt = document.body ? document.body.innerText : '';
+      return /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
+    }, 8000, 500);
+
+    const { gstin, pan } = _extractGstinAndPan();
+    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+
+    return {
+      gstin: gstin || _gstSession.gstin,
+      pan: pan || _gstSession.pan,
+      client_name: client_name || _gstSession.client_name,
+      client_temp_name: client_temp_name || _gstSession.client_temp_name,
+      company_name: trade_name || _gstSession.trade_name,
+      proprietor_name: legal_name || _gstSession.legal_name,
+      filing_type: 'GST Return Filing',
+      period_label: 'Filing Dashboard',
+      status: 'Return Selection',
+      arn: 'N/A'
+    };
+  }
+
+  // ─── Handler 4: Filing Success / Confirmation ───────────────────────────────
+  async function _handleFilingSuccess(url) {
+    await _waitForReady(() => {
+      const txt = document.body ? document.body.innerText : '';
+      const hasArn = /ARN/i.test(txt);
+      const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
+      return hasArn || hasGstin;
+    }, 10000, 500);
+
+    const { gstin, pan } = _extractGstinAndPan();
+    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const meta = _extractFormMetadata();
+
+    let arn = 'N/A';
+    const arnMatch = document.body ? document.body.innerText.match(/ARN\s*(?:Number|No\.?)?\s*[:\-]?\s*([A-Za-z0-9]{15})/i) : null;
+    if (arnMatch) {
+      arn = arnMatch[1].toUpperCase();
+    }
+
+    return {
+      gstin: gstin || _gstSession.gstin,
+      pan: pan || _gstSession.pan,
+      client_name: client_name || _gstSession.client_name,
+      client_temp_name: client_temp_name || _gstSession.client_temp_name,
+      company_name: trade_name || _gstSession.trade_name,
+      proprietor_name: legal_name || _gstSession.legal_name,
+      filing_type: meta.form_type || 'GSTR Filing',
+      period_label: meta.tax_period || 'Current Period',
+      status: 'Filed & Confirmed',
+      due_date: meta.due_date || '',
+      arn: arn
+    };
+  }
+
+  // ─── Handler 5: Login & Logout ──────────────────────────────────────────────
+  async function _handleLoginLogout(url) {
+    const lower = (url || '').toLowerCase();
+    const isLogout = lower.includes('logout') || lower.includes('signout') || lower.includes('session') || lower.includes('timeout');
+
+    const SDC = window.__SERA_SDC__;
+    if (isLogout && SDC) {
+      await SDC.session.finalizeLogout(url);
+      _resetGstSession();
+      await SDC.clearAllSessions();
+      return null;
+    }
+
+    const { gstin, pan } = _extractGstinAndPan();
+    return {
+      gstin: gstin || '',
+      pan: pan || '',
+      client_name: '',
+      client_temp_name: '',
+      filing_type: '',
+      period_label: '',
+      status: 'GST Pre-Login',
+      arn: 'N/A'
+    };
+  }
+
+  // ─── Register Protocol with SDC Core ────────────────────────────────────────
   function _register() {
     const SDC = window.__SERA_SDC__;
-    if (!SDC) { setTimeout(_register, 100); return; }
+    if (!SDC) {
+      setTimeout(_register, 100);
+      return;
+    }
 
-    // GST Protocol stub — no crosshairs active yet
-    // SDC.register({ name: 'GST Portal', hostMatch: /gst\.gov\.in/, crosshairs: [] });
+    SDC.onSessionClear(_resetGstSession);
 
-    console.log('⚡ Sera SDC: GST Protocol stub loaded (no crosshairs registered yet).');
+    SDC.register({
+      name: 'GST Portal',
+      hostMatch: /(?:services\.gst\.gov\.in|return\.gst\.gov\.in|gst\.gov\.in|localhost|127\.0\.0\.1)/i,
+      crosshairs: [
+        {
+          id: 'gst_filing_success',
+          pattern: /(?:services\/auth\/gstr.*success|gstr.*submit.*success|returns.*success|filing.*success|ack.*success)/i,
+          handler: _handleFilingSuccess
+        },
+        {
+          id: 'gst_form_details',
+          // Matches GSTR-1, GSTR-3B, CMP-08, IFF, GSTR-4, GSTR-9 form tables on return.gst.gov.in and services.gst.gov.in
+          pattern: /(?:returns\/auth\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff)|services\/auth\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff)|returns\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff))/i,
+          handler: _handleFormDetails
+        },
+        {
+          id: 'gst_welcome_calendar',
+          pattern: /(?:services\/auth\/fowelcome|services\/auth\/dashboard|fowelcome|auth\/dashboard$)/i,
+          handler: _handleWelcomeCalendar
+        },
+        {
+          id: 'gst_returns_dashboard',
+          pattern: /(?:services\/auth\/returns|services\/quicklinks\/returns|returns\/dashboard)/i,
+          handler: _handleReturnsDashboard
+        },
+        {
+          id: 'gst_login_logout',
+          pattern: /[/#](?:login|logout|sign-?in|sign-?out|session.?expire|session-?timeout)(?:[?/#]|$)/i,
+          handler: _handleLoginLogout
+        }
+      ]
+    });
+
+    console.log('⚡ Sera SDC: GST Portal Protocol registered with Form Summary & Returns Calendar crosshairs.');
   }
 
   _register();
+
 })();

@@ -325,6 +325,9 @@ class SeraDatabase:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_containers_last_updated ON client_raw_containers(last_updated DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_created ON tracker_dump(created_at DESC);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_start ON sdc_session_timelines(start_time DESC);")
 
     def _migrate_tracker_dump_to_raw_payload_db(self):
         """One-time migration: moves any historical tracker_dump rows from master.db to rawPayload.db, then drops tracker_dump in master.db."""
@@ -1997,6 +2000,13 @@ class SeraDatabase:
     def log_action(self, actor: str, action: str, client_id: int = None, service_id: int = None, detail: str = None):
         actor_name = actor or "System"
         ts = datetime.datetime.utcnow().isoformat()
+        if not detail:
+            if action == "view":
+                detail = f"Viewed client profile" if client_id else "Viewed client list"
+            elif action == "manual_assist":
+                detail = "Manual assist triggered"
+            elif action == "autofill":
+                detail = "Autofill triggered"
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO audit_log (ts, actor, action, client_id, service_id, detail)
@@ -2587,6 +2597,50 @@ class SeraDatabase:
                 "last_updated": row[15]
             }
 
+    def _fetch_clients_batch(self, m_conn, client_ids: set[int]) -> dict[int, dict]:
+        """High-performance batch fetcher for multiple client records in a single query."""
+        if not client_ids:
+            return {}
+            
+        mcl_cols = self.get_mcl_columns()
+        c_list = list(client_ids)
+        placeholders = ",".join("?" for _ in c_list)
+        
+        # 1. Fetch client tokens and archived status
+        cur = m_conn.execute(f"SELECT id, client_id_token FROM clients WHERE id IN ({placeholders})", c_list)
+        client_tokens = {row[0]: row[1] for row in cur.fetchall()}
+        
+        # 2. Fetch all values in one batch
+        cur = m_conn.execute(f"SELECT client_id, column_id, value FROM client_values WHERE client_id IN ({placeholders})", c_list)
+        client_values = {}
+        for cid, col_id, val in cur.fetchall():
+            if cid not in client_values:
+                client_values[cid] = {}
+            client_values[cid][col_id] = val
+            
+        # 3. Assemble map
+        client_map = {}
+        for cid in client_ids:
+            c_vals = client_values.get(cid, {})
+            name_val = ""
+            pan_val = ""
+            for col in mcl_cols:
+                lbl = col.get("label", "").lower()
+                val = c_vals.get(col["id"], "")
+                if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
+                    name_val = str(val).strip()
+                elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
+                    pan_val = str(val).strip()
+            
+            token = client_tokens.get(cid, f"CLI-{cid:05d}")
+            client_map[cid] = {
+                "name": name_val or token,
+                "pan": pan_val,
+                "client_id_token": token,
+                "is_unassigned": False
+            }
+        return client_map
+
     def get_srpf_containers(self, limit: int = 200, search_query: str = None) -> list[dict]:
         """SRPF Phase 1 Filtration: Returns grouped client containers from rawPayload.db.
         Each distinct client or unregistered entity is aggregated into exactly ONE container row."""
@@ -2613,32 +2667,15 @@ class SeraDatabase:
         if not rows:
             return []
 
-        # 3. Enrich with master.db client info
-        mcl_cols = self.get_mcl_columns()
+        # 3. Enrich with master.db client info (Batch Optimized)
         client_map = {}
         with self._connect() as m_conn:
             unique_cids = {r[1] for r in rows if r[1]}
-            for cid in unique_cids:
+            if unique_cids:
                 try:
-                    cdata = self._fetch_client_full(m_conn, cid)
-                    if cdata:
-                        c_vals = cdata.get("values", {})
-                        name_val = ""
-                        pan_val = ""
-                        for col in mcl_cols:
-                            lbl = col.get("label", "").lower()
-                            val = c_vals.get(col["id"], "")
-                            if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
-                                name_val = str(val).strip()
-                            elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
-                                pan_val = str(val).strip()
-                        client_map[cid] = {
-                            "name": name_val or cdata.get("client_id_token", str(cid)),
-                            "pan": pan_val,
-                            "client_id_token": cdata.get("client_id_token", f"CLI-{cid:05d}")
-                        }
+                    client_map = self._fetch_clients_batch(m_conn, unique_cids)
                 except Exception:
-                    pass
+                    client_map = {}
 
         containers = []
         for r in rows:
@@ -3767,32 +3804,16 @@ class SeraDatabase:
         if not rows:
             return []
 
-        # Enrich client names and tokens from master.db
-        mcl_cols = self.get_mcl_columns()
+        # Enrich client names and tokens from master.db (Batch Optimized)
         client_map = {}
         with self._connect() as m_conn:
             unique_cids = {r[1] for r in rows if r[1]}
-            for cid in unique_cids:
+            if unique_cids:
                 try:
-                    cdata = self._fetch_client_full(m_conn, cid)
-                    if cdata:
-                        c_vals = cdata.get("values", {})
-                        name_val = ""
-                        pan_val = ""
-                        for col in mcl_cols:
-                            lbl = col.get("label", "").lower()
-                            val = c_vals.get(col["id"], "")
-                            if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
-                                name_val = str(val).strip()
-                            elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
-                                pan_val = str(val).strip()
-                        client_map[cid] = {
-                            "name": name_val or cdata.get("client_id_token", str(cid)),
-                            "pan": pan_val,
-                            "is_unassigned": False
-                        }
+                    client_map = self._fetch_clients_batch(m_conn, unique_cids)
                 except Exception:
-                    pass
+                    client_map = {}
+            for cid in unique_cids:
                 if cid not in client_map:
                     client_map[cid] = {"name": f"CLI-{cid:05d}", "pan": "", "is_unassigned": False}
 

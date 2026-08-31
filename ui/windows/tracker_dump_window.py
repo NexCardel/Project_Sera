@@ -665,6 +665,13 @@ class TrackerDumpWindow(QWidget):
         super().__init__(parent)
         self.db = db
         self._dumps_cache = []
+        self._filtered_cache = []
+        self._current_page = 1
+        self._page_size = 50
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(180)
+        self._search_timer.timeout.connect(self._apply_filters)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -722,6 +729,44 @@ class TrackerDumpWindow(QWidget):
             }
             QPushButton.DangerBtn:hover {
                 background-color: #C9302C;
+            }
+            QPushButton.ActionCreateBtn {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QPushButton.ActionCreateBtn:hover {
+                background-color: #247C4C;
+            }
+            QPushButton.ActionInspectBtn {
+                background-color: #1A382B;
+                color: #4CF9B7;
+                border: 1px solid #2E9B5F;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton.ActionInspectBtn:hover {
+                background-color: #2E9B5F;
+                color: #FFFFFF;
+            }
+            QPushButton.ActionDelBtn {
+                background-color: #331A1A;
+                color: #FF6B6B;
+                border: 1px solid #882222;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton.ActionDelBtn:hover {
+                background-color: #D9534F;
+                color: #FFFFFF;
             }
             QTableWidget {
                 background-color: #121212;
@@ -819,17 +864,17 @@ class TrackerDumpWindow(QWidget):
 
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText("Search Client Name, PAN, GSTIN, ARN, Period, Portal...")
-        self.txt_search.textChanged.connect(self._apply_filters)
+        self.txt_search.textChanged.connect(self._on_search_text_changed)
         filter_layout.addWidget(self.txt_search, stretch=3)
 
         self.cmb_method = QComboBox()
         self.cmb_method.addItems(["All Capture Methods", "SAD_API_Interceptor", "DOM_Tracker", "Manual_Fallback"])
-        self.cmb_method.currentIndexChanged.connect(self._apply_filters)
+        self.cmb_method.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.cmb_method, stretch=1)
 
         self.cmb_status = QComboBox()
         self.cmb_status.addItems(["All Statuses", "submitted", "pending", "uncertain"])
-        self.cmb_status.currentIndexChanged.connect(self._apply_filters)
+        self.cmb_status.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.cmb_status, stretch=1)
 
         main_layout.addLayout(filter_layout)
@@ -837,19 +882,131 @@ class TrackerDumpWindow(QWidget):
         # Data Table
         self.table = QTableWidget()
         self.table.setAlternatingRowColors(True)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         main_layout.addWidget(self.table)
+
+        # Pagination & Stats Bar
+        pagination_layout = QHBoxLayout()
+        pagination_layout.setContentsMargins(4, 2, 4, 2)
+        pagination_layout.setSpacing(10)
+
+        self.lbl_page_info = QLabel("Showing 0 to 0 of 0 entries")
+        self.lbl_page_info.setStyleSheet("color: #8B949E; font-size: 12px; font-weight: 500;")
+        pagination_layout.addWidget(self.lbl_page_info)
+
+        pagination_layout.addStretch()
+
+        lbl_per_page = QLabel("Rows per page:")
+        lbl_per_page.setStyleSheet("color: #8B949E; font-size: 12px;")
+        pagination_layout.addWidget(lbl_per_page)
+
+        self.cmb_page_size = QComboBox()
+        self.cmb_page_size.addItems(["25", "50", "100", "200", "All"])
+        self.cmb_page_size.setCurrentText("50")
+        self.cmb_page_size.currentIndexChanged.connect(self._on_page_size_changed)
+        self.cmb_page_size.setStyleSheet("background-color: #121212; color: #F0F6FC; padding: 3px 8px; font-size: 12px;")
+        pagination_layout.addWidget(self.cmb_page_size)
+
+        self.btn_prev_page = QPushButton("◀ Prev")
+        self.btn_prev_page.setProperty("class", "ActionBtn")
+        self.btn_prev_page.clicked.connect(self._prev_page)
+        pagination_layout.addWidget(self.btn_prev_page)
+
+        self.lbl_current_page = QLabel("Page 1 / 1")
+        self.lbl_current_page.setStyleSheet("font-weight: 700; color: #4CF9B7; padding: 0 6px; font-size: 12px;")
+        pagination_layout.addWidget(self.lbl_current_page)
+
+        self.btn_next_page = QPushButton("Next ▶")
+        self.btn_next_page.setProperty("class", "ActionBtn")
+        self.btn_next_page.clicked.connect(self._next_page)
+        pagination_layout.addWidget(self.btn_next_page)
+
+        main_layout.addLayout(pagination_layout)
 
         # Initial Load
         self.load_data()
+
+    def _on_search_text_changed(self):
+        """Debounced search filter."""
+        self._current_page = 1
+        self._search_timer.start()
+
+    def _on_filter_changed(self):
+        """Instant filter on dropdown change."""
+        self._current_page = 1
+        self._apply_filters()
+
+    def _on_page_size_changed(self):
+        txt = self.cmb_page_size.currentText()
+        self._page_size = -1 if txt == "All" else int(txt)
+        self._current_page = 1
+        self._apply_filters()
+
+    def _prev_page(self):
+        if self._current_page > 1:
+            self._current_page -= 1
+            self._apply_filters()
+
+    def _next_page(self):
+        total_items = len(self._filtered_cache)
+        if self._page_size > 0:
+            total_pages = max(1, (total_items + self._page_size - 1) // self._page_size)
+            if self._current_page < total_pages:
+                self._current_page += 1
+                self._apply_filters()
+
+    def _on_cell_double_clicked(self, row, column):
+        """Fast double click inspection."""
+        if hasattr(self, "_current_page_items") and 0 <= row < len(self._current_page_items):
+            item = self._current_page_items[row]
+            is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+            if is_grouped:
+                self._show_container_dialog(item)
+            else:
+                self._show_payload_dialog(item)
+
+    def _on_table_context_menu(self, pos):
+        """Right click context menu for quick actions."""
+        row = self.table.rowAt(pos.y())
+        if row < 0 or not hasattr(self, "_current_page_items") or row >= len(self._current_page_items):
+            return
+        item = self._current_page_items[row]
+        is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.setStyleSheet("background-color: #1E1E1E; color: #FFFFFF; border: 1px solid #333333;")
+
+        if is_grouped:
+            act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", "#4CF9B7"), "Inspect Client Container")
+            act_inspect.triggered.connect(lambda: self._show_container_dialog(item))
+            if item.get('is_unassigned'):
+                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
+                act_create.triggered.connect(lambda: self._create_client_from_capture(item))
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Container")
+            act_del.triggered.connect(lambda: self._delete_srpf_container(item.get("identity_key")))
+        else:
+            act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", "#4CF9B7"), "View Raw Payload")
+            act_inspect.triggered.connect(lambda: self._show_payload_dialog(item))
+            if item.get('is_unassigned') or not item.get('client_id'):
+                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
+                act_create.triggered.connect(lambda: self._create_client_from_capture(item))
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Record")
+            act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
+
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
 
     def load_data(self):
         """Fetch tracker dumps or SRPF unified containers from database."""
         try:
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
-                self._dumps_cache = self.db.get_srpf_containers(limit=300)
+                self._dumps_cache = self.db.get_srpf_containers(limit=1000)
             else:
-                self._dumps_cache = self.db.get_tracker_dumps(limit=300)
+                self._dumps_cache = self.db.get_tracker_dumps(limit=1000)
+            self._current_page = 1
             self._apply_filters()
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
@@ -888,12 +1045,34 @@ class TrackerDumpWindow(QWidget):
 
             filtered.append(d)
 
+        self._filtered_cache = filtered
+        total_items = len(filtered)
+        
+        if self._page_size > 0:
+            total_pages = max(1, (total_items + self._page_size - 1) // self._page_size)
+            self._current_page = max(1, min(self._current_page, total_pages))
+            start_idx = (self._current_page - 1) * self._page_size
+            end_idx = min(start_idx + self._page_size, total_items)
+            page_items = filtered[start_idx:end_idx]
+            self.lbl_page_info.setText(f"Showing {start_idx + 1 if total_items > 0 else 0} to {end_idx} of {total_items} entries")
+            self.lbl_current_page.setText(f"Page {self._current_page} / {total_pages}")
+            self.btn_prev_page.setEnabled(self._current_page > 1)
+            self.btn_next_page.setEnabled(self._current_page < total_pages)
+        else:
+            page_items = filtered
+            self.lbl_page_info.setText(f"Showing 1 to {total_items} of {total_items} entries")
+            self.lbl_current_page.setText("Page 1 / 1")
+            self.btn_prev_page.setEnabled(False)
+            self.btn_next_page.setEnabled(False)
+
+        self._current_page_items = page_items
+
         self.table.setUpdatesEnabled(False)
         try:
             if is_grouped:
-                self._populate_grouped_table(filtered)
+                self._populate_grouped_table(page_items)
             else:
-                self._populate_raw_table(filtered)
+                self._populate_raw_table(page_items)
 
             if curr_row >= 0 and curr_row < self.table.rowCount() and curr_col >= 0 and curr_col < self.table.columnCount():
                 self.table.setCurrentCell(curr_row, curr_col)
@@ -995,59 +1174,18 @@ class TrackerDumpWindow(QWidget):
 
             if r.get('is_unassigned'):
                 btn_create = QPushButton("+ Create Client")
-                btn_create.setStyleSheet("""
-                    QPushButton {
-                        background-color: #2E9B5F;
-                        color: #FFFFFF;
-                        border: none;
-                        border-radius: 4px;
-                        padding: 3px 8px;
-                        font-size: 11px;
-                        font-weight: 700;
-                    }
-                    QPushButton:hover {
-                        background-color: #247C4C;
-                    }
-                """)
+                btn_create.setProperty("class", "ActionCreateBtn")
                 btn_create.clicked.connect(lambda _, item=r: self._create_client_from_capture(item))
                 action_layout.addWidget(btn_create)
 
             tot = r.get('total_captures', 1)
-            btn_view = QPushButton(f"Inspect Container ({tot})")
-            btn_view.setStyleSheet("""
-                QPushButton {
-                    background-color: #1A382B;
-                    color: #4CF9B7;
-                    border: 1px solid #2E9B5F;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    background-color: #2E9B5F;
-                    color: #FFFFFF;
-                }
-            """)
+            btn_view = QPushButton(f"Inspect ({tot})")
+            btn_view.setProperty("class", "ActionInspectBtn")
             btn_view.clicked.connect(lambda _, item=r: self._show_container_dialog(item))
             action_layout.addWidget(btn_view)
 
             btn_del = QPushButton("Delete")
-            btn_del.setStyleSheet("""
-                QPushButton {
-                    background-color: #331A1A;
-                    color: #FF6B6B;
-                    border: 1px solid #882222;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    background-color: #D9534F;
-                    color: #FFFFFF;
-                }
-            """)
+            btn_del.setProperty("class", "ActionDelBtn")
             btn_del.clicked.connect(lambda _, key=r["identity_key"]: self._delete_srpf_container(key))
             action_layout.addWidget(btn_del)
 
@@ -1145,58 +1283,17 @@ class TrackerDumpWindow(QWidget):
 
             if r.get('is_unassigned') or not r.get('client_id'):
                 btn_create = QPushButton("+ Create Client")
-                btn_create.setStyleSheet("""
-                    QPushButton {
-                        background-color: #2E9B5F;
-                        color: #FFFFFF;
-                        border: none;
-                        border-radius: 4px;
-                        padding: 3px 8px;
-                        font-size: 11px;
-                        font-weight: 700;
-                    }
-                    QPushButton:hover {
-                        background-color: #247C4C;
-                    }
-                """)
+                btn_create.setProperty("class", "ActionCreateBtn")
                 btn_create.clicked.connect(lambda _, item=r: self._create_client_from_capture(item))
                 action_layout.addWidget(btn_create)
 
             btn_view = QPushButton("View Payload")
-            btn_view.setStyleSheet("""
-                QPushButton {
-                    background-color: #1A382B;
-                    color: #4CF9B7;
-                    border: 1px solid #2E9B5F;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    background-color: #2E9B5F;
-                    color: #FFFFFF;
-                }
-            """)
+            btn_view.setProperty("class", "ActionInspectBtn")
             btn_view.clicked.connect(lambda _, item=r: self._show_payload_dialog(item))
             action_layout.addWidget(btn_view)
 
             btn_del = QPushButton("Delete")
-            btn_del.setStyleSheet("""
-                QPushButton {
-                    background-color: #331A1A;
-                    color: #FF6B6B;
-                    border: 1px solid #882222;
-                    border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-                QPushButton:hover {
-                    background-color: #D9534F;
-                    color: #FFFFFF;
-                }
-            """)
+            btn_del.setProperty("class", "ActionDelBtn")
             btn_del.clicked.connect(lambda _, dump_id=r["id"]: self._delete_dump(dump_id))
             action_layout.addWidget(btn_del)
 
@@ -1471,22 +1568,33 @@ class TrackerDumpWindow(QWidget):
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
 
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        app_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(base_dir))
         parser_dir = os.path.join(app_dir, "DOM_Parser_1")
-        report_path = os.path.join(parser_dir, "dom_audit_report.xlsx")
-        db_path = os.path.join(app_dir, "rawPayload.db")
+        live_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
+        os.makedirs(live_dir, exist_ok=True)
+        report_path = os.path.join(live_dir, "dom_audit_report.xlsx")
+
+        live_db = os.path.join(live_dir, "rawPayload.db")
+        app_db = os.path.join(app_dir, "rawPayload.db")
+        db_path = live_db if os.path.exists(live_db) else app_db
         dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
         target_dump = db_path if os.path.exists(db_path) else next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
 
         try:
             if parser_dir not in sys.path:
                 sys.path.insert(0, parser_dir)
-            import dom_parser
+            try:
+                import dom_parser
+            except ImportError:
+                from DOM_Parser_1 import dom_parser
 
-            os.makedirs(parser_dir, exist_ok=True)
             success = dom_parser.process_data(target_dump, report_path)
             if success and os.path.exists(report_path):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
+                try:
+                    os.startfile(report_path)
+                except Exception:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
             else:
                 QMessageBox.warning(self, "DOM Parser Notice", "Could not generate DOM audit report from available captures.")
         except Exception as e:

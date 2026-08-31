@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import sqlite3
 import pandas as pd
 from datetime import datetime
 
@@ -80,21 +79,20 @@ def get_db_connection():
     return conn
 
 def evaluate_status(raw_status):
-    raw = str(raw_status).lower()
-    if not raw or raw == 'null' or raw == 'none':
+    raw = str(raw_status).lower().strip()
+    if not raw or raw == "null" or raw == "none":
         return "Not submitted"
-    
-    if "filed & verified" in raw or "portal confirmed" in raw:
+    if "filed" in raw or "portal confirmed" in raw:
         return "Submitted & E-verified (green)"
-    elif "pending e-verification" in raw or "pending" in raw:
+    elif "pending" in raw:
         return "Submitted (e-verification pending) [yellow]"
     elif "evc" in raw:
         return "Other EVC"
-    elif "landing" in raw or "form selected" in raw or "draft" in raw or "profile" in raw:
+    elif "option expired" in raw:
+        return "Option Expired (NA)"
+    elif "landing" in raw or "form selected" in raw or "draft" in raw or "profile" in raw or raw == "na":
         return "Not submitted"
-    
     return "Not submitted"
-
 def process_timelines():
     print("Connecting to rawPayload.db to extract SDC Timelines...")
     conn = get_db_connection()
@@ -142,6 +140,7 @@ def process_timelines():
         session_form = ""
         session_ay = ""
         session_status_raw = ""
+        session_due_date = ""
         
         for step in timeline:
             cap = step.get('captured_data')
@@ -158,6 +157,8 @@ def process_timelines():
                     session_ay = cap.get('ay')
                 if cap.get('status'):
                     session_status_raw = cap.get('status')
+                if cap.get('due_date'):
+                    session_due_date = cap.get('due_date')
                     
         final_name = session_full_name if session_full_name else session_temp_name
         
@@ -177,6 +178,7 @@ def process_timelines():
                 "Filing Period": filing_period,
                 "Filing Type": session_form,
                 "Submit Status": submit_status,
+                "Due Date": session_due_date,
                 "Session ID": session_id,
                 "Site History": site_history,
                 "Last Updated": end_time if end_time else start_time
@@ -185,6 +187,8 @@ def process_timelines():
             existing = ltt_dict[key]
             existing["Filing Type"] = session_form if session_form else existing["Filing Type"]
             existing["Submit Status"] = submit_status if session_status_raw else existing["Submit Status"]
+            if session_due_date:
+                existing["Due Date"] = session_due_date
             existing["Session ID"] = session_id
             existing["Site History"] = site_history
             existing["Last Updated"] = end_time if end_time else start_time
@@ -202,7 +206,7 @@ def generate_ltt_excel():
         
     df = pd.DataFrame(data)
     
-    cols = ["PAN", "Client Name", "Filing Period", "Filing Type", "Submit Status", "Session ID", "Last Updated", "Site History"]
+    cols = ["PAN", "Client Name", "Filing Period", "Filing Type", "Submit Status", "Due Date", "Session ID", "Last Updated", "Site History"]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
@@ -217,22 +221,37 @@ def generate_ltt_excel():
     os.makedirs(live_dir, exist_ok=True)
     output_file = os.path.join(live_dir, "Live_Tracking_Table_LTT.xlsx")
     
-    
-    writer = pd.ExcelWriter(output_file, engine='openpyxl')
-    df.to_excel(writer, index=False, sheet_name='Live Tracking Table (LTT)')
-    
-    worksheet = writer.sheets['Live Tracking Table (LTT)']
-    worksheet.column_dimensions['A'].width = 15 
-    worksheet.column_dimensions['B'].width = 30 
-    worksheet.column_dimensions['C'].width = 15 
-    worksheet.column_dimensions['D'].width = 15 
-    worksheet.column_dimensions['E'].width = 40 
-    worksheet.column_dimensions['F'].width = 25 
-    worksheet.column_dimensions['G'].width = 25 
-    worksheet.column_dimensions['H'].width = 80 
-    
-    writer.close()
-    print(f"Success! Generated {output_file} with {len(data)} records.")
+    target_out = output_file
+    try:
+        writer = pd.ExcelWriter(target_out, engine='openpyxl')
+        df.to_excel(writer, index=False, sheet_name='Live Tracking Table (LTT)')
+        worksheet = writer.sheets['Live Tracking Table (LTT)']
+        worksheet.column_dimensions['A'].width = 15 
+        worksheet.column_dimensions['B'].width = 30 
+        worksheet.column_dimensions['C'].width = 15 
+        worksheet.column_dimensions['D'].width = 15 
+        worksheet.column_dimensions['E'].width = 40 
+        worksheet.column_dimensions['F'].width = 25 
+        worksheet.column_dimensions['G'].width = 25 
+        worksheet.column_dimensions['H'].width = 80 
+        writer.close()
+    except PermissionError:
+        target_out = os.path.join(live_dir, f"Live_Tracking_Table_LTT_{datetime.now().strftime('%H%M%S')}.xlsx")
+        writer = pd.ExcelWriter(target_out, engine='openpyxl')
+        df.to_excel(writer, index=False, sheet_name='Live Tracking Table (LTT)')
+        worksheet = writer.sheets['Live Tracking Table (LTT)']
+        worksheet.column_dimensions['A'].width = 15 
+        worksheet.column_dimensions['B'].width = 30 
+        worksheet.column_dimensions['C'].width = 15 
+        worksheet.column_dimensions['D'].width = 15 
+        worksheet.column_dimensions['E'].width = 40 
+        worksheet.column_dimensions['F'].width = 25 
+        worksheet.column_dimensions['G'].width = 25 
+        worksheet.column_dimensions['H'].width = 80 
+        writer.close()
+
+    print(f"Success! Generated {target_out} with {len(data)} records.")
+    return target_out
 
 if __name__ == '__main__':
     print("--- SDC Parser (Live Tracking Table) ---")
