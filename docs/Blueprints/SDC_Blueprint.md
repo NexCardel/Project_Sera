@@ -2,16 +2,15 @@
 
 ## Concept
 
-**SDC** (Sera DOM Crosshair) is a lightweight, route-gated DOM scanning engine for the Sera browser extension.
+**SDC** (Sera DOM Crosshair) is a lightweight, route-gated DOM scanning and session assembly engine for the Sera browser extension.
 
-Unlike `tracker.js` which runs a continuous MutationObserver across the entire DOM (causing minor lag on heavy SPA portals), SDC:
+Unlike continuous DOM observers that cause lag on heavy SPA portals, SDC:
 
 1. **Sleeps completely** while on non-target pages (zero CPU overhead)
 2. **Wakes only** when the current URL/hash matches a registered **crosshair pattern**
 3. **Delegates immediately** to the matched protocol's handler (ITR, GST, etc.)
-4. **Returns to sleep** after the capture
-
-SDC coexists alongside `tracker.js`. Both run when FST is enabled. SDC is the future path toward deprecating the heavy `tracker.js` once all portals are covered.
+4. **Buffers 100% of captured session data** into the in-memory **`sdc_assembler`** module
+5. **Flushes one single atomic master payload** directly to the Project Sera desktop app when the taxpayer session terminates (via logout, client switch, or 15-min inactivity TTL)
 
 ---
 
@@ -20,77 +19,64 @@ SDC coexists alongside `tracker.js`. Both run when FST is enabled. SDC is the fu
 ```
 sera_extension/
 └── sdc/
-    ├── sdc_core.js              ← Route listener + dispatcher (SPA-safe)
+    ├── sdc_core.js              ← Route listener + SDC Assembler + HTTP Dispatcher
     └── protocols/
-        ├── itr_protocol.js      ← Income Tax portal — ACTIVE (v1.0)
-        ├── gst_protocol.js      ← GST portal — Stub (planned)
+        ├── itr_protocol.js      ← Income Tax portal — ACTIVE (v2.9.2)
+        ├── gst_protocol.js      ← GST portal — Active
         ├── traces_protocol.js   ← TRACES TDS portal — Stub (planned)
         └── mca_protocol.js      ← MCA V3 portal — Stub (planned)
 ```
 
 ---
 
-## SDC Core (`sdc_core.js`)
+## SDC Assembler (`sdc_assembler`)
 
-- Intercepts `pushState`, `replaceState`, `hashchange`, `popstate` to detect SPA route changes.
-- On a route change, iterates registered protocols to find a host match, then crosshair pattern match.
-- On crosshair match, calls the protocol handler and emits `SeraFSTApiCapture` event (consumed by existing `filing_detector.js` pipeline).
-- Uses a 400ms debounce so rapid navigations don't fire redundant scans.
-- Provides a `SDC.utils` helper library to all protocols.
+The **SDC Assembler** aggregates all multi-step filing fragments throughout a taxpayer's active portal session into an isolated, portal-scoped local storage space:
 
-### Protocol Registration API
-
-```js
-window.__SERA_SDC__.register({
-  name: 'ITR Portal',
-  hostMatch: /incometax\.gov\.in/,
-  crosshairs: [
-    {
-      id: 'itr_filed_verified',
-      pattern: /fo-e-verify-now-success/i,
-      handler: async (url) => { /* returns SDCCapture or null */ }
-    }
-  ]
-});
-```
-
-### SDCCapture Shape
-
-```js
-{
-  portal: 'income tax',       // string
-  pan: 'ABCDE1234F',          // 10-char PAN (primary key)
-  client_name: 'JOHN SMITH',  // full legal name
-  name: 'JOHN SMITH',
-  taxpayer_name: 'JOHN SMITH',
-  filing_type: 'ITR-4',       // form type
-  period_label: 'AY 2026-27', // assessment / tax period
-  arn: '123456789012345',     // 15-digit ACK or 'N/A'
-  status: 'Filed & Verified', // see statuses below
-  dom_breadcrumbs: '...',
-  confirmation_message: '...'
-}
-```
+- **Portal-Scoped Storage Isolation**:
+  - `__SDC_SESSION_ITR__` for Income Tax Portal (`incometax.gov.in`)
+  - `__SDC_SESSION_GST__` for GST Portal (`gst.gov.in`)
+  - `__SDC_SESSION_TRACES__` for TRACES Portal (`tdscpc.gov.in`)
+  - `__SDC_SESSION_MCA__` for MCA Portal (`mca.gov.in`)
+  - `__SDC_SESSION_DEFAULT__` for generic compliance sites
+- **15-Minute Inactivity TTL**: Sessions automatically finalize and flush after 15 minutes of inactivity.
+- **Double-Flush Guard (`_assembler_flushed`)**: Prevents duplicate emissions when multiple termination triggers (e.g., explicit logout + login boundary guard) fire in rapid succession.
+- **Browse-Only Filter**: If a session contains navigation steps but zero crosshair captures, `filing_result` emission is suppressed, recording only the audit trail in `sdc_session_timelines`.
+- **Client Context Switch Guard**: Detects when a new PAN is encountered mid-session, cleanly sealing and flushing the prior client's session before initializing the new client session.
 
 ---
 
-## ITR Protocol Crosshairs
+## Primary Dispatch Pipeline: Direct HTTP Loopback
 
-| Crosshair ID | Route Pattern | Status Captured | Priority |
-| :--- | :--- | :--- | :--- |
-| `itr_filed_verified` | `fo-e-verify-now-success`, `fo-return-success` | **Filed & Verified** | 1st |
-| `itr_submitted_pending` | `fo-e-verify-later`, `complete-verification` | **Submitted (Pending e-Verification)** | 2nd |
-| `itr_personal_info` | `personal_information`, `profile`, `parta_gen` | **PAN + Name Identity Lock** | 3rd |
-| `itr_form_select` | `fo-select-itr-form`, `fo-lets-get-started` | **Form + AY Context Lock** | 4th |
+SDC delivers unified payloads to the desktop application via a resilient two-tier pipeline:
 
-### Status Values
+1. **Primary Route — Direct Local HTTP (`http://127.0.0.1:49152`)**:
+   - Dispatches directly from the active tab via `fetch()`.
+   - Immune to Manifest V3 background service worker idle/sleep cycles.
+   - Ultra-low latency and zero dependency on native messaging process pipes.
+2. **Fail-Safe Route — Chrome Runtime Service Worker**:
+   - If the direct HTTP fetch fails (e.g., desktop app temporarily closed), it falls back to `chrome.runtime.sendMessage()` to route via `background.js` and the Native Messaging host.
 
-| Status | Description |
-| :--- | :--- |
-| `Filed & Verified` | Banner: "You have successfully filed and verified your return!" |
-| `Submitted (Pending e-Verification)` | Banner: "…submitted…e-Verify within 30 days…Download ITR-V" |
-| `Form Selected` | ITR form type and AY identified from route/page |
-| `Draft / Personal Info` | PAN + Name captured from profile page |
+---
+
+## ITR Protocol Crosshairs (7-Crosshair Active Map)
+
+| # | Crosshair ID | Route Pattern | Captured Scope & Status | Priority |
+| :-: | :--- | :--- | :--- | :-: |
+| **1** | `itr_filed_verified` | `fo-e-verify-now-success`, `fo-return-success`, `e-verify.*success` | **`Filed & Verified`**: Captures 15-digit ACK, AY, Form, Date | 1st |
+| **2** | `itr_submitted_pending` | `fo-e-verify-later`, `complete-verification`, `fo-verify-later` | **`Submitted (Pending e-Verification)`**: Captures Ack Number, AY, Form | 2nd |
+| **3** | `itr_view_filed_returns` | `view-filed-returns`, `itr-status`, `fo-view-filed-returns` | **Ledger Extractor**: Scans return card/table, evaluates card milestone timeline via `_resolveCardFilingStatus()` | 3rd |
+| **4** | `itr_personal_info` | `personal_information`, `myProfile`, `profileDetail`, `parta_gen` | **Authoritative Identity**: Extracts legal full name (`FirstName + MiddleName + SurName`), DOB, PAN | 4th |
+| **5** | `itr_form_select` | `fo-select-itr-form`, `fo-lets-get-started` | **Form Intent**: Captures ITR Form (ITR 1–7), AY, Section (139(1), 139(5)) | 5th |
+| **6** | `itr_landing` | `fileincometaxreturn`, `filereturn`, `dashboard`, `welcome` | **Landing Badge**: Captures PAN, AY, Filing Mode, Header Name Badge | 6th |
+| **7** | `itr_login` | `#/login`, `#/logout`, `#/sign-in`, `#/password`, `#/session-expired` | **Session Boundary Guard**: Pre-login PAN extraction & session boundary seal | 7th |
+
+### View Filed Returns Dynamic Milestone Resolver
+On `view-filed-returns`, the protocol analyzes the visual milestone markers inside each card to prevent false-positive verifications:
+- `"Processed with no demand/refund"` / `"Processed"` $\rightarrow$ **`Filed & Verified (Processed)`**
+- `"Successfully e-verified"` $\rightarrow$ **`Filed & Verified`**
+- `"Pending for e-verification"` / `"e-Verify Later"` (without verified milestone) $\rightarrow$ **`Submitted (Pending e-Verification)`**
+- `"Defective"` $\rightarrow$ **`Defective Notice Issued`**
 
 ---
 
@@ -98,47 +84,7 @@ window.__SERA_SDC__.register({
 
 | Tier | Source | Notes |
 | :--- | :--- | :--- |
-| T1 | DOM form inputs (`FirstName`, `MiddleName`, `SurName/LastName`) | Most precise — Part A General page |
-| T2 | Header profile badge (`#loginUsername`, `.header-user-name`) | Available on all portal pages; strip trailing `...` |
-| T3 | Page text composite regex (name near PAN or near "Individual") | Fallback for dynamic rendering |
-
-**Consultation Note**: For person name regex (T3), we deliberately avoid strict regex (too many edge cases — initials, compound names, foreign names). Instead, we anchor name extraction to a PAN or "Individual" label being nearby on the page, which makes it accurate without needing a name-pattern regex.
-
----
-
-## Non-ITR EVC Disambiguation
-
-SDC **will not** fire on EVC flows unrelated to ITR (e.g., Form 10IEA, refund EVC, generic challan EVC). The `_isItrContext()` guard validates:
-
-1. Route/hash contains ITR-specific segments (`foreturns-ay`, `fo-itr`, `fo-e-verify`, `fo-select-itr`, etc.)
-2. **OR** breadcrumb confirms `Income Tax Return > Submit Level Validation`
-
-If neither condition is met, the crosshair handler returns `null` (no capture).
-
----
-
-## Injection Flow
-
-```
-background.js injectSAD(tabId)
-  │
-  ├─ content_scripts/filing_detector.js  (always: toast notifier + filing_result router)
-  ├─ tracker.js                          (if fstEnabled: heavy full-DOM observer)
-  │
-  └─ After filing_detector resolves:
-      ├─ sdc/sdc_core.js                 (if sdcEnabled: route listener + dispatcher)
-      ├─ sdc/protocols/itr_protocol.js
-      ├─ sdc/protocols/gst_protocol.js
-      ├─ sdc/protocols/traces_protocol.js
-      └─ sdc/protocols/mca_protocol.js
-```
-
----
-
-## Future Roadmap
-
-- [ ] `gst_protocol.js` — GSTIN + Legal Name + GSTR-1/3B/9/CMP-08 ARN capture
-- [ ] `traces_protocol.js` — TAN + 24Q/26Q TDS statement PRN/Token capture
-- [ ] `mca_protocol.js` — CIN + SRN ROC filing capture
-- [ ] Popup toggle: **"SDC Only" mode** (disables tracker.js, keeps SDC for lighter footprint)
-- [ ] Session carry-forward: PAN/Name from `itr_personal_info` auto-propagates to subsequent crosshairs within same session
+| **T0** | Portal Session Storage (`sessionStorage`) | Fast JSON profile cache inspection |
+| **T1** | DOM Form Controls (`FirstName`, `MiddleName`, `SurName/LastName`) | Authoritative un-truncated legal name |
+| **T2** | Header Profile Badge (`#loginUsername`, aria-label, role node siblings) | Instant temporary name badge (`client_temp_name`) |
+| **T3** | Page Text Composite Regex | Pattern match anchored near PAN or taxpayer tags |

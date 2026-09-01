@@ -42,7 +42,7 @@
 
     /**
      * SDC Session & Timeline Manager
-     * Syncs memory to chrome.storage.local for cross-tab persistence with 30m TTL.
+     * Syncs memory to chrome.storage.local for cross-tab persistence with 15m TTL.
      * Records an exclusive, unbroken timeline of every visited page on compliance portals.
      */
     session: {
@@ -62,20 +62,32 @@
           form: '',
           ay: '',
           portal: portal,
-          status: 'active', // 'active' | 'completed' | 'terminated_abruptly'
+          status: 'active',
           start_time: new Date().toISOString(),
           end_time: null,
           timeline: [],
+          assembler_captures: [],  // Buffered per-capture payloads (flushed atomically at session end)
+          _assembler_flushed: false, // Guard: prevents double-flush of the same session
           _lastStartedPan: '',
           _ts: Date.now()
         };
       },
 
+      _getStorageKey() {
+        const host = (window.location.hostname || '').toLowerCase();
+        if (host.includes('incometax') || host.includes('efiling')) return '__SDC_SESSION_ITR__';
+        if (host.includes('gst.gov.in')) return '__SDC_SESSION_GST__';
+        if (host.includes('tdscpc.gov.in') || host.includes('traces')) return '__SDC_SESSION_TRACES__';
+        if (host.includes('mca.gov.in')) return '__SDC_SESSION_MCA__';
+        return '__SDC_SESSION_DEFAULT__';
+      },
+
       async load() {
+        const storageKey = this._getStorageKey();
         return new Promise(resolve => {
           const onLoaded = (sess) => {
             const now = Date.now();
-            if (!sess || !sess.session_id || (now - (sess._ts || 0) > 30 * 60 * 1000)) {
+            if (!sess || !sess.session_id || (now - (sess._ts || 0) > 15 * 60 * 1000)) {
               if (sess && sess.session_id && sess.status === 'active') {
                 this._retrospectivelyFinalizeAbrupt(sess);
               }
@@ -89,11 +101,11 @@
 
           try {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-              chrome.storage.local.get(['__SDC_SESSION__'], (res) => {
-                onLoaded(res ? res.__SDC_SESSION__ : null);
+              chrome.storage.local.get([storageKey], (res) => {
+                onLoaded(res ? res[storageKey] : null);
               });
             } else if (typeof localStorage !== 'undefined') {
-              const raw = localStorage.getItem('__SDC_SESSION__');
+              const raw = localStorage.getItem(storageKey);
               onLoaded(raw ? JSON.parse(raw) : (this.data && this.data.session_id ? this.data : null));
             } else {
               if (!this.data || !this.data.session_id) this._initCleanSession();
@@ -107,13 +119,16 @@
       },
 
       async save() {
+        const storageKey = this._getStorageKey();
         return new Promise(resolve => {
           this.data._ts = Date.now();
           try {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-              chrome.storage.local.set({ __SDC_SESSION__: this.data }, resolve);
+              const payload = {};
+              payload[storageKey] = this.data;
+              chrome.storage.local.set(payload, resolve);
             } else if (typeof localStorage !== 'undefined') {
-              localStorage.setItem('__SDC_SESSION__', JSON.stringify(this.data));
+              localStorage.setItem(storageKey, JSON.stringify(this.data));
               resolve();
             } else {
               resolve();
@@ -144,20 +159,103 @@
           note: "Session abandoned, browser closed, or timeout occurred without clicking Log Out."
         });
 
-        // Dispatch finalized timeline to Desktop App
+        // Dispatch finalized unified payload to Desktop App via Assembler
+        this._flushAssembler(staleSession);
+      },
+
+      /**
+       * Assembles the final, comprehensive session packet (all captures + full timeline)
+       * and dispatches a single atomic transfer to the backend app.
+       */
+      _flushAssembler(targetSession) {
+        const sData = targetSession || this.data;
+        if (!sData || !sData.session_id) return;
+        if ((sData.timeline || []).length === 0) return; // Skip empty artifacts
+
+        // ─── Double-Flush Guard ───────────────────────────────────
+        // Prevents the same session from being flushed more than once,
+        // regardless of how many code paths converge on session termination.
+        if (sData._assembler_flushed) {
+          console.log(`⚡ Sera SDC Assembler: ⚠️ Session [${sData.session_id}] already flushed — ignoring duplicate flush call.`);
+          return;
+        }
+        sData._assembler_flushed = true;
+        // ─────────────────────────────────────────────────────────
+
+        console.log(`⚡ Sera SDC Assembler: 📦 Flushing atomic unified payload to backend for session [${sData.session_id}].`);
+
+        // 1. Always emit the timeline sync (for sdc_session_timelines DB — pure audit trail)
         _emitDual({
           type: 'sdc_session_timeline',
-          session_id: staleSession.session_id,
-          pan: staleSession.pan || "",
-          client_name: staleSession.name || "",
-          portal: staleSession.portal || "income tax",
-          status: 'terminated_abruptly',
-          start_time: staleSession.start_time,
-          end_time: staleSession.end_time,
-          total_steps: tl.length,
-          timeline: tl,
-          timestamp: staleSession.end_time
+          session_id: sData.session_id,
+          pan: sData.pan || "",
+          client_name: sData.name || "",
+          portal: sData.portal || "income tax",
+          status: sData.status || "active",
+          start_time: sData.start_time,
+          end_time: sData.end_time || null,
+          total_steps: (sData.timeline || []).length,
+          timeline: sData.timeline || [],
+          timestamp: new Date().toISOString()
         });
+
+        // 2. Only emit filing_result if there are actual captured payloads.
+        //    Pure navigation sessions (no crosshair hits) must NOT create tracker_dump entries.
+        const captures = sData.assembler_captures || [];
+        if (captures.length === 0) {
+          console.log(`⚡ Sera SDC Assembler: ℹ️ Session [${sData.session_id}] had no captures — skipping filing_result emission.`);
+          return;
+        }
+
+        // Compute dominant parameters across any portal (ITR, GST, TRACES, MCA)
+        const portal = sData.portal || (captures.length > 0 && captures[0].portal) || "Income Tax";
+        const arn = captures.map(c => c.arn).find(a => a && a !== "N/A") || "N/A";
+        const period = captures.map(c => c.period_label).find(p => p) || sData.ay || "";
+        const filingType = captures.map(c => c.filing_type).find(f => f) || sData.form || "";
+        const gstin = sData.gstin || captures.map(c => c.gstin).find(g => g) || "";
+        const pan = sData.pan || (gstin && gstin.length >= 12 ? gstin.substring(2, 12) : "") || captures.map(c => c.pan).find(p => p) || "";
+        const clientName = sData.name || captures.map(c => c.client_name || c.name || c.taxpayer_name).find(n => n) || "";
+        const companyName = captures.map(c => c.company_name || c.trade_name).find(c => c) || "";
+        const proprietorName = captures.map(c => c.proprietor_name || c.legal_name).find(p => p) || "";
+        
+        const masterPayload = {
+          type: "filing_result",
+          session_id: sData.session_id,
+          client_id: sData.client_id || null,
+          client_name: clientName,
+          taxpayer_name: clientName,
+          company_name: companyName,
+          proprietor_name: proprietorName,
+          pan: pan,
+          gstin: gstin,
+          portal: portal,
+          status: sData.status || "completed",
+          arn: arn,
+          capture_method: "SDC_Assembler",
+          period_label: period,
+          filing_type: filingType,
+          timestamp: new Date().toISOString(),
+          session_timeline: sData.timeline || [],
+          raw_payload: {
+            source: "Sera_SDC_Assembler",
+            session_id: sData.session_id,
+            detection_type: "SDC_Assembler_Unified",
+            client_name: clientName,
+            company_name: companyName,
+            proprietor_name: proprietorName,
+            pan: pan,
+            gstin: gstin,
+            portal: portal,
+            status: sData.status || "completed",
+            arn: arn,
+            period_label: period,
+            filing_type: filingType,
+            assembler_captures: captures, // 100% of the session fragments stored inside
+            session_timeline: sData.timeline || []
+          }
+        };
+        
+        _emitDual(masterPayload);
       },
 
       /**
@@ -248,7 +346,7 @@
         this.data.end_time = logoutTime;
         await this.save();
 
-        this._emitTimelineSync();
+        this._flushAssembler(this.data);
         console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
 
         if (window.SDCToast) {
@@ -267,30 +365,18 @@
       },
 
       _emitTimelineSync() {
-        if (!this.data.session_id) return;
-        _emitDual({
-          type: 'sdc_session_timeline',
-          session_id: this.data.session_id,
-          pan: this.data.pan || "",
-          client_name: this.data.name || "",
-          portal: this.data.portal || "income tax",
-          status: this.data.status || "active",
-          start_time: this.data.start_time,
-          end_time: this.data.end_time || null,
-          total_steps: (this.data.timeline || []).length,
-          timeline: this.data.timeline || [],
-          timestamp: new Date().toISOString()
-        });
+        // Obsolete: SDC Assembler now buffers and flushes atomically at session end.
       },
 
       async clear() {
+        const storageKey = this._getStorageKey();
         return new Promise(resolve => {
           this._initCleanSession();
           try {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-              chrome.storage.local.remove(['__SDC_SESSION__'], resolve);
+              chrome.storage.local.remove([storageKey], resolve);
             } else if (typeof localStorage !== 'undefined') {
-              localStorage.removeItem('__SDC_SESSION__');
+              localStorage.removeItem(storageKey);
               resolve();
             } else {
               resolve();
@@ -536,18 +622,72 @@
         // Execute protocol handler
         const capture = await matchedCrosshair.handler(url);
 
-        // Handle itr_login explicitly so we don't abort on PAN captures
-        if (matchedCrosshair.id === 'itr_login' && !capture) {
+        // ─── CLIENT CONTEXT SWITCH & SESSION BOUNDARY PROTECTION ───
+        // 1. PAN Mismatch: If capture has a new PAN that differs from the active session PAN
+        if (capture && capture.pan && SDC.session.data.pan && capture.pan !== SDC.session.data.pan) {
+            console.log(`⚡ Sera SDC: 🔄 PAN Mismatch Detected (${SDC.session.data.pan} -> ${capture.pan})! Finalizing stale session.`);
+            if (SDC.session.data.timeline && SDC.session.data.timeline.length > 0) {
+                SDC.session.data.status = 'completed';
+                SDC.session.data.end_time = new Date().toISOString();
+                const tl = SDC.session.data.timeline;
+                tl.push({
+                    step: tl.length + 1,
+                    title: "Client Context Switch",
+                    url: url,
+                    route: "SWITCH_EVENT",
+                    timestamp: SDC.session.data.end_time,
+                    is_termination: true,
+                    note: `Session finalized automatically due to new PAN (${capture.pan}) detection.`
+                });
+                await SDC.session.save();
+                SDC.session._flushAssembler();
+            }
+            await SDC.clearAllSessions();
+            // Re-load the new clean session initialized by clearAllSessions
+            await SDC.session.load();
+        }
+
+        // 2. Login / Logout Boundary Guard
+        // Only fire for crosshairs explicitly designated as login/logout handlers.
+        // Do NOT use url.includes('login') — it over-matches pages like 'pre-login', 'link-login', etc.
+        const isLoginCrosshair = matchedCrosshair.id === 'itr_login' || matchedCrosshair.id === 'gst_login_logout';
+        if (isLoginCrosshair) {
             const urlL = (url || '').toLowerCase();
             const isLogout = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sign-out') || 
                              urlL.includes('sessionexpire') || urlL.includes('session-expire') || 
                              urlL.includes('sessionexpired') || urlL.includes('session-expired') || urlL.includes('timeout');
-            if (isLogout) {
+            
+            if (isLogout && !capture) {
                 return; // Auth / logout route: session was finalized & wiped by handler — skip save
             }
+            
+            // If NOT a logout route, but we arrived at a login screen with an existing mature session
+            if (!isLogout && (SDC.session.data.pan || (SDC.session.data.timeline && SDC.session.data.timeline.length > 0))) {
+                if (!capture || (capture.pan !== SDC.session.data.pan)) {
+                    console.log(`⚡ Sera SDC: 🔄 Login Route Detected with active session! Finalizing previous session.`);
+                    SDC.session.data.status = 'completed';
+                    SDC.session.data.end_time = new Date().toISOString();
+                    const tl = SDC.session.data.timeline;
+                    tl.push({
+                        step: tl.length + 1,
+                        title: "Returned to Login",
+                        url: url,
+                        route: "LOGIN_BOUNDARY",
+                        timestamp: SDC.session.data.end_time,
+                        is_termination: true,
+                        note: "User navigated to Login screen. Session finalized."
+                    });
+                    await SDC.session.save();
+                    SDC.session._flushAssembler();
+                    await SDC.clearAllSessions();
+                    await SDC.session.load();
+                }
+            }
         }
+        // ──────────────────────────────────────────────────────────
 
         // Record timeline step with capture
+        SDC.session.data.portal = matchedProtocol.name;
         await SDC.session.recordStep(url, matchedCrosshair.id, capture);
 
         // Save memory changes back to shared storage
@@ -661,8 +801,11 @@
       }
     };
 
-    console.log(`⚡ Sera SDC CAPTURE [${crosshairId}]:`, JSON.stringify(detail).substring(0, 300));
-    _emitDual(detail);
+    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory.`);
+    // ─── Assembler Buffering ───
+    SDC.session.data.assembler_captures = SDC.session.data.assembler_captures || [];
+    SDC.session.data.assembler_captures.push(detail);
+    // Note: Do not emit Dual here. The assembler will flush this at session end.
 
     // ─── Trigger In-Browser Toast Notification ────────────────────────────────
     try {
@@ -712,40 +855,55 @@
     }
   }
 
-  // ─── Dual Dispatch Pipeline ──────────────────────────────────────────────────
+  // ─── Dispatch Pipeline ──────────────────────────────────────────────────
   function _emitDual(payload) {
-    // 1. Chrome Extension Runtime Dispatch (via Service Worker -> Native Host)
-    try {
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage(payload, () => {
-          if (chrome.runtime && chrome.runtime.lastError) {
-            // Ignored - background worker might be handling it
-          }
-        });
-      }
-    } catch (err) {
-      // Ignored
-    }
-
-    // 2. Direct Local IPC Dispatch (connects directly to Project Sera Desktop App on port 49152)
-    try {
-      if (typeof fetch === 'function') {
-        fetch('http://127.0.0.1:49152', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          mode: 'cors',
-          credentials: 'omit'
-        }).catch(() => {});
-      }
-    } catch (err) {}
-
-    // 3. Dispatch events for page-level test harness & filing detector listeners
+    // 1. Dispatch events for page-level test harness & filing detector listeners
     try {
       window.dispatchEvent(new CustomEvent('SeraSDCApiCapture', { detail: payload }));
       window.dispatchEvent(new CustomEvent('SeraSDCCapture', { detail: payload }));
       window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));
     } catch (_) {}
+
+    const _chromeRuntimeFallback = (p) => {
+      try {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage(p, () => {
+            if (chrome.runtime && chrome.runtime.lastError) {
+              console.warn('⚡ Sera SDC: Background worker fallback failed.', chrome.runtime.lastError);
+            } else {
+              console.log('⚡ Sera SDC: Successfully delivered payload via Chrome Runtime fallback.');
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('⚡ Sera SDC: sendMessage threw error during fallback.', err);
+      }
+    };
+
+    // 2. Direct HTTP Dispatch (Primary) - Fast, stateless, reliable
+    if (typeof fetch === 'function') {
+      fetch('http://127.0.0.1:49152', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        mode: 'cors',
+        credentials: 'omit'
+      })
+      .then(response => {
+        if (!response.ok) {
+          console.warn(`⚡ Sera SDC: Direct HTTP failed with status ${response.status}. Falling back to Service Worker.`);
+          _chromeRuntimeFallback(payload);
+        } else {
+          console.log('⚡ Sera SDC: Successfully delivered payload via Direct HTTP.');
+        }
+      })
+      .catch(err => {
+        console.warn('⚡ Sera SDC: Direct HTTP fetch error. Desktop app might be closed or port blocked. Falling back to Service Worker.', err);
+        _chromeRuntimeFallback(payload);
+      });
+    } else {
+      _chromeRuntimeFallback(payload);
+    }
   }
 
   // ─── Shared Helper Utilities (available to all protocols) ───────────────────

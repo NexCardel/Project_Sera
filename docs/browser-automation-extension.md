@@ -38,9 +38,16 @@ The injected `fillCredentialsInPage()` function:
 - **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
 - **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
-## Sera FST: API Detector (SAD v2.8.5.4) & DOM Detector (DOM)
+## Sera FST: API Detector (SAD v2.9.2), SDC Assembler & DOM Detector
 
-- **Sera SAD (`net_interceptor.js` — v2.8.5.4)**:
+- **Sera SDC Assembler (`sdc_core.js` + protocols)**:
+  - **In-Memory Aggregation**: Buffers all crosshair events during an active portal session into `sdc_assembler` without emitting premature fragmented entries.
+  - **Portal-Scoped Storage**: Completely isolates session memory keys across portals (`__SDC_SESSION_ITR__`, `__SDC_SESSION_GST__`, `__SDC_SESSION_TRACES__`, `__SDC_SESSION_MCA__`).
+  - **Direct HTTP Loopback (Primary)**: Emits final atomic session payloads directly to `http://127.0.0.1:49152` via `fetch()`, bypassing Manifest V3 service worker sleep cycles with automatic fallback to Chrome Runtime Native Messaging.
+  - **Double-Flush & Context Protection**: Guarded with `_assembler_flushed` lock and client PAN context switch monitors to prevent duplicated tracker dump rows.
+  - **Ledger Card Milestone Resolver**: Evaluates milestone timelines on `view-filed-returns` to distinguish verified returns from "e-Verify Later" submissions.
+
+- **Sera SAD (`net_interceptor.js` — v2.9.2)**:
   - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.
   - **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
   - **E-Verification State & Intent Detection**:

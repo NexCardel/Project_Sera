@@ -806,6 +806,47 @@
       };
     }
 
+    // ─── Lifecycle Status Resolver for View Filed Returns Card ───────────────
+    function _resolveCardFilingStatus(cardText) {
+      const t = (cardText || '').toLowerCase();
+      
+      // 1. Processed State (Processed with no demand/refund, processed with demand, processed with refund)
+      if (t.includes('processed with') || t.includes('under processing') || (t.includes('processed') && !t.includes('processing fee'))) {
+        return 'Filed & Verified (Processed)';
+      }
+      
+      // 2. Successfully e-verified / Verified
+      if (t.includes('successfully e-verified') || t.includes('successfully verified') || t.includes('e-verified on') || t.includes('return has been verified')) {
+        return 'Filed & Verified';
+      }
+      
+      // 3. Pending e-Verification (Return submitted with ARN, but unverified)
+      if (
+        t.includes('pending for e-verification') || 
+        t.includes('pending for verification') || 
+        t.includes('pending e-verification') || 
+        t.includes('e-verify within 30 days') || 
+        t.includes('e-verify within 120 days') || 
+        t.includes('e-verify now') || 
+        t.includes('e-verify later') || 
+        t.includes('verify return')
+      ) {
+        return 'Submitted (Pending e-Verification)';
+      }
+      
+      // 4. Defective / Rectification
+      if (t.includes('defective') || t.includes('section 139(9)')) {
+        return 'Defective Notice Issued';
+      }
+      
+      // 5. Fallback: If session already recorded a specific status, preserve it
+      if (getSession().status && getSession().status.includes('Pending')) {
+        return getSession().status;
+      }
+      
+      return 'Submitted (Pending e-Verification)';
+    }
+
     // ─── Shared: View Filed Returns Details Extractor (Card & Table Aware) ───
     function _extractViewFiledReturnsDetails() {
       const pageText = u.getPageText();
@@ -824,11 +865,13 @@
           
           const ayStr = ayM ? (ayM[1].toUpperCase().startsWith('AY') ? ayM[1].toUpperCase() : `AY ${ayM[1]}`) : '';
           const formStr = formM ? formM[1].replace(/\s+/g, '-').toUpperCase() : 'ITR';
+          const cardStatus = _resolveCardFilingStatus(rText);
           
           extractedCards.push({
             ack: ackM[1],
             ay: ayStr,
             form: formStr,
+            status: cardStatus,
             yearVal: ayM ? parseInt(ayM[1].slice(0, 4)) : 0
           });
         }
@@ -847,10 +890,12 @@
         const textCards = [];
         while ((m = cardRegex.exec(pageText)) !== null) {
           const formM = m[0].match(/\b(ITR-[1-7][A-Za-z]?|ITR\s*[1-7][A-Za-z]?|ITR-V|ITR-U)\b/i);
+          const cardStatus = _resolveCardFilingStatus(m[0]);
           textCards.push({
             ay: m[1].toUpperCase().startsWith('AY') ? m[1].toUpperCase() : `AY ${m[1]}`,
             ack: m[2],
             form: formM ? formM[1].replace(/\s+/g, '-').toUpperCase() : 'ITR',
+            status: cardStatus,
             yearVal: parseInt(m[1].slice(0, 4))
           });
         }
@@ -864,11 +909,13 @@
       const ackMatch = pageText.match(/(?:Acknowledgement\s*(?:Number|No\.?)|Ack\s*No\.?|Receipt\s*No\.?|ARN)\s*[:#-]?\s*(\d{15})/i) || pageText.match(/\b(\d{15})\b/);
       const ayMatch = pageText.match(/(?:Assessment\s*Year|AY|A\.Y\.)\s*[:#-]?\s*(20\d{2}-\d{2}|\d{4}-\d{2})/i) || pageText.match(/\b(20\d{2}-\d{2})\b/);
       const formMatch = pageText.match(/\b(ITR-[1-7][A-Za-z]?|ITR\s*[1-7][A-Za-z]?|ITR-V|ITR-U)\b/i);
+      const cardStatus = _resolveCardFilingStatus(pageText);
 
       return {
         ack: ackMatch ? ackMatch[1] : '',
         ay: ayMatch ? (ayMatch[1].toUpperCase().startsWith('AY') ? ayMatch[1].toUpperCase() : `AY ${ayMatch[1]}`) : '',
         form: formMatch ? formMatch[1].replace(/\s+/g, '-').toUpperCase() : 'ITR',
+        status: cardStatus,
         yearVal: 0
       };
     }
@@ -896,6 +943,7 @@
           const dob = getSession().dob || _extractDob();
           const ay = cardDetails.ay || getSession().ay || '';
           const form = cardDetails.form || getSession().form || 'ITR';
+          const filingStatus = cardDetails.status || 'Submitted (Pending e-Verification)';
 
           if (pan) getSession().pan = pan;
           if (name && name !== (getSession().client_temp_name || '')) getSession().name = name;
@@ -904,9 +952,10 @@
           if (ay) getSession().ay = ay;
           if (form) getSession().form = form;
           getSession().arn = ack;
+          getSession().status = filingStatus;
 
           const activeName = getSession().name || name || headerName || 'Taxpayer';
-          console.log(`⚡ Sera SDC [itr_view_filed_returns]: ✅ Async ACK resolved (within ${attempts * 350}ms) → ACK: "${ack}", AY: "${ay}", Form: "${form}"`);
+          console.log(`⚡ Sera SDC [itr_view_filed_returns]: ✅ Async ACK resolved (within ${attempts * 350}ms) → ACK: "${ack}", AY: "${ay}", Form: "${form}", Status: "${filingStatus}"`);
 
           const capture = {
             portal: 'income tax',
@@ -919,9 +968,9 @@
             filing_type: form,
             period_label: ay,
             arn: ack,
-            status: 'Filed & Verified (Portal Confirmed)',
+            status: filingStatus,
             dom_breadcrumbs: u.getBreadcrumbs(),
-            confirmation_message: 'Official 15-digit Acknowledgement captured from portal return history.'
+            confirmation_message: `Official 15-digit Acknowledgement captured from portal return history. Status: ${filingStatus}`
           };
 
           await SDC.session.recordStep(url, 'itr_view_filed_returns', capture);
@@ -959,6 +1008,7 @@
       const ack = cardDetails.ack;
       const ay = cardDetails.ay || getSession().ay || '';
       const form = cardDetails.form || getSession().form || 'ITR';
+      const filingStatus = cardDetails.status || 'Submitted (Pending e-Verification)';
 
       if (!ack) {
         // Start fast async watcher to catch table when Angular finishes rendering
@@ -969,9 +1019,10 @@
       if (ay) getSession().ay = ay;
       if (form) getSession().form = form;
       getSession().arn = ack;
+      getSession().status = filingStatus;
 
       const activeName = getSession().name || headerName || 'Taxpayer';
-      console.log(`⚡ Sera SDC [itr_view_filed_returns]: Extracted 15-digit ACK ${ack} for ${ay} (${form})`);
+      console.log(`⚡ Sera SDC [itr_view_filed_returns]: Extracted 15-digit ACK ${ack} for ${ay} (${form}) → Status: "${filingStatus}"`);
 
       return {
         portal: 'income tax',
@@ -984,9 +1035,9 @@
         filing_type: form,
         period_label: ay,
         arn: ack,
-        status: 'Filed & Verified (Portal Confirmed)',
+        status: filingStatus,
         dom_breadcrumbs: u.getBreadcrumbs(),
-        confirmation_message: 'Official 15-digit Acknowledgement captured from portal return history.'
+        confirmation_message: `Official 15-digit Acknowledgement captured from portal return history. Status: ${filingStatus}`
       };
     }
 
