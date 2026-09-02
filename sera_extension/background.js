@@ -1397,7 +1397,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if (msg.type === "filing_result") {
+  if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
     console.log("Sera background: handling filing_result, sending to desktop...");
     // Keep the MV3 service worker alive until the final assembler payload has
     // actually been forwarded to the desktop host.

@@ -560,22 +560,57 @@ class SeraApp:
         capture_method = msg.get("capture_method", "DOM_Tracker")
         capture_status = msg.get("status") or (scraped.get("summary_labels", {}).get("Status") if scraped else None) or "Submitted"
         
+        # An assembler payload may contain several independent GST/ITR
+        # datasets. Materialize one tracker-dump row per dataset while keeping
+        # the shared session timeline inside each row's raw payload.
+        assembler_captures = []
+        if isinstance(msg.get("raw_payload"), dict):
+            assembler_captures = msg["raw_payload"].get("assembler_captures") or []
+        dataset_messages = []
+        if isinstance(assembler_captures, list) and assembler_captures:
+            for dataset in assembler_captures:
+                if not isinstance(dataset, dict):
+                    continue
+                dataset_msg = dict(msg)
+                dataset_msg.update({
+                    key: value for key, value in dataset.items()
+                    if value not in (None, "")
+                })
+                dataset_raw = dict(msg.get("raw_payload") or {})
+                dataset_raw["dataset_capture"] = dataset
+                dataset_raw["dataset_key"] = "|".join(str(dataset.get(key) or "").strip().upper() for key in ("gstin", "filing_type", "period_label"))
+                dataset_msg["raw_payload"] = dataset_raw
+                dataset_messages.append(dataset_msg)
+        else:
+            dataset_messages = [msg]
+
         # Directly record into Tracker Dump database with authoritative identity resolution
         try:
-            res = self.db.insert_tracker_dump(
-                client_id=raw_client_id,
-                service_id=None,
-                portal=portal_display,
-                period_label=msg.get("period_label", ""),
-                arn_number=arn,
-                capture_method=capture_method,
-                status=capture_status,
-                raw_payload_json=json.dumps(msg),
-                captured_by=self.actor,
-                pan=pan
-            )
-            print(f"[main._handle_extension_result] Successfully inserted tracker_dump row: {res}")
-            return res
+            results = []
+            for dataset_msg in dataset_messages:
+                dataset_raw = dataset_msg.get("raw_payload") if isinstance(dataset_msg.get("raw_payload"), dict) else {}
+                dataset_pan = str(dataset_msg.get("pan") or pan or "").strip()
+                dataset_arn = dataset_msg.get("arn", "N/A")
+                dataset_filing_type = str(dataset_msg.get("filing_type") or filing_type).strip()
+                dataset_portal = dataset_msg.get("portal") or portal
+                dataset_portal_display = f"{dataset_portal} ({dataset_filing_type})" if dataset_filing_type else dataset_portal
+                dataset_status = dataset_msg.get("status") or capture_status
+                result = self.db.insert_tracker_dump(
+                    client_id=raw_client_id,
+                    service_id=None,
+                    portal=dataset_portal_display,
+                    period_label=dataset_msg.get("period_label", ""),
+                    arn_number=dataset_arn,
+                    capture_method=dataset_msg.get("capture_method", capture_method),
+                    status=dataset_status,
+                    raw_payload_json=json.dumps(dataset_msg),
+                    captured_by=self.actor,
+                    pan=dataset_pan,
+                    session_id=dataset_msg.get("session_id") or dataset_raw.get("session_id")
+                )
+                results.append(result)
+            print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
+            return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None

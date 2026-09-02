@@ -353,11 +353,17 @@
             session_timeline: sData.timeline || []
           }
         };
+
+        // Compress the complete assembler payload before it enters the
+        // durable outbox. Gzip is lossless and keeps the desktop contract
+        // unchanged because the desktop listener restores this object before
+        // handing it to the tracker-dump pipeline.
+        const transportPayload = await _buildCompressedPayload(masterPayload);
         
         // Logout may unload the page immediately. Prefer the extension
         // background-worker hop for the final atomic payload so it reaches
         // the desktop host even if the page's HTTP keepalive is cancelled.
-        await _queueReliableFlush(masterPayload);
+        await _queueReliableFlush(transportPayload || masterPayload);
       },
 
       /**
@@ -1066,12 +1072,18 @@
     // remain separate datasets inside the atomic master payload.
     const isGstCapture = /gst/i.test(portalName) || Boolean(detail.gstin);
     if (isGstCapture) {
+      const normalizeDatasetPart = (value) => String(value || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase()
+        .replace(/^GSTR1(?:\s*\/\s*IFF)?$/, 'GSTR-1/IFF')
+        .replace(/^GSTR[- ]?3B$/, 'GSTR-3B');
       const datasetKey = [detail.gstin || detail.pan || '', detail.filing_type || '', detail.period_label || '']
-        .map(value => String(value).trim().toUpperCase())
+        .map(normalizeDatasetPart)
         .join('|');
       const existingIndex = SDC.session.data.assembler_captures.findIndex(item => {
         const itemKey = [item.gstin || item.pan || '', item.filing_type || '', item.period_label || '']
-          .map(value => String(value).trim().toUpperCase())
+          .map(normalizeDatasetPart)
           .join('|');
         return itemKey === datasetKey;
       });
@@ -1148,6 +1160,34 @@
   // This survives logout navigation, page unloads, and MV3 worker restarts.
   const PENDING_FLUSH_KEY = '__SERA_SDC_PENDING_FLUSH__';
   let _pendingFlushInFlight = false;
+
+  async function _buildCompressedPayload(payload) {
+    if (typeof CompressionStream === 'undefined' || typeof TextEncoder === 'undefined') return null;
+    try {
+      const json = JSON.stringify(payload);
+      const input = new TextEncoder().encode(json);
+      const stream = new Blob([input]).stream().pipeThrough(new CompressionStream('gzip'));
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < compressed.length; i += chunkSize) {
+        binary += String.fromCharCode(...compressed.subarray(i, i + chunkSize));
+      }
+      return {
+        type: 'filing_result_compressed',
+        schema_version: '2.0',
+        encoding: 'gzip+base64',
+        original_type: 'filing_result',
+        session_id: payload.session_id || '',
+        original_size: input.byteLength,
+        compressed_size: compressed.byteLength,
+        payload: btoa(binary)
+      };
+    } catch (err) {
+      console.warn('⚡ Sera SDC: Compression failed; using uncompressed payload.', err);
+      return null;
+    }
+  }
 
   function _clearPendingFlush(sessionId) {
     return new Promise(resolve => {

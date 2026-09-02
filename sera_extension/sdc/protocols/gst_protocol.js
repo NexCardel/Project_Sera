@@ -176,14 +176,24 @@
     const fyMatch = bodyText.match(/FY\s*[-:]\s*([0-9]{4}\s*-\s*[0-9]{2,4})/i);
     if (fyMatch) fy = fyMatch[1].replace(/\s+/g, '');
 
-    // Tax Period: "Tax Period - June(Q)" or "Tax Period - June"
+    // GST uses both "Tax Period" and "Return Period" labels.
     let taxPeriod = '';
-    const periodMatch = bodyText.match(/Tax\s+Period\s*[-:]\s*([A-Za-z0-9\(\)\s\-_]+?)(?=\s*(?:Status|Due\s+Date|FY|Trade|Legal|\n|$))/i);
+    const periodMatch = bodyText.match(/(?:Tax|Return|Filing)\s+Period\s*[-:]\s*([A-Za-z0-9()\s\-_\/]+?)(?=\s*(?:Status|Due\s+Date|FY|Financial\s+Year|Trade|Legal|GSTIN|\n|$))/i);
     if (periodMatch) taxPeriod = periodMatch[1].trim();
+    if (!taxPeriod) {
+      const queryPeriod = new URLSearchParams(window.location.search).get('rtn_prd');
+      if (queryPeriod && /^\d{6}$/.test(queryPeriod)) {
+        const month = Number(queryPeriod.slice(0, 2));
+        const year = queryPeriod.slice(2);
+        if (month >= 1 && month <= 12) {
+          taxPeriod = `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month - 1]} ${year}`;
+        }
+      }
+    }
 
     // Status: "Status - Filed" or "Status - Not Filed"
     let status = '';
-    const statusMatch = bodyText.match(/Status\s*[-:]\s*([A-Za-z0-9\s\-_]+?)(?=\s*(?:Due\s+Date|FY|Tax\s+Period|Trade|Legal|\n|$))/i);
+    const statusMatch = bodyText.match(/Status\s*[-:]\s*([A-Za-z0-9\s\-_]+?)(?=\s*(?:Due\s+Date|FY|Tax\s+Period|Return\s+Period|Filing\s+Period|Trade|Legal|\n|$))/i);
     if (statusMatch) status = statusMatch[1].trim();
 
     // Due Date: "Due Date - 13/07/2026" or "Due Date : 13/07/2026"
@@ -202,6 +212,7 @@
       const urlM = window.location.href.match(/(gstr1|gstr3b|cmp08|gstr4|gstr9|iff)/i);
       if (urlM) formType = urlM[1].toUpperCase();
     }
+    formType = formType.replace(/^GSTR1$/i, 'GSTR-1').replace(/^GSTR3B$/i, 'GSTR-3B');
 
     // Nil filing checkbox
     const nilCheckbox = document.querySelector('input[type="checkbox"][id*="nil" i], input[type="checkbox"][name*="nil" i]');
