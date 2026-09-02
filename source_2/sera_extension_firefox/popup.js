@@ -112,6 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Attach toggle change listeners
   if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
+  if (toggleToast) toggleToast.addEventListener('change', () => saveSettings('sdcToastEnabled'));
   if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
 
   // Reconnect button

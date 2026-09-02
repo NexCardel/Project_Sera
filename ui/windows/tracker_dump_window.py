@@ -667,7 +667,7 @@ class TrackerDumpWindow(QWidget):
         self._dumps_cache = []
         self._filtered_cache = []
         self._current_page = 1
-        self._page_size = 50
+        self._page_size = 25
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(180)
@@ -904,7 +904,7 @@ class TrackerDumpWindow(QWidget):
 
         self.cmb_page_size = QComboBox()
         self.cmb_page_size.addItems(["25", "50", "100", "200", "All"])
-        self.cmb_page_size.setCurrentText("50")
+        self.cmb_page_size.setCurrentText("25")
         self.cmb_page_size.currentIndexChanged.connect(self._on_page_size_changed)
         self.cmb_page_size.setStyleSheet("background-color: #121212; color: #F0F6FC; padding: 3px 8px; font-size: 12px;")
         pagination_layout.addWidget(self.cmb_page_size)
@@ -1003,9 +1003,9 @@ class TrackerDumpWindow(QWidget):
         try:
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
-                self._dumps_cache = self.db.get_srpf_containers(limit=1000)
+                self._dumps_cache = self.db.get_srpf_containers(limit=200)
             else:
-                self._dumps_cache = self.db.get_tracker_dumps(limit=1000)
+                self._dumps_cache = self.db.get_tracker_dumps(limit=200)
             self._current_page = 1
             self._apply_filters()
         except Exception as e:
@@ -1103,70 +1103,59 @@ class TrackerDumpWindow(QWidget):
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
-        self.table.setRowCount(0)
+        self.table.setRowCount(len(containers))
         self.lbl_counter.setText(f"Client Containers: {len(containers)}")
 
         for row_idx, r in enumerate(containers):
-            self.table.insertRow(row_idx)
+            def _get_item(col, font=None, color=None, align=None):
+                item = self.table.item(row_idx, col)
+                if not item:
+                    item = QTableWidgetItem()
+                    self.table.setItem(row_idx, col, item)
+                if font: item.setFont(font)
+                if color: item.setForeground(QColor(color))
+                if align is not None: item.setTextAlignment(align)
+                return item
 
-            # 0. Client Name & PAN (Primary Prominent Column)
+            # 0. Client Name & PAN
             disp_name = r.get('display_name') or r.get('company_name') or r.get('proprietor_name') or f"Unregistered ({r.get('identity_key')})"
-            c_item = QTableWidgetItem(disp_name)
-            c_item.setFont(QFont("Segoe UI", 10.5, QFont.Bold))
+            c_item = _get_item(0, font=QFont("Segoe UI", 10.5, QFont.Bold), color="#FFA657" if r.get('is_unassigned') else "#FFFFFF")
+            c_item.setText(disp_name)
             c_item.setToolTip(disp_name)
-            if r.get('is_unassigned'):
-                c_item.setForeground(QColor("#FFA657"))
-            else:
-                c_item.setForeground(QColor("#FFFFFF"))
-            self.table.setItem(row_idx, 0, c_item)
 
             # 1. ID / Token
             token_str = str(r.get("client_id_token") or (f"CLI-{r['client_id']:05d}" if r.get("client_id") else "Unregistered"))
-            id_item = QTableWidgetItem(token_str)
-            id_item.setTextAlignment(Qt.AlignCenter)
+            id_item = _get_item(1, align=Qt.AlignCenter, color="#FFA657" if r.get('is_unassigned') else "#4CF9B7")
+            id_item.setText(token_str)
             id_item.setToolTip(token_str)
-            if r.get('is_unassigned'):
-                id_item.setForeground(QColor("#FFA657"))
-            else:
-                id_item.setForeground(QColor("#4CF9B7"))
-            self.table.setItem(row_idx, 1, id_item)
 
             # 2. Portal
             portal_str = r.get("portal") or "Income Tax Portal"
-            p_item = QTableWidgetItem(portal_str)
-            p_item.setForeground(QColor("#E6EDF3"))
+            p_item = _get_item(2, color="#E6EDF3")
+            p_item.setText(portal_str)
             p_item.setToolTip(portal_str)
-            self.table.setItem(row_idx, 2, p_item)
 
             # 3. Filings & History Summary
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
-            hist_item = QTableWidgetItem(period_sum)
-            hist_item.setForeground(QColor("#58A6FF"))
-            hist_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            hist_item = _get_item(3, font=QFont("Segoe UI", 9, QFont.Bold), color="#58A6FF")
+            hist_item.setText(period_sum)
             hist_item.setToolTip(period_sum)
-            self.table.setItem(row_idx, 3, hist_item)
 
             # 4. Latest ARN
-            arn_item = QTableWidgetItem(r.get("latest_arn", "N/A"))
-            arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
-            arn_item.setForeground(QColor("#39FF14"))
+            arn_item = _get_item(4, font=QFont("Consolas", 10, QFont.Bold), color="#39FF14")
+            arn_item.setText(r.get("latest_arn", "N/A"))
             arn_item.setToolTip(r.get("latest_arn", "N/A"))
-            self.table.setItem(row_idx, 4, arn_item)
 
             # 5. Method
-            method_item = QTableWidgetItem(r.get("capture_method", "SAD_API_Interceptor"))
-            method_item.setTextAlignment(Qt.AlignCenter)
-            method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            method_item.setForeground(QColor("#4CF9B7"))
-            self.table.setItem(row_idx, 7, method_item)
+            method_item = _get_item(7, font=QFont("Segoe UI", 9, QFont.Bold), align=Qt.AlignCenter, color="#4CF9B7")
+            method_item.setText(r.get("capture_method", "SAD_API_Interceptor"))
 
             # 6. Timestamp
             ts_str = _format_to_local_time(r.get("last_updated", ""))
-            ts_item = QTableWidgetItem(ts_str)
-            ts_item.setForeground(QColor("#8B949E"))
-            self.table.setItem(row_idx, 6, ts_item)
+            ts_item = _get_item(6, color="#8B949E")
+            ts_item.setText(ts_str)
 
-            # 7. Actions
+            # 7. Actions (always rebuild to capture current 'r')
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
             action_layout.setContentsMargins(2, 2, 2, 2)
@@ -1210,70 +1199,61 @@ class TrackerDumpWindow(QWidget):
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
-        self.table.setRowCount(0)
+        self.table.setRowCount(len(records))
         self.lbl_counter.setText(f"Raw Records: {len(records)}")
 
         for row_idx, r in enumerate(records):
-            self.table.insertRow(row_idx)
+            def _get_item(col, font=None, color=None, align=None):
+                item = self.table.item(row_idx, col)
+                if not item:
+                    item = QTableWidgetItem()
+                    self.table.setItem(row_idx, col, item)
+                if font: item.setFont(font)
+                if color: item.setForeground(QColor(color))
+                if align is not None: item.setTextAlignment(align)
+                return item
 
             # 0. Client Name & PAN
             client_name = r.get('client_name') or "Unknown Client"
             pan_str = f" ({r['pan']})" if r.get('pan') and not r.get('is_unassigned') else ""
             full_c_text = f"{client_name}{pan_str}"
-            c_item = QTableWidgetItem(full_c_text)
-            c_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            c_item = _get_item(0, font=QFont("Segoe UI", 10, QFont.Bold), color="#FFA657" if r.get('is_unassigned') or not r.get('client_id') else "#FFFFFF")
+            c_item.setText(full_c_text)
             c_item.setToolTip(full_c_text)
-            if r.get('is_unassigned') or not r.get('client_id'):
-                c_item.setForeground(QColor("#FFA657"))
-            else:
-                c_item.setForeground(QColor("#FFFFFF"))
-            self.table.setItem(row_idx, 0, c_item)
 
             # 1. ID
-            id_item = QTableWidgetItem(str(r["id"]))
-            id_item.setTextAlignment(Qt.AlignCenter)
-            id_item.setForeground(QColor("#8B949E"))
-            self.table.setItem(row_idx, 1, id_item)
+            id_item = _get_item(1, align=Qt.AlignCenter, color="#8B949E")
+            id_item.setText(str(r["id"]))
 
             # 2. Service / Portal
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
-            portal_item = QTableWidgetItem(portal_str)
-            portal_item.setForeground(QColor("#E6EDF3"))
+            portal_item = _get_item(2, color="#E6EDF3")
+            portal_item.setText(portal_str)
             portal_item.setToolTip(portal_str)
-            self.table.setItem(row_idx, 2, portal_item)
 
             # 3. Period
             period_val = r.get("period_label") or "N/A"
-            period_item = QTableWidgetItem(period_val)
-            period_item.setForeground(QColor("#D29922") if r.get("period_label") else QColor("#8B949E"))
+            period_item = _get_item(3, color="#D29922" if r.get("period_label") else "#8B949E")
+            period_item.setText(period_val)
             period_item.setToolTip(period_val)
-            self.table.setItem(row_idx, 3, period_item)
 
             # 4. ARN Number
-            arn_item = QTableWidgetItem(r.get("arn_number", "N/A"))
-            arn_item.setFont(QFont("Consolas", 10, QFont.Bold))
-            arn_item.setForeground(QColor("#39FF14"))
+            arn_item = _get_item(4, font=QFont("Consolas", 10, QFont.Bold), color="#39FF14")
+            arn_item.setText(r.get("arn_number", "N/A"))
             arn_item.setToolTip(r.get("arn_number", "N/A"))
-            self.table.setItem(row_idx, 4, arn_item)
 
             # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")
-            method_item = QTableWidgetItem(method)
-            method_item.setTextAlignment(Qt.AlignCenter)
-            method_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            if method == "SAD_API_Interceptor":
-                method_item.setForeground(QColor("#4CF9B7"))
-            elif method == "DOM_Tracker":
-                method_item.setForeground(QColor("#58A6FF"))
-            else:
-                method_item.setForeground(QColor("#FFA657"))
-            self.table.setItem(row_idx, 7, method_item)
+            if method == "SAD_API_Interceptor": color = "#4CF9B7"
+            elif method == "DOM_Tracker": color = "#58A6FF"
+            else: color = "#FFA657"
+            method_item = _get_item(7, font=QFont("Segoe UI", 9, QFont.Bold), align=Qt.AlignCenter, color=color)
+            method_item.setText(method)
 
             # 6. Timestamp
             ts_str = _format_to_local_time(r.get("created_at", ""))
-            ts_item = QTableWidgetItem(ts_str)
-            ts_item.setForeground(QColor("#8B949E"))
-            self.table.setItem(row_idx, 6, ts_item)
+            ts_item = _get_item(6, color="#8B949E")
+            ts_item.setText(ts_str)
 
             # 7. Actions Column
             action_widget = QWidget()

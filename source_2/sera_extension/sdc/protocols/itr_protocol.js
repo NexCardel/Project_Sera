@@ -490,6 +490,7 @@
 
       if (window.__SDC_ITR_FORM_WATCHER__) return;
       window.__SDC_ITR_FORM_WATCHER__ = true;
+      window.__SDC_ITR_FORM_EMITTED__ = false; // Reset emit guard for this page visit
 
       let attempts = 0;
       const MAX_ATTEMPTS = 5; // 5 × 350ms = 1.75s max wait (guaranteed <= 2.0s)
@@ -532,7 +533,8 @@
 
           await SDC.session.recordStep(url, isProfile ? 'itr_personal_info' : 'itr_personal_info', capture);
           await SDC.session.save();
-          if (typeof SDC.emitCapture === 'function') {
+          if (!window.__SDC_ITR_FORM_EMITTED__ && typeof SDC.emitCapture === 'function') {
+            window.__SDC_ITR_FORM_EMITTED__ = true;
             SDC.emitCapture(capture, 'ITR Portal', 'itr_personal_info');
           }
           return;
@@ -568,6 +570,7 @@
 
       // Reset watcher guard on fresh navigation
       window.__SDC_ITR_FORM_WATCHER__ = false;
+      window.__SDC_ITR_FORM_EMITTED__ = false; // Reset emit guard on fresh page entry
 
       const isProfilePage = url.toLowerCase().includes('profile');
       const pan = _extractPan();
@@ -595,6 +598,12 @@
       // On Profile pages (Category B), always capture immediately
       if (!pan && !activeName && !dob && !isProfilePage) {
         console.log('Sera SDC [itr_personal_info]: Waiting for async form render (watcher active).');
+        return null;
+      }
+
+      // If the async watcher already emitted this capture (e.g. on a _dispatch retry), skip
+      if (window.__SDC_ITR_FORM_EMITTED__) {
+        console.log('⚡ Sera SDC [itr_personal_info]: Watcher already emitted — skipping duplicate synchronous capture.');
         return null;
       }
 
@@ -924,6 +933,7 @@
     function _watchForViewFiledReturns(url) {
       if (window.__SDC_ITR_VIEW_WATCHER__) return;
       window.__SDC_ITR_VIEW_WATCHER__ = true;
+      window.__SDC_ITR_VIEW_EMITTED__ = false; // Reset emit guard for this page visit
 
       let attempts = 0;
       const MAX_ATTEMPTS = 5; // 5 × 350ms = 1.75s max wait (guaranteed <= 2.0s)
@@ -975,7 +985,8 @@
 
           await SDC.session.recordStep(url, 'itr_view_filed_returns', capture);
           await SDC.session.save();
-          if (typeof SDC.emitCapture === 'function') {
+          if (!window.__SDC_ITR_VIEW_EMITTED__ && typeof SDC.emitCapture === 'function') {
+            window.__SDC_ITR_VIEW_EMITTED__ = true;
             SDC.emitCapture(capture, 'ITR Portal', 'itr_view_filed_returns');
           }
           return;
@@ -993,6 +1004,7 @@
       if (!_isItrContext(url)) return null;
 
       window.__SDC_ITR_VIEW_WATCHER__ = false;
+      window.__SDC_ITR_VIEW_EMITTED__ = false; // Reset emit guard on fresh navigation
 
       const cardDetails = _extractViewFiledReturnsDetails();
       const headerName = _extractHeaderName();
@@ -1013,6 +1025,12 @@
       if (!ack) {
         // Start fast async watcher to catch table when Angular finishes rendering
         _watchForViewFiledReturns(url);
+        return null;
+      }
+
+      // If the async watcher already emitted this capture (e.g. on a _dispatch retry), skip
+      if (window.__SDC_ITR_VIEW_EMITTED__) {
+        console.log('⚡ Sera SDC [itr_view_filed_returns]: Watcher already emitted — skipping duplicate synchronous capture.');
         return null;
       }
 

@@ -154,6 +154,13 @@ class SyncPeerService:
         self._udp_sock: Optional[socket.socket] = None
         self._tcp_server: Optional[socket.socket] = None
 
+        # Bootstrap quarantine: if local DB is empty on startup, block all outbound pushes
+        # until we have received a pull from a higher-revision peer.
+        local_metrics = self._get_local_metrics()
+        self._is_bootstrapping: bool = (local_metrics.get("client_count", 0) == 0)
+        self._bootstrap_pull_done: bool = False
+        self._bootstrap_pull_attempted_peers: set[str] = set()
+
     def set_inv_frames(self, enabled: bool):
         self.inv_frames = bool(enabled)
         mode_str = "ENABLED" if self.inv_frames else "DISABLED"
@@ -395,6 +402,25 @@ class SyncPeerService:
             tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
             self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}{tracker_info}")
 
+        # ---- BOOTSTRAP AUTO-PULL ----
+        # If this node is bootstrapping (empty DB) and we discover a peer with data,
+        # immediately request a pull from them instead of waiting for user action.
+        if self._is_bootstrapping and not self._bootstrap_pull_done:
+            if client_cnt > 0 and ip not in self._bootstrap_pull_attempted_peers:
+                self._bootstrap_pull_attempted_peers.add(ip)
+                peer_port = int(body.get("sync_port", SYNC_PORT))
+                self.log_activity(
+                    "PULL",
+                    f"Bootstrap: Requesting data from {peer.host} (we are empty, they have {client_cnt} clients)",
+                    f"Peer Rev: {sync_rev}"
+                )
+                def _do_bootstrap_pull(_ip=ip, _port=peer_port):
+                    time.sleep(0.5)  # brief settle so both TCP servers are ready
+                    ok = self.request_pull_from(_ip, _port)
+                    if ok:
+                        self._bootstrap_pull_done = True
+                threading.Thread(target=_do_bootstrap_pull, daemon=True).start()
+
         self._safe_call(self.on_peer_table_changed, self._peer_list())
 
     def _start_peer_reaper(self):
@@ -508,6 +534,20 @@ class SyncPeerService:
                 _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
                 self._safe_call(self.on_peer_logs_received, sender_host)
                 return
+                
+            if action == "push_tracker_dump":
+                dumps = header.get("dumps", [])
+                try:
+                    from database import SeraDatabase
+                    # self.db_path is master.db, so db is fine
+                    db = SeraDatabase(self.db_path)
+                    db.store_peer_tracker_dumps(dumps)
+                    self.log_activity("DUMP", f"Received {len(dumps)} tracker dump(s) from {sender_host}", f"Local Rev: {local_sync_rev}")
+                except Exception as ex:
+                    print(f"[SYNC] Error storing peer tracker dumps from {sender_host}: {ex}")
+
+                _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
+                return
 
             if action == "request_database_pull":
                 peer_port = int(header.get("sync_port", SYNC_PORT))
@@ -544,11 +584,17 @@ class SyncPeerService:
                 if reject_reason:
                     print(f"[Sync Guard] Rejected incoming DB push from {sender_host}: {reject_reason}")
                     self.log_activity("GUARD", f"Rejected DB push from {sender_host}", f"{reject_reason} | Sender Rev: {incoming_sync_rev}, Local Rev: {local_sync_rev}")
+                    # Tell the sender what happened, and include PULL_REQUEST_FROM_YOU so they
+                    # know to trigger a request_pull_from back to us — this is the safer flow
+                    # for bootstrapping nodes because push_to from here can still race.
                     _send_framed(conn, json.dumps({
                         "status": "rejected",
-                        "reason": reject_reason
+                        "reason": reject_reason,
+                        "pull_request_from_you": True,   # signal to sender: call request_pull_from(us)
+                        "requester_ip": sender_ip,
+                        "requester_sync_port": self.sync_port,
                     }).encode("utf-8"))
-                    # Trigger reverse auto-push so sender receives our higher-revision database
+                    # Also trigger a direct reverse-push as a fallback (keeps existing behavior)
                     def reverse_sync():
                         time.sleep(1.0)
                         self.push_to(sender_ip, int(header.get("sync_port", SYNC_PORT)), live_update=True)
@@ -650,6 +696,20 @@ class SyncPeerService:
         Pushes local master.db + sera.salt to the specified peer.
         Returns a success/failure message string.
         """
+        # ---- BOOTSTRAP QUARANTINE ----
+        # Never push from a machine that has zero clients (new/empty install).
+        # This is an absolute hard block — it is unconditional and cannot be
+        # overridden by force_override. An empty database must never propagate.
+        if self._is_bootstrapping and not force_override:
+            local_metrics = self._get_local_metrics()
+            if local_metrics.get("client_count", 0) == 0:
+                msg = "Bootstrap quarantine: This node has 0 clients and cannot push its database. Waiting for pull from LAN."
+                self.log_activity("GUARD", "Outbound push blocked (bootstrap quarantine)", msg)
+                return msg
+            else:
+                # DB has been filled since startup (e.g. by a successful pull) — lift quarantine
+                self._is_bootstrapping = False
+
         sync_state = self.get_sync_state()
         if sync_state["status"] == "LAN_SYNC_FROZEN_MULTI_INV" and not force_override:
             inv_nodes_str = ", ".join(sync_state["active_inv_frames_nodes"])
@@ -707,6 +767,22 @@ class SyncPeerService:
                 if ack.get("status") != "ready":
                     reason = ack.get("reason", "Peer rejected sync request")
                     self.log_activity("PUSH", f"Sync rejected by {peer_ip}:{peer_port}", reason)
+                    # If peer told us to pull from them (e.g. we are a bootstrapping empty node),
+                    # honor that immediately — they have more data than us.
+                    if ack.get("pull_request_from_you"):
+                        pull_port = int(ack.get("requester_sync_port", peer_port))
+                        self.log_activity(
+                            "PULL",
+                            f"Peer instructed us to pull from them (higher-revision DB)",
+                            f"Connecting to {peer_ip}:{pull_port}"
+                        )
+                        def _do_instructed_pull(_ip=peer_ip, _port=pull_port):
+                            time.sleep(0.3)
+                            ok = self.request_pull_from(_ip, _port)
+                            if ok:
+                                self._bootstrap_pull_done = True
+                                self._is_bootstrapping = False
+                        threading.Thread(target=_do_instructed_pull, daemon=True).start()
                     return f"Sync skipped: {reason}"
 
                 # Send database + salt
@@ -748,10 +824,35 @@ class SyncPeerService:
                 }
                 _send_framed(conn, json.dumps(header).encode("utf-8"))
                 result_raw = _recv_framed(conn)
-                result = json.loads(result_raw.decode("utf-8"))
-                return result.get("status") == "ok"
-        except Exception as e:
-            return False
+                if result_raw:
+                    result = json.loads(result_raw.decode("utf-8"))
+                    return result.get("status") == "ok"
+        except Exception:
+            pass
+        return False
+
+    def push_tracker_dumps_to_host(self, host_ip: str, dumps: list[dict], host_port: int = SYNC_PORT) -> bool:
+        """
+        Pushes local tracker dump records to the Host PC.
+        """
+        if not dumps:
+            return True
+        try:
+            with socket.create_connection((host_ip, host_port), timeout=SOCK_TIMEOUT_SEC) as conn:
+                header = {
+                    "action": "push_tracker_dump",
+                    "username": self.username,
+                    "host": self.host_name,
+                    "dumps": dumps,
+                }
+                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                result_raw = _recv_framed(conn)
+                if result_raw:
+                    result = json.loads(result_raw.decode("utf-8"))
+                    return result.get("status") == "ok"
+        except Exception:
+            pass
+        return False
 
     def push_to_all(self, peers: Optional[list[dict]] = None) -> dict[str, str]:
         """

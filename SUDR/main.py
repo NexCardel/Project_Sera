@@ -393,7 +393,7 @@ class SeraApp:
         """Apply only UI updates on the Qt main thread after background work."""
         if not self._capture_ui_refresh_pending:
             self._capture_ui_refresh_pending = True
-            QTimer.singleShot(50, self._refresh_tracker_dump_ui)
+            QTimer.singleShot(300, self._refresh_tracker_dump_ui)
         portal = msg.get("portal", "Portal")
         arn = msg.get("arn", "N/A")
         capture_method = msg.get("capture_method", "DOM_Tracker")
@@ -1181,24 +1181,14 @@ class SeraApp:
                         t.join(timeout=3.5)
                     self.sync_bridge.sync_sent_signal.emit(count_ref[0], len(peers))
 
-                    # SSAL and Tracker Dumps: If configured, push to Host PC
+                    # SSAL: If configured, push recent audit logs to Host PC
                     host_ip = self.db.get_setting("host_ip")
                     if host_ip and self.sync_service:
                         try:
                             recent_logs = self.db.get_audit_logs(limit=100)
-                            if recent_logs:
-                                self.sync_service.push_audit_logs_to_host(host_ip, recent_logs)
+                            self.sync_service.push_audit_logs_to_host(host_ip, recent_logs)
                         except Exception as ex:
                             print(f"[SSAL] Auto push logs to host failed: {ex}")
-                            
-                        try:
-                            # Also push recent tracker dumps
-                            recent_dumps = self.db.get_tracker_dumps(limit=50)
-                            if recent_dumps:
-                                # Serialize datetime and objects if necessary, but get_tracker_dumps returns primitive dicts
-                                self.sync_service.push_tracker_dumps_to_host(host_ip, recent_dumps)
-                        except Exception as ex:
-                            print(f"[SYNC] Auto push tracker dumps to host failed: {ex}")
                 except Exception as e:
                     print(f"[Live Auto-Sync] Broadcast exception: {e}")
 

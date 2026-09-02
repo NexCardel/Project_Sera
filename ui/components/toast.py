@@ -22,6 +22,8 @@ class SeraAlert(QFrame):
         super().__init__(parent)
         self.setObjectName("SeraAlert")
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._current_level = None
+        self._icon_cache = {}
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 10, 16, 10)
@@ -51,22 +53,31 @@ class SeraAlert(QFrame):
 
     def show_alert(self, message: str, level: str = "success", duration_ms: int = 3000):
         level = level.lower() if level in ("success", "info", "warning", "error") else "success"
-        self.setProperty("level", level)
         
-        # Google Material Design Icon matching level
-        icon_name, color = self.LEVEL_ICONS.get(level, ("mdi.check-circle", "#1B5E20"))
-        try:
-            pixmap = qta.icon(icon_name, color=color).pixmap(20, 20)
-            self.icon_label.setPixmap(pixmap)
-            self.icon_label.show()
-        except Exception:
-            self.icon_label.hide()
+        if self._current_level != level:
+            self.setProperty("level", level)
+            self._current_level = level
+            
+            # Google Material Design Icon matching level - using Cache!
+            if level not in self._icon_cache:
+                icon_name, color = self.LEVEL_ICONS.get(level, ("mdi.check-circle", "#1B5E20"))
+                try:
+                    self._icon_cache[level] = qta.icon(icon_name, color=color).pixmap(20, 20)
+                except Exception:
+                    self._icon_cache[level] = None
+                    
+            pixmap = self._icon_cache.get(level)
+            if pixmap:
+                self.icon_label.setPixmap(pixmap)
+                self.icon_label.show()
+            else:
+                self.icon_label.hide()
+            
+            # Refresh stylesheet properties only if the level changed
+            self.style().unpolish(self)
+            self.style().polish(self)
             
         self.label.setText(message)
-        
-        # Refresh stylesheet properties
-        self.style().unpolish(self)
-        self.style().polish(self)
         self.adjustSize()
         
         # Bottom-Left positioning with safe 24px padding

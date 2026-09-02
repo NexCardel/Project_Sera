@@ -1,0 +1,118 @@
+diff --git a/sera_extension/sdc/sdc_core.js b/sera_extension/sdc/sdc_core.js
+index 92b3c86..ca13da8 100644
+--- a/sera_extension/sdc/sdc_core.js
++++ b/sera_extension/sdc/sdc_core.js
+@@ -32,6 +32,68 @@
+   const SDC_VERSION = '1.0.0';
+   console.log(`? Sera SDC (DOM Crosshair v${SDC_VERSION}): core loaded.`);
+ 
++  // --- SUDR: Sera Unified Dialect Recognition ---------------------------------
++  // Single source of truth for the canonical event vocabulary lives in
++  // event_types.json (web-accessible resource). Loaded once, cached, with a
++  // small built-in fallback so a fetch failure can't take crosshairs down.
++  const SUDR_FALLBACK_EVENT_TYPES = {
++    LOGIN_SUCCESS: { status: 'success' }, PORTAL_VIEW: { status: 'success' },
++    FORM_VIEW: { status: 'pending' }, FILING_SUBMITTED: { status: 'pending' },
++    FILING_VERIFIED: { status: 'success' }, RETURNS_LIST_VIEW: { status: 'success' },
++    LOGOUT: { status: 'success' }, ERROR: { status: 'failed' }
++  };
++  let _sudrEventTypes = SUDR_FALLBACK_EVENT_TYPES;
++  let _sudrLoaded = false;
++
++  async function _loadSudrEventTypes() {
++    try {
++      const url = (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL)
++        ? chrome.runtime.getURL('event_types.json')
++        : null;
++      if (!url) return;
++      const res = await fetch(url);
++      const data = await res.json();
++      if (data && data.event_types) {
++        _sudrEventTypes = data.event_types;
++        _sudrLoaded = true;
++        console.log(`? Sera SDC: SUDR vocabulary loaded (schema v${data.schema_version}, ${Object.keys(data.event_types).length} event types).`);
++      }
++    } catch (err) {
++      console.warn('? Sera SDC: SUDR event_types.json failed to load, using built-in fallback vocabulary.', err);
++    }
++  }
++  _loadSudrEventTypes();
++
++  /**
++   * deriveStatus(eventType)
++   * Status is NEVER chosen by a protocol — it's mechanically derived from
++   * event.type via the SUDR registry, so no two protocols can disagree on
++   * what "pending" vs "success" means for the same kind of event.
++   */
++  function deriveStatus(eventType) {
++    const entry = _sudrEventTypes[eventType];
++    return (entry && entry.status) || 'pending';
++  }
++
++  /**
++   * normalizeIdentity(raw)
++   * Validates PAN/GSTIN/TAN shape once, at the source, instead of letting
++   * downstream Python guess whether a scraped string is trustworthy.
++   */
++  function normalizeIdentity(raw) {
++    raw = raw || {};
++    const pan   = /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(raw.pan || '')   ? raw.pan   : null;
++    const gstin = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(raw.gstin || '') ? raw.gstin : null;
++    const tan   = /^[A-Z]{4}[0-9]{5}[A-Z]$/.test(raw.tan || '')   ? raw.tan   : null;
++    const cin   = raw.cin || null; // CIN pattern not yet validated — MCA still stub
++
++    let confidence = 'low';
++    if (pan || gstin || tan) confidence = 'high';
++    else if (raw.legal_name) confidence = 'medium';
++
++    return { pan, gstin, tan, cin, legal_name: raw.legal_name || null, confidence };
++  }
++
+   // --- Registered Protocol Registry -------------------------------------------
+   // Each protocol registers itself via SDC.register(protocol).
+   // A protocol is: { name, hostMatch, crosshairs: [{ pattern: RegExp, handler: fn }] }
+@@ -474,6 +536,36 @@
+     /** Public capture emitter for protocols */
+     emitCapture(capture, protocolName, crosshairId) {
+       _emitCapture(capture, protocolName, crosshairId);
++    },
++
++    /**
++     * emit(protocolName, crosshairId, eventType, identity, fields)
++     * SUDR enforcement point. This is the ONLY way a protocol may send a
++     * capture in the canonical envelope shape — protocols hand over
++     * ingredients (what happened, who it's about, extra scraped fields),
++     * this function builds the envelope. A protocol can never construct or
++     * dispatch a malformed/divergent payload because it never touches the
++     * envelope itself.
++     */
++    emit(protocolName, crosshairId, eventType, identity, fields) {
++      if (!_sudrEventTypes[eventType]) {
++        console.warn(`? Sera SDC: SUDR.emit() called with unknown event.type "${eventType}" — check event_types.json.`);
++      }
++      const envelope = {
++        type: 'sudr_capture', // top-level routing key for extension_listener.py
++        schema_version: '1.0',
++        capture_id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `sudr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
++        captured_at: new Date().toISOString(),
++        source: { protocol: protocolName, crosshair_id: crosshairId, extension_version: SDC_VERSION },
++        session_id: (SDC.session && SDC.session.data && SDC.session.data.session_id) || '',
++        event: { type: eventType, status: deriveStatus(eventType) },
++        identity: normalizeIdentity(identity),
++        fields: fields || {},
++        evidence: { url: window.location.href, page_title: document.title }
++      };
++
++      console.log(`? Sera SDC (SUDR) CAPTURE [${crosshairId} ? ${eventType}]:`, JSON.stringify(envelope).substring(0, 300));
++      _emitDual(envelope);
+     }
+   };
+ 
+@@ -859,6 +951,7 @@
+   function _emitDual(payload) {
+     // 1. Dispatch events for page-level test harness & filing detector listeners
+     try {
++      window.dispatchEvent(new CustomEvent('SeraSUDRCapture', { detail: payload }));
+       window.dispatchEvent(new CustomEvent('SeraSDCApiCapture', { detail: payload }));
+       window.dispatchEvent(new CustomEvent('SeraSDCCapture', { detail: payload }));
+       window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));

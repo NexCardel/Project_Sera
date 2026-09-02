@@ -12,7 +12,7 @@ class ExtensionListener(QThread):
     sca_fill_result_received = Signal(dict)
     session_started_received = Signal(dict)
     sdc_timeline_received = Signal(dict)
-    sudr_capture_received = Signal(dict)  # SUDR canonical envelope
+    sudr_capture_received = Signal(dict)  # SUDR canonical envelope (see sdcClaude.md §6)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,19 +23,13 @@ class ExtensionListener(QThread):
         self._running = False
         if self._server:
             try:
-                # Force socket to close, immediately unblocking any pending accept() calls
-                import socket
-                self._server.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
-            try:
                 self._server.close()
             except Exception:
                 pass
         try:
             if self.isRunning():
                 self.quit()
-                self.wait(2000) # Wait up to 2 seconds for loop to gracefully exit
+                self.wait(150)
         except RuntimeError:
             pass
 

@@ -340,7 +340,17 @@
       if (gstr3bSection) parseSection(gstr3bSection[0], 'GSTR-3B');
     }
 
-    return calendarEntries;
+    // Nested Angular row/cell containers can expose each calendar row twice.
+    // Keep one record per form + period + status before handing data to SDC.
+    const seen = new Set();
+    return calendarEntries.filter(entry => {
+      const key = [entry.form, entry.period, entry.status]
+        .map(value => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase())
+        .join('|');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   // ─── Handler 1: Welcome Dashboard & Calendar ────────────────────────────────
@@ -356,7 +366,17 @@
     const { gstin, pan } = _extractGstinAndPan();
     const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
     const preference = _extractFilingPreference();
-    const calendar = _parseReturnsCalendar();
+    const parsedCalendar = _parseReturnsCalendar();
+    // Capture only the current and immediately previous period for each form.
+    // The portal calendar is ordered chronologically, so the last two entries
+    // are the current visible period and its predecessor. This works for both
+    // Monthly and Quarterly filing preferences without hardcoded URLs.
+    const calendar = [];
+    const forms = [...new Set(parsedCalendar.map(entry => entry.form))];
+    for (const form of forms) {
+      const formPeriods = parsedCalendar.filter(entry => entry.form === form);
+      calendar.push(...formPeriods.slice(-2));
+    }
 
     if (gstin) _gstSession.gstin = gstin;
     if (pan) _gstSession.pan = pan;
@@ -370,7 +390,7 @@
     const SDC = window.__SERA_SDC__;
 
     // Emit individual calendar filings to SDC Core & Database
-    if (calendar.length > 0 && SDC && typeof SDC._emitCapture === 'function') {
+    if (calendar.length > 0 && SDC && typeof SDC.emitCapture === 'function') {
       for (const item of calendar) {
         const itemCapture = {
           gstin: gstin || _gstSession.gstin,
@@ -381,6 +401,7 @@
           proprietor_name: legal_name || _gstSession.legal_name,
           portal: 'GST Portal',
           filing_type: item.form,
+          filing_preference: preference,
           period_label: item.period,
           status: item.status,
           arn: 'N/A',
@@ -390,11 +411,13 @@
             legal_name: legal_name || _gstSession.legal_name,
             trade_name: trade_name || _gstSession.trade_name,
             filing_preference: preference,
+            taxpayer_name: client_name || legal_name || _gstSession.client_name || _gstSession.legal_name,
+            gstin: gstin || _gstSession.gstin,
             scanned_at: new Date().toISOString()
           }
         };
 
-        SDC._emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
+        SDC.emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
       }
     }
 
@@ -410,6 +433,7 @@
       company_name: trade_name || _gstSession.trade_name,
       proprietor_name: legal_name || _gstSession.legal_name,
       filing_type: 'GST Returns Calendar',
+      filing_preference: preference,
       period_label: periodSummary,
       status: summaryStatus,
       arn: 'N/A',
@@ -418,6 +442,9 @@
         legal_name: legal_name || _gstSession.legal_name,
         trade_name: trade_name || _gstSession.trade_name,
         preference: preference,
+        filing_preference: preference,
+        taxpayer_name: client_name || legal_name || _gstSession.client_name || _gstSession.legal_name,
+        gstin: gstin || _gstSession.gstin,
         total_periods: calendar.length,
         filed_periods: filedCount
       }
@@ -504,6 +531,45 @@
   }
 
   // ─── Handler 4: Filing Success / Confirmation ───────────────────────────────
+  async function _handleIffSubmissionSuccess(url) {
+    const successPattern = /(?:successfully\s+(?:submitted|filed)|return\s+(?:submitted|filed)\s+successfully|filing\s+successful|submitted\s+successfully)/i;
+    const arnPattern = /\b((?:[A-Z]{2}\d{13}|[A-Z0-9]{15}))\b/i;
+
+    await _waitForReady(() => {
+      const text = document.body ? document.body.innerText : '';
+      return successPattern.test(text) && arnPattern.test(text);
+    }, 12000, 400);
+
+    const text = document.body ? document.body.innerText : '';
+    const successMatch = text.match(successPattern);
+    const arnMatch = text.match(/(?:ARN\s*(?:Number|No\.?)?\s*[:\-]?\s*)([A-Za-z0-9]{15})/i) || text.match(arnPattern);
+    if (!successMatch || !arnMatch) return null;
+
+    const { gstin, pan } = _extractGstinAndPan();
+    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const meta = _extractFormMetadata();
+    const arn = arnMatch[1].toUpperCase();
+    return {
+      gstin: gstin || _gstSession.gstin,
+      pan: pan || _gstSession.pan,
+      client_name: client_name || _gstSession.client_name,
+      client_temp_name: client_temp_name || _gstSession.client_temp_name,
+      company_name: trade_name || _gstSession.trade_name,
+      proprietor_name: legal_name || _gstSession.legal_name,
+      filing_type: meta.form_type || 'IFF',
+      period_label: meta.tax_period || _gstSession.tax_period || 'Current Period',
+      status: 'Filed & Confirmed',
+      due_date: meta.due_date || '',
+      arn: arn,
+      scraped_data: {
+        success_message: successMatch[0].trim(),
+        arn: arn,
+        url: url,
+        captured_at: new Date().toISOString()
+      }
+    };
+  }
+
   async function _handleFilingSuccess(url) {
     await _waitForReady(() => {
       const txt = document.body ? document.body.innerText : '';
@@ -540,7 +606,7 @@
   // ─── Handler 5: Login & Logout ──────────────────────────────────────────────
   async function _handleLoginLogout(url) {
     const lower = (url || '').toLowerCase();
-    const isLogout = lower.includes('logout') || lower.includes('signout') || lower.includes('session') || lower.includes('timeout');
+    const isLogout = lower.includes('logout') || lower.includes('signout') || lower.includes('sign-out') || lower.includes('session') || lower.includes('timeout');
 
     const SDC = window.__SERA_SDC__;
     if (isLogout && SDC) {
@@ -573,7 +639,7 @@
 
     SDC.onSessionClear(_resetGstSession);
 
-    SDC.register({
+    const registered = SDC.register({
       name: 'GST Portal',
       hostMatch: /(?:services\.gst\.gov\.in|return\.gst\.gov\.in|gst\.gov\.in|localhost|127\.0\.0\.1)/i,
       crosshairs: [
@@ -587,6 +653,24 @@
           // Matches GSTR-1, GSTR-3B, CMP-08, IFF, GSTR-4, GSTR-9 form tables on return.gst.gov.in and services.gst.gov.in
           pattern: /(?:returns\/auth\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff)|services\/auth\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff)|returns\/(?:gstr1|gstr3b|cmp08|gstr4|gstr9|iff))/i,
           handler: _handleFormDetails
+        },
+        {
+          id: 'gst_iff_submission_success',
+          // The IFF success message is rendered on the same /file route.
+          pattern: /returns\/auth\/file(?:[?#]|$)/i,
+          handler: _handleIffSubmissionSuccess
+        },
+        {
+          id: 'gst_gstr1_submission_success',
+          // GSTR-1 uses the same GST /file confirmation route and DOM flow.
+          pattern: /returns\/auth\/file(?:[?#]|$)/i,
+          handler: _handleIffSubmissionSuccess
+        },
+        {
+          id: 'gst_gstr3b_submission_success',
+          // GSTR-3B uses the same GST /file confirmation route and DOM flow.
+          pattern: /returns\/auth\/file(?:[?#]|$)/i,
+          handler: _handleIffSubmissionSuccess
         },
         {
           id: 'gst_welcome_calendar',
@@ -607,6 +691,42 @@
     });
 
     console.log('⚡ Sera SDC: GST Portal Protocol registered with Form Summary & Returns Calendar crosshairs.');
+    // sdc_core performs its first URL scan before protocol files finish
+    // loading. Re-scan once GST is registered so an already-open GST page
+    // (including a direct /returns/auth/gstr1 visit) is captured immediately.
+    if (registered && typeof SDC.scanNow === 'function') {
+      SDC.scanNow(true).catch(err => console.warn('⚡ Sera SDC: GST initial scan failed.', err));
+    }
+    // GST keeps the IFF form on the same /file route after submission and
+    // renders the success banner asynchronously. Watch that route so the
+    // success crosshair can run when the ARN appears in the DOM.
+    if (registered && typeof MutationObserver !== 'undefined') {
+      let scanTimer = null;
+      const observer = new MutationObserver(() => {
+        if (!/returns\/auth\/file(?:[?#]|$)/i.test(window.location.href) || scanTimer) return;
+          scanTimer = setTimeout(async () => {
+            scanTimer = null;
+          const capture = await _handleIffSubmissionSuccess(window.location.href);
+          if (capture) {
+            const filingType = capture.filing_type || '';
+            const crosshairId = /3B/i.test(filingType)
+              ? 'gst_gstr3b_submission_success'
+              : /GSTR[- ]?1/i.test(filingType)
+                ? 'gst_gstr1_submission_success'
+                : 'gst_iff_submission_success';
+            // /returns/auth/file has no form-details route entry. Record the
+            // success page first so the assembler has a non-empty timeline
+            // and can flush the ARN payload when the user returns to Login.
+            SDC.session.data.portal = 'GST Portal';
+            await SDC.session.recordStep(window.location.href, crosshairId, capture);
+            await SDC.session.save();
+            SDC.emitCapture(capture, 'GST Portal', crosshairId);
+          }
+        }, 800);
+      });
+      if (document.body) observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+    if (typeof SDC.retryPendingFlush === 'function') SDC.retryPendingFlush();
   }
 
   _register();

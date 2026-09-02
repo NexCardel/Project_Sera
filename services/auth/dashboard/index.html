@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - GST Common Portal</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 30px; background: #f4f6f8; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0056b3; padding-bottom: 15px; margin-bottom: 20px; }
+        h1 { color: #0056b3; font-size: 24px; margin: 0; }
+        .taxpayer-info { font-size: 14px; color: #555; margin-top: 5px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 14px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        th { background-color: #0056b3; color: white; }
+        td:first-child { text-align: left; font-weight: bold; }
+        .logout-btn { background: #dc3545; color: white; padding: 8px 20px; text-decoration: none; border-radius: 4px; font-weight: bold; }
+        .logout-btn:hover { background: #c82333; }
+        .status-filed { color: green; font-weight: bold; }
+        .status-notfiled { color: red; font-weight: bold; }
+        .status-pending { color: orange; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Welcome AMAN ASSOCIATES to GST Common Portal</h1>
+                <div class="taxpayer-info">
+                    <strong>GSTIN:</strong> 22AAAAA0000A1Z5 &nbsp;&nbsp;|&nbsp;&nbsp; 
+                    <strong>PAN:</strong> AAAAA0000A
+                </div>
+            </div>
+            <div>
+                <!-- The word "Logout" in text or href is what Sera SDC listens for -->
+                <a href="#logout" class="logout-btn" id="logout-btn">Log out</a>
+            </div>
+        </div>
+
+        <h2 style="color: #333;">Returns Calendar</h2>
+        <div class="calendar-table">
+            <table>
+                <tr>
+                    <th>Return Type</th>
+                    <th>Mar - 2026</th>
+                    <th>Apr - 2026</th>
+                    <th>May - 2026</th>
+                    <th>Jun - 2026</th>
+                    <th>Jul - 2026</th>
+                </tr>
+                <tr>
+                    <td>GSTR-1</td>
+                    <td class="status-filed">Filed</td>
+                    <td class="status-filed">Filed</td>
+                    <td class="status-filed">Filed</td>
+                    <td class="status-notfiled">Not Filed</td>
+                    <td class="status-pending">Pending</td>
+                </tr>
+                <tr>
+                    <td>GSTR-3B</td>
+                    <td class="status-filed">Filed</td>
+                    <td class="status-filed">Filed</td>
+                    <td class="status-notfiled">Not Filed</td>
+                    <td class="status-notfiled">Not Filed</td>
+                    <td class="status-pending">Pending</td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="margin-top: 40px; padding: 15px; background: #e9ecef; border-radius: 5px; font-size: 14px;">
+            <h3 style="margin-top: 0;">🛠️ How to test the Sera SDC extension locally:</h3>
+            <ol>
+                <li>Open a terminal and start a local Python server in the root APP directory:<br>
+                    <code>cd "c:\Users\Nex\Downloads\Project Sera\APP"</code><br>
+                    <code>python -m http.server 8000</code>
+                </li>
+                <li>Navigate to <a href="http://localhost:8000/services/auth/dashboard/" target="_blank">http://localhost:8000/services/auth/dashboard/</a> in your browser. This URL path now exactly mirrors the real GST portal's dashboard URL.</li>
+                <li>You should immediately see the SDC Toast popup indicating the GST Calendar captures were buffered into memory.</li>
+                <li>Click the red <strong>"Log out"</strong> button at the top right.</li>
+                <li>The SDC Instant Logout interceptor will trigger, immediately flush the atomic payload to the background python server without exceeding the 64KB limit, and then the page will redirect!</li>
+                <li>Check the Sera Desktop App's Tracker Dump table.</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        // Simulate a standard GST portal logout navigation
+        document.getElementById('logout-btn').addEventListener('click', function(e) {
+            e.preventDefault();
+            setTimeout(() => {
+                window.location.href = "../logout/"; // Navigate to mock logout screen
+            }, 300); // 300ms delay to mimic network latency
+        });
+    </script>
+</body>
+</html>

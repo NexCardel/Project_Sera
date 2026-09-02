@@ -259,24 +259,35 @@ class SeraSyncDialog(QDialog):
             return
 
         is_local_inv = getattr(self.sync_service, "inv_frames", False)
-        if is_local_inv:
-            self.btn_inv_frames.setText("🛡️ Inv-Frames: ON")
-            self.btn_inv_frames.setStyleSheet(
-                "QPushButton { background-color: #F2C94C; color: #121212; font-weight: 700; "
-                "padding: 5px 12px; border-radius: 5px; border: 1px solid #E5B83B; } "
-                "QPushButton:hover { background-color: #FFD566; }"
-            )
-        else:
-            self.btn_inv_frames.setText("🛡️ Inv-Frames: OFF")
-            self.btn_inv_frames.setStyleSheet(
-                "QPushButton { background-color: #21262D; color: #8B949E; font-weight: 600; "
-                "padding: 5px 12px; border-radius: 5px; border: 1px solid #30363D; } "
-                "QPushButton:hover { background-color: #30363D; color: #C9D1D9; }"
-            )
+        if not hasattr(self, "_last_inv_state") or self._last_inv_state != is_local_inv:
+            self._last_inv_state = is_local_inv
+            if is_local_inv:
+                self.btn_inv_frames.setText("🛡️ Inv-Frames: ON")
+                self.btn_inv_frames.setStyleSheet(
+                    "QPushButton { background-color: #F2C94C; color: #121212; font-weight: 700; "
+                    "padding: 5px 12px; border-radius: 5px; border: 1px solid #E5B83B; } "
+                    "QPushButton:hover { background-color: #FFD566; }"
+                )
+            else:
+                self.btn_inv_frames.setText("🛡️ Inv-Frames: OFF")
+                self.btn_inv_frames.setStyleSheet(
+                    "QPushButton { background-color: #21262D; color: #8B949E; font-weight: 600; "
+                    "padding: 5px 12px; border-radius: 5px; border: 1px solid #30363D; } "
+                    "QPushButton:hover { background-color: #30363D; color: #C9D1D9; }"
+                )
 
         # Update dynamic LAN protocol status banner
         sync_state = self.sync_service.get_sync_state() if hasattr(self.sync_service, "get_sync_state") else {}
         status = sync_state.get("status", "NORMAL")
+        
+        # Check if text/status actually changed to avoid re-parsing CSS
+        auth = sync_state.get("authority_host", "Remote Master")
+        inv_nodes_str = ", ".join(sync_state.get("active_inv_frames_nodes", []))
+        cache_key = f"{status}_{auth}_{inv_nodes_str}"
+        
+        if getattr(self, "_last_banner_state", None) == cache_key:
+            return
+        self._last_banner_state = cache_key
 
         if status == "INV_FRAMES_MASTER":
             self.protocol_banner.setText("🛡️ INV-FRAMES ACTIVE (Local Node is Master Authority — All incoming sync rejected, pushing to LAN)")
@@ -285,14 +296,12 @@ class SeraSyncDialog(QDialog):
                 "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; }"
             )
         elif status == "LAN_SYNC_FROZEN_MULTI_INV":
-            inv_nodes_str = ", ".join(sync_state.get("active_inv_frames_nodes", []))
             self.protocol_banner.setText(f"⛔ LAN SYNC FROZEN — Multiple nodes ({inv_nodes_str}) have Inv-Frames enabled. All LAN sync is paused.")
             self.protocol_banner.setStyleSheet(
                 "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
                 "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; }"
             )
         elif status == "INV_FRAMES_FOLLOWER":
-            auth = sync_state.get("authority_host", "Remote Master")
             self.protocol_banner.setText(f"📥 FOLLOWING INV-FRAMES MASTER ({auth}) — Normal P2P sync locked; accepting master pushes.")
             self.protocol_banner.setStyleSheet(
                 "QLabel { background-color: #001F33; color: #7DD3FC; border: 1px solid #38BDF8; "
@@ -308,19 +317,23 @@ class SeraSyncDialog(QDialog):
     def _load_existing_activity(self):
         if self.sync_service and hasattr(self.sync_service, "get_activity_history"):
             history = self.sync_service.get_activity_history()
-            for entry in history:
-                ts = entry.get("timestamp", "")
-                cat = entry.get("category", "INFO")
-                title = entry.get("title", "")
-                detail = entry.get("detail", "")
-                msg = f"{title} - {detail}" if detail else title
-                self._add_log_item(ts, cat, msg)
+            if history:
+                self.log_list.setUpdatesEnabled(False)
+                for entry in history:
+                    ts = entry.get("timestamp", "")
+                    cat = entry.get("category", "INFO")
+                    title = entry.get("title", "")
+                    detail = entry.get("detail", "")
+                    msg = f"{title} - {detail}" if detail else title
+                    self._add_log_item(ts, cat, msg, auto_scroll=False)
+                self.log_list.scrollToBottom()
+                self.log_list.setUpdatesEnabled(True)
 
     def _on_activity_received(self, timestamp: str, category: str, message: str):
-        self._add_log_item(timestamp, category, message)
+        self._add_log_item(timestamp, category, message, auto_scroll=True)
         self._update_inv_frames_ui()
 
-    def _add_log_item(self, ts: str, cat: str, message: str):
+    def _add_log_item(self, ts: str, cat: str, message: str, auto_scroll: bool = True):
         # Format organized plain-text activity log item with colored badges
         icon_badge = "ℹ️"
         color = "#C9D1D9"
@@ -355,7 +368,14 @@ class SeraSyncDialog(QDialog):
         item = QListWidgetItem(formatted_text)
         item.setForeground(QColor(color))
         self.log_list.addItem(item)
-        self.log_list.scrollToBottom()
+        
+        # Auto-prune if too large to prevent UI lag over long periods
+        if self.log_list.count() > 400:
+            deleted_item = self.log_list.takeItem(0)
+            del deleted_item
+            
+        if auto_scroll:
+            self.log_list.scrollToBottom()
 
     def _clear_activity_log(self):
         self.log_list.clear()
@@ -376,6 +396,7 @@ class SeraSyncDialog(QDialog):
             if host_item and ip_item:
                 selected_key = f"{host_item.text()}:{ip_item.text()}"
 
+        self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(peers))
         new_sel_row = -1
 
@@ -384,46 +405,61 @@ class SeraSyncDialog(QDialog):
             if key == selected_key:
                 new_sel_row = r_idx
 
-            username_item = QTableWidgetItem(peer.get("username", "Unknown"))
-            username_item.setData(Qt.UserRole, peer)
-            self.table.setItem(r_idx, 0, username_item)
+            # 0: Username
+            item0 = self.table.item(r_idx, 0) or QTableWidgetItem()
+            item0.setText(peer.get("username", "Unknown"))
+            item0.setData(Qt.UserRole, peer)
+            if not self.table.item(r_idx, 0): self.table.setItem(r_idx, 0, item0)
 
-            host_item = QTableWidgetItem(peer.get("host", ""))
-            self.table.setItem(r_idx, 1, host_item)
+            # 1: Host
+            item1 = self.table.item(r_idx, 1) or QTableWidgetItem()
+            item1.setText(peer.get("host", ""))
+            if not self.table.item(r_idx, 1): self.table.setItem(r_idx, 1, item1)
 
-            ip_item = QTableWidgetItem(peer.get("ip", ""))
-            self.table.setItem(r_idx, 2, ip_item)
+            # 2: IP
+            item2 = self.table.item(r_idx, 2) or QTableWidgetItem()
+            item2.setText(peer.get("ip", ""))
+            if not self.table.item(r_idx, 2): self.table.setItem(r_idx, 2, item2)
 
-            ver_item = QTableWidgetItem(peer.get("app_version", "v2.4.0"))
-            self.table.setItem(r_idx, 3, ver_item)
+            # 3: Version
+            item3 = self.table.item(r_idx, 3) or QTableWidgetItem()
+            item3.setText(peer.get("app_version", "v2.4.0"))
+            if not self.table.item(r_idx, 3): self.table.setItem(r_idx, 3, item3)
 
-            mtime_item = QTableWidgetItem(peer.get("db_mtime", "N/A"))
-            self.table.setItem(r_idx, 4, mtime_item)
+            # 4: DB MTime
+            item4 = self.table.item(r_idx, 4) or QTableWidgetItem()
+            item4.setText(peer.get("db_mtime", "N/A"))
+            if not self.table.item(r_idx, 4): self.table.setItem(r_idx, 4, item4)
 
-            rev_score = peer.get("sync_revision", 0)
-            rev_item = QTableWidgetItem(str(rev_score))
-            rev_item.setTextAlignment(Qt.AlignCenter)
-            rev_item.setForeground(QColor("#38D9A9"))
-            self.table.setItem(r_idx, 5, rev_item)
+            # 5: Revision
+            item5 = self.table.item(r_idx, 5) or QTableWidgetItem()
+            item5.setText(str(peer.get("sync_revision", 0)))
+            item5.setTextAlignment(Qt.AlignCenter)
+            item5.setForeground(QColor("#38D9A9"))
+            if not self.table.item(r_idx, 5): self.table.setItem(r_idx, 5, item5)
 
+            # 6: Data Counts
             c_cnt = peer.get("client_count", 0)
             t_cnt = peer.get("tracker_count", 0)
-            data_item = QTableWidgetItem(f"{c_cnt} CLI | {t_cnt} Dumps")
-            data_item.setTextAlignment(Qt.AlignCenter)
-            data_item.setForeground(QColor("#7DD3FC"))
-            self.table.setItem(r_idx, 6, data_item)
+            item6 = self.table.item(r_idx, 6) or QTableWidgetItem()
+            item6.setText(f"{c_cnt} CLI | {t_cnt} Dumps")
+            item6.setTextAlignment(Qt.AlignCenter)
+            item6.setForeground(QColor("#7DD3FC"))
+            if not self.table.item(r_idx, 6): self.table.setItem(r_idx, 6, item6)
 
-            is_peer_inv = peer.get("inv_frames", False)
-            if is_peer_inv:
-                status_item = QTableWidgetItem("🛡️ Inv-Frames")
-                status_item.setForeground(QColor("#F2C94C"))
+            # 7: Status
+            item7 = self.table.item(r_idx, 7) or QTableWidgetItem()
+            if peer.get("inv_frames", False):
+                item7.setText("🛡️ Inv-Frames")
+                item7.setForeground(QColor("#F2C94C"))
             else:
-                status_item = QTableWidgetItem("🟢 Normal")
-                status_item.setForeground(QColor("#4CF9B7"))
-            self.table.setItem(r_idx, 7, status_item)
+                item7.setText("🟢 Normal")
+                item7.setForeground(QColor("#4CF9B7"))
+            if not self.table.item(r_idx, 7): self.table.setItem(r_idx, 7, item7)
 
         if new_sel_row >= 0:
             self.table.selectRow(new_sel_row)
+        self.table.setUpdatesEnabled(True)
 
     def _on_sync_clicked(self):
         selected = self.table.currentRow()

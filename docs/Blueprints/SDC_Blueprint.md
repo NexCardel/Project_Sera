@@ -21,7 +21,7 @@ sera_extension/
 └── sdc/
     ├── sdc_core.js              ← Route listener + SDC Assembler + HTTP Dispatcher
     └── protocols/
-        ├── itr_protocol.js      ← Income Tax portal — ACTIVE (v2.9.2)
+        ├── itr_protocol.js      ← Income Tax portal — ACTIVE (v2.9.4)
         ├── gst_protocol.js      ← GST portal — Active
         ├── traces_protocol.js   ← TRACES TDS portal — Stub (planned)
         └── mca_protocol.js      ← MCA V3 portal — Stub (planned)

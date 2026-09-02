@@ -157,9 +157,51 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
     chips: List[Dict[str, str]] = []
 
     # =========================================================================
-    # 0. SDC Specific Nodes (Termination, Logout, Page Routes, Crosshairs)
+    # 0. SUDR Unified Dialect Recognition Envelope
     # =========================================================================
-    if capture.get("is_termination") or capture.get("title") == "Tab terminated abruptly" or inner.get("is_termination"):
+    if payload_data.get("type") == "sudr_capture" or (isinstance(payload_data, dict) and payload_data.get("schema_version") == "1.0"):
+        event = payload_data.get("event", {}) or {}
+        event_type = event.get("type", "UNKNOWN")
+        source = payload_data.get("source", {}) or {}
+        identity = payload_data.get("identity", {}) or {}
+        fields = payload_data.get("fields", {}) or {}
+        protocol_name = source.get("protocol", portal)
+
+        sudr_map = {
+            "LOGIN_SUCCESS": {"title": "User Logged In", "category": "Authentication", "icon": "mdi.login-variant", "color": "#39FF14", "narrative": f"User successfully authenticated on {protocol_name}."},
+            "PORTAL_VIEW": {"title": "Viewing Portal", "category": "Navigation", "icon": "mdi.web", "color": "#58A6FF", "narrative": f"Dashboard or landing page viewed on {protocol_name}."},
+            "FORM_VIEW": {"title": "Viewing Form", "category": "Form Interaction", "icon": "mdi.file-document-outline", "color": "#D29922", "narrative": f"Form or period selection viewed on {protocol_name}."},
+            "FILING_SUBMITTED": {"title": "Filing Submitted", "category": "Filing State", "icon": "mdi.file-upload-outline", "color": "#FFA657", "narrative": f"Filing or statement submitted on {protocol_name}."},
+            "FILING_VERIFIED": {"title": "Filing Verified & Confirmed", "category": "Confirmation", "icon": "mdi.check-decagram", "color": "#39FF14", "narrative": f"Filing confirmed and verified on {protocol_name}."},
+            "RETURNS_LIST_VIEW": {"title": "Viewing Return History", "category": "Audit / History", "icon": "mdi.history", "color": "#58A6FF", "narrative": f"User browsing historical filing records on {protocol_name}."},
+            "LOGOUT": {"title": "User Logged Out", "category": "Authentication", "icon": "mdi.logout-variant", "color": "#8B949E", "narrative": f"Session ended on {protocol_name}."},
+            "ERROR": {"title": "Portal Error / Rejection", "category": "Error", "icon": "mdi.alert-circle-outline", "color": "#F85149", "narrative": f"Portal reported a failure or rejected state on {protocol_name}."}
+        }
+        meta = sudr_map.get(event_type, {"title": f"{protocol_name} Event", "category": "SUDR Capture", "icon": "mdi.crosshairs-gps", "color": "#4CF9B7", "narrative": f"Event {event_type} recorded on {protocol_name}."})
+        step_title = meta["title"]
+        category = meta["category"]
+        icon = meta["icon"]
+        color = meta["color"]
+        narrative = meta["narrative"]
+
+        if identity.get("legal_name"):
+            chips.append({"label": "Name", "val": str(identity["legal_name"])})
+        if identity.get("pan"):
+            chips.append({"label": "PAN", "val": str(identity["pan"])})
+        if identity.get("gstin"):
+            chips.append({"label": "GSTIN", "val": str(identity["gstin"])})
+        if identity.get("tan"):
+            chips.append({"label": "TAN", "val": str(identity["tan"])})
+
+        for k, v in fields.items():
+            if v:
+                short_label = k.split(".", 1)[-1].replace("_", " ").title()
+                chips.append({"label": short_label, "val": str(v)})
+
+    # =========================================================================
+    # 0.1 SDC Specific Nodes (Termination, Logout, Page Routes, Crosshairs)
+    # =========================================================================
+    elif capture.get("is_termination") or capture.get("title") == "Tab terminated abruptly" or inner.get("is_termination"):
         step_title = "Tab Terminated Abruptly"
         category = "Abrupt Termination"
         icon = "mdi.alert-octagon"

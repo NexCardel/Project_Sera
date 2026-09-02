@@ -8,7 +8,7 @@
  */
 
 (function() {
-    const SAD_VERSION = "2.9.2";
+    const SAD_VERSION = "2.9.4";
     // SAD Permanently Retired: Deactivated for compliance & safety. Zero network hooking.
     return;
     if (window.__SERA_SAD_VERSION__ === SAD_VERSION) return;

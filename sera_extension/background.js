@@ -1,4 +1,5 @@
 let nativePort = null;
+const sdcInjectedTabs = new Set();
 
 function connectToNativeHost() {
   if (nativePort !== null) return;
@@ -78,12 +79,12 @@ function ensureConnected() {
   if (!nativePort) connectToNativeHost();
 }
 
-async function sendToDesktop(msg) {
+async function sendToDesktop(msg, requireHttpAck = false) {
   let sent = false;
-  if (!nativePort) {
+  if (!requireHttpAck && !nativePort) {
     ensureConnected();
   }
-  if (nativePort) {
+  if (!requireHttpAck && nativePort) {
     try {
       nativePort.postMessage(msg);
       sent = true;
@@ -202,12 +203,20 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
 
 // SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
 function injectSAD(tabId, reason) {
+  if (sdcInjectedTabs.has(tabId)) {
+    console.log(`⚡ Sera SDC: Tab ${tabId} already injected — skipping duplicate injection.`);
+    return;
+  }
+  // Reserve the tab before the asynchronous settings lookup to prevent two
+  // concurrent injection requests from both passing the guard.
+  sdcInjectedTabs.add(tabId);
   chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
     const fstEnabled = data.fstEnabled !== false && trackerEnabled;
     const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
 
     if (!trackerEnabled || !sdcEnabled) {
+      sdcInjectedTabs.delete(tabId);
       return; // All visual and DOM scanning disabled
     }
 
@@ -246,9 +255,18 @@ function injectAllOpenTabs(reason) {
 // Inject into every tab that finishes loading or updates its SPA URL
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
-  if (changeInfo.status === 'complete' || changeInfo.url) {
-    injectSAD(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
+  if (changeInfo.status === 'complete') {
+    // A full document load creates a new execution context; reinject once.
+    sdcInjectedTabs.delete(tabId);
+    injectSAD(tabId, 'onUpdated-complete');
+  } else if (changeInfo.url) {
+    // SPA navigation is already handled by sdc_core's URL watcher.
+    console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
   }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  sdcInjectedTabs.delete(tabId);
 });
 
 // Also scan open tabs on worker startup
@@ -1381,10 +1399,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "filing_result") {
     console.log("Sera background: handling filing_result, sending to desktop...");
-    sendToDesktop(msg);
-    // Clear tracking state so we don't fire uncertain_result when tab closes
-    chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-    sendResponse({ status: "ok" });
+    // Keep the MV3 service worker alive until the final assembler payload has
+    // actually been forwarded to the desktop host.
+    // The HTTP listener returns 200 only after the desktop has accepted the
+    // payload. Native postMessage has no receipt acknowledgement, so it is
+    // not sufficient for clearing the durable assembler outbox.
+    // Acknowledge receipt to the page immediately; the worker owns the one
+    // forwarding attempt after the page starts unloading.
+    sendResponse({ status: "accepted" });
+    sendToDesktop(msg, true).then((sent) => {
+      if (sent) chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
+      else console.warn("Sera background: filing_result was not delivered to desktop.");
+    }).catch((err) => console.warn("Sera background: filing_result delivery error:", err));
     return true;
   }
 });

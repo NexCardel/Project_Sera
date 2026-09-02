@@ -39,6 +39,7 @@ class SeraDatabase:
             self.raw_db_path = os.path.join(db_dir, "rawPayload.db")
 
         self._local = threading.local()
+        self._last_reresolve_ts = 0.0  # Debounce timestamp for re_resolve_all_tracker_dumps
         # Set externally by main.py once SyncPeerService exists, so this
         # module never has to import sync_peer.py directly (sync depends
         # on the db, not the other way around). Left as a no-op until then
@@ -2059,7 +2060,15 @@ class SeraDatabase:
         - timeline_count: Total SDC session timelines in rawPayload.db
         - latest_timestamp: ISO timestamp of most recent audit log / capture entry
         - sync_revision: Structural database revision score
+        
+        Uses a 15-second cache to prevent heavy SQLite lock contention on background thread.
         """
+        import time
+        now = time.time()
+        if hasattr(self, "_sync_metrics_cache") and hasattr(self, "_sync_metrics_cache_ts"):
+            if now - self._sync_metrics_cache_ts < 15:
+                return self._sync_metrics_cache
+
         try:
             with self._connect() as conn:
                 cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_deleted = 0")
@@ -2094,7 +2103,7 @@ class SeraDatabase:
 
             sync_revision = (client_count * 10000) + (log_count * 10) + (tracker_count * 5) + timeline_count
 
-            return {
+            res = {
                 "client_count": client_count,
                 "archived_count": archived_count,
                 "log_count": log_count,
@@ -2103,6 +2112,9 @@ class SeraDatabase:
                 "latest_timestamp": latest_ts,
                 "sync_revision": sync_revision,
             }
+            self._sync_metrics_cache = res
+            self._sync_metrics_cache_ts = now
+            return res
         except Exception:
             return {
                 "client_count": 0,
@@ -3089,6 +3101,45 @@ class SeraDatabase:
             "portal": portal, "period_label": period_label, "arn_number": arn_number,
             "capture_method": capture_method, "status": status, "created_at": now, "replaced": is_replaced
         }
+
+    def store_peer_tracker_dumps(self, dumps: list[dict]):
+        """
+        Receives pushed tracker_dump records from a peer workstation (via LAN sync)
+        and inserts them into the local rawPayload.db, avoiding exact duplicates.
+        """
+        if not dumps:
+            return
+        
+        with self._connect_raw() as r_conn:
+            for d in dumps:
+                # Basic duplicate check by timestamp and actor
+                cur = r_conn.execute(
+                    "SELECT id FROM tracker_dump WHERE captured_by = ? AND created_at = ?",
+                    (d.get("captured_by"), d.get("created_at"))
+                )
+                if cur.fetchone():
+                    continue
+
+                r_conn.execute(
+                    """INSERT INTO tracker_dump
+                       (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        d.get("client_id"), d.get("unassigned_identity"), d.get("service_id"),
+                        d.get("portal"), d.get("period_label"), d.get("arn_number"),
+                        d.get("capture_method"), d.get("status"), d.get("raw_payload_json"),
+                        d.get("captured_by"), d.get("created_at")
+                    )
+                )
+
+        # Trigger resolution in case new unassigned dumps matched an existing client
+        try:
+            now_ts = time.time()
+            if now_ts - self._last_reresolve_ts > 30.0:
+                self.re_resolve_all_tracker_dumps()
+                self._last_reresolve_ts = now_ts
+        except Exception:
+            pass
 
     def upsert_sdc_session_timeline(self, session_data: dict) -> dict:
         """Upserts a full SDC Session Timeline audit trail in rawPayload.db."""

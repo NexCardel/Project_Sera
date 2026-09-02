@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Logged Out - GST Common Portal</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 50px; background: #f4f6f8; text-align: center; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .icon { font-size: 48px; color: #28a745; margin-bottom: 20px; }
+        h1 { color: #333; font-size: 24px; margin: 0 0 15px 0; }
+        p { color: #555; font-size: 16px; margin-bottom: 30px; }
+        .login-btn { background: #0056b3; color: white; padding: 10px 25px; text-decoration: none; border-radius: 4px; font-weight: bold; }
+        .login-btn:hover { background: #004494; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">✅</div>
+        <h1>You have successfully logged out.</h1>
+        <p>Thank you for using the GST Common Portal.</p>
+        <a href="../login/" class="login-btn">Login Again</a>
+    </div>
+
+    <div style="margin-top: 40px; text-align: left; max-width: 600px; margin-left: auto; margin-right: auto; padding: 15px; background: #e9ecef; border-radius: 5px; font-size: 14px;">
+        <h3 style="margin-top: 0; color: #333;">🛠️ SDC Test Status:</h3>
+        <p style="margin-top: 5px; margin-bottom: 0; color: #444;">
+            Because this URL is <code>/services/auth/logout/</code>, the Sera SDC <code>gst_login_logout</code> crosshair will detect it and call <code>clearAllSessions()</code> to securely wipe the local storage buffer.
+        </p>
+    </div>
+</body>
+</html>

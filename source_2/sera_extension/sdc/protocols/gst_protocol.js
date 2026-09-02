@@ -370,7 +370,7 @@
     const SDC = window.__SERA_SDC__;
 
     // Emit individual calendar filings to SDC Core & Database
-    if (calendar.length > 0 && SDC && typeof SDC._emitCapture === 'function') {
+    if (calendar.length > 0 && SDC && typeof SDC.emitCapture === 'function') {
       for (const item of calendar) {
         const itemCapture = {
           gstin: gstin || _gstSession.gstin,
@@ -394,7 +394,7 @@
           }
         };
 
-        SDC._emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
+        SDC.emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
       }
     }
 

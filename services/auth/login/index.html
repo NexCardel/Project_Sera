@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Login - GST Common Portal</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 50px; background: #f4f6f8; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 100%; max-width: 400px; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .logo { text-align: center; margin-bottom: 20px; font-size: 24px; font-weight: bold; color: #0056b3; }
+        h1 { color: #333; font-size: 20px; margin: 0 0 20px 0; text-align: center; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; color: #555; font-size: 14px; font-weight: bold; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+        .login-btn { display: block; width: 100%; background: #0056b3; color: white; padding: 12px; text-align: center; text-decoration: none; border-radius: 4px; font-weight: bold; margin-top: 20px; border: none; cursor: pointer; font-size: 16px; }
+        .login-btn:hover { background: #004494; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">GST Portal Mock</div>
+        <h1>Login</h1>
+        <form id="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" value="aman_associates_demo" readonly>
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" value="password123" readonly>
+            </div>
+            <button type="submit" class="login-btn">Login</button>
+        </form>
+    </div>
+
+    <div style="margin-top: 40px; max-width: 600px; padding: 15px; background: #e9ecef; border-radius: 5px; font-size: 14px;">
+        <h3 style="margin-top: 0; color: #333;">🛠️ Test Flow Instructions:</h3>
+        <p style="margin-top: 5px; margin-bottom: 10px; color: #444;">
+            This URL (<code>/services/auth/login/</code>) triggers the SDC <code>gst_login_logout</code> crosshair, which prepares a clean, empty session buffer.
+        </p>
+        <ol style="margin-bottom: 0;">
+            <li>Click <strong>Login</strong> above to proceed to the Dashboard.</li>
+            <li>Observe the SDC toaster on the dashboard indicating that the calendar data was captured and buffered.</li>
+            <li>Click <strong>Log out</strong> on the dashboard to trigger the atomic flush of the sub-64KB master payload, followed by a redirect to the logout page.</li>
+        </ol>
+    </div>
+
+    <script>
+        document.getElementById('login-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            setTimeout(() => {
+                window.location.href = "../dashboard/"; // Navigate to mock dashboard screen
+            }, 300); // simulate network latency
+        });
+    </script>
+</body>
+</html>
