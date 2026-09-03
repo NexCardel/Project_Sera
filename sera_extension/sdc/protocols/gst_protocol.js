@@ -585,7 +585,7 @@
       const hasRealStatus = /Status\s*[-:]\s*(Filed|Not Filed|Initiated|To be Filed|Submitted|Ready to File)/i.test(txt);
       const hasKnownPeriod = Boolean(_gstSession.tax_period || _gstSession.fy);
       return hasGstin && (hasRealPeriod || hasRealStatus || hasKnownPeriod);
-    }, 7000, 200);
+    }, 3000, 150);
 
     const { gstin, pan } = _extractGstinAndPan();
     const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();

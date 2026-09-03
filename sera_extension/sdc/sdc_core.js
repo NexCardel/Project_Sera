@@ -777,34 +777,10 @@
     }
   }, true); // use capture phase to guarantee we intercept it
 
-  // 5. pagehide / tab close instant flush fallback
+  // 5. pagehide: Safely persist session memory on page unload without prematurely flushing or wiping storage
   window.addEventListener('pagehide', () => {
-    // If there is an active un-flushed session with captures when the tab is closed, flush it!
-    if (SDC.session.data.session_id) {
-      const hasCaptures = (SDC.session.data.assembler_captures || []).length > 0;
-      if (!SDC.session.data._assembler_flushed && hasCaptures) {
-        console.log('⚡ Sera SDC: 🚪 Tab closed! Instant flush triggered via keepalive.');
-        SDC.session.data.status = 'completed';
-        SDC.session.data.end_time = new Date().toISOString();
-        const tl = SDC.session.data.timeline || [];
-        tl.push({
-            step: tl.length + 1,
-            title: "Tab Closed / Navigated Away",
-            url: window.location.href,
-            route: "TAB_CLOSED",
-            timestamp: SDC.session.data.end_time,
-            is_termination: true
-        });
-        // Queue the final payload, then remove persisted session memory so a
-        // later tab cannot resurrect the abruptly closed session.
-        SDC.session._flushAssembler(SDC.session.data)
-          .finally(() => SDC.session.clear())
-          .catch(() => {});
-      } else {
-        // No filing payload exists, but any persisted identity/timeline state
-        // must still be discarded when the tab terminates abruptly.
-        SDC.session.clear().catch(() => {});
-      }
+    if (SDC.session.data && SDC.session.data.session_id) {
+      SDC.session.save().catch(() => {});
     }
   });
 

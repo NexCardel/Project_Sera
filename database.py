@@ -2978,7 +2978,13 @@ class SeraDatabase:
         # Assessment Year canonical normalization: (e.g. "AY 2026-27", "2026-27", "AY: 2026-27") -> AY_2026_27
         m_ay = re.search(r"\b(?:AY|A\.Y\.)?\s*(20\d{2})[-_](\d{2})\b", per_clean, re.I)
         if m_ay:
-            per_canon = f"AY_{m_ay.group(1)}_{m_ay.group(2)}"
+            # GST labels commonly contain both the FY and tax period, such as
+            # "May (FY 2026-27)". Preserve both so months cannot overwrite one
+            # another under the same financial year.
+            m_tax_mon = re.search(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b", per_clean, re.I)
+            m_tax_qtr = re.search(r"\b(Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar|Q[1-4])\b", per_clean, re.I)
+            tax_period = m_tax_mon.group(1)[:3].upper() if m_tax_mon else (re.sub(r"[^A-Z0-9]+", "_", m_tax_qtr.group(1).upper()) if m_tax_qtr else "")
+            per_canon = f"AY_{m_ay.group(1)}_{m_ay.group(2)}{('_' + tax_period) if tax_period else ''}"
         else:
             # Month or quarter extraction with year
             m_mon = re.search(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b", per_clean, re.I)
