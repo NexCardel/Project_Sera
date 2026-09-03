@@ -33,6 +33,8 @@
     fy: '',
     tax_period: '',
     due_date: '',
+    gstr1_due_date: '',
+    gstr3b_due_date: '',
     filing_type: '',
     preference: '',
     calendar: []
@@ -49,6 +51,8 @@
       fy: '',
       tax_period: '',
       due_date: '',
+      gstr1_due_date: '',
+      gstr3b_due_date: '',
       filing_type: '',
       preference: '',
       calendar: []
@@ -329,10 +333,37 @@
       }
     }
 
-    // Due Date: "Due Date - 13/07/2026" or "Due Date : 13/07/2026"
+    // Due Date: "Due Date - 20/07/2026", "Due Date : 20/07/2026", "Due Date 20/07/2026", "Due Date\n20/07/2026", "20-Jul-2026"
     let dueDate = '';
-    const dueMatch = bodyText.match(/Due\s+Date\s*[-:]\s*([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})/i);
+    const dueMatch = bodyText.match(/Due\s*Date\s*[-:]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember))[\/\-\s]+[0-9]{2,4}))/i);
     if (dueMatch) dueDate = dueMatch[1].trim();
+
+    // DOM Element search for Due Date fallback
+    if (!dueDate) {
+      try {
+        const dueLabels = document.querySelectorAll('label, span, div, p, th, td, b, strong');
+        for (const el of dueLabels) {
+          const t = (el.innerText || '').trim();
+          if (/^due\s*date\s*[-:]?$/i.test(t)) {
+            const next = el.nextElementSibling;
+            if (next) {
+              const dm = (next.innerText || '').match(/([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[0-9]{1,2}[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4})/);
+              if (dm) { dueDate = dm[1].trim(); break; }
+            }
+            const p = el.parentElement;
+            if (p) {
+              const pNext = p.nextElementSibling;
+              if (pNext) {
+                const dm = (pNext.innerText || '').match(/([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[0-9]{1,2}[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4})/);
+                if (dm) { dueDate = dm[1].trim(); break; }
+              }
+              const dm = (p.innerText || '').match(/due\s*date\s*[-:]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[0-9]{1,2}[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4})/i);
+              if (dm) { dueDate = dm[1].trim(); break; }
+            }
+          }
+        }
+      } catch (_) {}
+    }
 
     // Form Title / Type: from Banner / Breadcrumb (e.g. "GSTR-1/IFF", "GSTR-3B", "CMP-08", "GSTR-4", "GSTR-9", "GSTR-9C")
     let formType = '';
@@ -691,21 +722,29 @@
       const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
       const hasRealPeriod = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)|Q[1-4]|20\d{2}-\d{2})\b/i.test(txt);
       const hasRealStatus = /Status\s*[-:]\s*(Filed|Not Filed|Initiated|To be Filed|Submitted|Ready to File)/i.test(txt);
-      const hasKnownPeriod = Boolean(_gstSession.tax_period || _gstSession.fy);
-      return hasGstin && (hasRealPeriod || hasRealStatus || hasKnownPeriod);
-    }, 3000, 150);
+      const hasFormIndicators = /(?:Due\s*Date|Eligible\s*ITC|Outward\s*supplies|Payment\s*of\s*Tax|Tax\s*Period)/i.test(txt);
+      return hasGstin && (hasRealPeriod || hasRealStatus || hasFormIndicators);
+    }, 4500, 200);
 
     const { gstin, pan } = _extractGstinAndPan();
     const { trade_name } = _extractTaxpayerNames();
     const meta = _extractFormMetadata();
+
+    const chosenFormType = meta.form_type || _inferFilingType(meta) || 'GSTR-3B';
+    const is3B = /3B/i.test(chosenFormType) || /gstr3b/i.test(window.location.href);
+    const resolvedDueDate = meta.due_date || (is3B ? _gstSession.gstr3b_due_date : _gstSession.gstr1_due_date) || _gstSession.due_date || '';
 
     if (gstin) _gstSession.gstin = gstin;
     if (pan) _gstSession.pan = pan;
     if (trade_name) _gstSession.trade_name = trade_name;
     if (meta.fy) _gstSession.fy = meta.fy;
     if (meta.tax_period) _gstSession.tax_period = meta.tax_period;
-    if (meta.due_date) _gstSession.due_date = meta.due_date;
-    if (meta.form_type) _gstSession.filing_type = meta.form_type;
+    if (resolvedDueDate) {
+      _gstSession.due_date = resolvedDueDate;
+      if (is3B) _gstSession.gstr3b_due_date = resolvedDueDate;
+      else _gstSession.gstr1_due_date = resolvedDueDate;
+    }
+    if (chosenFormType) _gstSession.filing_type = chosenFormType;
 
     // Do NOT capture legal/proprietor name from forms as it was already captured on the welcome screen
     const proprietorName = _gstSession.legal_name || '';
@@ -726,7 +765,6 @@
     }
 
     const finalStatus = (meta.status && meta.status !== 'FY -') ? meta.status : 'Initiated';
-    const chosenFormType = meta.form_type || _inferFilingType(meta) || 'GSTR-3B';
 
     return {
       gstin: gstin || _gstSession.gstin,
@@ -743,7 +781,7 @@
       filing_type: chosenFormType,
       period_label: fullPeriodLabel,
       status: finalStatus,
-      due_date: meta.due_date || '',
+      due_date: resolvedDueDate,
       arn: 'N/A',
       scraped_data: {
         gstin: gstin || _gstSession.gstin,
@@ -756,7 +794,7 @@
         fy: chosenFy,
         tax_period: chosenPeriod,
         status: finalStatus,
-        due_date: meta.due_date || _gstSession.due_date,
+        due_date: resolvedDueDate,
         form_type: chosenFormType,
         is_nil: meta.is_nil,
         captured_at: new Date().toISOString()
@@ -796,6 +834,19 @@
     const meta = _extractFormMetadata();
     if (meta.fy) _gstSession.fy = meta.fy;
     if (meta.tax_period) _gstSession.tax_period = meta.tax_period;
+
+    // Extract GSTR-3B and GSTR-1 tile due dates from Returns Dashboard cards
+    const dashText = document.body ? document.body.innerText : '';
+    const gstr3bDueMatch = dashText.match(/GSTR[- ]*3B[\s\S]*?Due\s*Date\s*[-:]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4}))/i);
+    if (gstr3bDueMatch && gstr3bDueMatch[1]) {
+      _gstSession.gstr3b_due_date = gstr3bDueMatch[1].trim();
+      console.log(`⚡ Sera SDC: Cached GSTR-3B Due Date from Dashboard: ${_gstSession.gstr3b_due_date}`);
+    }
+    const gstr1DueMatch = dashText.match(/GSTR[- ]*1(?:\/IFF)?[\s\S]*?Due\s*Date\s*[-:]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4}))/i);
+    if (gstr1DueMatch && gstr1DueMatch[1]) {
+      _gstSession.gstr1_due_date = gstr1DueMatch[1].trim();
+      console.log(`⚡ Sera SDC: Cached GSTR-1 Due Date from Dashboard: ${_gstSession.gstr1_due_date}`);
+    }
 
     return null;
   }
