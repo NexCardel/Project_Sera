@@ -279,10 +279,9 @@
         const filingType = captures.map(c => c.filing_type).find(f => f) || sData.form || "";
         const gstin = sData.gstin || captures.map(c => c.gstin).find(g => g) || "";
         const pan = sData.pan || (gstin && gstin.length >= 12 ? gstin.substring(2, 12) : "") || captures.map(c => c.pan).find(p => p) || "";
-        const companyName = captures.map(c => c.company_name || c.trade_name).find(c => c) || sData.company_name || "";
-        const proprietorName = captures.map(c => c.proprietor_name || c.legal_name).find(p => p) || sData.proprietor_name || "";
-        // If trade name is acquired, give it first preference as the display name
-        const clientName = companyName || sData.name || captures.map(c => c.client_name || c.name || c.taxpayer_name).find(n => n) || proprietorName || "";
+        const clientName = sData.name || captures.map(c => c.client_name || c.name || c.taxpayer_name).find(n => n) || "";
+        const companyName = captures.map(c => c.company_name || c.trade_name).find(c => c) || "";
+        const proprietorName = captures.map(c => c.proprietor_name || c.legal_name).find(p => p) || "";
         
         // CRITICAL: Strip the globally duplicated timeline from individual captures
         // to prevent exceeding the browser's strict 64KB limit for keepalive fetch requests
@@ -294,7 +293,7 @@
             return {
               gstin: c.gstin || '',
               pan: c.pan || '',
-              client_name: c.company_name || c.trade_name || c.client_name || c.name || c.taxpayer_name || '',
+              client_name: c.client_name || c.name || c.taxpayer_name || '',
               company_name: c.company_name || '',
               proprietor_name: c.proprietor_name || '',
               filing_type: c.filing_type || '',
@@ -360,7 +359,6 @@
           taxpayer_name: clientName,
           company_name: companyName,
           proprietor_name: proprietorName,
-          filing_preference: sData.filing_preference || (lastViewedDataset ? lastViewedDataset.filing_preference : "") || "",
           pan: pan,
           gstin: gstin,
           portal: portal,
@@ -378,7 +376,6 @@
             client_name: clientName,
             company_name: companyName,
             proprietor_name: proprietorName,
-            filing_preference: sData.filing_preference || (lastViewedDataset ? lastViewedDataset.filing_preference : "") || "",
             pan: pan,
             gstin: gstin,
             portal: portal,
@@ -412,30 +409,26 @@
         if (!this.data.timeline) this.data.timeline = [];
         const tl = this.data.timeline;
 
-        const route = (url.split('#')[1] || url.split('?')[0] || '').split('?')[0];
-
-        // Deduplicate: If the last recorded step is on the exact same URL or route, merge/update in place!
+        // Skip recording exact same URL consecutively within 1 second
         if (tl.length > 0) {
           const last = tl[tl.length - 1];
-          if (last.url === url || last.route === route) {
-            if (capture) {
-              const prev = last.captured_data || {};
+          if (last.url === url && last.crosshair_id === crosshairId) {
+            // Update capture if newly resolved
+            if (capture && !last.captured_data) {
               last.captured_data = {
-                pan: capture.pan || prev.pan || this.data.pan || "",
-                client_name: capture.client_name || prev.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
-                client_temp_name: capture.client_temp_name || prev.client_temp_name || this.data.client_temp_name || "",
-                company_name: capture.company_name || prev.company_name || capture.trade_name || "",
-                proprietor_name: capture.proprietor_name || prev.proprietor_name || capture.legal_name || "",
-                dob: capture.dob || prev.dob || this.data.dob || "",
-                form: capture.filing_type || prev.form || this.data.form || "",
-                ay: capture.period_label || prev.ay || this.data.ay || "",
-                arn: (capture.arn && capture.arn !== 'N/A') ? capture.arn : (prev.arn || 'N/A'),
-                status: capture.status || prev.status || "Captured",
-                due_date: capture.due_date || prev.due_date || "",
-                gstin: capture.gstin || prev.gstin || ""
+                pan: capture.pan || this.data.pan || "",
+                client_name: capture.client_name || capture.name || this.data.name || capture.client_temp_name || this.data.client_temp_name || "",
+                client_temp_name: capture.client_temp_name || this.data.client_temp_name || "",
+                company_name: capture.company_name || capture.trade_name || "",
+                proprietor_name: capture.proprietor_name || capture.legal_name || "",
+                dob: capture.dob || this.data.dob || "",
+                form: capture.filing_type || this.data.form || "",
+                ay: capture.period_label || this.data.ay || "",
+                arn: capture.arn || "N/A",
+                status: capture.status || "Captured",
+                due_date: capture.due_date || "",
+                gstin: capture.gstin || ""
               };
-              if (crosshairId) last.crosshair_id = crosshairId;
-              last.timestamp = new Date().toISOString();
               await this.save();
               this._emitTimelineSync();
             }
@@ -445,6 +438,7 @@
 
         const stepNumber = tl.length + 1;
         const title = _formatRouteTitle(url, crosshairId);
+        const route = (url.split('#')[1] || url.split('?')[0] || '').split('?')[0];
 
         const node = {
           step: stepNumber,
@@ -921,78 +915,73 @@
         // Only fire for crosshairs explicitly designated as login/logout handlers.
         // Do NOT use url.includes('login') — it over-matches pages like 'pre-login', 'link-login', etc.
         const isLoginCrosshair = matchedCrosshair.id === 'itr_login' || matchedCrosshair.id === 'gst_login_logout';
-        let isLogout = false;
         if (isLoginCrosshair) {
             const urlL = (url || '').toLowerCase();
-            isLogout = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sign-out') || 
-                       urlL.includes('sessionexpire') || urlL.includes('session-expire') || 
-                       urlL.includes('sessionexpired') || urlL.includes('session-expired') || urlL.includes('timeout');
+            const isLogout = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sign-out') || 
+                             urlL.includes('sessionexpire') || urlL.includes('session-expire') || 
+                             urlL.includes('sessionexpired') || urlL.includes('session-expired') || urlL.includes('timeout');
             
+            // Login is not a termination boundary. Staff may return to the
+            // login screen to authenticate the next client; keep current SDC
+            // memory intact. Termination is handled by logout, timeout,
+            // session expiry, or abrupt tab close.
+            if (!isLogout) {
+              console.log('⚡ Sera SDC: Login screen detected — preserving current session memory.');
+              return;
+            }
+
             if (isLogout && !capture) {
                 return; // Auth / logout route: session was finalized & wiped by handler — skip save
             }
-
-            // Arrived at login screen: if capture has a PAN and previous session was for a different client, finalize previous
-            if (!isLogout && SDC.session.data && SDC.session.data.pan && capture && capture.pan && capture.pan !== SDC.session.data.pan) {
-                console.log(`⚡ Sera SDC: 🔄 Login Route Detected for new client (${capture.pan} vs ${SDC.session.data.pan})! Finalizing previous session.`);
-                SDC.session.data.status = 'completed';
-                SDC.session.data.end_time = new Date().toISOString();
-                const tl = SDC.session.data.timeline || [];
-                tl.push({
-                    step: tl.length + 1,
-                    title: "Switched Client at Login",
-                    url: url,
-                    route: "LOGIN_BOUNDARY",
-                    timestamp: SDC.session.data.end_time,
-                    is_termination: true,
-                    note: `Switched from ${SDC.session.data.pan} to ${capture.pan} at login. Session finalized.`
-                });
-                await SDC.session.save();
-                SDC.session._flushAssembler();
-                await SDC.clearAllSessions();
-                await SDC.session.load();
-            }
-
-            // Store newly detected login PAN into session memory
-            if (!isLogout && capture && capture.pan) {
-                SDC.session.data.pan = capture.pan;
+            
+            // If NOT a logout route, but we arrived at a login screen with an existing mature session
+            if (!isLogout && (SDC.session.data.pan || (SDC.session.data.timeline && SDC.session.data.timeline.length > 0))) {
+                if (!capture || (capture.pan !== SDC.session.data.pan)) {
+                    console.log(`⚡ Sera SDC: 🔄 Login Route Detected with active session! Finalizing previous session.`);
+                    SDC.session.data.status = 'completed';
+                    SDC.session.data.end_time = new Date().toISOString();
+                    const tl = SDC.session.data.timeline;
+                    tl.push({
+                        step: tl.length + 1,
+                        title: "Returned to Login",
+                        url: url,
+                        route: "LOGIN_BOUNDARY",
+                        timestamp: SDC.session.data.end_time,
+                        is_termination: true,
+                        note: "User navigated to Login screen. Session finalized."
+                    });
+                    await SDC.session.save();
+                    SDC.session._flushAssembler();
+                    await SDC.clearAllSessions();
+                    await SDC.session.load();
+                }
             }
         }
         // ──────────────────────────────────────────────────────────
 
-        // Record timeline step with capture (only when capture is an actual object)
-        if (capture) {
-          SDC.session.data.portal = matchedProtocol.name;
-          await SDC.session.recordStep(url, matchedCrosshair.id, capture);
-        }
+        // Record timeline step with capture
+        SDC.session.data.portal = matchedProtocol.name;
+        await SDC.session.recordStep(url, matchedCrosshair.id, capture);
 
         // Save memory changes back to shared storage
         await SDC.session.save();
 
-        // Session Start Trigger: fires whenever a valid PAN is identified for a new/switched client,
-        // or when the client name is resolved/upgraded from header badge/storage post-login!
+        // Session Start Trigger: fires whenever a valid PAN is identified for a new/switched client
         const activePan = SDC.session.data.pan;
-        const activeName = SDC.session.data.name || SDC.session.data.client_temp_name || "";
-        const needsInitialStart = activePan && activePan !== SDC.session.data._lastStartedPan;
-        const needsNameUpgrade = activePan && activeName && activeName !== "Taxpayer" && activeName !== SDC.session.data._lastStartedName;
-
-        if (needsInitialStart || needsNameUpgrade) {
+        const activeName = SDC.session.data.name;
+        if (activePan && activePan !== SDC.session.data._lastStartedPan) {
           SDC.session.data._lastStartedPan = activePan;
-          SDC.session.data._lastStartedName = activeName;
           await SDC.session.save();
           SDC.emitSessionStart(matchedProtocol.name, activePan, activeName || 'Taxpayer');
         }
 
         if (capture) {
           _clearPendingRetries();
-          // Never emit dummy filing rows to tracker_dump for login screens
-          if (!isLoginCrosshair) {
-            await _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
-          }
+          await _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
           return;
-        } else if (retryCount < 2 && !isLogout) {
+        } else if (retryCount < 2 && !isLoginCrosshair) {
           // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering.
-          // Skipped for Logout boundaries as termination happens instantly.
+          // Skipped for Login/Logout boundaries as termination happens instantly.
           const delay = (retryCount + 1) * 700;
           const timer = setTimeout(() => {
             if (window.location.href === url) {
@@ -1120,7 +1109,6 @@
       due_date: capture.due_date || "",
       company_name: capture.company_name || capture.trade_name || "",
       proprietor_name: capture.proprietor_name || capture.legal_name || "",
-      filing_preference: capture.filing_preference || SDC.session.data.filing_preference || "",
       pan: pan,
       gstin: capture.gstin || "",
       url: window.location.href,
@@ -1150,7 +1138,6 @@
         arn: arn,
         pan: pan,
         gstin: capture.gstin || "",
-        filing_preference: capture.filing_preference || SDC.session.data.filing_preference || "",
         period: period,
         filing_type: filingType,
         status: status,

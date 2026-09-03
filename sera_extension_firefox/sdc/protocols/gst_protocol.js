@@ -195,9 +195,9 @@
         tradeName = _cleanNameString(tradeMatch[1]);
       }
 
-      // 3. Welcome banner: "Welcome <NAME> to GST Common Portal"
+      // 3. Welcome banner: "Welcome <NAME> to GST Common Portal" or "Welcome, <NAME>"
       if (!legalName) {
-        const welcomeMatch = bodyText.match(/Welcome\s+([A-Z0-9\s\.\-_&]+?)\s+to\s+GST\s+Common\s+Portal/i);
+        const welcomeMatch = bodyText.match(/Welcome\s*[,:]?\s*([A-Z0-9\s\.\-_&]{3,50}?)(?:\s+to\s+GST|\n|$)/i);
         if (welcomeMatch && welcomeMatch[1]) {
           legalName = _cleanNameString(welcomeMatch[1]);
         }
@@ -224,11 +224,45 @@
     const primaryName = legalName || tradeName || tempName || '';
 
     return {
-      legal_name: legalName,
+      legal_name: legalName || tempName || primaryName,
       trade_name: tradeName,
       client_name: primaryName,
       client_temp_name: tempName || primaryName
     };
+  }
+
+  // ─── Normalize Period (Month or Quarter-End) ────────────────────────────────
+  function _normalizeMonthOrQuarterEnd(rawPeriod) {
+    if (!rawPeriod) return '';
+    const p = String(rawPeriod).trim();
+
+    const monthMap = {
+      jan: 'January', feb: 'February', mar: 'March', apr: 'April',
+      may: 'May', jun: 'June', jul: 'July', aug: 'August',
+      sep: 'September', oct: 'October', nov: 'November', dec: 'December'
+    };
+
+    // 1. Quarterly ranges: e.g. "Apr-Jun", "April - June", "Apr - Jun" -> capture only the month at the end ("June")
+    const rangeMatch = p.match(/(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s*[-–—/to\s]+\s*(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)/i);
+    if (rangeMatch) {
+      const endMon = rangeMatch[1].toLowerCase().slice(0, 3);
+      return monthMap[endMon] || rangeMatch[1];
+    }
+
+    // 2. Quarter codes: Q1 -> June, Q2 -> September, Q3 -> December, Q4 -> March
+    if (/\bQ1\b/i.test(p)) return 'June';
+    if (/\bQ2\b/i.test(p)) return 'September';
+    if (/\bQ3\b/i.test(p)) return 'December';
+    if (/\bQ4\b/i.test(p)) return 'March';
+
+    // 3. Single month: e.g. "May", "June", "June(Q)" -> capture that month
+    const singleMatch = p.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i);
+    if (singleMatch) {
+      const sMon = singleMatch[1].toLowerCase().slice(0, 3);
+      return monthMap[sMon] || singleMatch[1];
+    }
+
+    return p;
   }
 
   // ─── Extract Form Details (FY, Tax Period, Status, Due Date) ────────────────
@@ -239,34 +273,47 @@
 
     // FY: "FY - 2026-27" or "Financial Year - 2026-27"
     let fy = '';
-    const fyMatch = bodyText.match(/(?:FY|Financial\s+Year)\s*[-:]\s*([0-9]{4}\s*-\s*[0-9]{2,4})/i);
+    const fyMatch = bodyText.match(/(?:FY|Financial\s+Year)\s*[-:]?\s*[\r\n]*\s*([0-9]{4}\s*-\s*[0-9]{2,4})/i);
     if (fyMatch) fy = fyMatch[1].replace(/\s+/g, '');
 
     // GST uses both "Tax Period" and "Return Period" labels.
     let taxPeriod = '';
-    const periodMatch = bodyText.match(/(?:Tax|Return|Filing)\s+Period\s*[-:]\s*([A-Za-z0-9()\s\-_\/]+?)(?=\s*(?:Status|Due\s+Date|FY|Financial\s+Year|Trade|Legal|GSTIN|\n|$))/i);
+    const periodMatch = bodyText.match(/(?:Tax|Return|Filing)\s+Period\s*[-:]?\s*[\r\n]*\s*([A-Za-z0-9()\-_/ ]+?)(?=\s*(?:Status|Due\s+Date|FY|Financial\s+Year|Trade|Legal|GSTIN|$|\n\s*[A-Z][a-z]+\s*[-:]))/i);
     if (periodMatch) {
       const cand = periodMatch[1].trim();
       if (!/^(?:status|due\s*date|fy|financial\s*year|na|-+)[\s\-:]*$/i.test(cand)) {
         taxPeriod = cand;
       }
     }
+
+    // Check URL parameters (search query or SPA hash query, e.g. ?rtn_prd=062026)
     if (!taxPeriod) {
-      const queryPeriod = new URLSearchParams(window.location.search).get('rtn_prd');
+      const fullUrl = window.location.href;
+      const searchStr = window.location.search || (fullUrl.includes('?') ? fullUrl.split('?')[1] : '');
+      const searchParams = new URLSearchParams(searchStr);
+      const queryPeriod = searchParams.get('rtn_prd') || searchParams.get('period');
       if (queryPeriod && /^\d{6}$/.test(queryPeriod)) {
         const month = Number(queryPeriod.slice(0, 2));
         const year = queryPeriod.slice(2);
         if (month >= 1 && month <= 12) {
-          taxPeriod = `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month - 1]} ${year}`;
+          taxPeriod = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][month - 1];
         }
       }
     }
+
+    // Fallback: look for month names or quarter ranges anywhere in page text
     if (!taxPeriod) {
       const monthM = bodyText.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December|Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar)\b/i);
-      if (monthM && !/^(dashboard|returns|services|help)/i.test(monthM[0])) {
+      if (monthM && !/^(dashboard|returns|services|help|download|search)/i.test(monthM[0])) {
         taxPeriod = monthM[0];
       }
     }
+
+    // Apply normalization: single month -> month; quarter range (Apr-Jun) -> end month (June)
+    if (taxPeriod) {
+      taxPeriod = _normalizeMonthOrQuarterEnd(taxPeriod);
+    }
+
     if (!fy) {
       const fyAlt = bodyText.match(/\b(20\d{2}-\d{2})\b/);
       if (fyAlt) fy = fyAlt[1];
@@ -324,11 +371,38 @@
     };
   }
 
-  // ─── Extract Return Filing Preference ───────────────────────────────────────
+  // ─── Extract Return Filing Preference (Monthly / Quarterly) ─────────────────
   function _extractFilingPreference() {
     if (!document.body) return '';
-    const match = document.body.innerText.match(/Return\s+filing\s+preference\s*(?:\([^)]*\))?\s*:\s*([A-Za-z]+)/i);
-    return match ? match[1].trim() : '';
+    const bodyText = document.body.innerText;
+
+    // 1. Structured label regex with flexible separators (:, -, or newline)
+    const prefMatch = bodyText.match(/(?:Return\s+filing\s+preference|Filing\s+preference|Return\s+filing\s+frequency|Filing\s+frequency)\s*(?:\([^)]*\))?\s*[-:]?\s*[\r\n]*\s*([A-Za-z]+)/i);
+    if (prefMatch) {
+      const cand = prefMatch[1].trim();
+      if (/monthly/i.test(cand)) return 'Monthly';
+      if (/quarterly/i.test(cand)) return 'Quarterly';
+    }
+
+    // 2. Proximity search around "preference" or "frequency"
+    if (/preference[\s\S]{0,50}\bmonthly\b/i.test(bodyText)) return 'Monthly';
+    if (/preference[\s\S]{0,50}\bquarterly\b/i.test(bodyText)) return 'Quarterly';
+    if (/frequency[\s\S]{0,50}\bmonthly\b/i.test(bodyText)) return 'Monthly';
+    if (/frequency[\s\S]{0,50}\bquarterly\b/i.test(bodyText)) return 'Quarterly';
+
+    // 3. DOM search for badges/labels containing Monthly or Quarterly
+    const candidates = document.querySelectorAll('.badge, .label, span, div, p, strong, b');
+    for (const el of candidates) {
+      const t = (el.innerText || '').trim();
+      if (/^(Monthly|Quarterly)$/i.test(t)) {
+        const parentContext = (el.parentElement ? el.parentElement.innerText : '').toLowerCase();
+        if (/preference|frequency|filing|qrmp/i.test(parentContext)) {
+          return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+        }
+      }
+    }
+
+    return '';
   }
 
   // ─── Utility: Wait for SPA DOM Rendering ─────────────────────────────────────
@@ -350,7 +424,7 @@
     });
   }
 
-  // ─── Parse Returns Calendar (Last 5 return periods) ─────────────────────────
+  // ─── Parse Returns Calendar (Strictly GSTR-1 & GSTR-3B) ──────────────────────
   function _parseReturnsCalendar() {
     const calendarEntries = [];
 
@@ -370,31 +444,32 @@
       const rows = targetTable.querySelectorAll('tr, div[class*="row"]');
       let periodHeaders = [];
 
-      // Look for the header row containing periods (e.g. "Mar - 2026", "Apr - 2026")
+      // Look for the header row containing periods (e.g. "Mar - 2026", "Apr - 2026", "Q1", "May 2025")
       for (const row of rows) {
         const cells = row.querySelectorAll('th, td, div[class*="col"], div[class*="cell"]');
         const cellTexts = Array.from(cells).map(c => (c.innerText || '').trim());
-        const dateMatchCount = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/.test(t)).length;
+        const dateMatchCount = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/i.test(t) || /\b20\d{2}\b/.test(t)).length;
         if (dateMatchCount >= 2) {
-          periodHeaders = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/.test(t));
+          periodHeaders = cellTexts.filter(t => /[A-Za-z]{3}\s*[-]?\s*\d{2,4}/i.test(t) || /\b20\d{2}\b/.test(t));
           break;
         }
       }
 
-      // If headers found, extract data rows
+      // If headers found, extract data rows strictly for GSTR-1 and GSTR-3B
       if (periodHeaders.length > 0) {
         for (const row of rows) {
           const cells = row.querySelectorAll('th, td, div[class*="col"], div[class*="cell"]');
           if (cells.length < 2) continue;
 
           const rowLabel = (cells[0].innerText || '').trim();
-          if (/GSTR-1|GSTR-3B|CMP-08|GSTR-4|GSTR-9/i.test(rowLabel)) {
-            const formType = rowLabel.replace(/\s+/g, ' ');
+          if (/GSTR-1|GSTR-3B/i.test(rowLabel)) {
+            const formType = /GSTR-3B/i.test(rowLabel) ? 'GSTR-3B' : 'GSTR-1/IFF';
             for (let i = 1; i < cells.length && (i - 1) < periodHeaders.length; i++) {
               const rawHeader = periodHeaders[i - 1] || '';
-              const cleanPeriodMatch = rawHeader.match(/([A-Za-z]{3,9}\s*[-]?\s*\d{2,4})/);
+              const cleanPeriodMatch = rawHeader.match(/([A-Za-z]{3,9}\s*[-]?\s*\d{2,4})/i);
               const period = cleanPeriodMatch ? cleanPeriodMatch[1].trim() : rawHeader.split('\n')[0].trim();
               
+              const statusCell = (cells[i].innerText || '').trim();
               let statusClean = statusCell.replace(/\s+/g, ' ');
               if (/not filed/i.test(statusClean)) statusClean = 'Not Filed';
               else if (/filed/i.test(statusClean)) statusClean = 'Filed';
@@ -422,8 +497,7 @@
 
       function parseSection(secText, formName) {
         if (!secText) return;
-        // Match 3-letter month + year, then the next words indicating status
-        const periodRegex = /([A-Za-z]{3}\s*[-]?\s*\d{2,4})[\s\n\r]+((?:Not\s+Filed|To\s+be\s+Filed|Filed|Pending|NA(?:\s+Option\s+expired)?))/gi;
+        const periodRegex = /([A-Za-z]{3,9}\s*[-]?\s*\d{2,4})[\s\n\r]+((?:Not\s+Filed|To\s+be\s+Filed|Filed|Pending|NA(?:\s+Option\s+expired)?))/gi;
         let match;
         while ((match = periodRegex.exec(secText)) !== null) {
           const period = match[1].trim();
@@ -444,17 +518,14 @@
         }
       }
 
-      if (gstr1Section) parseSection(gstr1Section[0], 'GSTR-1 / IFF');
+      if (gstr1Section) parseSection(gstr1Section[0], 'GSTR-1/IFF');
       if (gstr3bSection) parseSection(gstr3bSection[0], 'GSTR-3B');
     }
 
-    // Nested Angular row/cell containers can expose each calendar row twice.
-    // Keep one record per form + period + status before handing data to SDC.
+    // Deduplicate identical form + period entries
     const seen = new Set();
     return calendarEntries.filter(entry => {
-      const key = [entry.form, entry.period, entry.status]
-        .map(value => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase())
-        .join('|');
+      const key = `${entry.form}|${entry.period}|${entry.status}`.toUpperCase();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -469,45 +540,79 @@
       const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
       const hasCalendar = /(Returns Calendar|GSTR-1|GSTR-3B)/i.test(txt);
       return hasGstin && hasCalendar;
-    }, 12000, 500);
+    }, 6000, 200);
 
     const { gstin, pan } = _extractGstinAndPan();
-    const { legal_name } = _extractTaxpayerNames();
+    const { legal_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const proprietorName = legal_name || client_temp_name || client_name || '';
     const preference = _extractFilingPreference();
     const parsedCalendar = _parseReturnsCalendar();
 
-    // Capture ONLY the immediately previous period for each form.
-    // The portal calendar is ordered chronologically, so formPeriods[formPeriods.length - 2]
-    // represents the predecessor/previous completed period (or formPeriods[0] if only 1 period exists).
-    const calendar = [];
-    const forms = [...new Set(parsedCalendar.map(entry => entry.form))];
-    for (const form of forms) {
-      const formPeriods = parsedCalendar.filter(entry => entry.form === form);
-      if (formPeriods.length > 1) {
-        calendar.push(formPeriods[formPeriods.length - 2]); // Immediately previous period
-      } else if (formPeriods.length === 1) {
-        calendar.push(formPeriods[0]);
+    // Filter strictly for GSTR-1 and GSTR-3B
+    const targetForms = ['GSTR-1/IFF', 'GSTR-3B'];
+    const gstrEntries = parsedCalendar.filter(e => targetForms.includes(e.form));
+
+    // Identify Previous Year periods:
+    // Extract all 4-digit years from parsed calendar periods
+    const allYears = [];
+    for (const e of gstrEntries) {
+      const ym = (e.period || '').match(/\b(20\d{2})\b/);
+      if (ym) allYears.push(parseInt(ym[1]));
+    }
+    const currentMaxYear = allYears.length > 0 ? Math.max(...allYears) : new Date().getFullYear();
+    const prevYearNum = currentMaxYear - 1;
+
+    // Filter for entries matching the previous year
+    let calendar = gstrEntries.filter(e => {
+      const ym = (e.period || '').match(/\b(20\d{2})\b/);
+      return ym && parseInt(ym[1]) === prevYearNum;
+    });
+
+    // Fallback: If no previous year entries exist (e.g. calendar only spans current year),
+    // take the immediately predecessor/previous period for each form
+    if (calendar.length === 0) {
+      for (const form of targetForms) {
+        const formPeriods = gstrEntries.filter(entry => entry.form === form);
+        if (formPeriods.length > 1) {
+          calendar.push(formPeriods[formPeriods.length - 2]);
+        } else if (formPeriods.length === 1) {
+          calendar.push(formPeriods[0]);
+        }
       }
     }
 
     if (gstin) _gstSession.gstin = gstin;
     if (pan) _gstSession.pan = pan;
-    if (legal_name) _gstSession.legal_name = legal_name;
-    if (preference) _gstSession.preference = preference;
+    if (proprietorName) {
+      _gstSession.legal_name = proprietorName;
+      _gstSession.client_name = proprietorName;
+    }
+    if (preference) _gstSession.filing_preference = preference;
     _gstSession.calendar = calendar;
 
     const SDC = window.__SERA_SDC__;
+    if (SDC && SDC.session && SDC.session.data) {
+      if (gstin) SDC.session.data.gstin = gstin;
+      if (pan) SDC.session.data.pan = pan;
+      if (proprietorName) {
+        SDC.session.data.proprietor_name = proprietorName;
+        SDC.session.data.name = proprietorName;
+      }
+      if (preference) SDC.session.data.filing_preference = preference;
+    }
 
-    // Emit previous period calendar filings to SDC Core & Database silently (no multi-toast burst)
+    // Emit previous year calendar filings to SDC Core & Database silently
     if (calendar.length > 0 && SDC && typeof SDC.emitCapture === 'function') {
       for (const item of calendar) {
         const itemCapture = {
           gstin: gstin || _gstSession.gstin,
           pan: pan || _gstSession.pan,
-          legal_name: legal_name || _gstSession.legal_name,
-          client_name: legal_name || _gstSession.legal_name,
-          name: legal_name || _gstSession.legal_name,
-          taxpayer_name: legal_name || _gstSession.legal_name,
+          legal_name: proprietorName,
+          client_name: proprietorName,
+          name: proprietorName,
+          taxpayer_name: proprietorName,
+          proprietor_name: proprietorName,
+          company_name: '', // Strictly not present on welcome page
           portal: 'GST Portal',
           capture_origin: 'calendar_view',
           submitted_in_session: false,
@@ -518,24 +623,22 @@
           arn: 'N/A',
           silent: true,
           skip_toast: true,
-          confirmation_message: 'GST Returns Calendar (Previous Period): ' + item.form + ' for ' + item.period + ' is ' + item.status,
+          confirmation_message: `GST Returns Calendar (Previous Year): ${item.form} for ${item.period} is ${item.status}`,
           scraped_data: {
             returns_calendar_item: item,
-            legal_name: legal_name || _gstSession.legal_name,
+            proprietor_name: proprietorName,
+            legal_name: proprietorName,
             filing_preference: preference,
-            taxpayer_name: legal_name || _gstSession.legal_name,
+            taxpayer_name: proprietorName,
             gstin: gstin || _gstSession.gstin,
             pan: pan || _gstSession.pan,
             scanned_at: new Date().toISOString()
           }
         };
 
-        SDC.emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
+        await SDC.emitCapture(itemCapture, 'GST Portal', 'gst_calendar_entry');
       }
     }
-
-    const filedCount = calendar.filter(c => c.status === 'Filed').length;
-    const periodSummary = calendar.length > 0 ? (calendar[0].period + (calendar.length > 1 ? (' - ' + calendar[calendar.length - 1].period) : '')) : 'Previous Period';
 
     // Record individual return filings into session timeline so audit & LTT track each form/period
     if (SDC && SDC.session && typeof SDC.session.recordStep === 'function') {
@@ -543,8 +646,10 @@
         await SDC.session.recordStep(url, 'gst_calendar_entry', {
           gstin: gstin || _gstSession.gstin,
           pan: pan || _gstSession.pan,
-          legal_name: legal_name || _gstSession.legal_name,
-          client_name: legal_name || _gstSession.legal_name,
+          legal_name: proprietorName,
+          client_name: proprietorName,
+          proprietor_name: proprietorName,
+          company_name: '',
           filing_preference: preference,
           form: item.form,
           ay: item.period,
@@ -555,19 +660,22 @@
       await SDC.session.save();
     }
 
-    // Single unified toast summarizing the previous scanned period(s)
+    // Single unified toast summarizing the previous year scanned period(s)
     if (window.SDCToast && calendar.length > 0) {
+      const filedCount = calendar.filter(c => c.status === 'Filed').length;
+      const periodSummary = calendar.map(c => `${c.form}: ${c.period}`).join(' | ');
       window.SDCToast.show({
         type: 'capture',
         badge: 'SCANNED',
         title: 'GST Returns Calendar',
-        message: `${calendar.length} previous period(s) scanned (${filedCount} filed)`,
+        message: `${calendar.length} previous year period(s) scanned (${filedCount} filed)`,
         chips: [
-          { label: 'Client', value: legal_name || 'Taxpayer' },
+          { label: 'Proprietor', value: proprietorName || 'Taxpayer' },
           { label: 'GSTIN', value: gstin || _gstSession.gstin, isPan: true },
+          { label: 'Preference', value: preference || 'N/A' },
           { label: 'Period', value: periodSummary }
         ],
-        duration: 1600
+        duration: 2200
       });
     }
 
@@ -588,19 +696,24 @@
     }, 3000, 150);
 
     const { gstin, pan } = _extractGstinAndPan();
-    const { legal_name, trade_name, client_name, client_temp_name } = _extractTaxpayerNames();
+    const { trade_name } = _extractTaxpayerNames();
     const meta = _extractFormMetadata();
 
     if (gstin) _gstSession.gstin = gstin;
     if (pan) _gstSession.pan = pan;
-    if (legal_name) _gstSession.legal_name = legal_name;
     if (trade_name) _gstSession.trade_name = trade_name;
-    if (client_name) _gstSession.client_name = client_name;
-    if (client_temp_name) _gstSession.client_temp_name = client_temp_name;
     if (meta.fy) _gstSession.fy = meta.fy;
     if (meta.tax_period) _gstSession.tax_period = meta.tax_period;
     if (meta.due_date) _gstSession.due_date = meta.due_date;
     if (meta.form_type) _gstSession.filing_type = meta.form_type;
+
+    // Do NOT capture legal/proprietor name from forms as it was already captured on the welcome screen
+    const proprietorName = _gstSession.legal_name || '';
+
+    // If trade name is acquired, give it first preference as the display name
+    const activeTradeName = trade_name || _gstSession.trade_name || '';
+    const displayName = activeTradeName || _gstSession.client_name || proprietorName || '';
+    if (displayName) _gstSession.client_name = displayName;
 
     const chosenPeriod = meta.tax_period || _gstSession.tax_period || '';
     const chosenFy = meta.fy || _gstSession.fy || '';
@@ -613,18 +726,21 @@
     }
 
     const finalStatus = (meta.status && meta.status !== 'FY -') ? meta.status : 'Initiated';
+    const chosenFormType = meta.form_type || _inferFilingType(meta) || 'GSTR-3B';
 
     return {
       gstin: gstin || _gstSession.gstin,
       pan: pan || _gstSession.pan,
-      client_name: client_name || _gstSession.client_name,
-      client_temp_name: client_temp_name || _gstSession.client_temp_name,
-      company_name: trade_name || _gstSession.trade_name,
-      proprietor_name: legal_name || _gstSession.legal_name,
+      client_name: displayName,
+      client_temp_name: displayName,
+      company_name: activeTradeName,
+      trade_name: activeTradeName,
+      proprietor_name: proprietorName,
+      legal_name: proprietorName,
       portal: 'GST Portal',
       capture_origin: 'form_view',
       submitted_in_session: false,
-      filing_type: meta.form_type || _inferFilingType(meta),
+      filing_type: chosenFormType,
       period_label: fullPeriodLabel,
       status: finalStatus,
       due_date: meta.due_date || '',
@@ -632,13 +748,16 @@
       scraped_data: {
         gstin: gstin || _gstSession.gstin,
         pan: pan || _gstSession.pan,
-        legal_name: legal_name || _gstSession.legal_name,
-        trade_name: trade_name || _gstSession.trade_name,
-        fy: meta.fy || _gstSession.fy,
-        tax_period: meta.tax_period || _gstSession.tax_period,
+        legal_name: proprietorName,
+        proprietor_name: proprietorName,
+        trade_name: activeTradeName,
+        company_name: activeTradeName,
+        client_name: displayName,
+        fy: chosenFy,
+        tax_period: chosenPeriod,
         status: finalStatus,
         due_date: meta.due_date || _gstSession.due_date,
-        form_type: meta.form_type,
+        form_type: chosenFormType,
         is_nil: meta.is_nil,
         captured_at: new Date().toISOString()
       }

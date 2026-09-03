@@ -4,7 +4,6 @@ import json
 import re
 import pandas as pd
 from datetime import datetime
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 DEBUG = True
 
@@ -82,16 +81,14 @@ def get_db_connection():
 
 def evaluate_status(raw_status):
     raw = str(raw_status).lower().strip()
-    # Strip any legacy bracketed color annotations
-    raw = re.sub(r'[\(\[\{]\s*(?:green|yellow|red|blue|gray|grey)\s*[\)\]\}]', '', raw).strip()
     if not raw or raw == "null" or raw == "none":
         return "Not submitted"
     if "not filed" in raw or "unfiled" in raw or "to be filed" in raw:
         return "Not submitted"
     if "filed" in raw or "portal confirmed" in raw:
-        return "Submitted & E-verified"
+        return "Submitted & E-verified (green)"
     elif "pending" in raw:
-        return "Submitted (e-verification pending)"
+        return "Submitted (e-verification pending) [yellow]"
     elif "evc" in raw:
         return "Other EVC"
     elif "option expired" in raw:
@@ -103,7 +100,7 @@ def evaluate_status(raw_status):
     return "Not submitted"
 
 SKELETON_NAME_REGEX = re.compile(
-    r'^(?:taxpayer|client|user|individual|indicates\s*mandatory\s*fields|mandatory\s*fields|goods\s+and\s+services\s+tax|gst\s+common\s+portal|gst\s+portal|status|due\s*date|fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|legal\s*name|trade\s*name|gstin|pan|na|-+)[\s\-:*]*$',
+    r'^(?:indicates\s*mandatory\s*fields|mandatory\s*fields|goods\s+and\s+services\s+tax|gst\s+common\s+portal|gst\s+portal|status|due\s*date|fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|legal\s*name|trade\s*name|gstin|pan|na|-+)[\s\-:*]*$',
     re.I
 )
 
@@ -210,21 +207,18 @@ def process_timelines():
                 session_pan = cap.get('pan')
             if cap.get('gstin'):
                 session_gstin = cap.get('gstin')
-            trade_n = cap.get('company_name') or cap.get('trade_name') or ''
-            prop_n = cap.get('proprietor_name') or cap.get('legal_name') or cap.get('client_name') or ''
-            c_name = trade_n if (trade_n and not SKELETON_NAME_REGEX.search(trade_n)) else prop_n
+            c_name = cap.get('client_name') or ''
             if c_name and not SKELETON_NAME_REGEX.search(c_name):
-                if not session_full_name or len(c_name) >= len(session_full_name):
+                if c_name != cap.get('client_temp_name'):
                     session_full_name = c_name
             t_name = cap.get('client_temp_name') or ''
             if t_name and not SKELETON_NAME_REGEX.search(t_name):
-                if not session_temp_name or len(t_name) >= len(session_temp_name):
-                    session_temp_name = t_name
+                session_temp_name = t_name
                 
         row_cname = row['client_name'] or ""
         if SKELETON_NAME_REGEX.search(row_cname):
             row_cname = ""
-        final_name = session_full_name or session_temp_name or row_cname
+        final_name = session_full_name if session_full_name else (session_temp_name or row_cname)
         if SKELETON_NAME_REGEX.search(final_name):
             final_name = ""
         if not session_pan and session_gstin and len(session_gstin) >= 12:
@@ -362,7 +356,7 @@ def process_timelines():
                 if not t_pan:
                     continue
 
-                t_name = item.get('proprietor_name') or item.get('legal_name') or item.get('client_name') or item.get('name') or p_data.get('proprietor_name') or p_data.get('legal_name') or p_data.get('client_name') or raw_p.get('proprietor_name') or raw_p.get('client_name') or ''
+                t_name = item.get('client_name') or item.get('name') or p_data.get('client_name') or raw_p.get('client_name') or ''
                 if SKELETON_NAME_REGEX.search(t_name):
                     t_name = ""
                 raw_period_val = item.get('period_label') or item.get('period') or p_data.get('period_label') or r['period_label'] or ''
@@ -438,71 +432,6 @@ def generate_ltt_excel():
         ws.column_dimensions['H'].width = 25  # Session ID
         ws.column_dimensions['I'].width = 25  # Last Updated
         ws.column_dimensions['J'].width = 80  # Site History
-
-        # Locate "Submit Status" column
-        status_col = 6
-        for c_idx in range(1, ws.max_column + 1):
-            header_val = str(ws.cell(row=1, column=c_idx).value or '').strip().lower()
-            if header_val == "submit status":
-                status_col = c_idx
-                break
-
-        # High-contrast, WCAG-compliant style definitions:
-        # Soft pastel background + bold dark text for maximum readability & professional appearance
-        style_verified = {
-            "fill": PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"),  # Light pastel green
-            "font": Font(color="145A32", bold=True, name="Calibri", size=11)                  # Dark forest green (8.2:1 contrast)
-        }
-        style_pending = {
-            "fill": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),  # Light warm amber
-            "font": Font(color="7D6608", bold=True, name="Calibri", size=11)                  # Dark amber/brown (6.4:1 contrast)
-        }
-        style_not_submitted = {
-            "fill": PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid"),  # Soft light red/rose
-            "font": Font(color="78281F", bold=True, name="Calibri", size=11)                  # Deep burgundy/red (8.5:1 contrast)
-        }
-        style_expired = {
-            "fill": PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid"),  # Light neutral gray
-            "font": Font(color="595959", bold=True, name="Calibri", size=11)                  # Slate dark gray (5.6:1 contrast)
-        }
-        style_evc = {
-            "fill": PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid"),  # Light pastel blue
-            "font": Font(color="1B4F72", bold=True, name="Calibri", size=11)                  # Deep navy blue (7.8:1 contrast)
-        }
-
-        cell_border = Border(
-            left=Side(style='thin', color='D9D9D9'),
-            right=Side(style='thin', color='D9D9D9'),
-            top=Side(style='thin', color='D9D9D9'),
-            bottom=Side(style='thin', color='D9D9D9')
-        )
-
-        for row_idx in range(2, ws.max_row + 1):
-            cell = ws.cell(row=row_idx, column=status_col)
-            val = str(cell.value or '').strip()
-            # Strip any legacy bracketed color labels if present
-            cleaned_val = re.sub(r'\s*[\(\[\{]\s*(?:green|yellow|red|blue|gray|grey)\s*[\)\]\}]', '', val, flags=re.I).strip()
-            cell.value = cleaned_val
-            val_lower = cleaned_val.lower()
-
-            target_style = None
-            if "verified" in val_lower or "filed" in val_lower:
-                target_style = style_verified
-            elif "pending" in val_lower:
-                target_style = style_pending
-            elif "not submitted" in val_lower or "unfiled" in val_lower:
-                target_style = style_not_submitted
-            elif "expired" in val_lower or "na" in val_lower:
-                target_style = style_expired
-            elif "evc" in val_lower:
-                target_style = style_evc
-
-            if target_style:
-                cell.fill = target_style["fill"]
-                cell.font = target_style["font"]
-
-            cell.border = cell_border
-            cell.alignment = Alignment(vertical="center")
 
     target_out = output_file
     try:

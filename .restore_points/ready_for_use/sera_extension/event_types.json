@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "_comment": "Sera Unified Dialect Recognition (SUDR) — canonical event vocabulary. This is the ONLY file that should change when adapting SUDR to a new portal or a new kind of event. Every protocol.js and every downstream consumer (timeline_decoder.py, main.py) reads from this file — neither side should hardcode a copy of this table.",
+
+  "event_types": {
+    "LOGIN_SUCCESS": {
+      "status": "success",
+      "label": "Logged In",
+      "description": "User successfully authenticated on the portal."
+    },
+    "PORTAL_VIEW": {
+      "status": "success",
+      "label": "Viewing Portal",
+      "description": "Landing page or dashboard viewed, no specific form/action yet."
+    },
+    "FORM_VIEW": {
+      "status": "pending",
+      "label": "Viewing Form",
+      "description": "User is looking at or filling a specific form/period selection screen."
+    },
+    "FILING_SUBMITTED": {
+      "status": "pending",
+      "label": "Filing Submitted",
+      "description": "Filing/statement submitted but not yet verified or processed by the portal."
+    },
+    "FILING_VERIFIED": {
+      "status": "success",
+      "label": "Filing Verified",
+      "description": "Filing confirmed / processed / verified by the portal — final success state."
+    },
+    "RETURNS_LIST_VIEW": {
+      "status": "success",
+      "label": "Viewing Return History",
+      "description": "User is browsing a list/history of past filings or statements."
+    },
+    "LOGOUT": {
+      "status": "success",
+      "label": "Logged Out",
+      "description": "Session ended, normally or via timeout."
+    },
+    "ERROR": {
+      "status": "failed",
+      "label": "Error / Rejected",
+      "description": "Capture attempted but the portal reported a failure/default/rejection state, or the page state was unrecognized."
+    }
+  },
+
+  "identity_fields": ["pan", "gstin", "tan", "cin", "legal_name"],
+
+  "_change_log": [
+    { "schema_version": "1.0", "note": "Initial SUDR vocabulary, derived from live ITR + GST crosshair statuses and mapped onto TRACES." }
+  ]
+}

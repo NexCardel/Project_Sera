@@ -1,0 +1,42 @@
+{
+  "gst": {
+    "login": { 
+        "userid_selector": "#username", 
+        "password_selector": "#user_pass", 
+        "success_marker": "text:Dashboard" 
+    },
+    "filings": {
+      "GSTR1": { 
+          "success_marker": "text:ARN", 
+          "failure_marker": "text:Error", 
+          "timeout_ms": 600000 
+      },
+      "GSTR3B": { 
+          "success_marker": "text:ARN", 
+          "failure_marker": "text:Error", 
+          "timeout_ms": 600000 
+      }
+    }
+  },
+  "itr": {
+    "login": { 
+        "userid_selector": "#panAdhaarUserId, input[id='panAdhaarUserId'], input[formcontrolname='panAdhaarUserId'], input[name='pan']", 
+        "password_selector": "#passwordInput, input[id='passwordInput'], input[type='password']", 
+        "success_marker": "text:Welcome" 
+    },
+    "filings": {
+      "ITR": { 
+          "success_marker": "text:Ack No", 
+          "failure_marker": "text:Failed", 
+          "timeout_ms": 600000 
+      }
+    }
+  },
+  "income tax": {
+    "login": { 
+        "userid_selector": "#panAdhaarUserId, input[id='panAdhaarUserId'], input[formcontrolname='panAdhaarUserId'], input[name='pan']", 
+        "password_selector": "#passwordInput, input[id='passwordInput'], input[type='password']", 
+        "success_marker": "text:Welcome" 
+    }
+  }
+}

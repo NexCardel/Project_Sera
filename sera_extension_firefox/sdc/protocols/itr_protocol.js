@@ -43,6 +43,25 @@
     // ─── Session Identity Cache (cross-tab via sdc_core.js) ──────────────────
     const getSession = () => SDC.session.data;
 
+    // ─── DOM Poller Helper ───────────────────────────────────────────────────
+    function _waitForReady(predicateFn, maxWaitMs = 5000, intervalMs = 150) {
+      return new Promise((resolve) => {
+        const start = Date.now();
+        const check = () => {
+          try {
+            if (predicateFn()) {
+              return resolve(true);
+            }
+          } catch (_) {}
+          if (Date.now() - start >= maxWaitMs) {
+            return resolve(false);
+          }
+          setTimeout(check, intervalMs);
+        };
+        check();
+      });
+    }
+
     // ─── Name Sanitization & Validation Helpers ─────────────────────────────
     const NOISE_WORDS = new Set([
       'INDIVIDUAL', 'TAXPAYER', 'HUF', 'COMPANY', 'REPRESENTATIVE',
@@ -793,8 +812,16 @@
 
     // ─── CROSSHAIR 5: Landing Page & Dashboard Identity Capture ──────────────
     // Target: #/dashboard/fileIncomeTaxReturn, #/dashboard, #/home, #/welcome
-    function _handleLanding(url) {
+    async function _handleLanding(url) {
       if (!_isItrContext(url)) return null;
+
+      // Allow Angular dashboard components to finish rendering
+      await _waitForReady(() => {
+        const txt = document.body ? document.body.innerText : '';
+        const hasName = Boolean(document.querySelector('#loginUsername, .user-name, button[id*="loginUsername" i]'));
+        const hasPan = /\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/.test(txt);
+        return hasName || hasPan;
+      }, 3500, 150);
 
       const headerName = _extractHeaderName();
       const pan = _extractPan();
@@ -803,28 +830,40 @@
 
       if (headerName) {
         getSession().client_temp_name = headerName;
-        // NOTE: Do NOT set session.name from header badge here — header badge names are truncated
-        // (e.g. "INDRAJIT CHATTE...") and would block full name extraction from personal_info/profile.
-        // session.name is ONLY set from profile/personal-info crosshair (Crosshair #4).
+        // If session.name is empty, set it from headerName so the session is active & named without needing profile visits!
+        if (!getSession().name) {
+          getSession().name = headerName;
+        }
       }
       if (pan) getSession().pan = pan;
       if (dob) getSession().dob = dob;
       if (ay) getSession().ay = ay;
       if (form) getSession().form = form;
 
-      // At landing, the best name we have is the header badge (may be truncated).
-      // session.name is intentionally NOT set here — it's reserved for profile/personal-info pages.
       const activeName = getSession().name || headerName || getSession().client_temp_name || '';
+      const activePan = pan || getSession().pan || '';
 
-      console.log(`⚡ Sera SDC [itr_landing]: Post-login landing active for ${activeName || 'Client'} (${pan || 'No PAN'}) [Header Name: "${headerName}"]`);
+      // If PAN is known, ensure SDC session memory has it and emit session start if not yet emitted
+      if (activePan && SDC && SDC.session && SDC.session.data) {
+        SDC.session.data.pan = activePan;
+        if (activeName) SDC.session.data.name = activeName;
+        if (SDC.session.data._lastStartedPan !== activePan) {
+          SDC.session.data._lastStartedPan = activePan;
+          await SDC.session.save();
+          SDC.emitSessionStart('income tax', activePan, activeName || 'Taxpayer');
+        }
+      }
+
+      console.log(`⚡ Sera SDC [itr_landing]: Post-login landing active for ${activeName || 'Client'} (${activePan || 'No PAN'}) [Header Name: "${headerName}"]`);
 
       // Record navigation step in session timeline for audit trail
       if (SDC && SDC.session && typeof SDC.session.recordStep === 'function') {
-        SDC.session.recordStep(url, 'itr_landing', {
-          pan: pan || getSession().pan || '',
+        await SDC.session.recordStep(url, 'itr_landing', {
+          pan: activePan || getSession().pan || '',
           name: activeName,
           status: 'Landing Page Active'
         });
+        await SDC.session.save();
       }
 
       // Return null so SDC does NOT emit a dummy "ITR (Landing / e-File)" filing to tracker_dump
@@ -1118,56 +1157,66 @@
         return null;
       }
 
-      // If it is a login/password page, capture PAN if visible
+      // Strictly ignore initial #/login page — PAN detection only on #/login/password
+      const isPasswordRoute = lower.includes('login/password') || lower.includes('/password');
+      if (!isPasswordRoute) {
+        return null;
+      }
+
+      // Login / Password Route:
+      // Wait for Angular to render the confirmed PAN label
+      await _waitForReady(() => {
+        const txt = document.body ? document.body.innerText : '';
+        return /(?:PAN|User\s*ID)\s*[:\-]?\s*[A-Z]{5}[0-9]{4}[A-Z]{1}/i.test(txt);
+      }, 3500, 150);
+
       let pan = '';
-      const entityDivs = document.querySelectorAll('div.entity');
-      for (const div of entityDivs) {
-        if (div.textContent.includes('PAN')) {
-          const boldSpan = div.querySelector('span.boldfont');
-          if (boldSpan) {
-            pan = boldSpan.textContent.trim();
-          } else {
-            const match = div.textContent.match(/PAN\s*:\s*([A-Z]{5}[0-9]{4}[A-Z]{1})/i);
-            if (match) pan = match[1].trim();
+      const bodyText = document.body ? document.body.innerText : '';
+
+      // 1. Direct Regex Match on confirmed password page (Matches "PAN : AXTPM6903A" from screenshot)
+      const panMatch = bodyText.match(/(?:PAN|User\s*ID)\s*[:\-]?\s*([A-Z]{5}[0-9]{4}[A-Z]{1})\b/i);
+      if (panMatch && u.isValidPan(panMatch[1])) {
+        pan = panMatch[1].toUpperCase();
+      }
+
+      // 2. Fallback: Any valid PAN pattern in the card or body text
+      if (!pan) {
+        const boundaryMatches = [...bodyText.matchAll(/\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/g)];
+        for (const m of boundaryMatches) {
+          if (u.isValidPan(m[1])) {
+            pan = m[1].toUpperCase();
+            break;
           }
         }
       }
 
-      // Generic PAN regex scan fallback (replaces hardcoded input ID)
-      if (!pan) {
-         const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/i;
-         const boundaryRegex = /\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/i;
-         
-         // 1. Scan all input values generically
-         const inputs = document.querySelectorAll('input');
-         for (const input of inputs) {
-           const val = (input.value || '').trim();
-           if (panRegex.test(val)) {
-             pan = val.toUpperCase();
-             break;
-           }
-         }
-         
-         // 2. Scan visible text body as absolute last resort
-         if (!pan && document.body && document.body.innerText) {
-           const match = document.body.innerText.match(boundaryRegex);
-           if (match) {
-             pan = match[1].toUpperCase();
-           }
-         }
-      }
-
       if (pan) {
+        console.log(`⚡ Sera SDC [itr_login]: ✅ Detected PAN "${pan}" on Login/Password route.`);
+        getSession().pan = pan;
+        if (SDC && SDC.session && SDC.session.data) {
+          SDC.session.data.pan = pan;
+          SDC.session.data.portal = 'income tax';
+
+          // Emit Emerald Session Start toast immediately at the password confirmation screen!
+          if (SDC.session.data._lastStartedPan !== pan) {
+            SDC.session.data._lastStartedPan = pan;
+            await SDC.session.save();
+            SDC.emitSessionStart('income tax', pan, getSession().name || getSession().client_temp_name || 'Taxpayer');
+          }
+        }
+
         return {
           pan: pan,
-          client_name: '',
-          client_temp_name: '',
-          dob: '',
-          form: '',
-          ay: '',
-          status: 'Pre-Login / Password'
+          portal: 'income tax',
+          client_name: getSession().name || getSession().client_temp_name || '',
+          client_temp_name: getSession().client_temp_name || '',
+          dob: getSession().dob || '',
+          form: getSession().form || '',
+          ay: getSession().ay || '',
+          status: 'Login Active'
         };
       }
+
       return null;
     }
 
@@ -1211,9 +1260,9 @@
           handler: _handleLanding
         },
         {
-          // Login/logout/sessionExpire detection: matches all auth/login/logout/sessionExpire subroutes
+          // Login/password and session termination detection (strictly excludes bare #/login)
           id: 'itr_login',
-          pattern: /[/#](?:login|logout|sign-?in|sign-?out|password|pre-login|auth|session.?expire|session-?expired|session-?timeout)(?:[?/#]|$)/i,
+          pattern: /[/#](?:login\/password|password|logout|sign-?out|session.?expire|session-?expired|session-?timeout)(?:[?/#]|$)/i,
           handler: _handleLoginLogout
         }
       ]
