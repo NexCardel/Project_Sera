@@ -427,8 +427,9 @@
 
     // ─── Shared: AY + Form from Context ─────────────────────────────────────
     function _extractAyAndForm(url) {
-      const ay = u.extractAY(url) || getSession().ay || '';
-      const form = u.extractItrForm(url, u.getPageText()) || getSession().form || '';
+      const pageText = u.getPageText();
+      const ay = u.extractAY(url, pageText) || getSession().ay || '';
+      const form = u.extractItrForm(url, pageText) || getSession().form || '';
       return { ay, form };
     }
 
@@ -531,11 +532,22 @@
             confirmation_message: ''
           };
 
-          await SDC.session.recordStep(url, isProfile ? 'itr_personal_info' : 'itr_personal_info', capture);
-          await SDC.session.save();
-          if (!window.__SDC_ITR_FORM_EMITTED__ && typeof SDC.emitCapture === 'function') {
-            window.__SDC_ITR_FORM_EMITTED__ = true;
-            SDC.emitCapture(capture, 'ITR Portal', 'itr_personal_info');
+          if (!isProfile) {
+            await SDC.session.recordStep(url, 'itr_personal_info', capture);
+            await SDC.session.save();
+            if (!window.__SDC_ITR_FORM_EMITTED__ && typeof SDC.emitCapture === 'function') {
+              window.__SDC_ITR_FORM_EMITTED__ = true;
+              SDC.emitCapture(capture, 'ITR Portal', 'itr_personal_info');
+            }
+          } else {
+            // Profile page: record identity scan into timeline, but do not emit dummy filing to tracker_dump
+            await SDC.session.recordStep(url, 'itr_profile_scan', {
+              pan: pan || getSession().pan || '',
+              name: activeName,
+              dob: dob || getSession().dob || '',
+              status: 'Profile Scanned'
+            });
+            await SDC.session.save();
           }
           return;
         }
@@ -595,8 +607,20 @@
 
       const activeName = getSession().name || getSession().client_temp_name || '';
 
-      // On Profile pages (Category B), always capture immediately
-      if (!pan && !activeName && !dob && !isProfilePage) {
+      // On pure Profile pages (myProfile / profileDetail), save identity to session cache and timeline, but do NOT emit dummy filing
+      if (isProfilePage) {
+        if (SDC && SDC.session && typeof SDC.session.recordStep === 'function') {
+          SDC.session.recordStep(url, 'itr_profile_scan', {
+            pan: pan || getSession().pan || '',
+            name: activeName,
+            dob: dob || getSession().dob || '',
+            status: 'Profile Scanned'
+          });
+        }
+        return null; // Suppress dummy "Profile / Identity" row from tracker_dump
+      }
+
+      if (!pan && !activeName && !dob) {
         console.log('Sera SDC [itr_personal_info]: Waiting for async form render (watcher active).');
         return null;
       }
@@ -615,10 +639,10 @@
         name: activeName || 'Taxpayer',
         taxpayer_name: activeName || 'Taxpayer',
         dob: dob || getSession().dob || '',
-        filing_type: form || (isProfilePage ? 'Profile / Identity' : 'ITR (Form Pending)'),
+        filing_type: form || 'ITR (Form Pending)',
         period_label: ay,
         arn: 'N/A',
-        status: isProfilePage ? 'Profile Details' : 'Draft / Personal Info',
+        status: 'Draft / Personal Info',
         dom_breadcrumbs: u.getBreadcrumbs(),
         confirmation_message: ''
       };
@@ -794,25 +818,17 @@
 
       console.log(`⚡ Sera SDC [itr_landing]: Post-login landing active for ${activeName || 'Client'} (${pan || 'No PAN'}) [Header Name: "${headerName}"]`);
 
-      if (!pan && !activeName) {
-        return null;
+      // Record navigation step in session timeline for audit trail
+      if (SDC && SDC.session && typeof SDC.session.recordStep === 'function') {
+        SDC.session.recordStep(url, 'itr_landing', {
+          pan: pan || getSession().pan || '',
+          name: activeName,
+          status: 'Landing Page Active'
+        });
       }
 
-      return {
-        portal: 'income tax',
-        pan: pan || getSession().pan || '',
-        client_name: activeName,
-        client_temp_name: headerName || getSession().client_temp_name || '',
-        name: activeName,
-        taxpayer_name: activeName,
-        dob: dob || getSession().dob || '',
-        filing_type: form || 'ITR (Landing / e-File)',
-        period_label: ay || '',
-        arn: 'N/A',
-        status: 'Landing Page Active',
-        dom_breadcrumbs: u.getBreadcrumbs(),
-        confirmation_message: ''
-      };
+      // Return null so SDC does NOT emit a dummy "ITR (Landing / e-File)" filing to tracker_dump
+      return null;
     }
 
     // ─── Lifecycle Status Resolver for View Filed Returns Card ───────────────

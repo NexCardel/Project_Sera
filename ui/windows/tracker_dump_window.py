@@ -1358,27 +1358,6 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Export Failed", f"Could not write CSV: {e}")
 
-    def _open_raw_dump_txt(self):
-        """Opens seraRawPayloadDump.txt in the system's default text editor."""
-        import os
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        dump_paths = self.db._get_dump_file_paths()
-        target_path = None
-        for p in dump_paths:
-            if os.path.exists(p):
-                target_path = p
-                break
-        if not target_path and dump_paths:
-            self.db.rebuild_raw_payload_dumps_file()
-            target_path = dump_paths[0]
-
-        if target_path and os.path.exists(target_path):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
-        else:
-            QMessageBox.warning(self, "File Not Found", "Could not locate seraRawPayloadDump.txt on disk.")
-
     def _open_daily_dump_txt(self):
         """Opens today's Raw_Payload_Dump/seraRawPayloadDump_dd_mm_yy.txt in default text editor."""
         import os
@@ -1403,30 +1382,6 @@ class TrackerDumpWindow(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
         else:
             QMessageBox.warning(self, "File Not Found", f"Could not locate seraRawPayloadDump_{today_key}.txt on disk.")
-
-    def _open_backup_dump_txt(self):
-        """Opens seraRawPayloadDumpBackup.txt (append-only master archive) in default text editor."""
-        import os
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        backup_paths = self.db._get_backup_dump_file_paths()
-        target_path = None
-        for p in backup_paths:
-            if os.path.exists(p):
-                target_path = p
-                break
-        if not target_path and backup_paths:
-            self.db.rebuild_raw_payload_dumps_file()
-            for p in backup_paths:
-                if os.path.exists(p):
-                    target_path = p
-                    break
-
-        if target_path and os.path.exists(target_path):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(target_path))
-        else:
-            QMessageBox.warning(self, "File Not Found", "Could not locate seraRawPayloadDumpBackup.txt on disk.")
 
     def _open_dump_folder(self):
         """Opens the Raw_Payload_Dump folder in Windows Explorer."""
@@ -1453,12 +1408,12 @@ class TrackerDumpWindow(QWidget):
             QMessageBox.warning(self, "Folder Not Found", "Could not locate Raw_Payload_Dump folder on disk.")
 
     def _rebuild_raw_dump_txt(self):
-        """Cleanly rebuilds and syncs all daily dumps, canonical dump, and master backup."""
+        """Cleanly rebuilds and syncs all date-partitioned daily dumps."""
         try:
             count = self.db.rebuild_raw_payload_dumps_file()
             QMessageBox.information(
                 self, "Dump Files Rebuilt",
-                f"Successfully rebuilt all daily partitioned dumps, canonical dump, and master backup with {count} records."
+                f"Successfully rebuilt all date-partitioned daily dumps with {count} records."
             )
         except Exception as e:
             QMessageBox.critical(self, "Rebuild Failed", f"Could not rebuild dump file: {e}")
@@ -1484,7 +1439,7 @@ class TrackerDumpWindow(QWidget):
         app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         classifier_dir = os.path.join(app_dir, "FST_Classifier_1")
         report_path = os.path.join(classifier_dir, "payload_report.xlsx")
-        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
         
         target_dump = None
         for p in dump_paths:
@@ -1509,39 +1464,6 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Classifier Error", f"Failed to run FST Classifier: {e}")
 
-    def _open_fst_tracer_report(self):
-        """Refreshes and opens the evidence-first FST Tracer Alpha workbook."""
-        import os
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        tracer_dir = os.path.join(app_dir, "FST_Tracer_Alpha")
-        report_path = os.path.join(tracer_dir, "fst_tracer_alpha_report.xlsx")
-        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
-        target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
-
-        try:
-            if not target_dump and dump_paths:
-                self.db.rebuild_raw_payload_dumps_file()
-                target_dump = dump_paths[0]
-            if not target_dump or not os.path.exists(target_dump):
-                QMessageBox.warning(self, "Tracer Notice", "Could not locate a raw payload dump to trace.")
-                return
-
-            from FST_Tracer_Alpha.tracer import process_dump
-            os.makedirs(tracer_dir, exist_ok=True)
-            vault_path = os.path.join(app_dir, "docs", "APP", "Sera FST Tracer Alpha")
-            result = process_dump(target_dump, report_path, vault_path)
-            actual_report = result.get("outputs", {}).get("excel_path", report_path)
-            if os.path.exists(actual_report):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(actual_report))
-            else:
-                QMessageBox.warning(self, "Tracer Notice", "Could not generate the FST Tracer Alpha report.")
-        except Exception as e:
-            QMessageBox.critical(self, "Tracer Error", f"Failed to run FST Tracer Alpha: {e}")
-
-
     def _open_dom_parser_report(self):
         """Generates and opens the latest DOM Parser 1 audit Excel report."""
         import os, sys
@@ -1558,7 +1480,7 @@ class TrackerDumpWindow(QWidget):
         live_db = os.path.join(live_dir, "rawPayload.db")
         app_db = os.path.join(app_dir, "rawPayload.db")
         db_path = live_db if os.path.exists(live_db) else app_db
-        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
+        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
         target_dump = db_path if os.path.exists(db_path) else next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
 
         try:
@@ -1579,62 +1501,6 @@ class TrackerDumpWindow(QWidget):
                 QMessageBox.warning(self, "DOM Parser Notice", "Could not generate DOM audit report from available captures.")
         except Exception as e:
             QMessageBox.critical(self, "DOM Parser Error", f"Failed to run DOM Parser 1: {e}")
-
-    def _open_simple_parser_report(self):
-        """Refreshes and opens the conservative Simple Parser workbook."""
-        import os
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        parser_dir = os.path.join(app_dir, "simpleParser")
-        report_path = os.path.join(parser_dir, "simple_parser_report.xlsx")
-        dump_paths = self.db._get_dump_file_paths() if hasattr(self.db, "_get_dump_file_paths") else []
-        target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
-        try:
-            # Tracker Dump UI reads rawPayload.db directly, while Simple Parser
-            # reads the text dump. Rebuild first so newly captured rows cannot
-            # be missing from the generated workbook.
-            if dump_paths and hasattr(self.db, "rebuild_raw_payload_dumps_file"):
-                self.db.rebuild_raw_payload_dumps_file()
-                target_dump = next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
-            if not target_dump and dump_paths:
-                target_dump = dump_paths[0]
-            if not target_dump or not os.path.exists(target_dump):
-                QMessageBox.warning(self, "Simple Parser Notice", "Could not locate a raw payload dump to parse.")
-                return
-
-            from simpleParser.simple_parser import process_dump
-            os.makedirs(parser_dir, exist_ok=True)
-            result = process_dump(
-                target_dump,
-                report_path,
-                master_pans=self.db._get_master_pans_for_reports() if hasattr(self.db, "_get_master_pans_for_reports") else set(),
-            )
-            actual_report = result.get("outputs", {}).get("excel_path", report_path)
-            if os.path.exists(actual_report):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(actual_report))
-            else:
-                QMessageBox.warning(self, "Simple Parser Notice", "Could not generate the Simple Parser report.")
-        except Exception as e:
-            QMessageBox.critical(self, "Simple Parser Error", f"Failed to run Simple Parser: {e}")
-
-    def _open_fst_obsidian_vault(self):
-        """Refreshes and opens the generated Obsidian timeline folder."""
-        import os
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        vault_path = os.path.join(app_dir, "docs", "APP", "Sera FST Tracer Alpha")
-        try:
-            self.db.sync_fst_reports()
-            if os.path.isdir(vault_path):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(vault_path))
-            else:
-                QMessageBox.warning(self, "Vault Notice", "The Obsidian timeline vault could not be generated.")
-        except Exception as e:
-            QMessageBox.critical(self, "Vault Error", f"Failed to refresh the Obsidian timeline vault: {e}")
 
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
@@ -1668,16 +1534,10 @@ class TrackerDumpWindow(QWidget):
         act_open_daily = menu.addAction(_safe_qta_icon("mdi.calendar-today", "#4CF9B7"), "Open Today's Dump (TXT)")
         act_open_daily.triggered.connect(self._open_daily_dump_txt)
 
-        act_open_backup = menu.addAction(_safe_qta_icon("mdi.shield-lock-outline", "#4CF9B7"), "Open Master Backup (TXT)")
-        act_open_backup.triggered.connect(self._open_backup_dump_txt)
-
-        act_open_txt = menu.addAction(_safe_qta_icon("mdi.file-document-outline", "#4CF9B7"), "Open Full Dump (TXT)")
-        act_open_txt.triggered.connect(self._open_raw_dump_txt)
-
         act_open_folder = menu.addAction(_safe_qta_icon("mdi.folder-open-outline", "#4CF9B7"), "Open Raw_Payload_Dump Folder")
         act_open_folder.triggered.connect(self._open_dump_folder)
 
-        act_rebuild_txt = menu.addAction(_safe_qta_icon("mdi.file-sync-outline", "#4CF9B7"), "Rebuild & Sync All Dumps")
+        act_rebuild_txt = menu.addAction(_safe_qta_icon("mdi.file-sync-outline", "#4CF9B7"), "Rebuild Daily Dumps")
         act_rebuild_txt.triggered.connect(self._rebuild_raw_dump_txt)
 
         act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
@@ -1688,17 +1548,8 @@ class TrackerDumpWindow(QWidget):
         act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
         act_classifier.triggered.connect(self._open_fst_classifier_report)
 
-        act_tracer = menu.addAction(_safe_qta_icon("mdi.timeline-text-outline", "#4CF9B7"), "FST Tracer Alpha (Excel Report)")
-        act_tracer.triggered.connect(self._open_fst_tracer_report)
-
         act_dom_parser = menu.addAction(_safe_qta_icon("mdi.view-dashboard-outline", "#4CF9B7"), "DOM Parser 1 (Excel Report)")
         act_dom_parser.triggered.connect(self._open_dom_parser_report)
-
-        act_simple_parser = menu.addAction(_safe_qta_icon("mdi.file-table-outline", "#4CF9B7"), "Simple Parser (Excel Report)")
-        act_simple_parser.triggered.connect(self._open_simple_parser_report)
-
-        act_vault = menu.addAction(_safe_qta_icon("mdi.notebook-outline", "#4CF9B7"), "Open Obsidian FST Timeline Vault")
-        act_vault.triggered.connect(self._open_fst_obsidian_vault)
 
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
@@ -1732,13 +1583,13 @@ class TrackerDumpWindow(QWidget):
         try:
             import sdc_parser
             import importlib
-            importlib.reload(sdc_parser)
-            sdc_parser.generate_ltt_excel()
+            generated_path = sdc_parser.generate_ltt_excel()
+            target_file = generated_path if (generated_path and os.path.exists(generated_path)) else ltt_output
             QApplication.restoreOverrideCursor()
-            if os.path.exists(ltt_output):
-                QMessageBox.information(self, "Success", f"Live Tracking Table (LTT) generated successfully!\nSaved to:\n{ltt_output}")
+            if os.path.exists(target_file):
+                QMessageBox.information(self, "Success", f"Live Tracking Table (LTT) generated successfully!\nSaved to:\n{target_file}")
                 try:
-                    os.startfile(ltt_output)
+                    os.startfile(target_file)
                 except Exception: pass
             else:
                 QMessageBox.warning(self, "Warning", "Parser ran, but the LTT Excel file was not found.")

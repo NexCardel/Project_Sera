@@ -303,9 +303,15 @@
               due_date: c.due_date || '',
               arn: c.arn || 'N/A',
               capture_method: c.capture_method || 'SDC_GST',
-              scraped_data: c.scraped_data || null,
+              capture_origin: c.capture_origin || 'form_view',
+              submitted_in_session: Boolean(c.submitted_in_session),
+              submission_arn: c.submission_arn || '',
+              submission_timestamp: c.submission_timestamp || '',
+              last_viewed_at: c.last_viewed_at || c.updated_at || c.timestamp || '',
               first_captured_at: c.first_captured_at || c.timestamp || '',
-              updated_at: c.updated_at || c.timestamp || ''
+              updated_at: c.updated_at || c.timestamp || '',
+              dataset_key: c.dataset_key || '',
+              scraped_data: c.scraped_data || null
             };
           }
           const clone = { ...c };
@@ -316,6 +322,34 @@
           }
           return clone;
         });
+
+        // ─── Derivation of Tracker Dump Candidates (Blueprint Section 1 & 5) ───
+        // 1. Every dataset with a confirmed submission during the session
+        const submittedDatasets = strippedCaptures.filter(c => Boolean(c.submitted_in_session));
+
+        // 2. The single last dataset viewed during the session (with greatest last_viewed_at or updated_at)
+        let lastViewedDataset = null;
+        if (strippedCaptures.length > 0) {
+          const sortedByView = [...strippedCaptures].sort((a, b) => {
+            const timeA = new Date(a.last_viewed_at || a.updated_at || a.first_captured_at || a.timestamp || 0).getTime();
+            const timeB = new Date(b.last_viewed_at || b.updated_at || b.first_captured_at || b.timestamp || 0).getTime();
+            return timeB - timeA;
+          });
+          lastViewedDataset = sortedByView[0];
+        }
+
+        // 3. tracker_dump_captures = submitted_datasets + last_viewed_dataset (deduplicated by dataset_key)
+        const trackerDumpMap = new Map();
+        for (const sub of submittedDatasets) {
+          if (sub.dataset_key) trackerDumpMap.set(sub.dataset_key, sub);
+        }
+        if (lastViewedDataset && lastViewedDataset.dataset_key) {
+          if (!trackerDumpMap.has(lastViewedDataset.dataset_key)) {
+            trackerDumpMap.set(lastViewedDataset.dataset_key, lastViewedDataset);
+          }
+        }
+        const trackerDumpCaptures = Array.from(trackerDumpMap.values());
+        console.log(`⚡ Sera SDC Assembler: Derived ${trackerDumpCaptures.length} Tracker Dump candidate(s) (${submittedDatasets.length} submitted, ${lastViewedDataset ? 1 : 0} last-viewed) from ${strippedCaptures.length} total assembled datasets.`);
         
         const masterPayload = {
           type: "filing_result",
@@ -349,7 +383,9 @@
             arn: arn,
             period_label: period,
             filing_type: filingType,
-            assembler_captures: strippedCaptures, // Stripped of redundant timelines
+            tracker_dump_captures: trackerDumpCaptures, // Selective routing
+            assembler_captures: strippedCaptures,       // Full set for LTT/timeline
+            last_viewed_dataset_key: lastViewedDataset ? lastViewedDataset.dataset_key : '',
             session_timeline: sData.timeline || []
           }
         };
@@ -965,7 +1001,7 @@
 
         if (capture) {
           _clearPendingRetries();
-          _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
+          await _emitCapture(capture, matchedProtocol.name, matchedCrosshair.id);
           return;
         } else if (retryCount < 2 && !isLoginCrosshair) {
           // Schedule up to 2 retries (at +700ms and +1400ms) for Angular rendering.
@@ -989,9 +1025,70 @@
     }
   }
 
+  // ─── Canonical Dataset Key Generator ────────────────────────────────────────
+  function computeDatasetKey(portal, identifier, formType, periodLabel) {
+    const pStr = String(portal || '');
+    let pCanon = 'PORTAL';
+    if (/gst/i.test(pStr)) pCanon = 'GST';
+    else if (/itr|income/i.test(pStr)) pCanon = 'ITR';
+    else pCanon = pStr.replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'PORTAL';
+
+    const idCanon = String(identifier || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'UNKNOWN';
+
+    let fStr = String(formType || '');
+    if (!fStr && pStr.includes('(') && pStr.includes(')')) {
+      fStr = pStr.split('(').pop().split(')')[0].trim();
+    }
+    let fCanon = 'FORM';
+    if (/gstr[-_ ]*1a/i.test(fStr)) fCanon = 'GSTR1A';
+    else if (/gstr[-_ ]*1|iff/i.test(fStr)) fCanon = 'GSTR1';
+    else if (/gstr[-_ ]*2a/i.test(fStr)) fCanon = 'GSTR2A';
+    else if (/gstr[-_ ]*2b/i.test(fStr)) fCanon = 'GSTR2B';
+    else if (/gstr[-_ ]*3b/i.test(fStr)) fCanon = 'GSTR3B';
+    else if (/cmp[-_ ]*08/i.test(fStr)) fCanon = 'CMP08';
+    else if (/gstr[-_ ]*4/i.test(fStr)) fCanon = 'GSTR4';
+    else if (/gstr[-_ ]*9c/i.test(fStr)) fCanon = 'GSTR9C';
+    else if (/gstr[-_ ]*9/i.test(fStr)) fCanon = 'GSTR9';
+    else if (/gstr[-_ ]*7/i.test(fStr)) fCanon = 'GSTR7';
+    else if (/gstr[-_ ]*8/i.test(fStr)) fCanon = 'GSTR8';
+    else {
+      const mItr = fStr.match(/itr[-_ ]*([1-7])/i);
+      if (mItr) fCanon = 'ITR' + mItr[1];
+      else fCanon = fStr.replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'FORM';
+    }
+
+    // Canonical period: clean trailing text, status lines, due dates, newlines
+    const rawPerStr = String(periodLabel || '').trim();
+    const perClean = rawPerStr.split(/[\r\n]|(?:\b(?:Due date|Option|Filed|Pending|NA)\b)/i)[0].trim();
+
+    // Assessment Year canonical normalization: (e.g. "AY 2026-27", "2026-27", "AY: 2026-27") -> AY_2026_27
+    const mAy = perClean.match(/\b(?:AY|A\.Y\.)?\s*(20\d{2})[-_](\d{2})\b/i);
+
+    let perCanon = 'CURRENT';
+    if (mAy) {
+      perCanon = `AY_${mAy[1]}_${mAy[2]}`;
+    } else {
+      const mMon = perClean.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/i);
+      const mQtr = perClean.match(/\b(Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar|Q[1-4])\b/i);
+      const mYr = rawPerStr.match(/\b(20\d{2})\b/);
+
+      if (mQtr && mYr) {
+        perCanon = mQtr[1].replace(/[^A-Z0-9]+/gi, '_').toUpperCase() + '_' + mYr[1];
+      } else if (mMon && mYr) {
+        perCanon = mMon[1].slice(0, 3).toUpperCase() + '_' + mYr[1];
+      } else if (mMon) {
+        perCanon = mMon[1].slice(0, 3).toUpperCase();
+      } else {
+        perCanon = perClean.replace(/[^A-Z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'CURRENT';
+      }
+    }
+
+    return `${pCanon}:${idCanon}:${fCanon}:${perCanon}`;
+  }
+
   // ─── Capture Emit ────────────────────────────────────────────────────────────
   // Formats full filing payload and sends directly to background native host pipeline
-  function _emitCapture(capture, protocolName, crosshairId) {
+  async function _emitCapture(capture, protocolName, crosshairId) {
     const captureMethod = `SDC_${crosshairId}`;
     const portalName = capture.portal || protocolName || "income tax";
     const clientTempName = capture.client_temp_name || SDC.session.data.client_temp_name || "";
@@ -1008,8 +1105,15 @@
     const arn = capture.arn || "N/A";
     const period = capture.period_label || SDC.session.data.ay || "";
     const filingType = capture.filing_type || SDC.session.data.form || "ITR";
-    const status = capture.status || "Submitted";
+    const status = capture.status || "submitted";
     const timestamp = new Date().toISOString();
+
+    const datasetKey = computeDatasetKey(
+      portalName,
+      capture.gstin || pan || "",
+      filingType,
+      period
+    );
 
     const detail = {
       type: "filing_result",
@@ -1039,6 +1143,12 @@
       dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
       confirmation_message: capture.confirmation_message || "",
       scraped_data: capture.scraped_data || null,
+      dataset_key: datasetKey,
+      capture_origin: capture.capture_origin || (crosshairId.includes('success') ? 'submission_success' : crosshairId.includes('calendar') ? 'calendar_view' : 'form_view'),
+      submitted_in_session: Boolean(capture.submitted_in_session || crosshairId.includes('success')),
+      submission_arn: capture.submission_arn || (crosshairId.includes('success') && arn !== 'N/A' ? arn : ''),
+      submission_timestamp: capture.submission_timestamp || (crosshairId.includes('success') ? timestamp : ''),
+      last_viewed_at: timestamp,
       raw_payload: {
         source: "Sera_SDC",
         session_id: SDC.session.data.session_id || "",
@@ -1057,13 +1167,19 @@
         status: status,
         url: window.location.href,
         timestamp: timestamp,
+        dataset_key: datasetKey,
+        capture_origin: capture.capture_origin || (crosshairId.includes('success') ? 'submission_success' : crosshairId.includes('calendar') ? 'calendar_view' : 'form_view'),
+        submitted_in_session: Boolean(capture.submitted_in_session || crosshairId.includes('success')),
+        submission_arn: capture.submission_arn || (crosshairId.includes('success') && arn !== 'N/A' ? arn : ''),
+        submission_timestamp: capture.submission_timestamp || (crosshairId.includes('success') ? timestamp : ''),
+        last_viewed_at: timestamp,
         session_timeline: SDC.session.data.timeline || [],
         dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
         confirmation_message: capture.confirmation_message || ""
       }
     };
 
-    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory.`);
+    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory. Key: ${datasetKey}`);
     // ─── Assembler Buffering ───
     SDC.session.data.assembler_captures = SDC.session.data.assembler_captures || [];
     // GST can revisit the same form for a status update, or move to a new
@@ -1071,45 +1187,56 @@
     // GSTIN + form + period: same-period revisits update status; new periods
     // remain separate datasets inside the atomic master payload.
     const isGstCapture = /gst/i.test(portalName) || Boolean(detail.gstin);
-    if (isGstCapture) {
-      const normalizeDatasetPart = (value) => String(value || '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toUpperCase()
-        .replace(/^GSTR1(?:\s*\/\s*IFF)?$/, 'GSTR-1/IFF')
-        .replace(/^GSTR[- ]?3B$/, 'GSTR-3B');
-      const datasetKey = [detail.gstin || detail.pan || '', detail.filing_type || '', detail.period_label || '']
-        .map(normalizeDatasetPart)
-        .join('|');
-      const existingIndex = SDC.session.data.assembler_captures.findIndex(item => {
-        const itemKey = [item.gstin || item.pan || '', item.filing_type || '', item.period_label || '']
-          .map(normalizeDatasetPart)
-          .join('|');
-        return itemKey === datasetKey;
-      });
+    if (isGstCapture || datasetKey) {
+      const existingIndex = SDC.session.data.assembler_captures.findIndex(item => item.dataset_key === datasetKey);
       if (existingIndex >= 0) {
         const previous = SDC.session.data.assembler_captures[existingIndex];
+        // Sticky submission flags: once submitted_in_session is true, it MUST NOT be downgraded by a calendar or view revisit!
+        const wasSubmitted = Boolean(previous.submitted_in_session || detail.submitted_in_session);
+        const retainedArn = (wasSubmitted && previous.submission_arn) ? previous.submission_arn : (detail.submission_arn || (detail.arn !== 'N/A' ? detail.arn : previous.arn || 'N/A'));
+        const retainedTimestamp = (wasSubmitted && previous.submission_timestamp) ? previous.submission_timestamp : (detail.submission_timestamp || '');
+
         SDC.session.data.assembler_captures[existingIndex] = {
           ...previous,
           ...detail,
+          submitted_in_session: wasSubmitted,
+          submission_arn: retainedArn,
+          submission_timestamp: retainedTimestamp,
+          arn: (retainedArn && retainedArn !== 'N/A') ? retainedArn : (detail.arn && detail.arn !== 'N/A' ? detail.arn : previous.arn || 'N/A'),
+          status: wasSubmitted ? 'Filed & Confirmed' : detail.status,
           first_captured_at: previous.first_captured_at || previous.timestamp,
-          updated_at: timestamp
+          updated_at: timestamp,
+          last_viewed_at: timestamp,
+          capture_origin: detail.capture_origin || previous.capture_origin
         };
       } else {
         detail.first_captured_at = timestamp;
+        detail.last_viewed_at = timestamp;
         SDC.session.data.assembler_captures.push(detail);
       }
     } else {
+      detail.first_captured_at = timestamp;
+      detail.last_viewed_at = timestamp;
       SDC.session.data.assembler_captures.push(detail);
     }
-    // Note: Do not emit Dual here. The assembler will flush this at session end.
     
+    // Transport routing (Blueprint Section 6):
+    // Only confirmed submissions or explicit success events should immediately emit a live filing_result
+    // Routine calendar/form views update the assembler buffer and session timeline, but wait for session finalization
+    // so they do not flood tracker_dump with intermediate views.
+    if (detail.submitted_in_session || detail.capture_origin === 'submission_success') {
+      console.log(`⚡ Sera SDC: 🚀 Confirmed submission for ${datasetKey} — dispatching real-time to desktop tracker dump.`);
+      _emitDual(detail);
+    } else {
+      console.log(`⚡ Sera SDC: 👁️ View capture buffered for ${datasetKey} (origin: ${detail.capture_origin}) — deferred to session finalization.`);
+    }
+
     // Save the new buffer state to chrome.storage.local immediately so it survives page unloads/refreshes
-    SDC.session.save().catch(e => console.warn('⚡ Sera SDC: Failed to save capture buffer:', e));
+    await SDC.session.save().catch(e => console.warn('⚡ Sera SDC: Failed to save capture buffer:', e));
 
     // ─── Trigger In-Browser Toast Notification ────────────────────────────────
     try {
-      if (window.SDCToast) {
+      if (window.SDCToast && !capture.silent && !capture.skip_toast) {
         const currentUrlKey = window.location.href.split('?')[0].replace(/\/+$/, '').toLowerCase();
         const historyNodes = SDC.session.data.timeline || [];
         const matchingPriorVisits = historyNodes.filter(node => (node.url || '').split('?')[0].replace(/\/+$/, '').toLowerCase() === currentUrlKey);
@@ -1404,12 +1531,34 @@
       } catch (_) { return ''; }
     },
 
-    /** Extract Assessment Year from a URL like foreturns-ay26 or fo-itr4-ay2026 */
-    extractAY(url) {
-      const m = url.match(/(?:foreturns-ay(\d{2})|ay(\d{4}))/i);
-      if (!m) return '';
-      if (m[1]) return `AY 20${m[1]}-${parseInt(m[1]) + 1}`;
-      if (m[2]) return `AY ${m[2]}-${parseInt(m[2].slice(2)) + 1}`;
+    /** Extract Assessment Year from a URL, DOM, or page text */
+    extractAY(url, pageText) {
+      if (url) {
+        const m = url.match(/(?:foreturns-ay(\d{2})|ay(\d{4}))/i);
+        if (m) {
+          if (m[1]) return `AY 20${m[1]}-${parseInt(m[1]) + 1}`;
+          if (m[2]) return `AY ${m[2]}-${parseInt(m[2].slice(2)) + 1}`;
+        }
+      }
+      try {
+        if (typeof document !== 'undefined') {
+          const ayEls = document.querySelectorAll(
+            'mat-select[formcontrolname*="ay" i], mat-select[formcontrolname*="assessment" i], mat-select[id*="ay" i], mat-select[name*="ay" i],' +
+            'select[name*="ay" i], select[id*="ay" i], [aria-label*="assessment year" i], .mat-select-value'
+          );
+          for (const el of ayEls) {
+            const txt = (el.innerText || el.textContent || el.value || '').trim();
+            const m = txt.match(/\b(20\d{2}[-_]\d{2})\b/);
+            if (m) return `AY ${m[1].replace('_', '-')}`;
+          }
+        }
+      } catch (_) {}
+
+      const txt = pageText || (typeof document !== 'undefined' && document.body ? document.body.innerText : '');
+      if (txt) {
+        const m = txt.match(/(?:Assessment\s*Year|AY|A\.Y\.)\s*[:#-]?\s*(20\d{2}[-_]\d{2})/i) || txt.match(/\b(20\d{2}-\d{2})\b/);
+        if (m) return `AY ${m[1].replace('_', '-')}`;
+      }
       return '';
     },
 

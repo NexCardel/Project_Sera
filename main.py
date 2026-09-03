@@ -562,13 +562,21 @@ class SeraApp:
         
         # An assembler payload may contain several independent GST/ITR
         # datasets. Materialize one tracker-dump row per dataset while keeping
-        # the shared session timeline inside each row's raw payload.
-        assembler_captures = []
-        if isinstance(msg.get("raw_payload"), dict):
-            assembler_captures = msg["raw_payload"].get("assembler_captures") or []
+        # An assembler payload may contain several independent GST/ITR
+        # datasets. Materialize tracker-dump rows based on tracker_dump_captures
+        # (confirmed submissions + last-viewed dataset) while keeping the full
+        # assembler_captures and shared session timeline inside each row's raw payload for LTT.
+        raw_payload_dict = msg.get("raw_payload") if isinstance(msg.get("raw_payload"), dict) else {}
+        if "tracker_dump_captures" in raw_payload_dict and isinstance(raw_payload_dict["tracker_dump_captures"], list):
+            target_captures = raw_payload_dict["tracker_dump_captures"]
+        elif isinstance(raw_payload_dict.get("assembler_captures"), list) and raw_payload_dict["assembler_captures"]:
+            target_captures = raw_payload_dict["assembler_captures"]
+        else:
+            target_captures = []
+
         dataset_messages = []
-        if isinstance(assembler_captures, list) and assembler_captures:
-            for dataset in assembler_captures:
+        if target_captures:
+            for dataset in target_captures:
                 if not isinstance(dataset, dict):
                     continue
                 dataset_msg = dict(msg)
@@ -578,7 +586,14 @@ class SeraApp:
                 })
                 dataset_raw = dict(msg.get("raw_payload") or {})
                 dataset_raw["dataset_capture"] = dataset
-                dataset_raw["dataset_key"] = "|".join(str(dataset.get(key) or "").strip().upper() for key in ("gstin", "filing_type", "period_label"))
+                computed_key = dataset.get("dataset_key") or self.db.compute_dataset_key(
+                    dataset.get("portal") or portal,
+                    dataset.get("gstin") or dataset.get("pan") or pan,
+                    dataset.get("filing_type") or filing_type,
+                    dataset.get("period_label") or period
+                )
+                dataset_raw["dataset_key"] = computed_key
+                dataset_msg["dataset_key"] = computed_key
                 dataset_msg["raw_payload"] = dataset_raw
                 dataset_messages.append(dataset_msg)
         else:
@@ -606,7 +621,9 @@ class SeraApp:
                     raw_payload_json=json.dumps(dataset_msg),
                     captured_by=self.actor,
                     pan=dataset_pan,
-                    session_id=dataset_msg.get("session_id") or dataset_raw.get("session_id")
+                    session_id=dataset_msg.get("session_id") or dataset_raw.get("session_id"),
+                    filing_type=dataset_filing_type,
+                    dataset_key=dataset_msg.get("dataset_key") or dataset_raw.get("dataset_key")
                 )
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")

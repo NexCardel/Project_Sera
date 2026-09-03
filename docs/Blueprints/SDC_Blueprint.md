@@ -57,6 +57,40 @@ SDC delivers unified payloads to the desktop application via a resilient two-tie
 2. **Fail-Safe Route — Chrome Runtime Service Worker**:
    - If the direct HTTP fetch fails (e.g., desktop app temporarily closed), it falls back to `chrome.runtime.sendMessage()` to route via `background.js` and the Native Messaging host.
 
+## Multi-Dataset Assembler Contract
+
+SDC does not create a tracker row for every page visit. It buffers captures during the active portal session and emits one final `filing_result` envelope when the session terminates. The authoritative multi-dataset collection is:
+
+```json
+{
+  "raw_payload": {
+    "assembler_captures": [
+      {
+        "dataset_key": "GSTIN|GSTR-1|JUNE (FY 2026-27)",
+        "filing_type": "GSTR-1",
+        "period_label": "June (FY 2026-27)"
+      },
+      {
+        "dataset_key": "GSTIN|GSTR-3B|JUNE (FY 2026-27)",
+        "filing_type": "GSTR-3B",
+        "period_label": "June (FY 2026-27)"
+      }
+    ]
+  }
+}
+```
+
+The dataset key is normalized from `GSTIN/PAN + filing type + period`. Revisiting the same form and period updates that dataset; a different form or period remains a separate capture. The desktop listener decompresses the optional `filing_result_compressed` envelope, and `main.py` materializes each `assembler_captures` item as its own `tracker_dump` row.
+
+## Known Issue — Desktop Delivery / Multi-Dataset Visibility
+
+**Recorded:** 2026-09-03  
+**Symptom:** The tracker dump shows no separate rows for multiple GST forms or periods.  
+**Observed cause:** The desktop listener was not listening on `127.0.0.1:49152`; additionally, the compressed-payload decoder previously referenced `base64` without importing it. In either case the final assembler envelope could be dropped before reaching the dataset-expansion code.  
+**Expected behavior:** The desktop app must be running with the updated `ui/extension_listener.py`, the extension must be reloaded, and port `49152` must be listening before the final logout/timeout flush.  
+**Verification:** Confirm the browser console shows a final assembler dispatch, confirm the desktop listener accepts the payload, then inspect `raw_payload.assembler_captures` and the resulting tracker rows.  
+**Status:** Source fix applied; packaged builds must be rebuilt/restarted before production testing.
+
 ---
 
 ## ITR Protocol Crosshairs (7-Crosshair Active Map)

@@ -42,10 +42,18 @@ The injected `fillCredentialsInPage()` function:
 
 - **Sera SDC Assembler (`sdc_core.js` + protocols)**:
   - **In-Memory Aggregation**: Buffers all crosshair events during an active portal session into `sdc_assembler` without emitting premature fragmented entries.
+  - **Multi-Dataset Identity**: Keeps one capture per normalized `GSTIN/PAN + filing type + period`; revisits update the same dataset while different GST forms or periods remain in `raw_payload.assembler_captures`.
+  - **Atomic Session Flush**: Emits the buffered collection once on logout, timeout, client switch, or abrupt tab close. The tracker dump is therefore updated at session termination, not at each individual crosshair hit.
+  - **Compressed Transport**: Optionally sends the complete lossless assembler envelope as `filing_result_compressed` (`gzip+base64`); the desktop listener restores it to the normal `filing_result` contract before database insertion.
+  - **Serialized Session Persistence**: Queues browser storage writes and avoids reloading stale session snapshots during SPA route changes, preventing earlier datasets from being replaced by a later capture.
   - **Portal-Scoped Storage**: Completely isolates session memory keys across portals (`__SDC_SESSION_ITR__`, `__SDC_SESSION_GST__`, `__SDC_SESSION_TRACES__`, `__SDC_SESSION_MCA__`).
   - **Direct HTTP Loopback (Primary)**: Emits final atomic session payloads directly to `http://127.0.0.1:49152` via `fetch()`, bypassing Manifest V3 service worker sleep cycles with automatic fallback to Chrome Runtime Native Messaging.
   - **Double-Flush & Context Protection**: Guarded with `_assembler_flushed` lock and client PAN context switch monitors to prevent duplicated tracker dump rows.
   - **Ledger Card Milestone Resolver**: Evaluates milestone timelines on `view-filed-returns` to distinguish verified returns from "e-Verify Later" submissions.
+
+### SDC Multi-Dataset Delivery Incident — 2026-09-03
+
+The GST multi-dataset flow was not visible in Tracker Dump because the final compressed assembler message was not reaching the desktop ingestion path. The desktop listener was not active on loopback port `49152`, and its decoder also lacked the `base64` import required for `gzip+base64` messages. The source decoder and dataset expansion are now corrected. Testing must use a restarted desktop build and a reloaded extension; otherwise an older process can continue to discard or ignore the final envelope.
 
 - **Sera SAD (`net_interceptor.js` — v2.9.4)**:
   - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.

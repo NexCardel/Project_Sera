@@ -244,7 +244,7 @@
         }
         sData._assembler_flushed = true;
         // MUST save the flushed state immediately to prevent race conditions or cross-tab double flushes
-        this.save().catch(e => console.warn('⚡ Sera SDC: save failed during flush', e));
+        await this.save();
         // ─────────────────────────────────────────────────────────
 
         console.log(`⚡ Sera SDC Assembler: 📦 Flushing atomic unified payload to backend for session [${sData.session_id}].`);
@@ -286,8 +286,34 @@
         // CRITICAL: Strip the globally duplicated timeline from individual captures
         // to prevent exceeding the browser's strict 64KB limit for keepalive fetch requests
         const strippedCaptures = captures.map(c => {
+          // GST calendar/form captures only need the dataset fields below.
+          // Avoid repeating the complete timeline and nested raw capture in
+          // every period while preserving the assembler's per-period model.
+          if (/gst/i.test(c.portal || portal)) {
+            return {
+              gstin: c.gstin || '',
+              pan: c.pan || '',
+              client_name: c.client_name || c.name || c.taxpayer_name || '',
+              company_name: c.company_name || '',
+              proprietor_name: c.proprietor_name || '',
+              filing_type: c.filing_type || '',
+              filing_preference: c.filing_preference || c.scraped_data?.filing_preference || '',
+              period_label: c.period_label || '',
+              status: c.status || '',
+              due_date: c.due_date || '',
+              arn: c.arn || 'N/A',
+              capture_method: c.capture_method || 'SDC_GST',
+              scraped_data: c.scraped_data || null,
+              first_captured_at: c.first_captured_at || c.timestamp || '',
+              updated_at: c.updated_at || c.timestamp || ''
+            };
+          }
           const clone = { ...c };
           delete clone.session_timeline;
+          if (clone.raw_payload && typeof clone.raw_payload === 'object') {
+            clone.raw_payload = { ...clone.raw_payload };
+            delete clone.raw_payload.session_timeline;
+          }
           return clone;
         });
         
@@ -327,8 +353,17 @@
             session_timeline: sData.timeline || []
           }
         };
+
+        // Compress the complete assembler payload before it enters the
+        // durable outbox. Gzip is lossless and keeps the desktop contract
+        // unchanged because the desktop listener restores this object before
+        // handing it to the tracker-dump pipeline.
+        const transportPayload = await _buildCompressedPayload(masterPayload);
         
-        _emitDual(masterPayload);
+        // Logout may unload the page immediately. Prefer the extension
+        // background-worker hop for the final atomic payload so it reaches
+        // the desktop host even if the page's HTTP keepalive is cancelled.
+        await _queueReliableFlush(transportPayload || masterPayload);
       },
 
       /**
@@ -418,10 +453,10 @@
         this.data.status = 'completed';
         this.data.end_time = logoutTime;
         
-        // Execute flush synchronously first before yielding to the save operation
-        this._flushAssembler(this.data);
-        
-        this.save().catch(e => console.warn('⚡ Sera SDC: save failed during logout', e));
+        // Complete the atomic assembler flush before the GST/ITR protocol clears
+        // the shared session state on logout.
+        await this._flushAssembler(this.data);
+        await this.save();
         console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
 
         if (window.SDCToast) {
@@ -509,8 +544,15 @@
      * }
      */
     register(protocol) {
+      // background.js may reinject the SDC bundle on both tab completion and
+      // SPA URL updates. Do not register or scan the same protocol repeatedly.
+      if (_protocols.some(existing => existing.name === protocol.name)) {
+        console.log(`⚡ Sera SDC: Protocol "${protocol.name}" already registered — skipping duplicate.`);
+        return false;
+      }
       _protocols.push(protocol);
       console.log(`⚡ Sera SDC: Registered protocol "${protocol.name}" with ${protocol.crosshairs.length} crosshair(s).`);
+      return true;
     },
 
     /**
@@ -527,12 +569,27 @@
      * Wipes all protocol session caches and resets the last-scanned URL so
      * the next page gets a fresh scan. Called automatically on login/logout.
      */
-    async clearAllSessions() {
+    async clearAllSessions(options = {}) {
       console.log('⚡ Sera SDC: 🔄 New login detected — clearing all protocol session caches.');
       _lastScannedUrl = ''; // force re-scan on the next route
       await this.session.clear();
       for (const fn of _sessionClearCallbacks) {
         try { fn(); } catch (_) {}
+      }
+      if (options.reason === 'login') {
+        const now = Date.now();
+        if (now - _lastSessionRestartToastAt > 1500) {
+          _lastSessionRestartToastAt = now;
+          if (window.SDCToast) {
+            window.SDCToast.show({
+              type: 'start',
+              badge: 'NEW SESSION',
+              title: 'New Session',
+              message: 'Login screen detected — assembler restarted.',
+              duration: 2200
+            });
+          }
+        }
       }
     },
 
@@ -544,6 +601,17 @@
         return await _dispatch(window.location.href, 0);
       }
       _onUrlChange(window.location.href);
+    },
+
+    /** Retry a previously queued final payload after extension/page startup. */
+    async retryPendingFlush() {
+      if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local || _pendingFlushInFlight) return;
+      chrome.storage.local.get([PENDING_FLUSH_KEY], result => {
+        const pending = result && result[PENDING_FLUSH_KEY];
+        if (!pending || !pending.session_id) return;
+        _pendingFlushInFlight = true;
+        _sendReliableFlush(pending).finally(() => { _pendingFlushInFlight = false; });
+      });
     },
 
     /** Public capture emitter for protocols */
@@ -587,6 +655,7 @@
 
   // ─── Route Change Detection (SPA-safe with Loop Protection) ───────────────
   let _lastScannedUrl = '';
+  let _lastSessionRestartToastAt = 0;
   let _lastObservedUrl = window.location.href;
   let _debounceTimer = null;
   let _pendingRetryTimers = [];
@@ -675,21 +744,31 @@
   // 5. pagehide / tab close instant flush fallback
   window.addEventListener('pagehide', () => {
     // If there is an active un-flushed session with captures when the tab is closed, flush it!
-    if (SDC.session.data.session_id && !SDC.session.data._assembler_flushed && (SDC.session.data.assembler_captures || []).length > 0) {
-      console.log('⚡ Sera SDC: 🚪 Tab closed! Instant flush triggered via keepalive.');
-      SDC.session.data.status = 'completed';
-      SDC.session.data.end_time = new Date().toISOString();
-      const tl = SDC.session.data.timeline || [];
-      tl.push({
-          step: tl.length + 1,
-          title: "Tab Closed / Navigated Away",
-          url: window.location.href,
-          route: "TAB_CLOSED",
-          timestamp: SDC.session.data.end_time,
-          is_termination: true
-      });
-      // Fire it synchronously using the already configured backend
-      SDC.session._flushAssembler(SDC.session.data);
+    if (SDC.session.data.session_id) {
+      const hasCaptures = (SDC.session.data.assembler_captures || []).length > 0;
+      if (!SDC.session.data._assembler_flushed && hasCaptures) {
+        console.log('⚡ Sera SDC: 🚪 Tab closed! Instant flush triggered via keepalive.');
+        SDC.session.data.status = 'completed';
+        SDC.session.data.end_time = new Date().toISOString();
+        const tl = SDC.session.data.timeline || [];
+        tl.push({
+            step: tl.length + 1,
+            title: "Tab Closed / Navigated Away",
+            url: window.location.href,
+            route: "TAB_CLOSED",
+            timestamp: SDC.session.data.end_time,
+            is_termination: true
+        });
+        // Queue the final payload, then remove persisted session memory so a
+        // later tab cannot resurrect the abruptly closed session.
+        SDC.session._flushAssembler(SDC.session.data)
+          .finally(() => SDC.session.clear())
+          .catch(() => {});
+      } else {
+        // No filing payload exists, but any persisted identity/timeline state
+        // must still be discarded when the tab terminates abruptly.
+        SDC.session.clear().catch(() => {});
+      }
     }
   });
 
@@ -697,6 +776,26 @@
   function _formatRouteTitle(url, crosshairId) {
     if (!url) return "Page Navigation";
     const lower = url.toLowerCase();
+
+    // Prefer semantic crosshair IDs over URL fragments. GST routes commonly
+    // contain "/auth/" even when the page is a return form, not a login page.
+    if (crosshairId === 'gst_form_details') return "GST Return Form Details";
+    if (crosshairId === 'gst_returns_dashboard') return "GST Returns Dashboard";
+    if (crosshairId === 'gst_welcome_calendar') return "GST Returns Calendar";
+    if (crosshairId === 'gst_iff_submission_success' ||
+        crosshairId === 'gst_gstr1_submission_success' ||
+        crosshairId === 'gst_gstr3b_submission_success' ||
+        crosshairId === 'gst_filing_success') {
+      return "GST Filing Submission Success";
+    }
+    if (crosshairId === 'gst_login_logout') {
+      if (lower.includes('logout') || lower.includes('signout') || lower.includes('sign-out') ||
+          lower.includes('sessionexpire') || lower.includes('session-expire') ||
+          lower.includes('sessionexpired') || lower.includes('session-expired') || lower.includes('timeout')) {
+        return "GST Session Ended";
+      }
+      return "GST Login Screen";
+    }
 
     if (crosshairId === 'itr_filed_verified' || lower.includes('e-verify-now-success') || lower.includes('return-success')) {
       return "Filing Successful & e-Verified";
@@ -719,7 +818,7 @@
     if (crosshairId === 'itr_dashboard' || lower.includes('dashboard') || lower.includes('home')) {
       return "Dashboard";
     }
-    if (crosshairId === 'itr_login' || lower.includes('login') || lower.includes('auth') || lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') || lower.includes('session-expired')) {
+    if (crosshairId === 'itr_login' || lower.includes('login') || lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') || lower.includes('session-expired')) {
       if (lower.includes('sessionexpire') || lower.includes('session-expire') || lower.includes('sessionexpired') || lower.includes('session-expired') || lower.includes('timeout')) return "Session Expired";
       return lower.includes('logout') ? "Log Out" : "Login Screen";
     }
@@ -760,6 +859,7 @@
       matchedProtocol = protocol;
 
       for (const crosshair of protocol.crosshairs) {
+        if (crosshair.enabled === false) continue;
         if (!crosshair.pattern.test(url)) continue;
         matchedCrosshair = crosshair;
         break;
@@ -809,6 +909,15 @@
                              urlL.includes('sessionexpire') || urlL.includes('session-expire') || 
                              urlL.includes('sessionexpired') || urlL.includes('session-expired') || urlL.includes('timeout');
             
+            // Login is not a termination boundary. Staff may return to the
+            // login screen to authenticate the next client; keep current SDC
+            // memory intact. Termination is handled by logout, timeout,
+            // session expiry, or abrupt tab close.
+            if (!isLogout) {
+              console.log('⚡ Sera SDC: Login screen detected — preserving current session memory.');
+              return;
+            }
+
             if (isLogout && !capture) {
                 return; // Auth / logout route: session was finalized & wiped by handler — skip save
             }
@@ -880,6 +989,54 @@
     }
   }
 
+  // ─── Canonical Dataset Key Generator ────────────────────────────────────────
+  function computeDatasetKey(portal, identifier, formType, periodLabel) {
+    const pStr = String(portal || '');
+    let pCanon = 'PORTAL';
+    if (/gst/i.test(pStr)) pCanon = 'GST';
+    else if (/itr|income/i.test(pStr)) pCanon = 'ITR';
+    else pCanon = pStr.replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'PORTAL';
+
+    const idCanon = String(identifier || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'UNKNOWN';
+
+    let fStr = String(formType || '');
+    if (!fStr && pStr.includes('(') && pStr.includes(')')) {
+      fStr = pStr.split('(').pop().split(')')[0].trim();
+    }
+    let fCanon = 'FORM';
+    if (/gstr[-_ ]*1|iff/i.test(fStr)) fCanon = 'GSTR1';
+    else if (/gstr[-_ ]*3b/i.test(fStr)) fCanon = 'GSTR3B';
+    else if (/cmp[-_ ]*08/i.test(fStr)) fCanon = 'CMP08';
+    else if (/gstr[-_ ]*4/i.test(fStr)) fCanon = 'GSTR4';
+    else if (/gstr[-_ ]*9/i.test(fStr)) fCanon = 'GSTR9';
+    else {
+      const mItr = fStr.match(/itr[-_ ]*([1-7])/i);
+      if (mItr) fCanon = 'ITR' + mItr[1];
+      else fCanon = fStr.replace(/[^A-Z0-9]/gi, '').toUpperCase() || 'FORM';
+    }
+
+    // Canonical period: clean trailing text, status lines, due dates, newlines
+    const rawPerStr = String(periodLabel || '').trim();
+    const perClean = rawPerStr.split(/[\r\n]|(?:\b(?:Due date|Option|Filed|Pending|NA)\b)/i)[0].trim();
+
+    const mMon = perClean.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/i);
+    const mQtr = perClean.match(/\b(Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar|Q[1-4])\b/i);
+    const mYr = rawPerStr.match(/\b(20\d{2})\b/);
+
+    let perCanon = 'CURRENT';
+    if (mQtr && mYr) {
+      perCanon = mQtr[1].replace(/[^A-Z0-9]+/gi, '_').toUpperCase() + '_' + mYr[1];
+    } else if (mMon && mYr) {
+      perCanon = mMon[1].slice(0, 3).toUpperCase() + '_' + mYr[1];
+    } else if (mMon) {
+      perCanon = mMon[1].slice(0, 3).toUpperCase();
+    } else {
+      perCanon = perClean.replace(/[^A-Z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toUpperCase() || 'CURRENT';
+    }
+
+    return `${pCanon}:${idCanon}:${fCanon}:${perCanon}`;
+  }
+
   // ─── Capture Emit ────────────────────────────────────────────────────────────
   // Formats full filing payload and sends directly to background native host pipeline
   function _emitCapture(capture, protocolName, crosshairId) {
@@ -899,8 +1056,15 @@
     const arn = capture.arn || "N/A";
     const period = capture.period_label || SDC.session.data.ay || "";
     const filingType = capture.filing_type || SDC.session.data.form || "ITR";
-    const status = capture.status || "Submitted";
+    const status = capture.status || "submitted";
     const timestamp = new Date().toISOString();
+
+    const datasetKey = computeDatasetKey(
+      portalName,
+      capture.gstin || pan || "",
+      filingType,
+      period
+    );
 
     const detail = {
       type: "filing_result",
@@ -930,6 +1094,7 @@
       dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
       confirmation_message: capture.confirmation_message || "",
       scraped_data: capture.scraped_data || null,
+      dataset_key: datasetKey,
       raw_payload: {
         source: "Sera_SDC",
         session_id: SDC.session.data.session_id || "",
@@ -948,24 +1113,48 @@
         status: status,
         url: window.location.href,
         timestamp: timestamp,
+        dataset_key: datasetKey,
         session_timeline: SDC.session.data.timeline || [],
         dom_breadcrumbs: capture.dom_breadcrumbs || SDC.utils.getBreadcrumbs(),
         confirmation_message: capture.confirmation_message || ""
       }
     };
 
-    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory.`);
+    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory. Key: ${datasetKey}`);
     // ─── Assembler Buffering ───
     SDC.session.data.assembler_captures = SDC.session.data.assembler_captures || [];
-    SDC.session.data.assembler_captures.push(detail);
-    // Note: Do not emit Dual here. The assembler will flush this at session end.
+    // GST can revisit the same form for a status update, or move to a new
+    // filing period during one login session. Keep one dataset per
+    // GSTIN + form + period: same-period revisits update status; new periods
+    // remain separate datasets inside the atomic master payload.
+    const isGstCapture = /gst/i.test(portalName) || Boolean(detail.gstin);
+    if (isGstCapture) {
+      const existingIndex = SDC.session.data.assembler_captures.findIndex(item => item.dataset_key === datasetKey);
+      if (existingIndex >= 0) {
+        const previous = SDC.session.data.assembler_captures[existingIndex];
+        SDC.session.data.assembler_captures[existingIndex] = {
+          ...previous,
+          ...detail,
+          first_captured_at: previous.first_captured_at || previous.timestamp,
+          updated_at: timestamp
+        };
+      } else {
+        detail.first_captured_at = timestamp;
+        SDC.session.data.assembler_captures.push(detail);
+      }
+    } else {
+      SDC.session.data.assembler_captures.push(detail);
+    }
     
+    // Immediately emit live capture so each browsed month registers in real time
+    _emitDual(detail);
+
     // Save the new buffer state to chrome.storage.local immediately so it survives page unloads/refreshes
     SDC.session.save().catch(e => console.warn('⚡ Sera SDC: Failed to save capture buffer:', e));
 
     // ─── Trigger In-Browser Toast Notification ────────────────────────────────
     try {
-      if (window.SDCToast) {
+      if (window.SDCToast && !capture.silent && !capture.skip_toast) {
         const currentUrlKey = window.location.href.split('?')[0].replace(/\/+$/, '').toLowerCase();
         const historyNodes = SDC.session.data.timeline || [];
         const matchingPriorVisits = historyNodes.filter(node => (node.url || '').split('?')[0].replace(/\/+$/, '').toLowerCase() === currentUrlKey);
@@ -1011,8 +1200,96 @@
     }
   }
 
+  // ─── Durable final-payload outbox ───────────────────────────────────────
+  // Keep the immutable assembler result until the desktop acknowledges it.
+  // This survives logout navigation, page unloads, and MV3 worker restarts.
+  const PENDING_FLUSH_KEY = '__SERA_SDC_PENDING_FLUSH__';
+  let _pendingFlushInFlight = false;
+
+  async function _buildCompressedPayload(payload) {
+    if (typeof CompressionStream === 'undefined' || typeof TextEncoder === 'undefined') return null;
+    try {
+      const json = JSON.stringify(payload);
+      const input = new TextEncoder().encode(json);
+      const stream = new Blob([input]).stream().pipeThrough(new CompressionStream('gzip'));
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < compressed.length; i += chunkSize) {
+        binary += String.fromCharCode(...compressed.subarray(i, i + chunkSize));
+      }
+      return {
+        type: 'filing_result_compressed',
+        schema_version: '2.0',
+        encoding: 'gzip+base64',
+        original_type: 'filing_result',
+        session_id: payload.session_id || '',
+        original_size: input.byteLength,
+        compressed_size: compressed.byteLength,
+        payload: btoa(binary)
+      };
+    } catch (err) {
+      console.warn('⚡ Sera SDC: Compression failed; using uncompressed payload.', err);
+      return null;
+    }
+  }
+
+  function _clearPendingFlush(sessionId) {
+    return new Promise(resolve => {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get([PENDING_FLUSH_KEY], result => {
+          const pending = result && result[PENDING_FLUSH_KEY];
+          if (!pending || pending.session_id !== sessionId) { resolve(); return; }
+          chrome.storage.local.remove([PENDING_FLUSH_KEY], resolve);
+        });
+      } else resolve();
+    });
+  }
+
+  function _sendReliableFlush(payload) {
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (ok) _clearPendingFlush(payload.session_id).finally(() => resolve(true));
+        else resolve(false);
+      };
+
+      // Use one background-worker hop for the final flush. The worker owns
+      // delivery after the page begins unloading on logout.
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        try {
+          chrome.runtime.sendMessage(payload, response => {
+            if (!chrome.runtime.lastError && response && response.status === 'accepted') finish(true);
+            else finish(false);
+          });
+          setTimeout(() => finish(false), 2500);
+          return;
+        } catch (_) {}
+      }
+      finish(false);
+    });
+  }
+
+  function _queueReliableFlush(payload) {
+    return new Promise(resolve => {
+      const dispatch = () => {
+        if (_pendingFlushInFlight) { resolve(false); return; }
+        _pendingFlushInFlight = true;
+        _sendReliableFlush(payload).then(ok => {
+          _pendingFlushInFlight = false;
+          resolve(ok);
+        });
+      };
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.set({ [PENDING_FLUSH_KEY]: payload }, dispatch);
+      } else dispatch();
+    });
+  }
+
   // ─── Dispatch Pipeline ──────────────────────────────────────────────────
-  function _emitDual(payload) {
+  function _emitDual(payload, preferRuntime = false) {
     // 1. Dispatch events for page-level test harness & filing detector listeners
     try {
       window.dispatchEvent(new CustomEvent('SeraSUDRCapture', { detail: payload }));
@@ -1027,6 +1304,7 @@
           chrome.runtime.sendMessage(p, () => {
             if (chrome.runtime && chrome.runtime.lastError) {
               console.warn('⚡ Sera SDC: Background worker fallback failed.', chrome.runtime.lastError);
+              _directHttpDispatch(p);
             } else {
               console.log('⚡ Sera SDC: Successfully delivered payload via Chrome Runtime fallback.');
             }
@@ -1034,8 +1312,37 @@
         }
       } catch (err) {
         console.warn('⚡ Sera SDC: sendMessage threw error during fallback.', err);
+        _directHttpDispatch(p);
       }
     };
+
+    const _directHttpDispatch = (p, callback) => {
+      if (typeof fetch !== 'function') return;
+      fetch('http://127.0.0.1:49152', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(p),
+        mode: 'cors',
+        credentials: 'omit',
+        keepalive: true
+      }).then(response => {
+        if (!response.ok) {
+          console.warn(`⚡ Sera SDC: Direct HTTP fallback failed with status ${response.status}.`);
+          if (callback) callback(false);
+        } else {
+          console.log('⚡ Sera SDC: Successfully delivered payload via direct HTTP fallback.');
+          if (callback) callback(true);
+        }
+      }).catch(err => {
+        console.warn('⚡ Sera SDC: Direct HTTP fallback error.', err);
+        if (callback) callback(false);
+      });
+    };
+
+    if (preferRuntime && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      _chromeRuntimeFallback(payload);
+      return;
+    }
 
     // 2. Direct HTTP Dispatch (Primary) - Fast, stateless, reliable
     if (typeof fetch === 'function') {

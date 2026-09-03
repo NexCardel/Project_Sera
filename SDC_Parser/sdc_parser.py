@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import pandas as pd
 from datetime import datetime
 
@@ -82,6 +83,8 @@ def evaluate_status(raw_status):
     raw = str(raw_status).lower().strip()
     if not raw or raw == "null" or raw == "none":
         return "Not submitted"
+    if "not filed" in raw or "unfiled" in raw or "to be filed" in raw:
+        return "Not submitted"
     if "filed" in raw or "portal confirmed" in raw:
         return "Submitted & E-verified (green)"
     elif "pending" in raw:
@@ -92,14 +95,72 @@ def evaluate_status(raw_status):
         return "Option Expired (NA)"
     elif "landing" in raw or "form selected" in raw or "draft" in raw or "profile" in raw or raw == "na":
         return "Not submitted"
+    if re.search(r'^(?:fy|due\s*date|status|na|-+)[\s\-:]*$', raw, re.I):
+        return "Not submitted"
     return "Not submitted"
+
+SKELETON_NAME_REGEX = re.compile(
+    r'^(?:indicates\s*mandatory\s*fields|mandatory\s*fields|goods\s+and\s+services\s+tax|gst\s+common\s+portal|gst\s+portal|status|due\s*date|fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|legal\s*name|trade\s*name|gstin|pan|na|-+)[\s\-:*]*$',
+    re.I
+)
+
+SKELETON_PERIOD_REGEX = re.compile(
+    r'^(?:due\s*date|status|fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|na|-+)[\s\-:]*$',
+    re.I
+)
+
+def normalize_form_type(raw_form: str) -> str:
+    if not raw_form:
+        return ""
+    f = str(raw_form).strip()
+    if re.search(r'\b(GSTR[-_ ]*1A)\b', f, re.I):
+        return "GSTR-1A"
+    if re.search(r'\b(GSTR[-_ ]*1(?:\s*/\s*IFF)?|IFF)\b', f, re.I):
+        return "GSTR-1/IFF"
+    if re.search(r'\b(GSTR[-_ ]*2A)\b', f, re.I):
+        return "GSTR-2A"
+    if re.search(r'\b(GSTR[-_ ]*2B)\b', f, re.I):
+        return "GSTR-2B"
+    if re.search(r'\b(GSTR[-_ ]*3B[Q]?)\b', f, re.I):
+        return "GSTR-3B"
+    if re.search(r'\b(CMP[-_ ]*08)\b', f, re.I):
+        return "CMP-08"
+    if re.search(r'\b(GSTR[-_ ]*4)\b', f, re.I):
+        return "GSTR-4"
+    if re.search(r'\b(GSTR[-_ ]*9C)\b', f, re.I):
+        return "GSTR-9C"
+    if re.search(r'\b(GSTR[-_ ]*9)\b', f, re.I):
+        return "GSTR-9"
+    if re.search(r'\b(GSTR[-_ ]*7)\b', f, re.I):
+        return "GSTR-7"
+    if re.search(r'\b(GSTR[-_ ]*8)\b', f, re.I):
+        return "GSTR-8"
+    if re.search(r'\b(ITR[-_ ]*[1-7])\b', f, re.I):
+        m = re.search(r'\b(ITR[-_ ]*[1-7])\b', f, re.I)
+        return m.group(1).upper().replace(" ", "-")
+    return f
+
+def normalize_period(raw_period: str) -> str:
+    if not raw_period:
+        return "Unknown Period"
+    p = str(raw_period).strip()
+    p = re.sub(r'\s+', ' ', p)
+    # Reject skeleton placeholders
+    if SKELETON_PERIOD_REGEX.search(p):
+        return "Unknown Period"
+    # Split before status keywords if multi-line text was captured from table cells
+    p = re.split(r'\s+(?:Filed|Not Filed|To be Filed|Pending|Option expired|Due date)\b', p, flags=re.I)[0].strip()
+    if not p or SKELETON_PERIOD_REGEX.search(p):
+        return "Unknown Period"
+    return p
+
 def process_timelines():
     print("Connecting to rawPayload.db to extract SDC Timelines...")
     conn = get_db_connection()
     cur = conn.cursor()
     
     try:
-        # We order by start_time ASC so that newer sessions overwrite values for the same (PAN, Filing Period)
+        # We order by start_time ASC so that newer sessions overwrite values for the same (PAN, GSTIN, Form, Filing Period)
         cur.execute("""
             SELECT session_id, pan, client_name, start_time, end_time, timeline_json
             FROM sdc_session_timelines
@@ -130,71 +191,211 @@ def process_timelines():
             
         start_url = timeline[0].get('url', '')
         start_time = timeline[0].get('timestamp', '')
-        
         end_url = timeline[-1].get('url', '')
         end_time = timeline[-1].get('timestamp', '')
+        site_history = f"Start: {start_url} ({start_time})\nEnd: {end_url} ({end_time})\nSteps: {len(timeline)}"
         
+        # 1. Resolve session-wide identity (PAN, GSTIN, Names)
         session_pan = row['pan'] or ""
         session_full_name = ""
         session_temp_name = ""
-        session_form = ""
-        session_ay = ""
-        session_status_raw = ""
-        session_due_date = ""
+        session_gstin = ""
         
         for step in timeline:
-            cap = step.get('captured_data')
-            if cap:
-                if cap.get('pan'):
-                    session_pan = cap.get('pan')
-                if cap.get('client_name') and cap.get('client_name') != cap.get('client_temp_name'):
-                    session_full_name = cap.get('client_name')
-                if cap.get('client_temp_name'):
-                    session_temp_name = cap.get('client_temp_name')
-                if cap.get('form'):
-                    session_form = cap.get('form')
-                if cap.get('ay'):
-                    session_ay = cap.get('ay')
-                if cap.get('status'):
-                    session_status_raw = cap.get('status')
-                if cap.get('due_date'):
-                    session_due_date = cap.get('due_date')
-                    
-        final_name = session_full_name if session_full_name else session_temp_name
-        
+            cap = step.get('captured_data') or {}
+            if cap.get('pan'):
+                session_pan = cap.get('pan')
+            if cap.get('gstin'):
+                session_gstin = cap.get('gstin')
+            c_name = cap.get('client_name') or ''
+            if c_name and not SKELETON_NAME_REGEX.search(c_name):
+                if c_name != cap.get('client_temp_name'):
+                    session_full_name = c_name
+            t_name = cap.get('client_temp_name') or ''
+            if t_name and not SKELETON_NAME_REGEX.search(t_name):
+                session_temp_name = t_name
+                
+        row_cname = row['client_name'] or ""
+        if SKELETON_NAME_REGEX.search(row_cname):
+            row_cname = ""
+        final_name = session_full_name if session_full_name else (session_temp_name or row_cname)
+        if SKELETON_NAME_REGEX.search(final_name):
+            final_name = ""
+        if not session_pan and session_gstin and len(session_gstin) >= 12:
+            session_pan = session_gstin[2:12]
+            
         if not session_pan:
             continue
+
+        # 2. Extract distinct filings from the timeline
+        # Group steps by (normalized_form, normalized_period) so multi-form/period sessions retain all entries
+        filings_in_session = {}
+        for step in timeline:
+            cap = step.get('captured_data')
+            if not cap:
+                continue
+            raw_form = (cap.get('form') or cap.get('filing_type') or "").strip()
+            norm_form = normalize_form_type(raw_form)
+            # Skip non-filing navigation steps and generic dashboard indicators
+            if not norm_form or norm_form in ["Profile / Identity", "ITR (Landing / e-File)", "GST Return Filing", "Filing Dashboard"]:
+                continue
+            if "returns calendar" in norm_form.lower():
+                continue
+
+            raw_period = (cap.get('ay') or cap.get('period_label') or cap.get('period') or "").strip()
+            norm_period = normalize_period(raw_period)
+            status_raw = cap.get('status') or ""
+            due_date = cap.get('due_date') or ""
+            step_gstin = cap.get('gstin') or session_gstin
+            step_time = step.get('timestamp') or end_time or start_time
             
-        filing_period = session_ay if session_ay else "Unknown Period"
-        
-        key = (session_pan, filing_period)
-        submit_status = evaluate_status(session_status_raw)
-        site_history = f"Start: {start_url} ({start_time})\nEnd: {end_url} ({end_time})\nSteps: {len(timeline)}"
-        
-        if key not in ltt_dict:
-            ltt_dict[key] = {
-                "PAN": session_pan,
-                "Client Name": final_name,
-                "Filing Period": filing_period,
-                "Filing Type": session_form,
-                "Submit Status": submit_status,
-                "Due Date": session_due_date,
-                "Session ID": session_id,
-                "Site History": site_history,
-                "Last Updated": end_time if end_time else start_time
-            }
-        else:
-            existing = ltt_dict[key]
-            existing["Filing Type"] = session_form if session_form else existing["Filing Type"]
-            existing["Submit Status"] = submit_status if session_status_raw else existing["Submit Status"]
-            if session_due_date:
-                existing["Due Date"] = session_due_date
-            existing["Session ID"] = session_id
-            existing["Site History"] = site_history
-            existing["Last Updated"] = end_time if end_time else start_time
+            sub_key = (norm_form, norm_period)
+            if sub_key not in filings_in_session:
+                filings_in_session[sub_key] = {
+                    "form": norm_form,
+                    "period": norm_period,
+                    "status_raw": status_raw,
+                    "due_date": due_date,
+                    "gstin": step_gstin,
+                    "time": step_time
+                }
+            else:
+                existing_f = filings_in_session[sub_key]
+                if status_raw:
+                    existing_f["status_raw"] = status_raw
+                if due_date:
+                    existing_f["due_date"] = due_date
+                if step_gstin:
+                    existing_f["gstin"] = step_gstin
+                existing_f["time"] = step_time
+
+        # Prune generic placeholder periods if a specific period exists for the same form
+        forms_with_specific_period = {
+            f_type for (f_type, p_label) in filings_in_session
+            if p_label not in ("", "Current Period", "Unknown Period")
+        }
+        for (f_type, p_label) in list(filings_in_session.keys()):
+            if p_label in ("Current Period", "Unknown Period") and f_type in forms_with_specific_period:
+                del filings_in_session[(f_type, p_label)]
+            elif p_label in ("", "Current Period", "Unknown Period"):
+                f_entry = filings_in_session[(f_type, p_label)]
+                if evaluate_status(f_entry.get("status_raw")) == "Not submitted" and not f_entry.get("due_date"):
+                    del filings_in_session[(f_type, p_label)]
+
+        # If no actual return filings occurred in this session, do not generate a phantom record
+        if not filings_in_session:
+            continue
+
+        for (f_type, p_label), f_data in filings_in_session.items():
+            filing_period = f_data["period"] if f_data["period"] else "Unknown Period"
+            filing_type = f_data["form"]
+            item_gstin = f_data["gstin"] or session_gstin
+            submit_status = evaluate_status(f_data["status_raw"])
             
-            if session_full_name and (not existing["Client Name"] or existing["Client Name"] == session_temp_name):
-                existing["Client Name"] = session_full_name
+            key = (session_pan, item_gstin, filing_type, filing_period)
+            
+            if key not in ltt_dict:
+                ltt_dict[key] = {
+                    "PAN": session_pan,
+                    "GSTIN": item_gstin,
+                    "Client Name": final_name,
+                    "Filing Period": filing_period,
+                    "Filing Type": filing_type,
+                    "Submit Status": submit_status,
+                    "Due Date": f_data["due_date"],
+                    "Session ID": session_id,
+                    "Site History": site_history,
+                    "Last Updated": f_data["time"]
+                }
+            else:
+                existing = ltt_dict[key]
+                if f_data["status_raw"]:
+                    existing["Submit Status"] = submit_status
+                if f_data["due_date"]:
+                    existing["Due Date"] = f_data["due_date"]
+                existing["Session ID"] = session_id
+                existing["Site History"] = site_history
+                existing["Last Updated"] = f_data["time"]
+                if session_full_name and (not existing["Client Name"] or existing["Client Name"] == session_temp_name):
+                    existing["Client Name"] = session_full_name
+
+    # 3. Merge entries from tracker_dump table so live and individually captured filings are always included
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, created_at
+            FROM tracker_dump
+            ORDER BY id ASC
+        """)
+        td_rows = cur.fetchall()
+        for r in td_rows:
+            raw_json = r['raw_payload_json'] or '{}'
+            try:
+                p_data = json.loads(raw_json)
+            except Exception:
+                p_data = {}
+            raw_p = p_data.get('raw_payload') or {}
+            
+            # Expand the complete session collection so multi-form sessions
+            # (e.g. GSTR-1 + GSTR-3B) are all represented in LTT, even when
+            # tracker_dump selectively materializes only submitted/last-viewed
+            # candidates. Prefer the explicit LTT collection when present;
+            # assembler_captures remains the backward-compatible fallback.
+            captures_to_process = raw_p.get('ltt_captures') or raw_p.get('assembler_captures')
+            if not captures_to_process or not isinstance(captures_to_process, list):
+                captures_to_process = [p_data]
+
+            for item in captures_to_process:
+                if not isinstance(item, dict):
+                    continue
+                t_pan = (item.get('pan') or p_data.get('pan') or raw_p.get('pan') or '').strip().upper()
+                t_gstin = (item.get('gstin') or p_data.get('gstin') or raw_p.get('gstin') or '').strip().upper()
+                if not t_pan and t_gstin and len(t_gstin) >= 12:
+                    t_pan = t_gstin[2:12]
+                if not t_pan:
+                    continue
+
+                t_name = item.get('client_name') or item.get('name') or p_data.get('client_name') or raw_p.get('client_name') or ''
+                if SKELETON_NAME_REGEX.search(t_name):
+                    t_name = ""
+                raw_period_val = item.get('period_label') or item.get('period') or p_data.get('period_label') or r['period_label'] or ''
+                t_period = normalize_period(raw_period_val)
+                t_form = normalize_form_type(item.get('filing_type') or item.get('form') or p_data.get('filing_type') or r['portal'] or '')
+                if not t_form or t_form in ["Profile / Identity", "ITR (Landing / e-File)", "GST Return Filing", "Filing Dashboard"]:
+                    continue
+                if "returns calendar" in t_form.lower():
+                    continue
+                t_status = evaluate_status(item.get('status') or r['status'] or p_data.get('status') or '')
+                if t_period in ("Current Period", "Unknown Period", "Due Date -", "Status -", "FY -") and t_status in ("Not submitted", "Initiated", "FY -"):
+                    continue
+                t_due = item.get('due_date') or p_data.get('due_date') or ''
+                t_key = (t_pan, t_gstin, t_form, t_period)
+
+                if t_key not in ltt_dict:
+                    ltt_dict[t_key] = {
+                        "PAN": t_pan,
+                        "GSTIN": t_gstin,
+                        "Client Name": t_name,
+                        "Filing Period": t_period if t_period else "Unknown Period",
+                        "Filing Type": t_form,
+                        "Submit Status": t_status,
+                        "Due Date": t_due,
+                        "Session ID": item.get('session_id') or p_data.get('session_id') or f"TD-{r['id']}",
+                        "Site History": f"Captured via {item.get('capture_method') or r['capture_method']}",
+                        "Last Updated": item.get('last_viewed_at') or item.get('updated_at') or r['created_at']
+                    }
+                else:
+                    existing = ltt_dict[t_key]
+                    if t_status and t_status != "Not submitted":
+                        existing["Submit Status"] = t_status
+                    if t_due:
+                        existing["Due Date"] = t_due
+                    if t_name and (not existing["Client Name"] or SKELETON_NAME_REGEX.search(existing["Client Name"])):
+                        existing["Client Name"] = t_name
+        conn.close()
+    except Exception as e:
+        print(f"Failed to merge tracker_dump into LTT: {e}")
 
     return list(ltt_dict.values())
 
@@ -206,7 +407,7 @@ def generate_ltt_excel():
         
     df = pd.DataFrame(data)
     
-    cols = ["PAN", "Client Name", "Filing Period", "Filing Type", "Submit Status", "Due Date", "Session ID", "Last Updated", "Site History"]
+    cols = ["PAN", "GSTIN", "Client Name", "Filing Period", "Filing Type", "Submit Status", "Due Date", "Session ID", "Last Updated", "Site History"]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
@@ -216,38 +417,33 @@ def generate_ltt_excel():
     df = df.sort_values(by=["Sort Time"], ascending=False) # Newest first
     df = df.drop(columns=['Sort Time'])
     
-    
     live_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
     os.makedirs(live_dir, exist_ok=True)
     output_file = os.path.join(live_dir, "Live_Tracking_Table_LTT.xlsx")
     
+    def format_worksheet_columns(ws):
+        ws.column_dimensions['A'].width = 15  # PAN
+        ws.column_dimensions['B'].width = 18  # GSTIN
+        ws.column_dimensions['C'].width = 30  # Client Name
+        ws.column_dimensions['D'].width = 15  # Filing Period
+        ws.column_dimensions['E'].width = 15  # Filing Type
+        ws.column_dimensions['F'].width = 38  # Submit Status
+        ws.column_dimensions['G'].width = 20  # Due Date
+        ws.column_dimensions['H'].width = 25  # Session ID
+        ws.column_dimensions['I'].width = 25  # Last Updated
+        ws.column_dimensions['J'].width = 80  # Site History
+
     target_out = output_file
     try:
         writer = pd.ExcelWriter(target_out, engine='openpyxl')
         df.to_excel(writer, index=False, sheet_name='Live Tracking Table (LTT)')
-        worksheet = writer.sheets['Live Tracking Table (LTT)']
-        worksheet.column_dimensions['A'].width = 15 
-        worksheet.column_dimensions['B'].width = 30 
-        worksheet.column_dimensions['C'].width = 15 
-        worksheet.column_dimensions['D'].width = 15 
-        worksheet.column_dimensions['E'].width = 40 
-        worksheet.column_dimensions['F'].width = 25 
-        worksheet.column_dimensions['G'].width = 25 
-        worksheet.column_dimensions['H'].width = 80 
+        format_worksheet_columns(writer.sheets['Live Tracking Table (LTT)'])
         writer.close()
     except PermissionError:
         target_out = os.path.join(live_dir, f"Live_Tracking_Table_LTT_{datetime.now().strftime('%H%M%S')}.xlsx")
         writer = pd.ExcelWriter(target_out, engine='openpyxl')
         df.to_excel(writer, index=False, sheet_name='Live Tracking Table (LTT)')
-        worksheet = writer.sheets['Live Tracking Table (LTT)']
-        worksheet.column_dimensions['A'].width = 15 
-        worksheet.column_dimensions['B'].width = 30 
-        worksheet.column_dimensions['C'].width = 15 
-        worksheet.column_dimensions['D'].width = 15 
-        worksheet.column_dimensions['E'].width = 40 
-        worksheet.column_dimensions['F'].width = 25 
-        worksheet.column_dimensions['G'].width = 25 
-        worksheet.column_dimensions['H'].width = 80 
+        format_worksheet_columns(writer.sheets['Live Tracking Table (LTT)'])
         writer.close()
 
     print(f"Success! Generated {target_out} with {len(data)} records.")
