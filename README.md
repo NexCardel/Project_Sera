@@ -14,7 +14,7 @@ This README is the quick orientation page. The detailed implementation and archi
 - [Build & Release Guide](docs/build-release.md)
 - [Operations & LAN Synchronization](docs/operations-sync.md)
 
-For the visual design system, sidebar/navigation states, client-detail layout, and screen-by-screen styling rules, see [Sera_UI.md](Sera_UI.md).
+For the visual design system, sidebar/navigation states, client-detail layout, and screen-by-screen styling rules, see [docs/Sera_UI.md](docs/Sera_UI.md).
 
 ---
 
