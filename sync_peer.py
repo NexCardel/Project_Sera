@@ -125,6 +125,7 @@ class SyncPeerService:
         on_sync_received: Optional[Callable] = None,
         on_live_sync_received: Optional[Callable] = None,
         on_peer_logs_received: Optional[Callable] = None,
+        on_tracker_dump_received: Optional[Callable] = None,
         on_activity: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
     ):
@@ -140,6 +141,7 @@ class SyncPeerService:
         self.on_sync_received = on_sync_received
         self.on_live_sync_received = on_live_sync_received
         self.on_peer_logs_received = on_peer_logs_received
+        self.on_tracker_dump_received = on_tracker_dump_received
         self.on_activity = on_activity
         self.on_error = on_error
 
@@ -493,33 +495,8 @@ class SyncPeerService:
             local_sync_rev = local_metrics.get("sync_revision", 0)
             local_latest_ts = local_metrics.get("latest_timestamp", "")
 
-            # ---------------- PROTOCOL RULE 1: Local inv_frames Mode ----------------
-            if self.inv_frames:
-                reject_reason = f"INV_FRAMES_ACTIVE: Local node ({self.host_name}) is in Inv-Frames mode and rejects all incoming data."
-                print(f"[Inv-Frames] Rejected {action} from {sender_host}: {reject_reason}")
-                self.log_activity("INV_FRAMES", f"Rejected {action} from {sender_host}", f"Local Inv-Frames is ON | Sender Rev: {incoming_sync_rev}, Local Rev: {local_sync_rev}")
-                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
-                return
-
-            # ---------------- PROTOCOL RULE 2: Multiple inv_frames Nodes (LAN Freeze) ----------------
-            if sync_state["status"] == "LAN_SYNC_FROZEN_MULTI_INV":
-                inv_nodes_str = ", ".join(sync_state["active_inv_frames_nodes"])
-                reject_reason = f"LAN_SYNC_FROZEN: Multiple nodes ({inv_nodes_str}) have Inv-Frames active. All LAN sync is paused to prevent corruption."
-                print(f"[LAN Sync Frozen] Blocked sync from {sender_host}: {reject_reason}")
-                self.log_activity("GUARD", f"Blocked sync from {sender_host}", f"LAN Sync Frozen (Multiple Inv-Frames nodes: {inv_nodes_str}) | Sender Rev: {incoming_sync_rev}")
-                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
-                return
-
-            # ---------------- PROTOCOL RULE 3: Single inv_frames Authority Node ----------------
-            if sync_state["status"] == "INV_FRAMES_FOLLOWER":
-                authority = sync_state["authority_host"]
-                if sender_host != authority and not sender_inv_frames:
-                    reject_reason = f"INV_FRAMES_AUTHORITY_ACTIVE: Node {authority} is the active Inv-Frames authority. Sync between normal nodes is locked."
-                    print(f"[Inv-Frames Lock] Blocked non-authority push from {sender_host}: {reject_reason}")
-                    self.log_activity("INV_FRAMES", f"Blocked push from {sender_host}", f"Waiting for Authority {authority} | Sender Rev: {incoming_sync_rev}")
-                    _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
-                    return
-
+            # ---------------- TELEMETRY ACTIONS (Audit Logs & Tracker Dumps) ----------------
+            # Telemetry is append-only and idempotent; it is always accepted and bypasses sovereign locks.
             if action == "push_audit_log":
                 logs = header.get("logs", [])
                 live_dir = os.path.dirname(self.db_path)
@@ -538,15 +515,18 @@ class SyncPeerService:
             if action == "push_tracker_dump":
                 dumps = header.get("dumps", [])
                 try:
-                    from database import SeraDatabase
-                    # self.db_path is master.db, so db is fine
-                    db = SeraDatabase(self.db_path)
-                    db.store_peer_tracker_dumps(dumps)
+                    if self.db and hasattr(self.db, "store_peer_tracker_dumps"):
+                        self.db.store_peer_tracker_dumps(dumps)
+                    else:
+                        from database import SeraDatabase
+                        db = SeraDatabase(self.db_path)
+                        db.store_peer_tracker_dumps(dumps)
                     self.log_activity("DUMP", f"Received {len(dumps)} tracker dump(s) from {sender_host}", f"Local Rev: {local_sync_rev}")
                 except Exception as ex:
                     print(f"[SYNC] Error storing peer tracker dumps from {sender_host}: {ex}")
 
                 _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
+                self._safe_call(self.on_tracker_dump_received, sender_host, len(dumps))
                 return
 
             if action == "request_database_pull":
@@ -563,6 +543,34 @@ class SyncPeerService:
             if action != "push_database":
                 conn.close()
                 return
+
+            # ---------------- PROTOCOL RULE 1: Local inv_frames Mode ----------------
+            # Inv-Frames mode strictly protects master.db from incoming database pushes
+            if self.inv_frames:
+                reject_reason = f"INV_FRAMES_ACTIVE: Local node ({self.host_name}) is in Inv-Frames mode and rejects incoming database push."
+                print(f"[Inv-Frames] Rejected database push from {sender_host}: {reject_reason}")
+                self.log_activity("INV_FRAMES", f"Rejected push from {sender_host}", f"Local Inv-Frames is ON | Sender Rev: {incoming_sync_rev}, Local Rev: {local_sync_rev}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                return
+
+            # ---------------- PROTOCOL RULE 2: Multiple inv_frames Nodes (LAN Freeze) ----------------
+            if sync_state["status"] == "LAN_SYNC_FROZEN_MULTI_INV":
+                inv_nodes_str = ", ".join(sync_state["active_inv_frames_nodes"])
+                reject_reason = f"LAN_SYNC_FROZEN: Multiple nodes ({inv_nodes_str}) have Inv-Frames active. All database sync is paused to prevent corruption."
+                print(f"[LAN Sync Frozen] Blocked database sync from {sender_host}: {reject_reason}")
+                self.log_activity("GUARD", f"Blocked sync from {sender_host}", f"LAN Sync Frozen (Multiple Inv-Frames nodes: {inv_nodes_str}) | Sender Rev: {incoming_sync_rev}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                return
+
+            # ---------------- PROTOCOL RULE 3: Single inv_frames Authority Node ----------------
+            if sync_state["status"] == "INV_FRAMES_FOLLOWER":
+                authority = sync_state["authority_host"]
+                if sender_host != authority and not sender_inv_frames:
+                    reject_reason = f"INV_FRAMES_AUTHORITY_ACTIVE: Node {authority} is the active Inv-Frames authority. Database sync between normal nodes is locked."
+                    print(f"[Inv-Frames Lock] Blocked non-authority push from {sender_host}: {reject_reason}")
+                    self.log_activity("INV_FRAMES", f"Blocked push from {sender_host}", f"Waiting for Authority {authority} | Sender Rev: {incoming_sync_rev}")
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
+                    return
 
             db_size = int(header["db_size"])
             salt_size = int(header["salt_size"])
@@ -608,12 +616,12 @@ class SyncPeerService:
             db_bytes = _recv_exact(conn, db_size)
             # Receive salt bytes
             salt_bytes = _recv_exact(conn, salt_size)
-            # Receive raw payload db bytes if present
-            raw_db_bytes = b""
+            # Drain raw payload db bytes if present from legacy sender to preserve TCP framing,
+            # but NEVER overwrite local rawPayload.db file (tracker dumps sync row-by-row)
             if raw_db_size > 0:
-                raw_db_bytes = _recv_exact(conn, raw_db_size)
+                _recv_exact(conn, raw_db_size)
 
-            # Create safety backup of current live files
+            # Create safety backup of current live master.db and sera.salt
             live_dir = os.path.dirname(self.db_path)
             now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
@@ -624,11 +632,6 @@ class SyncPeerService:
             if os.path.exists(self.salt_path):
                 backup_salt = os.path.join(live_dir, f"sera.salt.pre-sync-{now_str}")
                 shutil.copy2(self.salt_path, backup_salt)
-
-            raw_db_path = os.path.join(live_dir, "rawPayload.db")
-            if os.path.exists(raw_db_path):
-                backup_raw = os.path.join(live_dir, f"rawPayload.db.pre-sync-{now_str}.db")
-                shutil.copy2(raw_db_path, backup_raw)
 
             # Write files with fallback if Windows holds a temporary file lock
             def safe_write_file(target_path, content_bytes):
@@ -648,21 +651,13 @@ class SyncPeerService:
 
             safe_write_file(self.db_path, db_bytes)
             safe_write_file(self.salt_path, salt_bytes)
-            if raw_db_size > 0:
-                safe_write_file(raw_db_path, raw_db_bytes)
 
-            # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal)
+            # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal) for master.db
             for ext in ["-wal", "-shm", "-journal"]:
                 sidecar = self.db_path + ext
                 if os.path.exists(sidecar):
                     try:
                         os.remove(sidecar)
-                    except OSError:
-                        pass
-                raw_sidecar = raw_db_path + ext
-                if os.path.exists(raw_sidecar):
-                    try:
-                        os.remove(raw_sidecar)
                     except OSError:
                         pass
 
@@ -728,12 +723,6 @@ class SyncPeerService:
         with open(self.salt_path, "rb") as f:
             salt_bytes = f.read()
 
-        raw_db_path = os.path.join(os.path.dirname(self.db_path), "rawPayload.db")
-        raw_db_bytes = b""
-        if os.path.exists(raw_db_path):
-            with open(raw_db_path, "rb") as f:
-                raw_db_bytes = f.read()
-
         local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
         metrics = self._get_local_metrics()
         local_sync_rev = metrics.get("sync_revision", 0)
@@ -742,7 +731,7 @@ class SyncPeerService:
         # Connect to peer
         try:
             with socket.create_connection((peer_ip, peer_port), timeout=SOCK_TIMEOUT_SEC) as conn:
-                # Send header
+                # Send header (raw_db_size is always 0 because tracker dumps sync incrementally)
                 header = {
                     "action": "push_database",
                     "username": self.username,
@@ -750,7 +739,7 @@ class SyncPeerService:
                     "sync_port": self.sync_port,
                     "db_size": len(db_bytes),
                     "salt_size": len(salt_bytes),
-                    "raw_db_size": len(raw_db_bytes),
+                    "raw_db_size": 0,
                     "live_update": live_update,
                     "force_override": force_override,
                     "client_count": local_client_cnt,
@@ -788,8 +777,6 @@ class SyncPeerService:
                 # Send database + salt
                 conn.sendall(db_bytes)
                 conn.sendall(salt_bytes)
-                if len(raw_db_bytes) > 0:
-                    conn.sendall(raw_db_bytes)
 
                 # Wait for confirmation
                 result_raw = _recv_framed(conn)
@@ -853,6 +840,108 @@ class SyncPeerService:
         except Exception:
             pass
         return False
+
+    def broadcast_tracker_dumps(self, dumps: list[dict], peers: Optional[list[dict]] = None) -> int:
+        """
+        Broadcasts filing tracker dumps concurrently to all active LAN peers.
+        Returns the count of peers that successfully accepted and acknowledged the dumps.
+        """
+        if not dumps:
+            return 0
+        if peers is None:
+            peers = self.get_peers()
+        if not peers:
+            return 0
+
+        success_count = [0]
+        threads = []
+
+        def _send(peer):
+            ip = peer.get("ip")
+            port = int(peer.get("sync_port", SYNC_PORT))
+            host = peer.get("host", ip)
+            if not ip:
+                return
+            try:
+                with socket.create_connection((ip, port), timeout=SOCK_TIMEOUT_SEC) as conn:
+                    header = {
+                        "action": "push_tracker_dump",
+                        "username": self.username,
+                        "host": self.host_name,
+                        "dumps": dumps,
+                    }
+                    _send_framed(conn, json.dumps(header).encode("utf-8"))
+                    result_raw = _recv_framed(conn)
+                    if result_raw:
+                        result = json.loads(result_raw.decode("utf-8"))
+                        if result.get("status") == "ok":
+                            success_count[0] += 1
+            except Exception:
+                pass
+
+        for p in peers:
+            t = threading.Thread(target=_send, args=(p,), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=2.0)
+
+        if success_count[0] > 0:
+            self.log_activity("DUMP", f"Broadcasted {len(dumps)} tracker dump(s)", f"Synced to {success_count[0]}/{len(peers)} peer(s)")
+        return success_count[0]
+
+    def broadcast_audit_logs(self, logs: list[dict], peers: Optional[list[dict]] = None) -> int:
+        """
+        Broadcasts audit logs to the Sovereign Master node (if present) or to all active peers.
+        Returns the count of peers that successfully stored the logs.
+        """
+        if not logs:
+            return 0
+        if peers is None:
+            peers = self.get_peers()
+        if not peers:
+            return 0
+
+        # Prioritize sovereign authority nodes if one exists; otherwise broadcast to all peers
+        sovereign_peers = [p for p in peers if p.get("inv_frames")]
+        targets = sovereign_peers if sovereign_peers else peers
+
+        success_count = [0]
+        threads = []
+
+        def _send(peer):
+            ip = peer.get("ip")
+            port = int(peer.get("sync_port", SYNC_PORT))
+            host = peer.get("host", ip)
+            if not ip:
+                return
+            try:
+                with socket.create_connection((ip, port), timeout=SOCK_TIMEOUT_SEC) as conn:
+                    header = {
+                        "action": "push_audit_log",
+                        "username": self.username,
+                        "host": self.host_name,
+                        "logs": logs,
+                    }
+                    _send_framed(conn, json.dumps(header).encode("utf-8"))
+                    result_raw = _recv_framed(conn)
+                    if result_raw:
+                        result = json.loads(result_raw.decode("utf-8"))
+                        if result.get("status") == "ok":
+                            success_count[0] += 1
+            except Exception:
+                pass
+
+        for p in targets:
+            t = threading.Thread(target=_send, args=(p,), daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=2.0)
+
+        if success_count[0] > 0:
+            self.log_activity("SSAL", f"Pushed {len(logs)} audit log(s)", f"Synced to {success_count[0]}/{len(targets)} workstation(s)")
+        return success_count[0]
 
     def push_to_all(self, peers: Optional[list[dict]] = None) -> dict[str, str]:
         """

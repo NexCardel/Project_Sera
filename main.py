@@ -46,6 +46,7 @@ class SyncSignalBridge(QObject):
     sync_received_signal = Signal()
     live_sync_received_signal = Signal(str, str)
     peer_logs_received_signal = Signal(str)
+    tracker_dump_received_signal = Signal(str, int)
     sync_sent_signal = Signal(int, int)
     capture_processed_signal = Signal(dict, dict)
 
@@ -198,6 +199,7 @@ class SeraApp:
         self.sync_bridge.sync_received_signal.connect(self._lock_and_force_restart)
         self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
         self.sync_bridge.peer_logs_received_signal.connect(self._handle_peer_logs_received_main_thread)
+        self.sync_bridge.tracker_dump_received_signal.connect(self._handle_tracker_dump_received_main_thread)
         self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
         self.sync_bridge.capture_processed_signal.connect(self._on_capture_processed_ui)
         self._capture_ui_refresh_pending = False
@@ -322,6 +324,7 @@ class SeraApp:
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,
             on_peer_logs_received=self._on_peer_logs_received,
+            on_tracker_dump_received=self._on_tracker_dump_received,
             on_error=lambda msg: print(f"[Sera Sync] {msg}"),
         )
         self.sync_service.start()
@@ -1142,6 +1145,20 @@ class SeraApp:
         """Called from SyncPeerService background thread when SSAL logs are received."""
         self.sync_bridge.peer_logs_received_signal.emit(sender_host)
 
+    def _on_tracker_dump_received(self, sender_host: str, count: int):
+        """Called from SyncPeerService background thread when tracker dumps are received."""
+        self.sync_bridge.tracker_dump_received_signal.emit(sender_host, count)
+
+    def _handle_tracker_dump_received_main_thread(self, sender_host: str, count: int):
+        """Main thread GUI handler when peer tracker dumps are received."""
+        try:
+            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
+                self.tracker_dump_win.load_data()
+            if hasattr(self, "shell") and self.shell:
+                self.shell.show_alert(f"📥 Received {count} filing capture(s) from {sender_host}", level="info", duration=3500)
+        except Exception:
+            pass
+
     def _handle_live_sync_received_main_thread(self, sender_username: str, sender_host: str):
         """Main thread GUI handler for live auto-sync without app restart."""
         try:
@@ -1233,24 +1250,21 @@ class SeraApp:
                         t.join(timeout=3.5)
                     self.sync_bridge.sync_sent_signal.emit(count_ref[0], len(peers))
 
-                    # SSAL and Tracker Dumps: If configured, push to Host PC
-                    host_ip = self.db.get_setting("host_ip")
-                    if host_ip and self.sync_service:
+                    # SSAL and Tracker Dumps: Stream append-only telemetry across active peers
+                    if hasattr(self, "sync_service") and self.sync_service:
+                        try:
+                            recent_dumps = self.db.get_tracker_dumps(limit=50)
+                            if recent_dumps:
+                                self.sync_service.broadcast_tracker_dumps(recent_dumps, peers=peers)
+                        except Exception as ex:
+                            print(f"[SYNC] Broadcast tracker dumps failed: {ex}")
+
                         try:
                             recent_logs = self.db.get_audit_logs(limit=100)
                             if recent_logs:
-                                self.sync_service.push_audit_logs_to_host(host_ip, recent_logs)
+                                self.sync_service.broadcast_audit_logs(recent_logs, peers=peers)
                         except Exception as ex:
-                            print(f"[SSAL] Auto push logs to host failed: {ex}")
-                            
-                        try:
-                            # Also push recent tracker dumps
-                            recent_dumps = self.db.get_tracker_dumps(limit=50)
-                            if recent_dumps:
-                                # Serialize datetime and objects if necessary, but get_tracker_dumps returns primitive dicts
-                                self.sync_service.push_tracker_dumps_to_host(host_ip, recent_dumps)
-                        except Exception as ex:
-                            print(f"[SYNC] Auto push tracker dumps to host failed: {ex}")
+                            print(f"[SSAL] Broadcast audit logs failed: {ex}")
                 except Exception as e:
                     print(f"[Live Auto-Sync] Broadcast exception: {e}")
 

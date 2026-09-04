@@ -138,6 +138,16 @@ class SeraDatabase:
         self._sync_revision_hook = fn
 
     def _bump_sync_revision_if_configured(self):
+        if hasattr(self, "_sync_metrics_cache"):
+            try:
+                del self._sync_metrics_cache
+            except AttributeError:
+                pass
+        if hasattr(self, "_sync_metrics_cache_ts"):
+            try:
+                del self._sync_metrics_cache_ts
+            except AttributeError:
+                pass
         if self._sync_revision_hook:
             try:
                 self._sync_revision_hook()
@@ -3215,36 +3225,62 @@ class SeraDatabase:
         if not dumps:
             return
         
+        inserted_any = False
         with self._connect_raw() as r_conn:
             for d in dumps:
-                # Basic duplicate check by timestamp and actor
-                cur = r_conn.execute(
-                    "SELECT id FROM tracker_dump WHERE captured_by = ? AND created_at = ?",
-                    (d.get("captured_by"), d.get("created_at"))
-                )
+                captured_by = d.get("captured_by")
+                created_at = d.get("created_at")
+                arn_number = (d.get("arn_number") or "").strip()
+                portal = (d.get("portal") or "").strip()
+
+                # Duplicate check by (captured_by, created_at) OR by non-empty (portal, arn_number)
+                if arn_number and arn_number != "N/A":
+                    cur = r_conn.execute(
+                        "SELECT id FROM tracker_dump WHERE (captured_by = ? AND created_at = ?) OR (portal = ? AND arn_number = ?)",
+                        (captured_by, created_at, portal, arn_number)
+                    )
+                else:
+                    cur = r_conn.execute(
+                        "SELECT id FROM tracker_dump WHERE captured_by = ? AND created_at = ?",
+                        (captured_by, created_at)
+                    )
                 if cur.fetchone():
                     continue
 
                 r_conn.execute(
                     """INSERT INTO tracker_dump
-                       (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, dataset_key)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         d.get("client_id"), d.get("unassigned_identity"), d.get("service_id"),
                         d.get("portal"), d.get("period_label"), d.get("arn_number"),
                         d.get("capture_method"), d.get("status"), d.get("raw_payload_json"),
-                        d.get("captured_by"), d.get("created_at")
+                        d.get("captured_by"), d.get("created_at"), d.get("dataset_key")
                     )
                 )
+                inserted_any = True
 
-        # Trigger resolution in case new unassigned dumps matched an existing client
-        try:
-            now_ts = time.time()
-            if now_ts - self._last_reresolve_ts > 30.0:
-                self.re_resolve_all_tracker_dumps()
-                self._last_reresolve_ts = now_ts
-        except Exception:
-            pass
+        if inserted_any:
+            # Clear metrics cache so local node immediately registers the new tracker count
+            if hasattr(self, "_sync_metrics_cache"):
+                try:
+                    del self._sync_metrics_cache
+                except AttributeError:
+                    pass
+            if hasattr(self, "_sync_metrics_cache_ts"):
+                try:
+                    del self._sync_metrics_cache_ts
+                except AttributeError:
+                    pass
+
+            # Trigger resolution in case new unassigned dumps matched an existing client
+            try:
+                now_ts = time.time()
+                if now_ts - self._last_reresolve_ts > 10.0:
+                    self.re_resolve_all_tracker_dumps()
+                    self._last_reresolve_ts = now_ts
+            except Exception:
+                pass
 
     def upsert_sdc_session_timeline(self, session_data: dict) -> dict:
         """Upserts a full SDC Session Timeline audit trail in rawPayload.db."""
