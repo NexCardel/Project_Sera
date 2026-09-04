@@ -28,6 +28,7 @@ import threading
 import time
 import shutil
 import datetime
+import glob
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -37,6 +38,27 @@ SYNC_PORT = 49157
 BEACON_INTERVAL_SEC = 5
 PEER_TIMEOUT_SEC = 30
 SOCK_TIMEOUT_SEC = 3
+
+
+def prune_pre_sync_backups(directory: str, max_keep: int = 5):
+    """
+    Retains the most recent `max_keep` pre-sync backups and safely purges older ones (FIFO).
+    Guarantees that disk space never grows indefinitely from repeated sync operations.
+    """
+    try:
+        patterns = ["master.db.pre-sync-*.db", "sera.salt.pre-sync-*"]
+        for pat in patterns:
+            matching_files = glob.glob(os.path.join(directory, pat))
+            matching_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0)
+            if len(matching_files) > max_keep:
+                to_delete = matching_files[:-max_keep]
+                for old_f in to_delete:
+                    try:
+                        os.remove(old_f)
+                    except OSError:
+                        pass
+    except Exception as e:
+        print(f"[Sera Sync] Backup rotation notice: {e}")
 
 # Fixed app-level magic bytes for beacon validation (not password-derived)
 SERA_SYNC_MAGIC = "sera-sync-v2"
@@ -632,6 +654,9 @@ class SyncPeerService:
             if os.path.exists(self.salt_path):
                 backup_salt = os.path.join(live_dir, f"sera.salt.pre-sync-{now_str}")
                 shutil.copy2(self.salt_path, backup_salt)
+
+            # Auto-prune older snapshots beyond the 5 most recent (FIFO retention)
+            prune_pre_sync_backups(live_dir, max_keep=5)
 
             # Write files with fallback if Windows holds a temporary file lock
             def safe_write_file(target_path, content_bytes):

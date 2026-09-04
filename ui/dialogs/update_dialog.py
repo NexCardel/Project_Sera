@@ -39,7 +39,7 @@ class DownloadWorker(QObject):
 
 
 class ForceUpdateDialog(QDialog):
-    def __init__(self, update_info: dict, parent=None):
+    def __init__(self, update_info: dict, parent=None, auto_start: bool = True):
         super().__init__(parent)
         self.update_info = update_info
         self.mandatory = update_info.get("mandatory", True)
@@ -47,6 +47,8 @@ class ForceUpdateDialog(QDialog):
         self.is_downloading = False
         
         self._setup_ui()
+        if auto_start:
+            self._start_download()
 
     def _setup_ui(self):
         self.setWindowTitle("Update Required — Project Sera")
@@ -253,10 +255,10 @@ class ForceUpdateDialog(QDialog):
             self.status_label.setText(f"Downloading update: {mb_dl:.1f} MB...")
 
     def _on_finished(self, dest_path: Path):
-        self.status_label.setText("Download complete! Applying update and restarting...")
+        self.status_label.setText("Download complete! Applying update silently and restarting...")
         self.progress_bar.setValue(100)
         QApplication.processEvents()
-        version.apply_and_restart(dest_path)
+        version.apply_and_restart(dest_path, silent=True)
 
     def _on_error(self, err_msg: str):
         self.is_downloading = False

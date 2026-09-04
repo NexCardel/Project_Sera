@@ -46,6 +46,63 @@ class TestUpdater(unittest.TestCase):
         self.assertIn("mandatory", data)
         self.assertIn("download_url", data)
 
+    def test_apply_and_restart_silent_script_generation(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installer_path = Path(tmpdir) / "Amas_Sera_Setup_v2.3.1.exe"
+            installer_path.write_bytes(b"dummy")
+            target_exe = Path(tmpdir) / "Amas_Sera.exe"
+            target_exe.write_bytes(b"dummy")
+
+            with patch("subprocess.Popen") as mock_popen, patch("sys.exit") as mock_exit:
+                version.apply_and_restart(installer_path, silent=True, target_exe=str(target_exe.resolve()))
+                
+                bat_file = Path(tmpdir) / "run_installer.bat"
+                self.assertTrue(bat_file.exists())
+                content = bat_file.read_text(encoding="utf-8")
+                self.assertIn("/VERYSILENT", content)
+                self.assertIn("/SUPPRESSMSGBOXES", content)
+                self.assertIn("/NORESTART", content)
+                self.assertIn(str(installer_path.resolve()), content)
+                self.assertIn(str(target_exe.resolve()), content)
+                self.assertTrue(mock_popen.called)
+                self.assertTrue(mock_exit.called)
+
+    def test_background_update_manager(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_installer = Path(tmpdir) / "downloaded_setup.exe"
+            mock_installer.write_bytes(b"mock installer binary")
+
+            mock_update_info = {
+                "latest_version": "2.3.1",
+                "current_version": "2.3.0",
+                "download_url": "https://github.com/dummy/release.exe",
+                "mandatory": True,
+            }
+
+            found_events = []
+            ready_events = []
+
+            with patch("version.check_for_updates", return_value=mock_update_info), \
+                 patch("version.download_update_payload", return_value=mock_installer):
+                
+                mgr = version.BackgroundUpdateManager(
+                    check_interval_seconds=3600,
+                    on_update_found=lambda info: found_events.append(info),
+                    on_update_ready=lambda path, info: ready_events.append((path, info))
+                )
+
+                # Trigger synchronous execution of one check cycle
+                mgr._check_and_download()
+
+                self.assertEqual(len(found_events), 1)
+                self.assertEqual(found_events[0]["latest_version"], "2.3.1")
+                self.assertEqual(len(ready_events), 1)
+                self.assertEqual(ready_events[0][0], mock_installer)
+                self.assertEqual(ready_events[0][1]["latest_version"], "2.3.1")
+                self.assertEqual(mgr.downloaded_payload, mock_installer)
+
 
 if __name__ == "__main__":
     unittest.main()

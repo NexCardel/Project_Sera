@@ -11,6 +11,8 @@ import urllib.request
 import urllib.error
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable
 
@@ -109,23 +111,141 @@ def download_update_payload(download_url: str, progress_callback: Optional[Calla
     return dest_path
 
 
-def apply_and_restart(installer_path: Path):
+def apply_and_restart(installer_path: Path, silent: bool = True, target_exe: Optional[str] = None):
     """
     Launch installer/update script and exit current process.
+    If silent is True, passes /VERYSILENT /SUPPRESSMSGBOXES /NORESTART to Inno Setup,
+    waits for installer to finish, and automatically relaunches the updated executable.
     """
     temp_dir = installer_path.parent
     bat_script = temp_dir / "run_installer.bat"
-    
-    # Batch file waits 2s for current Amas_Sera app to close, then launches installer
-    script_content = f"""@echo off
+
+    if target_exe is None:
+        target_exe = sys.executable if getattr(sys, "frozen", False) else ""
+
+    if silent:
+        relaunch_cmd = f'start "" "{target_exe}"' if target_exe else ""
+        script_content = f"""@echo off
+timeout /t 2 /nobreak > nul
+start /wait "" "{installer_path.resolve()}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+{relaunch_cmd}
+"""
+    else:
+        script_content = f"""@echo off
 timeout /t 2 /nobreak > nul
 start "" "{installer_path.resolve()}"
 """
     with open(bat_script, "w", encoding="utf-8") as f:
         f.write(script_content)
-        
+
     subprocess.Popen(["cmd.exe", "/c", str(bat_script.resolve())], creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app:
+            app.quit()
+    except Exception:
+        pass
     sys.exit(0)
+
+
+class BackgroundUpdateManager:
+    """
+    Automated background update service for Project Sera.
+    Checks GitHub for releases asynchronously, downloads update payloads
+    without user interaction or manual permission, and prepares the silent update.
+    """
+    def __init__(
+        self,
+        check_interval_seconds: int = 7200,
+        on_update_found: Optional[Callable[[Dict], None]] = None,
+        on_download_progress: Optional[Callable[[int, int], None]] = None,
+        on_update_ready: Optional[Callable[[Path, Dict], None]] = None,
+        on_error: Optional[Callable[[str], None]] = None,
+    ):
+        self.check_interval = check_interval_seconds
+        self.on_update_found = on_update_found
+        self.on_download_progress = on_download_progress
+        self.on_update_ready = on_update_ready
+        self.on_error = on_error
+
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._is_downloading = False
+        self.downloaded_payload: Optional[Path] = None
+        self.pending_update_info: Optional[Dict] = None
+
+    def start(self, initial_delay_seconds: int = 3):
+        """Starts the background updater daemon thread."""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            args=(initial_delay_seconds,),
+            name="sera-background-updater",
+            daemon=True
+        )
+        self._thread.start()
+
+    def stop(self):
+        """Stops the background updater loop."""
+        self._running = False
+
+    def trigger_check(self):
+        """Triggers an immediate asynchronous check and download in a background thread."""
+        threading.Thread(target=self._check_and_download, daemon=True).start()
+
+    def _run_loop(self, initial_delay: int):
+        if initial_delay > 0:
+            time.sleep(initial_delay)
+        while self._running:
+            self._check_and_download()
+            for _ in range(self.check_interval):
+                if not self._running:
+                    break
+                time.sleep(1)
+
+    def _check_and_download(self):
+        if self._is_downloading or self.downloaded_payload is not None:
+            return
+
+        update_info = check_for_updates(timeout_seconds=4)
+        if not update_info:
+            return
+
+        self.pending_update_info = update_info
+        if self.on_update_found:
+            try:
+                self.on_update_found(update_info)
+            except Exception:
+                pass
+
+        download_url = update_info.get("download_url")
+        if not download_url:
+            return
+
+        self._is_downloading = True
+        try:
+            dest_path = download_update_payload(
+                download_url,
+                progress_callback=self.on_download_progress
+            )
+            self.downloaded_payload = dest_path
+            if self.on_update_ready:
+                try:
+                    self.on_update_ready(dest_path, update_info)
+                except Exception:
+                    pass
+        except Exception as e:
+            if self.on_error:
+                try:
+                    self.on_error(str(e))
+                except Exception:
+                    pass
+        finally:
+            self._is_downloading = False
 
 
 def restart_app():

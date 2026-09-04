@@ -49,6 +49,8 @@ class SyncSignalBridge(QObject):
     tracker_dump_received_signal = Signal(str, int)
     sync_sent_signal = Signal(int, int)
     capture_processed_signal = Signal(dict, dict)
+    update_found_signal = Signal(dict)
+    update_ready_signal = Signal(str, dict)
 
 import security
 from database import SeraDatabase
@@ -202,27 +204,15 @@ class SeraApp:
         self.sync_bridge.tracker_dump_received_signal.connect(self._handle_tracker_dump_received_main_thread)
         self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
         self.sync_bridge.capture_processed_signal.connect(self._on_capture_processed_ui)
+        self.sync_bridge.update_found_signal.connect(self._handle_update_found)
+        self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
+        self._pending_update_installer = None
+        self._pending_update_info = None
+        self._update_applied = False
         self._capture_ui_refresh_pending = False
         self._capture_queue = queue.Queue()
         self._capture_worker = threading.Thread(target=self._capture_worker_loop, daemon=True)
         self._capture_worker.start()
-        
-        base_dir = Path(__file__).resolve().parent
-        icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
-        if not icon_path.exists():
-            icon_path = base_dir / "assets" / "logo" / "icon_here.png"
-        if not icon_path.exists():
-            icon_path = base_dir / "assets" / "logo" / "sera_icon.ico"
-        if not icon_path.exists():
-            icon_path = base_dir / "assets" / "logo" / "sera_icon.png"
-        if not icon_path.exists():
-            icon_path = APP_DIR / "assets" / "logo" / "icon_here.ico"
-
-        if icon_path.exists():
-            self.app_icon = QIcon(str(icon_path))
-            self.app.setWindowIcon(self.app_icon)
-        else:
-            self.app_icon = None
         
         base_dir = Path(__file__).resolve().parent
         icon_path = base_dir / "assets" / "logo" / "icon_here.ico"
@@ -330,15 +320,16 @@ class SeraApp:
         self.sync_service.start()
         self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
 
-        # Check for mandatory updates on GitHub (fast timeout on cold boot)
-        loading_dlg.set_status("Checking GitHub for mandatory version updates...")
+        # Asynchronous background auto-updater (non-blocking, silent)
+        loading_dlg.set_status("Initializing Background Auto-Updater...")
         import version
-        update_info = version.check_for_updates(timeout_seconds=2)
-        if update_info:
-            loading_dlg.close()
-            from ui.dialogs.update_dialog import ForceUpdateDialog
-            update_dlg = ForceUpdateDialog(update_info)
-            res = update_dlg.exec()
+        self.update_manager = version.BackgroundUpdateManager(
+            check_interval_seconds=7200,
+            on_update_found=lambda info: self.sync_bridge.update_found_signal.emit(info),
+            on_update_ready=lambda path, info: self.sync_bridge.update_ready_signal.emit(str(path), info),
+            on_error=lambda err: print(f"[AutoUpdater] {err}")
+        )
+        self.update_manager.start(initial_delay_seconds=3)
 
         loading_dlg.set_status("Initializing User Interface...")
         self._build_ui()
@@ -352,6 +343,7 @@ class SeraApp:
         self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
         self.ext_listener.sudr_capture_received.connect(self._handle_sudr_capture)
         self.app.aboutToQuit.connect(self.ext_listener.stop)
+        self.app.aboutToQuit.connect(self._on_app_about_to_quit)
         self.ext_listener.start()
 
         # Heavy historical repair/report work is intentionally deferred until
@@ -963,6 +955,10 @@ class SeraApp:
 
         tray_menu.addSeparator()
 
+        self.action_install_update = tray_menu.addAction(_safe_qta_icon("mdi.update", "#4CF9B7"), "Install Update & Restart")
+        self.action_install_update.triggered.connect(self._apply_pending_update_now)
+        self.action_install_update.setVisible(False)
+
         action_quit = tray_menu.addAction(_safe_qta_icon("mdi.power", "#FF4D4D"), "Exit Project Sera")
         action_quit.triggered.connect(self._quit_application)
 
@@ -1000,6 +996,47 @@ class SeraApp:
                 )
                 self._tray_hint_shown = True
 
+    def _handle_update_found(self, info: dict):
+        latest = info.get("latest_version", "new")
+        current = info.get("current_version", "")
+        print(f"[AutoUpdater] New update found: v{latest} (current: v{current}). Downloading payload in background...")
+
+    def _handle_update_ready(self, installer_path_str: str, info: dict):
+        self._pending_update_installer = installer_path_str
+        self._pending_update_info = info
+        latest_ver = info.get("latest_version", "new")
+        print(f"[AutoUpdater] Update v{latest_ver} successfully downloaded to {installer_path_str}. Ready for silent install.")
+        if hasattr(self, "action_install_update") and self.action_install_update:
+            self.action_install_update.setText(f"Install v{latest_ver} & Restart")
+            self.action_install_update.setVisible(True)
+        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+            self.tray_icon.showMessage(
+                "Sera Update Ready",
+                f"Version {latest_ver} has been downloaded in the background.\nIt will be installed automatically upon exiting the app.",
+                QSystemTrayIcon.Information,
+                5000,
+            )
+
+    def _apply_pending_update_now(self):
+        if getattr(self, "_pending_update_installer", None):
+            installer = Path(self._pending_update_installer)
+            if installer.exists():
+                self._update_applied = True
+                print(f"[AutoUpdater] Applying downloaded update immediately: {installer}")
+                import version
+                version.apply_and_restart(installer, silent=True)
+
+    def _on_app_about_to_quit(self):
+        if self._update_applied:
+            return
+        if getattr(self, "_pending_update_installer", None):
+            installer = Path(self._pending_update_installer)
+            if installer.exists():
+                self._update_applied = True
+                print(f"[AutoUpdater] Silent update triggered upon app aboutToQuit: {installer}")
+                import version
+                version.apply_and_restart(installer, silent=True)
+
     def _quit_application(self):
         """Full clean application shutdown triggered from the system tray menu or close button."""
         if hasattr(self, "shell") and self.shell:
@@ -1018,6 +1055,14 @@ class SeraApp:
                 self.sync_service.stop()
             except Exception:
                 pass
+        if not self._update_applied and getattr(self, "_pending_update_installer", None):
+            installer = Path(self._pending_update_installer)
+            if installer.exists():
+                self._update_applied = True
+                print(f"[AutoUpdater] Silent update triggered upon app exit: {installer}")
+                import version
+                version.apply_and_restart(installer, silent=True)
+                return
         self.app.quit()
 
     def _global_search_shortcut(self):

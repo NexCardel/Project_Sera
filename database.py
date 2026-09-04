@@ -18,6 +18,8 @@ import shutil
 import time
 import threading
 import re
+import gzip
+import glob
 from contextlib import contextmanager
 
 import security
@@ -65,6 +67,14 @@ class SeraDatabase:
             self.sync_fst_reports()
         except Exception as e:
             print(f"[-] Startup FST report sync skipped: {e}")
+        try:
+            self.optimize_storage()
+        except Exception as e:
+            print(f"[-] Startup storage optimization skipped: {e}")
+        try:
+            self.deduplicate_tracker_dumps()
+        except Exception as e:
+            print(f"[-] Startup tracker dump deduplication skipped: {e}")
 
     # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
     _ICON_LIGATURE_RE = re.compile(
@@ -2592,19 +2602,50 @@ class SeraDatabase:
             except Exception:
                 hist = []
 
-            arn_str = dump_row.get("arn_number")
-            if arn_str and not any(h.get("arn") == arn_str for h in hist):
-                hist.append({
-                    "portal": dump_row.get("portal"),
-                    "arn": arn_str,
-                    "period_label": dump_row.get("period_label"),
-                    "capture_method": dump_row.get("capture_method"),
-                    "created_at": dump_ts
-                })
-
             tot_caps = (existing[14] or 0) + 1
             existing_ts = str(existing[15] or "")
             final_last_updated = max(existing_ts, dump_ts) if existing_ts else dump_ts
+
+            arn_str = dump_row.get("arn_number")
+            status_val = dump_row.get("status") or ""
+            payload_str = dump_row.get("raw_payload_json") or ""
+
+            if arn_str:
+                matched_idx = None
+                for idx, h in enumerate(hist):
+                    if h.get("arn") == arn_str:
+                        matched_idx = idx
+                        break
+                if matched_idx is not None:
+                    if status_val:
+                        hist[matched_idx]["status"] = status_val
+                    if payload_str:
+                        hist[matched_idx]["raw_payload_json"] = payload_str
+                    if dump_row.get("period_label"):
+                        hist[matched_idx]["period_label"] = dump_row.get("period_label")
+                    hist[matched_idx]["created_at"] = dump_ts
+                else:
+                    hist.append({
+                        "portal": dump_row.get("portal"),
+                        "arn": arn_str,
+                        "period_label": dump_row.get("period_label"),
+                        "capture_method": dump_row.get("capture_method"),
+                        "status": status_val,
+                        "raw_payload_json": payload_str,
+                        "created_at": dump_ts
+                    })
+            elif dump_row.get("period_label"):
+                hist.append({
+                    "portal": dump_row.get("portal"),
+                    "arn": "N/A",
+                    "period_label": dump_row.get("period_label"),
+                    "capture_method": dump_row.get("capture_method"),
+                    "status": status_val,
+                    "raw_payload_json": payload_str,
+                    "created_at": dump_ts
+                })
+
+            hist.sort(key=lambda h: str(h.get("created_at") or ""))
 
             r_conn.execute("""
                 UPDATE client_raw_containers
@@ -2614,12 +2655,26 @@ class SeraDatabase:
         else:
             hist = []
             arn_str = dump_row.get("arn_number")
+            status_val = dump_row.get("status") or ""
+            payload_str = dump_row.get("raw_payload_json") or ""
             if arn_str:
                 hist.append({
                     "portal": dump_row.get("portal"),
                     "arn": arn_str,
                     "period_label": dump_row.get("period_label"),
                     "capture_method": dump_row.get("capture_method"),
+                    "status": status_val,
+                    "raw_payload_json": payload_str,
+                    "created_at": dump_ts
+                })
+            elif dump_row.get("period_label"):
+                hist.append({
+                    "portal": dump_row.get("portal"),
+                    "arn": "N/A",
+                    "period_label": dump_row.get("period_label"),
+                    "capture_method": dump_row.get("capture_method"),
+                    "status": status_val,
+                    "raw_payload_json": payload_str,
                     "created_at": dump_ts
                 })
             r_conn.execute("""
@@ -2792,6 +2847,9 @@ class SeraDatabase:
                 display_pan = identity_key
                 id_token = "Unregistered"
 
+            latest_status = filing_hist[-1].get("status", "") if filing_hist else ""
+            latest_payload = filing_hist[-1].get("raw_payload_json", "") if filing_hist else ""
+
             containers.append({
                 "identity_key": identity_key,
                 "client_id": cid,
@@ -2811,12 +2869,17 @@ class SeraDatabase:
                 "period_summary": period_summary,
                 "latest_period": latest_period,
                 "latest_arn": latest_arn,
+                "status": latest_status,
+                "latest_status": latest_status,
+                "raw_payload_json": latest_payload,
                 "capture_method": capture_method,
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
                 "last_updated": r[15]
             })
 
+        # Default chronological entry organisation: latest entry at top
+        containers.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
         return containers
 
     def get_captures_for_container(self, identity_key: str = None, client_id: int = None, pan: str = None) -> list[dict]:
@@ -3162,6 +3225,7 @@ class SeraDatabase:
                     "period_label": period_label,
                     "arn_number": arn_number,
                     "capture_method": capture_method,
+                    "status": status,
                     "raw_payload_json": raw_payload_json,
                     "created_at": now
                 }
@@ -3217,10 +3281,60 @@ class SeraDatabase:
             "dataset_key": final_dataset_key
         }
 
+    def deduplicate_tracker_dumps(self) -> int:
+        """
+        Cleans up duplicate tracker_dump records in rawPayload.db, retaining
+        only the most recent record per dataset_key or identical capture burst.
+        Returns the number of deleted duplicate rows.
+        """
+        deleted_count = 0
+        with self._connect_raw() as r_conn:
+            # 1. Deduplicate by non-empty dataset_key (keep MAX id)
+            cur = r_conn.execute("""
+                DELETE FROM tracker_dump
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM tracker_dump
+                    WHERE dataset_key IS NOT NULL AND dataset_key != '' AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT'
+                    GROUP BY dataset_key
+                )
+                AND dataset_key IS NOT NULL AND dataset_key != '' AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT'
+            """)
+            deleted_count += cur.rowcount
+
+            # 2. Deduplicate exact duplicates by non-empty ARN
+            cur2 = r_conn.execute("""
+                DELETE FROM tracker_dump
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM tracker_dump
+                    WHERE arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A'
+                    GROUP BY portal, arn_number
+                )
+                AND arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A'
+            """)
+            deleted_count += cur2.rowcount
+
+            # 3. Deduplicate exact duplicate bursts by (captured_by, created_at)
+            cur3 = r_conn.execute("""
+                DELETE FROM tracker_dump
+                WHERE id NOT IN (
+                    SELECT MAX(id)
+                    FROM tracker_dump
+                    GROUP BY captured_by, created_at
+                )
+            """)
+            deleted_count += cur3.rowcount
+
+        if deleted_count > 0:
+            print(f"[database] deduplicate_tracker_dumps: Purged {deleted_count} duplicate tracker dump row(s).")
+        return deleted_count
+
     def store_peer_tracker_dumps(self, dumps: list[dict]):
         """
         Receives pushed tracker_dump records from a peer workstation (via LAN sync)
-        and inserts them into the local rawPayload.db, avoiding exact duplicates.
+        and inserts them into the local rawPayload.db, deduplicating by dataset_key,
+        ARN, or capture timestamps and updating SRPF unified containers.
         """
         if not dumps:
             return
@@ -3232,22 +3346,39 @@ class SeraDatabase:
                 created_at = d.get("created_at")
                 arn_number = (d.get("arn_number") or "").strip()
                 portal = (d.get("portal") or "").strip()
+                dataset_key = (d.get("dataset_key") or "").strip()
 
-                # Duplicate check by (captured_by, created_at) OR by non-empty (portal, arn_number)
-                if arn_number and arn_number != "N/A":
+                # 1. Dataset Key Deduplication:
+                # If dataset_key is present and specific, replace older duplicates or skip if incoming is older
+                if dataset_key and not dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
+                    cur = r_conn.execute("SELECT id, created_at FROM tracker_dump WHERE dataset_key = ? ORDER BY id DESC", (dataset_key,))
+                    existing = cur.fetchall()
+                    if existing:
+                        existing_newest_created = existing[0][1] or ""
+                        # If incoming record is newer or same timestamp, purge older duplicates and replace
+                        if str(created_at or "") >= str(existing_newest_created):
+                            r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (dataset_key,))
+                        else:
+                            # Incoming snapshot is older than what we already have
+                            continue
+                elif arn_number and arn_number != "N/A":
+                    # 2. Duplicate check by (portal, arn_number) or (captured_by, created_at)
                     cur = r_conn.execute(
-                        "SELECT id FROM tracker_dump WHERE (captured_by = ? AND created_at = ?) OR (portal = ? AND arn_number = ?)",
-                        (captured_by, created_at, portal, arn_number)
+                        "SELECT id FROM tracker_dump WHERE (portal = ? AND arn_number = ?) OR (captured_by = ? AND created_at = ?)",
+                        (portal, arn_number, captured_by, created_at)
                     )
+                    if cur.fetchone():
+                        continue
                 else:
+                    # 3. Fallback duplicate check by exact (captured_by, created_at)
                     cur = r_conn.execute(
                         "SELECT id FROM tracker_dump WHERE captured_by = ? AND created_at = ?",
                         (captured_by, created_at)
                     )
-                if cur.fetchone():
-                    continue
+                    if cur.fetchone():
+                        continue
 
-                r_conn.execute(
+                cur = r_conn.execute(
                     """INSERT INTO tracker_dump
                        (client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, dataset_key)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -3258,7 +3389,36 @@ class SeraDatabase:
                         d.get("captured_by"), d.get("created_at"), d.get("dataset_key")
                     )
                 )
+                dump_id = cur.lastrowid
                 inserted_any = True
+
+                # Update SRPF Unified Container on receiving node
+                valid_id = d.get("client_id")
+                unassigned_identity = d.get("unassigned_identity")
+                if valid_id:
+                    container_key = f"CLI-{valid_id:05d}"
+                elif unassigned_identity:
+                    container_key = unassigned_identity
+                else:
+                    container_key = f"UNASSIGNED_{dump_id}"
+
+                try:
+                    self._update_srpf_container(
+                        r_conn,
+                        identity_key=container_key,
+                        client_id=valid_id,
+                        dump_row={
+                            "portal": portal,
+                            "period_label": d.get("period_label"),
+                            "arn_number": d.get("arn_number"),
+                            "capture_method": d.get("capture_method"),
+                            "status": d.get("status"),
+                            "raw_payload_json": d.get("raw_payload_json"),
+                            "created_at": created_at or ""
+                        }
+                    )
+                except Exception as exc:
+                    pass
 
         if inserted_any:
             # Clear metrics cache so local node immediately registers the new tracker count
@@ -3524,6 +3684,7 @@ class SeraDatabase:
                         "period_label": d["period_label"],
                         "arn_number": d["arn_number"],
                         "capture_method": d["capture_method"],
+                        "status": d.get("status"),
                         "raw_payload_json": d["raw_payload_json"],
                         "created_at": d["created_at"]
                     }
@@ -3790,7 +3951,7 @@ class SeraDatabase:
                 sql += " AND (arn_number LIKE ? OR portal LIKE ? OR period_label LIKE ? OR unassigned_identity LIKE ? OR dataset_key LIKE ?)"
                 q = f"%{search_query}%"
                 params.extend([q, q, q, q, q])
-            sql += " ORDER BY id DESC LIMIT ?"
+            sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
             params.append(limit)
 
             cur = r_conn.execute(sql, params)
@@ -3832,6 +3993,9 @@ class SeraDatabase:
                 "status": r[8] or "submitted", "raw_payload_json": r[9] or "{}", "captured_by": r[10] or "System",
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else ""
             })
+
+        # Default chronological entry organisation: latest entry at top
+        results.sort(key=lambda x: (str(x.get("created_at") or ""), x.get("id") or 0), reverse=True)
         return results
 
     def delete_tracker_dump(self, dump_id: int) -> bool:
@@ -3892,6 +4056,73 @@ class SeraDatabase:
             for r in cur.fetchall():
                 result[(r[0], str(r[1]))] = {"bg_color": r[2], "fg_color": r[3]}
             return result
+
+    def cleanup_daily_dumps(self, max_raw_days: int = 7, max_archive_days: int = 60):
+        """
+        Storage retention policy for daily text dumps:
+        - Keeps recent dumps (<= max_raw_days old) as raw .txt for instant inspection.
+        - Compresses older dumps (> max_raw_days) to .txt.gz using gzip (reducing file size by ~90%).
+        - Deletes ancient compressed dumps (> max_archive_days) to keep disk space permanently bounded.
+        """
+        now = datetime.datetime.now()
+        raw_cutoff = now - datetime.timedelta(days=max_raw_days)
+        purge_cutoff = now - datetime.timedelta(days=max_archive_days)
+
+        search_folders = set()
+        db_dir = os.path.dirname(os.path.abspath(self.db_path))
+        search_folders.add(db_dir)
+        search_folders.add(os.path.join(db_dir, "Raw_Payload_Dump"))
+
+        for folder in search_folders:
+            if not os.path.exists(folder):
+                continue
+
+            # 1. Compress .txt dumps older than max_raw_days
+            txt_files = glob.glob(os.path.join(folder, "seraRawPayloadDump_*.txt"))
+            for txt_path in txt_files:
+                try:
+                    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(txt_path))
+                    if mtime < raw_cutoff:
+                        gz_path = txt_path + ".gz"
+                        with open(txt_path, "rb") as f_in:
+                            with gzip.open(gz_path, "wb", compresslevel=6) as f_out:
+                                shutil.copyfileobj(f_in, f_out)
+                        os.remove(txt_path)
+                except Exception as e:
+                    print(f"[database] Dump compression notice ({txt_path}): {e}")
+
+            # 2. Purge .txt.gz files older than max_archive_days
+            gz_files = glob.glob(os.path.join(folder, "seraRawPayloadDump_*.txt.gz"))
+            for gz_path in gz_files:
+                try:
+                    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(gz_path))
+                    if mtime < purge_cutoff:
+                        os.remove(gz_path)
+                except Exception as e:
+                    print(f"[database] Dump purge notice ({gz_path}): {e}")
+
+    def optimize_storage(self):
+        """
+        Performs SQLite WAL truncation and checkpoint maintenance on both master.db and rawPayload.db.
+        Flushes all journaled WAL frames into the database files and truncates WAL logs to zero bytes.
+        Also triggers the daily text dump retention cleanup.
+        """
+        try:
+            with self._connect() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception as e:
+            print(f"[database] master.db WAL checkpoint notice: {e}")
+
+        try:
+            with self._connect_raw() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception as e:
+            print(f"[database] rawPayload.db WAL checkpoint notice: {e}")
+
+        try:
+            self.cleanup_daily_dumps()
+        except Exception as e:
+            print(f"[database] Daily dump cleanup notice: {e}")
 
 
 class PeerAuditLogManager:

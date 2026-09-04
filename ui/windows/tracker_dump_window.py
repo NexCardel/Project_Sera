@@ -47,6 +47,78 @@ def _format_to_local_time(iso_str: str) -> str:
         return clean[:19].replace("T", " ")
 
 
+def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
+    """
+    Evaluates raw record status via SDC_Parser logic into an authoritative
+    human-readable LTT submission status and corresponding UI display color.
+    Returns: (status_text, hex_color)
+    """
+    raw_status = record.get("status") or record.get("latest_status") or ""
+    arn = (record.get("arn_number") or record.get("latest_arn") or "").strip()
+
+    # If it's a container and top-level raw_status is empty, inspect filing_history
+    filing_hist = record.get("filing_history") or []
+    if not raw_status and filing_hist:
+        latest_f = filing_hist[-1]
+        raw_status = latest_f.get("status") or ""
+        if not arn:
+            arn = (latest_f.get("arn") or "").strip()
+
+    # If raw_payload has explicit status or ltt captures
+    raw_json = record.get("raw_payload_json") or ""
+    if not raw_json and filing_hist:
+        raw_json = filing_hist[-1].get("raw_payload_json") or ""
+
+    if raw_json:
+        try:
+            p_obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+            if isinstance(p_obj, dict):
+                raw_p = p_obj.get("raw_payload") if isinstance(p_obj.get("raw_payload"), dict) else {}
+                raw_status = p_obj.get("status") or raw_p.get("status") or raw_status
+        except Exception:
+            pass
+
+    # Evaluate using SDC_Parser's standard logic
+    try:
+        from SDC_Parser.sdc_parser import evaluate_status
+        ltt_status = evaluate_status(raw_status)
+    except Exception:
+        raw_lower = str(raw_status).lower()
+        if "pending" in raw_lower:
+            ltt_status = "Submitted (e-verification pending)"
+        elif "filed" in raw_lower or "portal confirmed" in raw_lower:
+            ltt_status = "Submitted & E-verified"
+        elif "evc" in raw_lower:
+            ltt_status = "Other EVC"
+        elif "option expired" in raw_lower:
+            ltt_status = "Option Expired (NA)"
+        else:
+            ltt_status = "Not submitted"
+
+    # Only promote if an ARN is present and status is "Not submitted",
+    # but NEVER override pending verification!
+    if arn and arn != "N/A" and ltt_status == "Not submitted":
+        raw_lower = str(raw_status).lower()
+        if "pending" in raw_lower:
+            ltt_status = "Submitted (e-verification pending)"
+        else:
+            ltt_status = "Submitted & E-verified"
+
+    # Assign color palette matching Google Material / Sera design
+    if ltt_status == "Submitted & E-verified":
+        color = "#39FF14"  # Neon / Emerald Green
+    elif ltt_status == "Submitted (e-verification pending)":
+        color = "#F1E05A"  # Amber / Yellow
+    elif ltt_status == "Other EVC":
+        color = "#58A6FF"  # Soft Blue
+    elif ltt_status == "Option Expired (NA)":
+        color = "#8B949E"  # Muted Gray
+    else:
+        color = "#FF6B6B"  # Soft Red / Not submitted
+
+    return ltt_status, color
+
+
 def _safe_qta_icon(icon_name, color="#FFFFFF"):
     if qta is not None:
         try:
@@ -446,13 +518,14 @@ class PayloadInspectorDialog(QDialog):
         sum_layout.addWidget(hist_lbl)
 
         hist_table = QTableWidget()
-        hist_table.setColumnCount(5)
-        hist_table.setHorizontalHeaderLabels(["Period / AY", "ARN / Ack Number", "Portal", "Capture Method", "Timestamp"])
+        hist_table.setColumnCount(6)
+        hist_table.setHorizontalHeaderLabels(["Period / AY", "ARN / Ack Number", "Submission Status", "Portal", "Capture Method", "Timestamp"])
         hist_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        hist_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        hist_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         hist_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         hist_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hist_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hist_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         hist_table.setRowCount(len(filing_history))
 
         for idx, fh in enumerate(reversed(filing_history)):
@@ -465,17 +538,23 @@ class PayloadInspectorDialog(QDialog):
             arn_item.setForeground(QColor("#39FF14"))
             hist_table.setItem(idx, 1, arn_item)
 
+            s_text, s_color = _resolve_ltt_submission_status(fh)
+            s_item = QTableWidgetItem(s_text)
+            s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            s_item.setForeground(QColor(s_color))
+            hist_table.setItem(idx, 2, s_item)
+
             port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
             port_item.setForeground(QColor("#E6EDF3"))
-            hist_table.setItem(idx, 2, port_item)
+            hist_table.setItem(idx, 3, port_item)
 
             m_item = QTableWidgetItem(fh.get("capture_method") or "SAD_API_Interceptor")
             m_item.setForeground(QColor("#4CF9B7"))
-            hist_table.setItem(idx, 3, m_item)
+            hist_table.setItem(idx, 4, m_item)
 
             ts_item = QTableWidgetItem(_format_to_local_time(fh.get("created_at") or ""))
             ts_item.setForeground(QColor("#8B949E"))
-            hist_table.setItem(idx, 4, ts_item)
+            hist_table.setItem(idx, 5, ts_item)
 
         sum_layout.addWidget(hist_table, stretch=1)
         tabs.addTab(tab_summary, "SRPF Unified Container")
@@ -1004,8 +1083,12 @@ class TrackerDumpWindow(QWidget):
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
                 self._dumps_cache = self.db.get_srpf_containers(limit=200)
+                # Default chronological organisation: latest entry at top
+                self._dumps_cache.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
             else:
                 self._dumps_cache = self.db.get_tracker_dumps(limit=200)
+                # Default chronological organisation: latest entry at top
+                self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
             self._current_page = 1
             self._apply_filters()
         except Exception as e:
@@ -1044,6 +1127,12 @@ class TrackerDumpWindow(QWidget):
                     continue
 
             filtered.append(d)
+
+        # Ensure default chronological order is strictly maintained (latest at top)
+        if is_grouped:
+            filtered.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
+        else:
+            filtered.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
 
         self._filtered_cache = filtered
         total_items = len(filtered)
@@ -1092,14 +1181,14 @@ class TrackerDumpWindow(QWidget):
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Client Name & PAN", "Client ID", "Portal / Services", "Filings & History",
-            "Latest ARN / Ack", "Actions", "Last Updated", "Capture Method"
+            "Submission Status", "Actions", "Last Updated", "Capture Method"
         ])
         
         # Allow interactive mouse drag resizing on all columns
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [320, 100, 180, 230, 160, 210, 140, 150]
+        default_widths = [300, 95, 170, 210, 185, 210, 140, 150]
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
@@ -1141,10 +1230,15 @@ class TrackerDumpWindow(QWidget):
             hist_item.setText(period_sum)
             hist_item.setToolTip(period_sum)
 
-            # 4. Latest ARN
-            arn_item = _get_item(4, font=QFont("Consolas", 10, QFont.Bold), color="#39FF14")
-            arn_item.setText(r.get("latest_arn", "N/A"))
-            arn_item.setToolTip(r.get("latest_arn", "N/A"))
+            # 4. Submission Status (Hooked to LTT / SDC_Parser)
+            status_text, status_color = _resolve_ltt_submission_status(r)
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
+            status_item.setText(status_text)
+            arn_val = r.get("latest_arn", "N/A")
+            tooltip_lines = [f"Submission Status: {status_text}"]
+            if arn_val and arn_val != "N/A":
+                tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
+            status_item.setToolTip("\n".join(tooltip_lines))
 
             # 5. Method
             method_item = _get_item(7, font=QFont("Segoe UI", 9, QFont.Bold), align=Qt.AlignCenter, color="#4CF9B7")
@@ -1188,14 +1282,14 @@ class TrackerDumpWindow(QWidget):
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Client Name & PAN", "ID", "Service / Portal", "Period",
-            "ARN / Ack Number", "Actions", "Timestamp", "Capture Method"
+            "Submission Status", "Actions", "Timestamp", "Capture Method"
         ])
 
         # Allow interactive mouse drag resizing on all columns
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [320, 80, 180, 140, 160, 190, 140, 150]
+        default_widths = [300, 75, 170, 130, 185, 190, 140, 150]
         for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
             self.table.setColumnWidth(c, w)
 
@@ -1237,10 +1331,15 @@ class TrackerDumpWindow(QWidget):
             period_item.setText(period_val)
             period_item.setToolTip(period_val)
 
-            # 4. ARN Number
-            arn_item = _get_item(4, font=QFont("Consolas", 10, QFont.Bold), color="#39FF14")
-            arn_item.setText(r.get("arn_number", "N/A"))
-            arn_item.setToolTip(r.get("arn_number", "N/A"))
+            # 4. Submission Status (Hooked to LTT / SDC_Parser)
+            status_text, status_color = _resolve_ltt_submission_status(r)
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
+            status_item.setText(status_text)
+            arn_val = r.get("arn_number", "N/A")
+            tooltip_lines = [f"Submission Status: {status_text}"]
+            if arn_val and arn_val != "N/A":
+                tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
+            status_item.setToolTip("\n".join(tooltip_lines))
 
             # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")

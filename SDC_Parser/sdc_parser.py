@@ -88,10 +88,10 @@ def evaluate_status(raw_status):
         return "Not submitted"
     if "not filed" in raw or "unfiled" in raw or "to be filed" in raw:
         return "Not submitted"
+    if "pending" in raw:
+        return "Submitted (e-verification pending)"
     if "filed" in raw or "portal confirmed" in raw:
         return "Submitted & E-verified"
-    elif "pending" in raw:
-        return "Submitted (e-verification pending)"
     elif "evc" in raw:
         return "Other EVC"
     elif "option expired" in raw:

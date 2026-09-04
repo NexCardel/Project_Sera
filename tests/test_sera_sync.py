@@ -3,7 +3,7 @@ import tempfile
 import shutil
 import time
 import unittest
-from sync_peer import SyncPeerService, PeerInfo, SERA_SYNC_MAGIC
+from sync_peer import SyncPeerService, PeerInfo, SERA_SYNC_MAGIC, prune_pre_sync_backups
 
 
 class TestSeraSync(unittest.TestCase):
@@ -307,6 +307,113 @@ class TestSeraSync(unittest.TestCase):
 
         finally:
             receiver_service.stop()
+
+    def test_prune_pre_sync_backups(self):
+        """FIFO pruning should retain only the most recent max_keep pre-sync files."""
+        # Create 10 dummy snapshots with sequential mtimes
+        for i in range(10):
+            db_snap = os.path.join(self.temp_dir, f"master.db.pre-sync-2026-09-01_{i:02d}0000.db")
+            salt_snap = os.path.join(self.temp_dir, f"sera.salt.pre-sync-2026-09-01_{i:02d}0000")
+            with open(db_snap, "wb") as f:
+                f.write(b"SNAP_DB")
+            with open(salt_snap, "wb") as f:
+                f.write(b"SNAP_SALT")
+            os.utime(db_snap, (1000 + i * 10, 1000 + i * 10))
+            os.utime(salt_snap, (1000 + i * 10, 1000 + i * 10))
+
+        # Prune keeping 5
+        prune_pre_sync_backups(self.temp_dir, max_keep=5)
+
+        remaining_dbs = [f for f in os.listdir(self.temp_dir) if f.startswith("master.db.pre-sync-")]
+        remaining_salts = [f for f in os.listdir(self.temp_dir) if f.startswith("sera.salt.pre-sync-")]
+        self.assertEqual(len(remaining_dbs), 5)
+        self.assertEqual(len(remaining_salts), 5)
+
+        # Ensure the 5 remaining are the newest ones (indices 5, 6, 7, 8, 9)
+        for i in range(5, 10):
+            self.assertIn(f"master.db.pre-sync-2026-09-01_{i:02d}0000.db", remaining_dbs)
+
+    def test_store_peer_tracker_dumps_deduplication(self):
+        """Verifies that store_peer_tracker_dumps deduplicates by dataset_key, keeping the latest record."""
+        import tempfile
+        import shutil
+        from database import SeraDatabase
+        import security
+
+        temp_dir = tempfile.mkdtemp(prefix="sera_test_dedup_")
+        try:
+            salt_path = os.path.join(temp_dir, "sera.salt")
+            security.generate_and_save_salt(salt_path)
+            salt = security.load_salt(salt_path)
+            hex_key = security.derive_key_hex("testpass123", salt)
+            db_path = os.path.join(temp_dir, "master.db")
+            raw_db_path = os.path.join(temp_dir, "rawPayload.db")
+            db = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+
+            # Create 4 successive peer dumps with the same dataset_key (e.g. from GST portal page navigation)
+            dataset_key = "GST:27AAAAA0000A1Z5:GSTR3B:OCT_2025"
+            batch_dumps = [
+                {
+                    "portal": "GST Portal",
+                    "period_label": "Oct 2025",
+                    "arn_number": "N/A",
+                    "capture_method": "DOM_Tracker",
+                    "status": "Not submitted",
+                    "captured_by": "NodeA",
+                    "created_at": "2026-09-04T12:00:01",
+                    "dataset_key": dataset_key,
+                    "raw_payload_json": '{"status": "Not submitted"}'
+                },
+                {
+                    "portal": "GST Portal",
+                    "period_label": "Oct 2025",
+                    "arn_number": "N/A",
+                    "capture_method": "DOM_Tracker",
+                    "status": "Not submitted",
+                    "captured_by": "NodeA",
+                    "created_at": "2026-09-04T12:00:05",
+                    "dataset_key": dataset_key,
+                    "raw_payload_json": '{"status": "Not submitted"}'
+                },
+                {
+                    "portal": "GST Portal",
+                    "period_label": "Oct 2025",
+                    "arn_number": "N/A",
+                    "capture_method": "DOM_Tracker",
+                    "status": "Initiated",
+                    "captured_by": "NodeA",
+                    "created_at": "2026-09-04T12:00:10",
+                    "dataset_key": dataset_key,
+                    "raw_payload_json": '{"status": "Initiated"}'
+                },
+                {
+                    "portal": "GST Portal",
+                    "period_label": "Oct 2025",
+                    "arn_number": "N/A",
+                    "capture_method": "DOM_Tracker",
+                    "status": "Filed",
+                    "captured_by": "NodeA",
+                    "created_at": "2026-09-04T12:00:20",
+                    "dataset_key": dataset_key,
+                    "raw_payload_json": '{"status": "Filed"}'
+                }
+            ]
+
+            # Store peer tracker dumps
+            db.store_peer_tracker_dumps(batch_dumps)
+
+            # Must have only 1 record for this dataset_key, and it must be the latest (status: Filed)
+            records = db.get_tracker_dumps()
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["dataset_key"], dataset_key)
+            self.assertEqual(records[0]["status"], "Filed")
+            self.assertEqual(records[0]["created_at"], "2026-09-04T12:00:20")
+
+            # Running deduplicate_tracker_dumps() should report 0 duplicates
+            cleaned = db.deduplicate_tracker_dumps()
+            self.assertEqual(cleaned, 0)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

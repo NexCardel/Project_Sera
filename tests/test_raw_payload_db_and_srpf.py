@@ -325,6 +325,66 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         arns = [f["arn"] for f in itr_container["filing_history"]]
         self.assertIn("ITR000883707378", arns)
 
+    def test_srpf_submission_status_and_chronological_ordering(self):
+        """Verifies that:
+        1. Latest filing status (e.g. pending e-verification) is accurately captured in containers.
+        2. UI status resolver accurately reflects 'Submitted (e-verification pending)'.
+        3. Containers and raw tracker dumps are returned with latest entries at the top."""
+        from ui.windows.tracker_dump_window import _resolve_ltt_submission_status
+
+        # Register client in master.db
+        mcl_cols = self.db.get_mcl_columns()
+        pan_col = next(c for c in mcl_cols if "PAN" in c["label"].upper())
+        c_vals = {c["id"]: "TestVal" for c in mcl_cols if c.get("is_internal_pk")}
+        c_vals[pan_col["id"]] = "AEYPH5467G"
+        cid = self.db.add_client(c_vals, notes="Azad Hossain", service_ids=[])
+
+        # Client: First filed return (AY 2025-26)
+        self.db.insert_tracker_dump(
+            client_id=cid,
+            portal="Income Tax Portal",
+            arn_number="827916720300726",
+            period_label="AY 2025-26",
+            status="Filed & Verified (Processed)",
+            capture_method="SAD_API_Interceptor",
+            raw_payload_json=json.dumps({"pan": "AEYPH5467G", "status": "Filed & Verified (Processed)"})
+        )
+
+        # Client: Later submission with pending e-verification (AY 2026-27)
+        self.db.insert_tracker_dump(
+            client_id=cid,
+            portal="Income Tax Portal",
+            arn_number="132255440300826",
+            period_label="AY 2026-27",
+            status="Submitted (Pending e-Verification)",
+            capture_method="SAD_API_Interceptor",
+            raw_payload_json=json.dumps({"pan": "AEYPH5467G", "status": "Submitted (Pending e-Verification)"})
+        )
+
+        # Run re-resolution to rebuild containers
+        self.db.re_resolve_all_tracker_dumps()
+
+        containers = self.db.get_srpf_containers()
+        matched = [c for c in containers if c.get("client_id") == cid or "AEYPH5467G" in c.get("identity_key", "")]
+        self.assertTrue(len(matched) > 0)
+        c = matched[0]
+
+        # Latest status must be pending e-verification
+        self.assertEqual(c.get("status"), "Submitted (Pending e-Verification)")
+        self.assertEqual(c.get("latest_arn"), "132255440300826")
+
+        # Resolved LTT status must match sdc_parser: 'Submitted (e-verification pending)'
+        status_text, status_color = _resolve_ltt_submission_status(c)
+        self.assertEqual(status_text, "Submitted (e-verification pending)")
+        self.assertEqual(status_color, "#F1E05A")
+
+        # Test chronological ordering in raw dumps: latest capture (ARN 132255440300826) must be above earlier
+        raw_dumps = self.db.get_tracker_dumps(client_id=cid)
+        self.assertEqual(len(raw_dumps), 2)
+        self.assertEqual(raw_dumps[0]["arn_number"], "132255440300826")
+        self.assertEqual(raw_dumps[1]["arn_number"], "827916720300726")
+
 
 if __name__ == "__main__":
     unittest.main()
+

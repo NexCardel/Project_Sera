@@ -7,9 +7,35 @@ import threading
 import time
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'host_log.txt')
+MAX_LOG_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_LOG_BACKUPS = 2
+
+def _rotate_logs_if_needed():
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) >= MAX_LOG_SIZE:
+            b2 = f"{LOG_FILE}.2"
+            b1 = f"{LOG_FILE}.1"
+            if os.path.exists(b2):
+                try:
+                    os.remove(b2)
+                except OSError:
+                    pass
+            if os.path.exists(b1):
+                try:
+                    os.rename(b1, b2)
+                except OSError:
+                    pass
+            try:
+                os.rename(LOG_FILE, b1)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
 def log(msg):
     try:
-        with open(LOG_FILE, 'a') as f:
+        _rotate_logs_if_needed()
+        with open(LOG_FILE, 'a', encoding='utf-8', errors='replace') as f:
             f.write(f"{time.time()}: {msg}\n")
     except:
         pass
