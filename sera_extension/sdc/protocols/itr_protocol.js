@@ -489,7 +489,8 @@
         'personal_information', 'fo-itr-shared', 'fo-filing-status',
         'myprofile', 'profiledetail', 'profile', 'fileincometaxreturn',
         'dashboard', 'landing', 'home', 'viewfiledreturns', 'view-filed-returns',
-        'viewreturns', 'filedreturns', 'filed-returns', 'itrstatus', 'itr-status'
+        'viewreturns', 'filedreturns', 'filed-returns', 'itrstatus', 'itr-status',
+        'everifyreturn', 'e-verify-return'
       ];
       if (ITR_ROUTE_SIGNALS.some(s => hashRoute.includes(s))) return true;
 
@@ -497,7 +498,8 @@
       const bc = u.getBreadcrumbs().toLowerCase();
       if (bc.includes('income tax return') || bc.includes('e-file') || bc.includes('filing returns') ||
           bc.includes('my profile') || bc.includes('profile') || bc.includes('dashboard') ||
-          bc.includes('view filed returns') || bc.includes('filed returns')) return true;
+          bc.includes('view filed returns') || bc.includes('filed returns') ||
+          bc.includes('e-verify return') || bc.includes('everify return')) return true;
 
       return false;
     }
@@ -726,7 +728,16 @@
         'successfully filed and verified your return',
         'you have successfully filed and verified',
         'filed and verified',
-        'return has been verified'
+        'return has been verified',
+        'return successfully verified',
+        'successfully verified your return',
+        'you have successfully verified',
+        'return has been successfully verified',
+        'return has been successfully e-verified',
+        'successfully e-verified',
+        'return successfully e-verified',
+        'e-verification successful',
+        'verification successful'
       ];
       const hasVerified = VERIFIED_PHRASES.some(p => lower.includes(p));
       if (!hasVerified) return null;
@@ -746,8 +757,81 @@
       const activeName = name || headerName || '';
       const msg = _extractBannerText(
         'successfully filed and verified',
-        'you have successfully filed and verified your return'
-      );
+        'you have successfully filed and verified your return',
+        'return successfully verified',
+        'successfully verified your return',
+        'you have successfully verified'
+      ) || 'Filed & Verified';
+
+      return {
+        portal: 'income tax',
+        pan: pan || getSession().pan || '',
+        client_name: activeName,
+        client_temp_name: headerName || getSession().client_temp_name || '',
+        name: activeName,
+        taxpayer_name: activeName,
+        dob: dob || getSession().dob || '',
+        filing_type: form || 'ITR',
+        period_label: ay,
+        arn: ack,
+        status: 'Filed & Verified',
+        dom_breadcrumbs: u.getBreadcrumbs(),
+        confirmation_message: msg
+      };
+    }
+
+    // ─── CROSSHAIR 3.5: e-Verify Return (Pending Verification Page) ───────────
+    // Target: #/dashboard/eVerifyReturn, #/dashboard/eVerifyReturn/eVerifyReturn-al, etc.
+    function _handleEVerifyReturn(url) {
+      if (!_isItrContext(url)) return null;
+
+      const pageText = u.getPageText();
+      const lower = pageText.toLowerCase();
+
+      const VERIFIED_PHRASES = [
+        'return successfully verified',
+        'successfully verified your return',
+        'you have successfully verified',
+        'successfully filed and verified',
+        'filed and verified',
+        'return has been verified',
+        'return has been successfully verified',
+        'return has been successfully e-verified',
+        'successfully e-verified',
+        'return successfully e-verified',
+        'e-verification successful',
+        'verification successful'
+      ];
+      const hasVerified = VERIFIED_PHRASES.some(p => lower.includes(p));
+
+      // Also check if Step 3 indicator is active/completed
+      const step3Active = lower.includes('return successfully verified') ||
+                          Boolean(document.querySelector('.stepper, mat-step, .step')?.innerText?.toLowerCase()?.includes('return successfully verified'));
+
+      if (!hasVerified && !step3Active) {
+        // User is still selecting return (Step 1) or entering OTP (Step 2)
+        return null;
+      }
+
+      const ack = u.extractAck15(pageText) || getSession().arn || 'N/A';
+      const headerName = _extractHeaderName();
+      const pan = getSession().pan || _extractPan();
+      const name = _getClientName();
+      const dob = getSession().dob || _extractDob();
+      const { ay, form } = _extractAyAndForm(url);
+
+      if (pan) getSession().pan = pan;
+      if (name && name !== (getSession().client_temp_name || '')) getSession().name = name;
+      if (headerName) getSession().client_temp_name = headerName;
+      if (dob) getSession().dob = dob;
+
+      const activeName = name || headerName || '';
+      const msg = _extractBannerText(
+        'return successfully verified',
+        'successfully verified your return',
+        'you have successfully verified',
+        'successfully filed and verified'
+      ) || 'Return Successfully Verified';
 
       return {
         portal: 'income tax',
@@ -1234,7 +1318,7 @@
     SDC.onSessionClear(_resetItrSession);
 
     // ─── Register Protocol ───────────────────────────────────────────────────
-    SDC.register({
+    const registered = SDC.register({
       name: 'ITR Portal',
       hostMatch: /(?:incometax\.gov\.in|incometaxindiaefiling\.gov\.in|localhost|127\.0\.0\.1|^$)/,
       crosshairs: [
@@ -1243,6 +1327,11 @@
           // Highest capture priority: check success routes first
           pattern: /(?:fo-e-verify-now-success|fo-return-success|e-verify.*success|filing-success)/i,
           handler: _handleFiledVerified
+        },
+        {
+          id: 'itr_everify_return',
+          pattern: /(?:eVerifyReturn|e-verify-return|everifyreturn)/i,
+          handler: _handleEVerifyReturn
         },
         {
           id: 'itr_submitted_pending',
@@ -1279,6 +1368,30 @@
     });
 
     console.log('⚡ Sera SDC: ITR Protocol registered successfully.');
+
+    // Dynamic MutationObserver to catch Step 3 verification completion on pending e-verification pages
+    if (registered && typeof MutationObserver !== 'undefined') {
+      let scanTimer = null;
+      const observer = new MutationObserver(() => {
+        const href = window.location.href;
+        if (!/(?:eVerifyReturn|e-verify-return|everifyreturn)/i.test(href) || scanTimer) return;
+        scanTimer = setTimeout(async () => {
+          scanTimer = null;
+          const capture = _handleEVerifyReturn(window.location.href);
+          if (capture && capture.arn && capture.arn !== 'N/A') {
+            if (window.__SDC_LAST_EVERIFY_ARN__ === capture.arn) return;
+            window.__SDC_LAST_EVERIFY_ARN__ = capture.arn;
+
+            SDC.session.data.portal = 'income tax';
+            await SDC.session.recordStep(window.location.href, 'itr_everify_return', capture);
+            await SDC.session.save();
+            SDC.emitCapture(capture, 'ITR Portal', 'itr_everify_return');
+            console.log('⚡ Sera SDC [itr_everify_return]: Emitted verified capture for ARN:', capture.arn);
+          }
+        }, 600);
+      });
+      if (document.body) observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
   }
 
   _register();

@@ -47,6 +47,29 @@ def _format_to_local_time(iso_str: str) -> str:
         return clean[:19].replace("T", " ")
 
 
+def _parse_record_datetime(ts_str: str) -> datetime | None:
+    """Parses a UTC/ISO or local timestamp string into a timezone-aware datetime object."""
+    if not ts_str:
+        return None
+    clean = str(ts_str).strip()
+    if not clean:
+        return None
+    try:
+        if clean.endswith("Z"):
+            clean = clean[:-1] + "+00:00"
+        dt = datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone()
+    except Exception:
+        pass
+    try:
+        dt = datetime.strptime(clean[:19], "%Y-%m-%d %H:%M:%S")
+        return dt.astimezone()
+    except Exception:
+        return None
+
+
 def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
     """
     Evaluates raw record status via SDC_Parser logic into an authoritative
@@ -932,29 +955,89 @@ class TrackerDumpWindow(QWidget):
 
         # Search & Filter Controls
         filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(10)
+        filter_layout.setSpacing(8)
 
         # View Mode Selector (SRPF Grouped by Client Container as default)
         self.cmb_view_mode = QComboBox()
         self.cmb_view_mode.addItems(["Grouped by Client Container (SRPF)", "Individual Raw Captures"])
-        self.cmb_view_mode.setStyleSheet("font-weight: 700; color: #4CF9B7; background-color: #0D1117; padding: 6px 12px;")
+        self.cmb_view_mode.setStyleSheet("font-weight: 700; color: #4CF9B7; background-color: #0D1117; padding: 6px 12px; border: 1px solid #30363D; border-radius: 4px;")
         self.cmb_view_mode.currentIndexChanged.connect(self.load_data)
         filter_layout.addWidget(self.cmb_view_mode, stretch=2)
 
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Search Client Name, PAN, GSTIN, ARN, Period, Portal...")
+        self.txt_search.setPlaceholderText("Search Client, PAN, GSTIN, ARN, Period, Portal...")
+        self.txt_search.setStyleSheet("padding: 6px 10px; background-color: #161B22; color: #F0F6FC; border: 1px solid #30363D; border-radius: 4px;")
         self.txt_search.textChanged.connect(self._on_search_text_changed)
         filter_layout.addWidget(self.txt_search, stretch=3)
 
-        self.cmb_method = QComboBox()
-        self.cmb_method.addItems(["All Capture Methods", "SAD_API_Interceptor", "DOM_Tracker", "Manual_Fallback"])
-        self.cmb_method.currentIndexChanged.connect(self._on_filter_changed)
-        filter_layout.addWidget(self.cmb_method, stretch=1)
-
         self.cmb_status = QComboBox()
-        self.cmb_status.addItems(["All Statuses", "submitted", "pending", "uncertain"])
+        self.cmb_status.addItems([
+            "All Statuses",
+            "Submitted & E-verified",
+            "Pending e-Verification",
+            "Other EVC",
+            "Not submitted"
+        ])
+        self.cmb_status.setToolTip("Filter by evaluated LTT filing submission status")
+        self.cmb_status.setStyleSheet("padding: 6px 8px; background-color: #161B22; color: #F0F6FC; border: 1px solid #30363D; border-radius: 4px;")
         self.cmb_status.currentIndexChanged.connect(self._on_filter_changed)
-        filter_layout.addWidget(self.cmb_status, stretch=1)
+        filter_layout.addWidget(self.cmb_status, stretch=2)
+
+        self.cmb_portal = QComboBox()
+        self.cmb_portal.addItems([
+            "All Portals",
+            "Income Tax (ITR)",
+            "GST Portal",
+            "TRACES / TDS"
+        ])
+        self.cmb_portal.setToolTip("Filter by government compliance portal")
+        self.cmb_portal.setStyleSheet("padding: 6px 8px; background-color: #161B22; color: #F0F6FC; border: 1px solid #30363D; border-radius: 4px;")
+        self.cmb_portal.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.cmb_portal, stretch=1)
+
+        self.cmb_client = QComboBox()
+        self.cmb_client.addItems([
+            "All Clients",
+            "Registered Clients",
+            "Unregistered / Action Required"
+        ])
+        self.cmb_client.setToolTip("Filter by client registration / assignment status")
+        self.cmb_client.setStyleSheet("padding: 6px 8px; background-color: #161B22; color: #F0F6FC; border: 1px solid #30363D; border-radius: 4px;")
+        self.cmb_client.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.cmb_client, stretch=2)
+
+        self.cmb_date = QComboBox()
+        self.cmb_date.addItems([
+            "All Time",
+            "Today",
+            "Past 7 Days",
+            "Past 30 Days"
+        ])
+        self.cmb_date.setToolTip("Filter by capture / update recency")
+        self.cmb_date.setStyleSheet("padding: 6px 8px; background-color: #161B22; color: #F0F6FC; border: 1px solid #30363D; border-radius: 4px;")
+        self.cmb_date.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.cmb_date, stretch=1)
+
+        self.btn_reset_filters = QPushButton(" Reset")
+        self.btn_reset_filters.setIcon(_safe_qta_icon("mdi.filter-off", "#8B949E"))
+        self.btn_reset_filters.setToolTip("Reset all search & filter options")
+        self.btn_reset_filters.setStyleSheet("""
+            QPushButton {
+                padding: 6px 12px;
+                background-color: #21262D;
+                color: #C9D1D9;
+                border: 1px solid #30363D;
+                border-radius: 4px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #30363D;
+                color: #FFFFFF;
+                border-color: #8B949E;
+            }
+        """)
+        self.btn_reset_filters.clicked.connect(self._reset_filters)
+        filter_layout.addWidget(self.btn_reset_filters, stretch=0)
 
         main_layout.addLayout(filter_layout)
 
@@ -1077,6 +1160,31 @@ class TrackerDumpWindow(QWidget):
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
+    def _reset_filters(self):
+        """Resets all search and filter dropdowns to their default state."""
+        self.txt_search.blockSignals(True)
+        self.txt_search.clear()
+        self.txt_search.blockSignals(False)
+
+        self.cmb_status.blockSignals(True)
+        self.cmb_status.setCurrentIndex(0)
+        self.cmb_status.blockSignals(False)
+
+        self.cmb_portal.blockSignals(True)
+        self.cmb_portal.setCurrentIndex(0)
+        self.cmb_portal.blockSignals(False)
+
+        self.cmb_client.blockSignals(True)
+        self.cmb_client.setCurrentIndex(0)
+        self.cmb_client.blockSignals(False)
+
+        self.cmb_date.blockSignals(True)
+        self.cmb_date.setCurrentIndex(0)
+        self.cmb_date.blockSignals(False)
+
+        self._current_page = 1
+        self._apply_filters()
+
     def load_data(self):
         """Fetch tracker dumps or SRPF unified containers from database."""
         try:
@@ -1102,18 +1210,69 @@ class TrackerDumpWindow(QWidget):
         curr_col = self.table.currentColumn()
 
         search_txt = self.txt_search.text().strip().lower()
-        method_filter = self.cmb_method.currentText()
         status_filter = self.cmb_status.currentText()
+        portal_filter = self.cmb_portal.currentText()
+        client_filter = self.cmb_client.currentText()
+        date_filter = self.cmb_date.currentText()
         is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+
+        now_dt = datetime.now().astimezone()
+        today_date = now_dt.date()
 
         filtered = []
         for d in self._dumps_cache:
-            if not is_grouped:
-                if method_filter != "All Capture Methods" and d.get("capture_method") != method_filter:
+            # 1. Submission Status Filter (Evaluated through authoritative LTT logic)
+            if status_filter != "All Statuses":
+                res_status, _ = _resolve_ltt_submission_status(d)
+                if status_filter == "Submitted & E-verified" and res_status != "Submitted & E-verified":
                     continue
-                if status_filter != "All Statuses" and d.get("status") != status_filter:
+                elif status_filter == "Pending e-Verification" and res_status != "Submitted (e-verification pending)":
+                    continue
+                elif status_filter == "Other EVC" and res_status != "Other EVC":
+                    continue
+                elif status_filter == "Not submitted" and res_status not in ("Not submitted", "Option Expired (NA)"):
                     continue
 
+            # 2. Portal / Jurisdiction Filter
+            if portal_filter != "All Portals":
+                p_text = f"{d.get('portal', '')} {d.get('service_name', '')} {d.get('form_type', '')}".lower()
+                if portal_filter == "Income Tax (ITR)":
+                    if not any(k in p_text for k in ("income tax", "itr")):
+                        continue
+                elif portal_filter == "GST Portal":
+                    if not any(k in p_text for k in ("gst", "gstr", "cmp")):
+                        continue
+                elif portal_filter == "TRACES / TDS":
+                    if not any(k in p_text for k in ("traces", "tds", "26q", "24q", "27q")):
+                        continue
+
+            # 3. Client Registration / Assignment Filter
+            if client_filter != "All Clients":
+                is_unreg = bool(d.get("is_unassigned")) or not bool(d.get("client_id"))
+                if client_filter == "Registered Clients" and is_unreg:
+                    continue
+                elif client_filter == "Unregistered / Action Required" and not is_unreg:
+                    continue
+
+            # 4. Date / Recency Filter
+            if date_filter != "All Time":
+                ts_raw = d.get("last_updated") if is_grouped else d.get("created_at")
+                rec_dt = _parse_record_datetime(ts_raw)
+                if not rec_dt:
+                    continue
+                if date_filter == "Today":
+                    if rec_dt.date() != today_date:
+                        continue
+                elif date_filter == "Past 7 Days":
+                    delta_sec = (now_dt - rec_dt).total_seconds()
+                    if delta_sec < 0 or delta_sec > 7 * 86400:
+                        continue
+                elif date_filter == "Past 30 Days":
+                    delta_sec = (now_dt - rec_dt).total_seconds()
+                    if delta_sec < 0 or delta_sec > 30 * 86400:
+                        continue
+
+            # 5. Search Text Filter
             if search_txt:
                 match_fields = [
                     d.get("display_name", ""), d.get("client_name", ""), d.get("pan", ""),

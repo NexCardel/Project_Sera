@@ -90,7 +90,7 @@ def evaluate_status(raw_status):
         return "Not submitted"
     if "pending" in raw:
         return "Submitted (e-verification pending)"
-    if "filed" in raw or "portal confirmed" in raw:
+    if "filed" in raw or "portal confirmed" in raw or "verified" in raw:
         return "Submitted & E-verified"
     elif "evc" in raw:
         return "Other EVC"
