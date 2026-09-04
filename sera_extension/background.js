@@ -593,7 +593,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       background: linear-gradient(145deg, #121815, #0B120E);
       border: 1.5px solid #2E9B5F;
       border-radius: 14px;
-      box-shadow: 0 16px 44px rgba(0,0,0,0.75), 0 0 20px rgba(46, 155, 95, 0.25);
+      box-shadow: none;
       color: #FFFFFF;
       transform: translateX(120%);
       opacity: 0;
@@ -1404,13 +1404,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // The HTTP listener returns 200 only after the desktop has accepted the
     // payload. Native postMessage has no receipt acknowledgement, so it is
     // not sufficient for clearing the durable assembler outbox.
-    // Acknowledge receipt to the page immediately; the worker owns the one
-    // forwarding attempt after the page starts unloading.
-    sendResponse({ status: "accepted" });
     sendToDesktop(msg, true).then((sent) => {
       if (sent) chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
       else console.warn("Sera background: filing_result was not delivered to desktop.");
-    }).catch((err) => console.warn("Sera background: filing_result delivery error:", err));
+      sendResponse({ status: sent ? "accepted" : "failed" });
+    }).catch((err) => {
+      console.warn("Sera background: filing_result delivery error:", err);
+      sendResponse({ status: "failed" });
+    });
     return true;
   }
 });
@@ -1932,7 +1933,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                     background: linear-gradient(145deg, #111814, #0B130E);
                     border: 1.5px solid #2E9B5F;
                     border-radius: 12px;
-                    box-shadow: 0 12px 36px rgba(0,0,0,0.65), 0 0 16px rgba(46, 155, 95, 0.25);
+                    box-shadow: none;
                     color: #FFFFFF;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                     transform: translateX(120%);

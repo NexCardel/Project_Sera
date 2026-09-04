@@ -78,12 +78,12 @@ function ensureConnected() {
   if (!nativePort) connectToNativeHost();
 }
 
-async function sendToDesktop(msg) {
+async function sendToDesktop(msg, requireHttpAck = false) {
   let sent = false;
-  if (!nativePort) {
+  if (!requireHttpAck && !nativePort) {
     ensureConnected();
   }
-  if (nativePort) {
+  if (!requireHttpAck && nativePort) {
     try {
       nativePort.postMessage(msg);
       sent = true;
@@ -1379,12 +1379,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if (msg.type === "filing_result") {
+  if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
     console.log("Sera background: handling filing_result, sending to desktop...");
-    sendToDesktop(msg);
-    // Clear tracking state so we don't fire uncertain_result when tab closes
-    chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-    sendResponse({ status: "ok" });
+    sendToDesktop(msg, true).then((sent) => {
+      if (sent) chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
+      sendResponse({ status: sent ? "accepted" : "failed" });
+    }).catch((err) => {
+      console.warn("Sera background: filing_result delivery error:", err);
+      sendResponse({ status: "failed" });
+    });
     return true;
   }
 });

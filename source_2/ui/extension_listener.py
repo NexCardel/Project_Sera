@@ -1,8 +1,32 @@
+import base64
+import gzip
 import json
 import socket
 from PySide6.QtCore import QThread, Signal
 
 IPC_PORT = 49152
+
+
+def _decode_transport_message(msg: dict) -> dict:
+    """Restore a losslessly compressed assembler payload, if present."""
+    if not isinstance(msg, dict) or msg.get("type") != "filing_result_compressed":
+        return msg
+    if msg.get("encoding") != "gzip+base64":
+        raise ValueError(f"Unsupported compressed payload encoding: {msg.get('encoding')}")
+
+    encoded = msg.get("payload")
+    if not isinstance(encoded, str):
+        raise ValueError("Compressed payload is missing its base64 body")
+    raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+    restored = json.loads(raw.decode("utf-8"))
+    if not isinstance(restored, dict) or restored.get("type") != "filing_result":
+        raise ValueError("Compressed payload did not restore a filing_result object")
+    restored["transport"] = {
+        "encoding": msg.get("encoding"),
+        "original_size": msg.get("original_size"),
+        "compressed_size": msg.get("compressed_size")
+    }
+    return restored
 
 class ExtensionListener(QThread):
     filing_result_received = Signal(dict)
@@ -93,7 +117,7 @@ class ExtensionListener(QThread):
                                 is_http = True
                                 json_str = raw_data.split("\r\n\r\n", 1)[-1] if "\r\n\r\n" in raw_data else raw_data.split("\n\n", 1)[-1]
 
-                            msg = json.loads(json_str)
+                            msg = _decode_transport_message(json.loads(json_str))
                             mtype = msg.get('type')
                             if mtype in ('filing_result', 'audit_event'):
                                 self.filing_result_received.emit(msg)

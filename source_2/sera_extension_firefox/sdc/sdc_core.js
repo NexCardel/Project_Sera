@@ -606,11 +606,16 @@
     /** Retry a previously queued final payload after extension/page startup. */
     async retryPendingFlush() {
       if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local || _pendingFlushInFlight) return;
-      chrome.storage.local.get([PENDING_FLUSH_KEY], result => {
-        const pending = result && result[PENDING_FLUSH_KEY];
-        if (!pending || !pending.session_id) return;
-        _pendingFlushInFlight = true;
-        _sendReliableFlush(pending).finally(() => { _pendingFlushInFlight = false; });
+      chrome.storage.local.get(null, async result => {
+        const pending = Object.entries(result || {})
+          .filter(([key, value]) => key.startsWith(PENDING_FLUSH_KEY) && value && value.session_id)
+          .map(([, value]) => value);
+          for (const payload of pending) {
+            if (!payload || !payload.session_id || _pendingFlushInFlight) break;
+            _pendingFlushInFlight = true;
+            try { await _sendReliableFlush(payload); }
+            finally { _pendingFlushInFlight = false; }
+        }
       });
     },
 
@@ -1238,9 +1243,10 @@
     return new Promise(resolve => {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
         chrome.storage.local.get([PENDING_FLUSH_KEY], result => {
-          const pending = result && result[PENDING_FLUSH_KEY];
-          if (!pending || pending.session_id !== sessionId) { resolve(); return; }
-          chrome.storage.local.remove([PENDING_FLUSH_KEY], resolve);
+        const key = `${PENDING_FLUSH_KEY}${sessionId}`;
+        const legacy = result && result[PENDING_FLUSH_KEY];
+        const keys = legacy && legacy.session_id === sessionId ? [key, PENDING_FLUSH_KEY] : [key];
+        chrome.storage.local.remove(keys, resolve);
         });
       } else resolve();
     });
@@ -1275,16 +1281,27 @@
   function _queueReliableFlush(payload) {
     return new Promise(resolve => {
       const dispatch = () => {
-        if (_pendingFlushInFlight) { resolve(false); return; }
+        const pendingKey = `${PENDING_FLUSH_KEY}${payload.session_id}`;
+        chrome.storage.local.set({ [pendingKey]: payload }, () => {
+          if (_pendingFlushInFlight) { resolve(false); return; }
+          _pendingFlushInFlight = true;
+          _sendReliableFlush(payload).then(ok => {
+            _pendingFlushInFlight = false;
+            resolve(ok);
+            this.retryPendingFlush();
+          });
+        });
+      };
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        dispatch();
+      } else {
         _pendingFlushInFlight = true;
         _sendReliableFlush(payload).then(ok => {
           _pendingFlushInFlight = false;
           resolve(ok);
+          this.retryPendingFlush();
         });
-      };
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({ [PENDING_FLUSH_KEY]: payload }, dispatch);
-      } else dispatch();
+      }
     });
   }
 
