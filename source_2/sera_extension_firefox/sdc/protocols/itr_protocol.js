@@ -426,8 +426,18 @@
     }
 
     // ─── Shared: AY + Form from Context ─────────────────────────────────────
+    function _preferAssessmentYear(currentAy, candidateAy) {
+      if (!candidateAy) return currentAy || '';
+      if (!currentAy) return candidateAy;
+      const year = value => {
+        const match = String(value).match(/\bAY\s*(20\d{2})[-–]\d{2}\b/i);
+        return match ? Number(match[1]) : 0;
+      };
+      return year(candidateAy) >= year(currentAy) ? candidateAy : currentAy;
+    }
+
     function _extractAyAndForm(url) {
-      const ay = u.extractAY(url) || getSession().ay || '';
+      const ay = _preferAssessmentYear(getSession().ay, u.extractAY(url));
       const form = u.extractItrForm(url, u.getPageText()) || getSession().form || '';
       return { ay, form };
     }
@@ -590,7 +600,7 @@
       if (name) getSession().name = name;
       else if (headerName && !getSession().name) getSession().name = headerName;
       if (dob) getSession().dob = dob;
-      if (ay) getSession().ay = ay;
+      if (ay) getSession().ay = _preferAssessmentYear(getSession().ay, ay);
       if (form) getSession().form = form;
 
       const activeName = getSession().name || getSession().client_temp_name || '';
@@ -631,7 +641,7 @@
 
       const { ay, form } = _extractAyAndForm(url);
       if (form) getSession().form = form;
-      if (ay) getSession().ay = ay;
+      if (ay) getSession().ay = _preferAssessmentYear(getSession().ay, ay);
 
       const headerName = _extractHeaderName();
       const pan = getSession().pan || _extractPan();
@@ -785,7 +795,7 @@
       }
       if (pan) getSession().pan = pan;
       if (dob) getSession().dob = dob;
-      if (ay) getSession().ay = ay;
+      if (ay) getSession().ay = _preferAssessmentYear(getSession().ay, ay);
       if (form) getSession().form = form;
 
       // At landing, the best name we have is the header badge (may be truncated).
@@ -959,7 +969,7 @@
           if (name && name !== (getSession().client_temp_name || '')) getSession().name = name;
           if (headerName) getSession().client_temp_name = headerName;
           if (dob) getSession().dob = dob;
-          if (ay) getSession().ay = ay;
+          if (ay) getSession().ay = _preferAssessmentYear(getSession().ay, ay);
           if (form) getSession().form = form;
           getSession().arn = ack;
           getSession().status = filingStatus;
@@ -1034,7 +1044,7 @@
         return null;
       }
 
-      if (ay) getSession().ay = ay;
+      if (ay) getSession().ay = _preferAssessmentYear(getSession().ay, ay);
       if (form) getSession().form = form;
       getSession().arn = ack;
       getSession().status = filingStatus;
