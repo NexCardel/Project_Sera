@@ -213,7 +213,7 @@ function renderScaWidgetFromContent(params) {
       background: linear-gradient(145deg, #111814, #0B130E);
       border: 1.5px solid #2E9B5F;
       border-radius: 12px;
-      box-shadow: 0 12px 36px rgba(0,0,0,0.65), 0 0 16px rgba(46, 155, 95, 0.25);
+      box-shadow: none;
       color: #FFFFFF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       transform: translateX(120%);
