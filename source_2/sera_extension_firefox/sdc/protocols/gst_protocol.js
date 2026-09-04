@@ -543,8 +543,10 @@
     await _waitForReady(() => {
       const txt = document.body ? document.body.innerText : '';
       const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
-      const hasMeta = /(Status|Due Date|Tax Period|FY)/i.test(txt);
-      return hasGstin && hasMeta;
+      // FY/status can render before Return Period on GST's SPA.
+      const hasConcretePeriod = /(?:Tax|Return|Filing)\s+Period\s*[-:]?\s*[\r\n]*\s*(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Q[1-4]|Apr\s*[-–—]\s*Jun|Jul\s*[-–—]\s*Sep|Oct\s*[-–—]\s*Dec|Jan\s*[-–—]\s*Mar)/i.test(txt)
+        || /(?:[?&#](?:rtn_prd|period)=)(?:0[1-9]|1[0-2])\d{4}/i.test(window.location.href);
+      return hasGstin && hasConcretePeriod;
     }, 10000, 500);
 
     const { gstin, pan } = _extractGstinAndPan();
@@ -562,7 +564,12 @@
     if (meta.due_date) _gstSession.due_date = meta.due_date;
     if (meta.form_type) _gstSession.filing_type = meta.form_type;
 
-    const fullPeriodLabel = meta.tax_period ? (meta.tax_period + (meta.fy ? ' (FY ' + meta.fy + ')' : '')) : (meta.fy || 'Current Period');
+    // Never fall back to a prior session period or FY-only placeholder.
+    if (!meta.tax_period) {
+      console.warn('⚡ Sera SDC: Form details scanned but current return period is not resolved. Skipping capture.');
+      return null;
+    }
+    const fullPeriodLabel = meta.tax_period + (meta.fy ? ' (FY ' + meta.fy + ')' : '');
     const finalStatus = meta.status || 'Initiated';
 
     return {

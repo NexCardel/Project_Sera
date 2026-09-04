@@ -720,11 +720,12 @@
     await _waitForReady(() => {
       const txt = document.body ? document.body.innerText : '';
       const hasGstin = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/i.test(txt);
-      const hasRealPeriod = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)|Q[1-4]|20\d{2}-\d{2})\b/i.test(txt);
-      const hasRealStatus = /Status\s*[-:]\s*(Filed|Not Filed|Initiated|To be Filed|Submitted|Ready to File)/i.test(txt);
-      const hasFormIndicators = /(?:Due\s*Date|Eligible\s*ITC|Outward\s*supplies|Payment\s*of\s*Tax|Tax\s*Period)/i.test(txt);
-      return hasGstin && (hasRealPeriod || hasRealStatus || hasFormIndicators);
-    }, 4500, 200);
+      // FY/status can render before Return Period on GST's SPA. Wait for the
+      // concrete current-period value, not merely a partially rendered card.
+      const hasConcretePeriod = /(?:Tax|Return|Filing)\s+Period\s*[-:]?\s*[\r\n]*\s*(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Q[1-4]|Apr\s*[-–—]\s*Jun|Jul\s*[-–—]\s*Sep|Oct\s*[-–—]\s*Dec|Jan\s*[-–—]\s*Mar)/i.test(txt)
+        || /(?:[?&#](?:rtn_prd|period)=)(?:0[1-9]|1[0-2])\d{4}/i.test(window.location.href);
+      return hasGstin && hasConcretePeriod;
+    }, 10000, 200);
 
     const { gstin, pan } = _extractGstinAndPan();
     const { trade_name } = _extractTaxpayerNames();
@@ -754,12 +755,14 @@
     const displayName = activeTradeName || _gstSession.client_name || proprietorName || '';
     if (displayName) _gstSession.client_name = displayName;
 
-    const chosenPeriod = meta.tax_period || _gstSession.tax_period || '';
+    // Use only the current page value; a session fallback can reuse a prior month.
+    const chosenPeriod = meta.tax_period || '';
     const chosenFy = meta.fy || _gstSession.fy || '';
     const fullPeriodLabel = chosenPeriod ? (chosenPeriod + (chosenFy ? ' (FY ' + chosenFy + ')' : '')) : (chosenFy || '');
 
     // Skip emitting if period is still empty skeleton
-    if (!fullPeriodLabel) {
+    // Never emit an FY-only capture; it creates an incorrect dataset key.
+    if (!chosenPeriod || !fullPeriodLabel) {
       console.warn('⚡ Sera SDC: Form details scanned but period is not yet resolved. Skipping premature emission.');
       return null;
     }
