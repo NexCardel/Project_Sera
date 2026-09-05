@@ -180,6 +180,14 @@ class LttWorkspaceWindow(QDialog):
         btn_refresh.clicked.connect(self.load_data)
         h_layout.addWidget(btn_refresh)
 
+        btn_live_excel = QPushButton(" Live Excel (Power Query)")
+        btn_live_excel.setProperty("class", "ActionBtn")
+        btn_live_excel.setStyleSheet("background-color: #238636; color: #FFFFFF; font-weight: 700;")
+        btn_live_excel.setIcon(_safe_qta_icon("mdi.refresh-auto", "#FFFFFF"))
+        btn_live_excel.setToolTip("Open Live-Linked Excel Workbook (1-Click Data -> Refresh All without compiling)")
+        btn_live_excel.clicked.connect(self._open_live_excel)
+        h_layout.addWidget(btn_live_excel)
+
         btn_export = QPushButton(" Export Multi-Sheet Excel")
         btn_export.setProperty("class", "ActionBtn")
         btn_export.setStyleSheet("background-color: #1F6FEB; color: #FFFFFF; font-weight: 700;")
@@ -1015,3 +1023,21 @@ class LttWorkspaceWindow(QDialog):
         except Exception as e:
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Export Error", f"Failed to generate Excel report: {e}")
+
+    def _open_live_excel(self):
+        """Opens the live-linked Excel workbook powered by Power Query / QueryTable."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            import sdc_parser
+            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
+            QApplication.restoreOverrideCursor()
+            if xlsx_p and os.path.exists(xlsx_p):
+                try:
+                    os.startfile(xlsx_p)
+                except Exception as e:
+                    QMessageBox.warning(self, "Notice", f"Could not launch Excel automatically: {e}")
+            else:
+                QMessageBox.warning(self, "Warning", "Live Excel workbook could not be initialized.")
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Failed to open Live Excel Feed: {e}")

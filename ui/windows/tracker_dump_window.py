@@ -1202,6 +1202,19 @@ class TrackerDumpWindow(QWidget):
                 self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
             self._current_page = 1
             self._apply_filters()
+
+            # Automatically update the live CSV feed in the background so Excel Refresh is instant
+            try:
+                import threading
+                def _bg_feed_update():
+                    try:
+                        import sdc_parser
+                        sdc_parser.export_ltt_live_feed()
+                    except Exception:
+                        pass
+                threading.Thread(target=_bg_feed_update, daemon=True).start()
+            except Exception:
+                pass
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
 
@@ -1809,6 +1822,12 @@ class TrackerDumpWindow(QWidget):
         act_ltt_ws = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7"), "Live Tracking Table (LTT) Workspace")
         act_ltt_ws.triggered.connect(self._open_ltt_workspace)
 
+        act_ltt_live = menu.addAction(_safe_qta_icon("mdi.refresh-auto", "#58A6FF"), "Open Live-Linked Excel (Power Query)")
+        act_ltt_live.triggered.connect(self._open_ltt_live_excel)
+
+        act_ltt_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Update Live Data Feed (CSV)")
+        act_ltt_feed.triggered.connect(self._update_ltt_data_feed)
+
         act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
         act_classifier.triggered.connect(self._open_fst_classifier_report)
 
@@ -1840,6 +1859,71 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open LTT Workspace: {e}")
 
+    def _open_ltt_live_excel(self):
+        """Opens the permanent live-linked Excel workbook powered by Power Query / QueryTable."""
+        import os, sys
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
+        if getattr(sys, 'frozen', False):
+            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
+        if sdc_parser_dir not in sys.path:
+            sys.path.insert(0, sdc_parser_dir)
+
+        live_xlsx = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_Live.xlsx")
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            import sdc_parser
+            import importlib
+            importlib.reload(sdc_parser)
+            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
+            target = xlsx_p if (xlsx_p and os.path.exists(xlsx_p)) else live_xlsx
+            QApplication.restoreOverrideCursor()
+
+            if os.path.exists(target):
+                try:
+                    os.startfile(target)
+                except Exception as e:
+                    QMessageBox.warning(self, "Notice", f"Could not launch Excel automatically: {e}")
+            else:
+                QMessageBox.warning(self, "Warning", f"Live workbook was not found at:\n{target}")
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Failed to initialize live Excel feed: {e}")
+
+    def _update_ltt_data_feed(self):
+        """Refreshes the backend CSV data feed without modifying or closing user's open Excel workbook."""
+        import os, sys
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
+        if getattr(sys, 'frozen', False):
+            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
+        if sdc_parser_dir not in sys.path:
+            sys.path.insert(0, sdc_parser_dir)
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            import sdc_parser
+            import importlib
+            importlib.reload(sdc_parser)
+            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
+            QApplication.restoreOverrideCursor()
+            if csv_p and os.path.exists(csv_p):
+                QMessageBox.information(
+                    self, "Data Feed Updated",
+                    f"Live CSV Data Feed updated successfully!\n\n"
+                    f"Saved to:\n{csv_p}\n\n"
+                    f"In Microsoft Excel, simply click:\n"
+                    f"• [Ctrl + Alt + F5]  or  Data -> 'Refresh All'\n"
+                    f"• Or right-click inside the table and click 'Refresh'.\n\n"
+                    f"All your custom columns, notes, and formulas will be preserved!"
+                )
+            else:
+                QMessageBox.warning(self, "Warning", "Data feed could not be generated.")
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Failed to update data feed: {e}")
+
     def _generate_ltt(self):
         """Backward-compatible alias for generating the LTT Excel report."""
         self._export_ltt_excel()
@@ -1850,7 +1934,15 @@ class TrackerDumpWindow(QWidget):
         act_open = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7") or "", "Open Interactive LTT Workspace")
         act_open.triggered.connect(self._open_ltt_workspace)
 
-        act_export = menu.addAction(_safe_qta_icon("mdi.file-excel", "#58A6FF") or "", "Export Multi-Sheet Excel Report")
+        act_live = menu.addAction(_safe_qta_icon("mdi.refresh-auto", "#58A6FF") or "", "Open Live-Linked Excel (Auto-Refresh)")
+        act_live.triggered.connect(self._open_ltt_live_excel)
+
+        act_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7") or "", "Update Live Data Feed (CSV)")
+        act_feed.triggered.connect(self._update_ltt_data_feed)
+
+        menu.addSeparator()
+
+        act_export = menu.addAction(_safe_qta_icon("mdi.file-excel", "#FFFFFF") or "", "Export Multi-Sheet Excel Report")
         act_export.triggered.connect(self._export_ltt_excel)
 
         btn = getattr(self, "btn_ltt_report", None)

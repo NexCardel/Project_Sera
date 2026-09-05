@@ -929,8 +929,97 @@ def generate_ltt_excel():
 
     writer.close()
     print(f"Success! Generated multi-sheet LTT report at: {target_out} ({len(data)} records).")
+
+    # Also automatically refresh the live CSV data feeds and linked workbook
+    try:
+        export_ltt_live_feed(output_dir=live_dir)
+    except Exception as e:
+        if DEBUG:
+            print(f"[SDC_Parser] Notice updating live feeds during excel export: {e}")
+
     return target_out
+
+
+def export_ltt_live_feed(output_dir=None, force_recreate_workbook=False):
+    """
+    Exports clean, high-performance CSV data feeds for Microsoft Excel Power Query / Data Connections.
+    
+    Generates:
+    - LTT_Data_Feed.csv: Full live tabular dataset (Master LTT) formatted for 1-click Excel refresh.
+    - LTT_Defaulters_Feed.csv: Filtered action-required / defaulters feed.
+    - Live_Tracking_Table_Live.xlsx: The live-linked Excel workbook pre-wired with Excel's native QueryTable / PowerQuery.
+      If Live_Tracking_Table_Live.xlsx already exists, it is NEVER overwritten, ensuring user formulas,
+      notes, custom columns, and conditional formatting are permanently preserved!
+    """
+    import subprocess
+    if output_dir is None:
+        output_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
+    os.makedirs(output_dir, exist_ok=True)
+
+    data, kpis = get_ltt_dataset()
+    if not data:
+        print("[SDC_Parser] Notice: No LTT data to export to live feed.")
+        return None, None
+
+    df_master = pd.DataFrame(data)
+    
+    # Clean up multi-line string columns to ensure exactly one line per row in CSV/Excel
+    for col in df_master.select_dtypes(include=['object']):
+        df_master[col] = (
+            df_master[col]
+            .astype(str)
+            .replace('None', '')
+            .replace('nan', '')
+            .str.replace('\r\n', ' ; ')
+            .str.replace('\n', ' ; ')
+            .str.replace('\r', ' ; ')
+        )
+
+    # 1. Export Master CSV Feed
+    csv_master_path = os.path.join(output_dir, "LTT_Data_Feed.csv")
+    df_master.to_csv(csv_master_path, index=False, encoding='utf-8-sig')
+
+    # Also keep a copy in local SDC_Parser dir for local access
+    local_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LTT_Data_Feed.csv")
+    try:
+        df_master.to_csv(local_csv, index=False, encoding='utf-8-sig')
+    except Exception:
+        pass
+
+    # 2. Export Defaulters CSV Feed
+    df_action = df_master[
+        (
+            df_master['Compliance Alert'].str.contains("Overdue|Expired|Soon|🚨|⚠️", case=False, na=False) |
+            (df_master['Discrepancy Note'] != "") |
+            (df_master['Submit Status'] == "Not submitted")
+        ) &
+        (~df_master['Submit Status'].isin(["Option Expired (NA)", "Not Applicable (NA)", "Submitted & E-verified"]))
+    ].copy()
+    csv_action_path = os.path.join(output_dir, "LTT_Defaulters_Feed.csv")
+    df_action.to_csv(csv_action_path, index=False, encoding='utf-8-sig')
+
+    # 3. Create or maintain the Live Excel Workbook (Power Query / Data Connection)
+    live_xlsx_path = os.path.join(output_dir, "Live_Tracking_Table_Live.xlsx")
+    ps1_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "create_live_workbook.ps1")
+    if os.path.exists(ps1_script):
+        try:
+            cmd = [
+                "powershell", "-ExecutionPolicy", "Bypass", "-File", ps1_script,
+                "-csvPath", csv_master_path,
+                "-xlsxPath", live_xlsx_path
+            ]
+            if force_recreate_workbook:
+                cmd.append("-force")
+            subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except Exception as e:
+            if DEBUG:
+                print(f"[SDC_Parser] PowerShell workbook creation notice: {e}")
+
+    print(f"[SDC_Parser] Live data feed updated: {csv_master_path} ({len(df_master)} records)")
+    return csv_master_path, live_xlsx_path
+
 
 if __name__ == '__main__':
     print("--- SDC Parser (Live Tracking Table) ---")
     generate_ltt_excel()
+    export_ltt_live_feed()
