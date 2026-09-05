@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Project Sera Companion",
-  "version": "2.9.6",
+  "version": "2.9.7",
   "description": "Autofill and filing confirmation tracking for Aman Associates.",
   "browser_specific_settings": {
     "gecko": {

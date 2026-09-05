@@ -280,8 +280,49 @@ class SeraDatabase:
         except Exception as e:
             print(f"[database] _migrate_tracker_dump_nullable notice: {e}")
 
+    def _auto_heal_raw_db(self):
+        """Safely backs up un-decryptable rawPayload.db and re-initializes a fresh database matching the current vault key."""
+        try:
+            if os.path.exists(self.raw_db_path) and os.path.getsize(self.raw_db_path) > 0:
+                import datetime, shutil
+                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_name = f"{self.raw_db_path}.key_mismatch_{now_str}.bak"
+                try:
+                    shutil.copy2(self.raw_db_path, backup_name)
+                    print(f"[database] Backed up un-decryptable rawPayload.db to {backup_name}")
+                except Exception:
+                    pass
+
+            for p in [self.raw_db_path, f"{self.raw_db_path}-wal", f"{self.raw_db_path}-shm", f"{self.raw_db_path}-journal"]:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            print("[database] Auto-recovery: Re-initializing fresh rawPayload.db with active vault key.")
+        except Exception as err:
+            print(f"[database] Error during _auto_heal_raw_db: {err}")
+
     def _init_raw_schema(self):
-        """Initializes tables and indexes inside rawPayload.db."""
+        """Initializes tables and indexes inside rawPayload.db with auto-healing recovery."""
+        # 1. Check for 0-byte dummy or corrupted file
+        if os.path.exists(self.raw_db_path) and os.path.getsize(self.raw_db_path) == 0:
+            try:
+                os.remove(self.raw_db_path)
+            except Exception:
+                pass
+
+        # 2. Test decryption. If key mismatch occurs (e.g. after transporting salt to a secondary PC),
+        # auto-heal so staff is never locked out with 'Could not open rawPayload.db with provided key'.
+        try:
+            with self._connect_raw() as test_conn:
+                test_conn.execute("SELECT count(*) FROM sqlite_master;")
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "key" in err_msg or "not a database" in err_msg or "encrypted" in err_msg or "codec" in err_msg:
+                print(f"[database] rawPayload.db key mismatch: {e}. Performing automatic recovery...")
+                self._auto_heal_raw_db()
+
         with self._connect_raw() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tracker_dump (

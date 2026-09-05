@@ -38,7 +38,7 @@ The injected `fillCredentialsInPage()` function:
 - **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
 - **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
-## Sera FST: API Detector (SAD v2.9.6), SDC Assembler & DOM Detector
+## Sera FST: API Detector (SAD v2.9.7), SDC Assembler & DOM Detector
 
 - **Sera SDC Assembler (`sdc_core.js` + protocols)**:
   - **In-Memory Aggregation**: Buffers all crosshair events during an active portal session into `sdc_assembler` without emitting premature fragmented entries.
@@ -55,7 +55,7 @@ The injected `fillCredentialsInPage()` function:
 
 The GST multi-dataset flow was not visible in Tracker Dump because the final compressed assembler message was not reaching the desktop ingestion path. The desktop listener was not active on loopback port `49152`, and its decoder also lacked the `base64` import required for `gzip+base64` messages. The source decoder and dataset expansion are now corrected. Testing must use a restarted desktop build and a reloaded extension; otherwise an older process can continue to discard or ignore the final envelope.
 
-- **Sera SAD (`net_interceptor.js` — v2.9.6)**:
+- **Sera SAD (`net_interceptor.js` — v2.9.7)**:
   - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.
   - **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
   - **E-Verification State & Intent Detection**:
