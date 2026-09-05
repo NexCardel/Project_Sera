@@ -931,12 +931,15 @@ class TrackerDumpWindow(QWidget):
         btn_refresh.clicked.connect(self.load_data)
         header_layout.addWidget(btn_refresh)
 
-        btn_ltt_report = QPushButton("Live Tracking Table (LTT)")
-        btn_ltt_report.setProperty("class", "ActionBtn")
-        btn_ltt_report.setStyleSheet("background-color: #2F6BA8; color: #FFFFFF; font-weight: 700;")
-        btn_ltt_report.setIcon(_safe_qta_icon("mdi.table-large", "#FFFFFF"))
-        btn_ltt_report.clicked.connect(self._generate_ltt)
-        header_layout.addWidget(btn_ltt_report)
+        self.btn_ltt_report = QPushButton("Live Tracking Table (LTT)")
+        self.btn_ltt_report.setProperty("class", "ActionBtn")
+        self.btn_ltt_report.setStyleSheet("background-color: #2F6BA8; color: #FFFFFF; font-weight: 700;")
+        self.btn_ltt_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
+        self.btn_ltt_report.setToolTip("Generate and open Multi-Sheet Live Tracking Table (LTT) Excel Report")
+        self.btn_ltt_report.clicked.connect(self._export_ltt_excel)
+        self.btn_ltt_report.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.btn_ltt_report.customContextMenuRequested.connect(self._show_ltt_menu)
+        header_layout.addWidget(self.btn_ltt_report)
 
         btn_excel_report = QPushButton("SDC Audit Report (Excel)")
         btn_excel_report.setProperty("class", "ActionBtn")
@@ -1803,6 +1806,9 @@ class TrackerDumpWindow(QWidget):
 
         menu.addSeparator()
 
+        act_ltt_ws = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7"), "Live Tracking Table (LTT) Workspace")
+        act_ltt_ws.triggered.connect(self._open_ltt_workspace)
+
         act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
         act_classifier.triggered.connect(self._open_fst_classifier_report)
 
@@ -1825,8 +1831,36 @@ class TrackerDumpWindow(QWidget):
             menu.exec_(self.cursor().pos())
 
 
+    def _open_ltt_workspace(self):
+        """Opens the full-featured interactive Live Tracking Table (LTT) workspace."""
+        try:
+            from ui.windows.ltt_window import LttWorkspaceWindow
+            win = LttWorkspaceWindow(self)
+            win.exec_()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open LTT Workspace: {e}")
+
     def _generate_ltt(self):
-        """Executes the independent SDC Parser and opens the resulting LTT Excel file."""
+        """Backward-compatible alias for generating the LTT Excel report."""
+        self._export_ltt_excel()
+
+    def _show_ltt_menu(self, pos):
+        """Context menu for LTT button providing quick actions."""
+        menu = QMenu(self)
+        act_open = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7") or "", "Open Interactive LTT Workspace")
+        act_open.triggered.connect(self._open_ltt_workspace)
+
+        act_export = menu.addAction(_safe_qta_icon("mdi.file-excel", "#58A6FF") or "", "Export Multi-Sheet Excel Report")
+        act_export.triggered.connect(self._export_ltt_excel)
+
+        btn = getattr(self, "btn_ltt_report", None)
+        if btn:
+            menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
+        else:
+            menu.exec_(self.cursor().pos())
+
+    def _export_ltt_excel(self):
+        """Generates and opens the enhanced multi-sheet LTT Excel file."""
         import os, sys
         base_dir = os.path.dirname(os.path.abspath(__file__))
         sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
@@ -1841,11 +1875,12 @@ class TrackerDumpWindow(QWidget):
         try:
             import sdc_parser
             import importlib
+            importlib.reload(sdc_parser)
             generated_path = sdc_parser.generate_ltt_excel()
             target_file = generated_path if (generated_path and os.path.exists(generated_path)) else ltt_output
             QApplication.restoreOverrideCursor()
             if os.path.exists(target_file):
-                QMessageBox.information(self, "Success", f"Live Tracking Table (LTT) generated successfully!\nSaved to:\n{target_file}")
+                QMessageBox.information(self, "Success", f"Multi-Sheet Live Tracking Table (LTT) generated successfully!\n\nSaved to:\n{target_file}")
                 try:
                     os.startfile(target_file)
                 except Exception: pass
@@ -1853,4 +1888,5 @@ class TrackerDumpWindow(QWidget):
                 QMessageBox.warning(self, "Warning", "Parser ran, but the LTT Excel file was not found.")
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to generate LTT: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to generate LTT Excel: {e}")
+
