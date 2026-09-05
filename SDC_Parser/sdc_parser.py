@@ -581,7 +581,51 @@ def process_timelines():
             if k in ltt_dict:
                 ltt_dict[k]["Discrepancy Note"] = "⚠️ GSTR-1 Pending (GSTR-3B Filed)"
 
-    return list(ltt_dict.values())
+    # Pass 3: Consolidate Income Tax (ITR) to strictly ONE final entry registered by the final payload
+    # GST filings and other portals remain completely untouched.
+    final_ltt_list = []
+    itr_candidates_by_pan = {}
+
+    for item in ltt_dict.values():
+        if item.get("Portal") == "Income Tax (ITD)":
+            pan = item.get("PAN")
+            if pan:
+                if pan not in itr_candidates_by_pan:
+                    itr_candidates_by_pan[pan] = []
+                itr_candidates_by_pan[pan].append(item)
+            else:
+                final_ltt_list.append(item)
+        else:
+            # GST and TRACES / TDS: completely untouched
+            final_ltt_list.append(item)
+
+    def _itr_final_payload_key(r):
+        """Returns a composite comparison key to determine the final, authoritative payload."""
+        ts = str(r.get("Last Updated") or "")
+        form_val = str(r.get("Filing Type") or "")
+        form_rank = 2 if re.match(r"^ITR-[1-7]", form_val, re.I) else (1 if "ITR" in form_val else 0)
+        period_val = str(r.get("Filing Period") or "")
+        period_rank = 0
+        if period_val.startswith("AY 20"):
+            try:
+                period_rank = int(period_val.split()[1][:4])
+            except Exception:
+                period_rank = 2000
+        elif period_val not in ("", "Unknown Period", "Current Period"):
+            period_rank = 1000
+        arn_val = str(r.get("ARN") or "").strip()
+        has_arn = 1 if (arn_val and arn_val not in ("-", "N/A", "None")) else 0
+        st_val = str(r.get("Submit Status") or "").lower()
+        st_rank = 2 if "verified" in st_val else (1 if "pending" in st_val else 0)
+
+        return (ts, form_rank, period_rank, has_arn, st_rank)
+
+    for pan, candidate_list in itr_candidates_by_pan.items():
+        # Pick the single final entry registered by the final payload
+        candidate_list.sort(key=_itr_final_payload_key, reverse=True)
+        final_ltt_list.append(candidate_list[0])
+
+    return final_ltt_list
 
 def get_ltt_dataset():
     """Authoritative API returning the sorted LTT dataset and computed KPI metrics."""

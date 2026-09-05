@@ -16,9 +16,10 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable
 
-APP_VERSION = "2.9.4"
+APP_VERSION = "2.9.6"
 GITHUB_REPO = "NexCardel/Project_Sera"
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.json"
+RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
 def parse_version(v_str: str) -> Tuple[int, ...]:
@@ -38,14 +39,20 @@ def is_update_available(latest_version: str, current_version: str = APP_VERSION)
     return parse_version(latest_version) > parse_version(current_version)
 
 
-def check_for_updates(timeout_seconds: int = 4) -> Optional[Dict]:
+def check_for_updates(timeout_seconds: int = 5) -> Optional[Dict]:
     """
-    Query GitHub raw content for version.json.
+    Query GitHub raw content for version.json, with automatic fallback
+    to GitHub Releases API to guarantee reliable update notifications.
     Returns dictionary with update info if a newer version is available, else None.
     """
+    # 1. First attempt: Query version.json with cache buster
+    cache_buster = int(time.time())
     req = urllib.request.Request(
-        VERSION_URL,
-        headers={"User-Agent": "ProjectSera-Updater/2.3.0"}
+        f"{VERSION_URL}?_cb={cache_buster}",
+        headers={
+            "User-Agent": f"ProjectSera-Updater/{APP_VERSION}",
+            "Cache-Control": "no-cache"
+        }
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
@@ -54,10 +61,7 @@ def check_for_updates(timeout_seconds: int = 4) -> Optional[Dict]:
                 latest_v = data.get("version", "0.0.0")
                 min_req_v = data.get("min_required_version", "0.0.0")
                 
-                # Check if update is available or mandatory
                 update_needed = is_update_available(latest_v, APP_VERSION)
-                # A mandatory flag only applies to an actual newer release. Without
-                # this guard, a build can be forced to download itself forever.
                 is_mandatory = update_needed and (
                     data.get("mandatory", False)
                     or is_update_available(min_req_v, APP_VERSION)
@@ -71,13 +75,42 @@ def check_for_updates(timeout_seconds: int = 4) -> Optional[Dict]:
                         "download_url": data.get("download_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
                         "release_notes": data.get("release_notes", "A new security and feature update is available for Project Sera.")
                     }
-    except urllib.error.HTTPError as e:
-        # A release branch/repository may not publish version metadata yet. This
-        # is a normal no-update state and should not alarm staff at startup.
-        if e.code != 404:
-            print(f"[Updater] Version check skipped/failed: {e}")
     except Exception as e:
-        print(f"[Updater] Version check skipped/failed: {e}")
+        print(f"[Updater] version.json check error: {e}")
+
+    # 2. Secondary fallback: Query GitHub Releases API directly
+    # This prevents missed updates if version.json wasn't bumped on the main branch.
+    try:
+        api_req = urllib.request.Request(
+            RELEASES_API_URL,
+            headers={
+                "User-Agent": f"ProjectSera-Updater/{APP_VERSION}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+        )
+        with urllib.request.urlopen(api_req, timeout=timeout_seconds) as api_resp:
+            if api_resp.status == 200:
+                rel_data = json.loads(api_resp.read().decode("utf-8"))
+                tag_v = rel_data.get("tag_name", "").strip().lstrip("vV")
+                if is_update_available(tag_v, APP_VERSION):
+                    download_url = None
+                    for asset in rel_data.get("assets", []):
+                        if asset.get("name", "").endswith(".exe"):
+                            download_url = asset.get("browser_download_url")
+                            break
+                    if not download_url:
+                        download_url = rel_data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest")
+                    
+                    return {
+                        "latest_version": tag_v,
+                        "current_version": APP_VERSION,
+                        "mandatory": False,
+                        "download_url": download_url,
+                        "release_notes": rel_data.get("body") or "A new release is available on GitHub."
+                    }
+    except Exception as e:
+        print(f"[Updater] GitHub Releases API fallback error: {e}")
+
     return None
 
 

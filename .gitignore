@@ -71,5 +71,7 @@ seraRawPayload*.txt
 Raw_Payload_Dump/
 *.xlsx
 .obsidian/
-
-
+backups/
+*.csv
+*.tmp
+~*
