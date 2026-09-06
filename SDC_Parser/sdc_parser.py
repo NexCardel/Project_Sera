@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import subprocess
 import pandas as pd
 from datetime import datetime, date
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
@@ -1045,16 +1046,35 @@ def export_ltt_live_feed(output_dir=None, force_recreate_workbook=False):
     # 3. Create or maintain the Live Excel Workbook (Power Query / Data Connection)
     live_xlsx_path = os.path.join(output_dir, "Live_Tracking_Table_Live.xlsx")
     ps1_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "create_live_workbook.ps1")
-    if os.path.exists(ps1_script):
+    
+    # Bypass PowerShell completely if the workbook already exists and recreate is not forced
+    if (not os.path.exists(live_xlsx_path) or force_recreate_workbook) and os.path.exists(ps1_script):
         try:
             cmd = [
-                "powershell", "-ExecutionPolicy", "Bypass", "-File", ps1_script,
+                "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                "-ExecutionPolicy", "Bypass", "-File", ps1_script,
                 "-csvPath", csv_master_path,
                 "-xlsxPath", live_xlsx_path
             ]
             if force_recreate_workbook:
                 cmd.append("-force")
-            subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+
+            startupinfo = None
+            creationflags = 0
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+                creationflags = subprocess.CREATE_NO_WINDOW
+
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=25,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
         except Exception as e:
             if DEBUG:
                 print(f"[SDC_Parser] PowerShell workbook creation notice: {e}")
