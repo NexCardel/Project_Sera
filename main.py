@@ -279,6 +279,9 @@ class SeraApp:
                 self.db.set_setting("sca_enabled", "1")
             if self.db.get_setting("tracker_enabled") is None:
                 self.db.set_setting("tracker_enabled", "1")
+            if self.db.get_setting("scc_enabled") is None:
+                self.db.set_setting("scc_enabled", "1")
+            self.scc_banner = None
 
             # Initialize Sera Clipboard Assist (SCA) immediately so cold-boot copies are armed
             from clipboard_watch import ClipboardWatchService
@@ -628,18 +631,138 @@ class SeraApp:
             return None
 
     def _handle_session_started(self, msg: dict):
-        """Displays a toast notification when a new client session starts."""
-        portal = msg.get("portal", "Income Tax").upper()
-        pan = msg.get("pan", "")
-        name = msg.get("client_name", "")
+        """Displays a toast notification when a new client session starts and triggers SCC if needed."""
+        portal = msg.get("portal", "Income Tax")
+        pan = str(msg.get("pan") or "").strip()
+        name = str(msg.get("client_name") or "").strip()
         
         if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
                 "Sera SDC Tracking Active", 
-                f"Live tracking started for {name} ({pan}) on {portal}.", 
+                f"Live tracking started for {name} ({pan}) on {portal.upper()}.", 
                 QSystemTrayIcon.Information, 
                 3000
             )
+
+        # SCC: Check if logged-in client has an undocumented password
+        self._check_scc_quick_tag(portal, pan, name)
+
+    def _check_scc_quick_tag(self, portal: str, pan: str, name: str):
+        """Checks if the logged-in client has an undocumented password, and if so, shows SCC Quick-Tag banner."""
+        if not pan or not hasattr(self, "db") or not self.db:
+            return
+
+        try:
+            scc_cfg = self.db.get_scc_settings()
+            if not scc_cfg.get("enabled"):
+                return
+
+            # Resolve service and password column
+            svc = self.db.get_service_for_portal(portal)
+            if not svc:
+                return
+
+            pwd_col_id = svc.get("password_column_id")
+            if not pwd_col_id:
+                return
+
+            # Look up client in master.db
+            client = self.db.get_client_by_pan(pan)
+            client_id = client.get("id") if client else None
+
+            # Check if password is already set
+            existing_pwd = ""
+            if client and "values" in client:
+                existing_pwd = str(client["values"].get(pwd_col_id) or "").strip()
+
+            if existing_pwd:
+                # Password already registered in vault — no action needed!
+                return
+
+            # Password is empty / missing! Spawn or update SCC banner
+            self._show_scc_quick_tag_banner(
+                client_id=client_id,
+                pan=pan,
+                name=name or (client.get("values", {}).get(2) if client else "") or "Taxpayer",
+                portal=svc.get("name", portal),
+                pwd_col_id=pwd_col_id,
+                combos=scc_cfg.get("combos", [])
+            )
+        except Exception as e:
+            print(f"[main._check_scc_quick_tag error] {e}")
+
+    def _show_scc_quick_tag_banner(self, client_id: int | None, pan: str, name: str, portal: str, pwd_col_id: int, combos: list):
+        """Displays the floating SCC Quick-Tag banner in the bottom-right corner."""
+        try:
+            if not hasattr(self, "scc_banner") or self.scc_banner is None:
+                from ui.components.scc_tag_banner import SccQuickTagBanner
+                self.scc_banner = SccQuickTagBanner()
+                self.scc_banner.password_selected.connect(self._on_scc_password_saved)
+
+            self.scc_banner._active_client_id = client_id
+            self.scc_banner.show_prompt(
+                pan=pan,
+                client_name=name,
+                column_id=pwd_col_id,
+                portal=portal,
+                combos=combos
+            )
+        except Exception as e:
+            print(f"[main._show_scc_quick_tag_banner error] {e}")
+
+    def _on_scc_password_saved(self, pan: str, client_name: str, column_id: int, password: str, combo_label: str):
+        """Persists the password tagged by operator into master.db."""
+        try:
+            client_id = getattr(self.scc_banner, "_active_client_id", None)
+            if not client_id:
+                client = self.db.get_client_by_pan(pan)
+                client_id = client.get("id") if client else None
+
+            if not client_id:
+                # Unregistered client: auto-create in master.db
+                mcl = self.db.get_mcl_columns()
+                pan_col_id = None
+                name_col_id = None
+                for c in mcl:
+                    lbl = c.get("label", "").lower()
+                    if "pan" in lbl and not pan_col_id:
+                        pan_col_id = c["id"]
+                    if ("name" in lbl or "client" in lbl or "proprietor" in lbl) and not name_col_id:
+                        name_col_id = c["id"]
+
+                values = {}
+                if pan_col_id:
+                    values[pan_col_id] = pan.upper()
+                if name_col_id and client_name:
+                    values[name_col_id] = client_name
+                values[column_id] = password
+
+                svc = self.db.get_service_for_portal("Income Tax")
+                svc_ids = [svc["id"]] if svc else []
+
+                client_id = self.db.add_client(
+                    values=values,
+                    notes=f"Auto-registered via SCC Quick-Tag ({combo_label})",
+                    service_ids=svc_ids,
+                    actor=getattr(self, "actor", "Staff")
+                )
+                print(f"[main.SCC] Auto-created client record #{client_id} with password from {combo_label}")
+            else:
+                # Existing client: update single password field
+                self.db.update_client_single_field(
+                    client_id=client_id,
+                    column_id=column_id,
+                    value=password,
+                    actor=getattr(self, "actor", "Staff"),
+                    log_action=True
+                )
+                print(f"[main.SCC] Updated client #{client_id} ({pan}) password via {combo_label}")
+
+            # Notify shell / main grid to refresh if visible
+            if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
+                self.shell.refresh_clients()
+        except Exception as e:
+            print(f"[main._on_scc_password_saved error] {e}")
 
     def _handle_sdc_timeline(self, msg: dict):
         """Persists SDC session timeline updates from browser into SQLite database."""

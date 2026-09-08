@@ -676,6 +676,32 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("SCA Uses per Copied UID",
             "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
 
+        lay.addWidget(_sub_header("SCC \u2014 Sera Credential Capture (Session Tagging)"))
+
+        self.scc_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable SCC Quick-Tag Prompt",
+            "When logging into a tax portal for a client with an undocumented password, show a 20-second quick-tag banner to save the working password.",
+            self.scc_check))
+
+        self.scc_combo_edits = []
+        for i in range(1, 5):
+            h_box = QHBoxLayout()
+            h_box.setContentsMargins(0, 0, 0, 0)
+            h_box.setSpacing(6)
+            lbl_edit = QLineEdit()
+            lbl_edit.setPlaceholderText(f"Combo {i} Label")
+            lbl_edit.setFixedWidth(110)
+            val_edit = QLineEdit()
+            val_edit.setPlaceholderText(f"Password value for Combo {i}")
+            val_edit.setEchoMode(QLineEdit.Password)
+            h_box.addWidget(lbl_edit)
+            h_box.addWidget(val_edit)
+            w = QWidget()
+            w.setLayout(h_box)
+            self.scc_combo_edits.append((lbl_edit, val_edit))
+            lay.addWidget(_setting_row(f"Password Combination {i}",
+                f"Preset label and password for quick-tag button #{i}.", w))
+
         lay.addWidget(_sub_header("Schema Info"))
 
         id_col = self.db.get_id_column()
@@ -1021,6 +1047,12 @@ class UnifiedSettingsDialog(QDialog):
             except Exception:
                 self.autostart_check.setChecked(False)
 
+            if hasattr(self, "scc_check"):
+                self.scc_check.setChecked(g("scc_enabled", "1") == "1")
+                for idx, (lbl_e, val_e) in enumerate(self.scc_combo_edits, 1):
+                    lbl_e.setText(g(f"scc_combo_label_{idx}", f"Combo {idx}"))
+                    val_e.setText(g(f"scc_combo_value_{idx}", ""))
+
         if hasattr(self, "btn_ext_check"):
             self.btn_ext_check.setChecked(g("extension_autofill_enabled", "1") == "1")
             self.btn_assist_check.setChecked(g("manual_assist_enabled", "1") == "1")
@@ -1048,6 +1080,12 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
                 bulk_settings["tracker_enabled"]            = "1" if (self.fst_check.isChecked() or self.sad_check.isChecked()) else "0"
+
+                if hasattr(self, "scc_check"):
+                    bulk_settings["scc_enabled"] = b(self.scc_check)
+                    for idx, (lbl_e, val_e) in enumerate(self.scc_combo_edits, 1):
+                        bulk_settings[f"scc_combo_label_{idx}"] = lbl_e.text().strip() or f"Combo {idx}"
+                        bulk_settings[f"scc_combo_value_{idx}"] = val_e.text().strip()
 
                 try:
                     from automation import update_extension_settings

@@ -826,6 +826,50 @@ class SeraDatabase:
                 [(k, str(v) if v is not None else "") for k, v in settings_dict.items()]
             )
 
+    def get_scc_settings(self) -> dict:
+        """Returns the SCC (Sera Credential Capture / Session Tagging) configuration dict."""
+        return {
+            "enabled": self.get_setting("scc_enabled", "1") in ("1", "true", "True"),
+            "combos": [
+                {
+                    "id": 1,
+                    "label": self.get_setting("scc_combo_label_1", "Combo 1"),
+                    "value": self.get_setting("scc_combo_value_1", ""),
+                },
+                {
+                    "id": 2,
+                    "label": self.get_setting("scc_combo_label_2", "Combo 2"),
+                    "value": self.get_setting("scc_combo_value_2", ""),
+                },
+                {
+                    "id": 3,
+                    "label": self.get_setting("scc_combo_label_3", "Combo 3"),
+                    "value": self.get_setting("scc_combo_value_3", ""),
+                },
+                {
+                    "id": 4,
+                    "label": self.get_setting("scc_combo_label_4", "Combo 4"),
+                    "value": self.get_setting("scc_combo_value_4", ""),
+                },
+            ],
+        }
+
+    def save_scc_settings(self, settings_dict: dict):
+        """Persists SCC configuration into app_settings."""
+        to_set = {}
+        if "enabled" in settings_dict:
+            to_set["scc_enabled"] = "1" if settings_dict["enabled"] else "0"
+        combos = settings_dict.get("combos", [])
+        for idx, c in enumerate(combos, 1):
+            if idx > 4:
+                break
+            if "label" in c:
+                to_set[f"scc_combo_label_{idx}"] = c["label"]
+            if "value" in c:
+                to_set[f"scc_combo_value_{idx}"] = c["value"]
+        if to_set:
+            self.set_settings_bulk(to_set)
+
     def load_ini_defaults(self, ini_path: str = None):
         """Loads default settings, MCL columns, and services from a .ini file if present."""
         import sys
@@ -1727,6 +1771,71 @@ class SeraDatabase:
                 if cur.fetchone():
                     matches.append(val)
             return matches
+
+    def get_client_by_pan(self, pan: str) -> dict | None:
+        """Finds active client by PAN and returns full client dict, or None."""
+        if not pan or not str(pan).strip():
+            return None
+        clean_pan = str(pan).strip().upper()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT cv.client_id FROM client_values cv
+                   JOIN clients c ON c.id = cv.client_id
+                   JOIN mcl_columns mc ON mc.id = cv.column_id
+                   WHERE c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
+                   LIMIT 1""",
+                (clean_pan,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return self._fetch_client_full(conn, row[0])
+
+    def get_service_for_portal(self, portal_name: str) -> dict | None:
+        """Finds the registered service record matching a portal name or keyword (e.g. 'Income Tax', 'ITR', 'GST')."""
+        if not portal_name:
+            return None
+        clean = str(portal_name).strip().lower()
+        services = self.get_services()
+        # 1. Exact match
+        for s in services:
+            sname = (s.get("name") or "").strip().lower()
+            if sname == clean:
+                return s
+        # 2. Income Tax / ITR Portal matching
+        if any(kw in clean for kw in ("income tax", "incometax", "itr", "eportal")):
+            for s in services:
+                sname = (s.get("name") or "").strip().lower()
+                slink = (s.get("login_page_link") or "").strip().lower()
+                if "income" in sname or "itr" in sname or "incometax" in slink:
+                    return s
+        # 3. GST Portal matching
+        if "gst" in clean:
+            for s in services:
+                sname = (s.get("name") or "").strip().lower()
+                if "gst" in sname:
+                    return s
+        # 4. Fallback substring
+        for s in services:
+            sname = (s.get("name") or "").strip().lower()
+            if sname in clean or clean in sname:
+                return s
+        return None
+
+    def update_client_single_field(self, client_id: int, column_id: int, value: str, actor: str = "Staff", log_action: bool = True) -> bool:
+        """Updates or inserts a single column value for a client in client_values."""
+        now = datetime.datetime.utcnow().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO client_values (client_id, column_id, value)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(client_id, column_id) DO UPDATE SET value = excluded.value""",
+                (client_id, column_id, str(value or "").strip())
+            )
+            conn.execute("UPDATE clients SET updated_at = ? WHERE id = ?", (now, client_id))
+        if log_action:
+            self.log_action(actor=actor, action="update", client_id=client_id, detail=f"Updated password via SCC Quick-Tag for client CLI-{client_id:05d}")
+        return True
 
 
 
