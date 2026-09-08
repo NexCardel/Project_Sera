@@ -1,6 +1,8 @@
+const SERA_DEBUG = false; // production: silence all console output
+
 // filing_detector.js - Listens for SAD API captures, displays compact in-browser FST toasts, and routes filing results to app
 (function() {
-    console.log("Project Sera: Filing detector active with FST toast notifier.");
+    if (SERA_DEBUG) console.log("Project Sera: Filing detector active with FST toast notifier.");
 
     // --- Compact Left-Side FST In-Browser Toast Notification Engine ---
     const SeraToastManager = (function() {
@@ -126,7 +128,7 @@
                     dismissToast(toast);
                 }, 4600);
             } catch (err) {
-                console.warn("Sera Toast Error:", err);
+                if (SERA_DEBUG) console.warn("Sera Toast Error:", err);
             }
         }
 
@@ -159,7 +161,7 @@
     // Export globally for tracker.js
     window.__SERA_TOAST_NOTIFIER__ = SeraToastManager;
 
-    window.addEventListener('SeraFSTApiCapture', (event) => {
+    window.addEventListener('__se_fs', (event) => {
         if (!event || !event.detail) return;
         const detail = event.detail;
 
@@ -168,10 +170,10 @@
             return;
         }
 
-        console.log("Sera Filing Detector: Received SAD API Capture event", detail);
+        if (SERA_DEBUG) console.log("Sera Filing Detector: Received SAD API Capture event", detail);
 
         if (!chrome.runtime || !chrome.runtime.id) {
-            console.log("Sera Filing Detector: Extension context reloaded.");
+            if (SERA_DEBUG) console.log("Sera Filing Detector: Extension context reloaded.");
             return;
         }
 
@@ -239,7 +241,7 @@
                 });
             });
         } catch (e) {
-            console.warn("Sera Filing Detector: Extension context error:", e);
+            if (SERA_DEBUG) console.warn("Sera Filing Detector: Extension context error:", e);
         }
     });
 

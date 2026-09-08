@@ -82,6 +82,133 @@ def get_db_connection():
     conn.row_factory = sqlcipher.Row
     return conn
 
+def get_master_db_connection():
+    """Opens a read-only connection to master.db (MCL / client list)."""
+    db_path = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "master.db")
+    if not os.path.exists(db_path):
+        db_path = os.path.join(APP_DIR, "master.db")
+        if not os.path.exists(db_path):
+            return None
+    hex_key = get_db_hex_key()
+    if not hex_key:
+        return None
+    try:
+        conn = sqlcipher.connect(db_path)
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+        conn.row_factory = sqlcipher.Row
+        return conn
+    except Exception:
+        return None
+
+def _build_authoritative_name_maps():
+    """
+    Builds PAN/GSTIN → authoritative display name maps from two sources:
+
+    Priority 1 (MCL): master.db → client_values EAV join.
+        - "NAME OF COMPANY" column  → business/company name
+        - "NAME OF PROPRIETOR" column → individual/proprietor name
+        - Identity columns (PAN, GSTIN) are used as keys.
+
+    Priority 2 (SRPF): rawPayload.db → client_raw_containers.
+        - company_name  → business name
+        - proprietor_name → individual name
+        - Keyed by pan and gstin.
+
+    Returns:
+        (pan_to_mcl_company, gstin_to_mcl_company,
+         pan_to_mcl_prop,    gstin_to_mcl_prop,
+         pan_to_srpf_company, gstin_to_srpf_company,
+         pan_to_srpf_prop,   gstin_to_srpf_prop)
+
+    All dicts map uppercase PAN/GSTIN strings to non-empty name strings.
+    """
+    pan_to_mcl_company   = {}
+    gstin_to_mcl_company = {}
+    pan_to_mcl_prop      = {}
+    gstin_to_mcl_prop    = {}
+
+    # ── MCL lookup ───────────────────────────────────────────────────────────
+    try:
+        mconn = get_master_db_connection()
+        if mconn:
+            # Read all identity + name column values in one query
+            # We join client_values to get (client_id, column_label, value)
+            rows = mconn.execute("""
+                SELECT cv.client_id, TRIM(UPPER(mc.label)) AS col_label, TRIM(cv.value) AS val
+                FROM client_values cv
+                JOIN mcl_columns mc ON mc.id = cv.column_id
+                WHERE cv.value IS NOT NULL AND cv.value != ''
+                  AND TRIM(cv.value) != ''
+                ORDER BY mc.sort_order ASC
+            """).fetchall()
+            mconn.close()
+
+            # Group by client_id
+            from collections import defaultdict
+            client_data = defaultdict(dict)
+            for r in rows:
+                client_data[r['client_id']][r['col_label']] = r['val']
+
+            for cid, cols in client_data.items():
+                pan   = (cols.get('PAN') or '').strip().upper()
+                gstin = (cols.get('GSTIN') or '').strip().upper()
+                company = ''
+                prop    = ''
+                # Scan all columns for company/proprietor names
+                for label, val in cols.items():
+                    if 'COMPANY' in label and not company:
+                        company = val
+                    elif 'PROPRIETOR' in label and not prop:
+                        prop = val
+                if pan:
+                    if company:
+                        pan_to_mcl_company[pan] = company
+                    if prop:
+                        pan_to_mcl_prop[pan] = prop
+                if gstin:
+                    if company:
+                        gstin_to_mcl_company[gstin] = company
+                    if prop:
+                        gstin_to_mcl_prop[gstin] = prop
+    except Exception:
+        pass
+
+    # ── SRPF lookup ──────────────────────────────────────────────────────────
+    pan_to_srpf_company   = {}
+    gstin_to_srpf_company = {}
+    pan_to_srpf_prop      = {}
+    gstin_to_srpf_prop    = {}
+    try:
+        rconn = get_db_connection()
+        srpf_rows = rconn.execute("""
+            SELECT TRIM(UPPER(pan)) AS pan,
+                   TRIM(UPPER(gstin)) AS gstin,
+                   TRIM(company_name) AS company_name,
+                   TRIM(proprietor_name) AS proprietor_name
+            FROM client_raw_containers
+            WHERE (pan IS NOT NULL AND pan != '')
+               OR (gstin IS NOT NULL AND gstin != '')
+        """).fetchall()
+        rconn.close()
+        for r in srpf_rows:
+            p  = r['pan']   or ''
+            g  = r['gstin'] or ''
+            co = r['company_name']    or ''
+            pr = r['proprietor_name'] or ''
+            if p:
+                if co: pan_to_srpf_company[p]   = co
+                if pr: pan_to_srpf_prop[p]       = pr
+            if g:
+                if co: gstin_to_srpf_company[g] = co
+                if pr: gstin_to_srpf_prop[g]    = pr
+    except Exception:
+        pass
+
+    return (pan_to_mcl_company,   gstin_to_mcl_company,
+            pan_to_mcl_prop,      gstin_to_mcl_prop,
+            pan_to_srpf_company,  gstin_to_srpf_company,
+            pan_to_srpf_prop,     gstin_to_srpf_prop)
+
 def evaluate_status(raw_status):
     raw = str(raw_status).lower().strip()
     # Strip any legacy bracketed color annotations
@@ -262,7 +389,15 @@ def process_timelines():
     finally:
         conn.close()
 
+    # Build authoritative name maps once — used in Pass 0 at the end of this function.
+    # Priority: MCL (master.db) → SRPF (client_raw_containers) → scraped capture data
+    (pan_to_mcl_co,   gstin_to_mcl_co,
+     pan_to_mcl_prop, gstin_to_mcl_prop,
+     pan_to_srpf_co,  gstin_to_srpf_co,
+     pan_to_srpf_prop, gstin_to_srpf_prop) = _build_authoritative_name_maps()
+
     ltt_dict = {}
+
 
     for row in rows:
         session_id = row['session_id']
@@ -626,7 +761,35 @@ def process_timelines():
         candidate_list.sort(key=_itr_final_payload_key, reverse=True)
         final_ltt_list.append(candidate_list[0])
 
+    # ── Pass 0: Authoritative Display Name Consolidation ────────────────────
+    # Applies the 4-tier priority cascade to every LTT entry:
+    #   1. MCL company name   (NAME OF COMPANY in master.db, keyed by PAN/GSTIN)
+    #   2. MCL proprietor name (NAME OF PROPRIETOR in master.db)
+    #   3. SRPF company name  (client_raw_containers.company_name)
+    #   4. SRPF proprietor name (client_raw_containers.proprietor_name)
+    #   5. Scraped portal name (already stored in item["Client Name"] from capture data)
+    #
+    # A non-empty MCL name ALWAYS wins, regardless of what was scraped.
+    # SRPF overrides the scraped name but yields to MCL.
+    for item in final_ltt_list:
+        pan   = (item.get("PAN")   or "").strip().upper()
+        gstin = (item.get("GSTIN") or "").strip().upper()
+
+        # Resolve by PAN first, then GSTIN as fallback
+        mcl_co   = pan_to_mcl_co.get(pan)   or gstin_to_mcl_co.get(gstin)   or ""
+        mcl_prop = pan_to_mcl_prop.get(pan)  or gstin_to_mcl_prop.get(gstin) or ""
+        srpf_co  = pan_to_srpf_co.get(pan)   or gstin_to_srpf_co.get(gstin)  or ""
+        srpf_prop= pan_to_srpf_prop.get(pan) or gstin_to_srpf_prop.get(gstin)or ""
+
+        # Pick the highest-priority non-empty name
+        auth_name = mcl_co or mcl_prop or srpf_co or srpf_prop or ""
+
+        if auth_name and not SKELETON_NAME_REGEX.search(auth_name):
+            item["Client Name"] = auth_name
+        # else: keep the existing scraped name (already set during timeline merge)
+
     return final_ltt_list
+
 
 def get_ltt_dataset():
     """Authoritative API returning the sorted LTT dataset and computed KPI metrics."""

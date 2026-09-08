@@ -1,3 +1,5 @@
+const SERA_DEBUG = false; // production: silence all console output
+
 let _lastScaTriggerUid = "";
 let _lastScaTriggerTime = 0;
 
@@ -37,7 +39,7 @@ function checkAndTriggerSCA(candidateText) {
         const adapter = window.getAdapterForUrl(window.location.href);
         const adapterName = adapter ? adapter.name : "generic";
         
-        console.log(`Sera SCA: Exact UID match [${clean}] via adapter [${adapterName}]`);
+        if (SERA_DEBUG) console.log(`Sera SCA: Exact UID match [${clean}] via adapter [${adapterName}]`);
         
         try {
           chrome.runtime.sendMessage({
@@ -98,7 +100,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SHOW_SCA_WIDGET") {
     renderScaWidgetFromContent(message);
   } else if (message.type === "autofill" && message.userid) {
-    console.log("Sera content script: received fallback autofill message.");
+    if (SERA_DEBUG) console.log("Sera content script: received fallback autofill message.");
     var userField = document.querySelector("input[id*='userId']") ||
                     document.querySelector("input[name*='userId']") ||
                     document.querySelector("#userId") ||
@@ -347,7 +349,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SCA_FILL_COMMAND") {
     const adapter = window.getAdapterForUrl ? window.getAdapterForUrl(window.location.href) : null;
     if (!adapter) {
-      console.log("Sera SCA: No adapter found for fill command.");
+      if (SERA_DEBUG) console.log("Sera SCA: No adapter found for fill command.");
       return;
     }
     
@@ -366,7 +368,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             try {
               const success = adapter.fillPassword(pwFields[0], password);
               if (success) {
-                console.log("Sera SCA: Password filled via adapter.");
+                if (SERA_DEBUG) console.log("Sera SCA: Password filled via adapter.");
                 showScaToast(message.business_name, message.owner_name, message.portal_name);
                 chrome.runtime.sendMessage({ type: "SCA_FILL_RESULT", result: "success", detail: `Password filled on ${message.adapter}` });
                 chrome.runtime.sendMessage({ type: "sca_fill_completed" });

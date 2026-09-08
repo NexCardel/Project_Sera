@@ -16,9 +16,9 @@
  *     mca_protocol.js  ← MCA rules (stub)
  *
  * Dispatch Event:
- *   Protocols fire window.dispatchEvent(new CustomEvent('SeraSDCCapture', { detail: {...} }))
- *   filing_detector.js (already loaded) listens on 'SeraFSTApiCapture'.
- *   SDC fires on 'SeraSDCCapture', which sdc_core.js re-dispatches as 'SeraFSTApiCapture'
+ *   Protocols fire window.dispatchEvent(new CustomEvent('__se_dc', { detail: {...} }))
+ *   filing_detector.js (already loaded) listens on '__se_fs'.
+ *   SDC fires on '__se_dc', which sdc_core.js re-dispatches as '__se_fs'
  *   so the existing pipeline (filing_detector → background.js → native host) works unchanged.
  */
 
@@ -30,7 +30,11 @@
   window.__SERA_SDC_ACTIVE__ = true;
 
   const SDC_VERSION = '1.0.0';
-  console.log(`⚡ Sera SDC (DOM Crosshair v${SDC_VERSION}): core loaded.`);
+  // ─── Debug Gate ─────────────────────────────────────────────────────────────
+  // Set to true ONLY during local development. In production this must be false
+  // so zero Sera-branded strings appear in the page's DevTools console.
+  const SDC_DEBUG = false;
+  if (SDC_DEBUG) console.log(`⚡ Sera SDC (DOM Crosshair v${SDC_VERSION}): core loaded.`);
 
   // ─── SUDR: Sera Unified Dialect Recognition ─────────────────────────────────
   // Single source of truth for the canonical event vocabulary lives in
@@ -56,10 +60,10 @@
       if (data && data.event_types) {
         _sudrEventTypes = data.event_types;
         _sudrLoaded = true;
-        console.log(`⚡ Sera SDC: SUDR vocabulary loaded (schema v${data.schema_version}, ${Object.keys(data.event_types).length} event types).`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC: SUDR vocabulary loaded (schema v${data.schema_version}, ${Object.keys(data.event_types).length} event types).`);
       }
     } catch (err) {
-      console.warn('⚡ Sera SDC: SUDR event_types.json failed to load, using built-in fallback vocabulary.', err);
+      if (SDC_DEBUG) console.warn('⚡ Sera SDC: SUDR event_types.json failed to load, using built-in fallback vocabulary.', err);
     }
   }
   _loadSudrEventTypes();
@@ -205,7 +209,7 @@
       // Retrospectively records "Tab terminated abruptly" on an abandoned session
       _retrospectivelyFinalizeAbrupt(staleSession) {
         if (!staleSession || staleSession.status !== 'active') return;
-        console.log(`⚡ Sera SDC: ⚠️ Previous session [${staleSession.session_id}] was not logged out. Retrospectively marking "Tab terminated abruptly".`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC: ⚠️ Previous session [${staleSession.session_id}] was not logged out. Retrospectively marking "Tab terminated abruptly".`);
         
         staleSession.status = 'terminated_abruptly';
         staleSession.end_time = new Date().toISOString();
@@ -239,7 +243,7 @@
         // Prevents the same session from being flushed more than once,
         // regardless of how many code paths converge on session termination.
         if (sData._assembler_flushed) {
-          console.log(`⚡ Sera SDC Assembler: ⚠️ Session [${sData.session_id}] already flushed — ignoring duplicate flush call.`);
+          if (SDC_DEBUG) console.log(`⚡ Sera SDC Assembler: ⚠️ Session [${sData.session_id}] already flushed — ignoring duplicate flush call.`);
           return;
         }
         sData._assembler_flushed = true;
@@ -247,7 +251,7 @@
         await this.save();
         // ─────────────────────────────────────────────────────────
 
-        console.log(`⚡ Sera SDC Assembler: 📦 Flushing atomic unified payload to backend for session [${sData.session_id}].`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC Assembler: 📦 Flushing atomic unified payload to backend for session [${sData.session_id}].`);
 
         // 1. Always emit the timeline sync (for sdc_session_timelines DB — pure audit trail)
         _emitDual({
@@ -268,7 +272,7 @@
         //    Pure navigation sessions (no crosshair hits) must NOT create tracker_dump entries.
         const captures = sData.assembler_captures || [];
         if (captures.length === 0) {
-          console.log(`⚡ Sera SDC Assembler: ℹ️ Session [${sData.session_id}] had no captures — skipping filing_result emission.`);
+          if (SDC_DEBUG) console.log(`⚡ Sera SDC Assembler: ℹ️ Session [${sData.session_id}] had no captures — skipping filing_result emission.`);
           return;
         }
 
@@ -350,7 +354,7 @@
           }
         }
         const trackerDumpCaptures = Array.from(trackerDumpMap.values());
-        console.log(`⚡ Sera SDC Assembler: Derived ${trackerDumpCaptures.length} Tracker Dump candidate(s) (${submittedDatasets.length} submitted, ${lastViewedDataset ? 1 : 0} last-viewed) from ${strippedCaptures.length} total assembled datasets.`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC Assembler: Derived ${trackerDumpCaptures.length} Tracker Dump candidate(s) (${submittedDatasets.length} submitted, ${lastViewedDataset ? 1 : 0} last-viewed) from ${strippedCaptures.length} total assembled datasets.`);
         
         const masterPayload = {
           type: "filing_result",
@@ -499,7 +503,7 @@
         // the shared session state on logout.
         await this._flushAssembler(this.data);
         await this.save();
-        console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🏁 Session [${this.data.session_id}] cleanly completed with ${tl.length} step(s).`);
 
         if (window.SDCToast) {
           window.SDCToast.show({
@@ -545,7 +549,7 @@
      */
     emitSessionStart(portalName, pan, name) {
       if (!pan) return;
-      console.log(`⚡ Sera SDC: 🟢 Session Start Ping [${portalName}] - ${pan} - ${name || 'Client'}`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🟢 Session Start Ping [${portalName}] - ${pan} - ${name || 'Client'}`);
       const payload = {
         type: 'session_start',
         session_id: this.session.data.session_id,
@@ -589,11 +593,11 @@
       // background.js may reinject the SDC bundle on both tab completion and
       // SPA URL updates. Do not register or scan the same protocol repeatedly.
       if (_protocols.some(existing => existing.name === protocol.name)) {
-        console.log(`⚡ Sera SDC: Protocol "${protocol.name}" already registered — skipping duplicate.`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC: Protocol "${protocol.name}" already registered — skipping duplicate.`);
         return false;
       }
       _protocols.push(protocol);
-      console.log(`⚡ Sera SDC: Registered protocol "${protocol.name}" with ${protocol.crosshairs.length} crosshair(s).`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: Registered protocol "${protocol.name}" with ${protocol.crosshairs.length} crosshair(s).`);
       return true;
     },
 
@@ -612,7 +616,7 @@
      * the next page gets a fresh scan. Called automatically on login/logout.
      */
     async clearAllSessions(options = {}) {
-      console.log('⚡ Sera SDC: 🔄 New login detected — clearing all protocol session caches.');
+      if (SDC_DEBUG) console.log('⚡ Sera SDC: 🔄 New login detected — clearing all protocol session caches.');
       _lastScannedUrl = ''; // force re-scan on the next route
       await this.session.clear();
       for (const fn of _sessionClearCallbacks) {
@@ -677,7 +681,7 @@
      */
     emit(protocolName, crosshairId, eventType, identity, fields) {
       if (!_sudrEventTypes[eventType]) {
-        console.warn(`⚡ Sera SDC: SUDR.emit() called with unknown event.type "${eventType}" — check event_types.json.`);
+        if (SDC_DEBUG) console.warn(`⚡ Sera SDC: SUDR.emit() called with unknown event.type "${eventType}" — check event_types.json.`);
       }
       const envelope = {
         type: 'sudr_capture', // top-level routing key for extension_listener.py
@@ -692,7 +696,7 @@
         evidence: { url: window.location.href, page_title: document.title }
       };
 
-      console.log(`⚡ Sera SDC (SUDR) CAPTURE [${crosshairId} → ${eventType}]:`, JSON.stringify(envelope).substring(0, 300));
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC (SUDR) CAPTURE [${crosshairId} → ${eventType}]:`, JSON.stringify(envelope).substring(0, 300));
       _emitDual(envelope);
     }
   };
@@ -780,7 +784,7 @@
     const isLogoutClick = txt.includes('log out') || txt.includes('sign out') || href.includes('logout') || href.includes('signout');
     
     if (isLogoutClick && SDC.session.data.session_id) {
-      console.log('⚡ Sera SDC: 🖱️ Instant Logout Click intercepted! Flushing immediately before navigation.');
+      if (SDC_DEBUG) console.log('⚡ Sera SDC: 🖱️ Instant Logout Click intercepted! Flushing immediately before navigation.');
       // Execute instantly while the browser waits for the server response
       SDC.session.finalizeLogout(window.location.href);
       // NOTE: We don't wipe storage here in case the server fails and they are still logged in, 
@@ -891,7 +895,7 @@
     }
 
     if (matchedCrosshair && matchedProtocol) {
-      console.log(`⚡ Sera SDC: Crosshair matched → [${matchedProtocol.name}] "${matchedCrosshair.id}" (attempt #${retryCount + 1})`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: Crosshair matched → [${matchedProtocol.name}] "${matchedCrosshair.id}" (attempt #${retryCount + 1})`);
 
       try {
         // Execute protocol handler
@@ -900,7 +904,7 @@
         // ─── CLIENT CONTEXT SWITCH & SESSION BOUNDARY PROTECTION ───
         // 1. PAN Mismatch: If capture has a new PAN that differs from the active session PAN
         if (capture && capture.pan && SDC.session.data.pan && capture.pan !== SDC.session.data.pan) {
-            console.log(`⚡ Sera SDC: 🔄 PAN Mismatch Detected (${SDC.session.data.pan} -> ${capture.pan})! Finalizing stale session.`);
+            if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🔄 PAN Mismatch Detected (${SDC.session.data.pan} -> ${capture.pan})! Finalizing stale session.`);
             if (SDC.session.data.timeline && SDC.session.data.timeline.length > 0) {
                 SDC.session.data.status = 'completed';
                 SDC.session.data.end_time = new Date().toISOString();
@@ -939,7 +943,7 @@
 
             // Arrived at login screen: if capture has a PAN and previous session was for a different client, finalize previous
             if (!isLogout && SDC.session.data && SDC.session.data.pan && capture && capture.pan && capture.pan !== SDC.session.data.pan) {
-                console.log(`⚡ Sera SDC: 🔄 Login Route Detected for new client (${capture.pan} vs ${SDC.session.data.pan})! Finalizing previous session.`);
+                if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🔄 Login Route Detected for new client (${capture.pan} vs ${SDC.session.data.pan})! Finalizing previous session.`);
                 SDC.session.data.status = 'completed';
                 SDC.session.data.end_time = new Date().toISOString();
                 const tl = SDC.session.data.timeline || [];
@@ -1007,7 +1011,7 @@
           _pendingRetryTimers.push(timer);
         }
       } catch (err) {
-        console.warn(`⚡ Sera SDC: Handler error in crosshair "${matchedCrosshair.id}":`, err);
+        if (SDC_DEBUG) console.warn(`⚡ Sera SDC: Handler error in crosshair "${matchedCrosshair.id}":`, err);
       }
     } else if (matchedProtocol && retryCount === 0) {
       // Non-crosshair navigation on compliance portal: record timeline step anyway
@@ -1173,7 +1177,7 @@
       }
     };
 
-    console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory. Key: ${datasetKey}`);
+    if (SDC_DEBUG) console.log(`⚡ Sera SDC Assembler: 📥 Buffered capture [${crosshairId}] in memory. Key: ${datasetKey}`);
     // ─── Assembler Buffering ───
     SDC.session.data.assembler_captures = SDC.session.data.assembler_captures || [];
     // GST can revisit the same form for a status update, or move to a new
@@ -1219,10 +1223,10 @@
     // Routine calendar/form views update the assembler buffer and session timeline, but wait for session finalization
     // so they do not flood tracker_dump with intermediate views.
     if (detail.submitted_in_session || detail.capture_origin === 'submission_success') {
-      console.log(`⚡ Sera SDC: 🚀 Confirmed submission for ${datasetKey} — dispatching real-time to desktop tracker dump.`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🚀 Confirmed submission for ${datasetKey} — dispatching real-time to desktop tracker dump.`);
       _emitDual(detail);
     } else {
-      console.log(`⚡ Sera SDC: 👁️ View capture buffered for ${datasetKey} (origin: ${detail.capture_origin}) — deferred to session finalization.`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: 👁️ View capture buffered for ${datasetKey} (origin: ${detail.capture_origin}) — deferred to session finalization.`);
     }
 
     // Save the new buffer state to chrome.storage.local immediately so it survives page unloads/refreshes
@@ -1272,7 +1276,7 @@
         }
       }
     } catch (e) {
-      console.warn('⚡ Sera SDC Toast Notice:', e);
+      if (SDC_DEBUG) console.warn('⚡ Sera SDC Toast Notice:', e);
     }
   }
 
@@ -1305,7 +1309,7 @@
         payload: btoa(binary)
       };
     } catch (err) {
-      console.warn('⚡ Sera SDC: Compression failed; using uncompressed payload.', err);
+      if (SDC_DEBUG) console.warn('⚡ Sera SDC: Compression failed; using uncompressed payload.', err);
       return null;
     }
   }
@@ -1380,10 +1384,10 @@
   function _emitDual(payload, preferRuntime = false) {
     // 1. Dispatch events for page-level test harness & filing detector listeners
     try {
-      window.dispatchEvent(new CustomEvent('SeraSUDRCapture', { detail: payload }));
-      window.dispatchEvent(new CustomEvent('SeraSDCApiCapture', { detail: payload }));
-      window.dispatchEvent(new CustomEvent('SeraSDCCapture', { detail: payload }));
-      window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('__se_su', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('__se_sa', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('__se_dc', { detail: payload }));
+      window.dispatchEvent(new CustomEvent('__se_fs', { detail: payload }));
     } catch (_) {}
 
     const _chromeRuntimeFallback = (p) => {
@@ -1391,15 +1395,15 @@
         if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
           chrome.runtime.sendMessage(p, () => {
             if (chrome.runtime && chrome.runtime.lastError) {
-              console.warn('⚡ Sera SDC: Background worker fallback failed.', chrome.runtime.lastError);
+              if (SDC_DEBUG) console.warn('⚡ Sera SDC: Background worker fallback failed.', chrome.runtime.lastError);
               _directHttpDispatch(p);
             } else {
-              console.log('⚡ Sera SDC: Successfully delivered payload via Chrome Runtime fallback.');
+              if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via Chrome Runtime fallback.');
             }
           });
         }
       } catch (err) {
-        console.warn('⚡ Sera SDC: sendMessage threw error during fallback.', err);
+        if (SDC_DEBUG) console.warn('⚡ Sera SDC: sendMessage threw error during fallback.', err);
         _directHttpDispatch(p);
       }
     };
@@ -1415,14 +1419,14 @@
         keepalive: true
       }).then(response => {
         if (!response.ok) {
-          console.warn(`⚡ Sera SDC: Direct HTTP fallback failed with status ${response.status}.`);
+          if (SDC_DEBUG) console.warn(`⚡ Sera SDC: Direct HTTP fallback failed with status ${response.status}.`);
           if (callback) callback(false);
         } else {
-          console.log('⚡ Sera SDC: Successfully delivered payload via direct HTTP fallback.');
+          if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via direct HTTP fallback.');
           if (callback) callback(true);
         }
       }).catch(err => {
-        console.warn('⚡ Sera SDC: Direct HTTP fallback error.', err);
+        if (SDC_DEBUG) console.warn('⚡ Sera SDC: Direct HTTP fallback error.', err);
         if (callback) callback(false);
       });
     };
@@ -1444,14 +1448,14 @@
       })
       .then(response => {
         if (!response.ok) {
-          console.warn(`⚡ Sera SDC: Direct HTTP failed with status ${response.status}. Falling back to Service Worker.`);
+          if (SDC_DEBUG) console.warn(`⚡ Sera SDC: Direct HTTP failed with status ${response.status}. Falling back to Service Worker.`);
           _chromeRuntimeFallback(payload);
         } else {
-          console.log('⚡ Sera SDC: Successfully delivered payload via Direct HTTP.');
+          if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via Direct HTTP.');
         }
       })
       .catch(err => {
-        console.warn('⚡ Sera SDC: Direct HTTP fetch error. Desktop app might be closed or port blocked. Falling back to Service Worker.', err);
+        if (SDC_DEBUG) console.warn('⚡ Sera SDC: Direct HTTP fetch error. Desktop app might be closed or port blocked. Falling back to Service Worker.', err);
         _chromeRuntimeFallback(payload);
       });
     } else {

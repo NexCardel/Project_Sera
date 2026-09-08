@@ -21,6 +21,7 @@
 
 (function () {
   'use strict';
+  const SDC_DEBUG = false; // production: silence all console output
 
   // ─── Local GST Session State Cache ──────────────────────────────────────────
   let _gstSession = {
@@ -763,7 +764,7 @@
     // Skip emitting if period is still empty skeleton
     // Never emit an FY-only capture; it creates an incorrect dataset key.
     if (!chosenPeriod || !fullPeriodLabel) {
-      console.warn('⚡ Sera SDC: Form details scanned but period is not yet resolved. Skipping premature emission.');
+      if (SDC_DEBUG) console.warn('⚡ Sera SDC: Form details scanned but period is not yet resolved. Skipping premature emission.');
       return null;
     }
 
@@ -843,12 +844,12 @@
     const gstr3bDueMatch = dashText.match(/GSTR[- ]*3B[\s\S]*?Due\s*Date\s*[-:]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4}))/i);
     if (gstr3bDueMatch && gstr3bDueMatch[1]) {
       _gstSession.gstr3b_due_date = gstr3bDueMatch[1].trim();
-      console.log(`⚡ Sera SDC: Cached GSTR-3B Due Date from Dashboard: ${_gstSession.gstr3b_due_date}`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: Cached GSTR-3B Due Date from Dashboard: ${_gstSession.gstr3b_due_date}`);
     }
     const gstr1DueMatch = dashText.match(/GSTR[- ]*1(?:\/IFF)?[\s\S]*?Due\s*Date\s*[-:]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+[A-Za-z]{3,9}[\/\-\s]+[0-9]{2,4}))/i);
     if (gstr1DueMatch && gstr1DueMatch[1]) {
       _gstSession.gstr1_due_date = gstr1DueMatch[1].trim();
-      console.log(`⚡ Sera SDC: Cached GSTR-1 Due Date from Dashboard: ${_gstSession.gstr1_due_date}`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: Cached GSTR-1 Due Date from Dashboard: ${_gstSession.gstr1_due_date}`);
     }
 
     return null;
@@ -1031,7 +1032,7 @@
       ]
     });
 
-    console.log('⚡ Sera SDC: GST Portal Protocol registered with Form Summary & Returns Calendar crosshairs.');
+    if (SDC_DEBUG) console.log('⚡ Sera SDC: GST Portal Protocol registered with Form Summary & Returns Calendar crosshairs.');
     // sdc_core performs its first URL scan before protocol files finish
     // loading. Re-scan once GST is registered so an already-open GST page
     // (including a direct /returns/auth/gstr1 visit) is captured immediately.

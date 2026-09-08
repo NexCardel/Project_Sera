@@ -12,12 +12,13 @@
 
 (function () {
   'use strict';
+  const SDC_DEBUG = false; // production: silence all console output
 
   function _register() {
     const SDC = window.__SERA_SDC__;
     if (!SDC) { setTimeout(_register, 100); return; }
 
-    console.log('⚡ Sera SDC: MCA Protocol stub loaded (no crosshairs registered yet).');
+    if (SDC_DEBUG) console.log('⚡ Sera SDC: MCA Protocol stub loaded (no crosshairs registered yet).');
   }
 
   _register();

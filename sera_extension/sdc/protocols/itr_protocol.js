@@ -28,12 +28,13 @@
 
 (function () {
   'use strict';
+  const SDC_DEBUG = false; // production: silence all console output
 
   // Wait for SDC core to be ready
   function _register() {
     const SDC = window.__SERA_SDC__;
     if (!SDC) {
-      console.warn('Sera SDC ITR Protocol: sdc_core not loaded. Retrying...');
+      if (SDC_DEBUG) console.warn('Sera SDC ITR Protocol: sdc_core not loaded. Retrying...');
       setTimeout(_register, 100);
       return;
     }
@@ -545,7 +546,7 @@
           if (dob) getSession().dob = dob;
 
           const activeName = getSession().name || getSession().client_temp_name || '';
-          console.log(`⚡ Sera SDC [itr_lazy_watcher]: ✅ Async profile data resolved (within ${attempts * 350}ms) → Name: "${activeName}", PAN: "${pan || getSession().pan}", DOB: "${dob || getSession().dob}"`);
+          if (SDC_DEBUG) console.log(`⚡ Sera SDC [itr_lazy_watcher]: ✅ Async profile data resolved (within ${attempts * 350}ms) → Name: "${activeName}", PAN: "${pan || getSession().pan}", DOB: "${dob || getSession().dob}"`);
 
           const capture = {
             portal: 'income tax',
@@ -607,7 +608,7 @@
         lowerUrl.includes('bank_details') ||
         lowerUrl.includes('bankaccount')
       ) {
-        console.log('⚡ Sera SDC [itr_personal_info]: Suppressed capture on contact/communication/bank details subpage.');
+        if (SDC_DEBUG) console.log('⚡ Sera SDC [itr_personal_info]: Suppressed capture on contact/communication/bank details subpage.');
         return null;
       }
 
@@ -652,13 +653,13 @@
       }
 
       if (!pan && !activeName && !dob) {
-        console.log('Sera SDC [itr_personal_info]: Waiting for async form render (watcher active).');
+        if (SDC_DEBUG) console.log('Sera SDC [itr_personal_info]: Waiting for async form render (watcher active).');
         return null;
       }
 
       // If the async watcher already emitted this capture (e.g. on a _dispatch retry), skip
       if (window.__SDC_ITR_FORM_EMITTED__) {
-        console.log('⚡ Sera SDC [itr_personal_info]: Watcher already emitted — skipping duplicate synchronous capture.');
+        if (SDC_DEBUG) console.log('⚡ Sera SDC [itr_personal_info]: Watcher already emitted — skipping duplicate synchronous capture.');
         return null;
       }
 
@@ -948,7 +949,7 @@
         }
       }
 
-      console.log(`⚡ Sera SDC [itr_landing]: Post-login landing active for ${activeName || 'Client'} (${activePan || 'No PAN'}) [Header Name: "${headerName}"]`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC [itr_landing]: Post-login landing active for ${activeName || 'Client'} (${activePan || 'No PAN'}) [Header Name: "${headerName}"]`);
 
       // Record navigation step in session timeline for audit trail
       if (SDC && SDC.session && typeof SDC.session.recordStep === 'function') {
@@ -1114,7 +1115,7 @@
           getSession().status = filingStatus;
 
           const activeName = getSession().name || name || headerName || 'Taxpayer';
-          console.log(`⚡ Sera SDC [itr_view_filed_returns]: ✅ Async ACK resolved (within ${attempts * 350}ms) → ACK: "${ack}", AY: "${ay}", Form: "${form}", Status: "${filingStatus}"`);
+          if (SDC_DEBUG) console.log(`⚡ Sera SDC [itr_view_filed_returns]: ✅ Async ACK resolved (within ${attempts * 350}ms) → ACK: "${ack}", AY: "${ay}", Form: "${form}", Status: "${filingStatus}"`);
 
           const capture = {
             portal: 'income tax',
@@ -1179,7 +1180,7 @@
 
       // If the async watcher already emitted this capture (e.g. on a _dispatch retry), skip
       if (window.__SDC_ITR_VIEW_EMITTED__) {
-        console.log('⚡ Sera SDC [itr_view_filed_returns]: Watcher already emitted — skipping duplicate synchronous capture.');
+        if (SDC_DEBUG) console.log('⚡ Sera SDC [itr_view_filed_returns]: Watcher already emitted — skipping duplicate synchronous capture.');
         return null;
       }
 
@@ -1189,7 +1190,7 @@
       getSession().status = filingStatus;
 
       const activeName = getSession().name || headerName || 'Taxpayer';
-      console.log(`⚡ Sera SDC [itr_view_filed_returns]: Extracted 15-digit ACK ${ack} for ${ay} (${form}) → Status: "${filingStatus}"`);
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC [itr_view_filed_returns]: Extracted 15-digit ACK ${ack} for ${ay} (${form}) → Status: "${filingStatus}"`);
 
       return {
         portal: 'income tax',
@@ -1234,7 +1235,7 @@
       getSession().dob  = '';
       getSession().form = '';
       getSession().ay   = '';
-      console.log('⚡ Sera SDC [ITR]: 🧹 Session cleared — ready for new client.');
+      if (SDC_DEBUG) console.log('⚡ Sera SDC [ITR]: 🧹 Session cleared — ready for new client.');
     }
 
     // ─── CROSSHAIR 0 (Priority): Login / Logout / Session Expired Route Guard ───
@@ -1285,7 +1286,7 @@
       }
 
       if (pan) {
-        console.log(`⚡ Sera SDC [itr_login]: ✅ Detected PAN "${pan}" on Login/Password route.`);
+        if (SDC_DEBUG) console.log(`⚡ Sera SDC [itr_login]: ✅ Detected PAN "${pan}" on Login/Password route.`);
         getSession().pan = pan;
         if (SDC && SDC.session && SDC.session.data) {
           SDC.session.data.pan = pan;
@@ -1367,7 +1368,7 @@
       ]
     });
 
-    console.log('⚡ Sera SDC: ITR Protocol registered successfully.');
+    if (SDC_DEBUG) console.log('⚡ Sera SDC: ITR Protocol registered successfully.');
 
     // Dynamic MutationObserver to catch Step 3 verification completion on pending e-verification pages
     if (registered && typeof MutationObserver !== 'undefined') {
@@ -1386,7 +1387,7 @@
             await SDC.session.recordStep(window.location.href, 'itr_everify_return', capture);
             await SDC.session.save();
             SDC.emitCapture(capture, 'ITR Portal', 'itr_everify_return');
-            console.log('⚡ Sera SDC [itr_everify_return]: Emitted verified capture for ARN:', capture.arn);
+            if (SDC_DEBUG) console.log('⚡ Sera SDC [itr_everify_return]: Emitted verified capture for ARN:', capture.arn);
           }
         }, 600);
       });

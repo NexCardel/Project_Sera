@@ -1,8 +1,10 @@
+const SERA_DEBUG = false; // production: silence all console output
+
 // tracker.js - Sera DOM Detector (Passive & Active DOM Confirmation Tracker)
 // Monitors portal DOM confirmation screens, banners, modals, and tables for Ack/ARN numbers.
 
 (function() {
-  console.log("⚡ Sera DOM (Visual Layer Tracker): tracker.js loaded.");
+  if (SERA_DEBUG) console.log("⚡ Sera DOM (Visual Layer Tracker): tracker.js loaded.");
 
   // Base portal domains to monitor
   const BASE_SERVICE_PORTALS = [
@@ -122,7 +124,7 @@
   ], (data) => {
     // 1. If tracker or FST is explicitly disabled globally in preferences, skip
     if (data && (data.trackerEnabled === false || data.fstEnabled === false)) {
-      console.log("Sera DOM: Tracker/FST is explicitly disabled in settings. Skipping.");
+      if (SERA_DEBUG) console.log("Sera DOM: Tracker/FST is explicitly disabled in settings. Skipping.");
       return;
     }
 
@@ -154,7 +156,7 @@
       }
     }
 
-    console.log("⚡ Sera DOM: Monitoring active on portal [" + currentHost + "].");
+    if (SERA_DEBUG) console.log("⚡ Sera DOM: Monitoring active on portal [" + currentHost + "].");
     startDomMonitoring(matchedContext);
   });
 
@@ -185,7 +187,7 @@
             const tEn = changes.trackerEnabled ? changes.trackerEnabled.newValue : true;
             const fEn = changes.fstEnabled ? changes.fstEnabled.newValue : true;
             if (tEn === false || fEn === false) {
-              console.log("Sera DOM: Tracker dynamically disabled. Detaching observer.");
+              if (SERA_DEBUG) console.log("Sera DOM: Tracker dynamically disabled. Detaching observer.");
               isMonitoringActive = false;
               if (activeObserver) {
                 activeObserver.disconnect();
@@ -193,7 +195,7 @@
               }
               if (debounceTimer) clearTimeout(debounceTimer);
             } else if (tEn !== false && fEn !== false && !isMonitoringActive) {
-              console.log("Sera DOM: Tracker dynamically re-enabled. Attaching observer.");
+              if (SERA_DEBUG) console.log("Sera DOM: Tracker dynamically re-enabled. Attaching observer.");
               isMonitoringActive = true;
               attachObserver();
               scheduleScan();
@@ -418,7 +420,7 @@
       const pageFullText = (document.body ? (document.body.innerText || document.body.textContent || "") : "").replace(/\s+/g, ' ');
       const lowerFullText = pageFullText.toLowerCase();
 
-      console.log(`⚡ Sera DOM [scan]: URL=${window.location.href.substring(0,80)}, isFilingUrl=${isFilingUrl}, urlForm=${urlForm}, textLen=${pageFullText.length}`);
+      if (SERA_DEBUG) console.log(`⚡ Sera DOM [scan]: URL=${window.location.href.substring(0,80)}, isFilingUrl=${isFilingUrl}, urlForm=${urlForm}, textLen=${pageFullText.length}`);
 
       let hasPositiveCue = false;
       let matchedPhrase = "";
@@ -433,14 +435,14 @@
       for (const neg of NEGATIVE_PHRASES) {
         // If error message is prominent and no real confirmation exists
         if (lowerFullText.includes(neg) && !lowerFullText.includes("submitted successfully") && !lowerFullText.includes("filed successfully") && !lowerFullText.includes("status - filed")) {
-          console.warn(`⚡ Sera DOM: Blocked by NEGATIVE_PHRASE: "${neg}"`);
+          if (SERA_DEBUG) console.warn(`⚡ Sera DOM: Blocked by NEGATIVE_PHRASE: "${neg}"`);
           return;
         }
       }
 
       // 3. Extract Live Identity (Name & PAN/GSTIN) via Multi-Vector Scanning (ALWAYS RUNS ON EVERY PAGE/STEP)
       const identity = extractIdentityFromPage(context, pageFullText);
-      console.log(`⚡ Sera DOM [identity]: pan="${identity.pan}", name="${identity.client_name}", gstin="${identity.gstin}", positiveCue="${matchedPhrase}"`);
+      if (SERA_DEBUG) console.log(`⚡ Sera DOM [identity]: pan="${identity.pan}", name="${identity.client_name}", gstin="${identity.gstin}", positiveCue="${matchedPhrase}"`);
 
       // Clean Identity Isolation: If live DOM shows a different PAN/GSTIN than in-memory session, reset memory
       if (identity.pan && window.__SERA_SESSION_IDENTITY__.pan && identity.pan !== window.__SERA_SESSION_IDENTITY__.pan) {
@@ -456,10 +458,10 @@
 
       // Gate: Must have at least a client identity or positive filing cue to record
       if (!finalPan && !finalClientName && !hasPositiveCue && !isFilingUrl) {
-        console.warn(`⚡ Sera DOM: Gate blocked - no pan="${finalPan}", no name="${finalClientName}", hasPositiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
+        if (SERA_DEBUG) console.warn(`⚡ Sera DOM: Gate blocked - no pan="${finalPan}", no name="${finalClientName}", hasPositiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
         return;
       }
-      console.log(`⚡ Sera DOM [gate passed]: pan="${finalPan}", name="${finalClientName}", positiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
+      if (SERA_DEBUG) console.log(`⚡ Sera DOM [gate passed]: pan="${finalPan}", name="${finalClientName}", positiveCue=${hasPositiveCue}, isFilingUrl=${isFilingUrl}`);
 
       // 4. Extract ARN / Ack Number
       let extractedArn = null;
@@ -580,7 +582,7 @@
       });
 
     } catch (err) {
-      console.warn("Sera DOM: Error in scanDomForFiling:", err);
+      if (SERA_DEBUG) console.warn("Sera DOM: Error in scanDomForFiling:", err);
     }
   }
 
@@ -1033,7 +1035,7 @@
       }
 
     } catch (err) {
-      console.warn("Sera DOM: Error harvesting scraped_data:", err);
+      if (SERA_DEBUG) console.warn("Sera DOM: Error harvesting scraped_data:", err);
     }
 
     return snapshot;
@@ -1083,7 +1085,7 @@
     }
     seraPageTracker.pageDataHashes[currentPageKey] = dataHash;
 
-    console.log(`⚡ Sera DOM Captured [${captureType}]: Portal=${portalName}, Name=${clientName}, ARN=${arn}, PAN=${pan}, GSTIN=${gstin}, Period=${period}, Status=${status}, PageKey=${currentPageKey}`);
+    if (SERA_DEBUG) console.log(`⚡ Sera DOM Captured [${captureType}]: Portal=${portalName}, Name=${clientName}, ARN=${arn}, PAN=${pan}, GSTIN=${gstin}, Period=${period}, Status=${status}, PageKey=${currentPageKey}`);
 
     const payload = {
       type: "filing_result",
@@ -1137,7 +1139,7 @@
         chrome.runtime.sendMessage(payload);
       }
     } catch (e) {
-      console.warn("Sera DOM: Failed to send filing_result message:", e);
+      if (SERA_DEBUG) console.warn("Sera DOM: Failed to send filing_result message:", e);
     }
 
     // 2. Show sleek left-side in-browser FST toast notification
@@ -1155,7 +1157,7 @@
         });
       }
     } catch (toastErr) {
-      console.warn("Sera DOM: Toast notification error:", toastErr);
+      if (SERA_DEBUG) console.warn("Sera DOM: Toast notification error:", toastErr);
     }
   }
 })();

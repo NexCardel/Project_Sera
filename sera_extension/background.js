@@ -1,3 +1,6 @@
+// Production debug gate — set to true only during local development
+const SERA_DEBUG = false;
+
 let nativePort = null;
 const sdcInjectedTabs = new Set();
 
@@ -6,9 +9,9 @@ function connectToNativeHost() {
   const hostName = "com.amanassociates.sera";
   try {
     nativePort = chrome.runtime.connectNative(hostName);
-    console.log('Sera native host connection established');
+    if (SERA_DEBUG) console.log('Sera native host connection established');
     nativePort.onMessage.addListener((message) => {
-      console.log("Received from Sera desktop:", message);
+      if (SERA_DEBUG) console.log("Received from Sera desktop:", message);
       if (message.type && message.type.startsWith("SCA_")) {
         if (message.command_id) {
           try {
@@ -61,16 +64,16 @@ function connectToNativeHost() {
     nativePort.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError;
       if (err) {
-        console.log("Sera desktop host status:", err.message || "Native host inactive");
+        if (SERA_DEBUG) console.log("Sera desktop host status:", err.message || "Native host inactive");
       } else {
-        console.log("Disconnected from Sera desktop app");
+        if (SERA_DEBUG) console.log("Disconnected from Sera desktop app");
       }
       nativePort = null;
       setTimeout(ensureConnected, 5000);
     });
 
   } catch (e) {
-    console.error("Failed to connect to native host:", e);
+    if (SERA_DEBUG) console.error("Failed to connect to native host:", e);
     nativePort = null;
   }
 }
@@ -89,7 +92,7 @@ async function sendToDesktop(msg, requireHttpAck = false) {
       nativePort.postMessage(msg);
       sent = true;
     } catch (e) {
-      console.warn("Sera background: native postMessage failed, falling back to HTTP:", e);
+      if (SERA_DEBUG) console.warn("Sera background: native postMessage failed, falling back to HTTP:", e);
     }
   }
   if (!sent) {
@@ -101,10 +104,10 @@ async function sendToDesktop(msg, requireHttpAck = false) {
       });
       sent = resp.ok;
       if (sent) {
-        console.log("Sera background: successfully delivered to desktop via HTTP port 49152");
+        if (SERA_DEBUG) console.log("Sera background: successfully delivered to desktop via HTTP port 49152");
       }
     } catch (err) {
-      console.warn("Sera background: direct HTTP delivery failed:", err);
+      if (SERA_DEBUG) console.warn("Sera background: direct HTTP delivery failed:", err);
     }
   }
   return sent;
@@ -174,7 +177,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 ensureConnected();
 
-console.log('Sera SAD: background.js module loaded, registering listeners.');
+if (SERA_DEBUG) console.log('Sera SAD: background.js module loaded, registering listeners.');
 
 // Helper to broadcast tracker & SAD state changes to open tabs
 function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
@@ -204,7 +207,7 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
 // SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
 function injectSAD(tabId, reason) {
   if (sdcInjectedTabs.has(tabId)) {
-    console.log(`⚡ Sera SDC: Tab ${tabId} already injected — skipping duplicate injection.`);
+    if (SERA_DEBUG) console.log(`⚡ Sera SDC: Tab ${tabId} already injected — skipping duplicate injection.`);
     return;
   }
   // Reserve the tab before the asynchronous settings lookup to prevent two
@@ -220,7 +223,7 @@ function injectSAD(tabId, reason) {
       return; // All visual and DOM scanning disabled
     }
 
-    console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
+    if (SERA_DEBUG) console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
 
     // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
     const sdcFiles = [
@@ -244,7 +247,7 @@ function injectSAD(tabId, reason) {
 // Inject into ALL open tabs
 function injectAllOpenTabs(reason) {
   chrome.tabs.query({}, (tabs) => {
-    console.log('Sera SAD: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
+    if (SERA_DEBUG) console.log('Sera SAD: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
     for (const tab of tabs) {
       if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
       if (tab.status === 'complete') injectSAD(tab.id, reason || 'startup-scan');
@@ -261,7 +264,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     injectSAD(tabId, 'onUpdated-complete');
   } else if (changeInfo.url) {
     // SPA navigation is already handled by sdc_core's URL watcher.
-    console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
+    if (SERA_DEBUG) console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
   }
 });
 
@@ -278,7 +281,7 @@ injectAllOpenTabs('service-worker-startup');
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
   if (window.__seraFillActive) return; // prevent duplicate runs
   window.__seraFillActive = true;
-  console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
+  if (SERA_DEBUG) console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
 
   function cleanSelector(sel) {
     if (!sel) return "";
@@ -345,7 +348,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         for (const btn of btns) {
           const text = (btn.textContent || '').trim().toLowerCase();
           if (isVisible(btn) && (text.includes('continue') || text.includes('login') || text.includes('sign in') || text.includes('submit'))) {
-            console.log("Sera: Auto-clicking Continue/Login button:", text);
+            if (SERA_DEBUG) console.log("Sera: Auto-clicking Continue/Login button:", text);
             setTimeout(() => btn.click(), 300);
             return true;
           }
@@ -361,7 +364,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   function checkDone() {
     if (panDone && passDone) {
       window.__seraFillActive = false;
-      console.log("Sera: Autofill finished");
+      if (SERA_DEBUG) console.log("Sera: Autofill finished");
     }
   }
 
@@ -414,9 +417,9 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       if (userField && userid) {
         if (userField.value !== userid) {
           simulateType(userField, userid);
-          console.log("Sera: Username/Email filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email filled");
         } else {
-          console.log("Sera: Username/Email already filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email already filled");
         }
         clearInterval(panInterval);
         panDone = true;
@@ -424,7 +427,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         checkDone();
       } else if (panAttempts >= 60) {
         clearInterval(panInterval);
-        console.warn("Sera: Username/Email field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Username/Email field not found after timeout");
         panDone = true;
         if (callback) callback();
         checkDone();
@@ -484,7 +487,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         }
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
-        console.log("Sera: Password filled");
+        if (SERA_DEBUG) console.log("Sera: Password filled");
 
         // Auto-click Continue/Login after a delay for Angular to process
         setTimeout(() => {
@@ -496,7 +499,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         checkDone();
       } else if (passAttempts >= 90) { // 45 seconds poll for 2-step logins
         clearInterval(passInterval);
-        console.warn("Sera: Password field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Password field not found after timeout");
         passDone = true;
         checkDone();
       }
@@ -1244,12 +1247,12 @@ function handleManualAssistTab(message) {
 function recordInjectionAndClearCookiesIfNeeded() {
   chrome.storage.local.get({ injectionCount: 0 }, (data) => {
     let newCount = (data.injectionCount || 0) + 1;
-    console.log(`Sera: Extension injection count = ${newCount}/5`);
+    if (SERA_DEBUG) console.log(`Sera: Extension injection count = ${newCount}/5`);
     
     if (newCount >= 5) {
-      console.log("Sera: Reached 5 extension injections. Clearing browser cookies...");
+      if (SERA_DEBUG) console.log("Sera: Reached 5 extension injections. Clearing browser cookies...");
       clearBrowserCookies(() => {
-        console.log("Sera: Browser cookies cleared successfully after 5 injections.");
+        if (SERA_DEBUG) console.log("Sera: Browser cookies cleared successfully after 5 injections.");
       });
       chrome.storage.local.set({ injectionCount: 0 });
     } else {
@@ -1270,7 +1273,7 @@ function clearBrowserCookies(callback) {
   if (chrome.browsingData && chrome.browsingData.removeCookies) {
     chrome.browsingData.removeCookies({ "since": 0 }, () => {
       if (chrome.runtime.lastError) {
-        console.warn("Sera: removeCookies error:", chrome.runtime.lastError.message);
+        if (SERA_DEBUG) console.warn("Sera: removeCookies error:", chrome.runtime.lastError.message);
       }
       finish();
     });
@@ -1340,7 +1343,7 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  console.log("Sera background: received runtime message:", msg);
+  if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg);
   if (msg.type === "CHECK_NATIVE_STATUS") {
     if (nativePort) {
       sendResponse({ connected: true, mode: "native" });
@@ -1398,7 +1401,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
-    console.log("Sera background: handling filing_result, sending to desktop...");
+    if (SERA_DEBUG) console.log("Sera background: handling filing_result, sending to desktop...");
     // Keep the MV3 service worker alive until the final assembler payload has
     // actually been forwarded to the desktop host.
     // The HTTP listener returns 200 only after the desktop has accepted the
@@ -1409,7 +1412,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       else console.warn("Sera background: filing_result was not delivered to desktop.");
       sendResponse({ status: sent ? "accepted" : "failed" });
     }).catch((err) => {
-      console.warn("Sera background: filing_result delivery error:", err);
+      if (SERA_DEBUG) console.warn("Sera background: filing_result delivery error:", err);
       sendResponse({ status: "failed" });
     });
     return true;
@@ -1727,7 +1730,7 @@ function handleScaCommand(req, sender, sendResponse) {
       const newArm = req.arm;
       if (!newArm) return;
       
-      console.log(`Sera SCA: Coordinator arming for client ${newArm.client_id_token || newArm.client_id}`);
+      if (SERA_DEBUG) console.log(`Sera SCA: Coordinator arming for client ${newArm.client_id_token || newArm.client_id}`);
       
       if (armedSCATimer) clearTimeout(armedSCATimer);
       
@@ -1752,10 +1755,10 @@ function handleScaCommand(req, sender, sendResponse) {
 function handleScaArm(message) {
   chrome.storage.local.get(['scaEnabled'], (data) => {
     if (data.scaEnabled === false) {
-      console.log("Sera SCA: SCA is disabled in settings. Skipping arm.");
+      if (SERA_DEBUG) console.log("Sera SCA: SCA is disabled in settings. Skipping arm.");
       return;
     }
-    console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id);
+    if (SERA_DEBUG) console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id);
     if (armedSCATimer) {
       clearTimeout(armedSCATimer);
       armedSCATimer = null;
@@ -1766,7 +1769,7 @@ function handleScaArm(message) {
       expiresAt: Date.now() + ttl
     };
     armedSCATimer = setTimeout(() => {
-      console.log("Sera SCA: Armed state expired.");
+      if (SERA_DEBUG) console.log("Sera SCA: Armed state expired.");
       armedSCAPayload = null;
       armedSCATimer = null;
     }, ttl);
@@ -1803,7 +1806,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
   if (req.type === "sca_fill_completed") {
     chrome.storage.local.get(['armedSCAPayload'], (stored) => {
-      console.log("Sera SCA: Successful fill reported; consuming one use.");
+      if (SERA_DEBUG) console.log("Sera SCA: Successful fill reported; consuming one use.");
       const payload = armedSCAPayload || stored.armedSCAPayload;
       if (!payload || payload.fillCompletionHandled) return;
       payload.fillCompletionHandled = true;
@@ -1821,7 +1824,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 
   if (req.type === "sca_paste_matched" || req.type === "SCA_MATCH_CANDIDATE") {
-    console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
+    if (SERA_DEBUG) console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
     if (!sender.tab || !sender.tab.id) return;
 
     chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode', 'manualAssistPayload'], (data) => {
@@ -1829,12 +1832,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       // Don't trigger SCA if SMTI (Manual Assist) widget is currently active
       const smtiActive = data.manualAssistPayload && data.manualAssistPayload.expiresAt && data.manualAssistPayload.expiresAt > Date.now();
       if (smtiActive) {
-        console.log("Sera SCA: Skipping — SMTI (Manual Assist) is currently active on this tab.");
+        if (SERA_DEBUG) console.log("Sera SCA: Skipping — SMTI (Manual Assist) is currently active on this tab.");
         return;
       }
       const payload = data.armedSCAPayload || armedSCAPayload;
       if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
-        console.log("Sera SCA: No active armed payload found for paste event.");
+        if (SERA_DEBUG) console.log("Sera SCA: No active armed payload found for paste event.");
         return;
       }
 
@@ -2247,7 +2250,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   setTimeout(() => {
                     simType(passField, pwd);
                     showScaToast();
-                    console.log("Sera SCA: Password filled safely & notification banner displayed.");
+                    if (SERA_DEBUG) console.log("Sera SCA: Password filled safely & notification banner displayed.");
                   }, 100);
                 } else if (attempts >= 200) {
                   clearInterval(interval);
