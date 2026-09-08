@@ -19,13 +19,37 @@ from PySide6.QtCore import Qt, QTimer, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon, QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QProgressBar, QFrame, QGraphicsOpacityEffect
+    QLineEdit, QProgressBar, QFrame, QGraphicsOpacityEffect,
+    QGraphicsDropShadowEffect
 )
 
 try:
     import qtawesome as qta
 except Exception:
     qta = None
+
+
+# ── Sera Design System Palette ────────────────────────────────────────────────
+_BG_CARD        = "#171717"
+_BG_CHIP        = "#141414"
+_BG_INPUT       = "#141414"
+_BG_BUTTON      = "#202020"
+_BG_HOVER       = "#282828"
+_BORDER_CARD    = "#2C2C2C"
+_BORDER_INNER   = "#242424"
+_BORDER_CTRL    = "#333333"
+
+_TEXT_PRI       = "#F8FAFC"
+_TEXT_MUTED     = "#8E8D88"
+_TEXT_SEC       = "#CBD5E1"
+
+_ACCENT         = "#2E9B5F"  # Canonical Sera Emerald
+_ACCENT_HOVER   = "#34B76D"
+_ACCENT_LIGHT   = "#4CF9B7"  # Mint / Token Cyan
+_ACCENT_PRESSED = "#237A4B"
+
+_SUCCESS_BG     = "#15261D"
+_SUCCESS_BORDER = "#2E7D32"
 
 
 def _safe_icon(icon_name: str, color: str = "#FFFFFF") -> QIcon:
@@ -40,6 +64,7 @@ def _safe_icon(icon_name: str, color: str = "#FFFFFF") -> QIcon:
 class SccQuickTagBanner(QWidget):
     """
     Floating, frameless desktop banner for quick password logging on login.
+    Fully integrated into the Sera design system.
     """
     password_selected = Signal(str, str, int, str, str)
     # (pan, client_name, column_id, password, combo_label)
@@ -59,13 +84,14 @@ class SccQuickTagBanner(QWidget):
         self._remaining_ms = 20000
         self._is_paused = False
 
-        # Opacity effect for smooth fade-in / fade-out
+        # Opacity effect & animation for window
         self._opacity_effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self._opacity_effect)
         self._opacity_effect.setOpacity(0.0)
 
         self._anim = QPropertyAnimation(self._opacity_effect, b"opacity")
         self._anim.setDuration(220)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
 
         # 100ms interval countdown timer
         self._countdown_timer = QTimer(self)
@@ -78,49 +104,86 @@ class SccQuickTagBanner(QWidget):
         self.setFixedWidth(420)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setContentsMargins(12, 12, 12, 12)
 
-        # Root Card Frame
+        # ── Root Card Frame ───────────────────────────────────
         self.card = QFrame(self)
         self.card.setObjectName("SccCard")
-        self.card.setStyleSheet("""
-            QFrame#SccCard {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 12px;
-            }
+        self.card.setStyleSheet(f"""
+            QFrame#SccCard {{
+                background-color: {_BG_CARD};
+                border: 1px solid {_BORDER_CARD};
+                border-radius: 10px;
+            }}
         """)
 
+        # Soft floating elevation drop shadow
+        self._shadow = QGraphicsDropShadowEffect(self.card)
+        self._shadow.setBlurRadius(24)
+        self._shadow.setColor(QColor(0, 0, 0, 160))
+        self._shadow.setOffset(0, 6)
+        self.card.setGraphicsEffect(self._shadow)
+
         card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(16, 14, 16, 12)
+        card_layout.setContentsMargins(16, 14, 16, 14)
         card_layout.setSpacing(10)
 
         # ── Header ───────────────────────────────────────────
         header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
+        header_layout.setSpacing(10)
 
-        self.icon_label = QLabel(self.card)
-        self.icon_label.setPixmap(_safe_icon("mdi.shield-key-outline", "#F59E0B").pixmap(22, 22))
-        header_layout.addWidget(self.icon_label)
+        # Emerald Icon Container
+        self.icon_frame = QFrame(self.card)
+        self.icon_frame.setFixedSize(32, 32)
+        self.icon_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: rgba(46, 155, 95, 0.15);
+                border: 1px solid rgba(76, 249, 183, 0.28);
+                border-radius: 6px;
+            }}
+        """)
+        icon_layout = QVBoxLayout(self.icon_frame)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.setAlignment(Qt.AlignCenter)
+
+        self.icon_label = QLabel(self.icon_frame)
+        self.icon_label.setPixmap(_safe_icon("mdi.shield-key-outline", _ACCENT_LIGHT).pixmap(18, 18))
+        icon_layout.addWidget(self.icon_label)
+        header_layout.addWidget(self.icon_frame)
+
+        # Title + Section Label
+        title_vbox = QVBoxLayout()
+        title_vbox.setContentsMargins(0, 0, 0, 0)
+        title_vbox.setSpacing(1)
+
+        self.subtitle_label = QLabel("SERA CREDENTIAL CAPTURE", self.card)
+        self.subtitle_label.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 0.8px;")
+        title_vbox.addWidget(self.subtitle_label)
 
         self.title_label = QLabel("ITR Password Required", self.card)
-        self.title_label.setStyleSheet("color: #F8FAFC; font-size: 13px; font-weight: 700;")
-        header_layout.addWidget(self.title_label, 1)
+        self.title_label.setStyleSheet(f"color: {_TEXT_PRI}; font-size: 13px; font-weight: 600;")
+        title_vbox.addWidget(self.title_label)
+        header_layout.addLayout(title_vbox, 1)
 
+        # Ghost Close Button
         self.btn_close = QPushButton(self.card)
-        self.btn_close.setIcon(_safe_icon("mdi.close", "#94A3B8"))
+        self.btn_close.setIcon(_safe_icon("mdi.close", _TEXT_MUTED))
         self.btn_close.setFixedSize(24, 24)
         self.btn_close.setCursor(Qt.PointingHandCursor)
-        self.btn_close.setToolTip("Dismiss")
-        self.btn_close.setStyleSheet("""
-            QPushButton {
+        self.btn_close.setToolTip("Dismiss (Auto-dismisses in 20s)")
+        self.btn_close.setStyleSheet(f"""
+            QPushButton {{
                 background: transparent;
-                border: none;
+                border: 1px solid transparent;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: rgba(255, 255, 255, 0.1);
-            }
+            }}
+            QPushButton:hover {{
+                background-color: #262626;
+                border-color: #333333;
+            }}
+            QPushButton:pressed {{
+                background-color: #1A1A1A;
+            }}
         """)
         self.btn_close.clicked.connect(self.dismiss)
         header_layout.addWidget(self.btn_close)
@@ -128,31 +191,44 @@ class SccQuickTagBanner(QWidget):
 
         # ── Client Info Chip ─────────────────────────────────
         self.chip_frame = QFrame(self.card)
-        self.chip_frame.setStyleSheet("""
-            QFrame {
-                background-color: #0F172A;
-                border: 1px solid #1E293B;
+        self.chip_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_BG_CHIP};
+                border: 1px solid {_BORDER_INNER};
                 border-radius: 6px;
-                padding: 4px 8px;
-            }
+            }}
         """)
         chip_layout = QHBoxLayout(self.chip_frame)
-        chip_layout.setContentsMargins(6, 4, 6, 4)
+        chip_layout.setContentsMargins(8, 6, 8, 6)
         chip_layout.setSpacing(8)
 
+        self.chip_icon = QLabel(self.chip_frame)
+        self.chip_icon.setPixmap(_safe_icon("mdi.card-account-details-outline", _TEXT_MUTED).pixmap(16, 16))
+        chip_layout.addWidget(self.chip_icon)
+
         self.lbl_client_name = QLabel("Client Name", self.chip_frame)
-        self.lbl_client_name.setStyleSheet("color: #38BDF8; font-size: 12px; font-weight: 600;")
+        self.lbl_client_name.setStyleSheet(f"color: {_TEXT_PRI}; font-size: 12px; font-weight: 600;")
         chip_layout.addWidget(self.lbl_client_name, 1)
 
         self.lbl_pan = QLabel("PAN: XXXXXXXXXX", self.chip_frame)
-        self.lbl_pan.setStyleSheet("color: #94A3B8; font-size: 11px; font-family: monospace; font-weight: bold;")
+        self.lbl_pan.setStyleSheet(f"""
+            QLabel {{
+                background-color: rgba(46, 155, 95, 0.15);
+                border: 1px solid rgba(76, 249, 183, 0.3);
+                color: {_ACCENT_LIGHT};
+                font-size: 11px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-weight: 700;
+                padding: 2px 7px;
+                border-radius: 4px;
+            }}
+        """)
         chip_layout.addWidget(self.lbl_pan)
-
         card_layout.addWidget(self.chip_frame)
 
         # ── Prompt Text ──────────────────────────────────────
-        self.prompt_label = QLabel("Which password opened this account?", self.card)
-        self.prompt_label.setStyleSheet("color: #CBD5E1; font-size: 11px;")
+        self.prompt_label = QLabel("Select working preset or enter custom password:", self.card)
+        self.prompt_label.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px; font-weight: 500;")
         card_layout.addWidget(self.prompt_label)
 
         # ── 4 Combo Buttons Grid ─────────────────────────────
@@ -163,24 +239,26 @@ class SccQuickTagBanner(QWidget):
         for i in range(4):
             btn = QPushButton(f"Combo {i+1}", self.card)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFixedHeight(28)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #334155;
-                    color: #F1F5F9;
-                    border: 1px solid #475569;
+            btn.setFixedHeight(30)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {_BG_BUTTON};
+                    color: {_TEXT_PRI};
+                    border: 1px solid {_BORDER_CTRL};
                     border-radius: 6px;
                     font-size: 11px;
                     font-weight: 600;
-                    padding: 0 6px;
-                }
-                QPushButton:hover {
-                    background-color: #0284C7;
-                    border-color: #38BDF8;
-                }
-                QPushButton:pressed {
-                    background-color: #0369A1;
-                }
+                    padding: 0 8px;
+                }}
+                QPushButton:hover {{
+                    background-color: {_BG_HOVER};
+                    border: 1px solid {_ACCENT};
+                    color: {_ACCENT_LIGHT};
+                }}
+                QPushButton:pressed {{
+                    background-color: {_BG_CHIP};
+                    border: 1px solid {_ACCENT_PRESSED};
+                }}
             """)
             btn.clicked.connect(lambda checked=False, idx=i: self._on_combo_clicked(idx))
             self.combo_buttons.append(btn)
@@ -195,63 +273,70 @@ class SccQuickTagBanner(QWidget):
         self.txt_password = QLineEdit(self.card)
         self.txt_password.setPlaceholderText("Or type / paste password here...")
         self.txt_password.setEchoMode(QLineEdit.Password)
-        self.txt_password.setFixedHeight(30)
-        self.txt_password.setStyleSheet("""
-            QLineEdit {
-                background-color: #0F172A;
-                color: #FFFFFF;
-                border: 1px solid #475569;
+        self.txt_password.setFixedHeight(32)
+        self.txt_password.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {_BG_INPUT};
+                color: {_TEXT_PRI};
+                border: 1px solid {_BORDER_CTRL};
                 border-radius: 6px;
-                padding: 0 8px;
+                padding: 0 10px;
                 font-size: 11px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #38BDF8;
-            }
+                selection-background-color: {_ACCENT};
+                selection-color: #FFFFFF;
+            }}
+            QLineEdit:focus {{
+                border: 1.5px solid {_ACCENT};
+            }}
         """)
         self.txt_password.returnPressed.connect(self._on_save_input)
         input_layout.addWidget(self.txt_password, 1)
 
         # Toggle eye icon
         self.btn_toggle_eye = QPushButton(self.card)
-        self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", "#94A3B8"))
-        self.btn_toggle_eye.setFixedSize(30, 30)
+        self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", _TEXT_MUTED))
+        self.btn_toggle_eye.setFixedSize(32, 32)
         self.btn_toggle_eye.setCursor(Qt.PointingHandCursor)
         self.btn_toggle_eye.setToolTip("Show / Hide password")
-        self.btn_toggle_eye.setStyleSheet("""
-            QPushButton {
-                background-color: #1E293B;
-                border: 1px solid #475569;
+        self.btn_toggle_eye.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_BG_BUTTON};
+                border: 1px solid {_BORDER_CTRL};
                 border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {_BG_HOVER};
+                border: 1px solid {_ACCENT};
+            }}
+            QPushButton:pressed {{
+                background-color: {_BG_CHIP};
+            }}
         """)
         self.btn_toggle_eye.clicked.connect(self._toggle_password_visibility)
         input_layout.addWidget(self.btn_toggle_eye)
 
         # Save button
         self.btn_save = QPushButton("Save", self.card)
-        self.btn_save.setIcon(_safe_icon("mdi.content-save", "#FFFFFF"))
-        self.btn_save.setFixedHeight(30)
+        self.btn_save.setIcon(_safe_icon("mdi.check", "#FFFFFF"))
+        self.btn_save.setFixedHeight(32)
         self.btn_save.setCursor(Qt.PointingHandCursor)
-        self.btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #10B981;
-                color: #FFFFFF;
-                border: none;
+        self.btn_save.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_ACCENT};
+                border: 1px solid {_ACCENT_HOVER};
                 border-radius: 6px;
-                padding: 0 12px;
+                color: #FFFFFF;
+                padding: 0 14px;
                 font-size: 11px;
                 font-weight: 700;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:pressed {
-                background-color: #047857;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {_ACCENT_HOVER};
+                border-color: {_ACCENT_LIGHT};
+            }}
+            QPushButton:pressed {{
+                background-color: {_ACCENT_PRESSED};
+            }}
         """)
         self.btn_save.clicked.connect(self._on_save_input)
         input_layout.addWidget(self.btn_save)
@@ -260,10 +345,10 @@ class SccQuickTagBanner(QWidget):
 
         # ── Countdown Progress & Status ──────────────────────
         status_layout = QHBoxLayout()
-        status_layout.setSpacing(6)
+        status_layout.setSpacing(8)
 
         self.lbl_timer = QLabel("Auto-dismiss in 20s", self.card)
-        self.lbl_timer.setStyleSheet("color: #64748B; font-size: 10px;")
+        self.lbl_timer.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px;")
         status_layout.addWidget(self.lbl_timer, 1)
 
         self.progress_bar = QProgressBar(self.card)
@@ -271,16 +356,16 @@ class SccQuickTagBanner(QWidget):
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setRange(0, self._total_duration_ms)
         self.progress_bar.setValue(self._total_duration_ms)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #334155;
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #242424;
                 border: none;
-                border-radius: 1px;
-            }
-            QProgressBar::chunk {
-                background-color: #38BDF8;
-                border-radius: 1px;
-            }
+                border-radius: 1.5px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {_ACCENT};
+                border-radius: 1.5px;
+            }}
         """)
         status_layout.addWidget(self.progress_bar, 1)
 
@@ -291,12 +376,16 @@ class SccQuickTagBanner(QWidget):
         """Pause timer when user hovers over the banner."""
         super().enterEvent(event)
         self._is_paused = True
-        self.lbl_timer.setText("Paused")
+        self.lbl_timer.setText("Paused (mouse over)")
+        self.lbl_timer.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 11px; font-weight: 600;")
 
     def leaveEvent(self, event):
         """Resume timer when mouse leaves."""
         super().leaveEvent(event)
         self._is_paused = False
+        sec_left = max(0, int(self._remaining_ms / 1000) + 1)
+        self.lbl_timer.setText(f"Auto-dismiss in {sec_left}s")
+        self.lbl_timer.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px; font-weight: normal;")
 
     def show_prompt(self, pan: str, client_name: str, column_id: int, portal: str = "Income Tax", combos: list = None):
         """
@@ -310,7 +399,12 @@ class SccQuickTagBanner(QWidget):
 
         self.lbl_client_name.setText(self._client_name)
         self.lbl_pan.setText(f"PAN: {self._pan}")
+        self.subtitle_label.setText("SERA CREDENTIAL CAPTURE")
         self.title_label.setText(f"{portal} Password Required")
+        self.title_label.setStyleSheet(f"color: {_TEXT_PRI}; font-size: 13px; font-weight: 600;")
+        self.prompt_label.setText("Select working preset or enter custom password:")
+        self.prompt_label.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px; font-weight: 500;")
+        self.icon_label.setPixmap(_safe_icon("mdi.shield-key-outline", _ACCENT_LIGHT).pixmap(18, 18))
 
         # Configure the 4 buttons
         for i in range(4):
@@ -331,14 +425,14 @@ class SccQuickTagBanner(QWidget):
         # Reset direct input & styling
         self.txt_password.clear()
         self.txt_password.setEchoMode(QLineEdit.Password)
-        self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", "#94A3B8"))
+        self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", _TEXT_MUTED))
 
-        self.card.setStyleSheet("""
-            QFrame#SccCard {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 12px;
-            }
+        self.card.setStyleSheet(f"""
+            QFrame#SccCard {{
+                background-color: {_BG_CARD};
+                border: 1px solid {_BORDER_CARD};
+                border-radius: 10px;
+            }}
         """)
 
         # Position at bottom-right of primary screen
@@ -348,6 +442,7 @@ class SccQuickTagBanner(QWidget):
         self._remaining_ms = self._total_duration_ms
         self.progress_bar.setValue(self._remaining_ms)
         self.lbl_timer.setText("Auto-dismiss in 20s")
+        self.lbl_timer.setStyleSheet(f"color: {_TEXT_MUTED}; font-size: 11px;")
         self._is_paused = False
 
         self.show()
@@ -386,10 +481,10 @@ class SccQuickTagBanner(QWidget):
     def _toggle_password_visibility(self):
         if self.txt_password.echoMode() == QLineEdit.Password:
             self.txt_password.setEchoMode(QLineEdit.Normal)
-            self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-off-outline", "#38BDF8"))
+            self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-off-outline", _ACCENT_LIGHT))
         else:
             self.txt_password.setEchoMode(QLineEdit.Password)
-            self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", "#94A3B8"))
+            self.btn_toggle_eye.setIcon(_safe_icon("mdi.eye-outline", _TEXT_MUTED))
 
     def _on_combo_clicked(self, idx: int):
         label = f"Combo {idx+1}"
@@ -418,16 +513,19 @@ class SccQuickTagBanner(QWidget):
         # Emit save signal to main application
         self.password_selected.emit(self._pan, self._client_name, self._column_id, password, combo_label)
 
-        # Show success state
-        self.icon_label.setPixmap(_safe_icon("mdi.check-circle", "#10B981").pixmap(22, 22))
-        self.title_label.setText("✓ Saved to Vault!")
-        self.prompt_label.setText(f"Password recorded under {combo_label}")
-        self.card.setStyleSheet("""
-            QFrame#SccCard {
-                background-color: #064E3B;
-                border: 1px solid #10B981;
-                border-radius: 12px;
-            }
+        # Show Sera emerald success confirmation
+        self.icon_label.setPixmap(_safe_icon("mdi.check-circle", _ACCENT_LIGHT).pixmap(18, 18))
+        self.title_label.setText("✓ Password Verified & Saved!")
+        self.title_label.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 13px; font-weight: 700;")
+        self.subtitle_label.setText("SERA VAULT UPDATED")
+        self.prompt_label.setText(f"Recorded under {combo_label} • Notes updated")
+        self.prompt_label.setStyleSheet(f"color: #A5D6A7; font-size: 11px; font-weight: 500;")
+        self.card.setStyleSheet(f"""
+            QFrame#SccCard {{
+                background-color: {_SUCCESS_BG};
+                border: 1px solid {_SUCCESS_BORDER};
+                border-radius: 10px;
+            }}
         """)
 
         # Fade out smoothly after 1.2s
