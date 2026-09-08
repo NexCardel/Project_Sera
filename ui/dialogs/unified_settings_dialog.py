@@ -341,6 +341,15 @@ class UnifiedSettingsDialog(QDialog):
         self._initial_state = None
         self._apply_global_style()
         self._build_ui()
+        # Pre-build settings pages so all controls exist for unified load & dirty tracking
+        for p in _SETTINGS_PAGES:
+            if p not in self._page_widgets:
+                builder = self._page_builders.get(p)
+                if builder:
+                    widget = builder()
+                    self._page_widgets[p] = widget
+                    self._stack.addWidget(widget)
+
         # Switch to requested page (or default to general)
         target_page = _PAGE_MAP.get(self._start_page, _P_GENERAL)
         self._switch_page(target_page)
@@ -572,8 +581,6 @@ class UnifiedSettingsDialog(QDialog):
                 widget = builder()
                 self._page_widgets[page_idx] = widget
                 self._stack.addWidget(widget)
-                if hasattr(self, "_initial_state") and self._initial_state is not None:
-                    self._load_settings()
 
         target_widget = self._page_widgets.get(page_idx)
         if target_widget:
@@ -1033,6 +1040,11 @@ class UnifiedSettingsDialog(QDialog):
             state["btn_assist"] = self.btn_assist_check.isChecked()
             state["btn_copy"] = self.btn_copy_check.isChecked()
             state["show_hide"] = self.show_hide_check.isChecked()
+        if hasattr(self, "scc_check"):
+            state["scc_enabled"] = self.scc_check.isChecked()
+            state["scc_combos"] = tuple(
+                (lbl.text(), val.text()) for lbl, val in getattr(self, "scc_combo_edits", [])
+            )
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1097,11 +1109,11 @@ class UnifiedSettingsDialog(QDialog):
             except Exception:
                 self.autostart_check.setChecked(False)
 
-            if hasattr(self, "scc_check"):
-                self.scc_check.setChecked(g("scc_enabled", "1") == "1")
-                for idx, (lbl_e, val_e) in enumerate(self.scc_combo_edits, 1):
-                    lbl_e.setText(g(f"scc_combo_label_{idx}", f"Combo {idx}"))
-                    val_e.setText(g(f"scc_combo_value_{idx}", ""))
+        if hasattr(self, "scc_check"):
+            self.scc_check.setChecked(g("scc_enabled", "1") == "1")
+            for idx, (lbl_e, val_e) in enumerate(getattr(self, "scc_combo_edits", []), 1):
+                lbl_e.setText(g(f"scc_combo_label_{idx}", f"Combo {idx}"))
+                val_e.setText(g(f"scc_combo_value_{idx}", ""))
 
         if hasattr(self, "btn_ext_check"):
             self.btn_ext_check.setChecked(g("extension_autofill_enabled", "1") == "1")
@@ -1131,12 +1143,6 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
                 bulk_settings["tracker_enabled"]            = "1" if (self.fst_check.isChecked() or self.sad_check.isChecked()) else "0"
 
-                if hasattr(self, "scc_check"):
-                    bulk_settings["scc_enabled"] = b(self.scc_check)
-                    for idx, (lbl_e, val_e) in enumerate(self.scc_combo_edits, 1):
-                        bulk_settings[f"scc_combo_label_{idx}"] = lbl_e.text().strip() or f"Combo {idx}"
-                        bulk_settings[f"scc_combo_value_{idx}"] = val_e.text().strip()
-
                 try:
                     from automation import update_extension_settings
                     update_extension_settings(
@@ -1157,6 +1163,12 @@ class UnifiedSettingsDialog(QDialog):
                     autostart.set_autostart_enabled(self.autostart_check.isChecked())
                 except Exception:
                     pass
+
+            if hasattr(self, "scc_check"):
+                bulk_settings["scc_enabled"] = b(self.scc_check)
+                for idx, (lbl_e, val_e) in enumerate(getattr(self, "scc_combo_edits", []), 1):
+                    bulk_settings[f"scc_combo_label_{idx}"] = lbl_e.text().strip() or f"Combo {idx}"
+                    bulk_settings[f"scc_combo_value_{idx}"] = val_e.text().strip()
 
             if hasattr(self, "btn_ext_check"):
                 bulk_settings["extension_autofill_enabled"] = b(self.btn_ext_check)

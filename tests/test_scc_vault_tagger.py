@@ -199,6 +199,46 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(len(dlg.scc_combo_edits), 4)
         dlg.close()
 
+    def test_unified_settings_scc_page_and_save(self):
+        from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog, _P_SCC
+
+        dlg = UnifiedSettingsDialog(self.db, actor="Admin", page="scc")
+        self.assertIsNotNone(dlg)
+        self.assertEqual(dlg._stack.currentWidget(), dlg._page_widgets[_P_SCC])
+        self.assertFalse(dlg._btn_save.isEnabled(), "Save button should be disabled initially")
+
+        # Edit combo 1 and combo 2
+        lbl1_edit, val1_edit = dlg.scc_combo_edits[0]
+        lbl2_edit, val2_edit = dlg.scc_combo_edits[1]
+
+        lbl1_edit.setText("Firm Alpha")
+        val1_edit.setText("AlphaPass@2026")
+        lbl2_edit.setText("Firm Beta")
+        val2_edit.setText("BetaPass#2026")
+
+        self.assertTrue(dlg._btn_save.isEnabled(), "Save button must be enabled after editing combos")
+
+        # Save settings
+        dlg._on_save_settings()
+        self.assertFalse(dlg._btn_save.isEnabled(), "Save button should be disabled after save")
+
+        # Verify persisted values in database
+        scc_settings = self.db.get_scc_settings()
+        self.assertTrue(scc_settings["enabled"])
+        self.assertEqual(scc_settings["combos"][0]["label"], "Firm Alpha")
+        self.assertEqual(scc_settings["combos"][0]["value"], "AlphaPass@2026")
+        self.assertEqual(scc_settings["combos"][1]["label"], "Firm Beta")
+        self.assertEqual(scc_settings["combos"][1]["value"], "BetaPass#2026")
+        dlg.close()
+
+        # Re-open dialog to verify controls load the saved combos
+        dlg2 = UnifiedSettingsDialog(self.db, actor="Admin", page="general")
+        self.assertEqual(dlg2.scc_combo_edits[0][0].text(), "Firm Alpha")
+        self.assertEqual(dlg2.scc_combo_edits[0][1].text(), "AlphaPass@2026")
+        self.assertEqual(dlg2.scc_combo_edits[1][0].text(), "Firm Beta")
+        self.assertEqual(dlg2.scc_combo_edits[1][1].text(), "BetaPass#2026")
+        dlg2.close()
+
 
 if __name__ == "__main__":
     unittest.main()
