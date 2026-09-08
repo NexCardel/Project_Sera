@@ -191,6 +191,14 @@ class TestSccVaultTagger(unittest.TestCase):
 
         banner.dismiss()
 
+    def test_unified_settings_dialog_general_page(self):
+        from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
+        dlg = UnifiedSettingsDialog(self.db, actor="Admin", page="general")
+        self.assertIsNotNone(dlg)
+        self.assertTrue(dlg.scc_check.isChecked())
+        self.assertEqual(len(dlg.scc_combo_edits), 4)
+        dlg.close()
+
 
 if __name__ == "__main__":
     unittest.main()

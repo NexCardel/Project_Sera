@@ -696,11 +696,11 @@ class UnifiedSettingsDialog(QDialog):
             val_edit.setEchoMode(QLineEdit.Password)
             h_box.addWidget(lbl_edit)
             h_box.addWidget(val_edit)
-            w = QWidget()
-            w.setLayout(h_box)
+            ctrl_widget = QWidget()
+            ctrl_widget.setLayout(h_box)
             self.scc_combo_edits.append((lbl_edit, val_edit))
             lay.addWidget(_setting_row(f"Password Combination {i}",
-                f"Preset label and password for quick-tag button #{i}.", w))
+                f"Preset label and password for quick-tag button #{i}.", ctrl_widget))
 
         lay.addWidget(_sub_header("Schema Info"))
 
@@ -728,6 +728,10 @@ class UnifiedSettingsDialog(QDialog):
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
+        self.scc_check.toggled.connect(self._on_control_changed)
+        for _lbl, _val in self.scc_combo_edits:
+            _lbl.textChanged.connect(self._on_control_changed)
+            _val.textChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
