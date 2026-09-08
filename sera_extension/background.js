@@ -255,6 +255,11 @@ function injectAllOpenTabs(reason) {
   });
 }
 
+let sccActiveAttempt = null;
+chrome.storage.local.get(['sccActiveAttempt'], d => {
+  if (d && d.sccActiveAttempt) sccActiveAttempt = d.sccActiveAttempt;
+});
+
 // Inject into every tab that finishes loading or updates its SPA URL
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
@@ -265,6 +270,50 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   } else if (changeInfo.url) {
     // SPA navigation is already handled by sdc_core's URL watcher.
     if (SERA_DEBUG) console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
+  }
+
+  // ── SCC Webpage Link Mutation Observer ──────────────────────────────────
+  if (sccActiveAttempt && sccActiveAttempt.password) {
+    const now = Date.now();
+    if (now - (sccActiveAttempt.timestamp || 0) > 10 * 60 * 1000) {
+      sccActiveAttempt = null;
+      chrome.storage.local.remove(['sccActiveAttempt']);
+    } else if (!sccActiveAttempt.tabId || sccActiveAttempt.tabId === tabId) {
+      const curUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : '');
+      if (curUrl) {
+        const initUrl = sccActiveAttempt.initial_url || '';
+        const urlChanged = initUrl ? (curUrl !== initUrl) : true;
+        const isLoginUrl = curUrl.toLowerCase().includes('/login') || curUrl.toLowerCase().endsWith('/login');
+        const isPostLoginRoute = urlChanged && !isLoginUrl && (
+          curUrl.includes('/dashboard') ||
+          curUrl.includes('/home') ||
+          curUrl.includes('/portal') ||
+          curUrl.includes('/welcome') ||
+          curUrl.includes('/foservices/#/') ||
+          curUrl.includes('services.gst.gov.in/services/auth') ||
+          urlChanged
+        );
+
+        if (isPostLoginRoute) {
+          if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
+          const attempt = { ...sccActiveAttempt };
+          sccActiveAttempt = null;
+          chrome.storage.local.remove(['sccActiveAttempt']);
+
+          sendToDesktop({
+            type: "scc_password_verified",
+            client_id: attempt.client_id,
+            service_id: attempt.service_id,
+            userid: attempt.userid,
+            password: attempt.password,
+            combo_label: attempt.combo_label,
+            portal: (curUrl && curUrl.includes("gst")) ? "gst" : "income tax",
+            destination_url: curUrl,
+            timestamp: new Date().toISOString()
+          }, true);
+        }
+      }
+    }
   }
 });
 
@@ -572,7 +621,7 @@ function handleAutofillTab(message) {
   });
 }
 
-function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
+function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, sccCombos, clientId, serviceId) {
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -793,9 +842,11 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const header = document.createElement("div");
   header.className = "header";
 
+  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
+
   const badge = document.createElement("div");
   badge.className = "badge";
-  badge.innerHTML = "⚡ Sera Assist";
+  badge.innerHTML = isScc ? "⚡ Sera Assist • SCC" : "⚡ Sera Assist";
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "close-btn";
@@ -816,12 +867,68 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
   uidBtn.innerHTML = "👤  Username";
+  actions.append(uidBtn);
 
-  const passBtn = document.createElement("button");
-  passBtn.className = "btn primary";
-  passBtn.innerHTML = "🔑  Password";
+  if (isScc) {
+    const guideTxt = document.createElement("div");
+    guideTxt.style.cssText = "font-size: 11px; color: #8BA295; margin: 3px 0 1px; font-weight: 600;";
+    guideTxt.textContent = "Select working combination to inject & verify:";
+    actions.append(guideTxt);
 
-  actions.append(uidBtn, passBtn);
+    sccCombos.forEach((combo, idx) => {
+      const pVal = (combo && (combo.value || combo.password)) || "";
+      const pLbl = (combo && combo.label) || `Combo ${idx + 1}`;
+      if (!pVal) return;
+      const cBtn = document.createElement("button");
+      cBtn.className = "btn primary";
+      cBtn.innerHTML = `🔑  ${pVal}`;
+      cBtn.title = `${pLbl}: ${pVal}`;
+      cBtn.style.textAlign = "left";
+      cBtn.style.paddingLeft = "12px";
+      cBtn.style.fontFamily = "monospace, -apple-system, sans-serif";
+
+      cBtn.onclick = () => {
+        const result = smartFill(pVal, passwordSelector, passFallbacks);
+        if (result === "filled") {
+          setBtn(cBtn, "done", `✓  ${pVal} Injected`);
+        } else {
+          setBtn(cBtn, "done", `📋  Copied ${pVal} (Ctrl+V)`);
+        }
+        try {
+          chrome.runtime.sendMessage({
+            type: "SCC_PASSWORD_INJECTED",
+            payload: {
+              client_id: clientId,
+              service_id: serviceId,
+              userid: userid,
+              password: pVal,
+              combo_label: pLbl,
+              initial_url: window.location.href
+            }
+          });
+        } catch (_) {}
+        setTimeout(() => {
+          setBtn(cBtn, "primary", `🔑  ${pVal}`);
+        }, 3000);
+      };
+      actions.append(cBtn);
+    });
+  } else {
+    const passBtn = document.createElement("button");
+    passBtn.className = "btn primary";
+    passBtn.innerHTML = "🔑  Password";
+    passBtn.onclick = () => {
+      const result = smartFill(password, passwordSelector, passFallbacks);
+      if (result === "filled") {
+        setBtn(passBtn, "done", "✓  Password Injected");
+        setTimeout(dismiss, 400);
+      } else {
+        setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
+        setTimeout(dismiss, 1200);
+      }
+    };
+    actions.append(passBtn);
+  }
 
   // Countdown timer bar
   const timerContainer = document.createElement("div");
@@ -1193,17 +1300,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     }
   };
 
-  passBtn.onclick = () => {
-    const result = smartFill(password, passwordSelector, passFallbacks);
-    if (result === "filled") {
-      setBtn(passBtn, "done", "✓  Password Injected");
-      setTimeout(dismiss, 400);
-    } else {
-      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
-      setTimeout(dismiss, 1200);
-    }
-  };
-
   closeBtn.onclick = dismiss;
   setTimeout(() => { if (host.isConnected) dismiss(); }, duration);
 }
@@ -1307,9 +1403,10 @@ function injectManualAssist(tabId, message) {
   // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
   armedSCAPayload = null;
   chrome.storage.local.remove(['armedSCAPayload']);
+  const sccCombos = (message && message.scc_mode && Array.isArray(message.scc_combos)) ? message.scc_combos : null;
   chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
-      message.client_name || message.portal, 30000] })
+      message.client_name || message.portal, 30000, sccCombos, message.client_id || null, message.service_id || null] })
     .then(() => console.log("Sera: Manual Assist widget injected"))
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }
@@ -1397,6 +1494,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
       });
     }
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "SCC_PASSWORD_INJECTED" && msg.payload) {
+    const tId = (sender && sender.tab) ? sender.tab.id : null;
+    sccActiveAttempt = {
+      ...msg.payload,
+      tabId: tId,
+      timestamp: Date.now()
+    };
+    chrome.storage.local.set({ sccActiveAttempt });
     sendResponse({ status: "ok" });
     return true;
   }

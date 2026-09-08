@@ -54,9 +54,9 @@ def autofill_login(service: dict, user_id: str, password: str, client_id: int, o
     _send_to_extension(service, user_id, password, client_id, on_error, mode="autofill")
 
 
-def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None):
+def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
     """Open the portal and ask the companion extension to show SMTI Manual Assist."""
-    _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
+    _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist", scc_mode=scc_mode, scc_combos=scc_combos)
 
 
 def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
@@ -119,7 +119,7 @@ def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
         pass
 
 
-def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
+def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
     """Sends the autofill/SMTI/MECP payload to the native_host via TCP with retry & auto-launch fallback."""
     u_sel = (service.get("username_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     p_sel = (service.get("password_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
@@ -142,6 +142,8 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "fst_enabled": service.get("_fst_enabled", True),
         "sad_enabled": service.get("_sad_enabled", True),
         "sad_browser_notif_enabled": service.get("_sad_browser_notif_enabled", True),
+        "scc_mode": scc_mode,
+        "scc_combos": scc_combos or [],
     }
 
     def _attempt_send():

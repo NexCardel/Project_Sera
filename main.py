@@ -343,6 +343,7 @@ class SeraApp:
         self.ext_listener.filing_result_received.connect(self._handle_extension_result)
         self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
         self.ext_listener.session_started_received.connect(self._handle_session_started)
+        self.ext_listener.scc_password_verified_received.connect(self._handle_scc_password_verified)
         self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
         self.ext_listener.sudr_capture_received.connect(self._handle_sudr_capture)
         self.app.aboutToQuit.connect(self.ext_listener.stop)
@@ -631,7 +632,7 @@ class SeraApp:
             return None
 
     def _handle_session_started(self, msg: dict):
-        """Displays a toast notification when a new client session starts and triggers SCC if needed."""
+        """Displays a toast notification when a new client session starts and processes SCC verification if attached."""
         portal = msg.get("portal", "Income Tax")
         pan = str(msg.get("pan") or "").strip()
         name = str(msg.get("client_name") or "").strip()
@@ -644,88 +645,47 @@ class SeraApp:
                 3000
             )
 
-        # SCC: Check if logged-in client has an undocumented password
-        self._check_scc_quick_tag(portal, pan, name)
+        # If session_start included an active SCC verified password from link mutation
+        if msg.get("scc_verified_password"):
+            self._handle_scc_password_verified(msg)
 
-    def _check_scc_quick_tag(self, portal: str, pan: str, name: str):
-        """Checks if the logged-in client is verified via SCC; if not, displays SCC Quick-Tag banner."""
-        if not pan or not hasattr(self, "db") or not self.db:
+    def _handle_scc_password_verified(self, msg: dict):
+        """Persists the verified password from SCC link mutation to master.db."""
+        password = str(msg.get("password") or msg.get("scc_verified_password") or "").strip()
+        if not password:
             return
 
+        client_id = msg.get("client_id")
+        service_id = msg.get("service_id")
+        userid = str(msg.get("userid") or msg.get("pan") or "").strip().upper()
+        combo_label = str(msg.get("combo_label") or "SCC").strip()
+        portal = str(msg.get("portal") or "Income Tax").strip()
+
         try:
-            scc_cfg = self.db.get_scc_settings()
-            if not scc_cfg.get("enabled"):
-                return
+            actor = getattr(self, "actor", "Staff")
 
-            # Check if this client (by PAN) has already been verified via SCC
-            if self.db.is_client_scc_verified(pan):
-                # Already verified via SCC — never trigger again!
-                return
+            # Resolve client if client_id is None
+            if not client_id and userid:
+                client = self.db.get_client_by_pan(userid)
+                client_id = client.get("id") if client else None
 
-            # Resolve service and password column
-            svc = self.db.get_service_for_portal(portal)
-            if not svc:
-                return
+            # Resolve service & password column
+            pwd_col_id = None
+            if service_id:
+                svc = self.db.get_service(service_id)
+                if svc:
+                    pwd_col_id = svc.get("password_column_id")
 
-            pwd_col_id = svc.get("password_column_id")
+            if not pwd_col_id:
+                svc = self.db.get_service_for_portal(portal)
+                if svc:
+                    service_id = svc.get("id")
+                    pwd_col_id = svc.get("password_column_id")
+
             if not pwd_col_id:
                 return
 
-            # Look up client in master.db
-            client = self.db.get_client_by_pan(pan)
-            client_id = client.get("id") if client else None
-
-            # Resolve client name
-            client_name_val = name
-            if not client_name_val and client:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").lower()
-                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
-                        client_name_val = str(client.get("values", {}).get(c["id"]) or "").strip()
-                        if client_name_val:
-                            break
-            if not client_name_val:
-                client_name_val = "Taxpayer"
-
-            # Spawn or update SCC banner
-            self._show_scc_quick_tag_banner(
-                client_id=client_id,
-                pan=pan,
-                name=client_name_val,
-                portal=svc.get("name", portal),
-                pwd_col_id=pwd_col_id,
-                combos=scc_cfg.get("combos", [])
-            )
-        except Exception as e:
-            print(f"[main._check_scc_quick_tag error] {e}")
-
-    def _show_scc_quick_tag_banner(self, client_id: int | None, pan: str, name: str, portal: str, pwd_col_id: int, combos: list):
-        """Displays the floating SCC Quick-Tag banner in the bottom-right corner."""
-        try:
-            if not hasattr(self, "scc_banner") or self.scc_banner is None:
-                from ui.components.scc_tag_banner import SccQuickTagBanner
-                self.scc_banner = SccQuickTagBanner()
-                self.scc_banner.password_selected.connect(self._on_scc_password_saved)
-
-            self.scc_banner._active_client_id = client_id
-            self.scc_banner.show_prompt(
-                pan=pan,
-                client_name=name,
-                column_id=pwd_col_id,
-                portal=portal,
-                combos=combos
-            )
-        except Exception as e:
-            print(f"[main._show_scc_quick_tag_banner error] {e}")
-
-    def _on_scc_password_saved(self, pan: str, client_name: str, column_id: int, password: str, combo_label: str):
-        """Persists the password tagged by operator into master.db and notes 'Password verified via SCC'."""
-        try:
-            actor = getattr(self, "actor", "Staff")
-            client_id = getattr(self.scc_banner, "_active_client_id", None)
-            if not client_id:
-                client = self.db.get_client_by_pan(pan)
-                client_id = client.get("id") if client else None
+            client_name_val = str(msg.get("client_name") or "").strip()
 
             if not client_id:
                 # Unregistered client: auto-create in master.db
@@ -740,13 +700,13 @@ class SeraApp:
                         name_col_id = c["id"]
 
                 values = {}
-                if pan_col_id:
-                    values[pan_col_id] = pan.upper()
-                if name_col_id and client_name:
-                    values[name_col_id] = client_name
-                values[column_id] = password
+                if pan_col_id and userid:
+                    values[pan_col_id] = userid
+                if name_col_id and client_name_val:
+                    values[name_col_id] = client_name_val
+                values[pwd_col_id] = password
 
-                svc = self.db.get_service_for_portal("Income Tax")
+                svc = self.db.get_service_for_portal(portal)
                 svc_ids = [svc["id"]] if svc else []
 
                 client_id = self.db.add_client(
@@ -755,25 +715,52 @@ class SeraApp:
                     service_ids=svc_ids,
                     actor=actor
                 )
-                print(f"[main.SCC] Auto-created client record #{client_id} with password from {combo_label} (verified in notes)")
+                print(f"[main.SCC] Auto-created client record #{client_id} with verified password ({combo_label})")
             else:
                 # Existing client: update single password field
                 self.db.update_client_single_field(
                     client_id=client_id,
-                    column_id=column_id,
+                    column_id=pwd_col_id,
                     value=password,
                     actor=actor,
                     log_action=True
                 )
-                # Mark notes as 'Password verified via SCC'
                 self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
-                print(f"[main.SCC] Updated client #{client_id} ({pan}) password via {combo_label} and marked 'Password verified via SCC' in notes")
+                print(f"[main.SCC] Updated client #{client_id} password via {combo_label} and marked 'Password verified via SCC'")
+
+            # Resolve client name for toast
+            client = self.db.get_client(client_id)
+            if not client_name_val and client:
+                for c in self.db.get_mcl_columns():
+                    lbl = (c.get("label") or "").lower()
+                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
+                        val = str(client.get("values", {}).get(c["id"]) or "").strip()
+                        if val:
+                            client_name_val = val
+                            break
+            if not client_name_val:
+                client_name_val = "Client"
+
+            if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    "Password Verified via SCC",
+                    f"Permanent password saved for {client_name_val} ({userid}).",
+                    QSystemTrayIcon.Information,
+                    5000
+                )
+
+            # Refresh client detail window if currently open for this client
+            if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
+                cur_c = getattr(self.client_detail_win, "client", None)
+                if cur_c and cur_c.get("id") == client_id:
+                    refreshed = self.db.get_client(client_id)
+                    self.client_detail_win.set_client(refreshed)
 
             # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
                 self.shell.refresh_clients()
         except Exception as e:
-            print(f"[main._on_scc_password_saved error] {e}")
+            print(f"[main._handle_scc_password_verified error] {e}")
 
     def _handle_sdc_timeline(self, msg: dict):
         """Persists SDC session timeline updates from browser into SQLite database."""

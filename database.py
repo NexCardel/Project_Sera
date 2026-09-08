@@ -1238,6 +1238,13 @@ class SeraDatabase:
                 for r in cur.fetchall()
             ]
 
+    def get_service(self, service_id: int) -> dict | None:
+        """Finds service by ID."""
+        for s in self.get_services():
+            if s.get("id") == service_id:
+                return s
+        return None
+
     def create_service(self, name: str, login_page_link: str, userid_column_id: int,
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str, extension_flow: str = "double",
@@ -1837,11 +1844,13 @@ class SeraDatabase:
             self.log_action(actor=actor, action="update", client_id=client_id, detail=f"Updated password via SCC Quick-Tag for client CLI-{client_id:05d}")
         return True
 
-    def is_client_scc_verified(self, pan: str) -> bool:
+    def is_client_scc_verified(self, pan: str = "", client_id: int | None = None) -> bool:
         """Checks if a client has already been verified via SCC."""
-        if not pan or not str(pan).strip():
-            return False
-        client = self.get_client_by_pan(pan)
+        client = None
+        if client_id is not None:
+            client = self.get_client(client_id)
+        elif pan and str(pan).strip():
+            client = self.get_client_by_pan(pan)
         if not client:
             return False
         notes = str(client.get("notes") or "")

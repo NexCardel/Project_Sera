@@ -1,10 +1,12 @@
 """
 test_scc_vault_tagger.py
 ------------------------
-Unit tests for SCC (Sera Credential Capture / Session Tagging):
+Unit tests for SCC (Sera Credential Capture / In-Browser SMTI):
 - Database methods (get_scc_settings, save_scc_settings, get_client_by_pan,
-  get_service_for_portal, update_client_single_field).
-- SccQuickTagBanner floating widget layout and 20-second timer behavior.
+  get_service_for_portal, update_client_single_field, is_client_scc_verified, tag_client_scc_verified).
+- SMTI SCC payload generation with scc_mode and 4 combos.
+- Password verification via link mutation handler (_handle_scc_password_verified) in main.py.
+- Settings dialog SCC tab and dirty-state tracking.
 """
 
 import unittest
@@ -12,6 +14,7 @@ import tempfile
 import os
 import shutil
 import sys
+from unittest.mock import MagicMock, patch
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PySide6.QtWidgets import QApplication
 
 from database import SeraDatabase
-from ui.components.scc_tag_banner import SccQuickTagBanner
+import automation
 
 
 class TestSccVaultTagger(unittest.TestCase):
@@ -153,43 +156,57 @@ class TestSccVaultTagger(unittest.TestCase):
         audit_entries = self.db.get_audit_logs(client_id=client_id)
         self.assertTrue(any("SCC Quick-Tag" in (e.get("detail") or "") for e in audit_entries))
 
-    def test_scc_banner_prompt_and_duration(self):
-        banner = SccQuickTagBanner()
-        self.assertEqual(banner._total_duration_ms, 20000)
+    def test_is_client_scc_verified_by_pan_and_client_id(self):
+        pan = "GZEPM6367M"
+        cid = self.db.add_client(
+            values={
+                self.pan_col_id: pan,
+                self.name_col_id: "Wasil Mandal"
+            },
+            notes="Initial notes.",
+            service_ids=[self.svc_id]
+        )
 
+        # Before tagging
+        self.assertFalse(self.db.is_client_scc_verified(pan=pan))
+        self.assertFalse(self.db.is_client_scc_verified(client_id=cid))
+
+        # Tag client
+        self.db.tag_client_scc_verified(cid, combo_label="Combo 1")
+
+        # After tagging
+        self.assertTrue(self.db.is_client_scc_verified(pan=pan))
+        self.assertTrue(self.db.is_client_scc_verified(client_id=cid))
+
+        client = self.db.get_client(cid)
+        self.assertIn("Password verified via SCC", client["notes"])
+
+    def test_automation_manual_assist_payload_with_scc(self):
+        service = {
+            "id": self.svc_id,
+            "name": "Income Tax",
+            "login_page_link": "https://eportal.incometax.gov.in/iec/foservices/#/login",
+            "username_selector": "#panAdhaarUserId",
+            "password_selector": "#passwordInput",
+        }
         combos = [
-            {"id": 1, "label": "Combo 1", "value": "Pass1"},
-            {"id": 2, "label": "Combo 2", "value": "Pass2"},
-            {"id": 3, "label": "Combo 3", "value": "Pass3"},
-            {"id": 4, "label": "Combo 4", "value": "Pass4"},
+            {"label": "Combo 1", "value": "Income@2024"},
+            {"label": "Combo 2", "value": "Aman@123"},
         ]
 
-        received_signals = []
-        banner.password_selected.connect(
-            lambda pan, name, col, pwd, lbl: received_signals.append((pan, name, col, pwd, lbl))
-        )
+        captured_payloads = []
+        with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
+            automation.trigger_manual_assist(
+                service, "ABCDE1234F", "", 123,
+                scc_mode=True, scc_combos=combos
+            )
 
-        banner.show_prompt(
-            pan="ABCDE1234F",
-            client_name="Acme Corp",
-            column_id=self.pwd_col_id,
-            portal="Income Tax",
-            combos=combos
-        )
-
-        self.assertEqual(banner._pan, "ABCDE1234F")
-        self.assertEqual(banner._client_name, "Acme Corp")
-        self.assertEqual(banner.combo_buttons[0].text(), "Combo 1")
-
-        # Simulate clicking Combo 2 button
-        banner._on_combo_clicked(1)
-
-        self.assertEqual(len(received_signals), 1)
-        self.assertEqual(received_signals[0][0], "ABCDE1234F")
-        self.assertEqual(received_signals[0][3], "Pass2")
-        self.assertEqual(received_signals[0][4], "Combo 2")
-
-        banner.dismiss()
+        self.assertEqual(len(captured_payloads), 1)
+        args, kwargs = captured_payloads[0]
+        self.assertEqual(args[0]["name"], "Income Tax")
+        self.assertEqual(args[1], "ABCDE1234F")
+        self.assertEqual(kwargs.get("scc_mode"), True)
+        self.assertEqual(kwargs.get("scc_combos"), combos)
 
     def test_unified_settings_dialog_general_page(self):
         from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
@@ -239,52 +256,44 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(dlg2.scc_combo_edits[1][1].text(), "BetaPass#2026")
         dlg2.close()
 
-    def test_scc_verified_once_flow(self):
-        # 1. Add a client that already has a password documented
-        pan = "TESTP1234Z"
+    def test_handle_scc_password_verified_saves_and_marks_notes(self):
+        pan = "TESTP9999Z"
         cid = self.db.add_client(
             values={
                 self.pan_col_id: pan,
-                self.name_col_id: "Test Taxpayer",
-                self.pwd_col_id: "OldKnownPassword@123"
+                self.name_col_id: "Wasil Taxpayer",
             },
-            notes="Regular client notes.",
+            notes="Active client.",
             service_ids=[self.svc_id]
         )
 
-        # 2. Verify initially is_client_scc_verified is False even though password exists
-        self.assertFalse(self.db.is_client_scc_verified(pan))
-
-        # 3. Simulate SeraApp trigger logic
         import main
-        from unittest.mock import MagicMock
         mock_app = MagicMock()
         mock_app.db = self.db
-        mock_app.actor = "Admin"
-        mock_app.scc_banner = None
-        mock_app._show_scc_quick_tag_banner = MagicMock()
+        mock_app.actor = "Operator"
+        mock_app.tray_icon = None
+        mock_app.client_detail_win = None
+        mock_app.shell = None
 
-        # Call _check_scc_quick_tag -> should trigger even though password exists!
-        main.SeraApp._check_scc_quick_tag(mock_app, "Income Tax", pan, "Test Taxpayer")
-        mock_app._show_scc_quick_tag_banner.assert_called_once()
-        self.assertEqual(mock_app._show_scc_quick_tag_banner.call_args[1]["pan"], pan)
+        # Simulate message received from extension link mutation
+        msg = {
+            "type": "scc_password_verified",
+            "client_id": cid,
+            "service_id": self.svc_id,
+            "userid": pan,
+            "password": "CorrectWorkingPass#2026",
+            "combo_label": "Combo 3",
+            "portal": "Income Tax"
+        }
 
-        # 4. Simulate selecting password via SCC
-        mock_app._show_scc_quick_tag_banner.reset_mock()
-        main.SeraApp._on_scc_password_saved(mock_app, pan, "Test Taxpayer", self.pwd_col_id, "NewVerifiedPass#2026", "Combo 3")
+        main.SeraApp._handle_scc_password_verified(mock_app, msg)
 
-        # Verify client password and notes updated
+        # Verify client password and notes updated in database
         updated_client = self.db.get_client(cid)
-        self.assertEqual(updated_client["values"].get(self.pwd_col_id), "NewVerifiedPass#2026")
+        self.assertEqual(updated_client["values"].get(self.pwd_col_id), "CorrectWorkingPass#2026")
         self.assertIn("Password verified via SCC", updated_client["notes"])
-        self.assertIn("Regular client notes.", updated_client["notes"])
-
-        # 5. Verify is_client_scc_verified is now True
-        self.assertTrue(self.db.is_client_scc_verified(pan))
-
-        # 6. Call _check_scc_quick_tag again -> should NEVER trigger!
-        main.SeraApp._check_scc_quick_tag(mock_app, "Income Tax", pan, "Test Taxpayer")
-        mock_app._show_scc_quick_tag_banner.assert_not_called()
+        self.assertTrue(self.db.is_client_scc_verified(pan=pan))
+        self.assertTrue(self.db.is_client_scc_verified(client_id=cid))
 
 
 if __name__ == "__main__":
