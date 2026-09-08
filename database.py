@@ -1837,6 +1837,45 @@ class SeraDatabase:
             self.log_action(actor=actor, action="update", client_id=client_id, detail=f"Updated password via SCC Quick-Tag for client CLI-{client_id:05d}")
         return True
 
+    def is_client_scc_verified(self, pan: str) -> bool:
+        """Checks if a client has already been verified via SCC."""
+        if not pan or not str(pan).strip():
+            return False
+        client = self.get_client_by_pan(pan)
+        if not client:
+            return False
+        notes = str(client.get("notes") or "")
+        if "password verified via scc" in notes.lower():
+            return True
+        for val in client.get("values", {}).values():
+            if val and "password verified via scc" in str(val).lower():
+                return True
+        return False
+
+    def tag_client_scc_verified(self, client_id: int, combo_label: str = "", actor: str = "Staff") -> bool:
+        """Marks client notes as verified via SCC and syncs any MCL notes column."""
+        client = self.get_client(client_id)
+        if not client:
+            return False
+        tag_text = "Password verified via SCC"
+        current_notes = str(client.get("notes") or "").strip()
+        if tag_text.lower() not in current_notes.lower():
+            updated_notes = f"{current_notes}\n{tag_text}".strip() if current_notes else tag_text
+            self.update_client_notes(client_id, updated_notes)
+
+        # Also sync any MCL column labeled 'notes' or 'remarks'
+        try:
+            for c in self.get_mcl_columns():
+                lbl = (c.get("label") or "").strip().lower()
+                if lbl in ("notes", "remarks", "note", "remark"):
+                    val = str(client.get("values", {}).get(c["id"]) or "").strip()
+                    if tag_text.lower() not in val.lower():
+                        new_val = f"{val}\n{tag_text}".strip() if val else tag_text
+                        self.update_client_single_field(client_id, c["id"], new_val, actor=actor, log_action=False)
+        except Exception:
+            pass
+        return True
+
 
 
     # ---------------- CSV Import ----------------

@@ -239,6 +239,53 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(dlg2.scc_combo_edits[1][1].text(), "BetaPass#2026")
         dlg2.close()
 
+    def test_scc_verified_once_flow(self):
+        # 1. Add a client that already has a password documented
+        pan = "TESTP1234Z"
+        cid = self.db.add_client(
+            values={
+                self.pan_col_id: pan,
+                self.name_col_id: "Test Taxpayer",
+                self.pwd_col_id: "OldKnownPassword@123"
+            },
+            notes="Regular client notes.",
+            service_ids=[self.svc_id]
+        )
+
+        # 2. Verify initially is_client_scc_verified is False even though password exists
+        self.assertFalse(self.db.is_client_scc_verified(pan))
+
+        # 3. Simulate SeraApp trigger logic
+        import main
+        from unittest.mock import MagicMock
+        mock_app = MagicMock()
+        mock_app.db = self.db
+        mock_app.actor = "Admin"
+        mock_app.scc_banner = None
+        mock_app._show_scc_quick_tag_banner = MagicMock()
+
+        # Call _check_scc_quick_tag -> should trigger even though password exists!
+        main.SeraApp._check_scc_quick_tag(mock_app, "Income Tax", pan, "Test Taxpayer")
+        mock_app._show_scc_quick_tag_banner.assert_called_once()
+        self.assertEqual(mock_app._show_scc_quick_tag_banner.call_args[1]["pan"], pan)
+
+        # 4. Simulate selecting password via SCC
+        mock_app._show_scc_quick_tag_banner.reset_mock()
+        main.SeraApp._on_scc_password_saved(mock_app, pan, "Test Taxpayer", self.pwd_col_id, "NewVerifiedPass#2026", "Combo 3")
+
+        # Verify client password and notes updated
+        updated_client = self.db.get_client(cid)
+        self.assertEqual(updated_client["values"].get(self.pwd_col_id), "NewVerifiedPass#2026")
+        self.assertIn("Password verified via SCC", updated_client["notes"])
+        self.assertIn("Regular client notes.", updated_client["notes"])
+
+        # 5. Verify is_client_scc_verified is now True
+        self.assertTrue(self.db.is_client_scc_verified(pan))
+
+        # 6. Call _check_scc_quick_tag again -> should NEVER trigger!
+        main.SeraApp._check_scc_quick_tag(mock_app, "Income Tax", pan, "Test Taxpayer")
+        mock_app._show_scc_quick_tag_banner.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

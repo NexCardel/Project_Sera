@@ -648,13 +648,18 @@ class SeraApp:
         self._check_scc_quick_tag(portal, pan, name)
 
     def _check_scc_quick_tag(self, portal: str, pan: str, name: str):
-        """Checks if the logged-in client has an undocumented password, and if so, shows SCC Quick-Tag banner."""
+        """Checks if the logged-in client is verified via SCC; if not, displays SCC Quick-Tag banner."""
         if not pan or not hasattr(self, "db") or not self.db:
             return
 
         try:
             scc_cfg = self.db.get_scc_settings()
             if not scc_cfg.get("enabled"):
+                return
+
+            # Check if this client (by PAN) has already been verified via SCC
+            if self.db.is_client_scc_verified(pan):
+                # Already verified via SCC — never trigger again!
                 return
 
             # Resolve service and password column
@@ -670,20 +675,23 @@ class SeraApp:
             client = self.db.get_client_by_pan(pan)
             client_id = client.get("id") if client else None
 
-            # Check if password is already set
-            existing_pwd = ""
-            if client and "values" in client:
-                existing_pwd = str(client["values"].get(pwd_col_id) or "").strip()
+            # Resolve client name
+            client_name_val = name
+            if not client_name_val and client:
+                for c in self.db.get_mcl_columns():
+                    lbl = (c.get("label") or "").lower()
+                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
+                        client_name_val = str(client.get("values", {}).get(c["id"]) or "").strip()
+                        if client_name_val:
+                            break
+            if not client_name_val:
+                client_name_val = "Taxpayer"
 
-            if existing_pwd:
-                # Password already registered in vault — no action needed!
-                return
-
-            # Password is empty / missing! Spawn or update SCC banner
+            # Spawn or update SCC banner
             self._show_scc_quick_tag_banner(
                 client_id=client_id,
                 pan=pan,
-                name=name or (client.get("values", {}).get(2) if client else "") or "Taxpayer",
+                name=client_name_val,
                 portal=svc.get("name", portal),
                 pwd_col_id=pwd_col_id,
                 combos=scc_cfg.get("combos", [])
@@ -711,8 +719,9 @@ class SeraApp:
             print(f"[main._show_scc_quick_tag_banner error] {e}")
 
     def _on_scc_password_saved(self, pan: str, client_name: str, column_id: int, password: str, combo_label: str):
-        """Persists the password tagged by operator into master.db."""
+        """Persists the password tagged by operator into master.db and notes 'Password verified via SCC'."""
         try:
+            actor = getattr(self, "actor", "Staff")
             client_id = getattr(self.scc_banner, "_active_client_id", None)
             if not client_id:
                 client = self.db.get_client_by_pan(pan)
@@ -742,21 +751,23 @@ class SeraApp:
 
                 client_id = self.db.add_client(
                     values=values,
-                    notes=f"Auto-registered via SCC Quick-Tag ({combo_label})",
+                    notes="Password verified via SCC",
                     service_ids=svc_ids,
-                    actor=getattr(self, "actor", "Staff")
+                    actor=actor
                 )
-                print(f"[main.SCC] Auto-created client record #{client_id} with password from {combo_label}")
+                print(f"[main.SCC] Auto-created client record #{client_id} with password from {combo_label} (verified in notes)")
             else:
                 # Existing client: update single password field
                 self.db.update_client_single_field(
                     client_id=client_id,
                     column_id=column_id,
                     value=password,
-                    actor=getattr(self, "actor", "Staff"),
+                    actor=actor,
                     log_action=True
                 )
-                print(f"[main.SCC] Updated client #{client_id} ({pan}) password via {combo_label}")
+                # Mark notes as 'Password verified via SCC'
+                self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
+                print(f"[main.SCC] Updated client #{client_id} ({pan}) password via {combo_label} and marked 'Password verified via SCC' in notes")
 
             # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
