@@ -258,18 +258,20 @@ def _wrap_scroll(content: QWidget) -> QScrollArea:
 # ── Page indices ──────────────────────────────────────────────────────────────
 _P_GENERAL   = 0
 _P_ACTIONS   = 1
-_P_MCL       = 2
-_P_SERVICES  = 3
-_P_MAIN_VIS  = 4
-_P_QC        = 5
-_P_ADMIN_VIS = 6
-_P_EXPORT    = 7
-_P_BACKUP    = 8
-_P_PURGE     = 9
+_P_SCC       = 2
+_P_MCL       = 3
+_P_SERVICES  = 4
+_P_MAIN_VIS  = 5
+_P_QC        = 6
+_P_ADMIN_VIS = 7
+_P_EXPORT    = 8
+_P_BACKUP    = 9
+_P_PURGE     = 10
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
     "actions":  _P_ACTIONS,
+    "scc":      _P_SCC,
     "mcl":      _P_MCL,
     "services": _P_SERVICES,
     "main_vis": _P_MAIN_VIS,
@@ -280,7 +282,7 @@ _PAGE_MAP = {
     "purge":    _P_PURGE,
 }
 
-_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS}
+_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS}
 
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
@@ -315,6 +317,7 @@ class UnifiedSettingsDialog(QDialog):
         self._page_builders = {
             _P_GENERAL: self._build_page_general,
             _P_ACTIONS: self._build_page_actions,
+            _P_SCC: self._build_page_scc,
             _P_MCL: self._build_page_mcl,
             _P_SERVICES: self._build_page_services,
             _P_MAIN_VIS: lambda: self._build_page_visibility(
@@ -515,6 +518,7 @@ class UnifiedSettingsDialog(QDialog):
         _sec("App Settings")
         _item("mdi.cog-outline",            "General",            _P_GENERAL)
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
+        _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
 
         _sec("Column Schema")
         _item("mdi.view-column-outline",    "Master Column List", _P_MCL)
@@ -676,32 +680,6 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("SCA Uses per Copied UID",
             "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
 
-        lay.addWidget(_sub_header("SCC \u2014 Sera Credential Capture (Session Tagging)"))
-
-        self.scc_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable SCC Quick-Tag Prompt",
-            "When logging into a tax portal for a client with an undocumented password, show a 20-second quick-tag banner to save the working password.",
-            self.scc_check))
-
-        self.scc_combo_edits = []
-        for i in range(1, 5):
-            h_box = QHBoxLayout()
-            h_box.setContentsMargins(0, 0, 0, 0)
-            h_box.setSpacing(6)
-            lbl_edit = QLineEdit()
-            lbl_edit.setPlaceholderText(f"Combo {i} Label")
-            lbl_edit.setFixedWidth(110)
-            val_edit = QLineEdit()
-            val_edit.setPlaceholderText(f"Password value for Combo {i}")
-            val_edit.setEchoMode(QLineEdit.Password)
-            h_box.addWidget(lbl_edit)
-            h_box.addWidget(val_edit)
-            ctrl_widget = QWidget()
-            ctrl_widget.setLayout(h_box)
-            self.scc_combo_edits.append((lbl_edit, val_edit))
-            lay.addWidget(_setting_row(f"Password Combination {i}",
-                f"Preset label and password for quick-tag button #{i}.", ctrl_widget))
-
         lay.addWidget(_sub_header("Schema Info"))
 
         id_col = self.db.get_id_column()
@@ -728,10 +706,6 @@ class UnifiedSettingsDialog(QDialog):
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
-        self.scc_check.toggled.connect(self._on_control_changed)
-        for _lbl, _val in self.scc_combo_edits:
-            _lbl.textChanged.connect(self._on_control_changed)
-            _val.textChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
@@ -765,6 +739,78 @@ class UnifiedSettingsDialog(QDialog):
         self.btn_assist_check.toggled.connect(self._on_control_changed)
         self.btn_copy_check.toggled.connect(self._on_control_changed)
         self.show_hide_check.toggled.connect(self._on_control_changed)
+
+        lay.addStretch()
+        return _wrap_scroll(w)
+
+    def _build_page_scc(self) -> QScrollArea:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(0)
+
+        lay.addWidget(_page_header("SCC Vault Presets",
+            "Configure Sera Credential Capture and the 4 firm-standard password combinations for session quick-tagging."))
+
+        self.scc_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable SCC Quick-Tag Prompt",
+            "When logging into a tax portal for a client with an undocumented password, show a 20-second floating desktop banner.",
+            self.scc_check))
+
+        lay.addWidget(_sub_header("4 Standard Firm Combinations"))
+
+        self.scc_combo_edits = []
+        for i in range(1, 5):
+            ctrl_widget = QWidget()
+            h_box = QHBoxLayout(ctrl_widget)
+            h_box.setContentsMargins(0, 0, 0, 0)
+            h_box.setSpacing(8)
+
+            lbl_edit = QLineEdit()
+            lbl_edit.setPlaceholderText(f"Combo {i} Label")
+            lbl_edit.setFixedWidth(130)
+
+            val_edit = QLineEdit()
+            val_edit.setPlaceholderText(f"Password value / pattern for Combo {i}")
+            val_edit.setEchoMode(QLineEdit.Password)
+            val_edit.setMinimumWidth(220)
+
+            eye_btn = QPushButton()
+            eye_btn.setProperty("class", "icon-sm")
+            eye_btn.setIcon(_icon("mdi.eye-outline", color=_TEXT_NAV))
+            eye_btn.setFixedSize(28, 28)
+            eye_btn.setToolTip("Show / Hide Password")
+
+            def _make_eye_toggle(ve=val_edit, eb=eye_btn):
+                def _toggle():
+                    if ve.echoMode() == QLineEdit.Password:
+                        ve.setEchoMode(QLineEdit.Normal)
+                        eb.setIcon(_icon("mdi.eye-off-outline", color=_ACCENT_LIGHT))
+                    else:
+                        ve.setEchoMode(QLineEdit.Password)
+                        eb.setIcon(_icon("mdi.eye-outline", color=_TEXT_NAV))
+                return _toggle
+
+            eye_btn.clicked.connect(_make_eye_toggle())
+
+            h_box.addWidget(lbl_edit)
+            h_box.addWidget(val_edit, stretch=1)
+            h_box.addWidget(eye_btn)
+
+            self.scc_combo_edits.append((lbl_edit, val_edit))
+            lay.addWidget(_setting_row(f"Password Combination {i}",
+                f"Preset label and password for quick-tag button #{i}.", ctrl_widget))
+
+        lay.addWidget(_sub_header("Banner Behavior"))
+        timeout_lbl = QLabel("20 seconds (Auto-pauses on mouse hover)")
+        timeout_lbl.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-weight: 600; font-size: 12px;")
+        lay.addWidget(_setting_row("Auto-Dismiss Duration",
+            "How long the floating desktop prompt stays visible before fading out.", timeout_lbl))
+
+        self.scc_check.toggled.connect(self._on_control_changed)
+        for _lbl, _val in self.scc_combo_edits:
+            _lbl.textChanged.connect(self._on_control_changed)
+            _val.textChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
