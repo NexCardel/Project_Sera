@@ -73,6 +73,10 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(cfg["opt1_fixed_str"], "@")
         self.assertEqual(cfg["opt2_label"], "Combo 2")
         self.assertEqual(cfg["opt2_fixed_str"], "")
+        self.assertEqual(cfg["opt3_label"], "Combo 3")
+        self.assertEqual(cfg["opt3_fixed_str"], "")
+        self.assertEqual(cfg["opt4_label"], "Combo 4")
+        self.assertEqual(cfg["opt4_fixed_str"], "")
 
         # Update settings
         self.db.save_scc_settings({
@@ -80,7 +84,11 @@ class TestSccVaultTagger(unittest.TestCase):
             "opt1_label": "Formula 1",
             "opt1_fixed_str": "#",
             "opt2_label": "Formula 2",
-            "opt2_fixed_str": "TaxPass@"
+            "opt2_fixed_str": "TaxPass@",
+            "opt3_label": "Fixed Master",
+            "opt3_fixed_str": "FirmMaster@2026",
+            "opt4_label": "Fixed Backup",
+            "opt4_fixed_str": "BackupPass#1"
         })
 
         updated = self.db.get_scc_settings()
@@ -89,6 +97,10 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(updated["opt1_fixed_str"], "#")
         self.assertEqual(updated["opt2_label"], "Formula 2")
         self.assertEqual(updated["opt2_fixed_str"], "TaxPass@")
+        self.assertEqual(updated["opt3_label"], "Fixed Master")
+        self.assertEqual(updated["opt3_fixed_str"], "FirmMaster@2026")
+        self.assertEqual(updated["opt4_label"], "Fixed Backup")
+        self.assertEqual(updated["opt4_fixed_str"], "BackupPass#1")
 
     def test_extract_pan_and_generate_scc_passwords(self):
         pan = "ABCDE1234F"
@@ -101,17 +113,27 @@ class TestSccVaultTagger(unittest.TestCase):
             "opt1_label": "Combo 1",
             "opt1_fixed_str": "@",
             "opt2_label": "Combo 2",
-            "opt2_fixed_str": "Tax#"
+            "opt2_fixed_str": "Tax#",
+            "opt3_label": "Combo 3",
+            "opt3_fixed_str": "FirmMaster@2026",
+            "opt4_label": "Combo 4",
+            "opt4_fixed_str": "BackupPass#1"
         })
 
         combos = self.db.generate_scc_passwords(pan)
-        self.assertEqual(len(combos), 2)
+        self.assertEqual(len(combos), 4)
         # Option 1: first 4 letters (lowercase) + fixed string + 4 digits
         self.assertEqual(combos[0]["label"], "Combo 1")
         self.assertEqual(combos[0]["value"], "abcd@1234")
         # Option 2: fixed string + 4 digits
         self.assertEqual(combos[1]["label"], "Combo 2")
         self.assertEqual(combos[1]["value"], "Tax#1234")
+        # Option 3: plain fixed string
+        self.assertEqual(combos[2]["label"], "Combo 3")
+        self.assertEqual(combos[2]["value"], "FirmMaster@2026")
+        # Option 4: plain fixed string
+        self.assertEqual(combos[3]["label"], "Combo 4")
+        self.assertEqual(combos[3]["value"], "BackupPass#1")
 
     def test_get_client_by_pan(self):
         client_id = self.db.add_client(
@@ -240,6 +262,10 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertIsNotNone(dlg.scc_opt1_str_edit)
         self.assertIsNotNone(dlg.scc_opt2_label_edit)
         self.assertIsNotNone(dlg.scc_opt2_str_edit)
+        self.assertIsNotNone(dlg.scc_opt3_label_edit)
+        self.assertIsNotNone(dlg.scc_opt3_str_edit)
+        self.assertIsNotNone(dlg.scc_opt4_label_edit)
+        self.assertIsNotNone(dlg.scc_opt4_str_edit)
         dlg.close()
 
     def test_unified_settings_scc_page_and_save(self):
@@ -250,11 +276,15 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(dlg._stack.currentWidget(), dlg._page_widgets[_P_SCC])
         self.assertFalse(dlg._btn_save.isEnabled(), "Save button should be disabled initially")
 
-        # Edit Option 1 and Option 2
+        # Edit Option 1 through 4
         dlg.scc_opt1_label_edit.setText("Primary Opt")
         dlg.scc_opt1_str_edit.setText("#")
         dlg.scc_opt2_label_edit.setText("Secondary Opt")
         dlg.scc_opt2_str_edit.setText("Aman@")
+        dlg.scc_opt3_label_edit.setText("Master Pass")
+        dlg.scc_opt3_str_edit.setText("FirmAdmin#2026")
+        dlg.scc_opt4_label_edit.setText("Legacy Pass")
+        dlg.scc_opt4_str_edit.setText("OldFirm@123")
 
         self.assertTrue(dlg._btn_save.isEnabled(), "Save button must be enabled after editing options")
 
@@ -269,6 +299,10 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(scc_settings["opt1_fixed_str"], "#")
         self.assertEqual(scc_settings["opt2_label"], "Secondary Opt")
         self.assertEqual(scc_settings["opt2_fixed_str"], "Aman@")
+        self.assertEqual(scc_settings["opt3_label"], "Master Pass")
+        self.assertEqual(scc_settings["opt3_fixed_str"], "FirmAdmin#2026")
+        self.assertEqual(scc_settings["opt4_label"], "Legacy Pass")
+        self.assertEqual(scc_settings["opt4_fixed_str"], "OldFirm@123")
         dlg.close()
 
         # Re-open dialog to verify controls load the saved options
@@ -277,6 +311,10 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(dlg2.scc_opt1_str_edit.text(), "#")
         self.assertEqual(dlg2.scc_opt2_label_edit.text(), "Secondary Opt")
         self.assertEqual(dlg2.scc_opt2_str_edit.text(), "Aman@")
+        self.assertEqual(dlg2.scc_opt3_label_edit.text(), "Master Pass")
+        self.assertEqual(dlg2.scc_opt3_str_edit.text(), "FirmAdmin#2026")
+        self.assertEqual(dlg2.scc_opt4_label_edit.text(), "Legacy Pass")
+        self.assertEqual(dlg2.scc_opt4_str_edit.text(), "OldFirm@123")
         dlg2.close()
 
     def test_handle_scc_password_verified_saves_and_marks_notes(self):

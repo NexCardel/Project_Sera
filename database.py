@@ -842,50 +842,67 @@ class SeraDatabase:
         return (letters, digits)
 
     def generate_scc_passwords(self, pan: str) -> list[dict]:
-        """Generates the 2 dedicated PAN-based password combinations for a given PAN.
+        """Generates the 4 SCC password combinations for a given PAN.
 
         Option 1: First 4 letters of PAN (lowercase) + Fixed String 1 + 4 digits of PAN
         Option 2: Fixed String 2 + 4 digits of PAN
+        Option 3: Plain Fixed String 3
+        Option 4: Plain Fixed String 4
         """
         cfg = self.get_scc_settings()
         letters, digits = self.extract_pan_components(pan)
 
         opt1_str = cfg.get("opt1_fixed_str", "@")
         opt2_str = cfg.get("opt2_fixed_str", "")
+        opt3_str = cfg.get("opt3_fixed_str", "")
+        opt4_str = cfg.get("opt4_fixed_str", "")
+
         opt1_lbl = cfg.get("opt1_label", "Combo 1")
         opt2_lbl = cfg.get("opt2_label", "Combo 2")
+        opt3_lbl = cfg.get("opt3_label", "Combo 3")
+        opt4_lbl = cfg.get("opt4_label", "Combo 4")
 
         val1 = f"{letters}{opt1_str}{digits}" if (letters or digits) else opt1_str
         val2 = f"{opt2_str}{digits}" if digits else opt2_str
+        val3 = opt3_str
+        val4 = opt4_str
 
-        return [
+        combos = [
             {"id": 1, "label": opt1_lbl, "value": val1},
             {"id": 2, "label": opt2_lbl, "value": val2},
         ]
+        if val3:
+            combos.append({"id": 3, "label": opt3_lbl, "value": val3})
+        if val4:
+            combos.append({"id": 4, "label": opt4_lbl, "value": val4})
+        return combos
 
     def get_scc_settings(self) -> dict:
-        """Returns the SCC (Sera Credential Capture) configuration dict for the 2 dedicated options."""
+        """Returns the SCC (Sera Credential Capture) configuration dict."""
         return {
             "enabled": self.get_setting("scc_enabled", "1") in ("1", "true", "True"),
             "opt1_label": self.get_setting("scc_opt1_label", "Combo 1"),
             "opt1_fixed_str": self.get_setting("scc_opt1_fixed_str", "@"),
             "opt2_label": self.get_setting("scc_opt2_label", "Combo 2"),
             "opt2_fixed_str": self.get_setting("scc_opt2_fixed_str", ""),
+            "opt3_label": self.get_setting("scc_opt3_label", "Combo 3"),
+            "opt3_fixed_str": self.get_setting("scc_opt3_fixed_str", ""),
+            "opt4_label": self.get_setting("scc_opt4_label", "Combo 4"),
+            "opt4_fixed_str": self.get_setting("scc_opt4_fixed_str", ""),
         }
 
     def save_scc_settings(self, settings_dict: dict):
-        """Persists the 2-option SCC configuration into app_settings."""
+        """Persists the SCC configuration into app_settings."""
         to_set = {}
         if "enabled" in settings_dict:
             to_set["scc_enabled"] = "1" if settings_dict["enabled"] else "0"
-        if "opt1_label" in settings_dict:
-            to_set["scc_opt1_label"] = settings_dict["opt1_label"]
-        if "opt1_fixed_str" in settings_dict:
-            to_set["scc_opt1_fixed_str"] = settings_dict["opt1_fixed_str"]
-        if "opt2_label" in settings_dict:
-            to_set["scc_opt2_label"] = settings_dict["opt2_label"]
-        if "opt2_fixed_str" in settings_dict:
-            to_set["scc_opt2_fixed_str"] = settings_dict["opt2_fixed_str"]
+        for i in range(1, 5):
+            lbl_k = f"opt{i}_label"
+            str_k = f"opt{i}_fixed_str"
+            if lbl_k in settings_dict:
+                to_set[f"scc_{lbl_k}"] = settings_dict[lbl_k]
+            if str_k in settings_dict:
+                to_set[f"scc_{str_k}"] = settings_dict[str_k]
         if to_set:
             self.set_settings_bulk(to_set)
 
