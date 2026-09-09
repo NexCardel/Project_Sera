@@ -801,7 +801,15 @@ class ClientDetailWindow(QWidget):
         scc_combos = []
         if scc_enabled and not is_scc_verified:
             scc_mode = True
-            scc_combos = scc_cfg.get("combos", [])
+            # Extract client PAN from client values or uid
+            client_pan = ""
+            if self.client and "values" in self.client:
+                pan_col = next((c["id"] for c in self.db.get_mcl_columns() if "PAN" in c.get("label", "").upper()), None)
+                if pan_col:
+                    client_pan = self.client["values"].get(pan_col, "")
+            if not client_pan:
+                client_pan = uid or ""
+            scc_combos = self.db.generate_scc_passwords(pan=client_pan)
 
         if not uid:
             QMessageBox.warning(self, "Missing credentials", f"No User ID saved for {service['name']}.")

@@ -757,67 +757,145 @@ class UnifiedSettingsDialog(QDialog):
         lay.setSpacing(0)
 
         lay.addWidget(_page_header("SCC Vault Presets",
-            "Configure Sera Credential Capture and the 4 firm-standard password combinations for session quick-tagging."))
+            "Configure Sera Credential Capture and the 2 dedicated PAN-based password combination formulas."))
 
         self.scc_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable SCC Quick-Tag Prompt",
-            "When logging into a tax portal for a client with an undocumented password, show a 20-second floating desktop banner.",
+        lay.addWidget(_setting_row("Enable SCC One-Time Verification",
+            "When logging into a tax portal for an unverified client, show 2 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
 
-        lay.addWidget(_sub_header("4 Standard Firm Combinations"))
+        # ── Option 1 Card ───────────────────────────────────────────────────
+        lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
 
-        self.scc_combo_edits = []
-        for i in range(1, 5):
-            ctrl_widget = QWidget()
-            h_box = QHBoxLayout(ctrl_widget)
-            h_box.setContentsMargins(0, 0, 0, 0)
-            h_box.setSpacing(8)
+        opt1_card = QWidget()
+        opt1_lay = QVBoxLayout(opt1_card)
+        opt1_lay.setContentsMargins(0, 0, 0, 0)
+        opt1_lay.setSpacing(8)
 
-            lbl_edit = QLineEdit()
-            lbl_edit.setPlaceholderText(f"Combo {i} Label")
-            lbl_edit.setFixedWidth(130)
+        # Formula badge
+        opt1_formula = QLabel("Formula:  [ pan_letters (4 smallcase) ]  +  [ Fixed String ]  +  [ pan_digits (4) ]")
+        opt1_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
+        opt1_lay.addWidget(opt1_formula)
 
-            val_edit = QLineEdit()
-            val_edit.setPlaceholderText(f"Password value / pattern for Combo {i}")
-            val_edit.setEchoMode(QLineEdit.Password)
-            val_edit.setMinimumWidth(220)
+        opt1_inputs = QWidget()
+        opt1_in_lay = QHBoxLayout(opt1_inputs)
+        opt1_in_lay.setContentsMargins(0, 0, 0, 0)
+        opt1_in_lay.setSpacing(8)
 
-            eye_btn = QPushButton()
-            eye_btn.setProperty("class", "icon-sm")
-            eye_btn.setIcon(_icon("mdi.eye-outline", color=_TEXT_NAV))
-            eye_btn.setFixedSize(28, 28)
-            eye_btn.setToolTip("Show / Hide Password")
+        self.scc_opt1_label_edit = QLineEdit()
+        self.scc_opt1_label_edit.setPlaceholderText("Option 1 Label (e.g. Combo 1)")
+        self.scc_opt1_label_edit.setFixedWidth(140)
 
-            def _make_eye_toggle(ve=val_edit, eb=eye_btn):
-                def _toggle():
-                    if ve.echoMode() == QLineEdit.Password:
-                        ve.setEchoMode(QLineEdit.Normal)
-                        eb.setIcon(_icon("mdi.eye-off-outline", color=_ACCENT_LIGHT))
-                    else:
-                        ve.setEchoMode(QLineEdit.Password)
-                        eb.setIcon(_icon("mdi.eye-outline", color=_TEXT_NAV))
-                return _toggle
+        self.scc_opt1_str_edit = QLineEdit()
+        self.scc_opt1_str_edit.setPlaceholderText("Fixed String (e.g. @ or #)")
+        self.scc_opt1_str_edit.setMinimumWidth(180)
 
-            eye_btn.clicked.connect(_make_eye_toggle())
+        opt1_in_lay.addWidget(self.scc_opt1_label_edit)
+        opt1_in_lay.addWidget(self.scc_opt1_str_edit, stretch=1)
+        opt1_lay.addWidget(opt1_inputs)
 
-            h_box.addWidget(lbl_edit)
-            h_box.addWidget(val_edit, stretch=1)
-            h_box.addWidget(eye_btn)
+        lay.addWidget(_setting_row("Combination Option 1",
+            "Generates password with the first 4 lowercase letters of the client's PAN, your fixed string, and the 4 PAN digits.",
+            opt1_card))
 
-            self.scc_combo_edits.append((lbl_edit, val_edit))
-            lay.addWidget(_setting_row(f"Password Combination {i}",
-                f"Preset label and password for quick-tag button #{i}.", ctrl_widget))
+        # ── Option 2 Card ───────────────────────────────────────────────────
+        lay.addWidget(_sub_header("Option 2: [Fixed String] + [4 Digits]"))
 
-        lay.addWidget(_sub_header("Banner Behavior"))
-        timeout_lbl = QLabel("20 seconds (Auto-pauses on mouse hover)")
-        timeout_lbl.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-weight: 600; font-size: 12px;")
-        lay.addWidget(_setting_row("Auto-Dismiss Duration",
-            "How long the floating desktop prompt stays visible before fading out.", timeout_lbl))
+        opt2_card = QWidget()
+        opt2_lay = QVBoxLayout(opt2_card)
+        opt2_lay.setContentsMargins(0, 0, 0, 0)
+        opt2_lay.setSpacing(8)
+
+        opt2_formula = QLabel("Formula:  [ Fixed String ]  +  [ pan_digits (4) ]")
+        opt2_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
+        opt2_lay.addWidget(opt2_formula)
+
+        opt2_inputs = QWidget()
+        opt2_in_lay = QHBoxLayout(opt2_inputs)
+        opt2_in_lay.setContentsMargins(0, 0, 0, 0)
+        opt2_in_lay.setSpacing(8)
+
+        self.scc_opt2_label_edit = QLineEdit()
+        self.scc_opt2_label_edit.setPlaceholderText("Option 2 Label (e.g. Combo 2)")
+        self.scc_opt2_label_edit.setFixedWidth(140)
+
+        self.scc_opt2_str_edit = QLineEdit()
+        self.scc_opt2_str_edit.setPlaceholderText("Fixed String (e.g. Pass# or Tax@)")
+        self.scc_opt2_str_edit.setMinimumWidth(180)
+
+        opt2_in_lay.addWidget(self.scc_opt2_label_edit)
+        opt2_in_lay.addWidget(self.scc_opt2_str_edit, stretch=1)
+        opt2_lay.addWidget(opt2_inputs)
+
+        lay.addWidget(_setting_row("Combination Option 2",
+            "Generates password starting with your fixed string followed directly by the 4 digits of the client's PAN.",
+            opt2_card))
+
+        # ── Live Preview Card ───────────────────────────────────────────────
+        lay.addWidget(_sub_header("Live Combination Preview"))
+
+        preview_card = QWidget()
+        preview_lay = QVBoxLayout(preview_card)
+        preview_lay.setContentsMargins(0, 0, 0, 0)
+        preview_lay.setSpacing(8)
+
+        sample_pan_box = QWidget()
+        sp_lay = QHBoxLayout(sample_pan_box)
+        sp_lay.setContentsMargins(0, 0, 0, 0)
+        sp_lay.setSpacing(8)
+        sp_lbl = QLabel("Test with PAN:")
+        sp_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 12px;")
+        self.scc_sample_pan_edit = QLineEdit("ABCDE1234F")
+        self.scc_sample_pan_edit.setFixedWidth(140)
+        self.scc_sample_pan_edit.setStyleSheet("text-transform: uppercase; font-family: monospace; font-weight: bold;")
+        sp_lay.addWidget(sp_lbl)
+        sp_lay.addWidget(self.scc_sample_pan_edit)
+        sp_lay.addStretch()
+        preview_lay.addWidget(sample_pan_box)
+
+        self.scc_preview_lbl1 = QLabel()
+        self.scc_preview_lbl1.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
+        self.scc_preview_lbl2 = QLabel()
+        self.scc_preview_lbl2.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
+        preview_lay.addWidget(self.scc_preview_lbl1)
+        preview_lay.addWidget(self.scc_preview_lbl2)
+
+        lay.addWidget(_setting_row("Resolved Buttons Preview",
+            "Shows exactly how the 2 combination buttons will appear in the in-browser SMTI widget for the test PAN.",
+            preview_card))
+
+        def _update_previews():
+            pan = self.scc_sample_pan_edit.text().strip().upper() or "ABCDE1234F"
+            import re
+            letters_m = re.search(r"^[A-Z]{4}", pan)
+            letters = letters_m.group(0).lower() if letters_m else pan[:4].lower()
+            digits_m = re.search(r"\d{4}", pan)
+            digits = digits_m.group(0) if digits_m else (pan[5:9] if len(pan) >= 9 else "")
+
+            lbl1 = self.scc_opt1_label_edit.text().strip() or "Combo 1"
+            str1 = self.scc_opt1_str_edit.text()
+            val1 = f"{letters}{str1}{digits}"
+
+            lbl2 = self.scc_opt2_label_edit.text().strip() or "Combo 2"
+            str2 = self.scc_opt2_str_edit.text()
+            val2 = f"{str2}{digits}"
+
+            self.scc_preview_lbl1.setText(f"  • {lbl1}:  🔑  {val1}")
+            self.scc_preview_lbl2.setText(f"  • {lbl2}:  🔑  {val2}")
+
+        self.scc_sample_pan_edit.textChanged.connect(_update_previews)
+        self.scc_opt1_label_edit.textChanged.connect(_update_previews)
+        self.scc_opt1_str_edit.textChanged.connect(_update_previews)
+        self.scc_opt2_label_edit.textChanged.connect(_update_previews)
+        self.scc_opt2_str_edit.textChanged.connect(_update_previews)
 
         self.scc_check.toggled.connect(self._on_control_changed)
-        for _lbl, _val in self.scc_combo_edits:
-            _lbl.textChanged.connect(self._on_control_changed)
-            _val.textChanged.connect(self._on_control_changed)
+        self.scc_opt1_label_edit.textChanged.connect(self._on_control_changed)
+        self.scc_opt1_str_edit.textChanged.connect(self._on_control_changed)
+        self.scc_opt2_label_edit.textChanged.connect(self._on_control_changed)
+        self.scc_opt2_str_edit.textChanged.connect(self._on_control_changed)
+
+        _update_previews()
 
         lay.addStretch()
         return _wrap_scroll(w)
@@ -1042,9 +1120,10 @@ class UnifiedSettingsDialog(QDialog):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
-            state["scc_combos"] = tuple(
-                (lbl.text(), val.text()) for lbl, val in getattr(self, "scc_combo_edits", [])
-            )
+            state["scc_opt1_label"] = getattr(self, "scc_opt1_label_edit", QLineEdit()).text()
+            state["scc_opt1_str"] = getattr(self, "scc_opt1_str_edit", QLineEdit()).text()
+            state["scc_opt2_label"] = getattr(self, "scc_opt2_label_edit", QLineEdit()).text()
+            state["scc_opt2_str"] = getattr(self, "scc_opt2_str_edit", QLineEdit()).text()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1070,12 +1149,10 @@ class UnifiedSettingsDialog(QDialog):
             self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
             self._btn_save.setCursor(Qt.ArrowCursor)
 
-    # ── Load settings ─────────────────────────────────────────────────────────
+    # ── Load settings into controls ───────────────────────────────────────────
     def _load_settings(self):
-        all_settings = self.db.get_all_settings() if hasattr(self.db, "get_all_settings") else {}
-        g = lambda k, d="": all_settings.get(k, self.db.get_setting(k, d) if not all_settings else d)
-
-        def _set(combo, val):
+        g = self.db.get_setting
+        def _set(combo: QComboBox, val: str):
             idx = combo.findData(val)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
@@ -1111,9 +1188,14 @@ class UnifiedSettingsDialog(QDialog):
 
         if hasattr(self, "scc_check"):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
-            for idx, (lbl_e, val_e) in enumerate(getattr(self, "scc_combo_edits", []), 1):
-                lbl_e.setText(g(f"scc_combo_label_{idx}", f"Combo {idx}"))
-                val_e.setText(g(f"scc_combo_value_{idx}", ""))
+            if hasattr(self, "scc_opt1_label_edit"):
+                self.scc_opt1_label_edit.setText(g("scc_opt1_label", "Combo 1"))
+            if hasattr(self, "scc_opt1_str_edit"):
+                self.scc_opt1_str_edit.setText(g("scc_opt1_fixed_str", "@"))
+            if hasattr(self, "scc_opt2_label_edit"):
+                self.scc_opt2_label_edit.setText(g("scc_opt2_label", "Combo 2"))
+            if hasattr(self, "scc_opt2_str_edit"):
+                self.scc_opt2_str_edit.setText(g("scc_opt2_fixed_str", ""))
 
         if hasattr(self, "btn_ext_check"):
             self.btn_ext_check.setChecked(g("extension_autofill_enabled", "1") == "1")
@@ -1166,9 +1248,14 @@ class UnifiedSettingsDialog(QDialog):
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)
-                for idx, (lbl_e, val_e) in enumerate(getattr(self, "scc_combo_edits", []), 1):
-                    bulk_settings[f"scc_combo_label_{idx}"] = lbl_e.text().strip() or f"Combo {idx}"
-                    bulk_settings[f"scc_combo_value_{idx}"] = val_e.text().strip()
+                if hasattr(self, "scc_opt1_label_edit"):
+                    bulk_settings["scc_opt1_label"] = self.scc_opt1_label_edit.text().strip() or "Combo 1"
+                if hasattr(self, "scc_opt1_str_edit"):
+                    bulk_settings["scc_opt1_fixed_str"] = self.scc_opt1_str_edit.text()
+                if hasattr(self, "scc_opt2_label_edit"):
+                    bulk_settings["scc_opt2_label"] = self.scc_opt2_label_edit.text().strip() or "Combo 2"
+                if hasattr(self, "scc_opt2_str_edit"):
+                    bulk_settings["scc_opt2_fixed_str"] = self.scc_opt2_str_edit.text()
 
             if hasattr(self, "btn_ext_check"):
                 bulk_settings["extension_autofill_enabled"] = b(self.btn_ext_check)
