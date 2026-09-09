@@ -1834,6 +1834,39 @@ class SeraDatabase:
                 return None
             return self._fetch_client_full(conn, row[0])
 
+    def get_client_pan(self, client_or_id) -> str:
+        """Resolves 10-character PAN for a client, checking MCL PAN column, values, or deriving from GSTIN."""
+        client = client_or_id if isinstance(client_or_id, dict) else self.get_client(client_or_id)
+        if not client or not isinstance(client, dict):
+            return ""
+        values = client.get("values", {})
+        mcl = self.get_mcl_columns()
+        # 1. Direct PAN column matching exact 'PAN' or word boundary \bPAN\b (excluding 'COMPANY' and 'PASSWORD')
+        pan_col = next((
+            c["id"] for c in mcl
+            if c.get("label", "").strip().upper() == "PAN"
+            or (re.search(r"\bPAN\b", c.get("label", "").upper())
+                and "PASS" not in c.get("label", "").upper()
+                and "COMPAN" not in c.get("label", "").upper())
+        ), None)
+        if pan_col and pan_col in values:
+            val = str(values[pan_col]).strip().upper()
+            if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", val):
+                return val
+            if val:
+                return val
+        # 2. Check any value in values that matches 10-character PAN format
+        for v in values.values():
+            val = str(v).strip().upper()
+            if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", val):
+                return val
+        # 3. Derive from GSTIN in values (chars 2:12)
+        for v in values.values():
+            val = str(v).strip().upper()
+            if re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", val):
+                return val[2:12]
+        return ""
+
     def get_service_for_portal(self, portal_name: str) -> dict | None:
         """Finds the registered service record matching a portal name or keyword (e.g. 'Income Tax', 'ITR', 'GST')."""
         if not portal_name:

@@ -356,6 +356,22 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertTrue(self.db.is_client_scc_verified(pan=pan))
         self.assertTrue(self.db.is_client_scc_verified(client_id=cid))
 
+    def test_get_client_pan_avoids_company_name_collision(self):
+        # Client where 'NAME OF COMPANY' contains 'PAN' substring (e.g. 'Panchayat Dresses' or any company)
+        cid = self.db.add_client(
+            values={
+                self.name_col_id: "Panchayat Dresses",
+                self.pan_col_id: "ABCDE1234F",
+            },
+            notes="",
+            service_ids=[self.svc_id]
+        )
+        resolved_pan = self.db.get_client_pan(cid)
+        self.assertEqual(resolved_pan, "ABCDE1234F")
+
+        combos = self.db.generate_scc_passwords(pan=resolved_pan)
+        self.assertEqual(combos[0]["value"], "abcd@1234")
+
 
 if __name__ == "__main__":
     unittest.main()

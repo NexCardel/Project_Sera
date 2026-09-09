@@ -757,11 +757,12 @@ class UnifiedSettingsDialog(QDialog):
         lay.setSpacing(0)
 
         lay.addWidget(_page_header("SCC Vault Presets",
-            "Configure Sera Credential Capture and the 2 dedicated PAN-based password combination formulas."))
+            "Configure Sera Credential Capture, the 2 dedicated PAN-based password formulas, and 2 plain fixed passwords."))
 
         self.scc_check = QCheckBox()
+        self.scc_check.setChecked(self.db.get_setting("scc_enabled", "1") in ("1", "true", "True"))
         lay.addWidget(_setting_row("Enable SCC One-Time Verification",
-            "When logging into a tax portal for an unverified client, show 2 resolved password buttons in the in-browser SMTI widget.",
+            "When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
 
         # ── Option 1 Card ───────────────────────────────────────────────────
