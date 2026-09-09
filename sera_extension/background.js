@@ -267,6 +267,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // A full document load creates a new execution context; reinject once.
     sdcInjectedTabs.delete(tabId);
     injectSAD(tabId, 'onUpdated-complete');
+
+    // Re-inject Manual Assist if tab is on login page and assist is active (e.g. after invalid password page reload)
+    chrome.storage.local.get(['manualAssistPayload'], data => {
+      const p = data.manualAssistPayload;
+      if (p && p.expiresAt && p.expiresAt > Date.now()) {
+        const curUrl = (tab.url || '').toLowerCase();
+        let targetHost = '';
+        try { targetHost = new URL(p.url).hostname.toLowerCase(); } catch (_) {}
+        const matchesHost = targetHost ? curUrl.includes(targetHost) : true;
+        const isLogin = curUrl.includes('/login') || curUrl.includes('/auth') || curUrl.includes('/signin') || curUrl.includes('/foservices') || curUrl.includes('unifiedportal') || curUrl.includes('tdscpc');
+        const notDashboard = !curUrl.includes('/dashboard') && !curUrl.includes('/home') && !curUrl.includes('/welcome') && !curUrl.includes('/landing');
+        if (matchesHost && isLogin && notDashboard) {
+          setTimeout(() => {
+            injectManualAssist(tabId, p);
+          }, 700);
+        } else if (matchesHost && !notDashboard) {
+          chrome.storage.local.remove(['manualAssistPayload']);
+        }
+      }
+    });
   } else if (changeInfo.url) {
     // SPA navigation is already handled by sdc_core's URL watcher.
     if (SERA_DEBUG) console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
@@ -622,13 +642,18 @@ function handleAutofillTab(message) {
 }
 
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, sccCombos, clientId, serviceId) {
+  try {
+    if (window.self !== window.top) return;
+  } catch (_) {}
+
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
-  const duration = expiresMs || 30000;
+  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
+  const duration = isScc ? 120000 : (expiresMs || 30000);
   const host = document.createElement("div");
   host.id = hostId;
   host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
@@ -842,16 +867,100 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const header = document.createElement("div");
   header.className = "header";
 
-  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
-
   const badge = document.createElement("div");
   badge.className = "badge";
   badge.innerHTML = isScc ? "⚡ Sera Assist • SCC" : "⚡ Sera Assist";
+
+  let dismiss = () => {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    card.style.transform = "translateX(120%)";
+    card.style.opacity = "0";
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+  };
+
+  function setBtn(btn, state, text) {
+    if (!btn) return;
+    if (state === "done") {
+      btn.className = "btn done";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    } else if (state === "warn") {
+      btn.className = "btn";
+      btn.style.borderColor = "#E8A040";
+      btn.style.color = "#F5C97A";
+    } else {
+      btn.className = "btn primary";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    }
+    btn.innerHTML = text;
+  }
+
+  // Countdown timer bar
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+
+  let timerTimeout = null;
+  let timerStartTime = 0;
+  let remainingMs = duration;
+  let isTimerPaused = false;
+
+  function startCountdown() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerStartTime = Date.now();
+    isTimerPaused = false;
+    timerBar.style.transition = `transform ${remainingMs}ms linear`;
+    timerBar.style.transform = "scaleX(0)";
+    timerTimeout = setTimeout(() => {
+      if (host.isConnected) dismiss();
+    }, remainingMs);
+  }
+
+  function pauseTimer() {
+    if (isTimerPaused || !timerTimeout) return;
+    isTimerPaused = true;
+    clearTimeout(timerTimeout);
+    timerTimeout = null;
+    const elapsed = Date.now() - timerStartTime;
+    remainingMs = Math.max(0, remainingMs - elapsed);
+    try {
+      const computed = window.getComputedStyle(timerBar);
+      const curMatrix = computed.transform;
+      timerBar.style.transition = "none";
+      timerBar.style.transform = curMatrix;
+    } catch (_) {}
+  }
+
+  function resumeTimer() {
+    if (!isTimerPaused) return;
+    if (remainingMs <= 500) {
+      dismiss();
+      return;
+    }
+    startCountdown();
+  }
+
+  function resetTimer() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    remainingMs = duration;
+    isTimerPaused = false;
+    timerBar.style.transition = "none";
+    timerBar.style.transform = "scaleX(1)";
+    void timerBar.offsetWidth; // force reflow
+    startCountdown();
+  }
+
+  card.addEventListener("mouseenter", pauseTimer);
+  card.addEventListener("mouseleave", resumeTimer);
 
   const closeBtn = document.createElement("button");
   closeBtn.className = "close-btn";
   closeBtn.innerHTML = "✕";
   closeBtn.title = "Dismiss";
+  closeBtn.onclick = dismiss;
 
   header.append(badge, closeBtn);
 
@@ -875,6 +984,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     guideTxt.textContent = "Select working combination to inject & verify:";
     actions.append(guideTxt);
 
+    const comboBtns = [];
     sccCombos.forEach((combo, idx) => {
       const pVal = (combo && (combo.value || combo.password)) || "";
       const pLbl = (combo && combo.label) || `Combo ${idx + 1}`;
@@ -886,8 +996,16 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       cBtn.style.textAlign = "left";
       cBtn.style.paddingLeft = "12px";
       cBtn.style.fontFamily = "monospace, -apple-system, sans-serif";
+      comboBtns.push({ btn: cBtn, val: pVal });
 
       cBtn.onclick = () => {
+        resetTimer();
+        comboBtns.forEach(item => {
+          if (item.btn !== cBtn) {
+            setBtn(item.btn, "primary", `🔑  ${item.val}`);
+          }
+        });
+
         const result = smartFill(pVal, passwordSelector, passFallbacks);
         if (result === "filled") {
           setBtn(cBtn, "done", `✓  ${pVal} Injected`);
@@ -907,9 +1025,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
             }
           });
         } catch (_) {}
-        setTimeout(() => {
-          setBtn(cBtn, "primary", `🔑  ${pVal}`);
-        }, 3000);
       };
       actions.append(cBtn);
     });
@@ -930,13 +1045,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     actions.append(passBtn);
   }
 
-  // Countdown timer bar
-  const timerContainer = document.createElement("div");
-  timerContainer.className = "timer-container";
-  const timerBar = document.createElement("div");
-  timerBar.className = "timer-bar";
-  timerContainer.appendChild(timerBar);
-
   card.append(header, title, actions, timerContainer);
   shadow.appendChild(card);
   document.documentElement.appendChild(host);
@@ -945,8 +1053,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   setTimeout(() => {
     card.style.transform = "translateX(0)";
     card.style.opacity = "1";
-    timerBar.style.transitionDuration = `${duration}ms`;
-    timerBar.style.transform = "scaleX(0)";
+    startCountdown();
   }, 30);
 
   function clean(sel) {
@@ -1033,25 +1140,75 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return false;
   }
 
+  function ensureTermsChecked() {
+    try {
+      const cb = document.querySelector("mat-checkbox#agreeTermAndCondition, mat-checkbox.login-terms, app-login mat-checkbox");
+      if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
+        const cbText = (cb.textContent || "").toLowerCase();
+        if (!cbText.includes("show") && !cbText.includes("reveal")) {
+          cb.click();
+        }
+      }
+    } catch (_) {}
+  }
+
   function fill(el, value) {
     if (!el || !value) return false;
+
+    // Check IT portal secure access message checkbox first if present
+    ensureTermsChecked();
+
     try {
       if (el.disabled) { el.removeAttribute("disabled"); el.disabled = false; }
       if (el.readOnly) { el.removeAttribute("readonly"); el.readOnly = false; }
       el.focus();
     } catch (_) {}
+
+    // 1. Clear any existing value cleanly so Angular/React detect value mutations
     try {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      setter.call(el, value);
+      const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(el);
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) {
+        desc.set.call(el, "");
+      } else {
+        el.value = "";
+      }
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    } catch (_) {
+      el.value = "";
+    }
+
+    // 2. Set new value via native descriptor setter
+    try {
+      const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(el);
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) {
+        desc.set.call(el, value);
+      } else {
+        el.value = value;
+      }
     } catch (_) {
       el.value = value;
     }
-    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    // 3. Selection + execCommand enhancement where supported
+    try {
+      el.select();
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(0, (value || "").length);
+      }
+    } catch (_) {}
+
+    // 4. Always fire full suite of input/change keyboard events for Angular/React form sync
+    try {
+      el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (_) {}
+
     return true;
   }
 
@@ -1074,7 +1231,20 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   }
 
   function smartFill(value, selector, fallbacks) {
-    const el = findField(selector, fallbacks);
+    ensureTermsChecked();
+    let el = findField(selector, fallbacks);
+    if (!el && selector && (selector.includes("password") || selector.includes("psw") || selector.includes("pass"))) {
+      const passCandidates = document.querySelectorAll("input[type='password'], input[id*='password'], input[name*='password'], input[id*='psw'], input[name*='psw'], #user_pass");
+      for (const p of passCandidates) {
+        if (visible(p)) { el = p; break; }
+      }
+    }
+    if (!el) {
+      const passInputs = document.querySelectorAll("input[type='password']");
+      for (const p of passInputs) {
+        if (visible(p)) { el = p; break; }
+      }
+    }
     if (el && fill(el, value)) return "filled";
 
     const fltEl = getFlutterActiveInput();
@@ -1214,12 +1384,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     if (flutterObserver) { flutterObserver.disconnect(); flutterObserver = null; }
   }
 
-  let dismiss = () => {
-    card.style.transform = "translateX(120%)";
-    card.style.opacity = "0";
-    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
-  };
-
   if (isFlutter) {
     // Hide buttons on Flutter sites as requested — replace with child-friendly step cards
     actions.style.display = "none";
@@ -1272,24 +1436,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     dismiss = () => { stopFlutterObserver(); baseDismiss(); };
   }
 
-  function setBtn(btn, state, text) {
-    if (state === "done") {
-      btn.className = "btn done";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    } else if (state === "warn") {
-      btn.className = "btn";
-      btn.style.borderColor = "#E8A040";
-      btn.style.color = "#F5C97A";
-    } else {
-      btn.className = "btn primary";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    }
-    btn.innerHTML = text;
-  }
-
   uidBtn.onclick = () => {
+    resetTimer();
     const result = smartFill(userid, usernameSelector, userFallbacks);
     if (result === "filled") {
       setBtn(uidBtn, "done", "✓  Username Injected");
@@ -1299,9 +1447,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
     }
   };
-
-  closeBtn.onclick = dismiss;
-  setTimeout(() => { if (host.isConnected) dismiss(); }, duration);
 }
 
 function handleManualAssistTab(message) {
