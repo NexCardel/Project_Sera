@@ -165,8 +165,8 @@ chrome.runtime.onInstalled.addListener(() => {
 // Broadcast changes to open tabs whenever settings change in storage
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.sadEnabled || changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
-    chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+  if (changes.sadEnabled || changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled || changes.sdsEnabled) {
+    chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled', 'sdsEnabled'], (data) => {
       const trackerEnabled = data.trackerEnabled !== false;
       const sadEnabled = data.sadEnabled !== false && trackerEnabled;
       const fstEnabled = data.fstEnabled !== false && trackerEnabled;
@@ -213,10 +213,11 @@ function injectSAD(tabId, reason) {
   // Reserve the tab before the asynchronous settings lookup to prevent two
   // concurrent injection requests from both passing the guard.
   sdcInjectedTabs.add(tabId);
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled', 'sdsEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
     const fstEnabled = data.fstEnabled !== false && trackerEnabled;
     const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
+    const sdsEnabled = false; // SDS Paused
 
     if (!trackerEnabled || !sdcEnabled) {
       sdcInjectedTabs.delete(tabId);
@@ -225,18 +226,23 @@ function injectSAD(tabId, reason) {
 
     if (SERA_DEBUG) console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
 
-    // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
+    // Pure isolated-world scripts (NO network hooking, NO main world injection)
     const sdcFiles = [
       'sdc/sdc_toast.js',
-      'sdc/sdc_core.js',
-      'sdc/protocols/itr_protocol.js',
-      'sdc/protocols/gst_protocol.js',
-      'sdc/protocols/traces_protocol.js',
-      'sdc/protocols/mca_protocol.js'
+      'sdc/sdc_core.js'
     ];
 
+    if (sdcEnabled) {
+      sdcFiles.push(
+        'sdc/protocols/itr_protocol.js',
+        'sdc/protocols/gst_protocol.js',
+        'sdc/protocols/traces_protocol.js',
+        'sdc/protocols/mca_protocol.js'
+      );
+    }
+
     chrome.scripting.executeScript({
-      target: { tabId: tabId, allFrames: false }, // top frame only for SDC
+      target: { tabId: tabId, allFrames: false }, // top frame only
       files: sdcFiles
     }).catch(err => {
       // Ignored for non-matching or restricted URLs
