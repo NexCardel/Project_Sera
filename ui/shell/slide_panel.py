@@ -95,13 +95,22 @@ class SlidePanel(QFrame):
     def is_open(self) -> bool:
         return self._is_open
 
+    def _calc_panel_width(self, parent_w: int) -> int:
+        if parent_w <= 0:
+            return self.target_width
+        # On compact/laptop displays (e.g. 1280-1366px or 125%/150% scaling),
+        # allocate ~42-44% of window width (min 380px) so the main content is not squeezed out.
+        responsive_w = int(parent_w * 0.44)
+        clamped_w = max(380, min(self.target_width, responsive_w))
+        return min(clamped_w, parent_w)
+
     def update_position(self):
         """Update geometry when parent resizes."""
         if not self.parent():
             return
         parent_w = self.parent().width()
         parent_h = self.parent().height()
-        panel_w = min(self.target_width, parent_w)
+        panel_w = self._calc_panel_width(parent_w)
         if self._is_open:
             self.setGeometry(parent_w - panel_w, 0, panel_w, parent_h)
             self.raise_()
@@ -142,7 +151,7 @@ class SlidePanel(QFrame):
             return
         parent_w = self.parent().width()
         parent_h = self.parent().height()
-        panel_w = min(self.target_width, parent_w)
+        panel_w = self._calc_panel_width(parent_w)
 
         self.anim.stop()
         start_geom = self.geometry()
@@ -166,7 +175,7 @@ class SlidePanel(QFrame):
             return
         parent_w = self.parent().width()
         parent_h = self.parent().height()
-        panel_w = min(self.target_width, parent_w)
+        panel_w = self._calc_panel_width(parent_w)
 
         self.anim.stop()
         start_geom = self.geometry()

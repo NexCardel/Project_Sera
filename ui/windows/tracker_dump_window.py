@@ -774,6 +774,10 @@ class TrackerDumpWindow(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(180)
         self._search_timer.timeout.connect(self._apply_filters)
+        self._col_resize_timer = QTimer(self)
+        self._col_resize_timer.setSingleShot(True)
+        self._col_resize_timer.setInterval(40)
+        self._col_resize_timer.timeout.connect(self._adjust_table_columns)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1093,6 +1097,70 @@ class TrackerDumpWindow(QWidget):
         # Initial Load
         self.load_data()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_col_resize_timer"):
+            self._col_resize_timer.start()
+
+    def _adjust_table_columns(self):
+        if not hasattr(self, "table") or self.table.columnCount() != 8:
+            return
+
+        avail_w = self.table.viewport().width()
+        if avail_w <= 0:
+            avail_w = self.table.width() - 25
+        if avail_w <= 0:
+            return
+
+        is_grouped = self.cmb_view_mode.currentIndex() == 0 if hasattr(self, "cmb_view_mode") else True
+
+        if is_grouped:
+            col_specs = [
+                (170, 2.8),  # 0. Client Name & PAN
+                (80, 0.0),   # 1. Client ID
+                (110, 1.4),  # 2. Portal / Services
+                (120, 1.8),  # 3. Filings & History
+                (140, 1.8),  # 4. Submission Status
+                (165, 1.8),  # 5. Actions
+                (115, 1.1),  # 6. Last Updated
+                (110, 1.1),  # 7. Capture Method
+            ]
+        else:
+            col_specs = [
+                (170, 2.8),  # 0. Client Name & PAN
+                (70, 0.0),   # 1. ID
+                (110, 1.4),  # 2. Service / Portal
+                (110, 1.4),  # 3. Period
+                (140, 1.8),  # 4. Submission Status
+                (165, 1.8),  # 5. Actions
+                (115, 1.1),  # 6. Timestamp
+                (110, 1.1),  # 7. Capture Method
+            ]
+
+        min_widths = [s[0] for s in col_specs]
+        weights = [s[1] for s in col_specs]
+        sum_min = sum(min_widths)
+        total_weight = sum(weights)
+
+        if avail_w > sum_min and total_weight > 0:
+            extra_w = avail_w - sum_min
+            alloc = []
+            for min_w, weight in zip(min_widths, weights):
+                if weight > 0:
+                    add = int((weight / total_weight) * extra_w)
+                    alloc.append(min_w + add)
+                else:
+                    alloc.append(min_w)
+            diff = avail_w - sum(alloc)
+            if diff > 0:
+                best_idx = weights.index(max(weights))
+                alloc[best_idx] += diff
+            for c, w in enumerate(alloc):
+                self.table.setColumnWidth(c, w)
+        else:
+            for c, min_w in enumerate(min_widths):
+                self.table.setColumnWidth(c, min_w)
+
     def _on_search_text_changed(self):
         """Debounced search filter."""
         self._current_page = 1
@@ -1363,9 +1431,11 @@ class TrackerDumpWindow(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [300, 95, 170, 210, 185, 210, 140, 150]
-        for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
-            self.table.setColumnWidth(c, w)
+        if prev_widths and len(prev_widths) == 8 and prev_widths[0] > 0:
+            for c, w in enumerate(prev_widths):
+                self.table.setColumnWidth(c, w)
+        else:
+            self._adjust_table_columns()
 
         self.table.setRowCount(len(containers))
         self.lbl_counter.setText(f"Client Containers: {len(containers)}")
@@ -1464,9 +1534,11 @@ class TrackerDumpWindow(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(False)
 
-        default_widths = [300, 75, 170, 130, 185, 190, 140, 150]
-        for c, w in enumerate(prev_widths if len(prev_widths) == 8 and prev_widths[0] > 0 else default_widths):
-            self.table.setColumnWidth(c, w)
+        if prev_widths and len(prev_widths) == 8 and prev_widths[0] > 0:
+            for c, w in enumerate(prev_widths):
+                self.table.setColumnWidth(c, w)
+        else:
+            self._adjust_table_columns()
 
         self.table.setRowCount(len(records))
         self.lbl_counter.setText(f"Raw Records: {len(records)}")

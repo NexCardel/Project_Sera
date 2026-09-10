@@ -150,6 +150,13 @@ class SearchWindow(QWidget):
         self._activity_refresh_timer.timeout.connect(self._on_search_changed)
         self._activity_refresh_timer.start()
 
+        self._current_mcl_cols = []
+        self._current_col_max_lens = []
+        self._column_resize_timer = QTimer(self)
+        self._column_resize_timer.setSingleShot(True)
+        self._column_resize_timer.setInterval(40)
+        self._column_resize_timer.timeout.connect(self._adjust_column_widths)
+
         self._build_ui()
         self.refresh()
 
@@ -708,26 +715,10 @@ class SearchWindow(QWidget):
                                 QTableWidgetSelectionRange(top, left, bottom, right), True
                             )
 
-            # Auto-fit column widths: compact fit for ID / Serial columns, comfortable fit for data columns
-            fm = self.results_table.fontMetrics()
-            char_w = fm.horizontalAdvance("M")
-            for c_idx, col in enumerate(mcl_cols):
-                col_lbl = col["label"].strip().lower()
-                is_compact = (col.get("field_type") == "id" or col_lbl in {"id", "client id", "token", "no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"})
-                if is_compact:
-                    self.results_table.resizeColumnToContents(c_idx)
-                    self.results_table.setColumnWidth(c_idx, max(self.results_table.columnWidth(c_idx) + 16, 50))
-                else:
-                    sample_chars = min(col_max_lens[c_idx], 40)
-                    calc_w = max(sample_chars * char_w + 24, fm.horizontalAdvance(col["label"]) + 28, 80)
-                    self.results_table.setColumnWidth(c_idx, calc_w)
-
-            # Services column (last section stretches to fill remaining space)
-            if len(headers) > len(mcl_cols):
-                svc_idx = len(mcl_cols)
-                self.results_table.setColumnWidth(
-                    svc_idx, max(min(col_max_lens[-1], 50) * char_w + 24, fm.horizontalAdvance("Services") + 28, 100)
-                )
+            # Store current column definitions and max string lengths for dynamic responsiveness
+            self._current_mcl_cols = mcl_cols
+            self._current_col_max_lens = col_max_lens
+            self._adjust_column_widths()
 
             # Retain scroll positions precisely
             if v_val > 0:
@@ -739,6 +730,114 @@ class SearchWindow(QWidget):
             self.results_table.horizontalHeader().setSortIndicatorShown(True)
             self.results_table.horizontalHeader().setSectionsClickable(True)
             self.results_table.setUpdatesEnabled(True)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_column_resize_timer"):
+            self._column_resize_timer.start()
+
+    def _adjust_column_widths(self):
+        if not hasattr(self, "_current_mcl_cols") or not self._current_mcl_cols:
+            return
+        if self.results_table.columnCount() == 0:
+            return
+
+        mcl_cols = self._current_mcl_cols
+        col_max_lens = getattr(self, "_current_col_max_lens", [])
+        total_cols = self.results_table.columnCount()
+        fm = self.results_table.fontMetrics()
+        char_w = max(fm.horizontalAdvance("M"), 7)
+
+        # 1. Calculate minimum widths and assign flex weights
+        min_widths = []
+        weights = []
+
+        for c_idx, col in enumerate(mcl_cols):
+            lbl = col.get("label", "").strip().lower()
+            field_name = col.get("field_name", "").lower()
+            field_type = col.get("field_type", "").lower()
+            is_compact = (
+                field_type == "id"
+                or lbl in {"id", "client id", "token", "no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}
+            )
+
+            hdr_w = fm.horizontalAdvance(col.get("label", "")) + 30
+            if is_compact:
+                w = max(hdr_w, 55)
+                min_widths.append(w)
+                weights.append(0.0)
+            else:
+                max_chars = col_max_lens[c_idx] if c_idx < len(col_max_lens) else 15
+                sample_chars = min(max_chars, 35)
+                content_w = max(sample_chars * char_w + 20, hdr_w, 80)
+
+                # Assign flex weights based on semantic data type
+                if any(k in lbl or k in field_name for k in ("name", "client")):
+                    weight = 3.2
+                    min_w = max(content_w, 130)
+                elif any(k in lbl or k in field_name for k in ("company", "trade", "firm", "business")):
+                    weight = 2.6
+                    min_w = max(content_w, 120)
+                elif "email" in lbl or "email" in field_name:
+                    weight = 2.0
+                    min_w = max(content_w, 120)
+                elif any(k in lbl or k in field_name for k in ("pan", "gst", "gstin", "tan")):
+                    weight = 1.4
+                    min_w = max(content_w, 105)
+                elif any(k in lbl or k in field_name for k in ("phone", "mobile", "contact")):
+                    weight = 1.3
+                    min_w = max(content_w, 95)
+                elif "status" in lbl:
+                    weight = 1.0
+                    min_w = max(content_w, 80)
+                else:
+                    weight = 1.5
+                    min_w = max(content_w, 90)
+
+                min_widths.append(min_w)
+                weights.append(weight)
+
+        # Services column (if present at the end)
+        if total_cols > len(mcl_cols):
+            svc_hdr_w = fm.horizontalAdvance("Services") + 30
+            svc_chars = col_max_lens[-1] if col_max_lens else 20
+            svc_w = max(min(svc_chars, 45) * char_w + 20, svc_hdr_w, 120)
+            min_widths.append(svc_w)
+            weights.append(2.8)
+
+        # 2. Check available viewport width
+        avail_w = self.results_table.viewport().width()
+        if avail_w <= 0:
+            avail_w = self.results_table.width() - 25
+
+        sum_min_w = sum(min_widths)
+        total_weight = sum(weights)
+
+        # 3. Proportional expansion to fill 100% viewport width without scrollbars
+        if avail_w > sum_min_w and total_weight > 0:
+            extra_w = avail_w - sum_min_w
+            allocated_w = []
+            for min_w, weight in zip(min_widths, weights):
+                if weight > 0:
+                    add = int((weight / total_weight) * extra_w)
+                    allocated_w.append(min_w + add)
+                else:
+                    allocated_w.append(min_w)
+
+            # Rounding difference adjustment on highest weighted column
+            diff = avail_w - sum(allocated_w)
+            if diff > 0:
+                best_idx = weights.index(max(weights))
+                allocated_w[best_idx] += diff
+
+            for c_idx, w in enumerate(allocated_w):
+                if c_idx < total_cols:
+                    self.results_table.setColumnWidth(c_idx, w)
+        else:
+            # Underflow / small resolution: apply comfortable min widths
+            for c_idx, min_w in enumerate(min_widths):
+                if c_idx < total_cols:
+                    self.results_table.setColumnWidth(c_idx, min_w)
 
 
 

@@ -190,6 +190,12 @@ class SeraApp:
             except Exception:
                 pass
 
+        # Enable High-DPI and smooth fractional scaling (125%, 150%, etc.)
+        if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
+            QApplication.setHighDpiScaleFactorRoundingPolicy(
+                Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+            )
+
         self.app = QApplication(sys.argv)
         # Avoid Windows legacy bitmap-font fallback warnings (8514oem/Fixedsys)
         # and keep all dialogs consistent with the app stylesheet.
