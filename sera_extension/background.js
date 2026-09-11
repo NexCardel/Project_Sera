@@ -365,13 +365,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         let targetHost = '';
         try { targetHost = new URL(p.url).hostname.toLowerCase(); } catch (_) {}
         const matchesHost = targetHost ? curUrl.includes(targetHost) : true;
-        const isLogin = curUrl.includes('/login') || curUrl.includes('/auth') || curUrl.includes('/signin') || curUrl.includes('unifiedportal') || curUrl.includes('tdscpc');
-        const isPostLogin = curUrl.includes('/dashboard') || curUrl.includes('/home') || curUrl.includes('/welcome') || curUrl.includes('/landing') || curUrl.includes('/portal') || curUrl.includes('/main') || curUrl.includes('/profile');
-        if (matchesHost && isLogin && !isPostLogin) {
+        const isPostLogin = curUrl.includes('/dashboard') || curUrl.includes('/user-profile') || curUrl.includes('/my-account');
+        const isExplicitLogin = curUrl.includes('/login') || curUrl.includes('/auth') || curUrl.includes('/signin') || curUrl.includes('unifiedportal') || curUrl.includes('tdscpc') || curUrl.includes('xhtml');
+        if (matchesHost && (isExplicitLogin || !isPostLogin)) {
           setTimeout(() => {
             injectManualAssist(tabId, p);
           }, 700);
-        } else if (matchesHost && isPostLogin) {
+        } else if (matchesHost && isPostLogin && !isExplicitLogin) {
           chrome.storage.local.remove(['manualAssistPayload']);
         }
       }
@@ -748,21 +748,18 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return;
   }
 
-  // Do not show widget if user is already logged in or page is on post-login dashboard/portal
+  // Do not show widget if user is already logged in or page is on post-login dashboard
   try {
     const curPageUrl = (window.location.href || "").toLowerCase();
-    const isPostLoginUrl = curPageUrl.includes('/dashboard') || curPageUrl.includes('/home') || curPageUrl.includes('/welcome') || curPageUrl.includes('/landing') || curPageUrl.includes('/portal') || curPageUrl.includes('/main') || curPageUrl.includes('/profile');
-    const isExplicitLoginUrl = curPageUrl.includes('/login') || curPageUrl.includes('/auth') || curPageUrl.includes('/signin');
-    if (isPostLoginUrl && !isExplicitLoginUrl) {
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.remove(['manualAssistPayload']);
-      }
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
-      }
-      return;
-    }
-    if (document.querySelector("a[href*='logout'], button[id*='logout'], .user-profile, app-dashboard")) {
+    const isExplicitLoginUrl = curPageUrl.includes('/login') || curPageUrl.includes('/auth') || curPageUrl.includes('/signin') || curPageUrl.includes('xhtml');
+    const isPostLoginUrl = curPageUrl.includes('/dashboard') || curPageUrl.includes('/user-profile') || curPageUrl.includes('/my-account');
+    
+    // Check for explicit logged-in DOM elements
+    const logoutBtn = document.querySelector("a[href*='logout'], button[id*='logout'], a[id*='logout'], button[name*='logout']");
+    const hasActiveDashboard = !!document.querySelector("app-dashboard, .user-dashboard, #dashboard-wrapper");
+    const isTrulyLoggedIn = (hasActiveDashboard || (logoutBtn && logoutBtn.offsetParent !== null)) && !isExplicitLoginUrl;
+
+    if (isTrulyLoggedIn || (isPostLoginUrl && !isExplicitLoginUrl)) {
       if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
         chrome.storage.local.remove(['manualAssistPayload']);
       }
@@ -1111,6 +1108,20 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   title.className = "client-title";
   title.textContent = clientName || "Client Profile";
 
+  const userFallbacks = [
+    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
+    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
+    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
+    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
+    "input[name='username']", "input[name='user']"
+  ];
+
+  const passFallbacks = [
+    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
+    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
+    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
+  ];
+
   // Action Buttons
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -1118,6 +1129,17 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
   uidBtn.innerHTML = "👤  Username";
+  uidBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(userid, usernameSelector, userFallbacks);
+    if (result === "filled") {
+      setBtn(uidBtn, "done", "✓  Username Injected");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
+    } else {
+      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
+    }
+  };
 
   const passBtn = document.createElement("button");
   passBtn.className = "btn primary";
@@ -1125,14 +1147,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   passBtn.onclick = () => {
     resetTimer();
     const result = smartFill(password, passwordSelector, passFallbacks);
-    try {
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.remove(['manualAssistPayload']);
-      }
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
-      }
-    } catch (_) {}
     if (result === "filled") {
       setBtn(passBtn, "done", "✓  Password Injected");
       setTimeout(dismiss, 400);
@@ -1190,7 +1204,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       const matches = queryAll(clean(selector));
       if (matches.length > 0) return matches[0];
     }
-    for (const sel of fallbacks) {
+    const fbs = Array.isArray(fallbacks) ? fallbacks : [];
+    for (const sel of fbs) {
       const matches = queryAll(sel);
       if (matches.length > 0) return matches[0];
     }
@@ -1365,20 +1380,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return "copied";
   }
 
-  const userFallbacks = [
-    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
-    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
-    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
-    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
-    "input[name='username']", "input[name='user']"
-  ];
-
-  const passFallbacks = [
-    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
-    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
-    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
-  ];
-
   const isFlutter = isFlutterPage();
 
   // ── Flutter auto-fill via MutationObserver ─────────────────────────────
@@ -1546,18 +1547,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     const baseDismiss = dismiss;
     dismiss = () => { stopFlutterObserver(); baseDismiss(); };
   }
-
-  uidBtn.onclick = () => {
-    resetTimer();
-    const result = smartFill(userid, usernameSelector, userFallbacks);
-    if (result === "filled") {
-      setBtn(uidBtn, "done", "✓  Username Injected");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
-    } else {
-      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
-    }
-  };
 }
 
 function handleManualAssistTab(message) {
@@ -1583,12 +1572,14 @@ function handleManualAssistTab(message) {
     const open = tab => {
       if (!tab) return;
       chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
+      const isAlreadyOnUrl = tab.url && (tab.url.split('#')[0].toLowerCase() === message.url.split('#')[0].toLowerCase());
+
       let listenerFired = false;
       const listener = (tabId, info) => {
         if (tabId === tab.id && info.status === "complete" && !listenerFired) {
           listenerFired = true;
           chrome.tabs.onUpdated.removeListener(listener);
-          setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
+          setTimeout(() => injectManualAssist(tab.id, message, true), injectDelay);
         }
       };
       chrome.tabs.onUpdated.addListener(listener);
@@ -1596,8 +1587,8 @@ function handleManualAssistTab(message) {
         try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
       }, 30000);
 
-      if (tab.status === "complete") {
-        setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
+      if (isAlreadyOnUrl && tab.status === "complete") {
+        setTimeout(() => injectManualAssist(tab.id, message, true), injectDelay);
       }
       chrome.tabs.update(tab.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
     };
@@ -1665,10 +1656,10 @@ function clearBrowserCookies(callback) {
 }
 
 const _lastManualAssistInject = {};
-function injectManualAssist(tabId, message) {
+function injectManualAssist(tabId, message, force = false) {
   if (!tabId) return;
   const now = Date.now();
-  if (_lastManualAssistInject[tabId] && (now - _lastManualAssistInject[tabId]) < 1000) {
+  if (!force && _lastManualAssistInject[tabId] && (now - _lastManualAssistInject[tabId]) < 1000) {
     return;
   }
   _lastManualAssistInject[tabId] = now;

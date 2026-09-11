@@ -848,7 +848,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       const matches = queryAll(clean(selector));
       if (matches.length > 0) return matches[0];
     }
-    for (const sel of fallbacks) {
+    const fbs = Array.isArray(fallbacks) ? fallbacks : [];
+    for (const sel of fbs) {
       const matches = queryAll(sel);
       if (matches.length > 0) return matches[0];
     }
