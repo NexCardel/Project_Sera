@@ -666,15 +666,6 @@ class ClientDetailWindow(QWidget):
     def _launch_extension_autofill(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:
-            is_itr = automation.is_itr_service(service)
-            scc_cfg = self.db.get_scc_settings()
-            scc_enabled = scc_cfg.get("enabled", True)
-            client_id = self.client.get("id") if self.client else None
-            is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
-            if is_itr and uid and scc_enabled and not is_scc_verified:
-                self._launch_manual_assist(service)
-                return
-
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
@@ -808,29 +799,8 @@ class ClientDetailWindow(QWidget):
 
     def _launch_manual_assist(self, service: dict):
         uid, pwd = self._get_credentials(service)
-
-        # Check SCC verification status (STRICTLY for Income Tax / ITR only)
-        is_itr = automation.is_itr_service(service)
-        scc_cfg = self.db.get_scc_settings()
-        scc_enabled = scc_cfg.get("enabled", True)
-        client_id = self.client.get("id") if self.client else None
-        is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
-
-        scc_mode = False
-        scc_combos = []
-        if is_itr and scc_enabled and not is_scc_verified:
-            scc_mode = True
-            # Extract client PAN using db.get_client_pan or fallback
-            client_pan = self.db.get_client_pan(self.client) if hasattr(self.db, "get_client_pan") else ""
-            if not client_pan:
-                client_pan = uid or ""
-            scc_combos = self.db.generate_scc_passwords(pan=client_pan)
-
-        if not uid:
-            QMessageBox.warning(self, "Missing credentials", f"No User ID saved for {service['name']}.")
-            return
-        if not pwd and not scc_mode:
-            QMessageBox.warning(self, "Missing credentials", f"No Password saved for {service['name']}.")
+        if not uid or not pwd:
+            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         try:
@@ -839,7 +809,7 @@ class ClientDetailWindow(QWidget):
             pass
         self.db.log_action(
             self.actor, "manual_assist", client_id=self.client["id"], service_id=service["id"],
-            detail=f"Manual assist triggered for {service['name']}" + (" (SCC Mode)" if scc_mode else "")
+            detail=f"Manual assist triggered for {service['name']}"
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
         fst_on = self.db.get_setting("fst_enabled", "1") == "1"
@@ -850,10 +820,8 @@ class ClientDetailWindow(QWidget):
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(
-            service, uid, pwd or "", self.client["id"],
-            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg),
-            scc_mode=scc_mode,
-            scc_combos=scc_combos
+            service, uid, pwd, self.client["id"],
+            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
         )
         self.window().showMinimized()
 

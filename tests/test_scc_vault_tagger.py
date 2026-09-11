@@ -241,7 +241,7 @@ class TestSccVaultTagger(unittest.TestCase):
 
         captured_payloads = []
         with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
-            automation.trigger_manual_assist(
+            automation.trigger_mecp(
                 service, "ABCDE1234F", "", 123,
                 scc_mode=True, scc_combos=combos
             )
@@ -397,7 +397,7 @@ class TestSccVaultTagger(unittest.TestCase):
         captured_payloads = []
         with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
             # Even if scc_mode=True is accidentally requested for GST, automation must disarm it
-            automation.trigger_manual_assist(
+            automation.trigger_mecp(
                 gst_svc, "27ABCDE1234F1Z5", "GstPass#2026", 456,
                 scc_mode=True, scc_combos=[{"value": "combo1"}]
             )

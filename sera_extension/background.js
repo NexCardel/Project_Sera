@@ -656,7 +656,7 @@ function handleAutofillTab(message) {
   });
 }
 
-function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, sccCombos, clientId, serviceId) {
+function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
   try {
     if (window.self !== window.top) return;
   } catch (_) {
@@ -665,12 +665,10 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
-  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
   if (old) {
     const curCid = old.getAttribute("data-client-id");
-    const curMode = old.getAttribute("data-is-scc");
-    if (curCid === String(clientId) && curMode === String(isScc)) {
-      // Widget is already active and displayed on this page for this client & mode
+    if (curCid === String(userid)) {
+      // Widget is already active and displayed on this page
       return;
     }
     old.remove();
@@ -678,11 +676,10 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
-  const duration = isScc ? 120000 : (expiresMs || 30000);
+  const duration = expiresMs || 30000;
   const host = document.createElement("div");
   host.id = hostId;
-  host.setAttribute("data-client-id", String(clientId));
-  host.setAttribute("data-is-scc", String(isScc));
+  host.setAttribute("data-client-id", String(userid));
   host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
 
   const shadow = host.attachShadow({ mode: "closed" });
@@ -896,7 +893,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   const badge = document.createElement("div");
   badge.className = "badge";
-  badge.innerHTML = isScc ? "⚡ Sera Assist • SCC" : "⚡ Sera Assist";
+  badge.innerHTML = "⚡ Sera Assist";
 
   let dismiss = () => {
     if (timerTimeout) clearTimeout(timerTimeout);
@@ -1003,74 +1000,23 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
   uidBtn.innerHTML = "👤  Username";
-  actions.append(uidBtn);
 
-  if (isScc) {
-    const guideTxt = document.createElement("div");
-    guideTxt.style.cssText = "font-size: 11px; color: #8BA295; margin: 3px 0 1px; font-weight: 600;";
-    guideTxt.textContent = "Select working combination to inject & verify:";
-    actions.append(guideTxt);
+  const passBtn = document.createElement("button");
+  passBtn.className = "btn primary";
+  passBtn.innerHTML = "🔑  Password";
+  passBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(password, passwordSelector, passFallbacks);
+    if (result === "filled") {
+      setBtn(passBtn, "done", "✓  Password Injected");
+      setTimeout(dismiss, 400);
+    } else {
+      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
+      setTimeout(dismiss, 1200);
+    }
+  };
 
-    const comboBtns = [];
-    sccCombos.forEach((combo, idx) => {
-      const pVal = (combo && (combo.value || combo.password)) || "";
-      const pLbl = (combo && combo.label) || `Combo ${idx + 1}`;
-      if (!pVal) return;
-      const cBtn = document.createElement("button");
-      cBtn.className = "btn primary";
-      cBtn.innerHTML = `🔑  ${pVal}`;
-      cBtn.title = `${pLbl}: ${pVal}`;
-      cBtn.style.textAlign = "left";
-      cBtn.style.paddingLeft = "12px";
-      cBtn.style.fontFamily = "monospace, -apple-system, sans-serif";
-      comboBtns.push({ btn: cBtn, val: pVal });
-
-      cBtn.onclick = () => {
-        resetTimer();
-        comboBtns.forEach(item => {
-          if (item.btn !== cBtn) {
-            setBtn(item.btn, "primary", `🔑  ${item.val}`);
-          }
-        });
-
-        const result = smartFill(pVal, passwordSelector, passFallbacks);
-        if (result === "filled") {
-          setBtn(cBtn, "done", `✓  ${pVal} Injected`);
-        } else {
-          setBtn(cBtn, "done", `📋  Copied ${pVal} (Ctrl+V)`);
-        }
-        try {
-          chrome.runtime.sendMessage({
-            type: "SCC_PASSWORD_INJECTED",
-            payload: {
-              client_id: clientId,
-              service_id: serviceId,
-              userid: userid,
-              password: pVal,
-              combo_label: pLbl,
-              initial_url: window.location.href
-            }
-          });
-        } catch (_) {}
-      };
-      actions.append(cBtn);
-    });
-  } else {
-    const passBtn = document.createElement("button");
-    passBtn.className = "btn primary";
-    passBtn.innerHTML = "🔑  Password";
-    passBtn.onclick = () => {
-      const result = smartFill(password, passwordSelector, passFallbacks);
-      if (result === "filled") {
-        setBtn(passBtn, "done", "✓  Password Injected");
-        setTimeout(dismiss, 400);
-      } else {
-        setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
-        setTimeout(dismiss, 1200);
-      }
-    };
-    actions.append(passBtn);
-  }
+  actions.append(uidBtn, passBtn);
 
   card.append(header, title, actions, timerContainer);
   shadow.appendChild(card);
@@ -1615,16 +1561,9 @@ function injectManualAssist(tabId, message) {
   armedSCAPayload = null;
   chrome.storage.local.remove(['armedSCAPayload']);
 
-  // SCC is strictly for Income Tax (ITR) only! Never activate for GST or other portals.
-  const portalName = String((message && (message.portal || message.name)) || "").toLowerCase();
-  const pageUrl = String((message && message.url) || "").toLowerCase();
-  const isItrPortal = (portalName.includes("income") || portalName.includes("itr") || pageUrl.includes("incometax")) &&
-                      !portalName.includes("gst") && !pageUrl.includes("gst.gov.in");
-
-  const sccCombos = (isItrPortal && message && message.scc_mode && Array.isArray(message.scc_combos)) ? message.scc_combos : null;
   chrome.scripting.executeScript({ target:{ tabId }, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
-      message.client_name || message.portal, 30000, sccCombos, message.client_id || null, message.service_id || null] })
+      message.client_name || message.portal, 30000] })
     .then(() => console.log("Sera: Manual Assist widget injected"))
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }

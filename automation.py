@@ -79,18 +79,17 @@ def autofill_login(service: dict, user_id: str, password: str, client_id: int, o
     _send_to_extension(service, user_id, password, client_id, on_error, mode="autofill")
 
 
-def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
+def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None):
     """Open the portal and ask the companion extension to show SMTI Manual Assist."""
-    # SCC is strictly an ITR-only one-time utility. Disarm for any other portal (especially GST).
+    _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
+
+
+def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
+    """Open the portal and ask the companion extension to show the MECP floating card widget."""
     if scc_mode and not is_itr_service(service):
         scc_mode = False
         scc_combos = None
-    _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist", scc_mode=scc_mode, scc_combos=scc_combos)
-
-
-def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
-    """Open the portal and ask the companion extension to show the MECP floating card widget."""
-    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
+    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp", scc_mode=scc_mode, scc_combos=scc_combos)
 
 
 def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
