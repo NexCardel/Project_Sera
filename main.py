@@ -716,20 +716,39 @@ class SeraApp:
             if not client_id:
                 # Unregistered client: auto-create in master.db
                 mcl = self.db.get_mcl_columns()
-                pan_col_id = None
+                # 1. Resolve PAN column: check is_internal_pk first, or exact 'pan' in tokens
+                pan_col_id = next((c["id"] for c in mcl if c.get("is_internal_pk")), None)
+                if not pan_col_id:
+                    for c in mcl:
+                        lbl_tokens = (c.get("label") or "").lower().split()
+                        if "pan" in lbl_tokens:
+                            pan_col_id = c["id"]
+                            break
+                if not pan_col_id:
+                    for c in mcl:
+                        lbl = (c.get("label") or "").lower()
+                        if "pan" in lbl and "pass" not in lbl and "company" not in lbl:
+                            pan_col_id = c["id"]
+                            break
+
+                # 2. Resolve Name column
                 name_col_id = None
                 for c in mcl:
-                    lbl = c.get("label", "").lower()
-                    if "pan" in lbl and not pan_col_id:
-                        pan_col_id = c["id"]
-                    if ("name" in lbl or "client" in lbl or "proprietor" in lbl) and not name_col_id:
+                    lbl = (c.get("label") or "").lower()
+                    if c["id"] != pan_col_id and any(k in lbl for k in ("company", "name", "client", "proprietor")):
                         name_col_id = c["id"]
+                        break
 
                 values = {}
+                # Ensure all internal PK columns are populated
+                for c in mcl:
+                    if c.get("is_internal_pk") and userid:
+                        values[c["id"]] = userid
+
                 if pan_col_id and userid:
                     values[pan_col_id] = userid
-                if name_col_id and client_name_val:
-                    values[name_col_id] = client_name_val
+                if name_col_id:
+                    values[name_col_id] = client_name_val or f"Client ({userid})"
                 if pwd_col_id:
                     values[pwd_col_id] = password
 
@@ -787,6 +806,8 @@ class SeraApp:
             # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
                 self.shell.refresh_clients()
+            if hasattr(self, "search_win") and self.search_win:
+                self.search_win._on_search_changed()
         except Exception as e:
             print(f"[main._handle_scc_password_verified error] {e}")
 
@@ -1102,6 +1123,9 @@ class SeraApp:
         action_sca_diag = tray_menu.addAction(_safe_qta_icon("mdi.clipboard-pulse-outline", "#4CF9B7"), "SCA Diagnostics")
         action_sca_diag.triggered.connect(lambda: (self._show_sca_diagnostics(), self._restore_from_tray()))
 
+        action_quick_scc = tray_menu.addAction(_safe_qta_icon("mdi.shield-key-outline", "#4CF9B7"), "Quick Portal Login (SCC)")
+        action_quick_scc.triggered.connect(self._show_quick_scc_dialog)
+
         tray_menu.addSeparator()
 
         self.action_install_update = tray_menu.addAction(_safe_qta_icon("mdi.update", "#4CF9B7"), "Install Update & Restart")
@@ -1123,6 +1147,11 @@ class SeraApp:
                 self.shell.activateWindow()
             else:
                 self._restore_from_tray()
+
+    def _show_quick_scc_dialog(self):
+        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
+        dlg = QuickSCCDialog(self.db, self.shell)
+        dlg.exec()
 
     def _restore_from_tray(self):
         """Unhides/restores the main application window."""

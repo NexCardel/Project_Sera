@@ -326,7 +326,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (isPostLoginRoute) {
       if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
       sccActiveAttempt = null;
-      chrome.storage.local.remove(['sccActiveAttempt']);
+      chrome.storage.local.remove(['sccActiveAttempt', 'mecpPayload']);
+
+      try {
+        chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => {
+            const el = document.getElementById("sera-mecp-host");
+            if (el) el.remove();
+          }
+        }).catch(() => {});
+      } catch (_) {}
 
       sendToDesktop({
         type: "scc_password_verified",
@@ -1682,14 +1692,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if (msg.type === "SCC_PASSWORD_INJECTED" && msg.payload) {
+  if ((msg.type === "SCC_PASSWORD_INJECTED" || msg.type === "SCC_PASSWORD_COPIED") && msg.payload) {
     const tId = (sender && sender.tab) ? sender.tab.id : null;
+    const tUrl = (sender && sender.tab) ? sender.tab.url : "";
     sccActiveAttempt = {
       ...msg.payload,
       tabId: tId,
+      initial_url: tUrl,
       timestamp: Date.now()
     };
     chrome.storage.local.set({ sccActiveAttempt });
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "MECP_DISMISSED") {
+    chrome.storage.local.remove(['mecpPayload', 'sccActiveAttempt']);
+    sccActiveAttempt = null;
     sendResponse({ status: "ok" });
     return true;
   }
@@ -1733,7 +1751,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function mecpWidget(userid, password, clientName, expiresMs) {
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clientId, portal) {
   const hostId = "sera-mecp-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -1744,56 +1762,66 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   host.id = hostId;
   const shadow = host.attachShadow({ mode: "open" });
 
+  const isSCC = !!(sccMode && sccCombos && sccCombos.length > 0);
+
   const style = document.createElement("style");
   style.textContent = `
     .box {
       position: fixed; top: 18px; right: 18px; z-index: 2147483647;
-      width: 310px; padding: 14px 16px; background: #161B22; border: 1.5px solid #30363D;
+      width: ${isSCC ? "360px" : "320px"}; padding: 14px 16px; background: #161B22; border: 1.5px solid ${isSCC ? "#2E9B5F" : "#30363D"};
       border-radius: 10px; color: #F0F6FC; box-shadow: 0 10px 32px rgba(0,0,0,.5);
-      font: 13px Segoe UI, Arial, sans-serif;
+      font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
     .header {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #30363D;
     }
+    .badge-wrap {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .badge-tag {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #4CF9B7;
+    }
     .client-title {
-      font-weight: 700; color: #7EE787; font-size: 13px; word-break: break-word; line-height: 1.3;
+      font-weight: 700; color: #F0F6FC; font-size: 13px; word-break: break-word; line-height: 1.3;
     }
     .close-btn {
       background: transparent; border: none; color: #8B949E; font-size: 18px;
       cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px;
     }
     .close-btn:hover { color: #F0F6FC; background: #21262D; }
+    .section-title {
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #8B949E; margin: 10px 0 6px 2px;
+    }
     .field-row {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      margin-bottom: 10px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin-bottom: 8px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
       border: 1px solid #21262D;
     }
+    .field-left {
+      display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1;
+    }
     .field-label {
-      font-size: 11px; color: #8B949E; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      font-size: 10px; color: #8B949E; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
     }
     .field-value {
-      font-family: monospace; font-size: 13px; color: #C9D1D9; letter-spacing: 2px; margin-top: 2px;
+      font-family: Consolas, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #E6EDF3;
+      word-break: break-all; font-weight: 600; line-height: 1.3;
     }
     .copy-btn {
       display: flex; align-items: center; justify-content: center; gap: 4px;
       background: #238636; color: #FFFFFF; border: none; border-radius: 5px;
-      padding: 6px 12px; font: 600 12px Segoe UI, Arial, sans-serif; cursor: pointer;
-      transition: background 0.15s ease; flex-shrink: 0;
+      padding: 6px 12px; font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; transition: background 0.15s ease; flex-shrink: 0; white-space: nowrap;
     }
     .copy-btn:hover { background: #2EA043; }
     .copy-btn.copied { background: #1F6FEB; }
-    .eye-btn {
-      background: transparent; border: 1px solid #30363D; color: #C9D1D9; border-radius: 5px;
-      padding: 5px 7px; font-size: 13px; cursor: pointer; display: flex; align-items: center;
-      justify-content: center; transition: background 0.15s ease, border-color 0.15s ease;
-      flex-shrink: 0; min-width: 32px; height: 28px;
-    }
-    .eye-btn:hover { background: #21262D; border-color: #8B949E; }
     .toast {
       display: none; position: absolute; bottom: 6px; left: 16px; right: 16px;
       background: #238636; color: #FFF; padding: 5px 10px; border-radius: 4px;
-      font-size: 11px; text-align: center; font-weight: 600;
+      font-size: 11px; text-align: center; font-weight: 600; z-index: 10;
     }
   `;
 
@@ -1804,20 +1832,30 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   // Header
   const header = document.createElement("div");
   header.className = "header";
+
+  const badgeWrap = document.createElement("div");
+  badgeWrap.className = "badge-wrap";
+  if (isSCC) {
+    const bTag = document.createElement("div");
+    bTag.className = "badge-tag";
+    bTag.textContent = "⚡ Sera Assist (SCC)";
+    badgeWrap.appendChild(bTag);
+  }
   const title = document.createElement("div");
   title.className = "client-title";
-  title.textContent = clientName || "MECP - Client Credentials";
+  title.textContent = clientName || (isSCC ? "Verify Password" : "Client Credentials");
+  badgeWrap.appendChild(title);
+
   const close = document.createElement("button");
   close.className = "close-btn";
   close.textContent = "×";
-  header.append(title, close);
-
-  // Helper function to create masked text
-  function maskText(str) {
-    if (!str) return "••••••••";
-    if (str.length <= 3) return "•".repeat(str.length);
-    return str.substring(0, 1) + "•".repeat(Math.max(4, str.length - 2)) + str.substring(str.length - 1);
-  }
+  close.title = "Dismiss";
+  close.onclick = () => {
+    try { chrome.storage.local.remove(['sccActiveAttempt', 'mecpPayload']); } catch (_) {}
+    try { chrome.runtime.sendMessage({ type: "MECP_DISMISSED" }); } catch (_) {}
+    if (host.isConnected) host.remove();
+  };
+  header.append(badgeWrap, close);
 
   // Toast banner
   const toast = document.createElement("div");
@@ -1830,36 +1868,34 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   }
 
   function copyCredential(val, label) {
-    navigator.clipboard.writeText(val).then(() => {
-      showToast(`${label} copied! Clipboard auto-clears in 45s.`);
-      setTimeout(() => {
-        navigator.clipboard.readText().then(current => {
-          if (current === val) {
-            navigator.clipboard.writeText("");
-          }
-        }).catch(() => {});
-      }, 45000);
-    }).catch(err => {
-      const ta = document.createElement("textarea");
-      ta.value = val;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
+    if (!val) return;
+    try {
+      navigator.clipboard.writeText(val);
       showToast(`${label} copied!`);
-    });
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = val;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast(`${label} copied!`);
+      } catch (_) {}
+    }
   }
 
   // User ID Row
   const uidRow = document.createElement("div");
   uidRow.className = "field-row";
   const uidLeft = document.createElement("div");
+  uidLeft.className = "field-left";
   const uidLbl = document.createElement("div");
   uidLbl.className = "field-label";
-  uidLbl.textContent = "User ID";
+  uidLbl.textContent = "User ID (PAN)";
   const uidVal = document.createElement("div");
   uidVal.className = "field-value";
-  uidVal.textContent = maskText(userid);
+  uidVal.textContent = userid || "";
   uidLeft.append(uidLbl, uidVal);
 
   const uidCopy = document.createElement("button");
@@ -1876,56 +1912,94 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   };
   uidRow.append(uidLeft, uidCopy);
 
-  // Password Row
-  const passRow = document.createElement("div");
-  passRow.className = "field-row";
-  const passLeft = document.createElement("div");
-  const passLbl = document.createElement("div");
-  passLbl.className = "field-label";
-  passLbl.textContent = "Password";
-  const passVal = document.createElement("div");
-  passVal.className = "field-value";
-  let isPassRevealed = false;
-  passVal.textContent = maskText(password);
-  passLeft.append(passLbl, passVal);
+  box.append(header, uidRow);
 
-  const passRight = document.createElement("div");
-  passRight.style.display = "flex";
-  passRight.style.alignItems = "center";
-  passRight.style.gap = "6px";
+  if (isSCC) {
+    // Password Combinations Section
+    const secTitle = document.createElement("div");
+    secTitle.className = "section-title";
+    secTitle.textContent = "Password Combinations (Unverified)";
+    box.appendChild(secTitle);
 
-  const eyeToggleBtn = document.createElement("button");
-  eyeToggleBtn.className = "eye-btn";
-  eyeToggleBtn.title = "Show / Hide Password";
-  eyeToggleBtn.innerHTML = "👁️";
-  eyeToggleBtn.onclick = () => {
-    isPassRevealed = !isPassRevealed;
-    passVal.textContent = isPassRevealed ? (password || "") : maskText(password);
-    eyeToggleBtn.innerHTML = isPassRevealed ? "🙈" : "👁️";
-  };
+    sccCombos.forEach((combo) => {
+      const cRow = document.createElement("div");
+      cRow.className = "field-row";
 
-  const passCopy = document.createElement("button");
-  passCopy.className = "copy-btn";
-  passCopy.innerHTML = "📋 Copy";
-  passCopy.onclick = () => {
-    copyCredential(password, "Password");
-    passCopy.classList.add("copied");
-    passCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      passCopy.classList.remove("copied");
-      passCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
+      const cLeft = document.createElement("div");
+      cLeft.className = "field-left";
+      const cLbl = document.createElement("div");
+      cLbl.className = "field-label";
+      cLbl.textContent = combo.label || `Combo ${combo.id}`;
+      const cVal = document.createElement("div");
+      cVal.className = "field-value";
+      cVal.textContent = combo.value || "";
+      cLeft.append(cLbl, cVal);
 
-  passRight.append(eyeToggleBtn, passCopy);
-  passRow.append(passLeft, passRight);
+      const cCopy = document.createElement("button");
+      cCopy.className = "copy-btn";
+      cCopy.innerHTML = "📋 Copy";
+      cCopy.onclick = () => {
+        copyCredential(combo.value, combo.label || "Password");
+        cCopy.classList.add("copied");
+        cCopy.innerHTML = "✓ Copied";
+        setTimeout(() => {
+          cCopy.classList.remove("copied");
+          cCopy.innerHTML = "📋 Copy";
+        }, 2000);
 
-  box.append(header, uidRow, passRow, toast);
+        try {
+          chrome.runtime.sendMessage({
+            type: "SCC_PASSWORD_COPIED",
+            payload: {
+              client_id: clientId,
+              userid: userid,
+              password: combo.value,
+              combo_label: combo.label || `Combo ${combo.id}`,
+              portal: portal || "Income Tax"
+            }
+          });
+        } catch (_) {}
+      };
+
+      cRow.append(cLeft, cCopy);
+      box.appendChild(cRow);
+    });
+  } else {
+    // Single Password Row (cleartext)
+    const passRow = document.createElement("div");
+    passRow.className = "field-row";
+    const passLeft = document.createElement("div");
+    passLeft.className = "field-left";
+    const passLbl = document.createElement("div");
+    passLbl.className = "field-label";
+    passLbl.textContent = "Password";
+    const passVal = document.createElement("div");
+    passVal.className = "field-value";
+    passVal.textContent = password || "";
+    passLeft.append(passLbl, passVal);
+
+    const passCopy = document.createElement("button");
+    passCopy.className = "copy-btn";
+    passCopy.innerHTML = "📋 Copy";
+    passCopy.onclick = () => {
+      copyCredential(password, "Password");
+      passCopy.classList.add("copied");
+      passCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        passCopy.classList.remove("copied");
+        passCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+
+    passRow.append(passLeft, passCopy);
+    box.appendChild(passRow);
+  }
+
+  box.appendChild(toast);
   shadow.appendChild(box);
   document.documentElement.appendChild(host);
 
-  close.onclick = () => host.remove();
-  setTimeout(() => { if (host.isConnected) host.remove(); }, expiresMs || 60000);
+  setTimeout(() => { if (host.isConnected) host.remove(); }, expiresMs || 90000);
 }
 
 function handleMECPTab(message) {
@@ -1975,7 +2049,16 @@ function injectMECP(tabId, message) {
   chrome.scripting.executeScript({
     target: { tabId },
     func: mecpWidget,
-    args: [message.userid, message.password, message.client_name || message.portal, 60000]
+    args: [
+      message.userid,
+      message.password,
+      message.client_name || message.portal,
+      90000,
+      message.scc_mode === true,
+      message.scc_combos || [],
+      message.client_id || null,
+      message.portal || "Income Tax"
+    ]
   }).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }

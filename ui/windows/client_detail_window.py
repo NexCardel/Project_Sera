@@ -729,7 +729,7 @@ class ClientDetailWindow(QWidget):
             client_id = self.client.get("id") if self.client else None
             is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
             if is_itr and uid and scc_enabled and not is_scc_verified:
-                self._launch_manual_assist(service)
+                self._launch_manual_copy(service)
                 return
 
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
@@ -767,12 +767,24 @@ class ClientDetailWindow(QWidget):
 
     def _launch_manual_copy(self, service: dict):
         uid, pwd = self._get_credentials(service)
-        if not uid or not pwd:
+        is_itr = automation.is_itr_service(service)
+        scc_cfg = self.db.get_scc_settings()
+        scc_enabled = scc_cfg.get("enabled", True)
+        client_id = self.client.get("id") if self.client else None
+        is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
+
+        scc_mode = False
+        scc_combos = None
+        if is_itr and uid and scc_enabled and not is_scc_verified:
+            scc_combos = self.db.generate_scc_passwords(uid)
+            scc_mode = True
+
+        if not uid or (not pwd and not scc_mode):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         try:
-            self.db.record_client_activity(self.client["id"], service["name"], "Manual Copy")
+            self.db.record_client_activity(self.client["id"], service["name"], "Manual Copy (SCC)" if scc_mode else "Manual Copy")
         except Exception:
             pass
 
@@ -780,7 +792,7 @@ class ClientDetailWindow(QWidget):
             self.actor, "manual_copy",
             client_id=self.client["id"],
             service_id=service["id"],
-            detail=f"MECP manual copy triggered for {service['name']}"
+            detail=f"MECP manual copy {'with SCC combos ' if scc_mode else ''}triggered for {service['name']}"
         )
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
@@ -792,8 +804,10 @@ class ClientDetailWindow(QWidget):
         service["_tracker_enabled"] = fst_on or sad_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
-            service, uid, pwd, self.client["id"],
-            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
+            service, uid, pwd or "", self.client["id"],
+            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg),
+            scc_mode=scc_mode,
+            scc_combos=scc_combos
         )
         self.window().showMinimized()
 

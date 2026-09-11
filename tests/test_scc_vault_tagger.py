@@ -445,6 +445,70 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(client["values"].get(self.pwd_col_id), "OriginalPassword")
         self.assertNotIn("Password verified via SCC", client.get("notes") or "")
 
+    def test_unregistered_client_auto_creation_on_scc_verification(self):
+        """Verify that an unregistered client (client_id=None) is auto-created in master.db when SCC verifies password."""
+        import main
+        mock_app = MagicMock()
+        mock_app.db = self.db
+        mock_app.actor = "Operator"
+        mock_app.tray_icon = None
+
+        unreg_pan = "XYZAB5678C"
+        # Confirm client does not exist
+        self.assertIsNone(self.db.get_client_by_pan(unreg_pan))
+
+        msg = {
+            "type": "scc_password_verified",
+            "client_id": None,
+            "service_id": None,
+            "userid": unreg_pan,
+            "password": "xyzab@5678",
+            "combo_label": "Combo 1",
+            "portal": "Income Tax",
+            "client_name": "ABC Enterprises"
+        }
+
+        main.SeraApp._handle_scc_password_verified(mock_app, msg)
+
+        # Client must now exist in master.db with verified password and SCC note
+        new_client = self.db.get_client_by_pan(unreg_pan)
+        self.assertIsNotNone(new_client, "Unregistered client must be auto-created in master.db")
+        self.assertEqual(new_client["values"].get(self.pan_col_id), unreg_pan)
+        self.assertEqual(new_client["values"].get(self.pwd_col_id), "xyzab@5678")
+        self.assertEqual(new_client["values"].get(self.name_col_id), "ABC Enterprises")
+        self.assertIn("Password verified via SCC", new_client.get("notes") or "")
+
+    def test_quick_scc_dialog_preview_and_launch(self):
+        """Verify that QuickSCCDialog generates live combinations for any PAN and launches MECP."""
+        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
+        self.db.save_scc_settings({
+            "enabled": True,
+            "opt1_label": "Combo 1",
+            "opt1_fixed_str": "@",
+            "opt2_label": "Combo 2",
+            "opt2_fixed_str": "Tax#",
+            "opt3_label": "Combo 3",
+            "opt3_fixed_str": "FirmMaster@2026",
+            "opt4_label": "Combo 4",
+            "opt4_fixed_str": "BackupPass#1"
+        })
+        dlg = QuickSCCDialog(self.db, prefill_pan="ABCDE1234F")
+        # Check preview values
+        self.assertEqual(dlg.combo_labels[0][1].text(), "abcd@1234")
+        self.assertEqual(dlg.combo_labels[1][1].text(), "Tax#1234")
+        self.assertEqual(dlg.combo_labels[2][1].text(), "FirmMaster@2026")
+        self.assertEqual(dlg.combo_labels[3][1].text(), "BackupPass#1")
+
+        captured = []
+        with patch.object(automation, "trigger_mecp", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
+            dlg._on_launch()
+
+        self.assertEqual(len(captured), 1)
+        kwargs = captured[0][1]
+        self.assertEqual(kwargs.get("user_id"), "ABCDE1234F")
+        self.assertTrue(kwargs.get("scc_mode"))
+        self.assertEqual(len(kwargs.get("scc_combos")), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

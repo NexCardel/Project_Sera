@@ -252,6 +252,19 @@ class SearchWindow(QWidget):
         header_row.addWidget(self.btn_add_client)
         header_row.addSpacing(8)
 
+        # Quick SCC Login button
+        self.btn_quick_scc = QPushButton("⚡ Quick SCC")
+        self.btn_quick_scc.setProperty("class", "GhostIconButton")
+        if qta:
+            self.btn_quick_scc.setIcon(qta.icon("mdi.shield-key-outline", color="#4CF9B7"))
+            self.btn_quick_scc.setIconSize(QSize(18, 18))
+        self.btn_quick_scc.setMinimumHeight(36)
+        self.btn_quick_scc.setCursor(Qt.PointingHandCursor)
+        self.btn_quick_scc.setToolTip("Quick Income Tax Portal Login via SCC (MECP) for any PAN")
+        self.btn_quick_scc.clicked.connect(self._open_quick_scc_dialog)
+        header_row.addWidget(self.btn_quick_scc)
+        header_row.addSpacing(8)
+
         # Sync Trigger (Refresh) button
         self.btn_sync = QPushButton()
         self.btn_sync.setProperty("class", "GhostIconButton")
@@ -1223,3 +1236,13 @@ class SearchWindow(QWidget):
     def focus_and_select_search(self):
         self.search_box.setFocus()
         self.search_box.selectAll()
+
+    def _open_quick_scc_dialog(self):
+        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
+        prefill = ""
+        if hasattr(self, "search_box"):
+            txt = self.search_box.text().strip()
+            if len(txt) == 10:
+                prefill = txt
+        dlg = QuickSCCDialog(self.db, self, prefill_pan=prefill)
+        dlg.exec()
