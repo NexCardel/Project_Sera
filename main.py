@@ -675,6 +675,16 @@ class SeraApp:
         try:
             actor = getattr(self, "actor", "Staff")
 
+            try:
+                client_id = int(client_id) if client_id is not None else None
+            except (ValueError, TypeError):
+                client_id = None
+
+            try:
+                service_id = int(service_id) if service_id is not None else None
+            except (ValueError, TypeError):
+                service_id = None
+
             # Resolve client if client_id is None
             if not client_id and userid:
                 client = self.db.get_client_by_pan(userid)
@@ -693,8 +703,13 @@ class SeraApp:
                     service_id = svc.get("id")
                     pwd_col_id = svc.get("password_column_id")
 
+            # Fallback: search MCL columns for ITR password column
             if not pwd_col_id:
-                return
+                for c in self.db.get_mcl_columns():
+                    lbl = (c.get("label") or "").strip().lower()
+                    if ("itr" in lbl or "income" in lbl) and "pass" in lbl:
+                        pwd_col_id = c["id"]
+                        break
 
             client_name_val = str(msg.get("client_name") or "").strip()
 
@@ -715,7 +730,8 @@ class SeraApp:
                     values[pan_col_id] = userid
                 if name_col_id and client_name_val:
                     values[name_col_id] = client_name_val
-                values[pwd_col_id] = password
+                if pwd_col_id:
+                    values[pwd_col_id] = password
 
                 svc = self.db.get_service_for_portal(portal)
                 svc_ids = [svc["id"]] if svc else []
@@ -728,14 +744,15 @@ class SeraApp:
                 )
                 print(f"[main.SCC] Auto-created client record #{client_id} with verified password ({combo_label})")
             else:
-                # Existing client: update single password field
-                self.db.update_client_single_field(
-                    client_id=client_id,
-                    column_id=pwd_col_id,
-                    value=password,
-                    actor=actor,
-                    log_action=True
-                )
+                # Existing client: update single password field if column is known
+                if pwd_col_id:
+                    self.db.update_client_single_field(
+                        client_id=client_id,
+                        column_id=pwd_col_id,
+                        value=password,
+                        actor=actor,
+                        log_action=True
+                    )
                 self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
                 print(f"[main.SCC] Updated client #{client_id} password via {combo_label} and marked 'Password verified via SCC'")
 

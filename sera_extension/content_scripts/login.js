@@ -459,3 +459,39 @@ function showScaToast(bizName, ownName, portalName) {
   setTimeout(() => { container.style.transform = 'translateX(0)'; container.style.opacity = '1'; }, 40);
   setTimeout(() => { container.style.transform = 'translateX(120%)'; container.style.opacity = '0'; setTimeout(() => host.remove(), 400); }, 6500);
 }
+
+// ── In-Page SCC Verification Detector (Income Tax Only) ─────────────────
+function checkSccLoginSuccess() {
+  try {
+    const href = window.location.href || "";
+    if (!href.includes("incometax.gov.in")) return;
+
+    if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+
+    chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+      const attempt = data && data.sccActiveAttempt;
+      if (!attempt || !attempt.password) return;
+
+      const isLogin = href.toLowerCase().includes('/login') || href.toLowerCase().includes('/auth');
+      const hasUserHeader = Boolean(
+        document.querySelector('#loginUsername, .user-name, button[id*="loginUsername" i], span[id*="loginUsername" i], a[href*="logout"], button:has(i.fa-power-off)')
+      );
+
+      if (!isLogin || hasUserHeader) {
+        chrome.storage.local.remove(['sccActiveAttempt']);
+        chrome.runtime.sendMessage({
+          type: "SCC_LOGIN_DETECTED",
+          destination_url: href,
+          attempt: attempt
+        });
+      }
+    });
+  } catch (_) {}
+}
+
+if (typeof window !== "undefined" && window.location && (window.location.hostname || "").includes("incometax.gov.in")) {
+  window.addEventListener('hashchange', checkSccLoginSuccess);
+  window.addEventListener('popstate', checkSccLoginSuccess);
+  const _sccInterval = setInterval(checkSccLoginSuccess, 1500);
+  setTimeout(() => clearInterval(_sccInterval), 180000);
+}

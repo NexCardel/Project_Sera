@@ -299,52 +299,48 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 
   // ── SCC Webpage Link Mutation Observer (Income Tax / ITR Only) ───────────
-  if (sccActiveAttempt && sccActiveAttempt.password) {
+  chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+    const attempt = data.sccActiveAttempt || sccActiveAttempt;
+    if (!attempt || !attempt.password) return;
+
     const now = Date.now();
-    if (now - (sccActiveAttempt.timestamp || 0) > 10 * 60 * 1000) {
+    if (now - (attempt.timestamp || 0) > 10 * 60 * 1000) {
       sccActiveAttempt = null;
       chrome.storage.local.remove(['sccActiveAttempt']);
-    } else if (!sccActiveAttempt.tabId || sccActiveAttempt.tabId === tabId) {
-      const curUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : '');
-      if (curUrl) {
-        const initUrl = sccActiveAttempt.initial_url || '';
-        // SCC is strictly for ITR (incometax.gov.in). Never observe or verify on GST or other domains.
-        const isItrDomain = curUrl.includes('incometax.gov.in') || (initUrl && initUrl.includes('incometax.gov.in'));
-        if (!isItrDomain) {
-          return;
-        }
-
-        const urlChanged = initUrl ? (curUrl !== initUrl) : true;
-        const isLoginUrl = curUrl.toLowerCase().includes('/login') || curUrl.toLowerCase().endsWith('/login');
-        const isPostLoginRoute = urlChanged && !isLoginUrl && (
-          curUrl.includes('/dashboard') ||
-          curUrl.includes('/home') ||
-          curUrl.includes('/portal') ||
-          curUrl.includes('/welcome') ||
-          curUrl.includes('/foservices/#/')
-        );
-
-        if (isPostLoginRoute) {
-          if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
-          const attempt = { ...sccActiveAttempt };
-          sccActiveAttempt = null;
-          chrome.storage.local.remove(['sccActiveAttempt']);
-
-          sendToDesktop({
-            type: "scc_password_verified",
-            client_id: attempt.client_id,
-            service_id: attempt.service_id,
-            userid: attempt.userid,
-            password: attempt.password,
-            combo_label: attempt.combo_label,
-            portal: "Income Tax",
-            destination_url: curUrl,
-            timestamp: new Date().toISOString()
-          }, true);
-        }
-      }
+      return;
     }
-  }
+
+    if (attempt.tabId && attempt.tabId !== tabId) return;
+
+    const curUrl = changeInfo.url || (tab && tab.url) || '';
+    if (!curUrl) return;
+
+    const initUrl = attempt.initial_url || '';
+    const isItrDomain = curUrl.includes('incometax.gov.in') || (initUrl && initUrl.includes('incometax.gov.in'));
+    if (!isItrDomain) return;
+
+    const isLoginUrl = curUrl.toLowerCase().includes('/login') || curUrl.toLowerCase().includes('/auth');
+    const urlChanged = initUrl ? (curUrl !== initUrl) : true;
+    const isPostLoginRoute = urlChanged && !isLoginUrl;
+
+    if (isPostLoginRoute) {
+      if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
+      sccActiveAttempt = null;
+      chrome.storage.local.remove(['sccActiveAttempt']);
+
+      sendToDesktop({
+        type: "scc_password_verified",
+        client_id: attempt.client_id,
+        service_id: attempt.service_id,
+        userid: attempt.userid,
+        password: attempt.password,
+        combo_label: attempt.combo_label,
+        portal: "Income Tax",
+        destination_url: curUrl,
+        timestamp: new Date().toISOString()
+      }, false);
+    }
+  });
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -1717,6 +1713,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       timestamp: Date.now()
     };
     chrome.storage.local.set({ sccActiveAttempt });
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "SCC_LOGIN_DETECTED" && msg.attempt) {
+    const attempt = msg.attempt;
+    sccActiveAttempt = null;
+    chrome.storage.local.remove(['sccActiveAttempt']);
+    if (SERA_DEBUG) console.log(`⚡ Sera SCC: In-page DOM login detected for ${attempt.userid} (${attempt.combo_label})`);
+    sendToDesktop({
+      type: "scc_password_verified",
+      client_id: attempt.client_id,
+      service_id: attempt.service_id,
+      userid: attempt.userid,
+      password: attempt.password,
+      combo_label: attempt.combo_label,
+      portal: "Income Tax",
+      destination_url: msg.destination_url || "",
+      timestamp: new Date().toISOString()
+    }, false);
     sendResponse({ status: "ok" });
     return true;
   }
