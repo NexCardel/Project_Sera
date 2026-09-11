@@ -26,6 +26,18 @@ import security
 
 DB_FILENAME = "master.db"
 
+SKELETON_NAME_REGEX = re.compile(
+    r'^(?:'
+    r'taxpayer|client|user|individual|indicates\s*mandatory\s*fields|mandatory\s*fields|'
+    r'goods\s+and\s+services\s+tax|gst\s+common\s+portal|gst\s+portal|status|due\s*date|'
+    r'fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|legal\s*name|'
+    r'trade\s*name|gstin|pan|na|none|-+|'
+    r'(?:client|taxpayer|user|unregistered|unassigned)?\s*[:\-\#]?\s*(?:\(?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*\)?|\d+|cli-\d+)|'
+    r'pan\s*:\s*[A-Z]{5}[0-9]{4}[A-Z].*'
+    r')[\s\-:*]*$',
+    re.I
+)
+
 class DatabaseError(Exception):
     pass
 
@@ -75,6 +87,10 @@ class SeraDatabase:
             self.deduplicate_tracker_dumps()
         except Exception as e:
             print(f"[-] Startup tracker dump deduplication skipped: {e}")
+        try:
+            self.upgrade_all_placeholder_client_names()
+        except Exception as e:
+            print(f"[-] Startup placeholder client name upgrade skipped: {e}")
 
     # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
     _ICON_LIGATURE_RE = re.compile(
@@ -140,6 +156,190 @@ class SeraDatabase:
             print(f"[database] _clean_ligature_noise_from_names notice: {e}")
         if total_fixed:
             print(f"[database] Retrospective ligature cleanup: {total_fixed} name(s) fixed.")
+
+    def _upgrade_client_name_if_placeholder(self, client_id: int, real_name: str) -> bool:
+        """Promotes a scraped real taxpayer name into master.db if client currently has a placeholder name."""
+        if not client_id or not real_name:
+            return False
+        clean_name = self._clean_name_retrofix(str(real_name).strip())
+        if not clean_name or SKELETON_NAME_REGEX.search(clean_name):
+            return False
+
+        try:
+            with self._connect() as m_conn:
+                mcl = self.get_mcl_columns()
+                # Find all name-like columns (company, proprietor, client, name)
+                name_col_ids = []
+                for c in mcl:
+                    lbl = (c.get("label") or "").lower()
+                    if any(k in lbl for k in ("company", "name", "client", "proprietor")) and "pass" not in lbl:
+                        name_col_ids.append(c["id"])
+
+                if not name_col_ids:
+                    id_col = self.get_identity_column()
+                    if id_col:
+                        name_col_ids.append(id_col["id"])
+                if not name_col_ids:
+                    return False
+
+                # Check which column currently holds a placeholder
+                target_col_id = None
+                curr_val = ""
+                for col_id in name_col_ids:
+                    cur = m_conn.execute(
+                        "SELECT value FROM client_values WHERE client_id = ? AND column_id = ?",
+                        (client_id, col_id)
+                    )
+                    row = cur.fetchone()
+                    val = (row[0] or "").strip() if row else ""
+                    if val and SKELETON_NAME_REGEX.search(val):
+                        target_col_id = col_id
+                        curr_val = val
+                        break
+
+                # If no column currently holds a placeholder, pick first empty name column
+                if not target_col_id:
+                    for col_id in name_col_ids:
+                        cur = m_conn.execute(
+                            "SELECT value FROM client_values WHERE client_id = ? AND column_id = ?",
+                            (client_id, col_id)
+                        )
+                        row = cur.fetchone()
+                        val = (row[0] or "").strip() if row else ""
+                        if not val:
+                            target_col_id = col_id
+                            break
+
+                if not target_col_id:
+                    return False
+
+                m_conn.execute(
+                    """INSERT INTO client_values (client_id, column_id, value)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(client_id, column_id) DO UPDATE SET value = excluded.value""",
+                    (client_id, target_col_id, clean_name)
+                )
+                print(f"[database] Promoted real taxpayer name for client #{client_id} (col #{target_col_id}): {curr_val!r} -> {clean_name!r}")
+                self._bump_sync_revision_if_configured()
+                return True
+        except Exception as e:
+            print(f"[database] _upgrade_client_name_if_placeholder notice: {e}")
+        return False
+
+    def upgrade_all_placeholder_client_names(self) -> int:
+        """
+        Scans master.db for clients with placeholder names (e.g. 'Client (ABCDE1234F)')
+        and resolves their real names from rawPayload.db (sdc_session_timelines, client_raw_containers, tracker_dump).
+        """
+        upgraded = 0
+        try:
+            mcl = self.get_mcl_columns()
+            pan_col_id = None
+            for c in mcl:
+                lbl = (c.get("label") or "").lower()
+                if re.search(r'\bpan\b', lbl) and "pass" not in lbl:
+                    pan_col_id = c["id"]
+                    break
+
+            if not pan_col_id:
+                return 0
+
+            with self._connect() as m_conn:
+                cur = m_conn.execute(
+                    """SELECT c.id, cv.column_id, mc.label, cv.value
+                       FROM clients c
+                       JOIN client_values cv ON cv.client_id = c.id
+                       JOIN mcl_columns mc ON mc.id = cv.column_id
+                       WHERE c.is_archived = 0"""
+                )
+                from collections import defaultdict
+                client_records = defaultdict(dict)
+                for cid, col_id, col_label, val in cur.fetchall():
+                    client_records[cid][col_id] = (col_label, val or "")
+
+                candidates = []
+                for cid, cols in client_records.items():
+                    pan_val = ""
+                    placeholder_cols = []
+                    for col_id, (label, val) in cols.items():
+                        lbl = label.lower()
+                        if col_id == pan_col_id or (re.search(r'\bpan\b', lbl) and "pass" not in lbl):
+                            pan_val = val.strip().upper()
+                        elif any(k in lbl for k in ("company", "name", "client", "proprietor")) and "pass" not in lbl:
+                            if val and SKELETON_NAME_REGEX.search(val.strip()):
+                                placeholder_cols.append((col_id, val.strip()))
+
+                    if pan_val and placeholder_cols:
+                        candidates.append((cid, pan_val, placeholder_cols))
+
+            if not candidates:
+                return 0
+
+            with self._connect_raw() as r_conn:
+                for cid, cpan, ph_cols in candidates:
+                    real_name = None
+                    # 1. Try sdc_session_timelines
+                    cur = r_conn.execute(
+                        """SELECT client_name FROM sdc_session_timelines
+                           WHERE pan = ? AND client_name IS NOT NULL AND client_name != ''
+                           ORDER BY start_time DESC LIMIT 1""",
+                        (cpan,)
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] and not SKELETON_NAME_REGEX.search(row[0]):
+                        real_name = row[0].strip()
+
+                    # 2. Try client_raw_containers
+                    if not real_name:
+                        cur = r_conn.execute(
+                            """SELECT company_name, proprietor_name FROM client_raw_containers
+                               WHERE pan = ? LIMIT 1""",
+                            (cpan,)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            co = (row[0] or "").strip()
+                            prop = (row[1] or "").strip()
+                            cand = co if (co and not SKELETON_NAME_REGEX.search(co)) else prop
+                            if cand and not SKELETON_NAME_REGEX.search(cand):
+                                real_name = cand
+
+                    # 3. Try tracker_dump raw_payload_json
+                    if not real_name:
+                        cur = r_conn.execute(
+                            """SELECT raw_payload_json FROM tracker_dump
+                               WHERE (unassigned_identity = ? OR client_id = ?)
+                               ORDER BY id DESC LIMIT 5""",
+                            (cpan, cid)
+                        )
+                        for (r_json,) in cur.fetchall():
+                            if r_json:
+                                try:
+                                    p_obj = json.loads(r_json)
+                                    p_name = p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or ""
+                                    if p_name and not SKELETON_NAME_REGEX.search(p_name):
+                                        real_name = p_name.strip()
+                                        break
+                                except Exception:
+                                    pass
+
+                    if real_name:
+                        clean_real = self._clean_name_retrofix(real_name)
+                        if clean_real and not SKELETON_NAME_REGEX.search(clean_real):
+                            with self._connect() as m_conn:
+                                for col_id, old_val in ph_cols:
+                                    m_conn.execute(
+                                        """UPDATE client_values SET value = ?
+                                           WHERE client_id = ? AND column_id = ?""",
+                                        (clean_real, cid, col_id)
+                                    )
+                                    print(f"[database] Upgraded client #{cid} ({cpan}) col #{col_id}: {old_val!r} -> {clean_real!r}")
+                            upgraded += 1
+            if upgraded:
+                self._bump_sync_revision_if_configured()
+        except Exception as e:
+            print(f"[database] Notice during upgrade_all_placeholder_client_names: {e}")
+        return upgraded
 
     def set_sync_revision_hook(self, fn):
         """fn is called with no arguments after any write that should
@@ -3433,6 +3633,13 @@ class SeraDatabase:
                     page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
                     if page_url and isinstance(page_url, str):
                         page_url_norm = page_url.strip().split("?")[0].rstrip("/").lower()
+                    if valid_id:
+                        cand_name = (
+                            p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
+                            raw_p.get("client_name") or raw_p.get("taxpayer_name") or raw_p.get("name") or ""
+                        )
+                        if cand_name and not SKELETON_NAME_REGEX.search(cand_name):
+                            self._upgrade_client_name_if_placeholder(valid_id, cand_name)
             except Exception:
                 page_url_norm = None
 
@@ -3770,6 +3977,13 @@ class SeraDatabase:
                 row = cur.fetchone()
                 if row:
                     client_id = row[0]
+
+        # Upgrade placeholder client name in master.db if a real scraped name arrived
+        if client_id and client_name and not SKELETON_NAME_REGEX.search(client_name):
+            try:
+                self._upgrade_client_name_if_placeholder(client_id, client_name)
+            except Exception as e:
+                print(f"[database] Notice upgrading placeholder name for client #{client_id}: {e}")
 
         with self._connect_raw() as r_conn:
             r_conn.execute(

@@ -14,16 +14,20 @@ def _decode_transport_message(msg: dict) -> dict:
         return msg
     if msg.get("encoding") != "gzip+base64":
         return msg
-    data_blob = msg.get("data")
+    data_blob = msg.get("payload") or msg.get("data")
     if not isinstance(data_blob, str):
+        print(f"[ExtensionListener] Warning: Compressed message missing payload/data: {list(msg.keys())}")
         return msg
-    decompressed = gzip.decompress(base64.b64decode(data_blob.encode("ascii")))
-    restored = json.loads(decompressed.decode("utf-8"))
-    if not isinstance(restored, dict):
+    try:
+        decompressed = gzip.decompress(base64.b64decode(data_blob.encode("ascii")))
+        restored = json.loads(decompressed.decode("utf-8"))
+        if not isinstance(restored, dict):
+            return msg
+        restored["type"] = msg.get("original_type") or restored.get("type") or "filing_result"
+        return restored
+    except Exception as e:
+        print(f"[ExtensionListener] Failed to decompress message: {e}")
         return msg
-    if "original_type" in msg:
-        restored["type"] = msg["original_type"]
-    return restored
 
 class ExtensionListener(QThread):
     filing_result_received = Signal(dict)
@@ -148,6 +152,8 @@ class ExtensionListener(QThread):
                                 self.sudr_capture_received.emit(msg)
                             elif mtype == 'extension_settings_updated':
                                 self.extension_settings_updated_received.emit(msg)
+                            elif mtype == 'filing_result_compressed':
+                                print(f"[ExtensionListener] Warning: unhandled compressed filing payload - check decompression error above.")
 
                             if mtype in ('request_settings', 'get_settings'):
                                 settings_data = self.settings_provider() if callable(self.settings_provider) else {"status": "ok"}

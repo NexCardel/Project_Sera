@@ -1247,8 +1247,8 @@
     // Only confirmed submissions or explicit success events should immediately emit a live filing_result
     // Routine calendar/form views update the assembler buffer and session timeline, but wait for session finalization
     // so they do not flood tracker_dump with intermediate views.
-    if (detail.submitted_in_session || detail.capture_origin === 'submission_success') {
-      if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🚀 Confirmed submission for ${datasetKey} — dispatching real-time to desktop tracker dump.`);
+    if (detail.submitted_in_session || detail.capture_origin === 'submission_success' || (detail.arn && detail.arn !== 'N/A')) {
+      if (SDC_DEBUG) console.log(`⚡ Sera SDC: 🚀 Confirmed submission / official ARN for ${datasetKey} — dispatching real-time to desktop tracker dump.`);
       _emitDual(detail);
     } else {
       if (SDC_DEBUG) console.log(`⚡ Sera SDC: 👁️ View capture buffered for ${datasetKey} (origin: ${detail.capture_origin}) — deferred to session finalization.`);
@@ -1331,7 +1331,8 @@
         session_id: payload.session_id || '',
         original_size: input.byteLength,
         compressed_size: compressed.byteLength,
-        payload: btoa(binary)
+        payload: btoa(binary),
+        data: btoa(binary)
       };
     } catch (err) {
       if (SDC_DEBUG) console.warn('⚡ Sera SDC: Compression failed; using uncompressed payload.', err);
