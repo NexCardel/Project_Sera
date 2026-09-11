@@ -537,7 +537,7 @@ class SeraDatabase:
                     password_column_id INTEGER REFERENCES mcl_columns(id) ON DELETE SET NULL,
                     username_selector  TEXT,
                     password_selector  TEXT,
-                    automation_mode    TEXT NOT NULL DEFAULT 'automated',
+                    automation_mode    TEXT NOT NULL DEFAULT 'extension',
                     extension_flow     TEXT NOT NULL DEFAULT 'double',
                     success_selector   TEXT,
                     arn_selector       TEXT,
@@ -547,6 +547,7 @@ class SeraDatabase:
             self._ensure_column(conn, "services", "extension_flow", "TEXT NOT NULL DEFAULT 'double'")
             self._ensure_column(conn, "services", "success_selector", "TEXT")
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
+            conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)
             conn.execute("""
@@ -1268,7 +1269,8 @@ class SeraDatabase:
                     "id": r[0], "name": r[1], "login_page_link": r[2],
                     "userid_column_id": r[3], "password_column_id": r[4],
                     "username_selector": r[5], "password_selector": r[6],
-                    "automation_mode": r[7], "extension_flow": r[8],
+                    "automation_mode": ("extension" if r[7] in ("automated", "playwright") or not r[7] else r[7]),
+                    "extension_flow": r[8],
                     "success_selector": r[9], "arn_selector": r[10], "sort_order": r[11]
                 }
                 for r in cur.fetchall()
@@ -1283,11 +1285,13 @@ class SeraDatabase:
 
     def create_service(self, name: str, login_page_link: str, userid_column_id: int,
                        password_column_id: int, username_selector: str, password_selector: str,
-                       automation_mode: str, extension_flow: str = "double",
+                       automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "") -> int:
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
+        if automation_mode in ("automated", "playwright") or not automation_mode:
+            automation_mode = "extension"
 
         # If selectors are missing, resolve from verified presets
         if not u_sel or not p_sel:
@@ -1325,11 +1329,13 @@ class SeraDatabase:
 
     def update_service(self, service_id: int, name: str, login_page_link: str, userid_column_id: int,
                        password_column_id: int, username_selector: str, password_selector: str,
-                       automation_mode: str, extension_flow: str = "double",
+                       automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = ""):
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
+        if automation_mode in ("automated", "playwright") or not automation_mode:
+            automation_mode = "extension"
 
         # If selectors are missing, resolve from verified presets
         if not u_sel or not p_sel:
@@ -1662,7 +1668,7 @@ class SeraDatabase:
             cur = conn.execute(
                 """SELECT s.id, s.name, s.login_page_link, s.userid_column_id,
                           s.password_column_id, s.username_selector, s.password_selector,
-                          s.automation_mode, s.sort_order
+                          s.automation_mode, s.sort_order, s.extension_flow, s.success_selector, s.arn_selector
                    FROM services s
                    INNER JOIN client_services cs ON s.id = cs.service_id
                    WHERE cs.client_id = ?
@@ -1673,7 +1679,11 @@ class SeraDatabase:
                     "id": r[0], "name": r[1], "login_page_link": r[2],
                     "userid_column_id": r[3], "password_column_id": r[4],
                     "username_selector": r[5], "password_selector": r[6],
-                    "automation_mode": r[7], "sort_order": r[8]
+                    "automation_mode": ("extension" if r[7] in ("automated", "playwright") or not r[7] else r[7]),
+                    "sort_order": r[8],
+                    "extension_flow": r[9] if len(r) > 9 else "double",
+                    "success_selector": r[10] if len(r) > 10 else "",
+                    "arn_selector": r[11] if len(r) > 11 else ""
                 }
                 for r in cur.fetchall()
             ]

@@ -133,12 +133,14 @@ class ServiceEditDialog(QDialog):
         form.addRow("ARN Field Selector:", self.arn_sel)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Automated (Playwright)", "automated")
-        self.mode_combo.addItem("Manual (Clipboard Copy)", "manual")
         self.mode_combo.addItem("Extension (Browser Tab)", "extension")
+        self.mode_combo.addItem("Manual (Clipboard Copy Only)", "manual")
         
         if service_data:
-            idx_mode = self.mode_combo.findData(service_data["automation_mode"])
+            mode_val = service_data.get("automation_mode")
+            if mode_val in ("automated", "playwright") or not mode_val:
+                mode_val = "extension"
+            idx_mode = self.mode_combo.findData(mode_val)
             self.mode_combo.setCurrentIndex(max(idx_mode, 0))
 
         form.addRow("Automation Mode:", self.mode_combo)
@@ -153,6 +155,9 @@ class ServiceEditDialog(QDialog):
         
         form.addRow("Extension Login Flow:", self.ext_flow_combo)
         main_layout.addWidget(form_frame)
+
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._on_mode_changed()
 
         # Wire real-time portal selector presets on typing
         self.name_input.textChanged.connect(self._auto_detect_portal_presets)
@@ -220,6 +225,14 @@ class ServiceEditDialog(QDialog):
                             break
                 break
 
+    def _on_mode_changed(self):
+        is_ext = (self.mode_combo.currentData() == "extension")
+        self.ext_flow_combo.setEnabled(is_ext)
+        self.uid_sel.setEnabled(is_ext)
+        self.pwd_sel.setEnabled(is_ext)
+        self.success_sel.setEnabled(is_ext)
+        self.arn_sel.setEnabled(is_ext)
+
     def _on_accept(self):
         if not self.name_input.text().strip():
             QMessageBox.warning(self, "Missing Name", "Service name is required.")
@@ -227,17 +240,18 @@ class ServiceEditDialog(QDialog):
         self.accept()
 
     def result_data(self) -> dict:
+        mode = self.mode_combo.currentData() or "extension"
         return {
             "name": self.name_input.text().strip(),
             "login_page_link": self.url_input.text().strip(),
             "userid_column_id": self.uid_combo.currentData(),
             "password_column_id": self.pwd_combo.currentData(),
-            "username_selector": self.uid_sel.text().strip(),
-            "password_selector": self.pwd_sel.text().strip(),
-            "automation_mode": self.mode_combo.currentData(),
+            "username_selector": self.uid_sel.text().strip() if mode == "extension" else "",
+            "password_selector": self.pwd_sel.text().strip() if mode == "extension" else "",
+            "automation_mode": mode,
             "extension_flow": self.ext_flow_combo.currentData(),
-            "success_selector": self.success_sel.text().strip(),
-            "arn_selector": self.arn_sel.text().strip()
+            "success_selector": self.success_sel.text().strip() if mode == "extension" else "",
+            "arn_selector": self.arn_sel.text().strip() if mode == "extension" else ""
         }
 
 
@@ -346,7 +360,10 @@ class ServiceManagerDialog(QDialog):
     def _reload_services(self):
         self.list_widget.clear()
         for s in self.db.get_services():
-            mode = s.get("automation_mode", "manual").capitalize()
+            mode_val = s.get("automation_mode", "extension")
+            if mode_val in ("automated", "playwright") or not mode_val:
+                mode_val = "extension"
+            mode = mode_val.capitalize()
             item = QListWidgetItem(f"{s['name']}  [{mode}]")
             item.setData(Qt.UserRole, s["id"])
             self.list_widget.addItem(item)

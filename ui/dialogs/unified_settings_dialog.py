@@ -1477,7 +1477,10 @@ class UnifiedSettingsDialog(QDialog):
     def _svc_reload(self):
         self._svc_list.clear()
         for svc in self.db.get_services():
-            mode = svc.get("automation_mode", "manual").capitalize()
+            mode_val = svc.get("automation_mode", "extension")
+            if mode_val in ("automated", "playwright") or not mode_val:
+                mode_val = "extension"
+            mode = mode_val.capitalize()
             item = QListWidgetItem(f"{svc['name']}  [{mode}]")
             item.setData(Qt.UserRole, svc["id"])
             self._svc_list.addItem(item)

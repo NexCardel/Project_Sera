@@ -695,31 +695,6 @@ class ClientDetailWindow(QWidget):
         )
         self.window().showMinimized()
 
-    def _launch_playwright_autofill(self, service: dict):
-        uid, pwd = self._get_credentials(service)
-        if not uid or not pwd:
-            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
-            return
-
-        try:
-            self.db.record_client_activity(self.client["id"], service["name"], "Playwright Autofill")
-        except Exception:
-            pass
-
-        self.db.log_action(
-            self.actor, "autofill_playwright",
-            client_id=self.client["id"],
-            service_id=service["id"],
-            detail=f"Playwright autofill triggered for {service['name']}"
-        )
-        self.action_alert_requested.emit("autofill", self._get_identity_label(self.client))
-
-        automation._manager.request_autofill(
-            service, uid, pwd, self.client["id"],
-            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
-        )
-        self.window().showMinimized()
-
     def _launch_autofill(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:

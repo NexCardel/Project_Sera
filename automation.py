@@ -37,13 +37,13 @@ class _AutofillBridge(QObject):
 
 
 def is_manual_portal(service: dict) -> bool:
-    mode = service.get("automation_mode", "extension")
+    mode = str(service.get("automation_mode") or "extension").strip().lower()
     return mode == "manual"
 
 
 def is_extension_portal(service: dict) -> bool:
-    mode = service.get("automation_mode", "extension")
-    return mode in ("extension", "playwright")
+    mode = str(service.get("automation_mode") or "extension").strip().lower()
+    return mode != "manual"
 
 
 def is_itr_service(service: dict) -> bool:
