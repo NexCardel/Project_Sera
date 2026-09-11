@@ -472,12 +472,14 @@ function checkSccLoginSuccess() {
       const attempt = data && data.sccActiveAttempt;
       if (!attempt || !attempt.password) return;
 
-      const isLogin = href.toLowerCase().includes('/login') || href.toLowerCase().includes('/auth');
+      const lowerHref = href.toLowerCase();
+      const isLogin = lowerHref.includes('/login') || lowerHref.includes('/auth') || lowerHref.includes('/foservices');
+      const isDashboard = lowerHref.includes('/dashboard') || lowerHref.includes('/home') || lowerHref.includes('/welcome');
       const hasUserHeader = Boolean(
         document.querySelector('#loginUsername, .user-name, button[id*="loginUsername" i], span[id*="loginUsername" i], a[href*="logout"], button:has(i.fa-power-off)')
       );
 
-      if (!isLogin || hasUserHeader) {
+      if (hasUserHeader || (isDashboard && !lowerHref.includes('/login'))) {
         chrome.storage.local.remove(['sccActiveAttempt']);
         chrome.runtime.sendMessage({
           type: "SCC_LOGIN_DETECTED",

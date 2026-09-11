@@ -565,7 +565,8 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
           const cbText = (cb.textContent || "").toLowerCase();
           if (!cbText.includes("show") && !cbText.includes("reveal")) {
-            cb.click();
+            const innerTarget = cb.querySelector("input[type='checkbox']") || cb.querySelector("label") || cb;
+            innerTarget.click();
           }
         }
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
@@ -1172,80 +1173,89 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
         const cbText = (cb.textContent || "").toLowerCase();
         if (!cbText.includes("show") && !cbText.includes("reveal")) {
-          cb.click();
+          const innerTarget = cb.querySelector("input[type='checkbox']") || cb.querySelector("label") || cb;
+          innerTarget.click();
         }
       }
     } catch (_) {}
   }
 
-  function fill(el, value) {
+  function fill(el, value, selector, fallbacks) {
     if (!el || !value) return false;
 
     // Check IT portal secure access message checkbox first if present
     ensureTermsChecked();
 
-    try {
-      if (el.disabled) { el.removeAttribute("disabled"); el.disabled = false; }
-      if (el.readOnly) { el.removeAttribute("readonly"); el.readOnly = false; }
-      el.focus();
-    } catch (_) {}
+    const applyValue = (targetEl, val) => {
+      if (!targetEl) return false;
+      try {
+        if (targetEl.disabled) { targetEl.removeAttribute("disabled"); targetEl.disabled = false; }
+        if (targetEl.readOnly) { targetEl.removeAttribute("readonly"); targetEl.readOnly = false; }
+        targetEl.focus();
+      } catch (_) {}
 
-    // 1. Clear any existing value cleanly so Angular/React detect value mutations
-    try {
-      const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(el);
-      const desc = Object.getOwnPropertyDescriptor(proto, "value");
-      if (desc && desc.set) {
-        desc.set.call(el, "");
-      } else {
-        el.value = "";
-      }
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }));
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    } catch (_) {
-      el.value = "";
-    }
+      let replaced = false;
+      // 1. Native browser replacement via execCommand: cleanly replaces any existing combo
+      try {
+        if (typeof targetEl.select === "function") {
+          targetEl.select();
+        }
+        replaced = document.execCommand("insertText", false, val);
+      } catch (_) {}
 
-    // 2. Set new value via native descriptor setter
-    try {
-      const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(el);
-      const desc = Object.getOwnPropertyDescriptor(proto, "value");
-      if (desc && desc.set) {
-        desc.set.call(el, value);
-      } else {
-        el.value = value;
-      }
-    } catch (_) {
-      el.value = value;
-    }
+      // 2. Direct descriptor setter fallback if execCommand was not supported or didn't update value
+      if (!replaced || targetEl.value !== val) {
+        try {
+          const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(targetEl);
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          if (desc && desc.set) {
+            desc.set.call(targetEl, val);
+          } else {
+            targetEl.value = val;
+          }
+        } catch (_) {
+          targetEl.value = val;
+        }
 
-    // 3. Position cursor cleanly at the end without leaving text selected
-    try {
-      const len = (value || "").length;
-      if (typeof el.setSelectionRange === "function") {
-        el.setSelectionRange(len, len);
+        try {
+          targetEl.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: val }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (_) {}
       }
-      if (window.getSelection) {
-        const sel = window.getSelection();
-        if (sel && sel.removeAllRanges) sel.removeAllRanges();
-      }
-    } catch (_) {}
 
-    // 4. Always fire full suite of input/change keyboard events for Angular/React form sync
-    try {
-      el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    } catch (_) {}
+      // 3. Keep cursor cleanly at the end without leaving text highlighted
+      try {
+        const len = (val || "").length;
+        if (typeof targetEl.setSelectionRange === "function") {
+          targetEl.setSelectionRange(len, len);
+        }
+      } catch (_) {}
 
-    // 5. Ensure cursor remains cleanly at the end after events
-    try {
-      const len = (value || "").length;
-      if (typeof el.setSelectionRange === "function") {
-        el.setSelectionRange(len, len);
-      }
-    } catch (_) {}
+      return true;
+    };
+
+    applyValue(el, value);
+
+    // Asynchronous re-sync: guards against Angular change detection resets
+    // (e.g. when mat-checkbox is clicked or an invalid attempt is dismissed and Angular enables the control on the next tick)
+    setTimeout(() => {
+      try {
+        const freshEl = (selector && findField(selector, fallbacks || [])) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 60);
+
+    setTimeout(() => {
+      try {
+        const freshEl = (selector && findField(selector, fallbacks || [])) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 180);
 
     return true;
   }
@@ -1283,12 +1293,12 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
         if (visible(p)) { el = p; break; }
       }
     }
-    if (el && fill(el, value)) return "filled";
+    if (el && fill(el, value, selector, fallbacks)) return "filled";
 
     const fltEl = getFlutterActiveInput();
     if (fltEl) {
       if (execInsert(fltEl, value)) return "filled";
-      if (fill(fltEl, value)) return "filled";
+      if (fill(fltEl, value, selector, fallbacks)) return "filled";
     }
 
     if (isFlutterPage()) {
