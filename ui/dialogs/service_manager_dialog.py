@@ -133,8 +133,8 @@ class ServiceEditDialog(QDialog):
         form.addRow("ARN Field Selector:", self.arn_sel)
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Extension (Browser Tab)", "extension")
-        self.mode_combo.addItem("Manual (Clipboard Copy Only)", "manual")
+        self.mode_combo.addItem("Extension (SMTI / Browser Tab)", "extension")
+        self.mode_combo.addItem("Manual (MECP / Clipboard Copy)", "manual")
         
         if service_data:
             mode_val = service_data.get("automation_mode")
@@ -363,8 +363,8 @@ class ServiceManagerDialog(QDialog):
             mode_val = s.get("automation_mode", "extension")
             if mode_val in ("automated", "playwright") or not mode_val:
                 mode_val = "extension"
-            mode = mode_val.capitalize()
-            item = QListWidgetItem(f"{s['name']}  [{mode}]")
+            tag = "Extension (SMTI)" if mode_val == "extension" else "Manual (MECP)"
+            item = QListWidgetItem(f"{s['name']}  [{tag}]")
             item.setData(Qt.UserRole, s["id"])
             self.list_widget.addItem(item)
 

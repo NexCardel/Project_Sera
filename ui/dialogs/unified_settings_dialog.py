@@ -1480,8 +1480,8 @@ class UnifiedSettingsDialog(QDialog):
             mode_val = svc.get("automation_mode", "extension")
             if mode_val in ("automated", "playwright") or not mode_val:
                 mode_val = "extension"
-            mode = mode_val.capitalize()
-            item = QListWidgetItem(f"{svc['name']}  [{mode}]")
+            tag = "Extension (SMTI)" if mode_val == "extension" else "Manual (MECP)"
+            item = QListWidgetItem(f"{svc['name']}  [{tag}]")
             item.setData(Qt.UserRole, svc["id"])
             self._svc_list.addItem(item)
 
