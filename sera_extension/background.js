@@ -87,8 +87,72 @@ function connectToNativeHost() {
   }
 }
 
+async function syncSettingsFromDesktop() {
+  try {
+    const resp = await fetch('http://127.0.0.1:49152', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'request_settings' })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data || data.status !== 'ok') return null;
+
+    const storageObj = {};
+    if (data.registered_pans && Array.isArray(data.registered_pans)) {
+      storageObj.registeredPans = data.registered_pans;
+    }
+    if (data.scc_settings && typeof data.scc_settings === 'object') {
+      storageObj.sccSettings = data.scc_settings;
+      if (data.scc_settings.enabled !== undefined) {
+        storageObj.sccEnabled = !!data.scc_settings.enabled;
+      }
+    }
+    if (data.allowed_services && Array.isArray(data.allowed_services)) {
+      storageObj.allowedServices = data.allowed_services;
+    }
+    if (data.sca_mode) {
+      storageObj.scaMode = data.sca_mode;
+    }
+    if (data.sca_enabled !== undefined) {
+      storageObj.scaEnabled = !!data.sca_enabled;
+    }
+    if (data.fst_enabled !== undefined) {
+      storageObj.fstEnabled = !!data.fst_enabled;
+    }
+    if (data.sad_enabled !== undefined) {
+      storageObj.sadEnabled = !!data.sad_enabled;
+    }
+    if (data.tracker_enabled !== undefined) {
+      storageObj.trackerEnabled = !!data.tracker_enabled;
+    }
+    if (Object.keys(storageObj).length > 0) {
+      await chrome.storage.local.set(storageObj);
+      if (SERA_DEBUG) console.log("⚡ Sera background: settings synced from desktop:", storageObj);
+    }
+    return storageObj;
+  } catch (err) {
+    if (SERA_DEBUG) console.warn("Sera background: syncSettingsFromDesktop failed:", err);
+    return null;
+  }
+}
+
 function ensureConnected() {
   if (!nativePort) connectToNativeHost();
+  syncSettingsFromDesktop();
+}
+
+// Ensure settings are synced on service worker boot, browser startup, or extension reload
+syncSettingsFromDesktop();
+if (chrome.runtime && chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    syncSettingsFromDesktop();
+  });
+}
+if (chrome.runtime && chrome.runtime.onInstalled) {
+  chrome.runtime.onInstalled.addListener(() => {
+    syncSettingsFromDesktop();
+  });
 }
 
 async function sendToDesktop(msg, requireHttpAck = false) {
@@ -1748,19 +1812,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ status: "no_tab" });
       return true;
     }
-    chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], (data) => {
-      const regList = (data.registeredPans || []).map(p => String(p).trim().toUpperCase());
+    chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], async (data) => {
+      let curData = data || {};
+      // If sccSettings or registeredPans is missing or lacks opt3_fixed_str, pull fresh from desktop!
+      if (!curData.registeredPans || !curData.sccSettings || curData.sccSettings.opt3_fixed_str === undefined) {
+        const fresh = await syncSettingsFromDesktop();
+        if (fresh) {
+          curData = await new Promise(resolve => chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], resolve));
+        }
+      }
+      const regList = (curData.registeredPans || []).map(p => String(p).trim().toUpperCase());
       // Strictly do NOT pop up for registered clients
       if (regList.includes(pan)) {
         if (SERA_DEBUG) console.log(`⚡ Sera SCC: Suppressing unregistered pop-in for registered PAN ${pan}`);
         sendResponse({ status: "registered" });
         return;
       }
-      if (data.sccEnabled === false) {
+      if (curData.sccEnabled === false) {
         sendResponse({ status: "disabled" });
         return;
       }
-      const combos = generateSccCombos(pan, data.sccSettings || {});
+      const combos = generateSccCombos(pan, curData.sccSettings || {});
       injectMECP(tabId, {
         scc_mode: true,
         scc_combos: combos,
@@ -1804,7 +1876,14 @@ function generateSccCombos(pan, sccSettings) {
   const results = [];
   for (let i = 1; i <= 4; i++) {
     const lbl = cfg[`opt${i}_label`] || `Combo ${i}`;
-    const fixedStr = cfg[`opt${i}_fixed_str`] !== undefined ? cfg[`opt${i}_fixed_str`] : (i === 1 ? "@" : "");
+    let fixedStr = cfg[`opt${i}_fixed_str`];
+    if (fixedStr === undefined || fixedStr === null) {
+      if (i === 1) fixedStr = "@";
+      else if (i === 2) fixedStr = "Link@";
+      else if (i === 3) fixedStr = "Income@2014";
+      else if (i === 4) fixedStr = "income@2014";
+      else fixedStr = "";
+    }
     let val = "";
     if (i === 1) {
       val = `${chars}${fixedStr || "@"}${digits}`;

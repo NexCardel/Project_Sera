@@ -3,7 +3,7 @@ import base64
 import gzip
 import json
 import socket
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QObject
 
 IPC_PORT = 49152
 
@@ -13,20 +13,16 @@ def _decode_transport_message(msg: dict) -> dict:
     if not isinstance(msg, dict) or msg.get("type") != "filing_result_compressed":
         return msg
     if msg.get("encoding") != "gzip+base64":
-        raise ValueError(f"Unsupported compressed payload encoding: {msg.get('encoding')}")
-
-    encoded = msg.get("payload")
-    if not isinstance(encoded, str):
-        raise ValueError("Compressed payload is missing its base64 body")
-    raw = gzip.decompress(base64.b64decode(encoded, validate=True))
-    restored = json.loads(raw.decode("utf-8"))
-    if not isinstance(restored, dict) or restored.get("type") != "filing_result":
-        raise ValueError("Compressed payload did not restore a filing_result object")
-    restored["transport"] = {
-        "encoding": msg.get("encoding"),
-        "original_size": msg.get("original_size"),
-        "compressed_size": msg.get("compressed_size")
-    }
+        return msg
+    data_blob = msg.get("data")
+    if not isinstance(data_blob, str):
+        return msg
+    decompressed = gzip.decompress(base64.b64decode(data_blob.encode("ascii")))
+    restored = json.loads(decompressed.decode("utf-8"))
+    if not isinstance(restored, dict):
+        return msg
+    if "original_type" in msg:
+        restored["type"] = msg["original_type"]
     return restored
 
 class ExtensionListener(QThread):
@@ -41,23 +37,28 @@ class ExtensionListener(QThread):
     sudr_capture_received = Signal(dict)  # SUDR canonical envelope
 
     def __init__(self, parent=None):
+        if not isinstance(parent, QObject):
+            parent = None
         super().__init__(parent)
         self._running = True
         self._server = None
+        self.settings_provider = None
 
     def stop(self):
         self._running = False
-        if self._server:
+        server = getattr(self, '_server', None)
+        if server:
             try:
                 # Force socket to close, immediately unblocking any pending accept() calls
                 import socket
-                self._server.shutdown(socket.SHUT_RDWR)
+                server.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
             try:
-                self._server.close()
+                server.close()
             except Exception:
                 pass
+            self._server = None
         try:
             if self.isRunning():
                 self.quit()
@@ -144,6 +145,23 @@ class ExtensionListener(QThread):
                                 self.sdc_timeline_received.emit(msg)
                             elif mtype == 'sudr_capture':
                                 self.sudr_capture_received.emit(msg)
+
+                            if mtype in ('request_settings', 'get_settings'):
+                                settings_data = self.settings_provider() if callable(self.settings_provider) else {"status": "ok"}
+                                resp_body = json.dumps(settings_data).encode('utf-8')
+                                if is_http:
+                                    header = (
+                                        "HTTP/1.1 200 OK\r\n"
+                                        "Access-Control-Allow-Origin: *\r\n"
+                                        "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+                                        "Access-Control-Allow-Headers: Content-Type\r\n"
+                                        "Content-Type: application/json\r\n"
+                                        f"Content-Length: {len(resp_body)}\r\n\r\n"
+                                    ).encode('utf-8')
+                                    conn.sendall(header + resp_body)
+                                else:
+                                    conn.sendall(resp_body)
+                                continue
 
                             if is_http:
                                 resp = (

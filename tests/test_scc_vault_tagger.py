@@ -515,6 +515,39 @@ class TestSccVaultTagger(unittest.TestCase):
             self.assertIn("scc_settings", sent_payload)
             self.assertTrue(sent_payload["scc_settings"]["enabled"])
 
+    def test_extension_listener_settings_provider_response(self):
+        """Verify ExtensionListener settings_provider callback returns expected payload."""
+        from ui.extension_listener import ExtensionListener
+        mock_app = MagicMock()
+        listener = ExtensionListener(mock_app)
+        listener.settings_provider = lambda: {
+            "status": "ok",
+            "registered_pans": ["ABCDE1234F"],
+            "scc_settings": {
+                "opt1_fixed_str": "@",
+                "opt2_fixed_str": "Link@",
+                "opt3_fixed_str": "Income@2014",
+                "opt4_fixed_str": "income@2014"
+            }
+        }
+        payload = listener.settings_provider()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scc_settings"]["opt2_fixed_str"], "Link@")
+        self.assertEqual(payload["scc_settings"]["opt3_fixed_str"], "Income@2014")
+        self.assertEqual(payload["scc_settings"]["opt4_fixed_str"], "income@2014")
+        self.assertIn("ABCDE1234F", payload["registered_pans"])
+
+    def test_sera_app_get_extension_settings_payload(self):
+        """Verify SeraApp._get_extension_settings_payload formats complete settings dict."""
+        import main
+        mock_app = MagicMock(spec=main.SeraApp)
+        mock_app.db = self.db
+        payload = main.SeraApp._get_extension_settings_payload(mock_app)
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn("registered_pans", payload)
+        self.assertIn("scc_settings", payload)
+        self.assertIn("opt1_fixed_str", payload["scc_settings"])
+
 
 if __name__ == "__main__":
     unittest.main()

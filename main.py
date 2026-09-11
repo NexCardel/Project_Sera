@@ -352,6 +352,7 @@ class SeraApp:
         self.ext_listener.scc_password_verified_received.connect(self._handle_scc_password_verified)
         self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
         self.ext_listener.sudr_capture_received.connect(self._handle_sudr_capture)
+        self.ext_listener.settings_provider = self._get_extension_settings_payload
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
         self.ext_listener.start()
@@ -374,10 +375,9 @@ class SeraApp:
             print(f"[Startup] Deferred maintenance failed: {exc}")
         self._sync_extension_settings()
 
-    def _sync_extension_settings(self):
-        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+    def _get_extension_settings_payload(self) -> dict:
+        """Packages current services, settings, registered PANs and SCC configuration."""
         try:
-            from automation import update_extension_settings
             fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
             sad = self.db.get_setting("sad_enabled", "1") in ("1", "true", "True")
             sad_notif = self.db.get_setting("sad_browser_notif_enabled", "1") in ("1", "true", "True")
@@ -390,18 +390,41 @@ class SeraApp:
             reg_pans = self.db.get_all_registered_pans()
             scc_cfg = self.db.get_scc_settings()
             svcs = self.db.get_services()
-            update_extension_settings(
-                fst_enabled=fst,
-                sad_enabled=sad,
-                tracker_enabled=fst or sad,
-                sca_enabled=sca_en,
-                sca_mode=sca_mode,
-                allowed_services=svcs,
-                sca_max_uses=sca_max,
-                sad_browser_notif_enabled=sad_notif,
-                registered_pans=reg_pans,
-                scc_settings=scc_cfg
-            )
+            return {
+                "status": "ok",
+                "fst_enabled": fst,
+                "sad_enabled": sad,
+                "tracker_enabled": fst or sad,
+                "sad_browser_notif_enabled": sad_notif,
+                "sca_enabled": sca_en,
+                "sca_mode": sca_mode,
+                "sca_max_uses": sca_max,
+                "allowed_services": svcs,
+                "registered_pans": reg_pans,
+                "scc_settings": scc_cfg,
+            }
+        except Exception as e:
+            print(f"[main] Failed to get extension settings payload: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def _sync_extension_settings(self):
+        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+        try:
+            from automation import update_extension_settings
+            payload = self._get_extension_settings_payload()
+            if payload.get("status") == "ok":
+                update_extension_settings(
+                    fst_enabled=payload.get("fst_enabled", True),
+                    sad_enabled=payload.get("sad_enabled", True),
+                    tracker_enabled=payload.get("tracker_enabled", True),
+                    sca_enabled=payload.get("sca_enabled", True),
+                    sca_mode=payload.get("sca_mode", "autofill"),
+                    allowed_services=payload.get("allowed_services", []),
+                    sca_max_uses=payload.get("sca_max_uses", 1),
+                    sad_browser_notif_enabled=payload.get("sad_browser_notif_enabled", True),
+                    registered_pans=payload.get("registered_pans", []),
+                    scc_settings=payload.get("scc_settings", {}),
+                )
         except Exception as e:
             print(f"[main] Failed to sync extension settings: {e}")
 
