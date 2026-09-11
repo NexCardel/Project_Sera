@@ -409,6 +409,14 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Position cursor cleanly at the end without leaving text selected
+    try {
+      const len = (value || "").length;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
+    } catch (_) {}
   }
 
   // Auto-click Continue/Login button after password fill
@@ -1202,11 +1210,15 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       el.value = value;
     }
 
-    // 3. Selection + execCommand enhancement where supported
+    // 3. Position cursor cleanly at the end without leaving text selected
     try {
-      el.select();
+      const len = (value || "").length;
       if (typeof el.setSelectionRange === "function") {
-        el.setSelectionRange(0, (value || "").length);
+        el.setSelectionRange(len, len);
+      }
+      if (window.getSelection) {
+        const sel = window.getSelection();
+        if (sel && sel.removeAllRanges) sel.removeAllRanges();
       }
     } catch (_) {}
 
@@ -1217,6 +1229,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
+    } catch (_) {}
+
+    // 5. Ensure cursor remains cleanly at the end after events
+    try {
+      const len = (value || "").length;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
     } catch (_) {}
 
     return true;
@@ -2152,6 +2172,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
+                try {
+                  const len = (val || "").length;
+                  if (typeof el.setSelectionRange === "function") {
+                    el.setSelectionRange(len, len);
+                  }
+                } catch (_) {}
               }
 
               const fallbacks = [
@@ -2396,6 +2422,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
                 el.dispatchEvent(new Event('input', { bubbles: true }));
                 el.dispatchEvent(new Event('change', { bubbles: true }));
+                try {
+                  const len = (val || "").length;
+                  if (typeof el.setSelectionRange === "function") {
+                    el.setSelectionRange(len, len);
+                  }
+                } catch (_) {}
               }
 
               function showScaToast() {

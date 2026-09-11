@@ -160,7 +160,15 @@ function renderScaWidgetFromContent(params) {
       el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
     } catch (_) {}
     try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {}
-    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+    try {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {}
+    try {
+      const len = (val || "").length;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
+    } catch (_) {}
     try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (_) {}
   }
 

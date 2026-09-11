@@ -34,6 +34,12 @@ class PortalAdapter {
     field.value = password;
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
+    try {
+      const len = (password || "").length;
+      if (typeof field.setSelectionRange === "function") {
+        field.setSelectionRange(len, len);
+      }
+    } catch (_) {}
     try { field.blur(); } catch(e) {}
     return true;
   }
