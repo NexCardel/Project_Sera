@@ -456,14 +456,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       }
                         
       if (passField && password) {
-        // Handle IT portal secure access message checkbox specifically (never click "Show password" checkboxes)
-        const cb = document.querySelector("mat-checkbox#agreeTermAndCondition, mat-checkbox.login-terms, app-login mat-checkbox");
-        if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
-          const cbText = (cb.textContent || "").toLowerCase();
-          if (!cbText.includes("show") && !cbText.includes("reveal")) {
-            cb.click();
-          }
-        }
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
         console.log("Sera: Password filled");

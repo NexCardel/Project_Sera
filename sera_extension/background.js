@@ -282,13 +282,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         let targetHost = '';
         try { targetHost = new URL(p.url).hostname.toLowerCase(); } catch (_) {}
         const matchesHost = targetHost ? curUrl.includes(targetHost) : true;
-        const isLogin = curUrl.includes('/login') || curUrl.includes('/auth') || curUrl.includes('/signin') || curUrl.includes('/foservices') || curUrl.includes('unifiedportal') || curUrl.includes('tdscpc');
-        const notDashboard = !curUrl.includes('/dashboard') && !curUrl.includes('/home') && !curUrl.includes('/welcome') && !curUrl.includes('/landing');
-        if (matchesHost && isLogin && notDashboard) {
+        const isLogin = curUrl.includes('/login') || curUrl.includes('/auth') || curUrl.includes('/signin') || curUrl.includes('unifiedportal') || curUrl.includes('tdscpc');
+        const isPostLogin = curUrl.includes('/dashboard') || curUrl.includes('/home') || curUrl.includes('/welcome') || curUrl.includes('/landing') || curUrl.includes('/portal') || curUrl.includes('/main') || curUrl.includes('/profile');
+        if (matchesHost && isLogin && !isPostLogin) {
           setTimeout(() => {
             injectManualAssist(tabId, p);
           }, 700);
-        } else if (matchesHost && !notDashboard) {
+        } else if (matchesHost && isPostLogin) {
           chrome.storage.local.remove(['manualAssistPayload']);
         }
       }
@@ -560,15 +560,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       }
                         
       if (passField && password) {
-        // Handle IT portal secure access message checkbox specifically (never click "Show password" checkboxes)
-        const cb = document.querySelector("mat-checkbox#agreeTermAndCondition, mat-checkbox.login-terms, app-login mat-checkbox");
-        if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
-          const cbText = (cb.textContent || "").toLowerCase();
-          if (!cbText.includes("show") && !cbText.includes("reveal")) {
-            const innerTarget = cb.querySelector("input[type='checkbox']") || cb.querySelector("label") || cb;
-            innerTarget.click();
-          }
-        }
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
         if (SERA_DEBUG) console.log("Sera: Password filled");
@@ -662,6 +653,31 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   } catch (_) {
     return;
   }
+
+  // Do not show widget if user is already logged in or page is on post-login dashboard/portal
+  try {
+    const curPageUrl = (window.location.href || "").toLowerCase();
+    const isPostLoginUrl = curPageUrl.includes('/dashboard') || curPageUrl.includes('/home') || curPageUrl.includes('/welcome') || curPageUrl.includes('/landing') || curPageUrl.includes('/portal') || curPageUrl.includes('/main') || curPageUrl.includes('/profile');
+    const isExplicitLoginUrl = curPageUrl.includes('/login') || curPageUrl.includes('/auth') || curPageUrl.includes('/signin');
+    if (isPostLoginUrl && !isExplicitLoginUrl) {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+      return;
+    }
+    if (document.querySelector("a[href*='logout'], button[id*='logout'], .user-profile, app-dashboard")) {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+      return;
+    }
+  } catch (_) {}
 
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
@@ -897,6 +913,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   let dismiss = () => {
     if (timerTimeout) clearTimeout(timerTimeout);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+    } catch (_) {}
     card.style.transform = "translateX(120%)";
     card.style.opacity = "0";
     setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
@@ -1007,6 +1031,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   passBtn.onclick = () => {
     resetTimer();
     const result = smartFill(password, passwordSelector, passFallbacks);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+    } catch (_) {}
     if (result === "filled") {
       setBtn(passBtn, "done", "✓  Password Injected");
       setTimeout(dismiss, 400);
@@ -1113,24 +1145,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return false;
   }
 
-  function ensureTermsChecked() {
-    try {
-      const cb = document.querySelector("mat-checkbox#agreeTermAndCondition, mat-checkbox.login-terms, app-login mat-checkbox");
-      if (cb && !cb.classList.contains("mat-checkbox-checked") && !cb.classList.contains("mat-mdc-checkbox-checked")) {
-        const cbText = (cb.textContent || "").toLowerCase();
-        if (!cbText.includes("show") && !cbText.includes("reveal")) {
-          const innerTarget = cb.querySelector("input[type='checkbox']") || cb.querySelector("label") || cb;
-          innerTarget.click();
-        }
-      }
-    } catch (_) {}
-  }
-
   function fill(el, value, selector, fallbacks) {
     if (!el || !value) return false;
-
-    // Check IT portal secure access message checkbox first if present
-    ensureTermsChecked();
 
     const applyValue = (targetEl, val) => {
       if (!targetEl) return false;
@@ -1225,7 +1241,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   }
 
   function smartFill(value, selector, fallbacks) {
-    ensureTermsChecked();
     let el = findField(selector, fallbacks);
     if (!el && selector && (selector.includes("password") || selector.includes("psw") || selector.includes("pass"))) {
       const passCandidates = document.querySelectorAll("input[type='password'], input[id*='password'], input[name*='password'], input[id*='psw'], input[name*='psw'], #user_pass");
@@ -1341,6 +1356,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
           flutterFillStep = 2;
           updateFlutterUI(2);
           stopFlutterObserver();
+          try {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+              chrome.storage.local.remove(['manualAssistPayload']);
+            }
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+              chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+            }
+          } catch (_) {}
           setTimeout(dismiss, 400);
         }
       }
@@ -1598,6 +1621,11 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg);
+  if (msg.type === "MANUAL_ASSIST_CLEAR" || msg.type === "MANUAL_ASSIST_DONE" || msg.type === "MANUAL_ASSIST_DISMISSED") {
+    chrome.storage.local.remove(['manualAssistPayload']);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type === "CHECK_NATIVE_STATUS") {
     if (nativePort) {
       sendResponse({ connected: true, mode: "native" });
