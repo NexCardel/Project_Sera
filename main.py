@@ -274,7 +274,9 @@ class SeraApp:
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
             self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
 
-            # Ensure FST, SAD, SCA, and tracker settings are initialized
+            # Ensure FST, SDC, SAD, SCA, and tracker settings are initialized
+            if self.db.get_setting("sdc_enabled") is None:
+                self.db.set_setting("sdc_enabled", "1")
             if self.db.get_setting("fst_enabled") is None:
                 self.db.set_setting("fst_enabled", "1")
             if self.db.get_setting("sad_enabled") is None:
@@ -352,6 +354,7 @@ class SeraApp:
         self.ext_listener.scc_password_verified_received.connect(self._handle_scc_password_verified)
         self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
         self.ext_listener.sudr_capture_received.connect(self._handle_sudr_capture)
+        self.ext_listener.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.ext_listener.settings_provider = self._get_extension_settings_payload
         self.app.aboutToQuit.connect(self.ext_listener.stop)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
@@ -375,9 +378,32 @@ class SeraApp:
             print(f"[Startup] Deferred maintenance failed: {exc}")
         self._sync_extension_settings()
 
+    def _handle_extension_settings_updated(self, msg: dict):
+        """Persists extension settings toggled from browser popup into SQLite database."""
+        try:
+            to_set = {}
+            if "sdc_enabled" in msg:
+                to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
+            if "fst_enabled" in msg:
+                to_set["fst_enabled"] = "1" if msg["fst_enabled"] else "0"
+            if "sad_enabled" in msg:
+                to_set["sad_enabled"] = "1" if msg["sad_enabled"] else "0"
+            if "tracker_enabled" in msg:
+                to_set["tracker_enabled"] = "1" if msg["tracker_enabled"] else "0"
+            if "sca_enabled" in msg:
+                to_set["sca_enabled"] = "1" if msg["sca_enabled"] else "0"
+            if "sad_browser_notif_enabled" in msg:
+                to_set["sad_browser_notif_enabled"] = "1" if msg["sad_browser_notif_enabled"] else "0"
+            if to_set:
+                self.db.set_settings_bulk(to_set)
+                print(f"[main] Persisted updated extension settings from popup: {to_set}")
+        except Exception as e:
+            print(f"[main] Error handling extension_settings_updated: {e}")
+
     def _get_extension_settings_payload(self) -> dict:
         """Packages current services, settings, registered PANs and SCC configuration."""
         try:
+            sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
             fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
             sad = self.db.get_setting("sad_enabled", "1") in ("1", "true", "True")
             sad_notif = self.db.get_setting("sad_browser_notif_enabled", "1") in ("1", "true", "True")
@@ -392,9 +418,10 @@ class SeraApp:
             svcs = self.db.get_services()
             return {
                 "status": "ok",
-                "fst_enabled": fst,
+                "sdc_enabled": sdc,
+                "fst_enabled": fst or sdc,
                 "sad_enabled": sad,
-                "tracker_enabled": fst or sad,
+                "tracker_enabled": sdc or fst or sad,
                 "sad_browser_notif_enabled": sad_notif,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
@@ -415,6 +442,7 @@ class SeraApp:
             if payload.get("status") == "ok":
                 update_extension_settings(
                     fst_enabled=payload.get("fst_enabled", True),
+                    sdc_enabled=payload.get("sdc_enabled", True),
                     sad_enabled=payload.get("sad_enabled", True),
                     tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),

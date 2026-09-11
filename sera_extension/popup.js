@@ -34,12 +34,12 @@ document.addEventListener('DOMContentLoaded', () => {
       'mecpPayload'
     ], (data) => {
       const tracker = data.trackerEnabled !== false;
-      const fst = data.fstEnabled !== false && tracker;
+      const sdc = (data.sdcEnabled !== false) && tracker;
       const sds = false; // Paused
       const toast = data.sdcToastEnabled !== false;
       const sca = data.scaEnabled !== false;
 
-      if (toggleFst) toggleFst.checked = fst;
+      if (toggleFst) toggleFst.checked = sdc;
       if (toggleSds) toggleSds.checked = false;
       if (toggleToast) toggleToast.checked = toast;
       if (toggleSca) toggleSca.checked = sca;
@@ -83,18 +83,18 @@ document.addEventListener('DOMContentLoaded', () => {
     syncStatus.textContent = 'Saving...';
     syncStatus.style.color = '#f59e0b';
 
-    const fstVal = toggleFst ? toggleFst.checked : true;
+    const sdcVal = toggleFst ? toggleFst.checked : true;
     const sdsVal = toggleSds ? toggleSds.checked : true;
     const toastVal = toggleToast ? toggleToast.checked : true;
     const scaVal = toggleSca ? toggleSca.checked : true;
 
     const storageUpdate = {
       sadEnabled: false, // Permanently purged
-      fstEnabled: fstVal,
-      sdcEnabled: fstVal,
+      fstEnabled: sdcVal,
+      sdcEnabled: sdcVal,
       sdsEnabled: sdsVal,
       sdcToastEnabled: toastVal,
-      trackerEnabled: fstVal || sdsVal,
+      trackerEnabled: sdcVal || sdsVal,
       sadBrowserNotifEnabled: false,
       scaEnabled: scaVal
     };

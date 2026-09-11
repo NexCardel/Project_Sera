@@ -656,8 +656,8 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_sub_header("File Submission Tracker (FST) Daemons"))
 
         self.fst_check = QCheckBox()
-        lay.addWidget(_setting_row("Sera DOM \u2014 DOM Detector (FST)",
-            "DOM detector that watches on-screen confirmation messages and elements on web pages.",
+        lay.addWidget(_setting_row("Sera SDC \u2014 DOM Crosshair (FST)",
+            "DOM Crosshair engine that watches on-screen confirmation messages and elements on web pages.",
             self.fst_check))
 
         self.sad_check = QCheckBox()
@@ -1259,7 +1259,7 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
-            self.fst_check.setChecked(g("fst_enabled", "1") == "1")
+            self.fst_check.setChecked(g("sdc_enabled", g("fst_enabled", "1")) == "1")
             self.sad_check.setChecked(g("sad_enabled", "1") == "1")
             self.sad_notif_check.setChecked(g("sad_browser_notif_enabled", "1") == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
@@ -1318,6 +1318,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
+                bulk_settings["sdc_enabled"]                = b(self.fst_check)
                 bulk_settings["fst_enabled"]                = b(self.fst_check)
                 bulk_settings["sad_enabled"]                = b(self.sad_check)
                 bulk_settings["sad_browser_notif_enabled"]  = b(self.sad_notif_check)
@@ -1341,6 +1342,7 @@ class UnifiedSettingsDialog(QDialog):
                     }
                     update_extension_settings(
                         fst_enabled=self.fst_check.isChecked(),
+                        sdc_enabled=self.fst_check.isChecked(),
                         sad_enabled=self.sad_check.isChecked(),
                         tracker_enabled=(self.fst_check.isChecked() or self.sad_check.isChecked()),
                         sad_browser_notif_enabled=self.sad_notif_check.isChecked(),

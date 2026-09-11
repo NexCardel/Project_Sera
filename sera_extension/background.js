@@ -32,14 +32,16 @@ function connectToNativeHost() {
         handleScaArm(message);
       } else if (message.type === "update_settings") {
         const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
+        const sdc = message.sdc_enabled !== undefined ? (message.sdc_enabled !== false && message.tracker_enabled !== false) : fst;
         const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
         const sadNotif = message.sad_browser_notif_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
         const allowedDomains = message.allowed_domains || [];
-        const overallTracker = fst || sad;
+        const overallTracker = sdc || fst || sad;
         const storageObj = {
           trackerEnabled: overallTracker,
+          sdcEnabled: sdc,
           fstEnabled: fst,
           sadEnabled: sad,
           sadBrowserNotifEnabled: sadNotif,
@@ -117,8 +119,15 @@ async function syncSettingsFromDesktop() {
     if (data.sca_enabled !== undefined) {
       storageObj.scaEnabled = !!data.sca_enabled;
     }
+    if (data.sdc_enabled !== undefined) {
+      storageObj.sdcEnabled = !!data.sdc_enabled;
+    } else {
+      storageObj.sdcEnabled = true;
+    }
     if (data.fst_enabled !== undefined) {
       storageObj.fstEnabled = !!data.fst_enabled;
+    } else {
+      storageObj.fstEnabled = true;
     }
     if (data.sad_enabled !== undefined) {
       storageObj.sadEnabled = !!data.sad_enabled;
@@ -224,11 +233,12 @@ chrome.runtime.onInstalled.addListener(() => {
   // Ensure native connection
   ensureConnected();
   // Enable tracker by default the first time the extension is installed
-  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
     const update = {};
     if (data.trackerEnabled === undefined) update.trackerEnabled = true;
     if (data.sadEnabled === undefined) update.sadEnabled = true;
     if (data.fstEnabled === undefined) update.fstEnabled = true;
+    if (data.sdcEnabled === undefined) update.sdcEnabled = true;
     if (Object.keys(update).length > 0) {
       chrome.storage.local.set(update);
     }
@@ -288,11 +298,11 @@ function injectSAD(tabId, reason) {
   sdcInjectedTabs.add(tabId);
   chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled', 'sdsEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
-    const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
+    const sdcEnabled = (data.sdcEnabled !== false) && trackerEnabled;
+    const fstEnabled = (data.fstEnabled !== false) && trackerEnabled;
     const sdsEnabled = false; // SDS Paused
 
-    if (!trackerEnabled || !sdcEnabled) {
+    if (!trackerEnabled || (!sdcEnabled && !fstEnabled)) {
       sdcInjectedTabs.delete(tabId);
       return; // All visual and DOM scanning disabled
     }
@@ -1733,15 +1743,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
     const s = msg.settings || {};
-    if (s.trackerEnabled && (s.sadEnabled || s.fstEnabled)) {
+    if (s.trackerEnabled && (s.sdcEnabled || s.fstEnabled || s.sadEnabled)) {
       injectAllOpenTabs('popup-settings-enabled');
     } else {
       broadcastTrackerState(false);
     }
     sendToDesktop({
       type: "extension_settings_updated",
-      sad_enabled: s.sadEnabled,
+      sdc_enabled: s.sdcEnabled,
       fst_enabled: s.fstEnabled,
+      sad_enabled: s.sadEnabled,
       tracker_enabled: s.trackerEnabled,
       sad_browser_notif_enabled: s.sadBrowserNotifEnabled,
       sca_enabled: s.scaEnabled

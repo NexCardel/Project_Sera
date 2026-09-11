@@ -35,6 +35,7 @@ class ExtensionListener(QThread):
     scc_password_verified_received = Signal(dict)
     sdc_timeline_received = Signal(dict)
     sudr_capture_received = Signal(dict)  # SUDR canonical envelope
+    extension_settings_updated_received = Signal(dict)
 
     def __init__(self, parent=None):
         if not isinstance(parent, QObject):
@@ -145,6 +146,8 @@ class ExtensionListener(QThread):
                                 self.sdc_timeline_received.emit(msg)
                             elif mtype == 'sudr_capture':
                                 self.sudr_capture_received.emit(msg)
+                            elif mtype == 'extension_settings_updated':
+                                self.extension_settings_updated_received.emit(msg)
 
                             if mtype in ('request_settings', 'get_settings'):
                                 settings_data = self.settings_provider() if callable(self.settings_provider) else {"status": "ok"}
