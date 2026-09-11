@@ -1877,6 +1877,23 @@ class SeraDatabase:
                 return val[2:12]
         return ""
 
+    def get_all_registered_pans(self) -> list[str]:
+        """Returns a deduplicated list of uppercase 10-char PANs for all active clients."""
+        pans = set()
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT DISTINCT UPPER(TRIM(cv.value)) FROM client_values cv
+                   JOIN clients c ON c.id = cv.client_id
+                   WHERE c.is_archived = 0 AND cv.value IS NOT NULL AND length(TRIM(cv.value)) >= 10"""
+            )
+            for row in cur.fetchall():
+                val = str(row[0] or "").strip()
+                if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", val):
+                    pans.add(val)
+                elif re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$", val):
+                    pans.add(val[2:12])
+        return sorted(list(pans))
+
     def get_service_for_portal(self, portal_name: str) -> dict | None:
         """Finds the registered service record matching a portal name or keyword (e.g. 'Income Tax', 'ITR', 'GST')."""
         if not portal_name:

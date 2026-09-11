@@ -278,7 +278,7 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True):
+def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
         tracker_enabled = fst_enabled or sad_enabled
@@ -315,6 +315,10 @@ def update_extension_settings(fst_enabled: bool = True, sad_enabled: bool = True
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,
     }
+    if registered_pans is not None:
+        payload["registered_pans"] = registered_pans
+    if scc_settings is not None:
+        payload["scc_settings"] = scc_settings
     def _do_send():
         for _ in range(5):
             success = False

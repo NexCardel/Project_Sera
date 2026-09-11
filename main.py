@@ -372,6 +372,38 @@ class SeraApp:
             # Startup maintenance is best-effort; the already-open app remains
             # usable and the error is visible in the diagnostic console.
             print(f"[Startup] Deferred maintenance failed: {exc}")
+        self._sync_extension_settings()
+
+    def _sync_extension_settings(self):
+        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+        try:
+            from automation import update_extension_settings
+            fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
+            sad = self.db.get_setting("sad_enabled", "1") in ("1", "true", "True")
+            sad_notif = self.db.get_setting("sad_browser_notif_enabled", "1") in ("1", "true", "True")
+            sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
+            sca_mode = self.db.get_setting("sca_action_mode", "autofill")
+            try:
+                sca_max = int(self.db.get_setting("sca_max_uses", "1"))
+            except (ValueError, TypeError):
+                sca_max = 1
+            reg_pans = self.db.get_all_registered_pans()
+            scc_cfg = self.db.get_scc_settings()
+            svcs = self.db.get_services()
+            update_extension_settings(
+                fst_enabled=fst,
+                sad_enabled=sad,
+                tracker_enabled=fst or sad,
+                sca_enabled=sca_en,
+                sca_mode=sca_mode,
+                allowed_services=svcs,
+                sca_max_uses=sca_max,
+                sad_browser_notif_enabled=sad_notif,
+                registered_pans=reg_pans,
+                scc_settings=scc_cfg
+            )
+        except Exception as e:
+            print(f"[main] Failed to sync extension settings: {e}")
 
     def _on_sca_armed(self, client_id: int, client_token: str, services: list):
         try:
@@ -632,6 +664,14 @@ class SeraApp:
                 )
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
+
+            # If payload carried an SCC verified password, ensure client/password is synced/auto-created
+            scc_pwd = msg.get("scc_verified_password") or (msg.get("raw_payload", {}).get("scc_verified_password") if isinstance(msg.get("raw_payload"), dict) else None)
+            if scc_pwd:
+                scc_msg = dict(msg)
+                scc_msg["password"] = scc_pwd
+                self._handle_scc_password_verified(scc_msg)
+
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
@@ -808,6 +848,8 @@ class SeraApp:
                 self.shell.refresh_clients()
             if hasattr(self, "search_win") and self.search_win:
                 self.search_win._on_search_changed()
+            # Push updated registered PANs to extension so newly verified client won't trigger unregistered pop-in
+            self._sync_extension_settings()
         except Exception as e:
             print(f"[main._handle_scc_password_verified error] {e}")
 
@@ -1123,9 +1165,6 @@ class SeraApp:
         action_sca_diag = tray_menu.addAction(_safe_qta_icon("mdi.clipboard-pulse-outline", "#4CF9B7"), "SCA Diagnostics")
         action_sca_diag.triggered.connect(lambda: (self._show_sca_diagnostics(), self._restore_from_tray()))
 
-        action_quick_scc = tray_menu.addAction(_safe_qta_icon("mdi.shield-key-outline", "#4CF9B7"), "Quick Portal Login (SCC)")
-        action_quick_scc.triggered.connect(self._show_quick_scc_dialog)
-
         tray_menu.addSeparator()
 
         self.action_install_update = tray_menu.addAction(_safe_qta_icon("mdi.update", "#4CF9B7"), "Install Update & Restart")
@@ -1147,11 +1186,6 @@ class SeraApp:
                 self.shell.activateWindow()
             else:
                 self._restore_from_tray()
-
-    def _show_quick_scc_dialog(self):
-        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
-        dlg = QuickSCCDialog(self.db, self.shell)
-        dlg.exec()
 
     def _restore_from_tray(self):
         """Unhides/restores the main application window."""

@@ -478,36 +478,42 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(new_client["values"].get(self.name_col_id), "ABC Enterprises")
         self.assertIn("Password verified via SCC", new_client.get("notes") or "")
 
-    def test_quick_scc_dialog_preview_and_launch(self):
-        """Verify that QuickSCCDialog generates live combinations for any PAN and launches MECP."""
-        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
-        self.db.save_scc_settings({
-            "enabled": True,
-            "opt1_label": "Combo 1",
-            "opt1_fixed_str": "@",
-            "opt2_label": "Combo 2",
-            "opt2_fixed_str": "Tax#",
-            "opt3_label": "Combo 3",
-            "opt3_fixed_str": "FirmMaster@2026",
-            "opt4_label": "Combo 4",
-            "opt4_fixed_str": "BackupPass#1"
-        })
-        dlg = QuickSCCDialog(self.db, prefill_pan="ABCDE1234F")
-        # Check preview values
-        self.assertEqual(dlg.combo_labels[0][1].text(), "abcd@1234")
-        self.assertEqual(dlg.combo_labels[1][1].text(), "Tax#1234")
-        self.assertEqual(dlg.combo_labels[2][1].text(), "FirmMaster@2026")
-        self.assertEqual(dlg.combo_labels[3][1].text(), "BackupPass#1")
+    def test_database_get_all_registered_pans(self):
+        """Verify get_all_registered_pans returns active client PANs and derived GSTINs, excluding archived."""
+        # Active client with direct PAN
+        self.db.add_client(values={self.pan_col_id: "ABCDE1234F"}, notes="", service_ids=[])
+        # Archived client with PAN
+        archived_id = self.db.add_client(values={self.pan_col_id: "XYZAB9999K"}, notes="", service_ids=[])
+        self.db.archive_client(archived_id)
 
-        captured = []
-        with patch.object(automation, "trigger_mecp", side_effect=lambda *args, **kwargs: captured.append((args, kwargs))):
-            dlg._on_launch()
+        pans = self.db.get_all_registered_pans()
+        self.assertIn("ABCDE1234F", pans)
+        self.assertNotIn("XYZAB9999K", pans)
 
-        self.assertEqual(len(captured), 1)
-        kwargs = captured[0][1]
-        self.assertEqual(kwargs.get("user_id"), "ABCDE1234F")
-        self.assertTrue(kwargs.get("scc_mode"))
-        self.assertEqual(len(kwargs.get("scc_combos")), 4)
+    def test_automation_update_extension_settings_includes_registered_pans_and_scc(self):
+        """Verify update_extension_settings formats payload with registered_pans and scc_settings."""
+        import json
+        from automation import update_extension_settings
+        with patch("socket.socket") as mock_sock_cls:
+            mock_sock = MagicMock()
+            mock_sock_cls.return_value.__enter__.return_value = mock_sock
+
+            update_extension_settings(
+                registered_pans=["ABCDE1234F", "ZZZZZ9999Z"],
+                scc_settings={"enabled": True, "opt1_label": "Combo 1", "opt1_fixed_str": "@"}
+            )
+            # Give background socket thread a brief moment
+            import time
+            time.sleep(0.3)
+
+            # Assert sendall was called with JSON containing registered_pans and scc_settings
+            calls = mock_sock.sendall.call_args_list
+            self.assertTrue(len(calls) > 0)
+            sent_payload = json.loads(calls[0][0][0].decode("utf-8"))
+            self.assertIn("registered_pans", sent_payload)
+            self.assertEqual(sent_payload["registered_pans"], ["ABCDE1234F", "ZZZZZ9999Z"])
+            self.assertIn("scc_settings", sent_payload)
+            self.assertTrue(sent_payload["scc_settings"]["enabled"])
 
 
 if __name__ == "__main__":

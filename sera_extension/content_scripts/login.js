@@ -491,9 +491,60 @@ function checkSccLoginSuccess() {
   } catch (_) {}
 }
 
+// ── Automated In-Page Unregistered Client SCC-MECP Trigger ────────────────
+function checkUnregisteredSccTrigger() {
+  try {
+    const href = window.location.href || "";
+    if (!href.includes("incometax.gov.in")) return;
+    const lowerHref = href.toLowerCase();
+    const isPasswordPage = lowerHref.includes('login/password') || lowerHref.includes('/password');
+    if (!isPasswordPage) return;
+
+    if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+
+    const bodyText = document.body ? document.body.innerText : '';
+    let pan = '';
+    const m = bodyText.match(/(?:PAN|User\s*ID)\s*[:\-]?\s*([A-Z]{5}[0-9]{4}[A-Z]{1})\b/i);
+    if (m && m[1]) {
+      pan = m[1].toUpperCase();
+    } else {
+      const allMatches = [...bodyText.matchAll(/\b([A-Z]{5}[0-9]{4}[A-Z]{1})\b/g)];
+      if (allMatches.length > 0) {
+        pan = allMatches[0][1].toUpperCase();
+      }
+    }
+    if (!pan) return;
+
+    if (window.__SERA_LAST_UNREG_SCC_PAN__ === pan) return;
+
+    chrome.storage.local.get(['registeredPans', 'sccEnabled'], (data) => {
+      if (data.sccEnabled === false) return;
+      const regList = (data.registeredPans || []).map(p => String(p).trim().toUpperCase());
+      // Strictly do NOT pop up for registered clients
+      if (regList.includes(pan)) return;
+
+      window.__SERA_LAST_UNREG_SCC_PAN__ = pan;
+      chrome.runtime.sendMessage({
+        type: "TRIGGER_UNREGISTERED_SCC_MECP",
+        pan: pan,
+        portal: "Income Tax"
+      });
+    });
+  } catch (_) {}
+}
+
 if (typeof window !== "undefined" && window.location && (window.location.hostname || "").includes("incometax.gov.in")) {
-  window.addEventListener('hashchange', checkSccLoginSuccess);
-  window.addEventListener('popstate', checkSccLoginSuccess);
-  const _sccInterval = setInterval(checkSccLoginSuccess, 1500);
+  window.addEventListener('hashchange', () => {
+    checkSccLoginSuccess();
+    checkUnregisteredSccTrigger();
+  });
+  window.addEventListener('popstate', () => {
+    checkSccLoginSuccess();
+    checkUnregisteredSccTrigger();
+  });
+  const _sccInterval = setInterval(() => {
+    checkSccLoginSuccess();
+    checkUnregisteredSccTrigger();
+  }, 1500);
   setTimeout(() => clearInterval(_sccInterval), 180000);
 }

@@ -14,10 +14,11 @@ from typing import Optional, Dict, Any, List
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtWidgets import QApplication
 
+import automation
+
 # Precompiled regexes for common UID formats
 RE_PAN = re.compile(r'^[A-Z]{5}[0-9]{4}[A-Z]$')
 RE_GSTIN = re.compile(r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$')
-
 # Excel clipboard MIME format markers
 EXCEL_MIME_MARKERS = {
     "csv",
@@ -250,6 +251,11 @@ class ClipboardWatchService(QObject):
 
                 if not password_val:
                     password_val = general_pwd
+
+                # Security & Verification Gate: SCA only sends verified passwords for ITR services.
+                # Strictly send password only when SCC-MECP is confirmed for the client.
+                if automation.is_itr_service(svc) and not self.db.is_client_scc_verified(pan=matched_uid, client_id=client_id):
+                    password_val = ""
 
                 service_payloads.append({
                     "service_id": svc.get("id"),

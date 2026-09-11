@@ -1328,6 +1328,17 @@ class UnifiedSettingsDialog(QDialog):
 
                 try:
                     from automation import update_extension_settings
+                    scc_payload = {
+                        "enabled": self.scc_check.isChecked() if hasattr(self, "scc_check") else True,
+                        "opt1_label": self.scc_opt1_label_edit.text().strip() if hasattr(self, "scc_opt1_label_edit") else "Combo 1",
+                        "opt1_fixed_str": self.scc_opt1_str_edit.text() if hasattr(self, "scc_opt1_str_edit") else "@",
+                        "opt2_label": self.scc_opt2_label_edit.text().strip() if hasattr(self, "scc_opt2_label_edit") else "Combo 2",
+                        "opt2_fixed_str": self.scc_opt2_str_edit.text() if hasattr(self, "scc_opt2_str_edit") else "",
+                        "opt3_label": self.scc_opt3_label_edit.text().strip() if hasattr(self, "scc_opt3_label_edit") else "Combo 3",
+                        "opt3_fixed_str": self.scc_opt3_str_edit.text() if hasattr(self, "scc_opt3_str_edit") else "",
+                        "opt4_label": self.scc_opt4_label_edit.text().strip() if hasattr(self, "scc_opt4_label_edit") else "Combo 4",
+                        "opt4_fixed_str": self.scc_opt4_str_edit.text() if hasattr(self, "scc_opt4_str_edit") else "",
+                    }
                     update_extension_settings(
                         fst_enabled=self.fst_check.isChecked(),
                         sad_enabled=self.sad_check.isChecked(),
@@ -1337,6 +1348,8 @@ class UnifiedSettingsDialog(QDialog):
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
                         sca_max_uses=self.sca_max_uses_spin.value(),
                         allowed_services=self.db.get_services(),
+                        registered_pans=self.db.get_all_registered_pans(),
+                        scc_settings=scc_payload,
                     )
                 except Exception:
                     pass

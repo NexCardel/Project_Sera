@@ -1300,6 +1300,26 @@
           }
         }
 
+        // Automated SCC-MECP Widget Pop-in: strictly for unregistered clients arriving at password page
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.get(['registeredPans', 'sccEnabled'], (data) => {
+            if (data.sccEnabled === false) return;
+            const regList = (data.registeredPans || []).map(p => String(p).trim().toUpperCase());
+            if (!regList.includes(pan)) {
+              if (window.__SERA_LAST_UNREG_SCC_PAN__ !== pan) {
+                window.__SERA_LAST_UNREG_SCC_PAN__ = pan;
+                try {
+                  chrome.runtime.sendMessage({
+                    type: "TRIGGER_UNREGISTERED_SCC_MECP",
+                    pan: pan,
+                    portal: "Income Tax"
+                  });
+                } catch (_) {}
+              }
+            }
+          });
+        }
+
         return {
           pan: pan,
           portal: 'income tax',

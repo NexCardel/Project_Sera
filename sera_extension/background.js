@@ -49,6 +49,15 @@ function connectToNativeHost() {
         if (allowedDomains && allowedDomains.length > 0) {
           storageObj.allowedDomains = allowedDomains;
         }
+        if (message.registered_pans && Array.isArray(message.registered_pans)) {
+          storageObj.registeredPans = message.registered_pans;
+        }
+        if (message.scc_settings && typeof message.scc_settings === 'object') {
+          storageObj.sccSettings = message.scc_settings;
+          if (message.scc_settings.enabled !== undefined) {
+            storageObj.sccEnabled = !!message.scc_settings.enabled;
+          }
+        }
         if (!overallTracker) {
           storageObj.activeAutofillPayload = null;
         }
@@ -342,7 +351,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         type: "scc_password_verified",
         client_id: attempt.client_id,
         service_id: attempt.service_id,
-        userid: attempt.userid,
+        userid: attempt.userid || attempt.pan || "",
+        pan: attempt.pan || attempt.userid || "",
         password: attempt.password,
         combo_label: attempt.combo_label,
         portal: "Income Tax",
@@ -1720,7 +1730,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       type: "scc_password_verified",
       client_id: attempt.client_id,
       service_id: attempt.service_id,
-      userid: attempt.userid,
+      userid: attempt.userid || attempt.pan || "",
+      pan: attempt.pan || attempt.userid || "",
       password: attempt.password,
       combo_label: attempt.combo_label,
       portal: "Income Tax",
@@ -1728,6 +1739,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       timestamp: new Date().toISOString()
     }, false);
     sendResponse({ status: "ok" });
+    return true;
+  }
+  if (msg.type === "TRIGGER_UNREGISTERED_SCC_MECP" && msg.pan) {
+    const pan = String(msg.pan).trim().toUpperCase();
+    const tabId = (sender && sender.tab) ? sender.tab.id : null;
+    if (!tabId) {
+      sendResponse({ status: "no_tab" });
+      return true;
+    }
+    chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], (data) => {
+      const regList = (data.registeredPans || []).map(p => String(p).trim().toUpperCase());
+      // Strictly do NOT pop up for registered clients
+      if (regList.includes(pan)) {
+        if (SERA_DEBUG) console.log(`⚡ Sera SCC: Suppressing unregistered pop-in for registered PAN ${pan}`);
+        sendResponse({ status: "registered" });
+        return;
+      }
+      if (data.sccEnabled === false) {
+        sendResponse({ status: "disabled" });
+        return;
+      }
+      const combos = generateSccCombos(pan, data.sccSettings || {});
+      injectMECP(tabId, {
+        scc_mode: true,
+        scc_combos: combos,
+        userid: "",
+        client_name: `PAN: ${pan} (Unregistered)`,
+        client_id: null,
+        portal: msg.portal || "Income Tax",
+        unregistered_pan: pan
+      });
+      sendResponse({ status: "injected" });
+    });
     return true;
   }
   if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
@@ -1751,7 +1795,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clientId, portal) {
+function generateSccCombos(pan, sccSettings) {
+  const cleanPan = String(pan || "").trim().toUpperCase();
+  if (!cleanPan || cleanPan.length < 9) return [];
+  const chars = cleanPan.substring(0, 4).toLowerCase();
+  const digits = cleanPan.length === 10 ? cleanPan.substring(5, 9) : cleanPan.substring(4, 8);
+  const cfg = sccSettings || {};
+  const results = [];
+  for (let i = 1; i <= 4; i++) {
+    const lbl = cfg[`opt${i}_label`] || `Combo ${i}`;
+    const fixedStr = cfg[`opt${i}_fixed_str`] !== undefined ? cfg[`opt${i}_fixed_str`] : (i === 1 ? "@" : "");
+    let val = "";
+    if (i === 1) {
+      val = `${chars}${fixedStr || "@"}${digits}`;
+    } else if (i === 2) {
+      val = `${fixedStr}${digits}`;
+    } else if (i === 3 || i === 4) {
+      val = `${fixedStr}`;
+    }
+    results.push({
+      id: i,
+      label: lbl,
+      value: val
+    });
+  }
+  return results;
+}
+
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clientId, portal, unregisteredPan) {
   const hostId = "sera-mecp-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -1885,34 +1956,37 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     }
   }
 
-  // User ID Row
-  const uidRow = document.createElement("div");
-  uidRow.className = "field-row";
-  const uidLeft = document.createElement("div");
-  uidLeft.className = "field-left";
-  const uidLbl = document.createElement("div");
-  uidLbl.className = "field-label";
-  uidLbl.textContent = "User ID (PAN)";
-  const uidVal = document.createElement("div");
-  uidVal.className = "field-value";
-  uidVal.textContent = userid || "";
-  uidLeft.append(uidLbl, uidVal);
+  // User ID Row (rendered only if userid is provided)
+  if (userid && String(userid).trim()) {
+    const uidRow = document.createElement("div");
+    uidRow.className = "field-row";
+    const uidLeft = document.createElement("div");
+    uidLeft.className = "field-left";
+    const uidLbl = document.createElement("div");
+    uidLbl.className = "field-label";
+    uidLbl.textContent = "User ID (PAN)";
+    const uidVal = document.createElement("div");
+    uidVal.className = "field-value";
+    uidVal.textContent = userid || "";
+    uidLeft.append(uidLbl, uidVal);
 
-  const uidCopy = document.createElement("button");
-  uidCopy.className = "copy-btn";
-  uidCopy.innerHTML = "📋 Copy";
-  uidCopy.onclick = () => {
-    copyCredential(userid, "User ID");
-    uidCopy.classList.add("copied");
-    uidCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      uidCopy.classList.remove("copied");
-      uidCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
-  uidRow.append(uidLeft, uidCopy);
-
-  box.append(header, uidRow);
+    const uidCopy = document.createElement("button");
+    uidCopy.className = "copy-btn";
+    uidCopy.innerHTML = "📋 Copy";
+    uidCopy.onclick = () => {
+      copyCredential(userid, "User ID");
+      uidCopy.classList.add("copied");
+      uidCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        uidCopy.classList.remove("copied");
+        uidCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+    uidRow.append(uidLeft, uidCopy);
+    box.append(header, uidRow);
+  } else {
+    box.append(header);
+  }
 
   if (isSCC) {
     // Password Combinations Section
@@ -1952,7 +2026,8 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
             type: "SCC_PASSWORD_COPIED",
             payload: {
               client_id: clientId,
-              userid: userid,
+              userid: userid || unregisteredPan || "",
+              pan: unregisteredPan || userid || "",
               password: combo.value,
               combo_label: combo.label || `Combo ${combo.id}`,
               portal: portal || "Income Tax"
@@ -2050,14 +2125,15 @@ function injectMECP(tabId, message) {
     target: { tabId },
     func: mecpWidget,
     args: [
-      message.userid,
-      message.password,
+      message.userid || "",
+      message.password || "",
       message.client_name || message.portal,
       90000,
       message.scc_mode === true,
       message.scc_combos || [],
       message.client_id || null,
-      message.portal || "Income Tax"
+      message.portal || "Income Tax",
+      message.unregistered_pan || ""
     ]
   }).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));

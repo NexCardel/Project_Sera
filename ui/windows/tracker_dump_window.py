@@ -1218,8 +1218,6 @@ class TrackerDumpWindow(QWidget):
             if item.get('is_unassigned'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
-                act_scc = menu.addAction(_safe_qta_icon("mdi.shield-key-outline", "#4CF9B7"), "⚡ Open Portal via SCC (MECP)")
-                act_scc.triggered.connect(lambda: self._open_scc_mecp_for_item(item))
             act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Container")
             act_del.triggered.connect(lambda: self._delete_srpf_container(item.get("identity_key")))
         else:
@@ -1228,34 +1226,10 @@ class TrackerDumpWindow(QWidget):
             if item.get('is_unassigned') or not item.get('client_id'):
                 act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
-                act_scc = menu.addAction(_safe_qta_icon("mdi.shield-key-outline", "#4CF9B7"), "⚡ Open Portal via SCC (MECP)")
-                act_scc.triggered.connect(lambda: self._open_scc_mecp_for_item(item))
             act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Record")
             act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
-
-    def _open_scc_mecp_for_item(self, item: dict):
-        if not item:
-            return
-        import re
-        cand_pan = ""
-        for k in ("identity_key", "pan", "client_pan", "unassigned_identity"):
-            val = str(item.get(k) or "").strip().upper()
-            if re.match(r"^[A-Z]{5}\d{4}[A-Z]$", val):
-                cand_pan = val
-                break
-        if not cand_pan and isinstance(item.get("raw_payload"), dict):
-            raw_p = item["raw_payload"]
-            for k in ("pan", "pan_number", "userid", "user_id"):
-                val = str(raw_p.get(k) or "").strip().upper()
-                if re.match(r"^[A-Z]{5}\d{4}[A-Z]$", val):
-                    cand_pan = val
-                    break
-
-        from ui.dialogs.quick_scc_dialog import QuickSCCDialog
-        dlg = QuickSCCDialog(self.db, self, prefill_pan=cand_pan)
-        dlg.exec()
 
     def _reset_filters(self):
         """Resets all search and filter dropdowns to their default state."""

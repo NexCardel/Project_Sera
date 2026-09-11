@@ -58,6 +58,55 @@ class TestClipboardAssist(unittest.TestCase):
         is_debounced = (service._last_armed_token == "1" and (now - service._last_armed_time) < service._debounce_window)
         self.assertTrue(is_debounced)
 
+    def test_sca_password_gated_by_scc_verification(self):
+        """Verify SCA strictly zeroes out password for ITR services unless SCC-verified."""
+        # 1. Setup MCL and Services
+        pan_col = next((c for c in self.db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+        pan_id = pan_col["id"] if pan_col else 5
+        pwd_col = next((c for c in self.db.get_mcl_columns() if "pass" in c["label"].lower()), None)
+        pwd_id = pwd_col["id"] if pwd_col else 6
+
+        itr_svc_id = self.db.create_service(
+            name="Income Tax Portal",
+            login_page_link="https://eportal.incometax.gov.in/iec/foservices/#/login",
+            userid_column_id=pan_id,
+            password_column_id=pwd_id,
+            username_selector="#panAdhaarUserId",
+            password_selector="input[type='password']",
+            automation_mode="manual"
+        )
+
+        # Client 1: Unverified client
+        c1_id = self.db.add_client(
+            values={pan_id: "ABCDE1234F", pwd_id: "UnverifiedPass#1"},
+            notes="Regular notes without scc tag",
+            service_ids=[itr_svc_id]
+        )
+
+        service = ClipboardWatchService(self.db, parent=None)
+        armed_payloads = []
+        from unittest.mock import patch
+        with patch("automation.arm_sca", side_effect=lambda **kwargs: armed_payloads.append(kwargs.get("services"))):
+            service._arm_client_services(c1_id, "ABCDE1234F", "ABCDE1234F")
+
+        self.assertEqual(len(armed_payloads), 1)
+        itr_entry = armed_payloads[0][0]
+        self.assertEqual(itr_entry["user_id"], "ABCDE1234F")
+        self.assertEqual(itr_entry["password"], "", "Password MUST be empty for unverified client on ITR portal")
+
+        # Now verify client via SCC tag
+        self.db.tag_client_scc_verified(c1_id, combo_label="Combo 1")
+        self.assertTrue(self.db.is_client_scc_verified(client_id=c1_id))
+
+        armed_payloads.clear()
+        with patch("automation.arm_sca", side_effect=lambda **kwargs: armed_payloads.append(kwargs.get("services"))):
+            service._arm_client_services(c1_id, "ABCDE1234F", "ABCDE1234F")
+
+        self.assertEqual(len(armed_payloads), 1)
+        itr_entry = armed_payloads[0][0]
+        self.assertEqual(itr_entry["user_id"], "ABCDE1234F")
+        self.assertEqual(itr_entry["password"], "UnverifiedPass#1", "Password MUST be delivered once verified via SCC")
+
 
 if __name__ == "__main__":
     unittest.main()
