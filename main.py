@@ -666,6 +666,11 @@ class SeraApp:
         userid = str(msg.get("userid") or msg.get("pan") or "").strip().upper()
         combo_label = str(msg.get("combo_label") or "SCC").strip()
         portal = str(msg.get("portal") or "Income Tax").strip()
+        portal_clean = portal.lower()
+        # Strictly enforce: SCC is exclusively an ITR-only one-time utility. Ignore any non-ITR portal attempts.
+        if "gst" in portal_clean or not any(k in portal_clean for k in ("income", "itr", "tax")):
+            print(f"[main.SCC] Ignored non-ITR SCC verification attempt for portal: {portal}")
+            return
 
         try:
             actor = getattr(self, "actor", "Staff")

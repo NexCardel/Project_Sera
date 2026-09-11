@@ -666,11 +666,12 @@ class ClientDetailWindow(QWidget):
     def _launch_extension_autofill(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:
+            is_itr = automation.is_itr_service(service)
             scc_cfg = self.db.get_scc_settings()
             scc_enabled = scc_cfg.get("enabled", True)
             client_id = self.client.get("id") if self.client else None
             is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
-            if uid and scc_enabled and not is_scc_verified:
+            if is_itr and uid and scc_enabled and not is_scc_verified:
                 self._launch_manual_assist(service)
                 return
 
@@ -731,11 +732,12 @@ class ClientDetailWindow(QWidget):
     def _launch_autofill(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:
+            is_itr = automation.is_itr_service(service)
             scc_cfg = self.db.get_scc_settings()
             scc_enabled = scc_cfg.get("enabled", True)
             client_id = self.client.get("id") if self.client else None
             is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
-            if uid and scc_enabled and not is_scc_verified:
+            if is_itr and uid and scc_enabled and not is_scc_verified:
                 self._launch_manual_assist(service)
                 return
 
@@ -807,7 +809,8 @@ class ClientDetailWindow(QWidget):
     def _launch_manual_assist(self, service: dict):
         uid, pwd = self._get_credentials(service)
 
-        # Check SCC verification status
+        # Check SCC verification status (STRICTLY for Income Tax / ITR only)
+        is_itr = automation.is_itr_service(service)
         scc_cfg = self.db.get_scc_settings()
         scc_enabled = scc_cfg.get("enabled", True)
         client_id = self.client.get("id") if self.client else None
@@ -815,7 +818,7 @@ class ClientDetailWindow(QWidget):
 
         scc_mode = False
         scc_combos = []
-        if scc_enabled and not is_scc_verified:
+        if is_itr and scc_enabled and not is_scc_verified:
             scc_mode = True
             # Extract client PAN using db.get_client_pan or fallback
             client_pan = self.db.get_client_pan(self.client) if hasattr(self.db, "get_client_pan") else ""

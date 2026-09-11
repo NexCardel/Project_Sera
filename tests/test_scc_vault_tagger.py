@@ -372,6 +372,79 @@ class TestSccVaultTagger(unittest.TestCase):
         combos = self.db.generate_scc_passwords(pan=resolved_pan)
         self.assertEqual(combos[0]["value"], "abcd@1234")
 
+    def test_is_itr_service_detection(self):
+        """Verify is_itr_service correctly identifies ITR vs GST and other portals."""
+        itr_svc = {"name": "Income Tax", "login_page_link": "https://eportal.incometax.gov.in/iec/foservices/#/login"}
+        gst_svc = {"name": "GST Portal", "login_page_link": "https://services.gst.gov.in/services/login"}
+        traces_svc = {"name": "TRACES", "login_page_link": "https://www.tdscpc.gov.in/app/login.xhtml"}
+
+        self.assertTrue(automation.is_itr_service(itr_svc))
+        self.assertFalse(automation.is_itr_service(gst_svc))
+        self.assertFalse(automation.is_itr_service(traces_svc))
+
+        self.assertTrue(automation.is_gst_service(gst_svc))
+        self.assertFalse(automation.is_gst_service(itr_svc))
+
+    def test_gst_manual_assist_never_activates_scc(self):
+        """Verify that triggering manual assist for GST never passes scc_mode=True or scc_combos."""
+        gst_svc = {
+            "id": 99,
+            "name": "GST Portal",
+            "login_page_link": "https://services.gst.gov.in/services/login",
+            "username_selector": "#username",
+            "password_selector": "#user_pass"
+        }
+        captured_payloads = []
+        with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
+            # Even if scc_mode=True is accidentally requested for GST, automation must disarm it
+            automation.trigger_manual_assist(
+                gst_svc, "27ABCDE1234F1Z5", "GstPass#2026", 456,
+                scc_mode=True, scc_combos=[{"value": "combo1"}]
+            )
+
+        self.assertEqual(len(captured_payloads), 1)
+        args, kwargs = captured_payloads[0]
+        self.assertEqual(args[0]["name"], "GST Portal")
+        self.assertEqual(args[1], "27ABCDE1234F1Z5")
+        self.assertEqual(args[2], "GstPass#2026")
+        self.assertEqual(kwargs.get("scc_mode"), False, "scc_mode must be False for GST")
+        self.assertIsNone(kwargs.get("scc_combos"), "scc_combos must be None for GST")
+
+    def test_handle_scc_password_verified_rejects_gst(self):
+        """Verify that _handle_scc_password_verified ignores non-ITR / GST verification attempts."""
+        cid = self.db.add_client(
+            values={
+                self.name_col_id: "GST Client Test",
+                self.pan_col_id: "ABCDE9999Z",
+                self.pwd_col_id: "OriginalPassword"
+            },
+            notes="",
+            service_ids=[self.svc_id]
+        )
+
+        import main
+        mock_app = MagicMock()
+        mock_app.db = self.db
+        mock_app.actor = "Operator"
+        mock_app.tray_icon = None
+
+        msg = {
+            "type": "scc_password_verified",
+            "client_id": cid,
+            "service_id": self.svc_id,
+            "userid": "ABCDE9999Z",
+            "password": "FakeInjectedGSTPass",
+            "combo_label": "Combo 1",
+            "portal": "GST"
+        }
+
+        main.SeraApp._handle_scc_password_verified(mock_app, msg)
+
+        # Database must NOT be updated
+        client = self.db.get_client(cid)
+        self.assertEqual(client["values"].get(self.pwd_col_id), "OriginalPassword")
+        self.assertNotIn("Password verified via SCC", client.get("notes") or "")
+
 
 if __name__ == "__main__":
     unittest.main()

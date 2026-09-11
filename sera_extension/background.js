@@ -298,7 +298,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (SERA_DEBUG) console.log(`⚡ Sera SDC: SPA URL changed in tab ${tabId} — keeping existing injection.`);
   }
 
-  // ── SCC Webpage Link Mutation Observer ──────────────────────────────────
+  // ── SCC Webpage Link Mutation Observer (Income Tax / ITR Only) ───────────
   if (sccActiveAttempt && sccActiveAttempt.password) {
     const now = Date.now();
     if (now - (sccActiveAttempt.timestamp || 0) > 10 * 60 * 1000) {
@@ -308,6 +308,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       const curUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : '');
       if (curUrl) {
         const initUrl = sccActiveAttempt.initial_url || '';
+        // SCC is strictly for ITR (incometax.gov.in). Never observe or verify on GST or other domains.
+        const isItrDomain = curUrl.includes('incometax.gov.in') || (initUrl && initUrl.includes('incometax.gov.in'));
+        if (!isItrDomain) {
+          return;
+        }
+
         const urlChanged = initUrl ? (curUrl !== initUrl) : true;
         const isLoginUrl = curUrl.toLowerCase().includes('/login') || curUrl.toLowerCase().endsWith('/login');
         const isPostLoginRoute = urlChanged && !isLoginUrl && (
@@ -315,9 +321,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
           curUrl.includes('/home') ||
           curUrl.includes('/portal') ||
           curUrl.includes('/welcome') ||
-          curUrl.includes('/foservices/#/') ||
-          curUrl.includes('services.gst.gov.in/services/auth') ||
-          urlChanged
+          curUrl.includes('/foservices/#/')
         );
 
         if (isPostLoginRoute) {
@@ -333,7 +337,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             userid: attempt.userid,
             password: attempt.password,
             combo_label: attempt.combo_label,
-            portal: (curUrl && curUrl.includes("gst")) ? "gst" : "income tax",
+            portal: "Income Tax",
             destination_url: curUrl,
             timestamp: new Date().toISOString()
           }, true);
@@ -1554,7 +1558,14 @@ function injectManualAssist(tabId, message) {
   // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
   armedSCAPayload = null;
   chrome.storage.local.remove(['armedSCAPayload']);
-  const sccCombos = (message && message.scc_mode && Array.isArray(message.scc_combos)) ? message.scc_combos : null;
+
+  // SCC is strictly for Income Tax (ITR) only! Never activate for GST or other portals.
+  const portalName = String((message && (message.portal || message.name)) || "").toLowerCase();
+  const pageUrl = String((message && message.url) || "").toLowerCase();
+  const isItrPortal = (portalName.includes("income") || portalName.includes("itr") || pageUrl.includes("incometax")) &&
+                      !portalName.includes("gst") && !pageUrl.includes("gst.gov.in");
+
+  const sccCombos = (isItrPortal && message && message.scc_mode && Array.isArray(message.scc_combos)) ? message.scc_combos : null;
   chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
       message.client_name || message.portal, 30000, sccCombos, message.client_id || null, message.service_id || null] })

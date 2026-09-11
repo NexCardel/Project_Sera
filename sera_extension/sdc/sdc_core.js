@@ -581,17 +581,21 @@
 
       try {
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-          chrome.storage.local.get(['sccActiveAttempt'], (data) => {
-            if (data && data.sccActiveAttempt && data.sccActiveAttempt.password) {
-              payload.scc_verified_password = data.sccActiveAttempt.password;
-              payload.combo_label = data.sccActiveAttempt.combo_label;
-              payload.client_id = data.sccActiveAttempt.client_id;
-              payload.service_id = data.sccActiveAttempt.service_id;
-              chrome.storage.local.remove(['sccActiveAttempt']);
-            }
-            send();
-          });
-          return;
+          // SCC is strictly for Income Tax (ITR) only! Never attach on GST or other domains.
+          const host = (window.location && window.location.hostname) || '';
+          if (host.includes('incometax.gov.in')) {
+            chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+              if (data && data.sccActiveAttempt && data.sccActiveAttempt.password) {
+                payload.scc_verified_password = data.sccActiveAttempt.password;
+                payload.combo_label = data.sccActiveAttempt.combo_label;
+                payload.client_id = data.sccActiveAttempt.client_id;
+                payload.service_id = data.sccActiveAttempt.service_id;
+                chrome.storage.local.remove(['sccActiveAttempt']);
+              }
+              send();
+            });
+            return;
+          }
         }
       } catch (_) {}
 

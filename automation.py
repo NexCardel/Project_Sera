@@ -46,6 +46,31 @@ def is_extension_portal(service: dict) -> bool:
     return mode in ("extension", "playwright")
 
 
+def is_itr_service(service: dict) -> bool:
+    """Returns True ONLY if the service corresponds to the Income Tax (ITR) portal."""
+    if not service or not isinstance(service, dict):
+        return False
+    name = str(service.get("name") or "").strip().lower()
+    link = str(service.get("login_page_link") or "").strip().lower()
+    # Negative filters: portals that are explicitly NOT Income Tax
+    non_itr_keywords = ("gst", "traces", "tds", "epfo", "pf", "mca", "icegate", "esi", "gem")
+    if any(kw in name or kw in link for kw in non_itr_keywords):
+        return False
+    return (
+        any(kw in name for kw in ("income tax", "incometax", "itr", "income-tax", "income_tax", "eportal"))
+        or any(kw in link for kw in ("incometax.gov.in", "incometaxindiaefiling.gov.in", "eportal.incometax"))
+    )
+
+
+def is_gst_service(service: dict) -> bool:
+    """Returns True if the service corresponds to the Goods and Services Tax (GST) portal."""
+    if not service or not isinstance(service, dict):
+        return False
+    name = str(service.get("name") or "").strip().lower()
+    link = str(service.get("login_page_link") or "").strip().lower()
+    return "gst" in name or "gst.gov.in" in link
+
+
 def get_login_url(service: dict) -> str:
     return service["login_page_link"]
 
@@ -56,6 +81,10 @@ def autofill_login(service: dict, user_id: str, password: str, client_id: int, o
 
 def trigger_manual_assist(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
     """Open the portal and ask the companion extension to show SMTI Manual Assist."""
+    # SCC is strictly an ITR-only one-time utility. Disarm for any other portal (especially GST).
+    if scc_mode and not is_itr_service(service):
+        scc_mode = False
+        scc_combos = None
     _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist", scc_mode=scc_mode, scc_combos=scc_combos)
 
 
@@ -121,6 +150,11 @@ def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
 
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
     """Sends the autofill/SMTI/MECP payload to the native_host via TCP with retry & auto-launch fallback."""
+    # Defense-in-depth: SCC is strictly an ITR-only one-time utility
+    if scc_mode and not is_itr_service(service):
+        scc_mode = False
+        scc_combos = []
+
     u_sel = (service.get("username_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     p_sel = (service.get("password_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     payload = {
