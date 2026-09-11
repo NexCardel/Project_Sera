@@ -207,9 +207,15 @@ function renderScaWidgetFromContent(params) {
     return null;
   }
 
+  try {
+    if (window.self !== window.top) return;
+  } catch (_) {
+    return;
+  }
+
   const hostId = "sera-sca-widget-host";
   const old = document.getElementById(hostId);
-  if (old) old.remove();
+  if (old) return;
 
   const host = document.createElement("div");
   host.id = hostId;

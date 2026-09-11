@@ -662,18 +662,30 @@ function handleAutofillTab(message) {
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, sccCombos, clientId, serviceId) {
   try {
     if (window.self !== window.top) return;
-  } catch (_) {}
+  } catch (_) {
+    return;
+  }
 
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
-  if (old) old.remove();
+  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
+  if (old) {
+    const curCid = old.getAttribute("data-client-id");
+    const curMode = old.getAttribute("data-is-scc");
+    if (curCid === String(clientId) && curMode === String(isScc)) {
+      // Widget is already active and displayed on this page for this client & mode
+      return;
+    }
+    old.remove();
+  }
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
-  const isScc = Array.isArray(sccCombos) && sccCombos.length > 0;
   const duration = isScc ? 120000 : (expiresMs || 30000);
   const host = document.createElement("div");
   host.id = hostId;
+  host.setAttribute("data-client-id", String(clientId));
+  host.setAttribute("data-is-scc", String(isScc));
   host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
 
   const shadow = host.attachShadow({ mode: "closed" });
@@ -1502,12 +1514,22 @@ function handleManualAssistTab(message) {
     const open = tab => {
       if (!tab) return;
       chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === tab.id && info.status === "complete") {
+      let listenerFired = false;
+      const listener = (tabId, info) => {
+        if (tabId === tab.id && info.status === "complete" && !listenerFired) {
+          listenerFired = true;
           chrome.tabs.onUpdated.removeListener(listener);
           setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
         }
-      });
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      setTimeout(() => {
+        try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
+      }, 30000);
+
+      if (tab.status === "complete") {
+        setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
+      }
       chrome.tabs.update(tab.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
     };
     if (existing) open(existing); else chrome.tabs.create({ url: message.url }, open);
@@ -1573,7 +1595,15 @@ function clearBrowserCookies(callback) {
   }
 }
 
+const _lastManualAssistInject = {};
 function injectManualAssist(tabId, message) {
+  if (!tabId) return;
+  const now = Date.now();
+  if (_lastManualAssistInject[tabId] && (now - _lastManualAssistInject[tabId]) < 1000) {
+    return;
+  }
+  _lastManualAssistInject[tabId] = now;
+
   recordInjectionAndClearCookiesIfNeeded();
   // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
   armedSCAPayload = null;
@@ -1586,7 +1616,7 @@ function injectManualAssist(tabId, message) {
                       !portalName.includes("gst") && !pageUrl.includes("gst.gov.in");
 
   const sccCombos = (isItrPortal && message && message.scc_mode && Array.isArray(message.scc_combos)) ? message.scc_combos : null;
-  chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
+  chrome.scripting.executeScript({ target:{ tabId }, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
       message.client_name || message.portal, 30000, sccCombos, message.client_id || null, message.service_id || null] })
     .then(() => console.log("Sera: Manual Assist widget injected"))
@@ -2152,7 +2182,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         if (isWidgetMode) {
           // Trigger interactive SCA Widget on this tab
           chrome.scripting.executeScript({
-            target: { tabId: sender.tab.id, allFrames: true },
+            target: { tabId: sender.tab.id },
             func: (pwd, pwdSel, bizName, ownName, portalName, matchedUid, clientId, clientToken) => {
               function isVis(el) {
                 if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
@@ -2212,9 +2242,14 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               }
 
               function renderAndShowWidget(targetField) {
+                try {
+                  if (window.self !== window.top) return;
+                } catch (_) {
+                  return;
+                }
                 const hostId = "sera-sca-widget-host";
                 const old = document.getElementById(hostId);
-                if (old) old.remove();
+                if (old) return;
                 const assistOld = document.getElementById("sera-sca-assist-host");
                 if (assistOld) assistOld.remove();
                 const toastOld = document.getElementById("sera-sca-toast-host");
