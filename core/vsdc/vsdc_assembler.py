@@ -143,10 +143,18 @@ class VisualSessionAssembler:
             else:
                 existing_words = self.client_name.split()
                 new_words = new_name.split()
-                # Do not downgrade a full name to a partial fragment (e.g. preserve 'WASIL AMAN MANDAL' if new is 'WASIL MANDAL' or 'WASIL AMAN')
-                if len(existing_words) > len(new_words) and (new_name in self.client_name or set(new_words).issubset(set(existing_words))):
-                    pass
-                else:
+                # Do not downgrade a full name to a partial fragment or truncated version
+                # (e.g. preserve 'WASIL AMAN MANDAL' if incoming is 'WASIL MANDAL', 'WASIL AMAN', or 'WASIL AMAN MAND')
+                is_downgrade = False
+                if len(new_words) < len(existing_words):
+                    if set(new_words).issubset(set(existing_words)) or new_name in self.client_name:
+                        is_downgrade = True
+                elif len(new_words) == len(existing_words):
+                    if all(ew.startswith(nw) for nw, ew in zip(new_words, existing_words)):
+                        if len(new_name.replace(' ', '')) < len(self.client_name.replace(' ', '')):
+                            is_downgrade = True
+
+                if not is_downgrade:
                     self.client_name = new_name
         if gstin:
             self.gstin = gstin.strip().upper()

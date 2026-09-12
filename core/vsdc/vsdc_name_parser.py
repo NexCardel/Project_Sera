@@ -234,13 +234,36 @@ def extract_composite_form_name(lines: List[str]) -> Optional[str]:
         if re.search(r"\bFirst\s*Name\b", line_clean, re.IGNORECASE) and re.search(r"\b(?:Last\s*Name|Surname)\b", line_clean, re.IGNORECASE):
             if idx + 1 < len(lines):
                 next_line = lines[idx + 1].strip()
+                # 1. Check if next_line itself is the full synthesized name (e.g. "WASIL AMAN MANDAL")
+                clean_cand = sanitize_visual_name(next_line)
+                cand_words = clean_cand.split()
+                if len(cand_words) >= 2 and is_valid_name(clean_cand) and not any(w in NOISE_WORDS for w in cand_words):
+                    return clean_cand
+                # 2. Check tab or multi-space separation
                 val_parts = [p.strip() for p in re.split(r"\s{2,}|\t+", next_line) if p.strip()]
                 if len(val_parts) >= 2:
                     clean_parts = [sanitize_visual_name(p) for p in val_parts]
                     if all(is_valid_name(p) or (len(p) >= 2 and p.isalpha()) for p in clean_parts):
                         assembled = " ".join(clean_parts)
-                        if is_valid_name(assembled):
+                        if is_valid_name(assembled) and not any(w in NOISE_WORDS for w in assembled.split()):
                             return assembled
+
+        # Check consecutive 3 header lines followed by 3 value lines:
+        # Line i:   "First Name"
+        # Line i+1: "Middle Name"
+        # Line i+2: "Last Name"
+        # Line i+3: "WASIL"
+        # Line i+4: "AMAN"
+        # Line i+5: "MANDAL"
+        if idx + 5 < len(lines):
+            l0, l1, l2 = lines[idx].strip(), lines[idx + 1].strip(), lines[idx + 2].strip()
+            if re.search(r"^First\s*Name\b", l0, re.IGNORECASE) and re.search(r"^Middle\s*Name\b", l1, re.IGNORECASE) and re.search(r"^(?:Last\s*Name|Surname)\b", l2, re.IGNORECASE):
+                v0, v1, v2 = sanitize_visual_name(lines[idx + 3]), sanitize_visual_name(lines[idx + 4]), sanitize_visual_name(lines[idx + 5])
+                parts = [p for p in [v0, v1, v2] if p and is_valid_name(p) and p not in NOISE_WORDS]
+                if len(parts) >= 2:
+                    assembled = " ".join(parts)
+                    if is_valid_name(assembled):
+                        return assembled
 
     for idx, line in enumerate(lines):
         line_clean = line.strip()
@@ -338,7 +361,25 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     if composite:
         return composite
 
-    # 1. Check for labeled fields (excluding individual First/Middle/Last/Surname fragments)
+    # 1. Check Profile / Personal Details labeled rows (e.g. "Full Name as per PAN", "Name as per PAN", "Legal Name", "Full Name")
+    for idx, line in enumerate(lines):
+        line_clean = line.strip()
+        # Direct next-line value for Full Name / Name as per PAN / Taxpayer Name / Assessee Name
+        if re.search(r"^(?:Full\s*Name(?:\s*as\s*per\s*PAN)?|Name\s*as\s*per\s*PAN|Legal\s*Name|Taxpayer\s*Name|Assessee\s*Name)\s*[:\-]?$", line_clean, re.IGNORECASE):
+            if idx + 1 < len(lines):
+                cand = sanitize_visual_name(lines[idx + 1])
+                words = cand.split()
+                if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
+                    return cand
+        # Inline with colon or dash: "Full Name as per PAN : WASIL AMAN MANDAL"
+        m_inline = re.search(r"\b(?:Full\s*Name(?:\s*as\s*per\s*PAN)?|Name\s*as\s*per\s*PAN|Legal\s*Name|Taxpayer\s*Name|Assessee\s*Name)\s*[:\-]\s*([A-Za-z\s.'-]{3,60})", line_clean, re.IGNORECASE)
+        if m_inline:
+            cand = sanitize_visual_name(m_inline.group(1))
+            words = cand.split()
+            if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
+                return cand
+
+    # 2. Check for labeled fields (excluding individual First/Middle/Last/Surname fragments)
     for line in lines:
         m_prefix = re.search(
             r"\b(First|Middle|Last|Sur(?:name)?|Full|Legal|Taxpayer|Assessee)?\s*Name\s*[:\-]\s*([A-Za-z\s.'-]{3,60})",

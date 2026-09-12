@@ -202,8 +202,54 @@ class TestVSDCNameParser(unittest.TestCase):
         assembler.update_identity(name="WASIL MANDAL")
         self.assertEqual(assembler.client_name, "WASIL AMAN MANDAL")
 
-        assembler.update_identity(name="WASIL AMAN")
+        # Truncated prefix words (e.g. WASIL AMAN MAND.) should NOT overwrite authoritative name
+        assembler.update_identity(name="WASIL AMAN MAND")
         self.assertEqual(assembler.client_name, "WASIL AMAN MANDAL")
+
+    def test_personal_info_page_table_extraction(self):
+        # Real OCR lines from Part A General - Personal Information screen
+        lines = [
+            "e-Filing Anywhere Anytime",
+            "WASIL AMAN MAND...",
+            "Individual",
+            "Dashboard > e-file > Income Tax Return > Return Summary > Part A General - Personal Information",
+            "Part A General - Personal Information",
+            "Profile",
+            "First Name Middle Name Last Name",
+            "WASIL AMAN MANDAL",
+            "PAN Date of Birth / Formation Aadhaar Number",
+            "GZEPM6367M"
+        ]
+        extracted = extract_name_from_ocr_lines(lines)
+        self.assertEqual(extracted, "WASIL AMAN MANDAL")
+
+    def test_profile_page_full_name_as_per_pan(self):
+        # Real OCR lines from My Profile screen
+        lines = [
+            "e-Filing Anywhere Anytime",
+            "WASIL AMAN MAND...",
+            "Individual",
+            "My Profile",
+            "Personal Details",
+            "Full Name as per PAN",
+            "WASIL AMAN MANDAL",
+            "PAN",
+            "GZEPM6367M"
+        ]
+        extracted = extract_name_from_ocr_lines(lines)
+        self.assertEqual(extracted, "WASIL AMAN MANDAL")
+
+    def test_stacked_composite_headers_and_values(self):
+        lines = [
+            "First Name",
+            "Middle Name",
+            "Last Name",
+            "WASIL",
+            "AMAN",
+            "MANDAL"
+        ]
+        extracted = extract_composite_form_name(lines)
+        self.assertEqual(extracted, "WASIL AMAN MANDAL")
 
 
 if __name__ == "__main__":

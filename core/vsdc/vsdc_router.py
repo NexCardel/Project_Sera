@@ -248,7 +248,8 @@ class VSDCRouter:
             self.last_crosshair_id = matched_crosshair.id
             self.assembler.record_step(url, matched_crosshair.id)
             label_text = getattr(matched_crosshair, "label", getattr(matched_crosshair, "description", matched_crosshair.id))
-            self.notify_activity("route", f"Monitoring: {label_text}", f"Portal: {self.active_portal}")
+            # Route changes are console-only; toast only fires for identity/capture/flush
+            print(f"[VSDC Router] Route: {label_text} | Portal: {self.active_portal}")
 
         # Handle session boundaries (Login / Logout / Timeout)
         if matched_crosshair.is_session_boundary:
@@ -322,7 +323,11 @@ class VSDCRouter:
         # on receipt card), or if extracted name is incomplete (fewer than 2 words), scan the header region!
         name_incomplete = not client_name or len(client_name.split()) < 2
         pan_missing = not pan and not self.assembler.client_pan
-        if pan_missing or (name_incomplete and not self.assembler.client_name):
+        # For the Personal Info / Profile page the center_card already contains the name table.
+        # The portal header always shows a truncated profile pill (e.g. "WASIL AMAN MAND...") —
+        # running header OCR would overwrite the correct full name with a fragment.
+        _skip_header_for_name = matched_crosshair.id == "itr_personal_info"
+        if pan_missing or (name_incomplete and not self.assembler.client_name and not _skip_header_for_name):
             if matched_crosshair.target_crop != "header":
                 header_res = self.ocr.scan_image(img, region_type="header")
                 h_text = header_res.get("text", "")
@@ -337,17 +342,29 @@ class VSDCRouter:
                     pan = h_pan
                 if h_gstin and not gstin:
                     gstin = h_gstin
+        # If we skipped header for name but still need PAN, scan header for PAN only
+        elif pan_missing and _skip_header_for_name:
+            if matched_crosshair.target_crop != "header":
+                header_res = self.ocr.scan_image(img, region_type="header")
+                h_text = header_res.get("text", "")
+                h_pan = extract_pan(h_text)
+                h_gstin = extract_gstin(h_text)
+                if h_pan and not pan:
+                    pan = h_pan
+                if h_gstin and not gstin:
+                    gstin = h_gstin
 
         if client_name:
             self.assembler.update_identity(name=client_name)
-            is_better_name = not self.last_logged_name or len(client_name.split()) > len(self.last_logged_name.split())
-            if is_better_name and client_name != self.last_logged_name:
-                print(f"[VSDC Router] Extracted client name: {client_name}")
-                self.last_logged_name = client_name
+            authoritative_name = self.assembler.client_name or client_name
+            is_better_name = not self.last_logged_name or len(authoritative_name.split()) > len(self.last_logged_name.split())
+            if is_better_name and authoritative_name != self.last_logged_name:
+                print(f"[VSDC Router] Extracted client name: {authoritative_name}")
+                self.last_logged_name = authoritative_name
 
         if pan or gstin:
             flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, portal=self.active_portal)
-            c_name = client_name or self.assembler.client_name or ""
+            c_name = self.assembler.client_name or client_name or ""
             if pan and pan != self.last_logged_pan:
                 print(f"[VSDC Router] Identity updated: PAN={pan}")
                 self.notify_activity("identity", f"Assessee: {pan}", f"{c_name}" if c_name else f"Portal: {self.active_portal}")
@@ -433,8 +450,10 @@ class VSDCRouter:
                 )
                 form_lbl = filing_type or self.assembler.current_filing_type or "Return"
                 period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
-                ack_lbl = f"Ack: {ack_number}"
-                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", ack_lbl)
+                assessee = self.assembler.client_name or ""
+                name_part = f"{assessee} • " if assessee else ""
+                # Toast title: form + period; subtitle: name + ack
+                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}Ack: {ack_number}")
 
                 if is_sub_crosshair:
                     # Seal and flush filing payload!
@@ -442,8 +461,9 @@ class VSDCRouter:
                     if master_payload:
                         self.has_flushed_current_route = True
                         self.assembler.clear_workflow_selection()
+                        flush_name = master_payload.get("client_name") or master_payload.get("pan", "")
                         print(f"[VSDC Router] Flushed filing payload to tracker dump: Ack={ack_number} Form={form_lbl} Status={status}")
-                        self.notify_activity("flush", "Filing Saved to Tracker Dump", f"{master_payload.get('pan', '')} • {form_lbl}")
+                        self.notify_activity("flush", "Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
                     return master_payload
 
         # Dataset Completion Principle:
@@ -454,8 +474,9 @@ class VSDCRouter:
             c_period = f" • {completed_payload.get('period_label')}" if completed_payload.get("period_label") else ""
             c_status = completed_payload.get("status", "Submitted")
             c_pan = completed_payload.get("pan", "")
+            c_name = completed_payload.get("client_name") or c_pan
             print(f"[VSDC Router] Dataset completed & shot to app: PAN={c_pan} Form={c_form}{c_period} Status={c_status}")
-            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"Status: {c_status}")
+            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}")
             return completed_payload
 
         return None

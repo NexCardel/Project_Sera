@@ -72,7 +72,7 @@ ITR_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="itr_personal_info",
         protocol="Income Tax",
-        pattern=re.compile(r"(?:personal.?information|personal.?info|test_page_personal_info|myProfile|profileDetail|profile-detail|my-profile|profile|partA_gen|parta.?gen|part-a-general)", re.IGNORECASE),
+        pattern=re.compile(r"(?:personal.?information|personal.?info|test_page_personal_info|myProfile|profileDetail|profile-detail|my-profile|profile|partA|part-a|foreturns-ay\d+/(?:fo-itr\d+|fo-schedule|fo-return|parta)|return-summary|user-profile|view-profile)", re.IGNORECASE),
         target_crop="center_card",
         description="Taxpayer personal information and profile detail",
         host_pattern=ITR_HOST_PATTERN,
