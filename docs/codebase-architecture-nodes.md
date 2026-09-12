@@ -54,6 +54,15 @@ graph TD
         SAD_DETECT["sera_extension/content_scripts/filing_detector.js<br/><i>(Filing Detector Bridge)</i>"]:::native
     end
 
+    subgraph VSDC Optical Harvester
+        VSDC_WORKER["core/vsdc/vsdc_worker.py<br/><i>(Frame Cropper & Worker)</i>"]:::core
+        VSDC_ROUTER["core/vsdc/vsdc_router.py<br/><i>(UIA Route Gater & Crosshairs)</i>"]:::core
+        VSDC_ASSEMBLER["core/vsdc/vsdc_assembler.py<br/><i>(Multi-Screen Session Assembler)</i>"]:::core
+        VSDC_OCR["core/vsdc/vsdc_ocr.py<br/><i>(DirectML Windows.Media.Ocr)</i>"]:::core
+        VSDC_REGEX["core/vsdc/vsdc_regex.py<br/><i>(Statutory Tax Regex & Repair)</i>"]:::core
+        VSDC_HUD["ui/components/vsdc_hud_pill.py<br/><i>(Ambient HUD Pill Overlay)</i>"]:::shell
+    end
+
     %% Connections
     MAIN --> DB
     MAIN --> SEC
@@ -66,6 +75,14 @@ graph TD
     MAIN --> TRACKER_DUMP
     MAIN --> EXT_LISTEN
     MAIN --> NH_HOST
+    MAIN --> VSDC_WORKER
+
+    VSDC_WORKER --> VSDC_ROUTER
+    VSDC_ROUTER --> VSDC_OCR
+    VSDC_ROUTER --> VSDC_REGEX
+    VSDC_ROUTER --> VSDC_ASSEMBLER
+    VSDC_ROUTER --> VSDC_HUD
+    VSDC_ASSEMBLER --> DB
 
     DB --> SEC
     SYNC --> SEC
@@ -153,6 +170,22 @@ graph LR
 
 ---
 
+### VSDC Optical Harvester Layer
+
+```mermaid
+graph LR
+    vsdc_worker["core/vsdc/vsdc_worker.py"] --> vsdc_router["core/vsdc/vsdc_router.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_crosshairs["core/vsdc/vsdc_crosshairs.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_ocr["core/vsdc/vsdc_ocr.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_regex["core/vsdc/vsdc_regex.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_name_parser["core/vsdc/vsdc_name_parser.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_assembler["core/vsdc/vsdc_assembler.py"]
+    vsdc_router["core/vsdc/vsdc_router.py"] --> vsdc_hud_pill["ui/components/vsdc_hud_pill.py"]
+    vsdc_assembler["core/vsdc/vsdc_assembler.py"] --> database["database.py"]
+```
+
+---
+
 ## 3. Component Responsibility Reference
 
 | Module Path | Primary Class / Functions | Connected Dependencies | Responsibility |
@@ -162,6 +195,13 @@ graph LR
 | [`security.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/security.py) | `derive_key_hex`, `load_salt`, `verify_pin` | Python standard crypto libraries | PBKDF2 key derivation, salt generation/loading, Argon2id PIN verification. |
 | [`sync_peer.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/sync_peer.py) | `SyncPeerService`, `PeerInfo` | `main` | Zero-configuration UDP LAN peer discovery (`BEACON_PORT 49156`) & TCP raw database/salt push (`SYNC_PORT 49157`). |
 | [`version.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/version.py) | `check_for_updates`, `apply_and_restart` | `update_dialog` | Queries GitHub raw release metadata (`version.json`) and orchestrates mandatory application updating. |
+| [`core/vsdc/vsdc_router.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_router.py) | `VsdcRouter` | `vsdc_crosshairs`, `vsdc_ocr`, `vsdc_regex`, `vsdc_assembler` | Windows UIA browser URL inspection, route crosshair matching, regional cropping, and OCR routing. |
+| [`core/vsdc/vsdc_assembler.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_assembler.py) | `VsdcAssembler` | `database` | Multi-screen taxpayer session buffering, boundary reset, Ack validation, and dataset emission. |
+| [`core/vsdc/vsdc_name_parser.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_name_parser.py) | `extract_clean_client_name` | `re` | Normalizes OCR text, strips web ligatures and portal noise, and parses multi-word taxpayer names. |
+| [`core/vsdc/vsdc_regex.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_regex.py) | Regex parsers & repair | `re` | Validates PAN, GSTIN, Ack numbers; repairs font confusion; extracts latest filed return cards. |
+| [`core/vsdc/vsdc_ocr.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_ocr.py) | `VsdcOcrEngine` | `winsdk.windows.media.ocr` | Hardware-accelerated offline DirectML OCR via native Windows 10/11 runtime. |
+| [`core/vsdc/vsdc_worker.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_worker.py) | `VsdcWorker` | `QThread`, `vsdc_router` | Background polling loop executing non-blocking frame ticks against active browser windows. |
+| [`ui/components/vsdc_hud_pill.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/components/vsdc_hud_pill.py) | `VsdcHudPill` | `QWidget`, `QPainter` | Floating frameless HUD Pill displaying live taxpayer name, PAN, and filing confirmation badge. |
 | [`ui/shell/app_shell.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/app_shell.py) | `AppShell` | `sidebar`, `slide_panel`, `toast`, `alert_service` | Main application shell frame, tab switcher blur effects, notification alert queue. |
 | [`ui/shell/sidebar.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/sidebar.py) | `Sidebar` | `theme` | Left navigation bar, admin mode toggle, profile row with Sera Sync trigger. |
 | [`ui/shell/slide_panel.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/slide_panel.py) | `SlidePanel` | Qt animation framework | Smooth sliding drawer component for viewing client details over search results. |
@@ -195,3 +235,22 @@ main.py ──> security.load_salt() ──> security.derive_key_hex() ──> d
 ```
 Chrome/Edge Extension ──(Native Messaging STDIN)──> native_host/host.py ──(Socket)──> ui/extension_listener.py ──> database.py
 ```
+
+### D. VSDC Zero-Browser Optical Session Capture
+```
+Browser Window ──(UIA Address Bar)──> vsdc_worker.py ──> vsdc_router.py (Crosshair Gate)
+                                                              │
+                                            ┌─────────────────┴─────────────────┐
+                                            ▼                                   ▼
+                                 DirectML Regional OCR                 Deterministic Regex
+                                 (Windows.Media.Ocr)                 (vsdc_regex / name_parser)
+                                            │                                   │
+                                            └─────────────────┬─────────────────┘
+                                                              ▼
+                                                     vsdc_assembler.py
+                                                              │
+                                            ┌─────────────────┴─────────────────┐
+                                            ▼                                   ▼
+                                     VsdcHudPill (UI)                  database.tracker_dump
+```
+

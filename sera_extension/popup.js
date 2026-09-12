@@ -2,6 +2,8 @@
 
 document.addEventListener('DOMContentLoaded', () => {
   const toggleFst = document.getElementById('toggle-fst');
+  const toggleVsdc = document.getElementById('toggle-vsdc');
+  const vsdcBadge = document.getElementById('vsdc-badge');
   const toggleSds = document.getElementById('toggle-sds');
   const toggleToast = document.getElementById('toggle-toast');
   const toggleSca = document.getElementById('toggle-sca');
@@ -21,12 +23,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   } catch (_) {}
 
+  function updateVsdcBadge(active) {
+    if (!vsdcBadge) return;
+    if (active) {
+      vsdcBadge.textContent = 'Active';
+      vsdcBadge.className = 'pill pill-green';
+      vsdcBadge.style.background = '';
+      vsdcBadge.style.color = '';
+      vsdcBadge.style.border = '';
+    } else {
+      vsdcBadge.textContent = 'Off';
+      vsdcBadge.className = 'pill';
+      vsdcBadge.style.background = 'rgba(107, 114, 128, 0.15)';
+      vsdcBadge.style.color = '#9ca3af';
+      vsdcBadge.style.border = '1px solid rgba(107, 114, 128, 0.3)';
+    }
+  }
+
   // 1. Load current extension settings from storage
   function loadSettings() {
     chrome.storage.local.get([
       'trackerEnabled',
       'fstEnabled',
       'sdcEnabled',
+      'vsdcEnabled',
       'sdsEnabled',
       'sdcToastEnabled',
       'scaEnabled',
@@ -35,11 +55,14 @@ document.addEventListener('DOMContentLoaded', () => {
     ], (data) => {
       const tracker = data.trackerEnabled !== false;
       const sdc = (data.sdcEnabled !== false) && tracker;
+      const vsdc = data.vsdcEnabled !== false;
       const sds = false; // Paused
       const toast = data.sdcToastEnabled !== false;
       const sca = data.scaEnabled !== false;
 
       if (toggleFst) toggleFst.checked = sdc;
+      if (toggleVsdc) toggleVsdc.checked = vsdc;
+      updateVsdcBadge(vsdc);
       if (toggleSds) toggleSds.checked = false;
       if (toggleToast) toggleToast.checked = toast;
       if (toggleSca) toggleSca.checked = sca;
@@ -84,17 +107,21 @@ document.addEventListener('DOMContentLoaded', () => {
     syncStatus.style.color = '#f59e0b';
 
     const sdcVal = toggleFst ? toggleFst.checked : true;
+    const vsdcVal = toggleVsdc ? toggleVsdc.checked : true;
     const sdsVal = toggleSds ? toggleSds.checked : true;
     const toastVal = toggleToast ? toggleToast.checked : true;
     const scaVal = toggleSca ? toggleSca.checked : true;
+
+    updateVsdcBadge(vsdcVal);
 
     const storageUpdate = {
       sadEnabled: false, // Permanently purged
       fstEnabled: sdcVal,
       sdcEnabled: sdcVal,
+      vsdcEnabled: vsdcVal,
       sdsEnabled: sdsVal,
       sdcToastEnabled: toastVal,
-      trackerEnabled: sdcVal || sdsVal,
+      trackerEnabled: sdcVal || sdsVal || vsdcVal,
       sadBrowserNotifEnabled: false,
       scaEnabled: scaVal
     };
@@ -118,6 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Attach toggle change listeners
   if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
+  if (toggleVsdc) toggleVsdc.addEventListener('change', () => saveSettings('vsdcEnabled'));
   if (toggleSds) toggleSds.addEventListener('change', () => saveSettings('sdsEnabled'));
   if (toggleToast) toggleToast.addEventListener('change', () => saveSettings('sdcToastEnabled'));
   if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));

@@ -60,6 +60,7 @@ from ui.windows.admin_window import AdminWindow, AdminPinDialog, NewClientDialog
 from ui.windows.tracker_dump_window import TrackerDumpWindow
 from ui.utils.theme import get_theme_stylesheet
 from ui.extension_listener import ExtensionListener
+from ui.components.vsdc_hud_pill import VSDCHudPill
 
 APP_DIR = Path.home() / "AmanAssociates_Sera"
 
@@ -289,6 +290,8 @@ class SeraApp:
                 self.db.set_setting("tracker_enabled", "1")
             if self.db.get_setting("scc_enabled") is None:
                 self.db.set_setting("scc_enabled", "1")
+            if self.db.get_setting("vsdc_enabled") is None:
+                self.db.set_setting("vsdc_enabled", "1")
             self.scc_banner = None
 
             # Initialize Sera Clipboard Assist (SCA) immediately so cold-boot copies are armed
@@ -360,6 +363,19 @@ class SeraApp:
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
         self.ext_listener.start()
 
+        # Start VSDC (Visual Sera DOM Crosshair) background worker & HUD Indicator
+        try:
+            from core.vsdc import VSDCWorker
+            self.vsdc_hud = VSDCHudPill()
+            self.vsdc_worker = VSDCWorker(parent=self.app)
+            self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
+            self.vsdc_worker.activity_event.connect(self._on_vsdc_activity_event)
+            self.app.aboutToQuit.connect(self.vsdc_worker.stop)
+            if self.db.get_setting("vsdc_enabled", "1") == "1":
+                self.vsdc_worker.start()
+        except Exception as vsdc_exc:
+            print(f"⚠️ [main] VSDC Worker initialization warning: {vsdc_exc}")
+
         # Heavy historical repair/report work is intentionally deferred until
         # after the main window and extension listener are available.
         threading.Thread(
@@ -379,9 +395,18 @@ class SeraApp:
         self._sync_extension_settings()
 
     def _handle_extension_settings_updated(self, msg: dict):
-        """Persists extension settings toggled from browser popup into SQLite database."""
+        """Persists extension settings toggled from browser popup into SQLite database and controls VSDC worker."""
         try:
             to_set = {}
+            if "vsdc_enabled" in msg:
+                vsdc_on = bool(msg["vsdc_enabled"])
+                to_set["vsdc_enabled"] = "1" if vsdc_on else "0"
+                if hasattr(self, "vsdc_worker") and self.vsdc_worker:
+                    if vsdc_on:
+                        self.vsdc_worker.resume()
+                    else:
+                        self.vsdc_worker.pause()
+                    print(f"[main] VSDC Worker {'resumed' if vsdc_on else 'paused'} via extension popup toggle")
             if "sdc_enabled" in msg:
                 to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
             if "fst_enabled" in msg:
@@ -405,6 +430,7 @@ class SeraApp:
         try:
             sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
             fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
+            vsdc = self.db.get_setting("vsdc_enabled", "1") in ("1", "true", "True")
             sad = self.db.get_setting("sad_enabled", "1") in ("1", "true", "True")
             sad_notif = self.db.get_setting("sad_browser_notif_enabled", "1") in ("1", "true", "True")
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
@@ -420,8 +446,9 @@ class SeraApp:
                 "status": "ok",
                 "sdc_enabled": sdc,
                 "fst_enabled": fst or sdc,
+                "vsdc_enabled": vsdc,
                 "sad_enabled": sad,
-                "tracker_enabled": sdc or fst or sad,
+                "tracker_enabled": sdc or fst or sad or vsdc,
                 "sad_browser_notif_enabled": sad_notif,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
@@ -443,6 +470,7 @@ class SeraApp:
                 update_extension_settings(
                     fst_enabled=payload.get("fst_enabled", True),
                     sdc_enabled=payload.get("sdc_enabled", True),
+                    vsdc_enabled=payload.get("vsdc_enabled", True),
                     sad_enabled=payload.get("sad_enabled", True),
                     tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),
@@ -477,6 +505,11 @@ class SeraApp:
             finally:
                 self._capture_queue.task_done()
 
+    def _on_vsdc_activity_event(self, event_type: str, title: str, subtitle: str = ""):
+        """Displays real-time bottom-left HUD overlay (no system tray, disappears within 3s)."""
+        if hasattr(self, "vsdc_hud") and self.vsdc_hud:
+            self.vsdc_hud.show_event(event_type, title, subtitle, duration_ms=2500)
+
     def _on_capture_processed_ui(self, msg: dict, res: dict):
         """Apply only UI updates on the Qt main thread after background work."""
         if not self._capture_ui_refresh_pending:
@@ -485,7 +518,13 @@ class SeraApp:
         portal = msg.get("portal", "Portal")
         arn = msg.get("arn", "N/A")
         capture_method = msg.get("capture_method", "DOM_Tracker")
-        method_label = "Sera SAD (API Detector)" if capture_method in ("SAD_API_Interceptor", "SAD_API_Detector") else "Sera DOM (DOM Detector)"
+        is_vsdc = "VSDC" in capture_method
+        if is_vsdc:
+            method_label = "Sera VSDC (Visual Harvester)"
+        elif capture_method in ("SAD_API_Interceptor", "SAD_API_Detector"):
+            method_label = "Sera SAD (API Detector)"
+        else:
+            method_label = "Sera SDC (DOM Crosshair)"
         client_display = ""
         if res.get("client_id"):
             try:
@@ -500,10 +539,20 @@ class SeraApp:
                 client_display = f"Client #{res.get('client_id')} | "
         elif res.get("unassigned_identity"):
             client_display = f"Unregistered ({res['unassigned_identity']}) | "
+
+        # Real-time bottom-left HUD indicator for VSDC (disappears within 3s, no system tray)
+        if is_vsdc and hasattr(self, "vsdc_hud") and self.vsdc_hud:
+            self.vsdc_hud.show_event(
+                "capture",
+                f"Captured {portal} Filing",
+                f"{client_display}ARN: {arn}",
+                duration_ms=2600,
+            )
+
         toast_msg = f"Captured {portal} Filing ({method_label}) — {client_display}ARN: {arn}"
         if hasattr(self, "shell") and self.shell and self.shell.isVisible() and not self.shell.isMinimized():
-            self.shell.show_toast(toast_msg, duration=5000)
-        elif hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
+            self.shell.show_toast(toast_msg, duration=3000)
+        elif not is_vsdc and hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
             self.tray_icon.showMessage(f"Filing Captured — {portal}", f"{client_display}ARN: {arn} ({method_label})", QSystemTrayIcon.Information, 4500)
 
     def _refresh_tracker_dump_ui(self):
@@ -622,6 +671,36 @@ class SeraApp:
 
         raw_client_id = msg.get('client_id')
         pan = str(msg.get('pan') or "").strip()
+        client_name = str(msg.get('client_name') or msg.get('name') or "").strip()
+
+        # If PAN is empty but client_name was visually captured, resolve identity via master.db
+        if not pan and client_name and len(client_name) >= 3:
+            try:
+                with self.db._connect() as m_conn:
+                    row = m_conn.execute(
+                        """SELECT c.id, UPPER(TRIM(cv_pan.value))
+                           FROM clients c
+                           JOIN client_values cv_name ON cv_name.client_id = c.id
+                           JOIN mcl_columns mc_name ON mc_name.id = cv_name.column_id
+                           LEFT JOIN client_values cv_pan ON cv_pan.client_id = c.id
+                           LEFT JOIN mcl_columns mc_pan ON mc_pan.id = cv_pan.column_id
+                                AND (LOWER(mc_pan.label) LIKE '%pan%' OR LOWER(mc_pan.label) LIKE '%gstin%')
+                           WHERE c.is_archived = 0
+                             AND (mc_name.is_identity = 1 OR LOWER(mc_name.label) LIKE '%name%')
+                             AND UPPER(TRIM(cv_name.value)) = ?
+                           LIMIT 1""",
+                        (client_name.upper(),)
+                    ).fetchone()
+                    if row:
+                        raw_client_id = row[0]
+                        if row[1]:
+                            pan = row[1]
+                            msg["pan"] = pan
+                            if hasattr(self, "vsdc_worker") and self.vsdc_worker:
+                                self.vsdc_worker.assembler.update_identity(pan=pan, name=client_name)
+                            print(f"[main] Resolved client #{raw_client_id} and PAN {pan} from visual name '{client_name}'")
+            except Exception as e:
+                print(f"[main] Warning: Failed to resolve PAN from name '{client_name}': {e}")
         
         # Cross-client guard: Only trust raw_client_id if it matches the parsed PAN in master.db
         if raw_client_id and pan:

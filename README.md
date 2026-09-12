@@ -11,6 +11,7 @@ This README is the quick orientation page. The detailed implementation and archi
 - [Browser Automation & Extension](docs/browser-automation-extension.md)
 - [File Submission Tracker](docs/file-submission-tracker.md)
 - [Government API Payload & Interception Matrix](docs/api-payloads-matrix.md)
+- [VSDC — Visual Screen Data Capture Blueprint](docs/Blueprints/Sera_Visual_Screen_Harvester_Blueprint.md)
 - [Build & Release Guide](docs/build-release.md)
 - [Operations & LAN Synchronization](docs/operations-sync.md)
 
@@ -18,8 +19,13 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
 
 ---
 
-## Latest Features (v2.6.1)
+## Latest Features (v2.7.0)
 
+- **Sera VSDC (Visual Screen Data Capture — OS Optical Layer)**:
+  - **Zero Browser Footprint**: Captures taxpayer filings and identity via native Windows UI Automation (`UIAutomationCore.dll`) and hardware-accelerated OCR (`Windows.Media.Ocr`) without browser DOM injection.
+  - **Multi-Screen Crosshairs**: State-machine tracking across authentication (`vsdc_identity`), form selection (`vsdc_selection`), filed return history (`vsdc_itr_view_filed_returns`), and terminal submission cards (`vsdc_submission`).
+  - **Optical Repair & Deterministic Tax Regex**: Auto-corrects OCR character confusions (l/I -> 1, O -> 0) and enforces strict validation for 10-char PANs, 15-char GSTINs, and 15-digit ITR Acknowledgement numbers.
+  - **Ambient HUD Pill (`VsdcHudPill`)**: Desktop overlay providing non-intrusive, real-time feedback of active client identity and confirmed filing submissions.
 - **Sera FST (File Submission Tracker Subsystem)**:
   - **Sera SAD — API Detector (Network Layer)**:
     - Passive Network Response Interceptor (`net_interceptor.js`) running in the page `MAIN` execution world.
@@ -30,8 +36,8 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
   - **Sera DOM — DOM Detector (Visual Layer)**:
     - `MutationObserver` visual fallback (`tracker.js`) monitoring on-screen confirmation banners and rendered HTML elements for legacy/server-rendered portal forms.
 - **Tracker Dump Workspace (`TrackerDumpWindow`)**:
-  - Dedicated desktop workspace logging all raw SAD captures and extension dumps into SQLite table `tracker_dump`.
-  - Features real-time multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `Manual_Fallback`), raw JSON payload inspector drawer, CSV export, single-row deletion, and one-click bulk purge.
+  - Dedicated desktop workspace logging all raw SAD captures, VSDC captures, and extension dumps into SQLite table `tracker_dump`.
+  - Features real-time multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `VSDC_Visual`, `Manual_Fallback`), raw JSON payload inspector drawer, CSV export, single-row deletion, and one-click bulk purge.
   - Universal client resolution dynamically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), and Name/PAN/GSTIN substring queries.
 - **Sera Clipboard Assist (SCA — Ambient Password Autofill)**:
   - Automatically arms password in memory when staff copy client User IDs from Excel, Sheets, Notepad, or CSV rosters.

@@ -28,6 +28,16 @@ project_sera/
 |   |-- file-submission-tracker.md
 |   |-- build-release.md
 |   `-- operations-sync.md
+|-- core/                      # Core OS-level subsystems
+|   `-- vsdc/                  # Visual Screen Data Capture (VSDC) optical engine
+|       |-- __init__.py
+|       |-- vsdc_router.py     # Windows UIA route gater & crosshair execution controller
+|       |-- vsdc_assembler.py  # Multi-screen session assembler & completed dataset emitter
+|       |-- vsdc_crosshairs.py # Route-specific crosshairs (identity, forms, returns, submission)
+|       |-- vsdc_name_parser.py# Taxpayer name normalizer, ligature scrubber & composite parser
+|       |-- vsdc_ocr.py        # Windows.Media.Ocr DirectML C++ engine wrapper
+|       |-- vsdc_regex.py      # Deterministic tax regex patterns & optical character repair
+|       `-- vsdc_worker.py     # Background QThread polling & frame processing worker
 |-- native_host/               # Native Messaging bridge for browser extension
 |   |-- com.amanassociates.sera.json
 |   |-- host.bat
@@ -47,11 +57,18 @@ project_sera/
 |   |-- test_sad_interceptor.html # Offline SAD simulation bench
 |   |-- test_dump_injection.py    # Direct TCP 49152 payload injection test script
 |   |-- test_cell_formatting.py
-|   `-- test_undo_redo_formatting.py
+|   |-- test_undo_redo_formatting.py
+|   |-- test_vsdc_assembler.py    # VSDC multi-screen session assembly & dataset sealing tests
+|   |-- test_vsdc_crosshairs.py   # Crosshair trigger route & bounding box tests
+|   |-- test_vsdc_draft_supersession.py # Draft vs submission supersession tests
+|   |-- test_vsdc_name.py         # Taxpayer legal name normalization tests
+|   |-- test_vsdc_regex.py        # Statutory regex & optical repair validation tests
+|   `-- test_vsdc_with_sample_html.py # End-to-end browser OCR integration tests
 `-- ui/
     |-- extension_listener.py  # Local TCP socket server on port 49152 for extension events
     |-- components/
-    |   `-- toast.py           # SeraAlert notification widget
+    |   |-- toast.py           # SeraAlert notification widget
+    |   `-- vsdc_hud_pill.py   # Floating ambient HUD Pill overlay widget
     |-- dialogs/
     |   |-- sera_sync_dialog.py # Sera Sync LAN P2P management dialog
     |   |-- csv_import_dialog.py

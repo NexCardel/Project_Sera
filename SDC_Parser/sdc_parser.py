@@ -213,24 +213,33 @@ def evaluate_status(raw_status):
     raw = str(raw_status).lower().strip()
     # Strip any legacy bracketed color annotations
     raw = re.sub(r'[\(\[\{]\s*(?:green|yellow|red|blue|gray|grey)\s*[\)\]\}]', '', raw).strip()
-    if not raw or raw == "null" or raw == "none":
+    if not raw or raw in ("null", "none"):
         return "Not submitted"
-    if "not filed" in raw or "unfiled" in raw or "to be filed" in raw:
+    if "not filed" in raw or "unfiled" in raw or "to be filed" in raw or "not submitted" in raw:
         return "Not submitted"
-    if "pending" in raw:
+    if "visited" in raw or "in progress" in raw or "form selected" in raw or "draft" in raw or "landing" in raw or "profile" in raw:
+        return "Not submitted"
+    if re.search(r'^(?:fy|due\s*date|status|-+)[\s\-:]*$', raw, re.I):
+        return "Not submitted"
+
+    # Step 1: Check pending / unverified FIRST before checking "verified"
+    if "not e-verified" in raw or "pending" in raw or "verify later" in raw or "unverified" in raw:
         return "Submitted (e-verification pending)"
+
+    # Step 2: Check verified / confirmed submissions
     if "filed" in raw or "portal confirmed" in raw or "verified" in raw:
         return "Submitted & E-verified"
-    elif "evc" in raw:
+    if "submitted" in raw or "submit" in raw or "success" in raw:
+        return "Submitted & E-verified"
+
+    # Step 3: Specific edge cases
+    if "evc" in raw:
         return "Other EVC"
     elif "option expired" in raw:
         return "Option Expired (NA)"
     elif re.search(r'\b(?:not applicable|na)\b', raw, re.I):
         return "Not Applicable (NA)"
-    elif "landing" in raw or "form selected" in raw or "draft" in raw or "profile" in raw:
-        return "Not submitted"
-    if re.search(r'^(?:fy|due\s*date|status|-+)[\s\-:]*$', raw, re.I):
-        return "Not submitted"
+
     return "Not submitted"
 
 NON_QUARTER_MONTHS = {

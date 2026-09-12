@@ -278,10 +278,10 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
+def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, vsdc_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
-        tracker_enabled = sdc_enabled or fst_enabled or sad_enabled
+        tracker_enabled = sdc_enabled or fst_enabled or sad_enabled or vsdc_enabled
 
     # Base government portal domains
     allowed_domains = [
@@ -308,6 +308,7 @@ def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True
         "type": "update_settings",
         "tracker_enabled": tracker_enabled,
         "sdc_enabled": sdc_enabled,
+        "vsdc_enabled": vsdc_enabled,
         "fst_enabled": fst_enabled,
         "sad_enabled": sad_enabled,
         "sad_browser_notif_enabled": sad_browser_notif_enabled,

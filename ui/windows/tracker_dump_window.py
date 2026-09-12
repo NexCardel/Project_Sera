@@ -107,9 +107,15 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
         ltt_status = evaluate_status(raw_status)
     except Exception:
         raw_lower = str(raw_status).lower()
-        if "pending" in raw_lower:
+        if "not filed" in raw_lower or "unfiled" in raw_lower or "to be filed" in raw_lower or "not submitted" in raw_lower:
+            ltt_status = "Not submitted"
+        elif "visited" in raw_lower or "in progress" in raw_lower or "form selected" in raw_lower or "draft" in raw_lower:
+            ltt_status = "Not submitted"
+        elif "not e-verified" in raw_lower or "pending" in raw_lower or "verify later" in raw_lower or "unverified" in raw_lower:
             ltt_status = "Submitted (e-verification pending)"
-        elif "filed" in raw_lower or "portal confirmed" in raw_lower:
+        elif "filed" in raw_lower or "portal confirmed" in raw_lower or "verified" in raw_lower:
+            ltt_status = "Submitted & E-verified"
+        elif "submitted" in raw_lower or "submit" in raw_lower or "success" in raw_lower:
             ltt_status = "Submitted & E-verified"
         elif "evc" in raw_lower:
             ltt_status = "Other EVC"
@@ -122,7 +128,7 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
     # but NEVER override pending verification!
     if arn and arn != "N/A" and ltt_status == "Not submitted":
         raw_lower = str(raw_status).lower()
-        if "pending" in raw_lower:
+        if "not e-verified" in raw_lower or "pending" in raw_lower or "verify later" in raw_lower:
             ltt_status = "Submitted (e-verification pending)"
         else:
             ltt_status = "Submitted & E-verified"
@@ -474,11 +480,29 @@ class PayloadInspectorDialog(QDialog):
         h_layout.setContentsMargins(8, 8, 8, 8)
         h_layout.setSpacing(4)
 
-        client_name = item_data.get('display_name') or item_data.get('client_name') or item_data.get('company_name') or "Client Container"
+        # Extract profile from payload if item_data does not already have it
+        raw_json = item_data.get("raw_payload_json") or "{}"
+        profile_data = extract_profile_from_payload(raw_json)
+
+        comp_name = item_data.get("company_name") or profile_data.get("company_name") or ""
+        prop_name = item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
+        pan_val = item_data.get("pan") or profile_data.get("pan") or item_data.get("identity_key") or ""
+        gstin_val = item_data.get("gstin") or profile_data.get("gstin") or ""
+
+        # Resolve clean display name for header
+        client_name = item_data.get('display_name')
+        if not client_name or client_name.startswith("Unregistered"):
+            if prop_name or comp_name:
+                client_name = f"{prop_name or comp_name} ({pan_val or gstin_val})"
+            elif item_data.get('client_name') and not item_data.get('client_name').startswith("Unregistered"):
+                client_name = item_data.get('client_name')
+            else:
+                client_name = f"Unregistered ({pan_val or item_data.get('identity_key') or 'N/A'})"
+
         is_unreg = item_data.get('is_unassigned') or not item_data.get('client_id')
         name_color = "#FFA657" if is_unreg else "#4CF9B7"
 
-        title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span> &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{item_data.get('pan') or item_data.get('identity_key') or 'N/A'}</span>")
+        title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span> &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{pan_val or item_data.get('identity_key') or 'N/A'}</span>")
         title_lbl.setTextFormat(Qt.RichText)
 
         sub_info = f"<b>Total Captures:</b> {item_data.get('total_captures', 1)} &nbsp;|&nbsp; <b>Portal:</b> {item_data.get('portal', 'Government Portal')} &nbsp;|&nbsp; <b>Last Updated:</b> {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}"
@@ -513,15 +537,15 @@ class PayloadInspectorDialog(QDialog):
                 v_widget.setStyleSheet("color: #F0F6FC; font-weight: 600;")
                 pf_layout.addRow(l_widget, v_widget)
 
-        _add_pf_row("Firm / Trade Name", item_data.get("company_name"))
-        _add_pf_row("Proprietor Name", item_data.get("proprietor_name"))
-        _add_pf_row("PAN", item_data.get("pan") or item_data.get("identity_key"))
-        _add_pf_row("GSTIN", item_data.get("gstin"))
-        _add_pf_row("TAN", item_data.get("tan"))
-        _add_pf_row("Primary Mobile", item_data.get("phone"))
-        _add_pf_row("Primary Email", item_data.get("email"))
-        _add_pf_row("DOB / Incorporation", item_data.get("dob"))
-        _add_pf_row("Portal User ID", item_data.get("user_id"))
+        _add_pf_row("Firm / Trade Name", comp_name)
+        _add_pf_row("Proprietor Name", prop_name)
+        _add_pf_row("PAN", pan_val)
+        _add_pf_row("GSTIN", gstin_val)
+        _add_pf_row("TAN", item_data.get("tan") or profile_data.get("tan"))
+        _add_pf_row("Primary Mobile", item_data.get("phone") or profile_data.get("phone"))
+        _add_pf_row("Primary Email", item_data.get("email") or profile_data.get("email"))
+        _add_pf_row("DOB / Incorporation", item_data.get("dob") or profile_data.get("dob"))
+        _add_pf_row("Portal User ID", item_data.get("user_id") or profile_data.get("user_id"))
 
         sum_layout.addWidget(profile_frame)
 
@@ -533,6 +557,8 @@ class PayloadInspectorDialog(QDialog):
                 "arn": item_data.get("arn_number"),
                 "period_label": item_data.get("period_label"),
                 "capture_method": item_data.get("capture_method"),
+                "status": item_data.get("status"),
+                "raw_payload_json": raw_json,
                 "created_at": item_data.get("created_at")
             }]
 

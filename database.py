@@ -31,7 +31,7 @@ SKELETON_NAME_REGEX = re.compile(
     r'taxpayer|client|user|individual|indicates\s*mandatory\s*fields|mandatory\s*fields|'
     r'goods\s+and\s+services\s+tax|gst\s+common\s+portal|gst\s+portal|status|due\s*date|'
     r'fy|financial\s*year|tax\s*period|return\s*period|filing\s*period|legal\s*name|'
-    r'trade\s*name|gstin|pan|na|none|-+|'
+    r'trade\s*name|gstin|pan|na|none|-+|sera(?:\s*assist)?|scc|'
     r'(?:client|taxpayer|user|unregistered|unassigned)?\s*[:\-\#]?\s*(?:\(?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*\)?|\d+|cli-\d+)|'
     r'pan\s*:\s*[A-Z]{5}[0-9]{4}[A-Z].*'
     r')[\s\-:*]*$',
@@ -3614,7 +3614,7 @@ class SeraDatabase:
                     ).fetchone()
                     if row:
                         valid_id = row[0]
-                if not valid_id:
+                if not valid_id and not unassigned_identity:
                     unassigned_identity = f"Pending_{arn_number}" if arn_number and arn_number != "N/A" else "Unassigned"
 
         # Resolve incoming dataset key components
@@ -3670,10 +3670,78 @@ class SeraDatabase:
                     }
 
             # Exact Dataset Matching: Unconditionally purge ALL older duplicates for this dataset_key
+            # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
+                ex_row = r_conn.execute(
+                    "SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY id DESC LIMIT 1",
+                    (final_dataset_key,)
+                ).fetchone()
+                if ex_row:
+                    ex_status, ex_arn = ex_row
+                    try:
+                        from core.vsdc.vsdc_assembler import get_status_rank
+                        if get_status_rank(ex_status) > get_status_rank(status):
+                            status = ex_status
+                            if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A":
+                                arn_number = ex_arn
+                    except Exception:
+                        pass
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True
+
+            # Unsubmitted Draft Supersession Guard:
+            # Only ONE unsubmitted draft can exist per (assessee, portal, period).
+            # If an unsubmitted draft arrives, check if a submitted return already exists
+            # for this assessee and period (if so, promote to submitted to avoid regressing).
+            # Otherwise, purge any older unsubmitted draft rows for this assessee and period.
+            if period_label:
+                assessee_conds = []
+                assessee_params = [portal, period_label]
+                if valid_id:
+                    assessee_conds.append("client_id = ?")
+                    assessee_params.append(valid_id)
+                if taxpayer_id:
+                    assessee_conds.append("unassigned_identity = ?")
+                    assessee_params.append(taxpayer_id)
+                    assessee_conds.append("dataset_key LIKE ?")
+                    assessee_params.append(f"%:{taxpayer_id}:%")
+
+                if assessee_conds:
+                    is_draft = status in ("Not Submitted", "Visited / In Progress", "Draft / Personal Info", "Form Selected", "Pending")
+                    if is_draft:
+                        # Check if already submitted under any form for this period
+                        chk_sql = f"""
+                            SELECT id, client_id, status, arn_number, dataset_key FROM tracker_dump
+                            WHERE portal = ?
+                              AND period_label = ?
+                              AND status NOT IN ('Not Submitted', '', 'Pending', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected')
+                              AND status IS NOT NULL
+                              AND ({' OR '.join(assessee_conds)})
+                            ORDER BY id DESC LIMIT 1
+                        """
+                        filed_row = r_conn.execute(chk_sql, assessee_params).fetchone()
+                        if filed_row:
+                            # Monotonicity Guard: Return is ALREADY filed for this assessee & period!
+                            # Do not insert an unsubmitted draft alongside an already completed return.
+                            return {
+                                "id": filed_row[0], "client_id": filed_row[1], "service_id": service_id,
+                                "portal": portal, "period_label": period_label, "arn_number": filed_row[3],
+                                "capture_method": capture_method, "status": filed_row[2], "created_at": now,
+                                "duplicate": True, "dataset_key": filed_row[4]
+                            }
+
+                    # Purge prior unsubmitted drafts for this assessee & period
+                    purge_sql = f"""
+                        DELETE FROM tracker_dump
+                        WHERE portal = ?
+                          AND period_label = ?
+                          AND (status IN ('Not Submitted', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
+                          AND ({' OR '.join(assessee_conds)})
+                    """
+                    del_unsub = r_conn.execute(purge_sql, assessee_params)
+                    if del_unsub.rowcount > 0:
+                        is_replaced = True
 
             # Fallback: URL check if dataset_key was insufficient on legacy rows
             if not is_replaced and page_url_norm and (capture_method == "DOM_Tracker" or capture_method.startswith("SDC_")):
@@ -3826,6 +3894,35 @@ class SeraDatabase:
                 )
             """)
             deleted_count += cur3.rowcount
+
+            # 4. Deduplicate unsubmitted drafts: Keep only MAX(id) per (portal, period_label, client)
+            #    so switching forms during return drafting doesn't leave multiple unsubmitted rows
+            cur4 = r_conn.execute("""
+                DELETE FROM tracker_dump
+                WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
+                  AND id NOT IN (
+                      SELECT MAX(id)
+                      FROM tracker_dump
+                      WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
+                      GROUP BY portal, period_label, COALESCE(client_id, unassigned_identity)
+                  )
+            """)
+            deleted_count += cur4.rowcount
+
+            # 5. Purge unsubmitted drafts if a submitted return already exists for that assessee + period
+            cur5 = r_conn.execute("""
+                DELETE FROM tracker_dump
+                WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
+                  AND EXISTS (
+                      SELECT 1 FROM tracker_dump sub
+                      WHERE sub.portal = tracker_dump.portal
+                        AND sub.period_label = tracker_dump.period_label
+                        AND COALESCE(sub.client_id, sub.unassigned_identity) = COALESCE(tracker_dump.client_id, tracker_dump.unassigned_identity)
+                        AND sub.status NOT IN ('Not Submitted', '', 'Pending')
+                        AND sub.status IS NOT NULL
+                  )
+            """)
+            deleted_count += cur5.rowcount
 
         if deleted_count > 0:
             print(f"[database] deduplicate_tracker_dumps: Purged {deleted_count} duplicate tracker dump row(s).")
@@ -4481,6 +4578,27 @@ class SeraDatabase:
                 if cid not in client_map:
                     client_map[cid] = {"name": f"CLI-{cid:05d}", "pan": "", "is_unassigned": False}
 
+        # Batch resolve names for unassigned identities from client_raw_containers
+        unassigned_map = {}
+        unique_unassigned = {r[2] for r in rows if not r[1] and r[2]}
+        if unique_unassigned:
+            with self._connect_raw() as r_conn:
+                try:
+                    placeholders = ",".join("?" for _ in unique_unassigned)
+                    c_rows = r_conn.execute(
+                        f"SELECT identity_key, company_name, proprietor_name FROM client_raw_containers WHERE identity_key IN ({placeholders})",
+                        list(unique_unassigned)
+                    ).fetchall()
+                    for c_row in c_rows:
+                        c_key = c_row[0]
+                        c_comp = c_row[1] or ""
+                        c_prop = c_row[2] or ""
+                        cand = c_prop or c_comp
+                        if cand and not SKELETON_NAME_REGEX.search(cand):
+                            unassigned_map[c_key] = cand
+                except Exception:
+                    pass
+
         results = []
         for r in rows:
             cid = r[1]
@@ -4488,7 +4606,26 @@ class SeraDatabase:
             if cid and cid in client_map:
                 info = client_map[cid]
             elif unassigned_id:
-                info = {"name": f"Unregistered (PAN: {unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
+                # 1. Try container map
+                c_name = unassigned_map.get(unassigned_id, "")
+                # 2. Try raw_payload_json if container lookup didn't yield a real name
+                if not c_name or SKELETON_NAME_REGEX.search(c_name):
+                    raw_json_str = r[9] or ""
+                    if raw_json_str and raw_json_str != "{}":
+                        try:
+                            p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
+                            if isinstance(p_obj, dict):
+                                c_name = (
+                                    p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
+                                    (p_obj.get("raw_payload", {}).get("client_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or
+                                    (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
+                                )
+                        except Exception:
+                            pass
+                if c_name and not SKELETON_NAME_REGEX.search(c_name):
+                    info = {"name": f"{c_name} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
+                else:
+                    info = {"name": f"Unregistered (PAN: {unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
             else:
                 info = {"name": "Unregistered Client", "pan": "", "is_unassigned": True}
 

@@ -33,15 +33,17 @@ function connectToNativeHost() {
       } else if (message.type === "update_settings") {
         const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
         const sdc = message.sdc_enabled !== undefined ? (message.sdc_enabled !== false && message.tracker_enabled !== false) : fst;
+        const vsdc = message.vsdc_enabled !== false;
         const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
         const sadNotif = message.sad_browser_notif_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
         const allowedDomains = message.allowed_domains || [];
-        const overallTracker = sdc || fst || sad;
+        const overallTracker = sdc || fst || sad || vsdc;
         const storageObj = {
           trackerEnabled: overallTracker,
           sdcEnabled: sdc,
+          vsdcEnabled: vsdc,
           fstEnabled: fst,
           sadEnabled: sad,
           sadBrowserNotifEnabled: sadNotif,
@@ -123,6 +125,11 @@ async function syncSettingsFromDesktop() {
       storageObj.sdcEnabled = !!data.sdc_enabled;
     } else {
       storageObj.sdcEnabled = true;
+    }
+    if (data.vsdc_enabled !== undefined) {
+      storageObj.vsdcEnabled = !!data.vsdc_enabled;
+    } else {
+      storageObj.vsdcEnabled = true;
     }
     if (data.fst_enabled !== undefined) {
       storageObj.fstEnabled = !!data.fst_enabled;
@@ -233,12 +240,13 @@ chrome.runtime.onInstalled.addListener(() => {
   // Ensure native connection
   ensureConnected();
   // Enable tracker by default the first time the extension is installed
-  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled', 'vsdcEnabled'], (data) => {
     const update = {};
     if (data.trackerEnabled === undefined) update.trackerEnabled = true;
     if (data.sadEnabled === undefined) update.sadEnabled = true;
     if (data.fstEnabled === undefined) update.fstEnabled = true;
     if (data.sdcEnabled === undefined) update.sdcEnabled = true;
+    if (data.vsdcEnabled === undefined) update.vsdcEnabled = true;
     if (Object.keys(update).length > 0) {
       chrome.storage.local.set(update);
     }
@@ -1743,6 +1751,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       type: "extension_settings_updated",
       sdc_enabled: s.sdcEnabled,
       fst_enabled: s.fstEnabled,
+      vsdc_enabled: s.vsdcEnabled !== false,
       sad_enabled: s.sadEnabled,
       tracker_enabled: s.trackerEnabled,
       sad_browser_notif_enabled: s.sadBrowserNotifEnabled,
