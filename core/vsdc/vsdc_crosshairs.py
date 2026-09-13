@@ -128,7 +128,7 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_filing_file_success",
         protocol="GST Portal",
-        pattern=re.compile(r"returns/auth/file(?:[?#]|$)", re.IGNORECASE),
+        pattern=re.compile(r"returns/auth/(?:[a-zA-Z0-9_-]+/)?file(?:[?#/]|$)", re.IGNORECASE),
         target_crop="receipt_card",
         description="GST return filing file route (IFF, GSTR-1, GSTR-3B submission)",
         host_pattern=GST_HOST_PATTERN,
@@ -137,7 +137,7 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_form_details",
         protocol="GST Portal",
-        pattern=re.compile(r"(?:returns|services)/(?:auth/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff)", re.IGNORECASE),
+        pattern=re.compile(r"(?:returns|services)/(?:auth/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff)(?!/file)", re.IGNORECASE),
         target_crop="form_details",
         description="GST return form table & period details (GSTR-1, 3B, CMP-08)",
         host_pattern=GST_HOST_PATTERN,

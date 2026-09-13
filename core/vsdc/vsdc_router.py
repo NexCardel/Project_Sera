@@ -823,31 +823,50 @@ class VSDCRouter:
         # STRICT MANDATE: An optical GST submission MUST have a valid ARN
         if arn and arn != "N/A":
             status = classify_verification_status(full_text)
-            if get_status_rank(status) >= 2:
-                self.assembler.record_submission(
-                    ack_number=arn,
-                    status=status,
-                    filing_type=filing_type,
-                    period_label=period,
-                    raw_text=full_text[:2000],
-                    crosshair_id=matched_crosshair.id,
-                )
-                form_lbl = filing_type or self.assembler.current_filing_type or "GST Return"
-                period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
-                assessee = self.assembler.client_name or self.assembler.gstin or ""
-                name_part = f"{assessee} • " if assessee else ""
-                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}ARN: {arn}")
+            if get_status_rank(status) < 2:
+                status = "Filed"
 
-                if is_sub_crosshair:
-                    # Seal and flush filing payload!
-                    master_payload = self.assembler.seal_and_flush()
-                    if master_payload:
-                        self.has_flushed_current_route = True
-                        self.assembler.clear_workflow_selection()
-                        flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
-                        print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
-                        self.notify_activity("flush", "GST Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
-                    return master_payload
+            if not filing_type:
+                u_lower = url.lower()
+                if "gstr1" in u_lower or "gstr-1" in u_lower:
+                    filing_type = "GSTR-1"
+                elif "gstr3b" in u_lower or "gstr-3b" in u_lower:
+                    filing_type = "GSTR-3B"
+                elif "cmp08" in u_lower or "cmp-08" in u_lower:
+                    filing_type = "CMP-08"
+                elif "iff" in u_lower:
+                    filing_type = "GSTR-1/IFF"
+                else:
+                    filing_type = self.assembler.current_filing_type or "GSTR-1"
+
+            if not period:
+                period = self.assembler.current_period_label
+
+            self.assembler.record_submission(
+                ack_number=arn,
+                status=status,
+                filing_type=filing_type,
+                period_label=period,
+                raw_text=full_text[:2000],
+                crosshair_id=matched_crosshair.id,
+            )
+            form_lbl = filing_type or self.assembler.current_filing_type or "GST Return"
+            period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
+            assessee = self.assembler.client_name or self.assembler.gstin or ""
+            trade = f" ({self.assembler.trade_name})" if self.assembler.trade_name else ""
+            name_part = f"{assessee}{trade} • " if assessee else ""
+            self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}ARN: {arn}")
+
+            if is_sub_crosshair:
+                # Seal and flush filing payload!
+                master_payload = self.assembler.seal_and_flush()
+                if master_payload:
+                    self.has_flushed_current_route = True
+                    self.assembler.clear_workflow_selection()
+                    flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
+                    print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
+                    self.notify_activity("flush", "GST Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
+                return master_payload
 
         # Dataset Completion Principle:
         completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)

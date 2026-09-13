@@ -412,6 +412,86 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertTrue(any(evt == "capture" and "GSTR-1" in title and "June(Q)" in title for evt, title, sub in notified))
         self.assertTrue(any("FATIMA BIBI" in sub and "SPY JUNIOR" in sub and "Filed" in sub for evt, title, sub in notified))
 
+    def test_gst_filing_file_success_arn_extraction(self):
+        """
+        Verifies that on https://return.gst.gov.in/returns/auth/gstr1/file:
+        1. URL matches gst_filing_file_success (not misclassified as gst_form_details)
+        2. Optical submission message and ARN (AA1908260123456) are captured
+        3. Assembler preserves client name, trade name, and period from workflow
+        4. Filing payload is sealed and flushed to tracker dump with HUD toast.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        # 1. Verify crosshair pattern match
+        test_url = "https://return.gst.gov.in/returns/auth/gstr1/file"
+        c = match_url_crosshair(test_url)
+        self.assertIsNotNone(c)
+        self.assertEqual(c.id, "gst_filing_file_success")
+        self.assertTrue(c.is_terminal_submission)
+
+        # 2. Setup assembler with prior session identity from form details step
+        assembler = VisualSessionAssembler()
+        assembler.update_identity(
+            name="FATIMA BIBI",
+            trade_name="SPY JUNIOR",
+            gstin="19AAAAA0000A1Z5",
+            pan="AAAAA0000A",
+            portal="GST Portal",
+        )
+        assembler.update_selection(filing_type="GSTR-1", period_label="June(Q)", fy="2026-27")
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax\n"
+                "Dashboard > Returns > GSTR-1/IFF > File\n"
+                "Filing Successful\n"
+                "Your return has been filed successfully.\n"
+                "Acknowledgement Reference Number (ARN) is AA1908260123456\n"
+                "Date of Filing: 14/09/2026\n"
+            ),
+            "lines": [
+                "Goods and Services Tax",
+                "Dashboard > Returns > GSTR-1/IFF > File",
+                "Filing Successful",
+                "Your return has been filed successfully.",
+                "Acknowledgement Reference Number (ARN) is AA1908260123456",
+                "Date of Filing: 14/09/2026",
+            ]
+        }
+
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | File - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=test_url)
+
+        master_payload = router.evaluate_tick()
+
+        # 3. Verify sealed & flushed master payload
+        self.assertIsNotNone(master_payload)
+        self.assertEqual(master_payload["arn"], "AA1908260123456")
+        self.assertEqual(master_payload["client_name"], "FATIMA BIBI")
+        self.assertEqual(master_payload["trade_name"], "SPY JUNIOR")
+        self.assertEqual(master_payload["gstin"], "19AAAAA0000A1Z5")
+        self.assertEqual(master_payload["pan"], "AAAAA0000A")
+        self.assertEqual(master_payload["filing_type"], "GSTR-1")
+        self.assertEqual(master_payload["period_label"], "June(Q)")
+        self.assertIn(master_payload["status"], ("Filed", "Filing Submitted"))
+
+        # 4. Verify Live HUD Toasts (capture + flush)
+        self.assertTrue(any(evt == "capture" and "AA1908260123456" in sub for evt, title, sub in notified))
+        self.assertTrue(any(evt == "flush" and "GST Filing Saved to Tracker Dump" in title for evt, title, sub in notified))
+
 
 if __name__ == "__main__":
     unittest.main()
