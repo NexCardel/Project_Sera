@@ -542,3 +542,41 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
         return cleaned
 
     return None
+
+
+def extract_gst_welcome_name(text: str) -> Optional[str]:
+    """
+    Extracts the taxpayer legal/trade name from the GST welcome page.
+    1. Primary: 'Welcome <NAME> to GST Common Portal'
+    2. Secondary: Name preceding GSTIN on the right-side profile card.
+    """
+    if not text:
+        return None
+    m = re.search(r"Welcome\s+([A-Za-z0-9\s.,'&-]{3,60})\s+to\s+GST\s+Common\s+Portal", text, re.IGNORECASE)
+    if m:
+        raw_cand = m.group(1).strip()
+        cleaned = sanitize_visual_name(raw_cand)
+        words = cleaned.split()
+        while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
+            words.pop(0)
+        while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
+            words.pop(-1)
+        candidate = " ".join(words)
+        if candidate and len(candidate.split()) >= 1 and candidate not in NOISE_WORDS:
+            return candidate
+
+    # Secondary: Name line right before 15-char GSTIN
+    m_gstin_block = re.search(r"\b([A-Z0-9\s.,'&-]{3,50})\n\s*(?:[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])", text)
+    if m_gstin_block:
+        cleaned = sanitize_visual_name(m_gstin_block.group(1).strip())
+        words = cleaned.split()
+        while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
+            words.pop(0)
+        while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
+            words.pop(-1)
+        candidate = " ".join(words)
+        if candidate and len(candidate.split()) >= 1 and candidate not in NOISE_WORDS:
+            return candidate
+
+    return None
+

@@ -377,3 +377,22 @@ def classify_verification_status(text: str) -> str:
         return "Filing Submitted"
 
     return "Not Submitted"
+
+
+def extract_gst_filing_preference(text: str) -> Optional[str]:
+    """
+    Extracts GST Return Filing Preference from the welcome/dashboard page.
+    Matches e.g. 'Return filing preference (Jul-Sep 2026) : Quarterly (Change)'
+    Returns 'Quarterly' or 'Monthly'.
+    """
+    if not text:
+        return None
+    m = re.search(r"Return\s+filing\s+preference[^\n:]*:\s*([A-Za-z]+)", text, re.IGNORECASE)
+    if m:
+        val = m.group(1).lower()
+        if "quarter" in val or "qrmp" in val:
+            return "Quarterly"
+        elif "month" in val:
+            return "Monthly"
+    return None
+

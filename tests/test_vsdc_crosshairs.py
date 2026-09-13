@@ -209,7 +209,112 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(payload["filing_type"], "ITR-4")
         self.assertEqual(payload["raw_payload"]["assembler_captures"][0]["dataset_key"], "AHJPR0846B|ITR-4|AY 2026-27")
 
+    def test_gst_welcome_calendar_calibration_with_popup(self):
+        """
+        Verifies that on services.gst.gov.in/services/auth/fowelcome, even when an Aadhaar/E-KYC
+        modal popup dims the screen, the router captures:
+        1. Taxpayer Name (ISMAIL BAGANI)
+        2. GSTIN (19ADRPB1234F1Z5) and derived PAN (ADRPB1234F)
+        3. Return filing preference (Quarterly)
+        without interference or degradation of ITR pipelines.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1200, 800), color="white")
+
+        # OCR scan simulates the exact OCR text extracted from the user's screenshot with modal popup
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax Help and Taxpayer Facilities\n"
+                "Dashboard ISMAIL LAGAN' v\n"
+                "Welcome ISMAIL BAGANI to GST Common Portal\n"
+                "Would you like to Authenticate Aadhaar or Upload E-KYC Documents for\n"
+                "Goods and Services Tax Identification Number (GSTIN) 19ADRPB1234F1Z5?\n"
+                "REMIND ME LATER\n"
+                "Return filing preference (Jul-Sep 2026) : Quarterly (Change)\n"
+            ),
+            "lines": [
+                "Goods and Services Tax Help and Taxpayer Facilities",
+                "Dashboard ISMAIL LAGAN' v",
+                "Welcome ISMAIL BAGANI to GST Common Portal",
+                "Would you like to Authenticate Aadhaar or Upload E-KYC Documents for",
+                "Goods and Services Tax Identification Number (GSTIN) 19ADRPB1234F1Z5?",
+                "REMIND ME LATER",
+                "Return filing preference (Jul-Sep 2026) : Quarterly (Change)",
+            ]
+        }
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "GST Common Portal - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://services.gst.gov.in/services/auth/fowelcome")
+
+        router.evaluate_tick()
+
+        # Verify the 3 core items
+        # 1. Taxpayer Name
+        self.assertEqual(assembler.client_name, "ISMAIL BAGANI")
+        # 2. GSTIN & derived PAN
+        self.assertEqual(assembler.gstin, "19ADRPB1234F1Z5")
+        self.assertEqual(assembler.client_pan, "ADRPB1234F")
+        # 3. Return filing preference
+        self.assertEqual(assembler.filing_preference, "Quarterly")
+
+        # Verify HUD activity notification was emitted
+        self.assertTrue(any(evt == "identity" and "ISMAIL BAGANI" in title for evt, title, sub in notified))
+        self.assertTrue(any("19ADRPB1234F1Z5" in sub and "Quarterly" in sub for evt, title, sub in notified))
+
+    def test_gst_welcome_calendar_filing_preference_monthly(self):
+        """Verifies that Monthly filing preference is correctly captured and normalized."""
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1200, 800), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Welcome GLOBAL LOGISTICS LLP to GST Common Portal\n"
+                "GSTIN: 27AABCU9603R1ZM\n"
+                "Return filing preference (Oct-Dec 2026) : Monthly (Change)\n"
+            ),
+            "lines": [
+                "Welcome GLOBAL LOGISTICS LLP to GST Common Portal",
+                "GSTIN: 27AABCU9603R1ZM",
+                "Return filing preference (Oct-Dec 2026) : Monthly (Change)",
+            ]
+        }
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "GST Common Portal - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://services.gst.gov.in/services/auth/fowelcome")
+
+        router.evaluate_tick()
+
+        self.assertEqual(assembler.client_name, "GLOBAL LOGISTICS LLP")
+        self.assertEqual(assembler.gstin, "27AABCU9603R1ZM")
+        self.assertEqual(assembler.client_pan, "AABCU9603R")
+        self.assertEqual(assembler.filing_preference, "Monthly")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

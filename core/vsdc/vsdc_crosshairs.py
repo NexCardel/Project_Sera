@@ -154,7 +154,7 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
         id="gst_welcome_calendar",
         protocol="GST Portal",
         pattern=re.compile(r"(?:services/auth/fowelcome|services/auth/dashboard|fowelcome|auth/dashboard$)", re.IGNORECASE),
-        target_crop="header",
+        target_crop="welcome_dashboard",
         description="GST Portal welcome page, returns calendar, and GSTIN badge",
         host_pattern=GST_HOST_PATTERN,
     ),

@@ -69,6 +69,7 @@ class VisualSessionAssembler:
         self.client_pan: Optional[str] = None
         self.client_name: Optional[str] = None
         self.gstin: Optional[str] = None
+        self.filing_preference: Optional[str] = None
         self.current_filing_type: Optional[str] = None
         self.current_period_label: Optional[str] = None
         self.captures: Dict[str, Dict[str, Any]] = {}
@@ -85,6 +86,7 @@ class VisualSessionAssembler:
         self.client_pan = new_pan
         self.client_name = None
         self.gstin = None
+        self.filing_preference = None
         self.current_filing_type = None
         self.current_period_label = None
         self.captures.clear()
@@ -117,7 +119,7 @@ class VisualSessionAssembler:
         }
         self.steps.append(step)
 
-    def update_identity(self, pan: Optional[str] = None, name: Optional[str] = None, gstin: Optional[str] = None, portal: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def update_identity(self, pan: Optional[str] = None, name: Optional[str] = None, gstin: Optional[str] = None, portal: Optional[str] = None, filing_preference: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Updates taxpayer identity attributes. Enforces PAN context switch guard.
         Returns sealed prior session payload if a context switch occurred, else None.
@@ -143,6 +145,8 @@ class VisualSessionAssembler:
                 self.client_name = new_name
         if gstin:
             self.gstin = gstin.strip().upper()
+        if filing_preference:
+            self.filing_preference = filing_preference.strip().title()
 
         return flushed_prior
 
@@ -281,6 +285,7 @@ class VisualSessionAssembler:
             "client_name": name,
             "filing_type": form,
             "period_label": period,
+            "filing_preference": self.filing_preference or "",
             "arn": arn,
             "ack_number": arn,
             "status": status,
@@ -303,6 +308,7 @@ class VisualSessionAssembler:
             "client_name": name,
             "filing_type": form,
             "period_label": period,
+            "filing_preference": self.filing_preference or "",
             "arn": arn,
             "status": status,
             "capture_method": capture_method,
@@ -354,6 +360,7 @@ class VisualSessionAssembler:
             "client_name": self.client_name or primary.get("client_name", ""),
             "filing_type": primary.get("filing_type", ""),
             "period_label": primary.get("period_label", ""),
+            "filing_preference": self.filing_preference or primary.get("filing_preference", ""),
             "arn": primary.get("arn", ""),
             "status": primary.get("status", "Submitted"),
             "capture_method": primary.get("capture_method", "VSDC_optical"),

@@ -163,6 +163,9 @@ class VSDCOcrEngine:
             top = int(h * 0.08)
             bottom = int(h * 0.92)
             return img.crop((left, top, right, bottom))
+        elif region_type == "welcome_dashboard":
+            # Captures header, center welcome greeting, preference, and right profile card
+            return img.crop((0, 0, w, min(int(h * 0.65), h)))
         return img
 
     async def _run_ocr_async(self, img: Image.Image) -> Dict[str, Any]:

@@ -19,6 +19,7 @@ from .vsdc_regex import (
     extract_assessment_year,
     extract_filing_type,
     classify_verification_status,
+    extract_gst_filing_preference,
 )
 from .vsdc_name_parser import (
     sanitize_visual_name,
@@ -27,6 +28,7 @@ from .vsdc_name_parser import (
     parse_human_name,
     extract_name_from_ocr_lines,
     extract_composite_form_name,
+    extract_gst_welcome_name,
 )
 from .vsdc_ocr import VSDCOcrEngine
 from .vsdc_assembler import VisualSessionAssembler

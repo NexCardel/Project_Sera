@@ -25,8 +25,14 @@ from .vsdc_regex import (
     classify_verification_status,
     is_page_loading,
     extract_view_filed_returns_card,
+    extract_gst_filing_preference,
 )
-from .vsdc_name_parser import extract_name_from_ocr_lines, parse_human_name, is_better_taxpayer_name
+from .vsdc_name_parser import (
+    extract_name_from_ocr_lines,
+    parse_human_name,
+    is_better_taxpayer_name,
+    extract_gst_welcome_name,
+)
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -252,6 +258,31 @@ class VSDCRouter:
             # Route changes are console-only; toast only fires for identity/capture/flush
             print(f"[VSDC Router] Route: {label_text} | Portal: {self.active_portal}")
 
+        # Strict Protocol Separation:
+        # Route directly to dedicated GST or ITR handlers so changes to one pipeline never alter or degrade the other.
+        is_gst = (
+            matched_crosshair.protocol == "GST Portal"
+            or self.active_portal == "GST Portal"
+            or matched_crosshair.id.startswith("gst_")
+        )
+        if is_gst:
+            return self._route_gst_crosshair(matched_crosshair, url, hwnd, is_new_url, prior_crosshair)
+        else:
+            return self._route_itr_crosshair(matched_crosshair, url, hwnd, is_new_url, prior_crosshair)
+
+    def _route_itr_crosshair(
+        self,
+        matched_crosshair: CrosshairDefinition,
+        url: str,
+        hwnd: int,
+        is_new_url: bool,
+        prior_crosshair: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Dedicated handler for Income Tax e-Filing crosshairs.
+        Processes login authentication, personal info profile, return form selection,
+        view filed returns, e-verify workflows, and terminal submission pages.
+        """
         # Handle session boundaries (Login / Logout / Timeout)
         if matched_crosshair.is_session_boundary:
             flushed = self.assembler.seal_and_flush()
@@ -280,7 +311,7 @@ class VSDCRouter:
                     return flushed
 
         # Hub / Dashboard boundary: clear active workflow selection when returning to landing/dashboard
-        if matched_crosshair.id in ("itr_landing", "gst_welcome_calendar", "gst_returns_dashboard"):
+        if matched_crosshair.id == "itr_landing":
             if self.assembler._flushed or not self.assembler.captures:
                 self.assembler.clear_workflow_selection()
 
@@ -397,18 +428,14 @@ class VSDCRouter:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
 
         # Check for terminal filing confirmation (Ack / ARN)
-        ack_number = None
-        if self.active_portal == "Income Tax":
-            ack_number = repair_numeric_ack(full_text)
-        else:
-            ack_number = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
+        ack_number = repair_numeric_ack(full_text)
 
         # Fallback to full image scan if Ack was not found in cropped card on a return/submission card!
         if not ack_number and (matched_crosshair.is_terminal_submission or matched_crosshair.id == "itr_view_filed_returns"):
             if matched_crosshair.target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
-                f_ack = repair_numeric_ack(f_text) if self.active_portal == "Income Tax" else (repair_gst_arn(f_text) or repair_numeric_ack(f_text))
+                f_ack = repair_numeric_ack(f_text)
                 if f_ack:
                     ack_number = f_ack
                     full_text = full_text + "\n" + f_text
@@ -445,11 +472,9 @@ class VSDCRouter:
             "itr_filed_verified",
             "itr_everify_return",
             "itr_submitted_pending",
-            "gst_filing_success",
-            "gst_filing_file_success",
         )
 
-        # STRICT MANDATE: An optical submission MUST have a valid Acknowledgement Number / ARN
+        # STRICT MANDATE: An optical submission MUST have a valid Acknowledgement Number
         if ack_number and ack_number != "N/A":
             if matched_crosshair.id != "itr_view_filed_returns":
                 status = classify_verification_status(full_text)
@@ -476,7 +501,7 @@ class VSDCRouter:
                         self.has_flushed_current_route = True
                         self.assembler.clear_workflow_selection()
                         flush_name = master_payload.get("client_name") or master_payload.get("pan", "")
-                        print(f"[VSDC Router] Flushed filing payload to tracker dump: Ack={ack_number} Form={form_lbl} Status={status}")
+                        print(f"[VSDC Router] Flushed ITR filing payload to tracker dump: Ack={ack_number} Form={form_lbl} Status={status}")
                         self.notify_activity("flush", "Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
                     return master_payload
 
@@ -490,6 +515,256 @@ class VSDCRouter:
             c_pan = completed_payload.get("pan", "")
             c_name = completed_payload.get("client_name") or c_pan
             print(f"[VSDC Router] Dataset completed & shot to app: PAN={c_pan} Form={c_form}{c_period} Status={c_status}")
+            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}")
+            return completed_payload
+
+        return None
+
+    def _route_gst_crosshair(
+        self,
+        matched_crosshair: CrosshairDefinition,
+        url: str,
+        hwnd: int,
+        is_new_url: bool,
+        prior_crosshair: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Dedicated handler for GST Common Portal crosshairs.
+        Calibrated for gst_welcome_calendar (fowelcome), returns dashboard,
+        form details (GSTR-1, GSTR-3B, CMP-08), and terminal submission screens.
+        Completely decoupled from ITR crosshairs.
+        """
+        # Handle GST session boundaries (Logout / Timeout)
+        if matched_crosshair.is_session_boundary or matched_crosshair.id == "gst_logout":
+            flushed = self.assembler.seal_and_flush()
+            self.assembler.reset()
+            self.has_flushed_current_route = True
+            self.last_logged_name = None
+            self.last_logged_pan = None
+            self.last_screen_hash = None
+            self.last_crosshair_id = None
+            self.route_poll_count = 0
+            if flushed and (flushed.get("gstin") or flushed.get("pan")):
+                ident = flushed.get("gstin") or flushed.get("pan")
+                self.notify_activity("flush", "GST Session Concluded", f"Archived {ident} • {flushed.get('filing_type', 'Activity')}")
+            return flushed
+
+        # Returning to GST login screen from an active session terminates prior session
+        if ("login" in url.lower() or matched_crosshair.id == "gst_login") and prior_crosshair not in (None, "gst_login"):
+            if self.assembler.gstin or self.assembler.client_pan or self.assembler.captures:
+                flushed = self.assembler.seal_and_flush()
+                self.assembler.reset()
+                self.last_logged_name = None
+                self.last_logged_pan = None
+                self.last_screen_hash = None
+                self.route_poll_count = 0
+                if flushed and (flushed.get("gstin") or flushed.get("pan")):
+                    ident = flushed.get("gstin") or flushed.get("pan")
+                    self.notify_activity("flush", "Prior GST Session Concluded", f"{ident}")
+                    return flushed
+
+        # Clear active workflow selection when returning to welcome/dashboard
+        if matched_crosshair.id in ("gst_welcome_calendar", "gst_returns_dashboard"):
+            if self.assembler._flushed or not self.assembler.captures:
+                self.assembler.clear_workflow_selection()
+
+        # Capture target region and execute OCR
+        img = self.ocr.capture_window_image(hwnd)
+        if not img:
+            return None
+
+        # Fast screen-change check:
+        # Resize content below header (ignoring live session countdown timer) to 32x32 thumbnail
+        try:
+            w, h = img.size
+            content_crop = img.crop((0, int(h * 0.15), w, h)) if h > 100 else img
+            thumb = content_crop.resize((32, 32)).tobytes()
+            curr_hash = hash(thumb)
+            if not is_new_url and self.last_screen_hash == curr_hash and self.route_poll_count > 3:
+                return None
+            self.last_screen_hash = curr_hash
+        except Exception:
+            pass
+
+        target_crop = matched_crosshair.target_crop or "welcome_dashboard"
+        ocr_res = self.ocr.scan_image(img, region_type=target_crop)
+        full_text = ocr_res.get("text", "")
+        lines = ocr_res.get("lines", [])
+
+        # Check if page is currently in an asynchronous loading state
+        if is_page_loading(full_text):
+            return None
+
+        # -------------------------------------------------------------
+        # CROSSHAIR CALIBRATION: gst_welcome_calendar (fowelcome)
+        # Captures 3 core items: Taxpayer Name, GSTIN (and derived PAN),
+        # and Return Filing Preference (Quarterly / Monthly).
+        # Immune to modal popups (e.g. Aadhaar/E-KYC reminders).
+        # -------------------------------------------------------------
+        if matched_crosshair.id == "gst_welcome_calendar":
+            client_name = extract_gst_welcome_name(full_text)
+            if not client_name:
+                client_name = extract_name_from_ocr_lines(lines)
+
+            gstin = extract_gstin(full_text)
+            # Fallback to full scan if GSTIN card was not inside crop
+            if not gstin and target_crop != "full":
+                full_res = self.ocr.scan_image(img, region_type="full")
+                f_text = full_res.get("text", "")
+                gstin = extract_gstin(f_text)
+                if gstin:
+                    full_text = full_text + "\n" + f_text
+
+            pan = None
+            if gstin and len(gstin) >= 12:
+                candidate_pan = gstin[2:12]
+                if extract_pan(candidate_pan):
+                    pan = candidate_pan
+            if not pan:
+                pan = extract_pan(full_text)
+
+            pref = extract_gst_filing_preference(full_text)
+
+            flushed_prior = self.assembler.update_identity(
+                name=client_name,
+                gstin=gstin,
+                pan=pan,
+                portal="GST Portal",
+                filing_preference=pref,
+            )
+
+            authoritative_name = self.assembler.client_name or client_name
+            authoritative_gstin = self.assembler.gstin or gstin
+            authoritative_pref = self.assembler.filing_preference or pref
+
+            # Live HUD Toast feedback
+            if authoritative_name and authoritative_name != self.last_logged_name:
+                self.last_logged_name = authoritative_name
+                pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
+                sub = f"GSTIN: {authoritative_gstin}{pref_suffix}" if authoritative_gstin else f"Portal: GST Portal{pref_suffix}"
+                print(f"[VSDC Router] GST Assessee identified: {authoritative_name} (GSTIN: {authoritative_gstin}, Pref: {authoritative_pref})")
+                self.notify_activity(
+                    "identity",
+                    f"Assessee: {authoritative_name}",
+                    sub,
+                )
+            elif authoritative_gstin and authoritative_gstin != self.last_logged_pan:
+                self.last_logged_pan = authoritative_gstin
+                pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
+                name_part = f"{authoritative_name} • " if authoritative_name else ""
+                print(f"[VSDC Router] GSTIN identified: {authoritative_gstin}")
+                self.notify_activity(
+                    "identity",
+                    f"GSTIN: {authoritative_gstin}",
+                    f"{name_part}Portal: GST Portal{pref_suffix}",
+                )
+
+            # Record step in assembler journey
+            self.assembler.record_step(
+                url,
+                matched_crosshair.id,
+                details={
+                    "client_name": authoritative_name,
+                    "gstin": authoritative_gstin,
+                    "filing_preference": authoritative_pref,
+                },
+            )
+
+            if flushed_prior:
+                print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
+                return flushed_prior
+
+            return None
+
+        # -------------------------------------------------------------
+        # OTHER GST CROSSHAIRS (Returns Dashboard, Form Details, Submission)
+        # -------------------------------------------------------------
+        # Extract GSTIN and Taxpayer Name if not yet identified
+        gstin = extract_gstin(full_text)
+        client_name = extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
+
+        pan = None
+        if gstin and len(gstin) >= 12:
+            candidate_pan = gstin[2:12]
+            if extract_pan(candidate_pan):
+                pan = candidate_pan
+
+        if client_name or gstin or pan:
+            flushed_prior = self.assembler.update_identity(
+                name=client_name,
+                gstin=gstin,
+                pan=pan,
+                portal="GST Portal",
+            )
+            if flushed_prior:
+                print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
+                return flushed_prior
+
+        filing_type = extract_filing_type(full_text)
+        period = extract_assessment_year(full_text)
+        if filing_type or period:
+            self.assembler.update_selection(filing_type=filing_type, period_label=period)
+
+        # Check for terminal filing confirmation (ARN)
+        arn = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
+
+        # Fallback to full image scan if ARN was not found in cropped card on a return/submission card!
+        is_sub_crosshair = matched_crosshair.is_terminal_submission or matched_crosshair.id in (
+            "gst_filing_success",
+            "gst_filing_file_success",
+        )
+
+        if not arn and is_sub_crosshair:
+            if target_crop != "full":
+                full_res = self.ocr.scan_image(img, region_type="full")
+                f_text = full_res.get("text", "")
+                f_arn = repair_gst_arn(f_text) or repair_numeric_ack(f_text)
+                if f_arn:
+                    arn = f_arn
+                    full_text = full_text + "\n" + f_text
+                    if not filing_type:
+                        filing_type = extract_filing_type(f_text)
+                    if not period:
+                        period = extract_assessment_year(f_text)
+
+        # STRICT MANDATE: An optical GST submission MUST have a valid ARN
+        if arn and arn != "N/A":
+            status = classify_verification_status(full_text)
+            if get_status_rank(status) >= 2:
+                self.assembler.record_submission(
+                    ack_number=arn,
+                    status=status,
+                    filing_type=filing_type,
+                    period_label=period,
+                    raw_text=full_text[:2000],
+                    crosshair_id=matched_crosshair.id,
+                )
+                form_lbl = filing_type or self.assembler.current_filing_type or "GST Return"
+                period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
+                assessee = self.assembler.client_name or self.assembler.gstin or ""
+                name_part = f"{assessee} • " if assessee else ""
+                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}ARN: {arn}")
+
+                if is_sub_crosshair:
+                    # Seal and flush filing payload!
+                    master_payload = self.assembler.seal_and_flush()
+                    if master_payload:
+                        self.has_flushed_current_route = True
+                        self.assembler.clear_workflow_selection()
+                        flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
+                        print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
+                        self.notify_activity("flush", "GST Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
+                    return master_payload
+
+        # Dataset Completion Principle:
+        completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)
+        if completed_payload:
+            c_form = completed_payload.get("filing_type", "GST Return")
+            c_period = f" • {completed_payload.get('period_label')}" if completed_payload.get("period_label") else ""
+            c_status = completed_payload.get("status", "Submitted")
+            c_ident = completed_payload.get("gstin") or completed_payload.get("pan", "")
+            c_name = completed_payload.get("client_name") or c_ident
+            print(f"[VSDC Router] GST Dataset completed & shot to app: {c_ident} Form={c_form}{c_period} Status={c_status}")
             self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}")
             return completed_payload
 
