@@ -555,8 +555,168 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertTrue(any(evt == "capture" and "AA1908260123456" in sub for evt, title, sub in notified))
         self.assertTrue(any(evt == "flush" and "GST Filing Saved to Tracker Dump" in title for evt, title, sub in notified))
 
+    def test_gst_capture_on_render_and_stop_until_url_changes(self):
+        """
+        Verifies single-shot on-render capture for GST:
+        1. When page is loading, route_captured remains False and router polls.
+        2. The moment data points render, router captures them, sets route_captured=True, and emits dataset.
+        3. On subsequent ticks on the SAME URL, OCR is completely suppressed (0 calls).
+        4. When the URL changes to a new route, route_captured resets to False and captures the new page.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        form_url = "https://return.gst.gov.in/returns/auth/gstr1"
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | Form - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=form_url)
+
+        # Tick 1: Screen is still in async loading / spinner state
+        mock_ocr.scan_image.return_value = {
+            "text": "Loading... Please wait while data is retrieved",
+            "lines": ["Loading... Please wait while data is retrieved"]
+        }
+        res1 = router.evaluate_tick()
+        self.assertIsNone(res1)
+        self.assertFalse(router.route_captured)
+        self.assertEqual(mock_ocr.scan_image.call_count, 1)
+
+        # Tick 2: Data renders on screen! Table metadata is extracted
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "GSTIN - 19AAAAA0000A1Z5\n"
+                "Legal Name - FATIMA BIBI\n"
+                "Trade Name - SPY JUNIOR\n"
+                "FY - 2026-27\n"
+                "Tax Period - June (Q)\n"
+                "Status - Filed\n"
+                "Due Date - 13/07/2026\n"
+            ),
+            "lines": [
+                "GSTIN - 19AAAAA0000A1Z5", "Legal Name - FATIMA BIBI", "Trade Name - SPY JUNIOR",
+                "FY - 2026-27", "Tax Period - June (Q)", "Status - Filed", "Due Date - 13/07/2026"
+            ]
+        }
+        res2 = router.evaluate_tick()
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2["status"], "Filed")
+        self.assertTrue(router.route_captured)
+        calls_after_capture = mock_ocr.scan_image.call_count
+
+        # Tick 3 & 4: Same URL, data has not changed. Must NOT call OCR scan_image!
+        res3 = router.evaluate_tick()
+        res4 = router.evaluate_tick()
+        self.assertIsNone(res3)
+        self.assertIsNone(res4)
+        # scan_image calls MUST not increase at all
+        self.assertEqual(mock_ocr.scan_image.call_count, calls_after_capture)
+
+        # Tick 5: CA navigates to file success URL
+        file_url = "https://return.gst.gov.in/returns/auth/gstr1/file"
+        router.extract_browser_url = MagicMock(return_value=file_url)
+        mock_ocr.scan_image.return_value = {
+            "text": "Filing Successful\nAcknowledgement Reference Number (ARN) is AA1908260123456",
+            "lines": ["Filing Successful", "Acknowledgement Reference Number (ARN) is AA1908260123456"]
+        }
+        res5 = router.evaluate_tick()
+        self.assertIsNotNone(res5)
+        self.assertEqual(res5["arn"], "AA1908260123456")
+        self.assertTrue(router.route_captured)
+        calls_after_file_url = mock_ocr.scan_image.call_count
+
+        # Tick 6: Same file URL. OCR must stop completely!
+        res6 = router.evaluate_tick()
+        self.assertIsNone(res6)
+        self.assertEqual(mock_ocr.scan_image.call_count, calls_after_file_url)
+
+    def test_itr_capture_on_render_and_stop_until_url_changes(self):
+        """
+        Verifies single-shot on-render capture for ITR:
+        1. When page is loading, route_captured remains False and router polls.
+        2. The moment data points render, router captures them, sets route_captured=True, and emits dataset.
+        3. On subsequent ticks on the SAME URL, OCR is completely suppressed (0 calls).
+        4. When the URL changes to a new route, route_captured resets to False.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1200, 800), color="white")
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        itr_status_url = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus"
+        router.get_foreground_info = MagicMock(return_value=(12345, "e-Filing - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=itr_status_url)
+
+        # Tick 1: Screen is loading
+        mock_ocr.scan_image.return_value = {
+            "text": "Loading... Please wait",
+            "lines": ["Loading... Please wait"]
+        }
+        res1 = router.evaluate_tick()
+        self.assertIsNone(res1)
+        self.assertFalse(router.route_captured)
+
+        # Tick 2: Return card renders
+        mock_ocr.scan_image.side_effect = [
+            {
+                "text": "View Filed Returns A.Y. 2026-27 ITR : ITR-1 Acknowledgement No : 123456789012345 Status : Successfully e-Verified",
+                "lines": [
+                    "View Filed Returns", "A.Y. 2026-27", "ITR : ITR-1",
+                    "Acknowledgement No : 123456789012345", "Status : Successfully e-Verified"
+                ]
+            },
+            {
+                "text": "e-Filing Income Tax Department RAMESH SHARMA ABCPE1234F",
+                "lines": ["e-Filing Income Tax Department", "RAMESH SHARMA", "ABCPE1234F"]
+            }
+        ]
+        res2 = router.evaluate_tick()
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2["arn"], "123456789012345")
+        self.assertEqual(res2["pan"], "ABCPE1234F")
+        self.assertTrue(router.route_captured)
+        calls_after_capture = mock_ocr.scan_image.call_count
+
+        # Tick 3: Same URL, subsequent tick. 0 OCR calls!
+        res3 = router.evaluate_tick()
+        self.assertIsNone(res3)
+        self.assertEqual(mock_ocr.scan_image.call_count, calls_after_capture)
+
+        # Tick 4: Navigate to dashboard / landing. URL change resets route_captured!
+        landing_url = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard"
+        router.extract_browser_url = MagicMock(return_value=landing_url)
+        mock_ocr.scan_image.side_effect = None
+        mock_ocr.scan_image.return_value = {
+            "text": "Dashboard Welcome RAMESH SHARMA",
+            "lines": ["Dashboard Welcome RAMESH SHARMA"]
+        }
+        res4 = router.evaluate_tick()
+        # Even if res4 is None (dashboard without submission), route_captured was reset on URL change
+        self.assertEqual(router.last_url, landing_url)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

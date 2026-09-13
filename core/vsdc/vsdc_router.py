@@ -89,6 +89,7 @@ class VSDCRouter:
         self.last_hwnd: int = 0
         self.active_portal: str = "Income Tax"
         self.has_flushed_current_route: bool = False
+        self.route_captured: bool = False
         self.route_poll_count: int = 0
         self.last_screen_hash: Optional[int] = None
         self.last_logged_name: Optional[str] = None
@@ -227,12 +228,15 @@ class VSDCRouter:
         is_new_url = (url != self.last_url)
         is_new_window = (hwnd != self.last_hwnd)
 
-        if is_new_url or is_new_window:
+        if is_new_url:
             self.last_url = url
-            self.last_hwnd = hwnd
             self.has_flushed_current_route = False
+            self.route_captured = False
             self.route_poll_count = 0
             self.last_screen_hash = None
+
+        if is_new_window:
+            self.last_hwnd = hwnd
 
         # Match against SDC Crosshairs
         matched_crosshair = match_url_crosshair(url_normalized)
@@ -245,11 +249,12 @@ class VSDCRouter:
         if not matched_crosshair:
             return None
 
-        # If on the same URL and we ALREADY captured & flushed the filing for this route: sleep (0.0% CPU)
-        if not is_new_url and self.has_flushed_current_route:
+        # Data points do not change after the page loads.
+        # Once data points render on screen and are captured, stop capturing further until URL changes!
+        if not is_new_url and (self.route_captured or self.has_flushed_current_route):
             return None
 
-        # Cap polling attempts on the same route if nothing has changed
+        # Cap polling attempts on the same route if nothing has rendered/changed
         if not is_new_url and self.route_poll_count >= 15:
             return None
 
@@ -427,10 +432,18 @@ class VSDCRouter:
                 print(f"[VSDC Router] Flushed prior client session due to PAN context switch!")
                 return flushed_prior
 
+        # Mark route captured when key data points for the matched route render on screen
+        if is_login_auth and pan:
+            self.route_captured = True
+        elif matched_crosshair.id in ("itr_personal_info", "itr_profile") and (client_name or pan):
+            self.route_captured = True
+
         filing_type = extract_filing_type(full_text)
         period = extract_assessment_year(full_text)
         if filing_type or period:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
+            if matched_crosshair.id == "itr_form_selection":
+                self.route_captured = True
 
         # Check for terminal filing confirmation (Ack / ARN)
         ack_number = repair_numeric_ack(full_text)
@@ -472,6 +485,7 @@ class VSDCRouter:
             period = card["ay"]
             filing_type = card["form"]
             status = card["status"]
+            self.route_captured = True
 
         is_sub_crosshair = matched_crosshair.is_terminal_submission or matched_crosshair.id in (
             "itr_filed_verified",
@@ -484,6 +498,7 @@ class VSDCRouter:
             if matched_crosshair.id != "itr_view_filed_returns":
                 status = classify_verification_status(full_text)
             if get_status_rank(status) >= 2:
+                self.route_captured = True
                 self.assembler.record_submission(
                     ack_number=ack_number,
                     status=status,
@@ -514,6 +529,7 @@ class VSDCRouter:
         # A dataset completes ONLY when submit status is captured from the portal!
         completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)
         if completed_payload:
+            self.route_captured = True
             c_form = completed_payload.get("filing_type", "Return")
             c_period = f" • {completed_payload.get('period_label')}" if completed_payload.get("period_label") else ""
             c_status = completed_payload.get("status", "Submitted")
@@ -679,6 +695,9 @@ class VSDCRouter:
                 print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
                 return flushed_prior
 
+            if authoritative_name or authoritative_gstin:
+                self.route_captured = True
+
             return None
 
         # -------------------------------------------------------------
@@ -772,9 +791,14 @@ class VSDCRouter:
             )
             print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {display_period} | {name_label} | Status={status}")
 
+            if gstin or meta.get("gstin") or meta.get("status") or meta.get("tax_period"):
+                self.route_captured = True
+
             # Shoot assembled dataset directly to desktop application!
             dataset_payload = self.assembler.get_gst_form_dataset_payload(crosshair_id=matched_crosshair.id)
             if dataset_payload:
+                self.route_captured = True
+                self.has_flushed_current_route = True
                 return dataset_payload
 
             return None
@@ -809,6 +833,8 @@ class VSDCRouter:
         period = format_gst_period_label(gst_tp, gst_fy) if (gst_tp or gst_fy) else None
         if filing_type or period:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
+            if matched_crosshair.id == "gst_returns_dashboard":
+                self.route_captured = True
 
         # Check for terminal filing confirmation (ARN)
         arn = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
@@ -837,6 +863,7 @@ class VSDCRouter:
 
         # STRICT MANDATE: An optical GST submission MUST have a valid ARN
         if arn and arn != "N/A":
+            self.route_captured = True
             status = classify_verification_status(full_text)
             if get_status_rank(status) < 2:
                 status = "Filed"
@@ -886,6 +913,7 @@ class VSDCRouter:
         # Dataset Completion Principle:
         completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)
         if completed_payload:
+            self.route_captured = True
             c_form = completed_payload.get("filing_type", "GST Return")
             c_period = f" • {completed_payload.get('period_label')}" if completed_payload.get("period_label") else ""
             c_status = completed_payload.get("status", "Submitted")
