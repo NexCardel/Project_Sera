@@ -2,16 +2,32 @@ const SERA_DEBUG = false; // production: silence all console output
 
 let _lastScaTriggerUid = "";
 let _lastScaTriggerTime = 0;
+let _scaPasswordInjected = false;
+try {
+  if (sessionStorage.getItem('sera_sca_filled') === 'true' || window.__sera_sca_filled) {
+    _scaPasswordInjected = true;
+  }
+} catch (_) {}
 
 window.addEventListener('message', (event) => {
   try {
     if (event.source === window && event.data && event.data.source === 'sera_sca' && event.data.type === 'filled') {
+      _scaPasswordInjected = true;
+      try { sessionStorage.setItem('sera_sca_filled', 'true'); } catch (_) {}
+      try { window.__sera_sca_filled = true; } catch (_) {}
       chrome.runtime.sendMessage({ type: 'sca_fill_completed' });
     }
   } catch (_) {}
 });
 
 function checkAndTriggerSCA(candidateText) {
+  if (_scaPasswordInjected) return;
+  try {
+    if (sessionStorage.getItem('sera_sca_filled') === 'true' || window.__sera_sca_filled) {
+      _scaPasswordInjected = true;
+      return;
+    }
+  } catch (_) {}
   if (!candidateText || !window.normalizeUid) return;
   const clean = window.normalizeUid(candidateText);
   if (clean.length < 3 || clean.length > 100) return;
@@ -134,6 +150,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function renderScaWidgetFromContent(params) {
+  if (_scaPasswordInjected) return;
+  try {
+    if (sessionStorage.getItem('sera_sca_filled') === 'true' || window.__sera_sca_filled) {
+      _scaPasswordInjected = true;
+      return;
+    }
+  } catch (_) {}
   const pwd = params.password || "";
   const pwdSel = params.password_selector || "";
   const bizName = params.business_name || "";
@@ -344,11 +367,12 @@ function renderScaWidgetFromContent(params) {
     const currentField = findPassField();
     if (currentField) {
       simType(currentField, pwd);
+      _scaPasswordInjected = true;
+      try { sessionStorage.setItem('sera_sca_filled', 'true'); } catch (_) {}
+      try { window.__sera_sca_filled = true; } catch (_) {}
       window.postMessage({ source: "sera_sca", type: "filled" }, "*");
       clearTimeout(autoTimer);
-      injectBtn.className = "btn-inject done";
-      injectBtn.innerHTML = "✓  Password Injected";
-      setTimeout(dismiss, 500);
+      dismiss();
     } else {
       injectBtn.innerHTML = "⚠️ Password field not visible";
       setTimeout(() => {
@@ -383,7 +407,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               const success = adapter.fillPassword(pwFields[0], password);
               if (success) {
                 if (SERA_DEBUG) console.log("Sera SCA: Password filled via adapter.");
-                showScaToast(message.business_name, message.owner_name, message.portal_name);
+                _scaPasswordInjected = true;
+                try { sessionStorage.setItem('sera_sca_filled', 'true'); } catch (_) {}
+                try { window.__sera_sca_filled = true; } catch (_) {}
                 chrome.runtime.sendMessage({ type: "SCA_FILL_RESULT", result: "success", detail: `Password filled on ${message.adapter}` });
                 chrome.runtime.sendMessage({ type: "sca_fill_completed" });
               } else {
@@ -406,58 +432,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function showScaToast(bizName, ownName, portalName) {
-  const existing = document.getElementById('sera-sca-toast-host');
-  if (existing) existing.remove();
-
-  const host = document.createElement('div');
-  host.id = 'sera-sca-toast-host';
-  host.style.cssText = 'position: fixed; top: 20px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; pointer-events: auto;';
-
-  const shadow = host.attachShadow({ mode: 'closed' });
-  const container = document.createElement('div');
-  container.style.cssText = `
-    display: flex; flex-direction: column; gap: 6px; min-width: 290px; max-width: 380px; padding: 14px 16px;
-    background: linear-gradient(145deg, #111814, #0B130E); border: 1.5px solid #2E9B5F; border-radius: 12px;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(46, 155, 95, 0.25); color: #FFFFFF;
-    transform: translateX(120%); opacity: 0; transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
-  `;
-
-  const headerRow = document.createElement('div');
-  headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;';
-
-  const badge = document.createElement('span');
-  badge.style.cssText = 'font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #4CF9B7; background: rgba(46, 155, 95, 0.22); border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px;';
-  badge.innerHTML = '⚡ Sera Clipboard Assist';
-
-  const closeBtn = document.createElement('span');
-  closeBtn.style.cssText = 'cursor: pointer; font-size: 14px; color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;';
-  closeBtn.textContent = '✕';
-  closeBtn.onclick = () => {
-    container.style.transform = 'translateX(120%)'; container.style.opacity = '0'; setTimeout(() => host.remove(), 400);
-  };
-  headerRow.appendChild(badge); headerRow.appendChild(closeBtn);
-
-  const title = document.createElement('div');
-  title.style.cssText = 'font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-  title.textContent = bizName || 'Client Profile';
-
-  let ownerDiv = null;
-  if (ownName) {
-    ownerDiv = document.createElement('div');
-    ownerDiv.style.cssText = 'font-size: 12px; color: #9FB3A8; line-height: 1.2;';
-    ownerDiv.textContent = `👤 ${ownName}`;
-  }
-
-  const statusDiv = document.createElement('div');
-  statusDiv.style.cssText = 'display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #34D399; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08);';
-  statusDiv.innerHTML = `<span>✓</span> <span>Password was autofilled for ${portalName || 'Portal'}</span>`;
-
-  container.appendChild(headerRow); container.appendChild(title);
-  if (ownerDiv) container.appendChild(ownerDiv);
-  container.appendChild(statusDiv); shadow.appendChild(container); document.body.appendChild(host);
-
-  setTimeout(() => { container.style.transform = 'translateX(0)'; container.style.opacity = '1'; }, 40);
-  setTimeout(() => { container.style.transform = 'translateX(120%)'; container.style.opacity = '0'; setTimeout(() => host.remove(), 400); }, 6500);
+  // Suppressed permanently: prevents obscuring top-right taxpayer badge/profile header required by VSDC visual name capture
+  return;
 }
 
 // ── In-Page SCC Verification Detector (Income Tax Only) ─────────────────

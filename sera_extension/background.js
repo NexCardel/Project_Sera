@@ -1156,8 +1156,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     resetTimer();
     const result = smartFill(password, passwordSelector, passFallbacks);
     if (result === "filled") {
-      setBtn(passBtn, "done", "✓  Password Injected");
-      setTimeout(dismiss, 400);
+      try { sessionStorage.setItem("sera_sca_filled", "true"); } catch (_) {}
+      try { window.__sera_sca_filled = true; } catch (_) {}
+      try {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({ type: "sca_fill_completed" });
+        }
+      } catch (_) {}
+      dismiss();
     } else {
       setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
       setTimeout(dismiss, 1200);
@@ -2366,21 +2372,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   }
 
   if (req.type === "sca_fill_completed") {
-    chrome.storage.local.get(['armedSCAPayload'], (stored) => {
-      if (SERA_DEBUG) console.log("Sera SCA: Successful fill reported; consuming one use.");
-      const payload = armedSCAPayload || stored.armedSCAPayload;
-      if (!payload || payload.fillCompletionHandled) return;
-      payload.fillCompletionHandled = true;
-      payload.fillInProgress = false;
-      payload.remainingUses = Math.max(0, Number(payload.remainingUses || 1) - 1);
-      if (payload.remainingUses <= 0) {
-        clearScaArm();
-      } else {
-        payload.fillCompletionHandled = false;
-        armedSCAPayload = payload;
-        chrome.storage.local.set({ armedSCAPayload: payload });
-      }
-    });
+    if (SERA_DEBUG) console.log("Sera SCA: Fill completed, disarming SCA payload immediately.");
+    clearScaArm();
     return;
   }
 
@@ -2485,6 +2478,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               function renderAndShowWidget(targetField) {
                 try {
                   if (window.self !== window.top) return;
+                  if (sessionStorage.getItem("sera_sca_filled") === "true" || window.__sera_sca_filled) return;
                 } catch (_) {
                   return;
                 }
@@ -2626,9 +2620,14 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   if (currentField) {
                     simType(currentField, pwd);
                     clearTimeout(autoTimer);
-                    injectBtn.className = "btn-inject done";
-                    injectBtn.innerHTML = "✓  Password Injected";
-                    setTimeout(dismiss, 500);
+                    try { sessionStorage.setItem("sera_sca_filled", "true"); } catch (_) {}
+                    try { window.__sera_sca_filled = true; } catch (_) {}
+                    try {
+                      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                        chrome.runtime.sendMessage({ type: "sca_fill_completed" });
+                      }
+                    } catch (_) {}
+                    dismiss();
                   } else {
                     injectBtn.innerHTML = "⚠️ Password field not visible";
                     setTimeout(() => {
@@ -2636,6 +2635,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                     }, 1500);
                   }
                 };
+              }
+
+              if (sessionStorage.getItem("sera_sca_filled") === "true" || window.__sera_sca_filled) {
+                return;
               }
 
               // Check if password field is already visible (single-page login)
@@ -2646,6 +2649,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                 // Two-page login: wait up to 45s for user to click Next and password field to appear
                 let attempts = 0;
                 const waitInterval = setInterval(() => {
+                  if (sessionStorage.getItem("sera_sca_filled") === "true" || window.__sera_sca_filled) {
+                    clearInterval(waitInterval);
+                    return;
+                  }
                   attempts++;
                   const pf = findPassField();
                   if (pf) {
@@ -2707,85 +2714,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
               }
 
               function showScaToast() {
-                const existing = document.getElementById('sera-sca-toast-host');
-                if (existing) existing.remove();
-
-                const host = document.createElement('div');
-                host.id = 'sera-sca-toast-host';
-                host.style.cssText = 'position: fixed; top: 20px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; pointer-events: auto;';
-
-                const shadow = host.attachShadow({ mode: 'closed' });
-                const container = document.createElement('div');
-                container.style.cssText = `
-                  display: flex;
-                  flex-direction: column;
-                  gap: 6px;
-                  min-width: 290px;
-                  max-width: 380px;
-                  padding: 14px 16px;
-                  background: linear-gradient(145deg, #111814, #0B130E);
-                  border: 1.5px solid #2E9B5F;
-                  border-radius: 12px;
-                  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(46, 155, 95, 0.25);
-                  color: #FFFFFF;
-                  transform: translateX(120%);
-                  opacity: 0;
-                  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
-                `;
-
-                const headerRow = document.createElement('div');
-                headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;';
-
-                const badge = document.createElement('span');
-                badge.style.cssText = 'font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #4CF9B7; background: rgba(46, 155, 95, 0.22); border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px;';
-                badge.innerHTML = '⚡ Sera Clipboard Assist';
-
-                const closeBtn = document.createElement('span');
-                closeBtn.style.cssText = 'cursor: pointer; font-size: 14px; color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;';
-                closeBtn.textContent = '✕';
-                closeBtn.onclick = () => {
-                  container.style.transform = 'translateX(120%)';
-                  container.style.opacity = '0';
-                  setTimeout(() => host.remove(), 400);
-                };
-
-                headerRow.appendChild(badge);
-                headerRow.appendChild(closeBtn);
-
-                const title = document.createElement('div');
-                title.style.cssText = 'font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-                title.textContent = bizName || 'Client Profile';
-
-                let ownerDiv = null;
-                if (ownName) {
-                  ownerDiv = document.createElement('div');
-                  ownerDiv.style.cssText = 'font-size: 12px; color: #9FB3A8; line-height: 1.2;';
-                  ownerDiv.textContent = `👤 ${ownName}`;
-                }
-
-                const statusDiv = document.createElement('div');
-                statusDiv.style.cssText = 'display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #34D399; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08);';
-                statusDiv.innerHTML = `<span>✓</span> <span>Password was autofilled for ${portalName || 'Portal'}</span>`;
-
-                container.appendChild(headerRow);
-                container.appendChild(title);
-                if (ownerDiv) container.appendChild(ownerDiv);
-                container.appendChild(statusDiv);
-                shadow.appendChild(container);
-                document.body.appendChild(host);
-
-                // Slide in
-                setTimeout(() => {
-                  container.style.transform = 'translateX(0)';
-                  container.style.opacity = '1';
-                }, 40);
-
-                // Auto-dismiss after 6.5 seconds
-                setTimeout(() => {
-                  container.style.transform = 'translateX(120%)';
-                  container.style.opacity = '0';
-                  setTimeout(() => host.remove(), 400);
-                }, 6500);
+                // Suppressed permanently: prevents obscuring top-right taxpayer badge/profile header required by VSDC visual name capture
+                return;
               }
 
               // Find password field (includes TRACES and Google's Passwd field)
@@ -2827,8 +2757,9 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
                   clearInterval(interval);
                   setTimeout(() => {
                     simType(passField, pwd);
-                    showScaToast();
-                    if (SERA_DEBUG) console.log("Sera SCA: Password filled safely & notification banner displayed.");
+                    try { sessionStorage.setItem("sera_sca_filled", "true"); } catch (_) {}
+                    try { window.__sera_sca_filled = true; } catch (_) {}
+                    if (SERA_DEBUG) console.log("Sera SCA: Password filled safely.");
                   }, 100);
                 } else if (attempts >= 200) {
                   clearInterval(interval);
