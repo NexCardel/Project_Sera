@@ -26,6 +26,7 @@ from .vsdc_regex import (
     is_page_loading,
     extract_view_filed_returns_card,
     extract_gst_filing_preference,
+    extract_gst_form_table,
 )
 from .vsdc_name_parser import (
     extract_name_from_ocr_lines,
@@ -677,7 +678,99 @@ class VSDCRouter:
             return None
 
         # -------------------------------------------------------------
-        # OTHER GST CROSSHAIRS (Returns Dashboard, Form Details, Submission)
+        # CROSSHAIR CALIBRATION: gst_form_details (/returns/auth/gstr1, gstr3b, cmp08, iff)
+        # Captures complete 4-column metadata table:
+        # GSTIN, PAN, Legal Name, Trade Name, Form Type, FY, Tax Period, Status, Due Date.
+        # Assembles and shoots the complete dataset to the app!
+        # -------------------------------------------------------------
+        if matched_crosshair.id == "gst_form_details":
+            meta = extract_gst_form_table(full_text)
+
+            # Fallback to full window scan if GSTIN or Legal Name was missed
+            if not meta.get("gstin") and target_crop != "full":
+                full_res = self.ocr.scan_image(img, region_type="full")
+                f_text = full_res.get("text", "")
+                full_meta = extract_gst_form_table(f_text)
+                for k, v in full_meta.items():
+                    if v and not meta.get(k):
+                        meta[k] = v
+                full_text = full_text + "\n" + f_text
+
+            gstin = meta.get("gstin") or extract_gstin(full_text)
+            pan = meta.get("pan")
+            if not pan and gstin and len(gstin) >= 12:
+                pan = gstin[2:12]
+
+            legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
+            trade_name = meta.get("trade_name")
+            form_type = meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
+            tax_period = meta.get("tax_period") or extract_assessment_year(full_text) or ""
+            fy = meta.get("fy")
+            due_date = meta.get("due_date")
+            status = meta.get("status") or "Initiated"
+
+            flushed_prior = self.assembler.update_identity(
+                name=legal_name,
+                trade_name=trade_name,
+                gstin=gstin,
+                pan=pan,
+                portal="GST Portal",
+            )
+            if flushed_prior:
+                print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
+                return flushed_prior
+
+            # Record full form details dataset in assembler
+            self.assembler.record_gst_form_details(
+                form_type=form_type,
+                tax_period=tax_period,
+                status=status,
+                due_date=due_date,
+                fy=fy,
+                trade_name=trade_name,
+                raw_text=full_text[:2000],
+                crosshair_id=matched_crosshair.id,
+            )
+
+            # Record step in timeline
+            self.assembler.record_step(
+                url,
+                matched_crosshair.id,
+                details={
+                    "client_name": legal_name,
+                    "trade_name": trade_name,
+                    "gstin": gstin,
+                    "form_type": form_type,
+                    "tax_period": tax_period,
+                    "status": status,
+                    "due_date": due_date,
+                    "fy": fy,
+                },
+            )
+
+            # Live HUD Toast Feedback
+            authoritative_name = self.assembler.client_name or legal_name or ""
+            authoritative_trade = self.assembler.trade_name or trade_name or ""
+            name_label = f"{authoritative_name}" + (f" ({authoritative_trade})" if authoritative_trade else "")
+            period_str = f" • {tax_period}" if tax_period else ""
+            status_str = f" • Status: {status}" if status else ""
+
+            self.notify_activity(
+                "capture",
+                f"Captured {form_type}{period_str}",
+                f"{name_label}{status_str}".strip(),
+            )
+            print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {tax_period} | {name_label} | Status={status}")
+
+            # Shoot assembled dataset directly to desktop application!
+            dataset_payload = self.assembler.get_gst_form_dataset_payload(crosshair_id=matched_crosshair.id)
+            if dataset_payload:
+                return dataset_payload
+
+            return None
+
+        # -------------------------------------------------------------
+        # OTHER GST CROSSHAIRS (Returns Dashboard, Submission)
         # -------------------------------------------------------------
         # Extract GSTIN and Taxpayer Name if not yet identified
         gstin = extract_gstin(full_text)

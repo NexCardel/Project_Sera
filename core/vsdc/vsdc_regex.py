@@ -396,3 +396,134 @@ def extract_gst_filing_preference(text: str) -> Optional[str]:
             return "Monthly"
     return None
 
+
+def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
+    """
+    Extracts structured metadata from the 4-column GST Return Form details table
+    (e.g., on return.gst.gov.in/returns/auth/gstr1, gstr3b, cmp08, iff):
+    - gstin & derived pan
+    - legal_name
+    - trade_name
+    - fy
+    - tax_period
+    - status
+    - due_date
+    - form_type
+    """
+    res: Dict[str, Optional[str]] = {
+        "gstin": None,
+        "pan": None,
+        "legal_name": None,
+        "trade_name": None,
+        "fy": None,
+        "tax_period": None,
+        "status": None,
+        "due_date": None,
+        "form_type": None,
+    }
+    if not text:
+        return res
+
+    # 1. GSTIN & PAN
+    gstin_m = re.search(r"GSTIN(?:\/UIN)?\s*[-:]\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])", text, re.IGNORECASE)
+    if gstin_m:
+        res["gstin"] = gstin_m.group(1).upper()
+    else:
+        res["gstin"] = extract_gstin(text)
+
+    if res["gstin"] and len(res["gstin"]) >= 12:
+        res["pan"] = res["gstin"][2:12]
+
+    # 2. FY (Financial Year)
+    fy_m = re.search(r"(?:FY|Financial\s+Year)\s*[-:]\s*([0-9]{4}\s*-\s*[0-9]{2,4})", text, re.IGNORECASE)
+    if fy_m:
+        res["fy"] = fy_m.group(1).replace(" ", "")
+
+    # 3. Legal Name
+    legal_m = re.search(
+        r"Legal\s+Name(?:\s+of\s+Business)?\s*[-:]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Tax\s+Period|Trade\s+Name|Status|Due\s+Date|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if legal_m:
+        cand = legal_m.group(1).strip()
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin)$", cand, re.IGNORECASE):
+            res["legal_name"] = cand
+
+    # 4. Trade Name
+    trade_m = re.search(
+        r"Trade\s+Name(?:\s+of\s+Business)?\s*[-:]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s+Name|Status|Due\s+Date|Tax\s+Period|Return\s+Period|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if trade_m:
+        cand = trade_m.group(1).strip()
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin)$", cand, re.IGNORECASE):
+            res["trade_name"] = cand
+
+    # 5. Tax Period
+    period_m = re.search(
+        r"(?:Tax|Return|Filing)\s+Period\s*[-:]\s*([A-Za-z0-9()\-_/\s]+?)(?=\s*(?:Status|Due\s+Date|FY|Financial|Trade|Legal|GSTIN|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if period_m:
+        cand = period_m.group(1).strip()
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|-+)$", cand, re.IGNORECASE):
+            res["tax_period"] = cand
+
+    # 6. Status
+    status_m = re.search(
+        r"Status\s*[-:]\s*([A-Za-z0-9\s\-_]+?)(?=\s*(?:Due\s+Date|FY|Financial|Tax\s+Period|Return\s+Period|Trade|Legal|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if status_m:
+        raw_status = status_m.group(1).strip()
+        s_lower = raw_status.lower()
+        if "not filed" in s_lower:
+            res["status"] = "Not Filed"
+        elif "filed" in s_lower:
+            res["status"] = "Filed"
+        elif "submitted" in s_lower:
+            res["status"] = "Submitted"
+        elif "initiated" in s_lower or "draft" in s_lower:
+            res["status"] = "Initiated"
+        else:
+            res["status"] = raw_status.title()
+
+    # 7. Due Date
+    due_m = re.search(
+        r"Due\s*Date\s*[-:]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[0-9]{1,2}[\/\-\s]+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember))[\/\-\s]+[0-9]{2,4})",
+        text,
+        re.IGNORECASE,
+    )
+    if due_m:
+        res["due_date"] = due_m.group(1).strip()
+
+    # 8. Form Type (from Banner or Breadcrumbs or URL text)
+    form_m = re.search(
+        r"\b(GSTR[-_ ]*1(?:\s*\/\s*IFF)?|GSTR[-_ ]*3B|CMP[-_ ]*08|GSTR[-_ ]*4|GSTR[-_ ]*9C|GSTR[-_ ]*9|GSTR[-_ ]*7|GSTR[-_ ]*8|IFF)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if form_m:
+        raw_f = form_m.group(1).upper().replace(" ", "").replace("_", "-")
+        if "GSTR-1" in raw_f or "IFF" in raw_f:
+            res["form_type"] = "GSTR-1/IFF" if "IFF" in raw_f else "GSTR-1"
+        elif "GSTR-3B" in raw_f:
+            res["form_type"] = "GSTR-3B"
+        elif "CMP-08" in raw_f:
+            res["form_type"] = "CMP-08"
+        elif "GSTR-4" in raw_f:
+            res["form_type"] = "GSTR-4"
+        elif "GSTR-9C" in raw_f:
+            res["form_type"] = "GSTR-9C"
+        elif "GSTR-9" in raw_f:
+            res["form_type"] = "GSTR-9"
+        else:
+            res["form_type"] = raw_f
+
+    return res
+
+

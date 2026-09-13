@@ -68,15 +68,18 @@ class VisualSessionAssembler:
         self.portal: str = "Income Tax"
         self.client_pan: Optional[str] = None
         self.client_name: Optional[str] = None
+        self.trade_name: Optional[str] = None
         self.gstin: Optional[str] = None
         self.filing_preference: Optional[str] = None
         self.current_filing_type: Optional[str] = None
         self.current_period_label: Optional[str] = None
+        self.fy: Optional[str] = None
+        self.due_date: Optional[str] = None
         self.captures: Dict[str, Dict[str, Any]] = {}
         self.steps: List[Dict[str, Any]] = []
         self.last_activity: float = time.time()
         self._flushed: bool = False
-        self._emitted_datasets: Dict[str, Tuple[str, str, str]] = {}  # {dataset_key: (status, arn, client_name)}
+        self._emitted_datasets: Dict[str, Tuple[str, str, str, str]] = {}  # {dataset_key: (status, arn, client_name, trade_name)}
 
     def reset(self, new_pan: Optional[str] = None):
         """
@@ -85,10 +88,13 @@ class VisualSessionAssembler:
         self.session_id = f"vsdc_sess_{uuid.uuid4().hex[:12]}"
         self.client_pan = new_pan
         self.client_name = None
+        self.trade_name = None
         self.gstin = None
         self.filing_preference = None
         self.current_filing_type = None
         self.current_period_label = None
+        self.fy = None
+        self.due_date = None
         self.captures.clear()
         self.steps.clear()
         self.last_activity = time.time()
@@ -103,6 +109,8 @@ class VisualSessionAssembler:
         """
         self.current_filing_type = None
         self.current_period_label = None
+        self.fy = None
+        self.due_date = None
         self.captures.clear()
         self._flushed = False
 
@@ -119,7 +127,15 @@ class VisualSessionAssembler:
         }
         self.steps.append(step)
 
-    def update_identity(self, pan: Optional[str] = None, name: Optional[str] = None, gstin: Optional[str] = None, portal: Optional[str] = None, filing_preference: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def update_identity(
+        self,
+        pan: Optional[str] = None,
+        name: Optional[str] = None,
+        gstin: Optional[str] = None,
+        portal: Optional[str] = None,
+        filing_preference: Optional[str] = None,
+        trade_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Updates taxpayer identity attributes. Enforces PAN context switch guard.
         Returns sealed prior session payload if a context switch occurred, else None.
@@ -143,6 +159,8 @@ class VisualSessionAssembler:
             new_name = name.strip().upper()
             if not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
                 self.client_name = new_name
+        if trade_name:
+            self.trade_name = trade_name.strip().upper()
         if gstin:
             self.gstin = gstin.strip().upper()
         if filing_preference:
@@ -150,7 +168,13 @@ class VisualSessionAssembler:
 
         return flushed_prior
 
-    def update_selection(self, filing_type: Optional[str] = None, period_label: Optional[str] = None):
+    def update_selection(
+        self,
+        filing_type: Optional[str] = None,
+        period_label: Optional[str] = None,
+        fy: Optional[str] = None,
+        due_date: Optional[str] = None,
+    ):
         """
         Records the active form type and assessment year / return period.
         If a new filing form is selected, any prior unsubmitted draft for this assessee & period
@@ -176,6 +200,10 @@ class VisualSessionAssembler:
             self.current_filing_type = new_ft
         if period_label:
             self.current_period_label = period_label.strip()
+        if fy:
+            self.fy = fy.strip()
+        if due_date:
+            self.due_date = due_date.strip()
 
     def record_submission(
         self,
@@ -218,8 +246,12 @@ class VisualSessionAssembler:
             "pan": self.client_pan or "",
             "gstin": self.gstin or "",
             "client_name": self.client_name or "",
+            "trade_name": self.trade_name or "",
             "filing_type": ft,
             "period_label": period,
+            "fy": self.fy or "",
+            "due_date": self.due_date or "",
+            "filing_preference": self.filing_preference or "",
             "arn": ack_number,
             "ack_number": ack_number,
             "status": status,
@@ -231,6 +263,134 @@ class VisualSessionAssembler:
         }
         self.captures[dataset_key] = item
         return item
+
+    def record_gst_form_details(
+        self,
+        form_type: str,
+        tax_period: str,
+        status: str,
+        due_date: Optional[str] = None,
+        fy: Optional[str] = None,
+        trade_name: Optional[str] = None,
+        raw_text: Optional[str] = None,
+        crosshair_id: str = "gst_form_details",
+    ) -> Dict[str, Any]:
+        """
+        Records full metadata captured from a GST Return Form page table
+        (GSTIN, PAN, Legal Name, Trade Name, Form Type, FY, Tax Period, Status, Due Date).
+        Constructs a dataset item keyed by (GSTIN | FormType | Period).
+        """
+        self.last_activity = time.time()
+        ft = form_type or self.current_filing_type or "GSTR-1"
+        period = tax_period or self.current_period_label or ""
+        entity_id = self.gstin or self.client_pan or "UNKNOWN"
+
+        self.current_filing_type = ft
+        if period:
+            self.current_period_label = period
+        if trade_name and not self.trade_name:
+            self.trade_name = trade_name.strip().upper()
+        if fy:
+            self.fy = fy.strip()
+        if due_date:
+            self.due_date = due_date.strip()
+
+        dataset_key = f"{entity_id}|{ft}|{period}"
+
+        # Monotonicity Guard: Status promotes, it does not demote!
+        existing = self.captures.get(dataset_key)
+        arn = ""
+        if existing:
+            if get_status_rank(existing.get("status")) > get_status_rank(status):
+                status = existing.get("status", status)
+            arn = existing.get("arn") or existing.get("ack_number") or ""
+
+        item = {
+            "dataset_key": dataset_key,
+            "pan": self.client_pan or "",
+            "gstin": self.gstin or "",
+            "client_name": self.client_name or "",
+            "trade_name": self.trade_name or trade_name or "",
+            "filing_type": ft,
+            "period_label": period,
+            "fy": self.fy or fy or "",
+            "due_date": self.due_date or due_date or "",
+            "filing_preference": self.filing_preference or "",
+            "arn": arn,
+            "ack_number": arn,
+            "status": status,
+            "portal": "GST Portal",
+            "capture_method": f"VSDC_{crosshair_id}",
+            "filing_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "raw_text": raw_text or "",
+            "session_id": self.session_id,
+        }
+        self.captures[dataset_key] = item
+        return item
+
+    def get_gst_form_dataset_payload(
+        self,
+        dataset_key: Optional[str] = None,
+        crosshair_id: str = "gst_form_details",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Constructs and emits an assembled GST Form dataset payload to send directly to the app.
+        Deduplicates against (status, arn, client_name, trade_name) to avoid spamming the app on unchanged screen polls.
+        """
+        entity_id = self.gstin or self.client_pan
+        if not entity_id:
+            return None
+
+        key = dataset_key
+        if not key:
+            form = self.current_filing_type or "GSTR-1"
+            period = self.current_period_label or ""
+            key = f"{entity_id}|{form}|{period}"
+
+        capture_item = self.captures.get(key)
+        if not capture_item:
+            return None
+
+        status = capture_item.get("status", "Initiated")
+        client_name = capture_item.get("client_name") or self.client_name or ""
+        trade_name = capture_item.get("trade_name") or self.trade_name or ""
+        arn = capture_item.get("arn", "")
+
+        fingerprint = (status, arn, client_name, trade_name)
+        if self._emitted_datasets.get(key) == fingerprint:
+            return None
+
+        payload = {
+            "source": "vsdc_optical",
+            "session_id": self.session_id,
+            "portal": "GST Portal",
+            "pan": self.client_pan or "",
+            "gstin": self.gstin or "",
+            "client_name": client_name,
+            "trade_name": trade_name,
+            "filing_type": capture_item.get("filing_type", "GSTR-1"),
+            "period_label": capture_item.get("period_label", ""),
+            "fy": capture_item.get("fy", ""),
+            "due_date": capture_item.get("due_date", ""),
+            "filing_preference": self.filing_preference or "",
+            "arn": arn,
+            "status": status,
+            "capture_method": capture_item.get("capture_method", f"VSDC_{crosshair_id}"),
+            "raw_payload": {
+                "source": {
+                    "protocol": "GST Portal",
+                    "engine": "VSDC",
+                    "version": "1.0.0",
+                },
+                "client_temp_name": client_name,
+                "trade_name": trade_name,
+                "assembler_captures": [capture_item],
+                "timeline": list(self.steps),
+            },
+        }
+
+        self._emitted_datasets[key] = fingerprint
+        return payload
 
     def get_completed_dataset_payload(self, crosshair_id: str = "vsdc_dataset_completion") -> Optional[Dict[str, Any]]:
         """
@@ -358,8 +518,11 @@ class VisualSessionAssembler:
             "pan": self.client_pan or primary.get("pan", ""),
             "gstin": self.gstin or primary.get("gstin", ""),
             "client_name": self.client_name or primary.get("client_name", ""),
+            "trade_name": self.trade_name or primary.get("trade_name", ""),
             "filing_type": primary.get("filing_type", ""),
             "period_label": primary.get("period_label", ""),
+            "fy": self.fy or primary.get("fy", ""),
+            "due_date": self.due_date or primary.get("due_date", ""),
             "filing_preference": self.filing_preference or primary.get("filing_preference", ""),
             "arn": primary.get("arn", ""),
             "status": primary.get("status", "Submitted"),
@@ -371,6 +534,7 @@ class VisualSessionAssembler:
                     "version": "1.0.0",
                 },
                 "client_temp_name": self.client_name or "",
+                "trade_name": self.trade_name or "",
                 "assembler_captures": valid_captures,
                 "timeline": list(self.steps),
             },

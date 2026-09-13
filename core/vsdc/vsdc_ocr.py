@@ -166,6 +166,9 @@ class VSDCOcrEngine:
         elif region_type == "welcome_dashboard":
             # Captures header, center welcome greeting, preference, and right profile card
             return img.crop((0, 0, w, min(int(h * 0.65), h)))
+        elif region_type == "form_details":
+            # Captures header, breadcrumb, form banner, and 4-column metadata table
+            return img.crop((0, 0, w, min(int(h * 0.58), h)))
         return img
 
     async def _run_ocr_async(self, img: Image.Image) -> Dict[str, Any]:

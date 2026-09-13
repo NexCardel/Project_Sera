@@ -20,6 +20,7 @@ from .vsdc_regex import (
     extract_filing_type,
     classify_verification_status,
     extract_gst_filing_preference,
+    extract_gst_form_table,
 )
 from .vsdc_name_parser import (
     sanitize_visual_name,
@@ -48,6 +49,8 @@ __all__ = [
     "extract_assessment_year",
     "extract_filing_type",
     "classify_verification_status",
+    "extract_gst_filing_preference",
+    "extract_gst_form_table",
     "sanitize_visual_name",
     "is_valid_name",
     "is_better_taxpayer_name",

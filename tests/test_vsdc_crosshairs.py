@@ -313,6 +313,105 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(assembler.client_pan, "AABCU9603R")
         self.assertEqual(assembler.filing_preference, "Monthly")
 
+    def test_gst_form_details_calibration(self):
+        """
+        Verifies that on return.gst.gov.in/returns/auth/gstr1 (or gstr3b, cmp08, iff),
+        the router captures the complete 4-column metadata table:
+        1. GSTIN (19AAAAA0000A1Z5) and derived PAN (AAAAA0000A)
+        2. Legal Name (FATIMA BIBI)
+        3. Trade Name (SPY JUNIOR)
+        4. Form Type (GSTR-1/IFF)
+        5. FY (2026-27)
+        6. Tax Period (June(Q))
+        7. Status (Filed)
+        8. Due Date (13/07/2026)
+        and shoots the complete dataset payload to the app with live HUD toast.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+
+        # Simulated OCR text matching the user's screenshot (media_1789328507578.png)
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax\n"
+                "FATIMA BIBI v\n"
+                "Dashboard > Returns > GSTR-1/IFF\n"
+                "GSTR-1 - Details of outward supplies of goods or services\n"
+                "GSTIN - 19AAAAA0000A1Z5\n"
+                "Legal Name - FATIMA BIBI\n"
+                "Trade Name - SPY JUNIOR\n"
+                "* Indicates Mandatory Fields\n"
+                "FY - 2026-27\n"
+                "Tax Period - June(Q)\n"
+                "Status - Filed\n"
+                "Due Date - 13/07/2026\n"
+                "File Nil GSTR-1\n"
+                "ADD RECORD DETAILS\n"
+            ),
+            "lines": [
+                "Goods and Services Tax",
+                "FATIMA BIBI v",
+                "Dashboard > Returns > GSTR-1/IFF",
+                "GSTR-1 - Details of outward supplies of goods or services",
+                "GSTIN - 19AAAAA0000A1Z5",
+                "Legal Name - FATIMA BIBI",
+                "Trade Name - SPY JUNIOR",
+                "* Indicates Mandatory Fields",
+                "FY - 2026-27",
+                "Tax Period - June(Q)",
+                "Status - Filed",
+                "Due Date - 13/07/2026",
+                "File Nil GSTR-1",
+                "ADD RECORD DETAILS",
+            ]
+        }
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | User - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://return.gst.gov.in/returns/auth/gstr1")
+
+        payload = router.evaluate_tick()
+
+        # 1. Verify Assembler state
+        self.assertEqual(assembler.client_name, "FATIMA BIBI")
+        self.assertEqual(assembler.trade_name, "SPY JUNIOR")
+        self.assertEqual(assembler.gstin, "19AAAAA0000A1Z5")
+        self.assertEqual(assembler.client_pan, "AAAAA0000A")
+        self.assertEqual(assembler.fy, "2026-27")
+        self.assertEqual(assembler.due_date, "13/07/2026")
+        self.assertEqual(assembler.current_period_label, "June(Q)")
+        self.assertIn("GSTR-1", assembler.current_filing_type)
+
+        # 2. Verify shot dataset payload to app
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["portal"], "GST Portal")
+        self.assertEqual(payload["client_name"], "FATIMA BIBI")
+        self.assertEqual(payload["trade_name"], "SPY JUNIOR")
+        self.assertEqual(payload["gstin"], "19AAAAA0000A1Z5")
+        self.assertEqual(payload["pan"], "AAAAA0000A")
+        self.assertEqual(payload["period_label"], "June(Q)")
+        self.assertEqual(payload["status"], "Filed")
+        self.assertEqual(payload["due_date"], "13/07/2026")
+        self.assertEqual(payload["fy"], "2026-27")
+        self.assertIn("GSTR-1", payload["filing_type"])
+        self.assertEqual(payload["raw_payload"]["trade_name"], "SPY JUNIOR")
+
+        # 3. Verify Live HUD Toast
+        self.assertTrue(any(evt == "capture" and "GSTR-1" in title and "June(Q)" in title for evt, title, sub in notified))
+        self.assertTrue(any("FATIMA BIBI" in sub and "SPY JUNIOR" in sub and "Filed" in sub for evt, title, sub in notified))
+
 
 if __name__ == "__main__":
     unittest.main()
