@@ -43,6 +43,11 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(c.id, "itr_landing")
 
         # 8. itr_login_auth (Identity Seeding - NOT session boundary)
+        c = match_url_crosshair("https://eportal.incometax.gov.in/iec/foservices/#/login")
+        self.assertEqual(c.id, "itr_login_auth")
+        self.assertFalse(c.is_session_boundary)
+        self.assertEqual(c.target_crop, "center_card")
+
         c = match_url_crosshair("https://eportal.incometax.gov.in/iec/foservices/#/login/password")
         self.assertEqual(c.id, "itr_login_auth")
         self.assertFalse(c.is_session_boundary)
@@ -144,6 +149,67 @@ class TestVSDCCrosshairs(unittest.TestCase):
         # Name must NOT be registered (strictly None) to prevent breadcrumb spam
         self.assertIsNone(assembler.client_name)
 
+    def test_itr_login_auth_standard_hash_and_view_filed_returns_journey(self):
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (800, 600), color="white")
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        # Step 1: User is on standard live login URL: https://eportal.incometax.gov.in/iec/foservices/#/login
+        router.get_foreground_info = MagicMock(return_value=(12345, "e-Filing Login - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/login")
+        mock_ocr.scan_image.return_value = {
+            "text": "User ID : AHJPR0846B\nPlease confirm your Secure Access Message\nPassword :",
+            "lines": ["User ID : AHJPR0846B", "Please confirm your Secure Access Message", "Password :"]
+        }
+
+        router.evaluate_tick()
+
+        # PAN must be preserved from login step
+        self.assertEqual(assembler.client_pan, "AHJPR0846B")
+
+        # Step 2: User logs in and visits View Filed Returns: https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus")
+        mock_ocr.scan_image.side_effect = [
+            # center_card scan (View Filed Returns)
+            {
+                "text": "View Filed Returns A.Y. 2026-27 ITR : ITR-4 Acknowledgement No : 163894330310826 Filed Date : Aug 31, 2026",
+                "lines": [
+                    "View Filed Returns",
+                    "A.Y. 2026-27",
+                    "ITR : ITR-4",
+                    "Acknowledgement No : 163894330310826",
+                    "Filed Date : Aug 31, 2026"
+                ]
+            },
+            # header scan (taxpayer pill)
+            {
+                "text": "e-Filing Income Tax Department PINKI ROY AIS Help Session Time 15.00",
+                "lines": ["e-Filing Income Tax Department", "PINKI ROY", "AIS Help"]
+            }
+        ]
+
+        payload = router.evaluate_tick()
+
+        # Master payload verification
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["pan"], "AHJPR0846B")
+        self.assertEqual(payload["client_name"], "PINKI ROY")
+        self.assertEqual(payload["arn"], "163894330310826")
+        self.assertEqual(payload["filing_type"], "ITR-4")
+        self.assertEqual(payload["raw_payload"]["assembler_captures"][0]["dataset_key"], "AHJPR0846B|ITR-4|AY 2026-27")
+
 
 if __name__ == "__main__":
     unittest.main()
+

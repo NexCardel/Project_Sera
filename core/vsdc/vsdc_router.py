@@ -244,6 +244,7 @@ class VSDCRouter:
 
         self.route_poll_count += 1
 
+        prior_crosshair = self.last_crosshair_id
         if matched_crosshair.id != self.last_crosshair_id or is_new_url:
             self.last_crosshair_id = matched_crosshair.id
             self.assembler.record_step(url, matched_crosshair.id)
@@ -265,15 +266,14 @@ class VSDCRouter:
                 self.notify_activity("flush", "Session Concluded", f"Archived {flushed.get('pan')} • {flushed.get('filing_type', 'Activity')}")
             return flushed
 
-        # Handle login screen boundary: navigating back to login page terminates any prior session
-        if matched_crosshair.id == "itr_login_auth" or "/login" in url.lower():
+        # Handle login screen boundary: returning to login from an active session terminates the prior session
+        if (matched_crosshair.id == "itr_login_auth" or "/login" in url.lower()) and prior_crosshair not in (None, "itr_login_auth"):
             if self.assembler.client_pan or self.assembler.captures or self.assembler.current_filing_type:
                 flushed = self.assembler.seal_and_flush()
                 self.assembler.reset()
                 self.last_logged_name = None
                 self.last_logged_pan = None
                 self.last_screen_hash = None
-                self.last_crosshair_id = None
                 self.route_poll_count = 0
                 if flushed and flushed.get("pan"):
                     self.notify_activity("flush", "Prior Session Concluded", f"{flushed.get('pan')}")
