@@ -397,6 +397,217 @@ def extract_gst_filing_preference(text: str) -> Optional[str]:
     return None
 
 
+def extract_gst_fy(text: str) -> Optional[str]:
+    """
+    Extracts GST Financial Year (e.g. '2026-27', '2025-26', '2026-2027').
+    Handles 'FY - 2026-27', 'Financial Year : 2026-27', 'FY\\n2026-27',
+    spaces within hyphen ('2026 - 27'), en-dash ('2026–27'), etc.
+    """
+    if not text:
+        return None
+
+    # 1. Explicit FY / Financial Year label (allowing line breaks and spaces)
+    fy_m = re.search(
+        r"(?:FY|Financial\s*Year)\s*[-:–—]?\s*[\r\n]*\s*(20\d{2}\s*[-–—/]\s*(?:\d{2}|20\d{2}))",
+        text,
+        re.IGNORECASE,
+    )
+    if fy_m:
+        return re.sub(r"\s+", "", fy_m.group(1)).replace("–", "-").replace("—", "-").replace("/", "-")
+
+    # 2. Standalone FY pattern (e.g. 2025-26, 2026-27)
+    standalone_m = re.search(r"\b(20[2-9]\d\s*[-–—]\s*(?:\d{2}|20\d{2}))\b", text)
+    if standalone_m:
+        return re.sub(r"\s+", "", standalone_m.group(1)).replace("–", "-").replace("—", "-")
+
+    return None
+
+
+def extract_gst_tax_period(text: str) -> Optional[str]:
+    """
+    Extracts the GST Tax Period (Month/Quarter).
+    Examples:
+      - 'Tax Period - June(Q)' -> 'June(Q)'
+      - 'Tax Period: June (Q)' -> 'June(Q)'
+      - 'Tax Period -\\nJune(Q)' -> 'June(Q)'
+      - 'Return Period - Apr-Jun' -> 'Apr-Jun'
+      - 'Tax Period - Q1' -> 'Q1'
+      - 'Tax Period - July' -> 'July'
+    """
+    if not text:
+        return None
+
+    month_names_pat = (
+        r"(?:January|February|March|April|May|June|July|August|September|October|November|December|"
+        r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
+    )
+
+    # 1. Explicit period token directly following Tax / Return / Filing Period label
+    # Note: Ranges (e.g. Apr-Jun) MUST precede single month names to prevent partial matches.
+    explicit_pat = (
+        r"(?:Tax|Return|Filing)\s*Period\s*[-:–—]?\s*[\r\n]*\s*"
+        rf"([A-Za-z]{{3,9}}\s*[-–—/]\s*[A-Za-z]{{3,9}}|"
+        rf"{month_names_pat}\s*(?:\([A-Za-z0-9]+\))?|"
+        r"Q[1-4](?:\s*\([A-Za-z0-9]+\))?|"
+        r"(?:0[1-9]|1[0-2])[\/\-](?:20)?[0-9]{2})"
+    )
+    m = re.search(explicit_pat, text, re.IGNORECASE)
+    if m:
+        val = m.group(1).strip()
+        val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
+        val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
+        return val
+
+    # 2. Line-by-line inspection around any line containing 'Period'
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        if re.search(r"\b(?:Tax|Return|Filing)\s*Period\b", line, re.IGNORECASE):
+            window = " ".join(lines[i:min(i + 3, len(lines))])
+            after_label = window[re.search(r"Period", window, re.IGNORECASE).end():]
+            token_m = re.search(
+                rf"\b([A-Za-z]{{3,9}}\s*[-–—/]\s*[A-Za-z]{{3,9}}|{month_names_pat}\s*(?:\([A-Za-z0-9]+\))?|Q[1-4](?:\s*\([A-Za-z0-9]+\))?)\b",
+                after_label,
+                re.IGNORECASE,
+            )
+            if token_m:
+                val = token_m.group(1).strip()
+                val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
+                val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
+                return val
+
+    # 3. Delimited capture after Period label up to next field keyword
+    delim_m = re.search(
+        r"(?:Tax|Return|Filing)\s*Period\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9()\-_/\s]+?)(?=\s*(?:Status|Due\s*Date|FY|Financial|Trade|Legal|GSTIN|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if delim_m:
+        cand = delim_m.group(1).strip()
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|-+)$", cand, re.IGNORECASE):
+            cand = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", cand)
+            return cand
+
+    # 4. Fallback standalone search for Month with (Q) or quarter range anywhere in text
+    standalone_m = re.search(
+        rf"(?:\b({month_names_pat}\s*\([A-Za-z0-9]+\))|\b((?:Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar))\b)",
+        text,
+        re.IGNORECASE,
+    )
+    if standalone_m:
+        val = (standalone_m.group(1) or standalone_m.group(2) or "").strip()
+        val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
+        val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
+        return val
+
+    return None
+
+
+def extract_gst_status(text: str) -> Optional[str]:
+    """
+    Extracts authoritative filing status from GST forms/tables.
+    Handles 'Filed', 'Not Filed', 'Submitted', 'Initiated', 'Draft', 'Pending', etc.,
+    including multiline separation ('Status -\\nFiled') and column interleaving.
+    """
+    if not text:
+        return None
+
+    # 1. Tier 1: Look for known status keywords directly following a Status label
+    # NOTE: "Not Filed" MUST precede "Filed" to prevent substring mismatch!
+    status_kw_pattern = (
+        r"(?:Filing\s*Status|Return\s*Status|Status)\s*[-:–—]?\s*[\r\n]*\s*"
+        r"\b(Not\s*Filed|Filed\s*(?:&|and)\s*Confirmed|Filed|Submitted|Initiated|In\s*Progress|Draft|Pending|Ready\s*to\s*File|Under\s*Process)\b"
+    )
+    status_m = re.search(status_kw_pattern, text, re.IGNORECASE)
+    if status_m:
+        raw = status_m.group(1).strip()
+        low = raw.lower()
+        if "not filed" in low:
+            return "Not Filed"
+        elif "filed" in low:
+            return "Filed"
+        elif "submitted" in low:
+            return "Submitted"
+        elif "initiated" in low or "draft" in low or "progress" in low:
+            return "Initiated"
+        elif "pending" in low:
+            return "Pending"
+        elif "ready" in low:
+            return "Ready to File"
+        return raw.title()
+
+    # 2. Tier 2: Line-by-line inspection around any line containing 'Status'
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for i, line in enumerate(lines):
+        if re.search(r"\bStatus\b", line, re.IGNORECASE):
+            window = " ".join(lines[i:min(i + 3, len(lines))])
+            after_status = window[re.search(r"\bStatus\b", window, re.IGNORECASE).start():]
+            kw_match = re.search(
+                r"\b(Not\s*Filed|Filed\s*(?:&|and)\s*Confirmed|Filed|Submitted|Initiated|In\s*Progress|Draft|Pending|Ready\s*to\s*File)\b",
+                after_status,
+                re.IGNORECASE,
+            )
+            if kw_match:
+                k_val = kw_match.group(1).strip()
+                k_low = k_val.lower()
+                if "not filed" in k_low:
+                    return "Not Filed"
+                elif "filed" in k_low:
+                    return "Filed"
+                elif "submitted" in k_low:
+                    return "Submitted"
+                elif "initiated" in k_low or "draft" in k_low or "progress" in k_low:
+                    return "Initiated"
+                elif "pending" in k_low:
+                    return "Pending"
+                return k_val.title()
+
+    # 3. Tier 3: Delimited capture after Status label up to the next field keyword
+    delim_m = re.search(
+        r"(?:Filing\s*Status|Return\s*Status|Status)\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9\s\-_/]+?)(?=\s*(?:Due\s*Date|FY|Financial|Tax\s*Period|Return\s*Period|Trade\s*Name|Legal\s*Name|GSTIN|Indicates|\*|\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if delim_m:
+        cand = delim_m.group(1).strip()
+        if cand and not re.match(r"^(?:due\s*date|fy|financial|na|trade|legal|gstin|-+)$", cand, re.IGNORECASE):
+            cand_low = cand.lower()
+            if "not filed" in cand_low:
+                return "Not Filed"
+            elif "filed" in cand_low:
+                return "Filed"
+            elif "submitted" in cand_low:
+                return "Submitted"
+            elif "initiated" in cand_low or "draft" in cand_low or "progress" in cand_low:
+                return "Initiated"
+            elif "pending" in cand_low:
+                return "Pending"
+            return cand.title()
+
+    return None
+
+
+def format_gst_period_label(tax_period: Optional[str], fy: Optional[str]) -> str:
+    """
+    Formats the canonical GST period label combining Month/Quarter and Financial Year.
+    Examples:
+      - tax_period='June(Q)', fy='2026-27' -> 'June(Q) (FY 2026-27)'
+      - tax_period='June', fy='2026-27'    -> 'June (FY 2026-27)'
+      - tax_period='June(Q)', fy=None       -> 'June(Q)'
+      - tax_period=None, fy='2026-27'       -> 'FY 2026-27'
+    """
+    tp = (tax_period or "").strip()
+    f_year = (fy or "").strip()
+    if tp and f_year:
+        if f"FY {f_year}" in tp or f"({f_year})" in tp:
+            return tp
+        return f"{tp} (FY {f_year})"
+    if tp:
+        return tp
+    if f_year:
+        return f"FY {f_year}" if not f_year.upper().startswith("FY") else f_year
+    return ""
+
+
 def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
     """
     Extracts structured metadata from the 4-column GST Return Form details table
@@ -406,6 +617,7 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
     - trade_name
     - fy
     - tax_period
+    - period_label (canonical Month + FY)
     - status
     - due_date
     - form_type
@@ -417,6 +629,7 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
         "trade_name": None,
         "fy": None,
         "tax_period": None,
+        "period_label": None,
         "status": None,
         "due_date": None,
         "form_type": None,
@@ -435,73 +648,49 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
         res["pan"] = res["gstin"][2:12]
 
     # 2. FY (Financial Year)
-    fy_m = re.search(r"(?:FY|Financial\s+Year)\s*[-:]\s*([0-9]{4}\s*-\s*[0-9]{2,4})", text, re.IGNORECASE)
-    if fy_m:
-        res["fy"] = fy_m.group(1).replace(" ", "")
+    res["fy"] = extract_gst_fy(text)
 
     # 3. Legal Name
     legal_m = re.search(
-        r"Legal\s+Name(?:\s+of\s+Business)?\s*[-:]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Tax\s+Period|Trade\s+Name|Status|Due\s+Date|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        r"Legal\s*Name(?:\s+of\s+Business)?\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*|\n|$))",
         text,
         re.IGNORECASE,
     )
     if legal_m:
         cand = legal_m.group(1).strip()
-        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin)$", cand, re.IGNORECASE):
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin|-+)$", cand, re.IGNORECASE):
             res["legal_name"] = cand
 
     # 4. Trade Name
     trade_m = re.search(
-        r"Trade\s+Name(?:\s+of\s+Business)?\s*[-:]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s+Name|Status|Due\s+Date|Tax\s+Period|Return\s+Period|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        r"Trade\s*Name(?:\s+of\s+Business)?\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s*Name|Status|Due\s*Date|Tax\s*Period|Return\s*Period|FY|Financial|GSTIN|Indicates|\*|\n|$))",
         text,
         re.IGNORECASE,
     )
     if trade_m:
         cand = trade_m.group(1).strip()
-        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin)$", cand, re.IGNORECASE):
+        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin|-+)$", cand, re.IGNORECASE):
             res["trade_name"] = cand
 
-    # 5. Tax Period
-    period_m = re.search(
-        r"(?:Tax|Return|Filing)\s+Period\s*[-:]\s*([A-Za-z0-9()\-_/\s]+?)(?=\s*(?:Status|Due\s+Date|FY|Financial|Trade|Legal|GSTIN|Indicates|\*|\n|$))",
-        text,
-        re.IGNORECASE,
-    )
-    if period_m:
-        cand = period_m.group(1).strip()
-        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|-+)$", cand, re.IGNORECASE):
-            res["tax_period"] = cand
+    # 5. Tax Period (Month/Quarter)
+    res["tax_period"] = extract_gst_tax_period(text)
 
-    # 6. Status
-    status_m = re.search(
-        r"Status\s*[-:]\s*([A-Za-z0-9\s\-_]+?)(?=\s*(?:Due\s+Date|FY|Financial|Tax\s+Period|Return\s+Period|Trade|Legal|Indicates|\*|\n|$))",
-        text,
-        re.IGNORECASE,
-    )
-    if status_m:
-        raw_status = status_m.group(1).strip()
-        s_lower = raw_status.lower()
-        if "not filed" in s_lower:
-            res["status"] = "Not Filed"
-        elif "filed" in s_lower:
-            res["status"] = "Filed"
-        elif "submitted" in s_lower:
-            res["status"] = "Submitted"
-        elif "initiated" in s_lower or "draft" in s_lower:
-            res["status"] = "Initiated"
-        else:
-            res["status"] = raw_status.title()
+    # 6. Canonical Period Label (Month + FY)
+    res["period_label"] = format_gst_period_label(res["tax_period"], res["fy"]) or None
 
-    # 7. Due Date
+    # 7. Status
+    res["status"] = extract_gst_status(text)
+
+    # 8. Due Date
     due_m = re.search(
-        r"Due\s*Date\s*[-:]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[0-9]{1,2}[\/\-\s]+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember))[\/\-\s]+[0-9]{2,4})",
+        r"Due\s*Date\s*[-:–—]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember))[\/\-\s]+[0-9]{2,4}))",
         text,
         re.IGNORECASE,
     )
     if due_m:
         res["due_date"] = due_m.group(1).strip()
 
-    # 8. Form Type (from Banner or Breadcrumbs or URL text)
+    # 9. Form Type (from Banner or Breadcrumbs or URL text)
     form_m = re.search(
         r"\b(GSTR[-_ ]*1(?:\s*\/\s*IFF)?|GSTR[-_ ]*3B|CMP[-_ ]*08|GSTR[-_ ]*4|GSTR[-_ ]*9C|GSTR[-_ ]*9|GSTR[-_ ]*7|GSTR[-_ ]*8|IFF)\b",
         text,

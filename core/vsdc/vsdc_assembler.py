@@ -272,6 +272,7 @@ class VisualSessionAssembler:
         due_date: Optional[str] = None,
         fy: Optional[str] = None,
         trade_name: Optional[str] = None,
+        period_label: Optional[str] = None,
         raw_text: Optional[str] = None,
         crosshair_id: str = "gst_form_details",
     ) -> Dict[str, Any]:
@@ -282,7 +283,17 @@ class VisualSessionAssembler:
         """
         self.last_activity = time.time()
         ft = form_type or self.current_filing_type or "GSTR-1"
-        period = tax_period or self.current_period_label or ""
+        
+        # Canonical period representation: Month (FY Year)
+        if period_label:
+            period = period_label.strip()
+        elif tax_period and fy:
+            clean_tp = tax_period.strip()
+            clean_fy = fy.strip()
+            period = f"{clean_tp} (FY {clean_fy})" if f"FY {clean_fy}" not in clean_tp else clean_tp
+        else:
+            period = (tax_period or self.current_period_label or "").strip()
+
         entity_id = self.gstin or self.client_pan or "UNKNOWN"
 
         self.current_filing_type = ft
@@ -313,6 +324,7 @@ class VisualSessionAssembler:
             "trade_name": self.trade_name or trade_name or "",
             "filing_type": ft,
             "period_label": period,
+            "tax_period": tax_period or "",
             "fy": self.fy or fy or "",
             "due_date": self.due_date or due_date or "",
             "filing_preference": self.filing_preference or "",
@@ -370,6 +382,7 @@ class VisualSessionAssembler:
             "trade_name": trade_name,
             "filing_type": capture_item.get("filing_type", "GSTR-1"),
             "period_label": capture_item.get("period_label", ""),
+            "tax_period": capture_item.get("tax_period", ""),
             "fy": capture_item.get("fy", ""),
             "due_date": capture_item.get("due_date", ""),
             "filing_preference": self.filing_preference or "",

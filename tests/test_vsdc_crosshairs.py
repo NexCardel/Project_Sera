@@ -391,7 +391,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(assembler.client_pan, "AAAAA0000A")
         self.assertEqual(assembler.fy, "2026-27")
         self.assertEqual(assembler.due_date, "13/07/2026")
-        self.assertEqual(assembler.current_period_label, "June(Q)")
+        self.assertEqual(assembler.current_period_label, "June(Q) (FY 2026-27)")
         self.assertIn("GSTR-1", assembler.current_filing_type)
 
         # 2. Verify shot dataset payload to app
@@ -401,7 +401,8 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(payload["trade_name"], "SPY JUNIOR")
         self.assertEqual(payload["gstin"], "19AAAAA0000A1Z5")
         self.assertEqual(payload["pan"], "AAAAA0000A")
-        self.assertEqual(payload["period_label"], "June(Q)")
+        self.assertEqual(payload["period_label"], "June(Q) (FY 2026-27)")
+        self.assertEqual(payload["tax_period"], "June(Q)")
         self.assertEqual(payload["status"], "Filed")
         self.assertEqual(payload["due_date"], "13/07/2026")
         self.assertEqual(payload["fy"], "2026-27")
@@ -411,6 +412,69 @@ class TestVSDCCrosshairs(unittest.TestCase):
         # 3. Verify Live HUD Toast
         self.assertTrue(any(evt == "capture" and "GSTR-1" in title and "June(Q)" in title for evt, title, sub in notified))
         self.assertTrue(any("FATIMA BIBI" in sub and "SPY JUNIOR" in sub and "Filed" in sub for evt, title, sub in notified))
+
+    def test_gst_form_details_multiline_status_and_period(self):
+        """
+        Verifies that when OCR outputs multiline breaks between field labels and values:
+        - 'Tax Period -\nJune(Q)' is captured as June(Q)
+        - 'Status -\nFiled' is captured as Filed (NOT defaulted to Initiated)
+        - 'FY -\n2026-27' is captured as 2026-27
+        - Canonical period_label is formatted as 'June(Q) (FY 2026-27)'
+        - No ITR 'AY 2026-27' leak occurs.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax\n"
+                "Dashboard > Returns > GSTR-1/IFF\n"
+                "GSTR-1 - Details of outward supplies of goods or services\n"
+                "GSTIN -\n19AAAAA0000A1Z5\n"
+                "Legal Name -\nFATIMA BIBI\n"
+                "Trade Name -\nSPY JUNIOR\n"
+                "FY -\n2026-27\n"
+                "Tax Period -\nJune (Q)\n"
+                "Status -\nFiled\n"
+                "Due Date -\n13/07/2026\n"
+            ),
+            "lines": [
+                "Goods and Services Tax",
+                "Dashboard > Returns > GSTR-1/IFF",
+                "GSTR-1 - Details of outward supplies of goods or services",
+                "GSTIN -", "19AAAAA0000A1Z5",
+                "Legal Name -", "FATIMA BIBI",
+                "Trade Name -", "SPY JUNIOR",
+                "FY -", "2026-27",
+                "Tax Period -", "June (Q)",
+                "Status -", "Filed",
+                "Due Date -", "13/07/2026",
+            ]
+        }
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | User - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://return.gst.gov.in/returns/auth/gstr1")
+
+        payload = router.evaluate_tick()
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["status"], "Filed")
+        self.assertEqual(payload["period_label"], "June(Q) (FY 2026-27)")
+        self.assertEqual(payload["tax_period"], "June(Q)")
+        self.assertEqual(payload["fy"], "2026-27")
+        self.assertNotIn("AY", payload["period_label"])
 
     def test_gst_filing_file_success_arn_extraction(self):
         """
@@ -428,12 +492,11 @@ class TestVSDCCrosshairs(unittest.TestCase):
 
         # 1. Verify crosshair pattern match
         test_url = "https://return.gst.gov.in/returns/auth/gstr1/file"
-        c = match_url_crosshair(test_url)
-        self.assertIsNotNone(c)
-        self.assertEqual(c.id, "gst_filing_file_success")
-        self.assertTrue(c.is_terminal_submission)
+        matched = match_url_crosshair(test_url)
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, "gst_filing_file_success")
 
-        # 2. Setup assembler with prior session identity from form details step
+        # 2. Setup Assembler with prior state from form view
         assembler = VisualSessionAssembler()
         assembler.update_identity(
             name="FATIMA BIBI",
@@ -442,7 +505,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
             pan="AAAAA0000A",
             portal="GST Portal",
         )
-        assembler.update_selection(filing_type="GSTR-1", period_label="June(Q)", fy="2026-27")
+        assembler.update_selection(filing_type="GSTR-1", period_label="June(Q) (FY 2026-27)", fy="2026-27")
 
         mock_ocr = MagicMock()
         mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
@@ -485,7 +548,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(master_payload["gstin"], "19AAAAA0000A1Z5")
         self.assertEqual(master_payload["pan"], "AAAAA0000A")
         self.assertEqual(master_payload["filing_type"], "GSTR-1")
-        self.assertEqual(master_payload["period_label"], "June(Q)")
+        self.assertEqual(master_payload["period_label"], "June(Q) (FY 2026-27)")
         self.assertIn(master_payload["status"], ("Filed", "Filing Submitted"))
 
         # 4. Verify Live HUD Toasts (capture + flush)

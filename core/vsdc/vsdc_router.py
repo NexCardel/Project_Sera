@@ -27,6 +27,10 @@ from .vsdc_regex import (
     extract_view_filed_returns_card,
     extract_gst_filing_preference,
     extract_gst_form_table,
+    extract_gst_fy,
+    extract_gst_tax_period,
+    extract_gst_status,
+    format_gst_period_label,
 )
 from .vsdc_name_parser import (
     extract_name_from_ocr_lines,
@@ -686,8 +690,8 @@ class VSDCRouter:
         if matched_crosshair.id == "gst_form_details":
             meta = extract_gst_form_table(full_text)
 
-            # Fallback to full window scan if GSTIN or Legal Name was missed
-            if not meta.get("gstin") and target_crop != "full":
+            # Fallback to full window scan if GSTIN or Status was missed in cropped area
+            if (not meta.get("gstin") or not meta.get("status")) and target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 full_meta = extract_gst_form_table(f_text)
@@ -704,10 +708,13 @@ class VSDCRouter:
             legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
             trade_name = meta.get("trade_name")
             form_type = meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
-            tax_period = meta.get("tax_period") or extract_assessment_year(full_text) or ""
-            fy = meta.get("fy")
+            
+            # Smart period & FY extraction without ITR Assessment Year leaks
+            tax_period = meta.get("tax_period") or extract_gst_tax_period(full_text) or ""
+            fy = meta.get("fy") or extract_gst_fy(full_text) or ""
+            period_label = meta.get("period_label") or format_gst_period_label(tax_period, fy)
             due_date = meta.get("due_date")
-            status = meta.get("status") or "Initiated"
+            status = meta.get("status") or extract_gst_status(full_text) or "Initiated"
 
             flushed_prior = self.assembler.update_identity(
                 name=legal_name,
@@ -728,6 +735,7 @@ class VSDCRouter:
                 due_date=due_date,
                 fy=fy,
                 trade_name=trade_name,
+                period_label=period_label,
                 raw_text=full_text[:2000],
                 crosshair_id=matched_crosshair.id,
             )
@@ -742,6 +750,7 @@ class VSDCRouter:
                     "gstin": gstin,
                     "form_type": form_type,
                     "tax_period": tax_period,
+                    "period_label": period_label,
                     "status": status,
                     "due_date": due_date,
                     "fy": fy,
@@ -752,7 +761,8 @@ class VSDCRouter:
             authoritative_name = self.assembler.client_name or legal_name or ""
             authoritative_trade = self.assembler.trade_name or trade_name or ""
             name_label = f"{authoritative_name}" + (f" ({authoritative_trade})" if authoritative_trade else "")
-            period_str = f" • {tax_period}" if tax_period else ""
+            display_period = period_label or tax_period
+            period_str = f" • {display_period}" if display_period else ""
             status_str = f" • Status: {status}" if status else ""
 
             self.notify_activity(
@@ -760,7 +770,7 @@ class VSDCRouter:
                 f"Captured {form_type}{period_str}",
                 f"{name_label}{status_str}".strip(),
             )
-            print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {tax_period} | {name_label} | Status={status}")
+            print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {display_period} | {name_label} | Status={status}")
 
             # Shoot assembled dataset directly to desktop application!
             dataset_payload = self.assembler.get_gst_form_dataset_payload(crosshair_id=matched_crosshair.id)
@@ -794,7 +804,9 @@ class VSDCRouter:
                 return flushed_prior
 
         filing_type = extract_filing_type(full_text)
-        period = extract_assessment_year(full_text)
+        gst_tp = extract_gst_tax_period(full_text)
+        gst_fy = extract_gst_fy(full_text)
+        period = format_gst_period_label(gst_tp, gst_fy) if (gst_tp or gst_fy) else None
         if filing_type or period:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
 
@@ -818,7 +830,10 @@ class VSDCRouter:
                     if not filing_type:
                         filing_type = extract_filing_type(f_text)
                     if not period:
-                        period = extract_assessment_year(f_text)
+                        f_gst_tp = extract_gst_tax_period(f_text)
+                        f_gst_fy = extract_gst_fy(f_text)
+                        if f_gst_tp or f_gst_fy:
+                            period = format_gst_period_label(f_gst_tp, f_gst_fy)
 
         # STRICT MANDATE: An optical GST submission MUST have a valid ARN
         if arn and arn != "N/A":

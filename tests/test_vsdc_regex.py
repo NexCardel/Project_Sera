@@ -165,6 +165,103 @@ class TestVSDCRegex(unittest.TestCase):
         self.assertEqual(wasil_card["form"], "ITR-4")
         self.assertEqual(wasil_card["status"], "Submitted (e-Verified)")
 
+    def test_extract_gst_fy_smart_regex(self):
+        from core.vsdc.vsdc_regex import extract_gst_fy
+
+        # Clean label with dash
+        self.assertEqual(extract_gst_fy("FY - 2026-27"), "2026-27")
+        # Colon separator
+        self.assertEqual(extract_gst_fy("FY: 2026-27"), "2026-27")
+        # Multiline break between label and year
+        self.assertEqual(extract_gst_fy("FY -\n2026-27"), "2026-27")
+        self.assertEqual(extract_gst_fy("Financial Year\n2026-27"), "2026-27")
+        # Spaces around hyphen and en-dash
+        self.assertEqual(extract_gst_fy("FY - 2026 - 27"), "2026-27")
+        self.assertEqual(extract_gst_fy("FY: 2026–27"), "2026-27")
+        # Standalone financial year
+        self.assertEqual(extract_gst_fy("Return for 2025-26 portal view"), "2025-26")
+
+    def test_extract_gst_tax_period_smart_regex(self):
+        from core.vsdc.vsdc_regex import extract_gst_tax_period
+
+        # Clean month with (Q)
+        self.assertEqual(extract_gst_tax_period("Tax Period - June(Q)"), "June(Q)")
+        # Space between month and (Q) normalized
+        self.assertEqual(extract_gst_tax_period("Tax Period : June (Q)"), "June(Q)")
+        # Multiline break between label and value
+        self.assertEqual(extract_gst_tax_period("Tax Period -\nJune(Q)"), "June(Q)")
+        self.assertEqual(extract_gst_tax_period("Return Period\nJuly"), "July")
+        # Quarter ranges
+        self.assertEqual(extract_gst_tax_period("Return Period - Apr-Jun"), "Apr-Jun")
+        self.assertEqual(extract_gst_tax_period("Tax Period - Q1"), "Q1")
+        # Standalone fallback when label is missing
+        self.assertEqual(extract_gst_tax_period("Outward supplies for June(Q) filed"), "June(Q)")
+
+    def test_extract_gst_status_smart_regex(self):
+        from core.vsdc.vsdc_regex import extract_gst_status
+
+        # Standard filed
+        self.assertEqual(extract_gst_status("Status - Filed"), "Filed")
+        self.assertEqual(extract_gst_status("Status : Filed"), "Filed")
+        # Multiline separation
+        self.assertEqual(extract_gst_status("Status -\nFiled"), "Filed")
+        self.assertEqual(extract_gst_status("Status\nFiled"), "Filed")
+        # Not Filed (must not be confused with Filed)
+        self.assertEqual(extract_gst_status("Status - Not Filed"), "Not Filed")
+        self.assertEqual(extract_gst_status("Status -\nNot Filed"), "Not Filed")
+        # Submitted, Initiated, Draft, Pending
+        self.assertEqual(extract_gst_status("Status - Submitted"), "Submitted")
+        self.assertEqual(extract_gst_status("Status - Initiated"), "Initiated")
+        self.assertEqual(extract_gst_status("Status - Draft"), "Initiated")
+        self.assertEqual(extract_gst_status("Status - Pending"), "Pending")
+        self.assertEqual(extract_gst_status("Status - Ready to File"), "Ready to File")
+        # Column interleaved OCR text
+        self.assertEqual(
+            extract_gst_status("Trade Name - SPY JUNIOR Status - Filed Due Date - 13/07/2026"),
+            "Filed"
+        )
+        self.assertEqual(
+            extract_gst_status("Trade Name - SPY JUNIOR Status: Not Filed Due Date - 13/07/2026"),
+            "Not Filed"
+        )
+
+    def test_format_gst_period_label(self):
+        from core.vsdc.vsdc_regex import format_gst_period_label
+
+        self.assertEqual(format_gst_period_label("June(Q)", "2026-27"), "June(Q) (FY 2026-27)")
+        self.assertEqual(format_gst_period_label("June", "2026-27"), "June (FY 2026-27)")
+        self.assertEqual(format_gst_period_label("June(Q)", None), "June(Q)")
+        self.assertEqual(format_gst_period_label(None, "2026-27"), "FY 2026-27")
+        self.assertEqual(format_gst_period_label("June(Q) (FY 2026-27)", "2026-27"), "June(Q) (FY 2026-27)")
+
+    def test_extract_gst_form_table_multiline_and_optical_noise(self):
+        from core.vsdc.vsdc_regex import extract_gst_form_table
+
+        # Simulated OCR with newlines between labels and values
+        multiline_ocr = (
+            "Goods and Services Tax\n"
+            "Dashboard > Returns > GSTR-1/IFF\n"
+            "GSTR-1 - Details of outward supplies\n"
+            "GSTIN -\n19AAAAA0000A1Z5\n"
+            "Legal Name -\nFATIMA BIBI\n"
+            "Trade Name -\nSPY JUNIOR\n"
+            "FY -\n2026-27\n"
+            "Tax Period -\nJune (Q)\n"
+            "Status -\nNot Filed\n"
+            "Due Date -\n13/07/2026\n"
+        )
+        table = extract_gst_form_table(multiline_ocr)
+        self.assertEqual(table["gstin"], "19AAAAA0000A1Z5")
+        self.assertEqual(table["pan"], "AAAAA0000A")
+        self.assertEqual(table["legal_name"], "FATIMA BIBI")
+        self.assertEqual(table["trade_name"], "SPY JUNIOR")
+        self.assertEqual(table["fy"], "2026-27")
+        self.assertEqual(table["tax_period"], "June(Q)")
+        self.assertEqual(table["period_label"], "June(Q) (FY 2026-27)")
+        self.assertEqual(table["status"], "Not Filed")
+        self.assertEqual(table["due_date"], "13/07/2026")
+        self.assertEqual(table["form_type"], "GSTR-1/IFF")
+
 
 if __name__ == "__main__":
     unittest.main()

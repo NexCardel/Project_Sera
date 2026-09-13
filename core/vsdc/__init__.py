@@ -21,6 +21,10 @@ from .vsdc_regex import (
     classify_verification_status,
     extract_gst_filing_preference,
     extract_gst_form_table,
+    extract_gst_fy,
+    extract_gst_tax_period,
+    extract_gst_status,
+    format_gst_period_label,
 )
 from .vsdc_name_parser import (
     sanitize_visual_name,
@@ -51,6 +55,10 @@ __all__ = [
     "classify_verification_status",
     "extract_gst_filing_preference",
     "extract_gst_form_table",
+    "extract_gst_fy",
+    "extract_gst_tax_period",
+    "extract_gst_status",
+    "format_gst_period_label",
     "sanitize_visual_name",
     "is_valid_name",
     "is_better_taxpayer_name",
