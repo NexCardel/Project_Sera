@@ -23,6 +23,7 @@ from .vsdc_regex import (
 from .vsdc_name_parser import (
     sanitize_visual_name,
     is_valid_name,
+    is_better_taxpayer_name,
     parse_human_name,
     extract_name_from_ocr_lines,
     extract_composite_form_name,
@@ -47,6 +48,7 @@ __all__ = [
     "classify_verification_status",
     "sanitize_visual_name",
     "is_valid_name",
+    "is_better_taxpayer_name",
     "parse_human_name",
     "extract_name_from_ocr_lines",
     "extract_composite_form_name",

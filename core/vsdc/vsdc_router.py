@@ -26,7 +26,7 @@ from .vsdc_regex import (
     is_page_loading,
     extract_view_filed_returns_card,
 )
-from .vsdc_name_parser import extract_name_from_ocr_lines, parse_human_name
+from .vsdc_name_parser import extract_name_from_ocr_lines, parse_human_name, is_better_taxpayer_name
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -343,7 +343,7 @@ class VSDCRouter:
                 h_gstin = extract_gstin(h_text)
                 h_name = extract_name_from_ocr_lines(h_lines)
                 if h_name:
-                    if not client_name or len(h_name.split()) > len(client_name.split()):
+                    if not client_name or is_better_taxpayer_name(h_name, client_name):
                         client_name = h_name
                 if h_pan and not pan:
                     pan = h_pan
@@ -364,10 +364,17 @@ class VSDCRouter:
         if client_name and not is_login_auth:
             self.assembler.update_identity(name=client_name)
             authoritative_name = self.assembler.client_name or client_name
-            is_better_name = not self.last_logged_name or len(authoritative_name.split()) > len(self.last_logged_name.split())
+            is_better_name = is_better_taxpayer_name(authoritative_name, self.last_logged_name)
             if is_better_name and authoritative_name != self.last_logged_name:
                 print(f"[VSDC Router] Extracted client name: {authoritative_name}")
                 self.last_logged_name = authoritative_name
+                # Trigger live HUD toast update with authoritative full name
+                pan_label = self.assembler.client_pan or self.assembler.gstin or ""
+                self.notify_activity(
+                    "identity",
+                    f"Assessee: {authoritative_name}",
+                    f"PAN: {pan_label}" if pan_label else f"Portal: {self.active_portal}",
+                )
 
         if pan or gstin:
             flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, portal=self.active_portal)

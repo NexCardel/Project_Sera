@@ -10,6 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
+from .vsdc_name_parser import is_better_taxpayer_name
 
 
 STATUS_RANK: Dict[str, int] = {
@@ -138,24 +139,8 @@ class VisualSessionAssembler:
 
         if name:
             new_name = name.strip().upper()
-            if not self.client_name:
+            if not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
                 self.client_name = new_name
-            else:
-                existing_words = self.client_name.split()
-                new_words = new_name.split()
-                # Do not downgrade a full name to a partial fragment or truncated version
-                # (e.g. preserve 'WASIL AMAN MANDAL' if incoming is 'WASIL MANDAL', 'WASIL AMAN', or 'WASIL AMAN MAND')
-                is_downgrade = False
-                if len(new_words) < len(existing_words):
-                    if set(new_words).issubset(set(existing_words)) or new_name in self.client_name:
-                        is_downgrade = True
-                elif len(new_words) == len(existing_words):
-                    if all(ew.startswith(nw) for nw, ew in zip(new_words, existing_words)):
-                        if len(new_name.replace(' ', '')) < len(self.client_name.replace(' ', '')):
-                            is_downgrade = True
-
-                if not is_downgrade:
-                    self.client_name = new_name
         if gstin:
             self.gstin = gstin.strip().upper()
 

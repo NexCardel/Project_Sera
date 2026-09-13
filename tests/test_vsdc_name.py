@@ -6,6 +6,7 @@ import unittest
 from core.vsdc.vsdc_name_parser import (
     sanitize_visual_name,
     is_valid_name,
+    is_better_taxpayer_name,
     parse_human_name,
     extract_name_from_ocr_lines,
     extract_composite_form_name,
@@ -253,6 +254,35 @@ class TestVSDCNameParser(unittest.TestCase):
         ]
         extracted = extract_composite_form_name(lines)
         self.assertEqual(extracted, "WASIL AMAN MANDAL")
+
+    def test_sanitize_visual_name_ellipsis_and_multiple_dots(self):
+        # Multiple trailing dots (e.g. 's......') and Unicode ellipsis '…'
+        self.assertEqual(sanitize_visual_name("RABINDRANATH S......"), "RABINDRANATH S")
+        self.assertEqual(sanitize_visual_name("RABINDRANATH S…"), "RABINDRANATH S")
+        self.assertEqual(sanitize_visual_name("WASIL AMAN MAND..."), "WASIL AMAN MAND")
+        self.assertEqual(sanitize_visual_name("WASIL AMAN MANDAL"), "WASIL AMAN MANDAL")
+
+    def test_is_better_taxpayer_name_equal_word_count_expansion(self):
+        # 1. Equal word count: full name expands truncated single-letter initial / prefix
+        # "RABINDRANATH SAGORE" (2 words) vs "RABINDRANATH S" (2 words)
+        self.assertTrue(is_better_taxpayer_name("RABINDRANATH SAGORE", "RABINDRANATH S"))
+        self.assertTrue(is_better_taxpayer_name("RABINDRANATH SAGORE", "RABINDRANATH S......"))
+
+        # 2. Equal word count: full name expands truncated word fragment
+        # "WASIL AMAN MANDAL" (3 words) vs "WASIL AMAN MAND" (3 words)
+        self.assertTrue(is_better_taxpayer_name("WASIL AMAN MANDAL", "WASIL AMAN MAND"))
+
+        # 3. Word count expansion: 3 words vs 2 words
+        self.assertTrue(is_better_taxpayer_name("WASIL AMAN MANDAL", "WASIL MANDAL"))
+
+        # 4. Anti-downgrade: truncated header name cannot overwrite full profile name
+        self.assertFalse(is_better_taxpayer_name("RABINDRANATH S", "RABINDRANATH SAGORE"))
+        self.assertFalse(is_better_taxpayer_name("RABINDRANATH S......", "RABINDRANATH SAGORE"))
+        self.assertFalse(is_better_taxpayer_name("WASIL AMAN MAND", "WASIL AMAN MANDAL"))
+        self.assertFalse(is_better_taxpayer_name("WASIL MANDAL", "WASIL AMAN MANDAL"))
+
+        # 5. Identical names do not qualify as 'better'
+        self.assertFalse(is_better_taxpayer_name("RABINDRANATH SAGORE", "RABINDRANATH SAGORE"))
 
 
 if __name__ == "__main__":

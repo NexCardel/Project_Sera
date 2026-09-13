@@ -83,14 +83,16 @@ def sanitize_visual_name(raw_name: str) -> str:
     # 4. Strip Unicode arrows & UI symbols
     clean = re.sub(r"[\u02C0-\u02FF\u25A0-\u25FF\u2300-\u23FF\uFE00-\uFE0F⌵▼▽˅^<>|•\-_:]+", " ", clean)
 
-    # 4. Strip trailing ellipsis
-    clean = re.sub(r"\.\.\.$", "", clean)
+    # 5. Strip trailing ellipsis (including multiple dots like '......', '...', and Unicode '…')
+    clean = re.sub(r"[\u2026\.]+$", "", clean)
+    clean = re.sub(r"\s*[\u2026\.]+\s*", " ", clean)
 
-    # 5. Keep only valid name characters
+    # 6. Keep only valid name characters
     clean = re.sub(r"[^A-Za-z\s.'-]", " ", clean)
 
-    # 6. Normalize whitespace
+    # 7. Normalize whitespace and strip trailing non-letter symbols
     clean = re.sub(r"\s+", " ", clean).strip().upper()
+    clean = re.sub(r"[\s.'-]+$", "", clean).strip()
     return clean
 
 
@@ -114,6 +116,70 @@ def is_valid_name(name: str) -> bool:
         return False
     # Must match name character set
     return bool(re.match(r"^[A-Z\s.'-]{3,70}$", name))
+
+
+def is_better_taxpayer_name(new_name: Optional[str], existing_name: Optional[str]) -> bool:
+    """
+    Evaluates whether an incoming name candidate is strictly more complete and authoritative
+    than the currently registered name.
+
+    Handles:
+    1. Initial population: Any valid name beats None/empty.
+    2. Word count expansion: "WASIL AMAN MANDAL" (3 words) beats "WASIL MANDAL" (2 words).
+    3. Same word count with truncation expansion:
+       - "RABINDRANATH SAGORE" beats "RABINDRANATH S" (single-letter / prefix expansion).
+       - "WASIL AMAN MANDAL" beats "WASIL AMAN MAND" (character length expansion).
+    4. Anti-downgrade protection: A truncated header re-scan ("RABINDRANATH S")
+       never overwrites an already-expanded full profile name ("RABINDRANATH SAGORE").
+    """
+    if not new_name:
+        return False
+    n_clean = sanitize_visual_name(new_name)
+    if not is_valid_name(n_clean):
+        return False
+    if not existing_name:
+        return True
+
+    e_clean = sanitize_visual_name(existing_name)
+    if not e_clean:
+        return True
+    if n_clean == e_clean:
+        return False
+
+    n_words = n_clean.split()
+    e_words = e_clean.split()
+
+    # 1. Word count expansion (more words is generally more complete)
+    if len(n_words) > len(e_words):
+        return True
+    if len(n_words) < len(e_words):
+        # Fewer words is a downgrade, unless existing was purely single-letter fragments
+        if all(len(w) <= 1 for w in e_words) and all(len(w) >= 2 for w in n_words):
+            return True
+        return False
+
+    # 2. Equal word count: inspect character length and word expansions
+    n_chars = len(n_clean.replace(" ", ""))
+    e_chars = len(e_clean.replace(" ", ""))
+
+    # Check if incoming word expands a single-letter initial or truncated prefix
+    has_expansion = False
+    for nw, ew in zip(n_words, e_words):
+        if nw.startswith(ew) and len(nw) > len(ew):
+            has_expansion = True
+            break
+        elif len(ew) <= 2 and len(nw) >= 3:
+            has_expansion = True
+            break
+
+    if has_expansion and n_chars > e_chars:
+        return True
+
+    # Noticeably longer character length with matching leading name
+    if n_chars > e_chars and n_words[0] == e_words[0]:
+        return True
+
+    return False
 
 
 def parse_human_name(raw_name: str) -> Dict[str, str]:
