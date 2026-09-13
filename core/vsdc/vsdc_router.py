@@ -309,10 +309,18 @@ class VSDCRouter:
         # Process extracted fields based on crosshair type
         pan = extract_pan(full_text)
         gstin = extract_gstin(full_text)
-        client_name = extract_name_from_ocr_lines(lines)
+
+        # On login authentication (password) page: strictly capture PAN only.
+        # Never extract or register name candidates from the password / secure access message page
+        # to prevent breadcrumb spamming and bogus name seeding.
+        is_login_auth = (matched_crosshair.id == "itr_login_auth")
+        if is_login_auth:
+            client_name = None
+        else:
+            client_name = extract_name_from_ocr_lines(lines)
 
         # On login authentication page, if PAN is not in cropped card, fallback to full image
-        if not pan and matched_crosshair.id == "itr_login_auth":
+        if not pan and is_login_auth:
             full_res = self.ocr.scan_image(img, region_type="full")
             f_text = full_res.get("text", "")
             pan = extract_pan(f_text)
@@ -323,10 +331,9 @@ class VSDCRouter:
         # on receipt card), or if extracted name is incomplete (fewer than 2 words), scan the header region!
         name_incomplete = not client_name or len(client_name.split()) < 2
         pan_missing = not pan and not self.assembler.client_pan
-        # For the Personal Info / Profile page the center_card already contains the name table.
-        # The portal header always shows a truncated profile pill (e.g. "WASIL AMAN MAND...") —
-        # running header OCR would overwrite the correct full name with a fragment.
-        _skip_header_for_name = matched_crosshair.id == "itr_personal_info"
+        # For Personal Info page the center_card already contains the full name table (avoid header truncated pill).
+        # For Login Auth page, we strictly do NOT scan header for name.
+        _skip_header_for_name = matched_crosshair.id in ("itr_personal_info", "itr_login_auth")
         if pan_missing or (name_incomplete and not self.assembler.client_name and not _skip_header_for_name):
             if matched_crosshair.target_crop != "header":
                 header_res = self.ocr.scan_image(img, region_type="header")
@@ -354,7 +361,7 @@ class VSDCRouter:
                 if h_gstin and not gstin:
                     gstin = h_gstin
 
-        if client_name:
+        if client_name and not is_login_auth:
             self.assembler.update_identity(name=client_name)
             authoritative_name = self.assembler.client_name or client_name
             is_better_name = not self.last_logged_name or len(authoritative_name.split()) > len(self.last_logged_name.split())
@@ -364,7 +371,7 @@ class VSDCRouter:
 
         if pan or gstin:
             flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, portal=self.active_portal)
-            c_name = self.assembler.client_name or client_name or ""
+            c_name = self.assembler.client_name or ""
             if pan and pan != self.last_logged_pan:
                 print(f"[VSDC Router] Identity updated: PAN={pan}")
                 self.notify_activity("identity", f"Assessee: {pan}", f"{c_name}" if c_name else f"Portal: {self.active_portal}")

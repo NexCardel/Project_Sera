@@ -105,6 +105,45 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertIsNotNone(c)
         self.assertEqual(c.id, "itr_personal_info")
 
+    def test_itr_login_auth_captures_pan_only(self):
+        """Verifies that on itr_login_auth (password page), only PAN is captured and names are strictly ignored."""
+        from unittest.mock import MagicMock
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        from PIL import Image
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (800, 600), color="white")
+        # Text simulating the e-Filing password page with PAN and a Secure Access Message
+        mock_ocr.scan_image.return_value = {
+            "text": "User ID : AHJPR0846B\nPlease confirm your Secure Access Message :\nAMAN ENTERPRISES PRIVATE LIMITED\nPassword :",
+            "lines": [
+                "User ID : AHJPR0846B",
+                "Please confirm your Secure Access Message :",
+                "AMAN ENTERPRISES PRIVATE LIMITED",
+                "Password :"
+            ]
+        }
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        # Mock foreground window and browser address bar for itr_login_auth
+        router.get_foreground_info = MagicMock(return_value=(12345, "e-Filing Login - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/login/password")
+
+        router.evaluate_tick()
+
+        # PAN must be seeded
+        self.assertEqual(assembler.client_pan, "AHJPR0846B")
+        # Name must NOT be registered (strictly None) to prevent breadcrumb spam
+        self.assertIsNone(assembler.client_name)
+
 
 if __name__ == "__main__":
     unittest.main()

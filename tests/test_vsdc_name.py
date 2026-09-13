@@ -11,6 +11,7 @@ from core.vsdc.vsdc_name_parser import (
     extract_composite_form_name,
     caps_run_name_candidates,
     extract_spacy_person_names,
+    get_spacy_nlp,
 )
 
 
@@ -120,6 +121,8 @@ class TestVSDCNameParser(unittest.TestCase):
         self.assertNotIn("DOWNLOAD RECEIPT", cands)
 
     def test_spacy_person_name_extraction(self):
+        if not get_spacy_nlp():
+            self.skipTest("spaCy / en_core_web_sm not loaded")
         # Mixed-case document / notice text
         doc_text = "Income Tax intimation for Indrajit Chatterjee issued under section 143(1)."
         names = extract_spacy_person_names(doc_text)
