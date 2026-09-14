@@ -38,6 +38,8 @@ from .vsdc_name_parser import (
     is_better_taxpayer_name,
     extract_gst_welcome_name,
 )
+from .vsdc_beeper import PANBeeper
+from .vsdc_gemini_parser import parse_compliance_with_gemini
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -724,6 +726,18 @@ class VSDCRouter:
             pan = meta.get("pan")
             if not pan and gstin and len(gstin) >= 12:
                 pan = gstin[2:12]
+
+            # Privacy-First PAN Beeper & Gemini Flash structured enrichment
+            if not meta.get("legal_name") or not meta.get("tax_period") or not meta.get("status"):
+                try:
+                    beeper_res = PANBeeper.anonymize_and_slim(lines, known_pan=pan, known_gstin=gstin)
+                    gem_res = parse_compliance_with_gemini(beeper_res["slimmed_masked_text"])
+                    if gem_res:
+                        for k in ("legal_name", "trade_name", "form_type", "fy", "tax_period", "period_label", "status", "due_date"):
+                            if gem_res.get(k) and not meta.get(k):
+                                meta[k] = gem_res[k]
+                except Exception as e:
+                    print(f"[VSDC Router] Beeper / Gemini notice: {e}")
 
             legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
             trade_name = meta.get("trade_name")

@@ -23,6 +23,11 @@ from PySide6.QtWidgets import (
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 
 try:
+    from core.vsdc.vsdc_token_tracker import get_token_usage_summary
+except Exception:
+    get_token_usage_summary = None
+
+try:
     import qtawesome as qta
 except Exception:
     qta = None
@@ -955,6 +960,16 @@ class TrackerDumpWindow(QWidget):
         self.lbl_counter.setStyleSheet("font-weight: 700; color: #4CF9B7; font-size: 13px; background-color: #1A382B; padding: 6px 12px; border-radius: 4px;")
         header_layout.addWidget(self.lbl_counter)
 
+        self.lbl_token_meter = QLabel("⚡ Gemini: 0 Calls | 1,500 Free Left")
+        self.lbl_token_meter.setStyleSheet(
+            "font-weight: 700; color: #58A6FF; font-size: 12px; "
+            "background-color: #0D1D30; border: 1px solid #1F6FEB; "
+            "padding: 6px 12px; border-radius: 4px;"
+        )
+        self.lbl_token_meter.setToolTip("Google AI Studio Gemini Flash Free Quota & Daily Token Meter")
+        header_layout.addWidget(self.lbl_token_meter)
+        self._update_token_meter()
+
         btn_refresh = QPushButton("Refresh")
         btn_refresh.setProperty("class", "ActionBtn")
         btn_refresh.setIcon(_safe_qta_icon("mdi.refresh", "#FFFFFF"))
@@ -1257,6 +1272,16 @@ class TrackerDumpWindow(QWidget):
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
+    def _update_token_meter(self):
+        """Updates the Gemini Flash token usage meter badge and tooltip."""
+        if get_token_usage_summary and hasattr(self, "lbl_token_meter"):
+            try:
+                stats = get_token_usage_summary()
+                self.lbl_token_meter.setText(stats["badge_text"])
+                self.lbl_token_meter.setToolTip(stats["tooltip"])
+            except Exception:
+                pass
+
     def _reset_filters(self):
         """Resets all search and filter dropdowns to their default state."""
         self.txt_search.blockSignals(True)
@@ -1465,6 +1490,7 @@ class TrackerDumpWindow(QWidget):
 
         self.table.setRowCount(len(containers))
         self.lbl_counter.setText(f"Client Containers: {len(containers)}")
+        self._update_token_meter()
 
         for row_idx, r in enumerate(containers):
             def _get_item(col, font=None, color=None, align=None):
@@ -1568,6 +1594,7 @@ class TrackerDumpWindow(QWidget):
 
         self.table.setRowCount(len(records))
         self.lbl_counter.setText(f"Raw Records: {len(records)}")
+        self._update_token_meter()
 
         for row_idx, r in enumerate(records):
             def _get_item(col, font=None, color=None, align=None):
