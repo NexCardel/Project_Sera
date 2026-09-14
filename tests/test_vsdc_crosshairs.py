@@ -3,7 +3,11 @@ tests/test_vsdc_crosshairs.py — Unit Tests for VSDC Crosshair Matching
 """
 
 import unittest
+from unittest.mock import MagicMock
+from PIL import Image
 from core.vsdc.vsdc_crosshairs import match_url_crosshair, ITR_CROSSHAIRS, GST_CROSSHAIRS
+from core.vsdc.vsdc_router import VSDCRouter
+from core.vsdc.vsdc_assembler import VisualSessionAssembler
 
 
 class TestVSDCCrosshairs(unittest.TestCase):
@@ -714,9 +718,105 @@ class TestVSDCCrosshairs(unittest.TestCase):
         # Even if res4 is None (dashboard without submission), route_captured was reset on URL change
         self.assertEqual(router.last_url, landing_url)
 
+    def test_gst_multiline_anchor_extraction_and_premature_lock_guard(self):
+        """
+        Verifies full-page multi-line visual anchor and proximity extraction for GST form details:
+        1. When only GSTIN and taxpayer name render on Tick 1 (before table loads), router updates
+           identity but does NOT prematurely set route_captured=True.
+        2. When table renders across multiple wrapped lines on Tick 2 (labels on line i, values on line i+1),
+           router extracts all fields (GSTIN, PAN, Legal Name, Trade Name, FY, Tax Period, Status, Due Date),
+           assembles and shoots the dataset, and locks route_captured=True.
+        3. On Tick 3, router suppresses redundant OCR scans on the same route.
+        """
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        form_url = "https://return.gst.gov.in/returns/auth/gstr1"
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | Form - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=form_url)
+
+        # Tick 1: Screen has header with GSTIN and Legal Name, but table hasn't rendered period or status yet
+        mock_ocr.scan_image.return_value = {
+            "text": "Goods and Services Tax\nGSTIN - 19AKVPA6032B1ZC\nLegal Name - MOHAMMAD ASHRAF ALI",
+            "lines": ["Goods and Services Tax", "GSTIN - 19AKVPA6032B1ZC", "Legal Name - MOHAMMAD ASHRAF ALI"]
+        }
+        res1 = router.evaluate_tick()
+        self.assertIsNone(res1)
+        self.assertFalse(router.route_captured, "Router must NOT prematurely lock before tax_period renders")
+        self.assertEqual(assembler.gstin, "19AKVPA6032B1ZC")
+        self.assertEqual(assembler.client_name, "MOHAMMAD ASHRAF ALI")
+
+        # Tick 2: Full table renders on screen with multi-line/adjacent wrapped layout
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax\n"
+                "Dashboard > Returns > GSTR-1/IFF\n"
+                "GSTR-1 - Details of outward supplies of goods or services\n"
+                "GSTIN\n"
+                "19AKVPA6032B1ZC\n"
+                "Legal Name of Business\n"
+                "MOHAMMAD ASHRAF ALI\n"
+                "Trade Name\n"
+                "A. P. ENTERPRISE\n"
+                "Financial Year\n"
+                "2024-25\n"
+                "Tax Period\n"
+                "January\n"
+                "Status\n"
+                "Filed\n"
+                "Due Date\n"
+                "11/02/2025\n"
+            ),
+            "lines": [
+                "Goods and Services Tax",
+                "Dashboard > Returns > GSTR-1/IFF",
+                "GSTR-1 - Details of outward supplies of goods or services",
+                "GSTIN",
+                "19AKVPA6032B1ZC",
+                "Legal Name of Business",
+                "MOHAMMAD ASHRAF ALI",
+                "Trade Name",
+                "A. P. ENTERPRISE",
+                "Financial Year",
+                "2024-25",
+                "Tax Period",
+                "January",
+                "Status",
+                "Filed",
+                "Due Date",
+                "11/02/2025",
+            ]
+        }
+        res2 = router.evaluate_tick()
+        self.assertIsNotNone(res2, "Router must emit dataset payload once table renders")
+        self.assertEqual(res2["gstin"], "19AKVPA6032B1ZC")
+        self.assertEqual(res2["pan"], "AKVPA6032B")
+        self.assertEqual(res2["client_name"], "MOHAMMAD ASHRAF ALI")
+        self.assertEqual(res2["trade_name"], "A. P. ENTERPRISE")
+        self.assertEqual(res2["tax_period"], "January")
+        self.assertEqual(res2["fy"], "2024-25")
+        self.assertEqual(res2["period_label"], "January (FY 2024-25)")
+        self.assertEqual(res2["status"], "Filed")
+        self.assertEqual(res2["due_date"], "11/02/2025")
+        self.assertTrue(router.route_captured, "Router must lock after successful full dataset emission")
+
+        # Tick 3: Same URL, subsequent tick. 0 new OCR calls!
+        calls_after_capture = mock_ocr.scan_image.call_count
+        res3 = router.evaluate_tick()
+        self.assertIsNone(res3)
+        self.assertEqual(mock_ocr.scan_image.call_count, calls_after_capture)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

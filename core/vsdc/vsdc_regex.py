@@ -11,7 +11,7 @@ Deterministic extraction and optical character confusion self-repair for:
 """
 
 import re
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 
 # Optical confusion replacement tables
@@ -608,7 +608,7 @@ def format_gst_period_label(tax_period: Optional[str], fy: Optional[str]) -> str
     return ""
 
 
-def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
+def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict[str, Optional[str]]:
     """
     Extracts structured metadata from the 4-column GST Return Form details table
     (e.g., on return.gst.gov.in/returns/auth/gstr1, gstr3b, cmp08, iff):
@@ -621,6 +621,12 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
     - status
     - due_date
     - form_type
+
+    Supports:
+    1. Single-line labeled pairs ('Legal Name - FATIMA BIBI')
+    2. Delimited multi-column horizontal rows ('GSTIN - ... Legal Name - ... Trade Name - ...')
+    3. Multi-line wrapped / adjacent lines (Header line 'Legal Name' followed by 'FATIMA BIBI')
+    4. Full-page OCR token proximity scanning across all 4 statutory columns.
     """
     res: Dict[str, Optional[str]] = {
         "gstin": None,
@@ -634,26 +640,51 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
         "due_date": None,
         "form_type": None,
     }
-    if not text:
+    if not text and not lines:
         return res
 
+    raw_text = text or ""
+    if lines is not None:
+        norm_lines = [ln.strip() for ln in lines if ln and ln.strip()]
+    else:
+        norm_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+
     # 1. GSTIN & PAN
-    gstin_m = re.search(r"GSTIN(?:\/UIN)?\s*[-:]\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])", text, re.IGNORECASE)
+    gstin_m = re.search(r"GSTIN(?:\/UIN)?\s*[-:–—]?\s*([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])", raw_text, re.IGNORECASE)
     if gstin_m:
         res["gstin"] = gstin_m.group(1).upper()
     else:
-        res["gstin"] = extract_gstin(text)
+        res["gstin"] = extract_gstin(raw_text)
+
+    # If still not found, search lines for GSTIN anchor line
+    if not res["gstin"]:
+        for i, ln in enumerate(norm_lines):
+            if re.match(r"^GSTIN(?:\/UIN)?\s*[-:–—]?$", ln, re.IGNORECASE):
+                if i + 1 < len(norm_lines):
+                    g_cand = extract_gstin(norm_lines[i + 1])
+                    if g_cand:
+                        res["gstin"] = g_cand
+                        break
 
     if res["gstin"] and len(res["gstin"]) >= 12:
         res["pan"] = res["gstin"][2:12]
 
     # 2. FY (Financial Year)
-    res["fy"] = extract_gst_fy(text)
+    res["fy"] = extract_gst_fy(raw_text)
+    if not res["fy"]:
+        for i, ln in enumerate(norm_lines):
+            if re.match(r"^(?:Financial\s*Year|FY)\s*[-:–—]?$", ln, re.IGNORECASE):
+                if i + 1 < len(norm_lines):
+                    f_cand = extract_gst_fy(norm_lines[i + 1])
+                    if f_cand:
+                        res["fy"] = f_cand
+                        break
 
     # 3. Legal Name
+    # 3a. Inline regex: "Legal Name [-:] <value>"
     legal_m = re.search(
-        r"Legal\s*Name(?:\s+of\s+Business)?\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*|\n|$))",
-        text,
+        r"Legal\s*Name(?:\s+of\s+Business)?\s*[-:–—]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        raw_text,
         re.IGNORECASE,
     )
     if legal_m:
@@ -661,10 +692,28 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
         if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin|-+)$", cand, re.IGNORECASE):
             res["legal_name"] = cand
 
+    # 3b. Line-by-line anchor inspection for Legal Name
+    if not res["legal_name"]:
+        for i, ln in enumerate(norm_lines):
+            if re.match(r"^(?:Legal\s*Name(?:\s+of\s+Business)?|Legal\s*Name)\s*[-:–—]?$", ln, re.IGNORECASE):
+                if i + 1 < len(norm_lines):
+                    cand = norm_lines[i + 1].strip()
+                    if cand and not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
+                        if len(cand) >= 3 and not cand.startswith("-"):
+                            res["legal_name"] = cand
+                            break
+            m_inline = re.match(r"^Legal\s*Name(?:\s+of\s+Business)?\s*[-:–—\s]+([A-Za-z0-9\s\.\-_&]{3,60})$", ln, re.IGNORECASE)
+            if m_inline:
+                cand = m_inline.group(1).strip()
+                if not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
+                    res["legal_name"] = cand
+                    break
+
     # 4. Trade Name
+    # 4a. Inline regex: "Trade Name [-:] <value>"
     trade_m = re.search(
-        r"Trade\s*Name(?:\s+of\s+Business)?\s*[-:–—]?\s*[\r\n]*\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s*Name|Status|Due\s*Date|Tax\s*Period|Return\s*Period|FY|Financial|GSTIN|Indicates|\*|\n|$))",
-        text,
+        r"Trade\s*Name(?:\s+of\s+Business)?\s*[-:–—]\s*([A-Za-z0-9\s\.\-_&]+?)(?=\s*(?:Legal\s*Name|Status|Due\s*Date|Tax\s*Period|Return\s*Period|FY|Financial|GSTIN|Indicates|\*|\n|$))",
+        raw_text,
         re.IGNORECASE,
     )
     if trade_m:
@@ -672,28 +721,70 @@ def extract_gst_form_table(text: str) -> Dict[str, Optional[str]]:
         if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin|-+)$", cand, re.IGNORECASE):
             res["trade_name"] = cand
 
+    # 4b. Line-by-line anchor inspection for Trade Name
+    if not res["trade_name"]:
+        for i, ln in enumerate(norm_lines):
+            if re.match(r"^(?:Trade\s*Name(?:\s+of\s+Business)?|Trade\s*Name)\s*[-:–—]?$", ln, re.IGNORECASE):
+                if i + 1 < len(norm_lines):
+                    cand = norm_lines[i + 1].strip()
+                    if cand and not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
+                        if len(cand) >= 3 and not cand.startswith("-"):
+                            res["trade_name"] = cand
+                            break
+            m_inline = re.match(r"^Trade\s*Name(?:\s+of\s+Business)?\s*[-:–—\s]+([A-Za-z0-9\s\.\-_&]{3,60})$", ln, re.IGNORECASE)
+            if m_inline:
+                cand = m_inline.group(1).strip()
+                if not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
+                    res["trade_name"] = cand
+                    break
+
     # 5. Tax Period (Month/Quarter)
-    res["tax_period"] = extract_gst_tax_period(text)
+    res["tax_period"] = extract_gst_tax_period(raw_text)
+    if not res["tax_period"]:
+        for i, ln in enumerate(norm_lines):
+            if re.search(r"\b(?:Tax|Return|Filing)\s*Period\b", ln, re.IGNORECASE):
+                sub_block = " ".join(norm_lines[i:min(i + 3, len(norm_lines))])
+                tp = extract_gst_tax_period(sub_block)
+                if tp:
+                    res["tax_period"] = tp
+                    break
 
     # 6. Canonical Period Label (Month + FY)
     res["period_label"] = format_gst_period_label(res["tax_period"], res["fy"]) or None
 
     # 7. Status
-    res["status"] = extract_gst_status(text)
+    res["status"] = extract_gst_status(raw_text)
+    if not res["status"]:
+        for i, ln in enumerate(norm_lines):
+            if re.search(r"\b(?:Filing\s*Status|Return\s*Status|Status)\b", ln, re.IGNORECASE):
+                sub_block = " ".join(norm_lines[i:min(i + 3, len(norm_lines))])
+                st = extract_gst_status(sub_block)
+                if st:
+                    res["status"] = st
+                    break
 
     # 8. Due Date
     due_m = re.search(
         r"Due\s*Date\s*[-:–—]?\s*[\r\n]*\s*([0-9]{1,2}(?:[\/\-][0-9]{1,2}[\/\-][0-9]{2,4}|[\/\-\s]+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember))[\/\-\s]+[0-9]{2,4}))",
-        text,
+        raw_text,
         re.IGNORECASE,
     )
     if due_m:
         res["due_date"] = due_m.group(1).strip()
+    elif not res["due_date"]:
+        for i, ln in enumerate(norm_lines):
+            if re.match(r"^Due\s*Date\s*[-:–—]?$", ln, re.IGNORECASE):
+                if i + 1 < len(norm_lines):
+                    cand = norm_lines[i + 1].strip()
+                    d_m = re.search(r"([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})", cand)
+                    if d_m:
+                        res["due_date"] = d_m.group(1).strip()
+                        break
 
     # 9. Form Type (from Banner or Breadcrumbs or URL text)
     form_m = re.search(
         r"\b(GSTR[-_ ]*1(?:\s*\/\s*IFF)?|GSTR[-_ ]*3B|CMP[-_ ]*08|GSTR[-_ ]*4|GSTR[-_ ]*9C|GSTR[-_ ]*9|GSTR[-_ ]*7|GSTR[-_ ]*8|IFF)\b",
-        text,
+        raw_text,
         re.IGNORECASE,
     )
     if form_m:

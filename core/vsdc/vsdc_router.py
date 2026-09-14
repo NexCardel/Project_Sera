@@ -707,13 +707,14 @@ class VSDCRouter:
         # Assembles and shoots the complete dataset to the app!
         # -------------------------------------------------------------
         if matched_crosshair.id == "gst_form_details":
-            meta = extract_gst_form_table(full_text)
+            meta = extract_gst_form_table(full_text, lines=lines)
 
-            # Fallback to full window scan if GSTIN or Status was missed in cropped area
-            if (not meta.get("gstin") or not meta.get("status")) and target_crop != "full":
+            # Fallback to full window scan if GSTIN, tax_period, or Status was missed in cropped area
+            if (not meta.get("gstin") or not meta.get("tax_period") or not meta.get("status")) and target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
-                full_meta = extract_gst_form_table(f_text)
+                f_lines = full_res.get("lines", [])
+                full_meta = extract_gst_form_table(f_text, lines=f_lines)
                 for k, v in full_meta.items():
                     if v and not meta.get(k):
                         meta[k] = v
@@ -733,24 +734,36 @@ class VSDCRouter:
             fy = meta.get("fy") or extract_gst_fy(full_text) or ""
             period_label = meta.get("period_label") or format_gst_period_label(tax_period, fy)
             due_date = meta.get("due_date")
-            status = meta.get("status") or extract_gst_status(full_text) or "Initiated"
+            status = meta.get("status") or extract_gst_status(full_text)
 
-            flushed_prior = self.assembler.update_identity(
-                name=legal_name,
-                trade_name=trade_name,
-                gstin=gstin,
-                pan=pan,
-                portal="GST Portal",
-            )
-            if flushed_prior:
-                print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
-                return flushed_prior
+            if legal_name or trade_name or gstin or pan:
+                flushed_prior = self.assembler.update_identity(
+                    name=legal_name,
+                    trade_name=trade_name,
+                    gstin=gstin,
+                    pan=pan,
+                    portal="GST Portal",
+                )
+                if flushed_prior:
+                    print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
+                    return flushed_prior
+
+            # Premature lock protection: Ensure tax_period and status have rendered before locking
+            has_period = bool(tax_period)
+            has_status = bool(status)
+
+            if not has_period:
+                return None
+
+            effective_status = status or ("Initiated" if self.route_poll_count >= 5 else None)
+            if not effective_status:
+                return None
 
             # Record full form details dataset in assembler
             self.assembler.record_gst_form_details(
                 form_type=form_type,
                 tax_period=tax_period,
-                status=status,
+                status=effective_status,
                 due_date=due_date,
                 fy=fy,
                 trade_name=trade_name,
@@ -770,7 +783,7 @@ class VSDCRouter:
                     "form_type": form_type,
                     "tax_period": tax_period,
                     "period_label": period_label,
-                    "status": status,
+                    "status": effective_status,
                     "due_date": due_date,
                     "fy": fy,
                 },
@@ -782,17 +795,14 @@ class VSDCRouter:
             name_label = f"{authoritative_name}" + (f" ({authoritative_trade})" if authoritative_trade else "")
             display_period = period_label or tax_period
             period_str = f" • {display_period}" if display_period else ""
-            status_str = f" • Status: {status}" if status else ""
+            status_str = f" • Status: {effective_status}" if effective_status else ""
 
             self.notify_activity(
                 "capture",
                 f"Captured {form_type}{period_str}",
                 f"{name_label}{status_str}".strip(),
             )
-            print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {display_period} | {name_label} | Status={status}")
-
-            if gstin or meta.get("gstin") or meta.get("status") or meta.get("tax_period"):
-                self.route_captured = True
+            print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {display_period} | {name_label} | Status={effective_status}")
 
             # Shoot assembled dataset directly to desktop application!
             dataset_payload = self.assembler.get_gst_form_dataset_payload(crosshair_id=matched_crosshair.id)
