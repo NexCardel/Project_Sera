@@ -813,6 +813,77 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertIsNone(res3)
         self.assertEqual(mock_ocr.scan_image.call_count, calls_after_capture)
 
+    def test_gst_authoritative_legal_name_overrides_welcome_noise(self):
+        """
+        Verifies that:
+        1. Welcome/dashboard text with portal words like 'UNION TERRITORIES' or 'GCK DS SERVICE'
+           is rejected by NOISE_WORDS.
+        2. Even if a prior heuristic name was recorded in the assembler, the authoritative
+           'Legal Name - JABED ALI' from the statutory GST Return Form table takes absolute precedence,
+           populating client_name='JABED ALI' and trade_name='A.C.T. DRESSES'.
+        """
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+
+        assembler = VisualSessionAssembler()
+        # Seed assembler with noise name to test overwrite
+        assembler.client_name = "GCK DS SERVICE"
+
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda *args: None,
+        )
+
+        form_url = "https://return.gst.gov.in/returns/auth/gstr1"
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Service Tax (GST) - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=form_url)
+
+        user_raw_text = (
+            "e Gcx)ds & Service Tax (GST) I Use X + c return.gst.gov.in/returns/auth/gstrl "
+            "Goods and Services Tax Government of India, States and Union Territories "
+            "Help and Taxpayer Facilities e-lnvoice Ask Gemini a JABED ALI v 19BNNPA1234H1ZX "
+            "News and Updates English O Dashboard Services • GST Law Downloads • Search Taxpayer • "
+            "Dashboard Returns GSTR-I/IFF GSTR-I - Details of outward supplies of goods or services "
+            "E-INVOICE ADVISORY HELP O GSTIN - 19BNNPA1234H1ZX FY - 2026-27 File Nil GSTR-I "
+            "ADD RECORD DETAILS 4A, 4B, 6B, SC - 82B, SEZ, DE Invoices 8A, 8B, 8C, 8D - Nil Rated Supplies "
+            "Legal Name - JABED ALI Tax Period - September(Q) 5 - B2C (Large) Invoices "
+            "9B - Credit / Debit Notes (Registered) Trade Name - A.C.T. DRESSES Status - Not Filed "
+            "6A - Exports Invoices 9B - Credit / Debit Notes (Unregistered) • Indicates Mandatory Fields "
+            "Due Date - 13/10/2026 7 - B2C (Others) IIA(I), IIA(2) - Tax Liability (Advances Received)"
+        )
+
+        mock_ocr.scan_image.return_value = {
+            "text": user_raw_text,
+            "lines": [
+                "Goods and Services Tax Government of India, States and Union Territories",
+                "Ask Gemini a JABED ALI v 19BNNPA1234H1ZX",
+                "Dashboard Returns GSTR-I/IFF",
+                "GSTR-I - Details of outward supplies of goods or services",
+                "GSTIN - 19BNNPA1234H1ZX",
+                "FY - 2026-27",
+                "Legal Name - JABED ALI",
+                "Tax Period - September(Q)",
+                "Trade Name - A.C.T. DRESSES",
+                "Status - Not Filed",
+                "Due Date - 13/10/2026",
+            ]
+        }
+
+        payload = router.evaluate_tick()
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["client_name"], "JABED ALI", "Authoritative legal name must override noise")
+        self.assertEqual(payload["trade_name"], "A.C.T. DRESSES")
+        self.assertEqual(payload["gstin"], "19BNNPA1234H1ZX")
+        self.assertEqual(payload["pan"], "BNNPA1234H")
+        self.assertEqual(payload["status"], "Not Filed")
+        self.assertEqual(payload["tax_period"], "September(Q)")
+        self.assertEqual(payload["fy"], "2026-27")
+        self.assertEqual(payload["period_label"], "September(Q) (FY 2026-27)")
+        self.assertEqual(payload["due_date"], "13/10/2026")
+        self.assertEqual(assembler.client_name, "JABED ALI")
+        self.assertEqual(assembler.trade_name, "A.C.T. DRESSES")
+
 
 if __name__ == "__main__":
     unittest.main()

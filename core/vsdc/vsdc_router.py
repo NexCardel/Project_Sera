@@ -743,6 +743,7 @@ class VSDCRouter:
                     gstin=gstin,
                     pan=pan,
                     portal="GST Portal",
+                    is_authoritative=bool(meta.get("legal_name")),
                 )
                 if flushed_prior:
                     print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
@@ -770,6 +771,7 @@ class VSDCRouter:
                 period_label=period_label,
                 raw_text=full_text[:2000],
                 crosshair_id=matched_crosshair.id,
+                legal_name=legal_name,
             )
 
             # Record step in timeline
@@ -790,8 +792,8 @@ class VSDCRouter:
             )
 
             # Live HUD Toast Feedback
-            authoritative_name = self.assembler.client_name or legal_name or ""
-            authoritative_trade = self.assembler.trade_name or trade_name or ""
+            authoritative_name = legal_name or self.assembler.client_name or ""
+            authoritative_trade = trade_name or self.assembler.trade_name or ""
             name_label = f"{authoritative_name}" + (f" ({authoritative_trade})" if authoritative_trade else "")
             display_period = period_label or tax_period
             period_str = f" • {display_period}" if display_period else ""

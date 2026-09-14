@@ -47,7 +47,20 @@ NOISE_WORDS = {
     # Form field labels and personal data attributes
     "FIRST", "MIDDLE", "LAST", "SURNAME", "FATHER", "MOTHER", "SPOUSE",
     "GENDER", "MALE", "FEMALE", "DOB", "BIRTH", "AADHAAR", "ADDRESS",
-    "MOBILE", "EMAIL", "PREVIOUS"
+    "MOBILE", "EMAIL", "PREVIOUS",
+    # GST portal specific navigation & statutory headers
+    "GOODS", "SERVICE", "SERVICES", "GST", "GSTIN", "UIN",
+    "UNION", "TERRITORIES", "TERRITORY", "STATES", "STATE",
+    "FACILITIES", "FACILITY", "COMMON", "PORTAL", "LAW", "DOWNLOADS",
+    "INVOICE", "INVOICES", "E-INVOICE", "ADVISORY",
+    "SUPPLIES", "SUPPLY", "OUTWARD", "INWARD", "RATED",
+    "CREDIT", "DEBIT", "NOTES", "NOTE",
+    "REGISTERED", "UNREGISTERED", "LIABILITY", "ADVANCES",
+    "RECEIVED", "NIL", "RECORDS", "RECORD", "APPLY", "APPLICATION",
+    "CENTRAL", "BOARD", "INDIRECT", "CUSTOMS", "CBIC",
+    # Browser & UI artifacts
+    "ASK", "GEMINI", "CHROME", "EDGE", "BRAVE", "FIREFOX", "BROWSER",
+    "NEW", "TAB", "USE", "GCK", "DS"
 }
 
 
@@ -148,6 +161,14 @@ def is_better_taxpayer_name(new_name: Optional[str], existing_name: Optional[str
 
     n_words = n_clean.split()
     e_words = e_clean.split()
+
+    # 0. Noise purge: If existing name contains any noise word and new candidate is clean, new candidate wins!
+    e_has_noise = any(w in NOISE_WORDS for w in e_words)
+    n_has_noise = any(w in NOISE_WORDS for w in n_words)
+    if e_has_noise and not n_has_noise:
+        return True
+    if n_has_noise and not e_has_noise:
+        return False
 
     # 1. Word count expansion (more words is generally more complete)
     if len(n_words) > len(e_words):
@@ -575,7 +596,24 @@ def extract_gst_welcome_name(text: str) -> Optional[str]:
         while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
             words.pop(-1)
         candidate = " ".join(words)
-        if candidate and len(candidate.split()) >= 1 and candidate not in NOISE_WORDS:
+        if candidate and len(candidate.split()) >= 1 and candidate not in NOISE_WORDS and not any(w in NOISE_WORDS for w in candidate.split()):
+            return candidate
+
+    # Tertiary: Navbar user profile dropdown badge (e.g. 'JABED ALI v 19BNN...HIZX' or 'JABED ALI ˅')
+    m_badge = re.search(
+        r"(?:Ask\s*Gemini\s*[a-z0-9]?\s*)?\b([A-Za-z\s.'-]{3,40})\s*(?:[v▼▽⌵^|]|expand_more)\s*(?:[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])?",
+        text,
+        re.IGNORECASE,
+    )
+    if m_badge:
+        cand = sanitize_visual_name(m_badge.group(1).strip())
+        words = cand.split()
+        while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
+            words.pop(0)
+        while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
+            words.pop(-1)
+        candidate = " ".join(words)
+        if candidate and is_valid_name(candidate) and not any(w in NOISE_WORDS for w in candidate.split()):
             return candidate
 
     return None

@@ -135,6 +135,7 @@ class VisualSessionAssembler:
         portal: Optional[str] = None,
         filing_preference: Optional[str] = None,
         trade_name: Optional[str] = None,
+        is_authoritative: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Updates taxpayer identity attributes. Enforces PAN context switch guard.
@@ -157,7 +158,7 @@ class VisualSessionAssembler:
 
         if name:
             new_name = name.strip().upper()
-            if not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
+            if is_authoritative or not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
                 self.client_name = new_name
         if trade_name:
             self.trade_name = trade_name.strip().upper()
@@ -275,6 +276,7 @@ class VisualSessionAssembler:
         period_label: Optional[str] = None,
         raw_text: Optional[str] = None,
         crosshair_id: str = "gst_form_details",
+        legal_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Records full metadata captured from a GST Return Form page table
@@ -299,7 +301,11 @@ class VisualSessionAssembler:
         self.current_filing_type = ft
         if period:
             self.current_period_label = period
+        if legal_name:
+            self.client_name = legal_name.strip().upper()
         if trade_name and not self.trade_name:
+            self.trade_name = trade_name.strip().upper()
+        elif trade_name:
             self.trade_name = trade_name.strip().upper()
         if fy:
             self.fy = fy.strip()
@@ -316,12 +322,15 @@ class VisualSessionAssembler:
                 status = existing.get("status", status)
             arn = existing.get("arn") or existing.get("ack_number") or ""
 
+        resolved_client_name = (legal_name.strip().upper() if legal_name else "") or self.client_name or ""
+        resolved_trade_name = self.trade_name or (trade_name.strip().upper() if trade_name else "")
+
         item = {
             "dataset_key": dataset_key,
             "pan": self.client_pan or "",
             "gstin": self.gstin or "",
-            "client_name": self.client_name or "",
-            "trade_name": self.trade_name or trade_name or "",
+            "client_name": resolved_client_name,
+            "trade_name": resolved_trade_name,
             "filing_type": ft,
             "period_label": period,
             "tax_period": tax_period or "",
