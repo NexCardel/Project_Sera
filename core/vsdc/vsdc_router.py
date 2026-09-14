@@ -30,6 +30,8 @@ from .vsdc_regex import (
     extract_gst_fy,
     extract_gst_tax_period,
     extract_gst_status,
+    is_valid_gst_tax_period,
+    is_valid_gst_status,
     format_gst_period_label,
 )
 from .vsdc_name_parser import (
@@ -727,15 +729,35 @@ class VSDCRouter:
             if not pan and gstin and len(gstin) >= 12:
                 pan = gstin[2:12]
 
+            # Invalidate junk values from local regex
+            if not is_valid_gst_tax_period(meta.get("tax_period")):
+                meta["tax_period"] = None
+                meta["period_label"] = None
+            if not is_valid_gst_status(meta.get("status")):
+                meta["status"] = None
+
             # Privacy-First PAN Beeper & Gemini Flash structured enrichment
             if not meta.get("legal_name") or not meta.get("tax_period") or not meta.get("status"):
                 try:
                     beeper_res = PANBeeper.anonymize_and_slim(lines, known_pan=pan, known_gstin=gstin)
                     gem_res = parse_compliance_with_gemini(beeper_res["slimmed_masked_text"])
                     if gem_res:
-                        for k in ("legal_name", "trade_name", "form_type", "fy", "tax_period", "period_label", "status", "due_date"):
-                            if gem_res.get(k) and not meta.get(k):
-                                meta[k] = gem_res[k]
+                        if gem_res.get("legal_name") and not meta.get("legal_name"):
+                            meta["legal_name"] = gem_res["legal_name"]
+                        if gem_res.get("trade_name") and not meta.get("trade_name"):
+                            meta["trade_name"] = gem_res["trade_name"]
+                        if gem_res.get("form_type") and not meta.get("form_type"):
+                            meta["form_type"] = gem_res["form_type"]
+                        if gem_res.get("fy") and not meta.get("fy"):
+                            meta["fy"] = gem_res["fy"]
+                        if gem_res.get("tax_period") and is_valid_gst_tax_period(gem_res["tax_period"]):
+                            meta["tax_period"] = gem_res["tax_period"]
+                        if gem_res.get("period_label"):
+                            meta["period_label"] = gem_res["period_label"]
+                        if gem_res.get("status") and is_valid_gst_status(gem_res["status"]):
+                            meta["status"] = gem_res["status"]
+                        if gem_res.get("due_date") and not meta.get("due_date"):
+                            meta["due_date"] = gem_res["due_date"]
                 except Exception as e:
                     print(f"[VSDC Router] Beeper / Gemini notice: {e}")
 
@@ -744,11 +766,13 @@ class VSDCRouter:
             form_type = meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
             
             # Smart period & FY extraction without ITR Assessment Year leaks
-            tax_period = meta.get("tax_period") or extract_gst_tax_period(full_text) or ""
+            raw_period = meta.get("tax_period") or extract_gst_tax_period(full_text) or ""
+            tax_period = raw_period if is_valid_gst_tax_period(raw_period) else ""
             fy = meta.get("fy") or extract_gst_fy(full_text) or ""
             period_label = meta.get("period_label") or format_gst_period_label(tax_period, fy)
             due_date = meta.get("due_date")
-            status = meta.get("status") or extract_gst_status(full_text)
+            raw_status = meta.get("status") or extract_gst_status(full_text)
+            status = raw_status if is_valid_gst_status(raw_status) else None
 
             if legal_name or trade_name or gstin or pan:
                 flushed_prior = self.assembler.update_identity(
@@ -764,10 +788,11 @@ class VSDCRouter:
                     return flushed_prior
 
             # Premature lock protection: Ensure tax_period and status have rendered before locking
-            has_period = bool(tax_period)
-            has_status = bool(status)
+            has_period = bool(tax_period) and is_valid_gst_tax_period(tax_period)
+            has_status = bool(status) and is_valid_gst_status(status)
 
             if not has_period:
+                # Modal dialog is open or table is still loading
                 return None
 
             effective_status = status or ("Initiated" if self.route_poll_count >= 5 else None)

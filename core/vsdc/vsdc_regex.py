@@ -382,18 +382,23 @@ def classify_verification_status(text: str) -> str:
 def extract_gst_filing_preference(text: str) -> Optional[str]:
     """
     Extracts GST Return Filing Preference from the welcome/dashboard page.
-    Matches e.g. 'Return filing preference (Jul-Sep 2026) : Quarterly (Change)'
+    Matches e.g. 'Return filing preference (Jul-Sep 2026) : Quarterly (Change)',
+    'Filing preference: Monthly', or QRMP indicator.
     Returns 'Quarterly' or 'Monthly'.
     """
     if not text:
         return None
-    m = re.search(r"Return\s+filing\s+preference[^\n:]*:\s*([A-Za-z]+)", text, re.IGNORECASE)
+    # 1. Direct label pattern
+    m = re.search(r"(?:return\s+)?filing\s+preference[^\n:]*[:\-–—\s]*\s*(Quarterly|Monthly)", text, re.IGNORECASE)
     if m:
-        val = m.group(1).lower()
-        if "quarter" in val or "qrmp" in val:
-            return "Quarterly"
-        elif "month" in val:
-            return "Monthly"
+        return m.group(1).title()
+    # 2. Proximity window within 80 characters of 'filing preference'
+    m2 = re.search(r"filing\s*preference.{0,80}?\b(Quarterly|Monthly)\b", text, re.IGNORECASE | re.DOTALL)
+    if m2:
+        return m2.group(1).title()
+    # 3. QRMP indicator
+    if re.search(r"\bQRMP\b", text, re.IGNORECASE):
+        return "Quarterly"
     return None
 
 
@@ -421,6 +426,54 @@ def extract_gst_fy(text: str) -> Optional[str]:
         return re.sub(r"\s+", "", standalone_m.group(1)).replace("–", "-").replace("—", "-")
 
     return None
+
+
+VALID_GST_PERIOD_PATTERN = re.compile(
+    r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|"
+    r"Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|"
+    r"Q[1-4]|Quarter\s*[1-4]|"
+    r"Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar)\b",
+    re.IGNORECASE,
+)
+
+PERIOD_NOISE_KEYWORDS = (
+    "status", "due", "date", "dashboard", "network", "search",
+    "taxpayer", "returns", "designed", "developed", "updated", "site",
+    "goods", "services", "help", "facilities", "invoice"
+)
+
+
+def is_valid_gst_tax_period(val: Optional[str]) -> bool:
+    """
+    Validates whether a candidate string is an authentic GST tax period (Month or Quarter).
+    Rejects OCR noise words, navigation headers, or portal boilerplate (e.g. 'Status-Due').
+    """
+    if not val:
+        return False
+    clean = str(val).strip()
+    if len(clean) < 2 or len(clean) > 35:
+        return False
+    clean_low = clean.lower()
+    if any(noise in clean_low for noise in PERIOD_NOISE_KEYWORDS):
+        return False
+    return bool(VALID_GST_PERIOD_PATTERN.search(clean))
+
+
+def is_valid_gst_status(val: Optional[str]) -> bool:
+    """
+    Validates whether a candidate string is an authoritative GST filing status.
+    Rejects footer disclaimers, timestamps, or arbitrary text (e.g. 'Due Date - Site Last Updated...').
+    """
+    if not val:
+        return False
+    clean = str(val).strip().lower()
+    if any(k in clean for k in ("site last updated", "due date", "designed", "developed", "best viewed", "resolution", "network")):
+        return False
+    allowed = (
+        "not filed", "filed", "submitted", "initiated", "in progress", "draft",
+        "pending", "ready to file", "under process"
+    )
+    return any(a in clean for a in allowed)
 
 
 def extract_gst_tax_period(text: str) -> Optional[str]:
@@ -456,7 +509,8 @@ def extract_gst_tax_period(text: str) -> Optional[str]:
         val = m.group(1).strip()
         val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
         val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
-        return val
+        if is_valid_gst_tax_period(val):
+            return val
 
     # 2. Line-by-line inspection around any line containing 'Period'
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -473,7 +527,8 @@ def extract_gst_tax_period(text: str) -> Optional[str]:
                 val = token_m.group(1).strip()
                 val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
                 val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
-                return val
+                if is_valid_gst_tax_period(val):
+                    return val
 
     # 3. Delimited capture after Period label up to next field keyword
     delim_m = re.search(
@@ -485,7 +540,8 @@ def extract_gst_tax_period(text: str) -> Optional[str]:
         cand = delim_m.group(1).strip()
         if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|-+)$", cand, re.IGNORECASE):
             cand = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", cand)
-            return cand
+            if is_valid_gst_tax_period(cand):
+                return cand
 
     # 4. Fallback standalone search for Month with (Q) or quarter range anywhere in text
     standalone_m = re.search(
@@ -497,7 +553,8 @@ def extract_gst_tax_period(text: str) -> Optional[str]:
         val = (standalone_m.group(1) or standalone_m.group(2) or "").strip()
         val = re.sub(r"([A-Za-z]+)\s+\(([A-Za-z0-9]+)\)", r"\1(\2)", val)
         val = re.sub(r"\s*([-–—/])\s*", r"\1", val)
-        return val
+        if is_valid_gst_tax_period(val):
+            return val
 
     return None
 
@@ -581,7 +638,10 @@ def extract_gst_status(text: str) -> Optional[str]:
                 return "Initiated"
             elif "pending" in cand_low:
                 return "Pending"
-            return cand.title()
+            elif "ready" in cand_low:
+                return "Ready to File"
+            # Strict protection: NEVER return arbitrary candidate text unless it matches an allowed status!
+            return None
 
     return None
 

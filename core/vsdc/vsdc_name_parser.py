@@ -60,7 +60,9 @@ NOISE_WORDS = {
     "CENTRAL", "BOARD", "INDIRECT", "CUSTOMS", "CBIC",
     # Browser & UI artifacts
     "ASK", "GEMINI", "CHROME", "EDGE", "BRAVE", "FIREFOX", "BROWSER",
-    "NEW", "TAB", "USE", "GCK", "DS"
+    "NEW", "TAB", "USE", "GCK", "DS",
+    # Captcha & Form input placeholders
+    "ENTER", "CHARACTERS", "SHOWN", "BELOW", "CAPTCHA", "REFRESH", "CODE"
 }
 
 

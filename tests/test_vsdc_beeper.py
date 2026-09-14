@@ -125,10 +125,48 @@ def test_live_gemini_flash_parsing():
     ]
 
     masked = PANBeeper.anonymize_and_slim(test_lines)
-    result = parse_compliance_with_gemini(masked["slimmed_masked_text"], api_key=api_key)
+    result = None
+    for _ in range(3):
+        try:
+            result = parse_compliance_with_gemini(masked["slimmed_masked_text"], api_key=api_key, timeout=15.0)
+            if result:
+                break
+        except Exception:
+            pass
 
     assert result is not None, "Gemini should return parsed JSON"
     assert "GCK DS SERVICE" in (result.get("legal_name") or "")
     assert "GSTR" in (result.get("form_type") or "")
     assert "2026-27" in (result.get("fy") or "")
     assert (result.get("status") or "").lower() == "filed"
+
+
+def test_rejection_of_empty_labels_and_junk_periods():
+    from core.vsdc.vsdc_regex import extract_gst_tax_period, extract_gst_status, extract_gst_filing_preference, is_valid_gst_tax_period, is_valid_gst_status
+
+    user_raw = (
+        "e Gcx)ds & Service Tax (GST) I Use X + Ask Gemini c return.gst.gov.in/returns/auth/gstr3b "
+        "Goods and Services Tax Govemment of India, States and Union Territories O Dashboard Services "
+        "• GST Law Help and Taxpayer Facilities e-lnvoice Skip to Main Content a JALALUDDIN MOLLA v 19AXUPM0513FIZD "
+        "News and Updates e English Downloads • Legal Name - Return Period - Search Taxpayer • Dashboard Returns "
+        "GSTR-3BQ GSTR-3BQ - Quarterly Return GSTIN - 0 2026-27 Goods and Services Tax Network Status - Due Date - "
+        "Site Last Updated on 18-08-2026 Designed & Developed by GSTN Site best viewed at 1024 x 768 resolution"
+    )
+
+    # 1. Tax period MUST NOT be extracted as 'Status-Due'
+    extracted_period = extract_gst_tax_period(user_raw)
+    assert extracted_period is None
+    assert is_valid_gst_tax_period("Status-Due") is False
+
+    # 2. Status MUST NOT be extracted as 'Due Date - Site Last Updated On 18-08-2026'
+    extracted_status = extract_gst_status(user_raw)
+    assert extracted_status is None
+    assert is_valid_gst_status("Due Date - Site Last Updated on 18-08-2026") is False
+
+    # 3. Preference extraction
+    sample_pref_1 = "Return filing preference (Jul-Sep 2026) : Quarterly (Change)"
+    sample_pref_2 = "Filing preference\nMonthly"
+    sample_pref_3 = "Taxpayer registered under QRMP scheme"
+    assert extract_gst_filing_preference(sample_pref_1) == "Quarterly"
+    assert extract_gst_filing_preference(sample_pref_2) == "Monthly"
+    assert extract_gst_filing_preference(sample_pref_3) == "Quarterly"
