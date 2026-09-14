@@ -25,6 +25,8 @@ from .vsdc_regex import (
     extract_gst_tax_period,
     extract_gst_status,
     format_gst_period_label,
+    resolve_gst_form_type_from_url,
+    extract_gst_filing_date,
 )
 from .vsdc_name_parser import (
     sanitize_visual_name,
@@ -59,6 +61,8 @@ __all__ = [
     "extract_gst_tax_period",
     "extract_gst_status",
     "format_gst_period_label",
+    "resolve_gst_form_type_from_url",
+    "extract_gst_filing_date",
     "sanitize_visual_name",
     "is_valid_name",
     "is_better_taxpayer_name",

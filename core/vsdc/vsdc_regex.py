@@ -12,6 +12,7 @@ Deterministic extraction and optical character confusion self-repair for:
 
 import re
 from typing import Optional, Dict, Tuple, List
+from .vsdc_name_parser import is_valid_name, sanitize_visual_name
 
 
 # Optical confusion replacement tables
@@ -98,7 +99,14 @@ def repair_gst_arn(raw_str: str) -> Optional[str]:
     if direct:
         return direct.group(0)
 
-    # 2. Optical repair on 15-char tokens
+    # 2. Labeled ARN pattern (e.g. ARN : AA190826000001Z or ARN is AA190826000001Z)
+    labeled = re.search(r"\bARN\s*(?:is|[-:–—=])?\s*([A-Z0-9\s]{14,20})\b", raw_str, re.IGNORECASE)
+    if labeled:
+        clean_tok = re.sub(r"\s+", "", labeled.group(1)).upper()
+        if len(clean_tok) == 15 and re.match(r"^[A-Z]{2}\d{12}[A-Z0-9]$", clean_tok):
+            return clean_tok
+
+    # 3. Optical repair on 15-char tokens
     for token in re.findall(r"\b[A-Za-z0-9]{15}\b", raw_str):
         token_upper = token.upper()
         state_code = "".join(LETTER_FIX_MAP.get(c, c) for c in token_upper[:2])
@@ -245,7 +253,10 @@ def extract_filing_type(text: str, allow_multiple: bool = False) -> Optional[str
         return "Form " + form_m.group(1).upper().replace(" ", "-")
 
     # 3. GST Forms
-    gst_matches = re.findall(r"\b(GSTR[-_\s]?[1-9A-Z]+|CMP[-_\s]?08|IFF)\b", text, re.IGNORECASE)
+    # Optical repair: GSTR-I, GSTR-l, GSTR-i -> GSTR-1, CMP-O8 -> CMP-08
+    text_fixed = re.sub(r"\bGSTR[-_\s]*[Ili]\b", "GSTR-1", text, flags=re.IGNORECASE)
+    text_fixed = re.sub(r"\bCMP[-_\s]*[Oo]8\b", "CMP-08", text_fixed, flags=re.IGNORECASE)
+    gst_matches = re.findall(r"\b(GSTR[-_\s]?[1-9A-Z]+|CMP[-_\s]?08|IFF)\b", text_fixed, re.IGNORECASE)
     if gst_matches:
         canonical_gst = []
         for m in gst_matches:
@@ -256,6 +267,66 @@ def extract_filing_type(text: str, allow_multiple: bool = False) -> Optional[str
             return None
         return canonical_gst[0]
 
+    return None
+
+
+def resolve_gst_form_type_from_url(url: Optional[str], text: Optional[str] = None) -> Optional[str]:
+    """
+    Resolves the authoritative GST form type directly from the browser URL path.
+    Prevents on-screen informational disclaimers (e.g. 'required to file GSTR-1 and GSTR-3B')
+    from polluting or misclassifying the active filing form.
+
+    Examples:
+    - returns/auth/gstr3b/filing -> GSTR-3B
+    - returns/auth/gstr1/file   -> GSTR-1 (or GSTR-1/IFF if IFF indicated in URL/text)
+    - returns/auth/iff/file     -> GSTR-1/IFF
+    - returns/auth/cmp08/filing -> CMP-08
+    - returns/auth/gstr4/filing -> GSTR-4
+    - returns/auth/gstr9/filing -> GSTR-9
+    - returns/auth/gstr9c/filing -> GSTR-9C
+    """
+    if not url:
+        return extract_filing_type(text) if text else None
+
+    u_lower = url.lower()
+    if "gstr3b" in u_lower or "gstr-3b" in u_lower:
+        return "GSTR-3B"
+    if "cmp08" in u_lower or "cmp-08" in u_lower:
+        return "CMP-08"
+    if "iff" in u_lower:
+        return "GSTR-1/IFF"
+    if "gstr4" in u_lower or "gstr-4" in u_lower:
+        return "GSTR-4"
+    if "gstr9c" in u_lower or "gstr-9c" in u_lower:
+        return "GSTR-9C"
+    if "gstr9" in u_lower or "gstr-9" in u_lower:
+        return "GSTR-9"
+    if "gstr7" in u_lower or "gstr-7" in u_lower:
+        return "GSTR-7"
+    if "gstr8" in u_lower or "gstr-8" in u_lower:
+        return "GSTR-8"
+    if "gstr1" in u_lower or "gstr-1" in u_lower:
+        if text and ("invoice furnishing facility" in text.lower() or re.search(r"\bIFF\b", text)):
+            return "GSTR-1/IFF"
+        return "GSTR-1"
+
+    return extract_filing_type(text) if text else None
+
+
+def extract_gst_filing_date(text: str) -> Optional[str]:
+    """
+    Extracts the statutory filing date from the GST success banner/receipt:
+    e.g., 'Date of filing: 15/09/2026' or 'Date: 15-09-2026'.
+    """
+    if not text:
+        return None
+    m = re.search(
+        r"\b(?:Date\s*of\s*filing|Filing\s*Date|Filed\s*on|Date)\s*[:\-–—]?\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{4})",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
     return None
 
 
@@ -668,7 +739,11 @@ def format_gst_period_label(tax_period: Optional[str], fy: Optional[str]) -> str
     return ""
 
 
-def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict[str, Optional[str]]:
+def extract_gst_form_table(
+    text: str,
+    lines: Optional[List[str]] = None,
+    url: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
     """
     Extracts structured metadata from the 4-column GST Return Form details table
     (e.g., on return.gst.gov.in/returns/auth/gstr1, gstr3b, cmp08, iff):
@@ -749,8 +824,9 @@ def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict
     )
     if legal_m:
         cand = legal_m.group(1).strip()
-        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin|-+)$", cand, re.IGNORECASE):
-            res["legal_name"] = cand
+        cand_clean = sanitize_visual_name(cand)
+        if cand_clean and is_valid_name(cand_clean) and not re.match(r"^(?:status|due\s*date|fy|financial|na|trade|gstin|-+)$", cand_clean, re.IGNORECASE):
+            res["legal_name"] = cand_clean
 
     # 3b. Line-by-line anchor inspection for Legal Name
     if not res["legal_name"]:
@@ -758,15 +834,17 @@ def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict
             if re.match(r"^(?:Legal\s*Name(?:\s+of\s+Business)?|Legal\s*Name)\s*[-:–—]?$", ln, re.IGNORECASE):
                 if i + 1 < len(norm_lines):
                     cand = norm_lines[i + 1].strip()
-                    if cand and not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
-                        if len(cand) >= 3 and not cand.startswith("-"):
-                            res["legal_name"] = cand
+                    cand_clean = sanitize_visual_name(cand)
+                    if cand_clean and is_valid_name(cand_clean) and not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
+                        if len(cand_clean) >= 3 and not cand_clean.startswith("-"):
+                            res["legal_name"] = cand_clean
                             break
             m_inline = re.match(r"^Legal\s*Name(?:\s+of\s+Business)?\s*[-:–—\s]+([A-Za-z0-9\s\.\-_&]{3,60})$", ln, re.IGNORECASE)
             if m_inline:
                 cand = m_inline.group(1).strip()
-                if not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
-                    res["legal_name"] = cand
+                cand_clean = sanitize_visual_name(cand)
+                if cand_clean and is_valid_name(cand_clean) and not re.search(r"\b(?:Tax\s*Period|Return\s*Period|Trade\s*Name|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
+                    res["legal_name"] = cand_clean
                     break
 
     # 4. Trade Name
@@ -778,8 +856,9 @@ def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict
     )
     if trade_m:
         cand = trade_m.group(1).strip()
-        if cand and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin|-+)$", cand, re.IGNORECASE):
-            res["trade_name"] = cand
+        cand_clean = sanitize_visual_name(cand)
+        if cand_clean and is_valid_name(cand_clean) and not re.match(r"^(?:status|due\s*date|fy|financial|na|legal|gstin|-+)$", cand_clean, re.IGNORECASE):
+            res["trade_name"] = cand_clean
 
     # 4b. Line-by-line anchor inspection for Trade Name
     if not res["trade_name"]:
@@ -787,15 +866,17 @@ def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict
             if re.match(r"^(?:Trade\s*Name(?:\s+of\s+Business)?|Trade\s*Name)\s*[-:–—]?$", ln, re.IGNORECASE):
                 if i + 1 < len(norm_lines):
                     cand = norm_lines[i + 1].strip()
-                    if cand and not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
-                        if len(cand) >= 3 and not cand.startswith("-"):
-                            res["trade_name"] = cand
+                    cand_clean = sanitize_visual_name(cand)
+                    if cand_clean and is_valid_name(cand_clean) and not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates|\*)\b", cand, re.IGNORECASE):
+                        if len(cand_clean) >= 3 and not cand_clean.startswith("-"):
+                            res["trade_name"] = cand_clean
                             break
             m_inline = re.match(r"^Trade\s*Name(?:\s+of\s+Business)?\s*[-:–—\s]+([A-Za-z0-9\s\.\-_&]{3,60})$", ln, re.IGNORECASE)
             if m_inline:
                 cand = m_inline.group(1).strip()
-                if not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
-                    res["trade_name"] = cand
+                cand_clean = sanitize_visual_name(cand)
+                if cand_clean and is_valid_name(cand_clean) and not re.search(r"\b(?:Legal\s*Name|Tax\s*Period|Return\s*Period|Status|Due\s*Date|FY|Financial|GSTIN|Indicates)\b", cand, re.IGNORECASE):
+                    res["trade_name"] = cand_clean
                     break
 
     # 5. Tax Period (Month/Quarter)
@@ -841,28 +922,36 @@ def extract_gst_form_table(text: str, lines: Optional[List[str]] = None) -> Dict
                         res["due_date"] = d_m.group(1).strip()
                         break
 
-    # 9. Form Type (from Banner or Breadcrumbs or URL text)
-    form_m = re.search(
-        r"\b(GSTR[-_ ]*1(?:\s*\/\s*IFF)?|GSTR[-_ ]*3B|CMP[-_ ]*08|GSTR[-_ ]*4|GSTR[-_ ]*9C|GSTR[-_ ]*9|GSTR[-_ ]*7|GSTR[-_ ]*8|IFF)\b",
-        raw_text,
-        re.IGNORECASE,
-    )
-    if form_m:
-        raw_f = form_m.group(1).upper().replace(" ", "").replace("_", "-")
-        if "GSTR-1" in raw_f or "IFF" in raw_f:
-            res["form_type"] = "GSTR-1/IFF" if "IFF" in raw_f else "GSTR-1"
-        elif "GSTR-3B" in raw_f:
-            res["form_type"] = "GSTR-3B"
-        elif "CMP-08" in raw_f:
-            res["form_type"] = "CMP-08"
-        elif "GSTR-4" in raw_f:
-            res["form_type"] = "GSTR-4"
-        elif "GSTR-9C" in raw_f:
-            res["form_type"] = "GSTR-9C"
-        elif "GSTR-9" in raw_f:
-            res["form_type"] = "GSTR-9"
-        else:
-            res["form_type"] = raw_f
+    # 9. Form Type (Prioritize URL, then Banner or Breadcrumbs or Screen text)
+    if url:
+        url_form = resolve_gst_form_type_from_url(url, raw_text)
+        if url_form:
+            res["form_type"] = url_form
+
+    if not res["form_type"]:
+        text_fixed = re.sub(r"\bGSTR[-_\s]*[Ili]\b", "GSTR-1", raw_text, flags=re.IGNORECASE)
+        text_fixed = re.sub(r"\bCMP[-_\s]*[Oo]8\b", "CMP-08", text_fixed, flags=re.IGNORECASE)
+        form_m = re.search(
+            r"\b(GSTR[-_ ]*1(?:\s*\/\s*IFF)?|GSTR[-_ ]*3B|CMP[-_ ]*08|GSTR[-_ ]*4|GSTR[-_ ]*9C|GSTR[-_ ]*9|GSTR[-_ ]*7|GSTR[-_ ]*8|IFF)\b",
+            text_fixed,
+            re.IGNORECASE,
+        )
+        if form_m:
+            raw_f = form_m.group(1).upper().replace(" ", "").replace("_", "-")
+            if "GSTR-1" in raw_f or "IFF" in raw_f:
+                res["form_type"] = "GSTR-1/IFF" if "IFF" in raw_f else "GSTR-1"
+            elif "GSTR-3B" in raw_f:
+                res["form_type"] = "GSTR-3B"
+            elif "CMP-08" in raw_f:
+                res["form_type"] = "CMP-08"
+            elif "GSTR-4" in raw_f:
+                res["form_type"] = "GSTR-4"
+            elif "GSTR-9C" in raw_f:
+                res["form_type"] = "GSTR-9C"
+            elif "GSTR-9" in raw_f:
+                res["form_type"] = "GSTR-9"
+            else:
+                res["form_type"] = raw_f
 
     return res
 

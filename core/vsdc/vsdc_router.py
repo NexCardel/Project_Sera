@@ -33,6 +33,8 @@ from .vsdc_regex import (
     is_valid_gst_tax_period,
     is_valid_gst_status,
     format_gst_period_label,
+    resolve_gst_form_type_from_url,
+    extract_gst_filing_date,
 )
 from .vsdc_name_parser import (
     extract_name_from_ocr_lines,
@@ -711,14 +713,14 @@ class VSDCRouter:
         # Assembles and shoots the complete dataset to the app!
         # -------------------------------------------------------------
         if matched_crosshair.id == "gst_form_details":
-            meta = extract_gst_form_table(full_text, lines=lines)
+            meta = extract_gst_form_table(full_text, lines=lines, url=url)
 
             # Fallback to full window scan if GSTIN, tax_period, or Status was missed in cropped area
             if (not meta.get("gstin") or not meta.get("tax_period") or not meta.get("status")) and target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 f_lines = full_res.get("lines", [])
-                full_meta = extract_gst_form_table(f_text, lines=f_lines)
+                full_meta = extract_gst_form_table(f_text, lines=f_lines, url=url)
                 for k, v in full_meta.items():
                     if v and not meta.get(k):
                         meta[k] = v
@@ -763,7 +765,7 @@ class VSDCRouter:
 
             legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
             trade_name = meta.get("trade_name")
-            form_type = meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
+            form_type = resolve_gst_form_type_from_url(url, full_text) or meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
             
             # Smart period & FY extraction without ITR Assessment Year leaks
             raw_period = meta.get("tax_period") or extract_gst_tax_period(full_text) or ""
@@ -878,10 +880,34 @@ class VSDCRouter:
                 print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
                 return flushed_prior
 
-        filing_type = extract_filing_type(full_text)
+        # Resolve filing_type accurately: prioritize URL for GST
+        url_form = resolve_gst_form_type_from_url(url, full_text) if self.active_portal == "GST Portal" else None
+        filing_type = url_form or extract_filing_type(full_text)
         gst_tp = extract_gst_tax_period(full_text)
         gst_fy = extract_gst_fy(full_text)
         period = format_gst_period_label(gst_tp, gst_fy) if (gst_tp or gst_fy) else None
+
+        # On GST filing routes (/file or /filing) or success screens, extract full assessee identity if present
+        if matched_crosshair.id in ("gst_filing_file_success", "gst_filing_success"):
+            meta = extract_gst_form_table(full_text, lines=lines, url=url)
+            m_gstin = meta.get("gstin")
+            m_pan = meta.get("pan")
+            m_legal = meta.get("legal_name")
+            m_trade = meta.get("trade_name")
+            if m_legal or m_trade or m_gstin or m_pan:
+                self.assembler.update_identity(
+                    name=m_legal,
+                    trade_name=m_trade,
+                    gstin=m_gstin,
+                    pan=m_pan,
+                    portal="GST Portal",
+                    is_authoritative=bool(m_legal),
+                )
+            if not period and meta.get("period_label"):
+                period = meta["period_label"]
+            if not filing_type and meta.get("form_type"):
+                filing_type = meta["form_type"]
+
         if filing_type or period:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
             if matched_crosshair.id == "gst_returns_dashboard":
@@ -905,7 +931,7 @@ class VSDCRouter:
                     arn = f_arn
                     full_text = full_text + "\n" + f_text
                     if not filing_type:
-                        filing_type = extract_filing_type(f_text)
+                        filing_type = resolve_gst_form_type_from_url(url, f_text) or extract_filing_type(f_text)
                     if not period:
                         f_gst_tp = extract_gst_tax_period(f_text)
                         f_gst_fy = extract_gst_fy(f_text)
@@ -920,17 +946,7 @@ class VSDCRouter:
                 status = "Filed"
 
             if not filing_type:
-                u_lower = url.lower()
-                if "gstr1" in u_lower or "gstr-1" in u_lower:
-                    filing_type = "GSTR-1"
-                elif "gstr3b" in u_lower or "gstr-3b" in u_lower:
-                    filing_type = "GSTR-3B"
-                elif "cmp08" in u_lower or "cmp-08" in u_lower:
-                    filing_type = "CMP-08"
-                elif "iff" in u_lower:
-                    filing_type = "GSTR-1/IFF"
-                else:
-                    filing_type = self.assembler.current_filing_type or "GSTR-1"
+                filing_type = resolve_gst_form_type_from_url(url, full_text) or self.assembler.current_filing_type or "GSTR-1"
 
             if not period:
                 period = self.assembler.current_period_label

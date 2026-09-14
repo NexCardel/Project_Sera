@@ -49,7 +49,8 @@ NOISE_WORDS = {
     "GENDER", "MALE", "FEMALE", "DOB", "BIRTH", "AADHAAR", "ADDRESS",
     "MOBILE", "EMAIL", "PREVIOUS",
     # GST portal specific navigation & statutory headers
-    "GOODS", "SERVICE", "SERVICES", "GST", "GSTIN", "UIN",
+    "GOODS", "SERVICE", "SERVICES", "SER", "GST", "GSTIN", "UIN",
+    "TAX", "TAXES", "TAXATION",
     "UNION", "TERRITORIES", "TERRITORY", "STATES", "STATE",
     "FACILITIES", "FACILITY", "COMMON", "PORTAL", "LAW", "DOWNLOADS",
     "INVOICE", "INVOICES", "E-INVOICE", "ADVISORY",

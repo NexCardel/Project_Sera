@@ -10,7 +10,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
-from .vsdc_name_parser import is_better_taxpayer_name
+from .vsdc_name_parser import is_better_taxpayer_name, is_valid_name
 
 
 STATUS_RANK: Dict[str, int] = {
@@ -158,12 +158,15 @@ class VisualSessionAssembler:
 
         if name:
             new_name = name.strip().upper()
-            if is_authoritative or not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
-                self.client_name = new_name
+            if is_valid_name(new_name):
+                if is_authoritative or not self.client_name or is_better_taxpayer_name(new_name, self.client_name):
+                    self.client_name = new_name
         if trade_name:
             self.trade_name = trade_name.strip().upper()
         if gstin:
             self.gstin = gstin.strip().upper()
+            if not self.client_pan and len(self.gstin) >= 12:
+                self.client_pan = self.gstin[2:12]
         if filing_preference:
             self.filing_preference = filing_preference.strip().title()
 
@@ -460,9 +463,10 @@ class VisualSessionAssembler:
         if self._emitted_datasets.get(dataset_key) == fingerprint:
             return None
 
+        derived_pan = self.client_pan or (self.gstin[2:12] if (self.gstin and len(self.gstin) >= 12) else "")
         capture_item = {
             "dataset_key": dataset_key,
-            "pan": self.client_pan or "",
+            "pan": derived_pan,
             "gstin": self.gstin or "",
             "client_name": name,
             "filing_type": form,

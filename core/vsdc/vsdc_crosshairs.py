@@ -128,16 +128,16 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_filing_file_success",
         protocol="GST Portal",
-        pattern=re.compile(r"returns/auth/(?:[a-zA-Z0-9_-]+/)?file(?:[?#/]|$)", re.IGNORECASE),
+        pattern=re.compile(r"returns/auth/(?:[a-zA-Z0-9_-]+/)?(?:file|filing)(?:[?#/]|$)", re.IGNORECASE),
         target_crop="receipt_card",
-        description="GST return filing file route (IFF, GSTR-1, GSTR-3B submission)",
+        description="GST return filing file route (IFF, GSTR-1, GSTR-3B, CMP-08 submission)",
         host_pattern=GST_HOST_PATTERN,
         is_terminal_submission=True,
     ),
     CrosshairDefinition(
         id="gst_form_details",
         protocol="GST Portal",
-        pattern=re.compile(r"(?:returns|services)/(?:auth/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff)(?!/file)", re.IGNORECASE),
+        pattern=re.compile(r"(?:returns|services)/(?:auth/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff)(?!/(?:file|filing))", re.IGNORECASE),
         target_crop="full",
         description="GST return form table & period details (GSTR-1, 3B, CMP-08)",
         host_pattern=GST_HOST_PATTERN,
@@ -145,7 +145,7 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_returns_dashboard",
         protocol="GST Portal",
-        pattern=re.compile(r"(?:services/auth/returns|services/quicklinks/returns|returns/dashboard)", re.IGNORECASE),
+        pattern=re.compile(r"(?:services/auth/returns|services/quicklinks/returns|returns/(?:auth/)?dashboard)", re.IGNORECASE),
         target_crop="full",
         description="GST Returns Dashboard (Period & Financial Year selection)",
         host_pattern=GST_HOST_PATTERN,
@@ -153,7 +153,7 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_welcome_calendar",
         protocol="GST Portal",
-        pattern=re.compile(r"(?:services/auth/fowelcome|services/auth/dashboard|fowelcome|auth/dashboard$)", re.IGNORECASE),
+        pattern=re.compile(r"(?:services/auth/fowelcome|services/auth/dashboard|fowelcome|services/dashboard$)", re.IGNORECASE),
         target_crop="full",
         description="GST Portal welcome page, returns calendar, and GSTIN badge",
         host_pattern=GST_HOST_PATTERN,
