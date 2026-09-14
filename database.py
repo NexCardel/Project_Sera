@@ -3241,14 +3241,27 @@ class SeraDatabase:
             c_vals = client_values.get(cid, {})
             name_val = ""
             pan_val = ""
+            gst_val = ""
             for col in mcl_cols:
                 lbl = col.get("label", "").lower()
-                val = c_vals.get(col["id"], "")
+                val = str(c_vals.get(col["id"], "") or "").strip()
                 if val and not name_val and any(k in lbl for k in ["name", "party", "client"]):
-                    name_val = str(val).strip()
-                elif val and not pan_val and any(k in lbl for k in ["pan", "gstin", "gst"]):
-                    pan_val = str(val).strip()
-            
+                    name_val = val
+                elif val and not pan_val and re.search(r'\bpan\b', lbl) and "pass" not in lbl:
+                    cleaned_pan = val.upper()
+                    if len(cleaned_pan) == 10 and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", cleaned_pan):
+                        pan_val = cleaned_pan
+                    elif len(cleaned_pan) == 15 and re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]", cleaned_pan):
+                        pan_val = cleaned_pan[2:12]
+                elif val and not gst_val and any(k in lbl for k in ["gstin", "gst"]):
+                    gst_val = val.upper()
+
+            # If no direct PAN found, derive from GSTIN if available
+            if not pan_val and gst_val and len(gst_val) >= 12:
+                derived = gst_val[2:12]
+                if re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", derived):
+                    pan_val = derived
+
             token = client_tokens.get(cid, f"CLI-{cid:05d}")
             client_map[cid] = {
                 "name": name_val or token,
@@ -3316,7 +3329,7 @@ class SeraDatabase:
             latest_arn = filing_hist[-1].get("arn", "N/A") if filing_hist else "N/A"
             latest_portal = filing_hist[-1].get("portal", "Portal") if filing_hist else "Portal"
             latest_period = filing_hist[-1].get("period_label", "") if filing_hist else ""
-            capture_method = filing_hist[-1].get("capture_method", "SAD_API_Interceptor") if filing_hist else "SAD_API_Interceptor"
+            capture_method = filing_hist[-1].get("capture_method", "") if filing_hist else ""
 
             periods = [h.get("period_label") for h in filing_hist if h.get("period_label") and h.get("period_label") != "N/A"]
             if len(periods) > 1:
@@ -3329,12 +3342,18 @@ class SeraDatabase:
             is_unassigned = not bool(cid)
             if cid and cid in client_map:
                 c_info = client_map[cid]
-                display_name = f"{c_info['name']} ({c_info['pan'] or pan_val or identity_key})"
-                display_pan = c_info['pan'] or pan_val
+                c_pan = c_info.get("pan") or pan_val or ""
+                if len(c_pan) == 15 and re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]", c_pan):
+                    c_pan = c_pan[2:12]
+                display_name = f"{c_info['name']} ({c_pan or identity_key})"
+                display_pan = c_pan
                 id_token = c_info.get("client_id_token", f"CLI-{cid:05d}")
             elif comp_name or prop_name:
-                display_name = f"{comp_name or prop_name} ({pan_val or gst_val or identity_key})"
-                display_pan = pan_val or gst_val or identity_key
+                cand_pan = pan_val
+                if (not cand_pan or len(cand_pan) != 10) and gst_val and len(gst_val) >= 12:
+                    cand_pan = gst_val[2:12]
+                display_name = f"{comp_name or prop_name} ({cand_pan or gst_val or identity_key})"
+                display_pan = cand_pan or gst_val or identity_key
                 id_token = "Unregistered"
             else:
                 display_name = f"Unregistered ({identity_key})"

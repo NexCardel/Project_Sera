@@ -268,12 +268,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 ensureConnected();
 
-if (SERA_DEBUG) console.log('Sera SAD: background.js module loaded, registering listeners.');
+if (SERA_DEBUG) console.log('Sera SDC: background.js module loaded, registering listeners.');
 
-// Helper to broadcast tracker & SAD state changes to open tabs
-function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
+// Helper to broadcast tracker state changes to open tabs
+function broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled) {
   const tOn = trackerEnabled !== false;
-  const sOn = (sadEnabled !== undefined ? (sadEnabled !== false) : tOn) && tOn;
+  const sOn = (sdcEnabled !== undefined ? (sdcEnabled !== false) : tOn) && tOn;
   const fOn = (fstEnabled !== undefined ? (fstEnabled !== false) : tOn) && tOn;
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
@@ -282,13 +282,8 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
         chrome.tabs.sendMessage(tab.id, {
           type: "SERA_TRACKER_STATE_CHANGED",
           trackerEnabled: tOn,
-          sadEnabled: sOn,
+          sdcEnabled: sOn,
           fstEnabled: fOn
-        }).catch(() => {});
-        chrome.tabs.sendMessage(tab.id, {
-          type: "SERA_SAD_STATE_CHANGED",
-          sadEnabled: sOn,
-          trackerEnabled: tOn
         }).catch(() => {});
       } catch (_) {}
     }
@@ -296,7 +291,7 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
 }
 
 // SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
-function injectSAD(tabId, reason) {
+function injectSDC(tabId, reason) {
   if (sdcInjectedTabs.has(tabId)) {
     if (SERA_DEBUG) console.log(`⚡ Sera SDC: Tab ${tabId} already injected — skipping duplicate injection.`);
     return;
@@ -344,10 +339,10 @@ function injectSAD(tabId, reason) {
 // Inject into ALL open tabs
 function injectAllOpenTabs(reason) {
   chrome.tabs.query({}, (tabs) => {
-    if (SERA_DEBUG) console.log('Sera SAD: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
+    if (SERA_DEBUG) console.log('Sera SDC: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
     for (const tab of tabs) {
       if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
-      if (tab.status === 'complete') injectSAD(tab.id, reason || 'startup-scan');
+      if (tab.status === 'complete') injectSDC(tab.id, reason || 'startup-scan');
     }
   });
 }
@@ -363,7 +358,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete') {
     // A full document load creates a new execution context; reinject once.
     sdcInjectedTabs.delete(tabId);
-    injectSAD(tabId, 'onUpdated-complete');
+    injectSDC(tabId, 'onUpdated-complete');
 
     // Re-inject Manual Assist if tab is on login page and assist is active (e.g. after invalid password page reload)
     chrome.storage.local.get(['manualAssistPayload'], data => {

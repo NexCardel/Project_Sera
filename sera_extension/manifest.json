@@ -64,7 +64,6 @@
       "resources": [
         "config.json",
         "event_types.json",
-        "content_scripts/net_interceptor.js",
         "content_scripts/filing_detector.js",
         "tracker.js",
         "sdc/sdc_toast.js",

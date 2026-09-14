@@ -1,3 +1,5 @@
+const SERA_DEBUG = false; // production: silence all console output
+
 /**
  * net_interceptor.js — Sera SAD (API Detector)
  * ---------------------------------------------
@@ -8,7 +10,7 @@
  */
 
 (function() {
-    const SAD_VERSION = "2.9.4";
+    const SAD_VERSION = "2.9.8";
     // SAD Permanently Retired: Deactivated for compliance & safety. Zero network hooking.
     return;
     if (window.__SERA_SAD_VERSION__ === SAD_VERSION) return;
@@ -51,11 +53,11 @@
     window.addEventListener('message', (event) => {
         if (event && event.data && event.data.type === 'SERA_SAD_KILLSWITCH') {
             window.__SERA_SAD_ENABLED__ = Boolean(event.data.enabled);
-            console.log(`⚡ Sera SAD: Interceptor live state updated -> enabled=${window.__SERA_SAD_ENABLED__}`);
+            if (SERA_DEBUG) console.log(`⚡ Sera SAD: Interceptor live state updated -> enabled=${window.__SERA_SAD_ENABLED__}`);
         }
     });
 
-    console.log(`⚡ Sera SAD (API Detector v${SAD_VERSION}): Scoped interceptor active for portal domain [${currentHost}].`);
+    if (SERA_DEBUG) console.log(`⚡ Sera SAD (API Detector v${SAD_VERSION}): Scoped interceptor active for portal domain [${currentHost}].`);
 
     // Session cache to prevent duplicate events for the same Ack/ARN within a session
     const capturedSet = window.__SERA_CAPTURED_SET__ || new Set();
@@ -279,7 +281,7 @@
             if (window.sessionStorage.getItem('__SERA_SESSION_ID__')) {
                 window.sessionStorage.removeItem('__SERA_SESSION_ID__');
                 window.sessionStorage.removeItem('__SERA_SESSION_PAN__');
-                console.log("⚡ Sera SAD: Session cleared due to login/logout navigation.");
+                if (SERA_DEBUG) console.log("⚡ Sera SAD: Session cleared due to login/logout navigation.");
             }
         }
     }
@@ -314,7 +316,7 @@
         if (detail.pan) {
             const currentPan = String(detail.pan).trim().toUpperCase();
             if (sessionPan && sessionPan !== currentPan) {
-                console.log(`⚡ Sera SAD: PAN change detected (${sessionPan} -> ${currentPan}). Resetting session.`);
+                if (SERA_DEBUG) console.log(`⚡ Sera SAD: PAN change detected (${sessionPan} -> ${currentPan}). Resetting session.`);
                 sessionId = null; 
             }
             window.sessionStorage.setItem('__SERA_SESSION_PAN__', currentPan);
@@ -325,8 +327,8 @@
             window.sessionStorage.setItem('__SERA_SESSION_ID__', sessionId);
         }
 
-        console.log(`⚡ Sera SAD [API Detector] Captured Filing: ${detail.portal} | ${detail.filing_type || 'Return'} | ARN: ${detail.arn} | Period: ${detail.period_label || 'N/A'}`);
-        window.dispatchEvent(new CustomEvent('SeraFSTApiCapture', {
+        if (SERA_DEBUG) console.log(`⚡ Sera SAD [API Detector] Captured Filing: ${detail.portal} | ${detail.filing_type || 'Return'} | ARN: ${detail.arn} | Period: ${detail.period_label || 'N/A'}`);
+        window.dispatchEvent(new CustomEvent('__se_fs', {
             detail: {
                 portal: detail.portal,
                 arn: String(detail.arn).trim(),
@@ -734,7 +736,7 @@
                 inspectSingleRecord(url, host, jsonObj, globalPan);
             }
             if (totalCaptured > 0) {
-                console.log(`⚡ Sera SAD: Successfully processed and captured ${totalCaptured} record(s) from return history array.`);
+                if (SERA_DEBUG) console.log(`⚡ Sera SAD: Successfully processed and captured ${totalCaptured} record(s) from return history array.`);
             }
 
         } catch (err) {

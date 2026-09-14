@@ -24,10 +24,8 @@ def bump_versions(new_version="2.9.4"):
             f.write(c)
         print(f"Updated {iss}")
 
-    # 3. Update net_interceptor.js (Sera SAD internal engine version)
+    # 3. Update archived net_interceptor.js if present in source_2
     net_paths = [
-        r'sera_extension\content_scripts\net_interceptor.js',
-        r'sera_extension_firefox\content_scripts\net_interceptor.js',
         r'source_2\sera_extension\content_scripts\net_interceptor.js',
         r'source_2\sera_extension_firefox\content_scripts\net_interceptor.js',
     ]
