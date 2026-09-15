@@ -93,6 +93,44 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(c.id, "gst_logout")
         self.assertTrue(c.is_session_boundary)
 
+        # 7. gst_login (Redirect after logout or fresh session start)
+        c = match_url_crosshair("https://services.gst.gov.in/services/login")
+        self.assertIsNotNone(c)
+        self.assertEqual(c.id, "gst_login")
+        self.assertFalse(c.is_session_boundary)
+
+    def test_gst_session_boundary_logout_notification(self):
+        from unittest.mock import MagicMock
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        from PIL import Image
+
+        assembler = VisualSessionAssembler()
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (800, 600), color="white")
+        mock_ocr.scan_image.return_value = {"text": "Goods and Services Tax Login", "lines": ["Goods and Services Tax Login"]}
+
+        activities = []
+        def on_activity(kind, title, desc):
+            activities.append((kind, title, desc))
+
+        router = VSDCRouter(ocr_engine=mock_ocr, assembler=assembler, on_activity=on_activity)
+        router.assembler.gstin = "27AAPFU0939L1ZV"
+        router.assembler.client_name = "ABC ENTERPRISE"
+        router.last_logged_name = "ABC ENTERPRISE"
+
+        # Simulate user logging out / redirected to services/login
+        router.get_foreground_info = MagicMock(return_value=(12345, "GST Portal Login - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value="https://services.gst.gov.in/services/login")
+        router.evaluate_tick()
+
+        logout_events = [act for act in activities if act[0] == "logout"]
+        self.assertTrue(len(logout_events) >= 1)
+        kind, title, desc = logout_events[0]
+        self.assertEqual(title, "GST Session Concluded")
+        self.assertIn("ABC ENTERPRISE", desc)
+
     def test_local_path_and_title_matching(self):
         # Local file path with file:///
         c = match_url_crosshair("file:///C:/Users/Nex/Downloads/Project Sera/APP/tests/test_page_submit_success.html")
@@ -275,7 +313,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(assembler.filing_preference, "Quarterly")
 
         # Verify HUD activity notification was emitted
-        self.assertTrue(any(evt == "identity" and "ISMAIL BAGANI" in title for evt, title, sub in notified))
+        self.assertTrue(any(evt in ("start", "identity") and "ISMAIL BAGANI" in title for evt, title, sub in notified))
         self.assertTrue(any("19ADRPB1234F1Z5" in sub and "Quarterly" in sub for evt, title, sub in notified))
 
     def test_gst_welcome_calendar_filing_preference_monthly(self):
@@ -395,7 +433,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(assembler.client_pan, "AAAAA0000A")
         self.assertEqual(assembler.fy, "2026-27")
         self.assertEqual(assembler.due_date, "13/07/2026")
-        self.assertEqual(assembler.current_period_label, "June(Q) (FY 2026-27)")
+        self.assertEqual(assembler.current_period_label, "June (FY 2026-27)")
         self.assertIn("GSTR-1", assembler.current_filing_type)
 
         # 2. Verify shot dataset payload to app
@@ -405,8 +443,8 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(payload["trade_name"], "SPY JUNIOR")
         self.assertEqual(payload["gstin"], "19AAAAA0000A1Z5")
         self.assertEqual(payload["pan"], "AAAAA0000A")
-        self.assertEqual(payload["period_label"], "June(Q) (FY 2026-27)")
-        self.assertEqual(payload["tax_period"], "June(Q)")
+        self.assertEqual(payload["period_label"], "June (FY 2026-27)")
+        self.assertEqual(payload["tax_period"], "June")
         self.assertEqual(payload["status"], "Filed")
         self.assertEqual(payload["due_date"], "13/07/2026")
         self.assertEqual(payload["fy"], "2026-27")
@@ -414,7 +452,7 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(payload["raw_payload"]["trade_name"], "SPY JUNIOR")
 
         # 3. Verify Live HUD Toast
-        self.assertTrue(any(evt == "capture" and "GSTR-1" in title and "June(Q)" in title for evt, title, sub in notified))
+        self.assertTrue(any(evt == "capture" and "GSTR-1" in title and "June" in title for evt, title, sub in notified))
         self.assertTrue(any("FATIMA BIBI" in sub and "SPY JUNIOR" in sub and "Filed" in sub for evt, title, sub in notified))
 
     def test_gst_form_details_multiline_status_and_period(self):
@@ -475,8 +513,8 @@ class TestVSDCCrosshairs(unittest.TestCase):
 
         self.assertIsNotNone(payload)
         self.assertEqual(payload["status"], "Filed")
-        self.assertEqual(payload["period_label"], "June(Q) (FY 2026-27)")
-        self.assertEqual(payload["tax_period"], "June(Q)")
+        self.assertEqual(payload["period_label"], "June (FY 2026-27)")
+        self.assertEqual(payload["tax_period"], "June")
         self.assertEqual(payload["fy"], "2026-27")
         self.assertNotIn("AY", payload["period_label"])
 
@@ -552,12 +590,11 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(master_payload["gstin"], "19AAAAA0000A1Z5")
         self.assertEqual(master_payload["pan"], "AAAAA0000A")
         self.assertEqual(master_payload["filing_type"], "GSTR-1")
-        self.assertEqual(master_payload["period_label"], "June(Q) (FY 2026-27)")
+        self.assertEqual(master_payload["period_label"], "June (FY 2026-27)")
         self.assertIn(master_payload["status"], ("Filed", "Filing Submitted"))
 
-        # 4. Verify Live HUD Toasts (capture + flush)
-        self.assertTrue(any(evt == "capture" and "AA1908260123456" in sub for evt, title, sub in notified))
-        self.assertTrue(any(evt == "flush" and "GST Filing Saved to Tracker Dump" in title for evt, title, sub in notified))
+        # 4. Verify Live HUD Toast (submit event with ARN)
+        self.assertTrue(any(evt in ("submit", "capture") and "AA1908260123456" in sub for evt, title, sub in notified))
 
     def test_gst_capture_on_render_and_stop_until_url_changes(self):
         """
@@ -877,12 +914,87 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(payload["gstin"], "19BNNPA1234H1ZX")
         self.assertEqual(payload["pan"], "BNNPA1234H")
         self.assertEqual(payload["status"], "Not Filed")
-        self.assertEqual(payload["tax_period"], "September(Q)")
+        self.assertEqual(payload["tax_period"], "September")
         self.assertEqual(payload["fy"], "2026-27")
-        self.assertEqual(payload["period_label"], "September(Q) (FY 2026-27)")
+        self.assertEqual(payload["period_label"], "September (FY 2026-27)")
         self.assertEqual(payload["due_date"], "13/10/2026")
         self.assertEqual(assembler.client_name, "JABED ALI")
         self.assertEqual(assembler.trade_name, "A.C.T. DRESSES")
+
+    def test_gst_scroll_past_and_scroll_back_capture(self):
+        """
+        Verifies viewport resilience when an employee scrolls fast past the table:
+        1. Tick 1: User scrolled fast to the bottom of GSTR-3B page; table is off-screen.
+           Router rejects incomplete view; route_captured remains False.
+        2. Ticks 2-4: User remains at bottom; static view suppresses redundant OCR scans.
+        3. Tick 5: User scrolls back up to the top! The GST table enters viewport.
+           Router detects screen content change, extracts all fields, shoots payload,
+           and sets route_captured=True.
+        4. Tick 6: Subsequent ticks lock and do not make OCR scans.
+        """
+        mock_ocr = MagicMock()
+        img_bottom = Image.new("RGB", (1366, 768), color="red")
+        img_top = Image.new("RGB", (1366, 768), color="blue")
+        mock_ocr.capture_window_image.return_value = img_bottom
+
+        assembler = VisualSessionAssembler()
+        router = VSDCRouter(ocr_engine=mock_ocr, assembler=assembler, on_activity=lambda *args: None)
+
+        test_url = "https://return.gst.gov.in/returns/auth/gstr3b"
+        router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) - Google Chrome", "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=test_url)
+
+        # Tick 1: Scrolled to bottom (only buttons & Table 3.1, no period or status)
+        mock_ocr.scan_image.return_value = {
+            "text": "Table 3.1 Details of Outward Supplies\nBACK SAVE GSTR3B DOWNLOAD FILED GSTR-3B",
+            "lines": ["Table 3.1 Details of Outward Supplies", "BACK SAVE GSTR3B DOWNLOAD FILED GSTR-3B"]
+        }
+        res1 = router.evaluate_tick()
+        self.assertIsNone(res1)
+        self.assertFalse(router.route_captured, "Must NOT lock when table is scrolled off-screen")
+
+        # Tick 2-4: Still at bottom
+        for _ in range(3):
+            self.assertIsNone(router.evaluate_tick())
+        self.assertFalse(router.route_captured)
+
+        # Tick 5: User scrolls back up to top! Image changes and full table enters viewport
+        mock_ocr.capture_window_image.return_value = img_top
+        mock_ocr.scan_image.return_value = {
+            "text": (
+                "Goods and Services Tax\n"
+                "Dashboard Returns GSTR-3BQ GSTR-3BQ - Quarterly Return\n"
+                "GSTIN - 19CJLPM0265MIZO FY - 2026-27\n"
+                "Legal Name - ARIF MOHAMMAD MOLLA Return Period - Apr-Jun\n"
+                "Status - Filed Due Date - 24/07/2026"
+            ),
+            "lines": [
+                "Goods and Services Tax",
+                "Dashboard Returns GSTR-3BQ GSTR-3BQ - Quarterly Return",
+                "GSTIN - 19CJLPM0265MIZO",
+                "FY - 2026-27",
+                "Legal Name - ARIF MOHAMMAD MOLLA",
+                "Return Period - Apr-Jun",
+                "Status - Filed",
+                "Due Date - 24/07/2026"
+            ]
+        }
+        res5 = router.evaluate_tick()
+        self.assertIsNotNone(res5, "Router MUST capture the table when user scrolls back up")
+        self.assertEqual(res5["gstin"], "19CJLPM0265MIZO")
+        self.assertEqual(res5["pan"], "CJLPM0265M")
+        self.assertEqual(res5["client_name"], "ARIF MOHAMMAD MOLLA")
+        self.assertEqual(res5["filing_type"], "GSTR-3B")
+        self.assertEqual(res5["period_label"], "June (FY 2026-27)")
+        self.assertEqual(res5["status"], "Filed")
+        self.assertEqual(res5["due_date"], "24/07/2026")
+        self.assertTrue(router.route_captured)
+
+        # Tick 6: Locked on same route
+        calls_before = mock_ocr.scan_image.call_count
+        res6 = router.evaluate_tick()
+        self.assertIsNone(res6)
+        self.assertEqual(mock_ocr.scan_image.call_count, calls_before, "OCR must be completely suppressed once captured")
 
 
 if __name__ == "__main__":

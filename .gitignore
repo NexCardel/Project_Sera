@@ -69,6 +69,7 @@ settings.ini
 seraRawPayloadDump.txt
 seraRawPayload*.txt
 Raw_Payload_Dump/
+Vsdc_Captures/
 *.xlsx
 .obsidian/
 backups/
@@ -77,3 +78,4 @@ backups/
 ~*
 scratch/
 .pytest_cache/
+data/

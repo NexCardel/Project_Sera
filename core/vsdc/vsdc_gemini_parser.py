@@ -16,11 +16,17 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from .vsdc_token_tracker import record_gemini_call
+from .vsdc_beeper import PANBeeper
 
 SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.ini"
 
-PRIMARY_MODEL = "gemini-3.6-flash"
-FALLBACK_MODEL = "gemini-flash-latest"
+MODELS_CASCADE = [
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.6-flash",
+]
+PRIMARY_MODEL = "gemini-3.5-flash-lite"
+FALLBACK_MODEL = "gemini-flash-lite-latest"
 
 
 def get_gemini_api_key() -> str:
@@ -120,7 +126,7 @@ def parse_compliance_with_gemini(
         "}"
     )
 
-    models_to_try = [PRIMARY_MODEL, FALLBACK_MODEL]
+    models_to_try = MODELS_CASCADE
     last_error = None
 
     for model in models_to_try:
@@ -173,8 +179,8 @@ def parse_compliance_with_gemini(
             last_error = e
             # Record failed call
             record_gemini_call(0, 0, 0, model=model, success=False)
-            if e.code == 429:
-                print(f"[GeminiParser] Quota rate limit (429) on {model}, trying fallback...")
+            if e.code in (429, 503):
+                print(f"[GeminiParser] Quota rate limit or service busy ({e.code}) on {model}, trying fallback...")
                 continue
             elif e.code in (400, 403, 404):
                 print(f"[GeminiParser] HTTP {e.code} on {model}: {e}")
@@ -186,3 +192,82 @@ def parse_compliance_with_gemini(
             continue
 
     return None
+
+
+def enrich_payload_with_gemini(
+    payload: Dict[str, Any],
+    timeout: float = 6.0
+) -> Dict[str, Any]:
+    """
+    Checks the payload's raw text capture, redacts sensitive credentials (PAN/GSTIN/PII)
+    via PANBeeper, queries Gemini AI for structured extraction, and attaches a
+    'gemini_extracted': {...} portion to the JSON payload before Tracker Dump ingestion.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    # Ensure gemini_extracted object is present by default
+    payload.setdefault("gemini_extracted", {})
+    if isinstance(payload.get("raw_payload"), dict):
+        payload["raw_payload"].setdefault("gemini_extracted", {})
+
+    # Extract raw text from payload or nested structures
+    raw_text = payload.get("raw_text")
+    if not raw_text and isinstance(payload.get("raw_payload"), dict):
+        raw_text = payload["raw_payload"].get("raw_text")
+        if not raw_text:
+            captures = payload["raw_payload"].get("assembler_captures") or []
+            if captures and isinstance(captures, list) and isinstance(captures[0], dict):
+                raw_text = captures[0].get("raw_text")
+            elif isinstance(payload["raw_payload"].get("dataset_capture"), dict):
+                raw_text = payload["raw_payload"]["dataset_capture"].get("raw_text")
+
+    if not raw_text or not isinstance(raw_text, str) or not raw_text.strip():
+        return payload
+
+    # Segment unbroken text on statutory field anchors if line count is small or lines are long
+    field_anchors = (
+        "GSTIN", "Legal Name", "Trade Name", "Financial Year", "FY", "Tax Period",
+        "Return Period", "Status", "Due Date", "GSTR", "IFF", "Acknowledgement", "Ack No", "ARN"
+    )
+    segmented_text = raw_text
+    for fa in field_anchors:
+        segmented_text = re.sub(rf"(?i)\s+({re.escape(fa)}\s*[-:–—])", r"\n\1", segmented_text)
+
+    lines = [ln.strip() for ln in segmented_text.splitlines() if ln.strip()]
+    if not lines:
+        return payload
+
+    pan = payload.get("pan")
+    gstin = payload.get("gstin")
+
+    try:
+        # 1. Anonymize and slim text via PANBeeper (guarantees zero-leakage of PAN/GSTIN)
+        beeper_res = PANBeeper.anonymize_and_slim(lines, known_pan=pan, known_gstin=gstin)
+        slimmed_text = beeper_res.get("slimmed_masked_text", "")
+        if not slimmed_text:
+            return payload
+
+        # 2. Call Gemini AI with prompt and timeout
+        gem_res = parse_compliance_with_gemini(slimmed_text, timeout=timeout)
+        if gem_res and isinstance(gem_res, dict):
+            # Clean out null/empty values
+            clean_res = {k: v for k, v in gem_res.items() if v not in (None, "")}
+            payload["gemini_extracted"] = clean_res
+            if isinstance(payload.get("raw_payload"), dict):
+                payload["raw_payload"]["gemini_extracted"] = clean_res
+
+            # Supplemental non-destructive backfill for top-level keys if missing
+            if not payload.get("client_name") and clean_res.get("legal_name"):
+                payload["client_name"] = clean_res["legal_name"]
+            if not payload.get("trade_name") and clean_res.get("trade_name"):
+                payload["trade_name"] = clean_res["trade_name"]
+            if not payload.get("fy") and clean_res.get("fy"):
+                payload["fy"] = clean_res["fy"]
+            if not payload.get("tax_period") and clean_res.get("tax_period"):
+                payload["tax_period"] = clean_res["tax_period"]
+
+    except Exception as e:
+        print(f"[GeminiEnricher] Notice during payload enrichment: {e}")
+
+    return payload

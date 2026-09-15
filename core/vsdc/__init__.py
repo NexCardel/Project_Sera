@@ -41,6 +41,7 @@ from .vsdc_ocr import VSDCOcrEngine
 from .vsdc_assembler import VisualSessionAssembler
 from .vsdc_router import VSDCRouter
 from .vsdc_worker import VSDCWorker
+from .vsdc_session_logger import VSDCSessionLogger
 
 __all__ = [
     "ALL_CROSSHAIRS",
@@ -73,4 +74,5 @@ __all__ = [
     "VisualSessionAssembler",
     "VSDCRouter",
     "VSDCWorker",
+    "VSDCSessionLogger",
 ]

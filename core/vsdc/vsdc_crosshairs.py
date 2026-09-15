@@ -161,11 +161,20 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="gst_logout",
         protocol="GST Portal",
-        pattern=re.compile(r"[/#](?:logout|sign-?out|session.?expire|session-?timeout)(?:[?/#]|$)", re.IGNORECASE),
+        pattern=re.compile(r"[/#](?:logout|sign-?out|session.?expire|session-?timeout|sessionexpired)(?:[?/#]|$)", re.IGNORECASE),
         target_crop="header",
         description="GST session termination boundary",
         host_pattern=GST_HOST_PATTERN,
         is_session_boundary=True,
+    ),
+    CrosshairDefinition(
+        id="gst_login",
+        protocol="GST Portal",
+        pattern=re.compile(r"services/(?:auth/)?login(?:[?#/]|$)", re.IGNORECASE),
+        target_crop="header",
+        description="GST Portal login page (pre-auth or post-logout boundary)",
+        host_pattern=GST_HOST_PATTERN,
+        is_session_boundary=False,
     ),
 ]
 
@@ -197,8 +206,10 @@ def match_url_crosshair(url: str, portal_hint: Optional[str] = None) -> Optional
         if crosshair.pattern.search(url):
             return crosshair
 
-    # 2. Fallback: match without host constraint
+    # 2. Fallback: match without host constraint (strictly respecting portal_hint if present)
     for crosshair in ALL_CROSSHAIRS:
+        if portal_hint and crosshair.protocol != portal_hint:
+            continue
         if crosshair.pattern.search(url):
             return crosshair
 

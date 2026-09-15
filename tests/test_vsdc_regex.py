@@ -11,6 +11,8 @@ from core.vsdc.vsdc_regex import (
     extract_assessment_year,
     extract_filing_type,
     classify_verification_status,
+    extract_gst_form_table,
+    extract_gst_filing_preference,
 )
 
 
@@ -261,6 +263,35 @@ class TestVSDCRegex(unittest.TestCase):
         self.assertEqual(table["status"], "Not Filed")
         self.assertEqual(table["due_date"], "13/07/2026")
         self.assertEqual(table["form_type"], "GSTR-1/IFF")
+
+    def test_extract_gst_form_table_gstr3b_qrmp(self):
+        raw = (
+            "New Tab c -o Goods & Service Tax (GSD I Use return.gst.gov.in/returns/auth/gstr3b "
+            "Goods and Services Tax Government of India, States and Union Territories Ask Gemini "
+            "Skip to Main Content O A- a ARIF MOHAMMAD MOLLA v 19CJLPM0265MIZO News and Updates English "
+            "O Dashboard Services • GST Law Downloads • Search Taxpayer • Help and Taxpayer Facilities "
+            "Status - Filed Due Date - 24/07/2026 e-lnvoice Dashboard Returns GSTR-3BQ GSTR-3BQ - Quarterly Return "
+            "GSTIN - 19CJLPM0265MIZO FY - 2026-27 Facilitation in filing GSTR-3BQ "
+            "Legal Name - ARIF MOHAMMAD MOLLA Return Period - Apr-Jun "
+            "O System has not generated summary of Table 3.1(d) and Table 4 of FORM GSTR-3B on the basis of your GSTR-2B "
+            "as same is not generated for the current tax period. O System has not generated summary of table 5.1 interest "
+            "of Form GSTR-3B basis your previous period Form GSTR-3B as the same is not filed or interest is not applicable. "
+            "Click here for system generated summary status for GSTR-3B. BACK SAVE GSTR3B DOWNLOAD FILED GSTR-3B "
+            "Help Manual SYSTEM GENERATED GSTR-3B"
+        )
+        url = "https://return.gst.gov.in/returns/auth/gstr3b"
+        table = extract_gst_form_table(raw, url=url)
+        self.assertEqual(table["gstin"], "19CJLPM0265MIZO")
+        self.assertEqual(table["pan"], "CJLPM0265M")
+        self.assertEqual(table["legal_name"], "ARIF MOHAMMAD MOLLA")
+        self.assertIsNone(table["trade_name"])
+        self.assertEqual(table["fy"], "2026-27")
+        self.assertEqual(table["tax_period"], "Apr-Jun")
+        self.assertEqual(table["period_label"], "Apr-Jun (FY 2026-27)")
+        self.assertEqual(table["status"], "Filed")
+        self.assertEqual(table["due_date"], "24/07/2026")
+        self.assertEqual(table["form_type"], "GSTR-3B")
+        self.assertEqual(extract_gst_filing_preference(raw), "Quarterly")
 
 
 if __name__ == "__main__":

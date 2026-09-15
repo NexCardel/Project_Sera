@@ -33,14 +33,10 @@ def test_masking_real_gstin_and_pan():
     # 1. Real GSTIN and PAN must NOT be anywhere in the output
     assert "19AKVPA6032B1ZC" not in slimmed
     assert "AKVPA6032B" not in slimmed
-    assert "9830112233" not in slimmed
-    assert "accounts@apenterprise.com" not in slimmed
 
     # 2. Replaced tokens must be present
     assert "[GSTIN_TOKEN]" in slimmed
     assert "[PAN_TOKEN]" in slimmed
-    assert "[PHONE_REDACTED]" in slimmed
-    assert "[EMAIL_REDACTED]" in slimmed
 
     # 3. Preserved compliance attributes
     assert "A. P. Enterprise" in slimmed
@@ -67,12 +63,10 @@ def test_preflight_leak_guard_blocks_unmasked_pan():
     assert "Unmasked PAN detected" in str(exc_info.value)
 
 
-def test_preflight_leak_guard_blocks_phone_and_email():
-    with pytest.raises(SensitiveDataLeakageError):
-        PANBeeper.assert_zero_sensitive_data("Call client at 9876543210 for verification")
-
-    with pytest.raises(SensitiveDataLeakageError):
-        PANBeeper.assert_zero_sensitive_data("Send notice to client@firm.com immediately")
+def test_preflight_leak_guard_allows_non_pan_gstin_text():
+    # Only PAN and GSTIN are blocked; other text is permitted
+    assert PANBeeper.assert_zero_sensitive_data("Call client at 9876543210 for verification") is True
+    assert PANBeeper.assert_zero_sensitive_data("Send notice to client@firm.com immediately") is True
 
 
 def test_preflight_leak_guard_passes_clean_payload():

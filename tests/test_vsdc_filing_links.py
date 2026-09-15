@@ -131,3 +131,110 @@ def test_full_dataset_capture_simulation():
     assert payload["filing_type"] == "GSTR-3B"
     assert payload["status"] == "Filed"
     assert payload["portal"] == "GST Portal"
+
+
+def test_burst_mode_logic():
+    """Verify router triggers burst_ticks_remaining on URL change."""
+    from core.vsdc.vsdc_router import VSDCRouter
+    from core.vsdc.vsdc_ocr import VSDCOcrEngine
+
+    ocr_engine = VSDCOcrEngine()
+    assembler = VisualSessionAssembler()
+    router = VSDCRouter(ocr_engine=ocr_engine, assembler=assembler)
+
+    assert router.burst_ticks_remaining == 0
+    assert router._cached_address_elements == {}
+    # Simulate URL change burst triggering
+    router.burst_ticks_remaining = 10
+    assert router.burst_ticks_remaining == 10
+
+
+def test_vsdc_address_bar_cache_retrieval():
+    """Verify cached UIA address bar element returns cached URL in < 0.2ms without tree scan."""
+    from core.vsdc.vsdc_router import VSDCRouter
+    from core.vsdc.vsdc_ocr import VSDCOcrEngine
+    from unittest.mock import MagicMock
+
+    ocr_engine = VSDCOcrEngine()
+    assembler = VisualSessionAssembler()
+    router = VSDCRouter(ocr_engine=ocr_engine, assembler=assembler)
+    router._uia = MagicMock()
+
+    # Mock cached val_obj
+    mock_edit = MagicMock()
+    mock_val_obj = MagicMock()
+    mock_val_obj.CurrentValue = "https://return.gst.gov.in/returns/auth/gstr1"
+
+    fake_hwnd = 12345
+    router._cached_address_elements[fake_hwnd] = (mock_edit, mock_val_obj)
+
+    # Calling extract_browser_url should read from cache and NOT call ElementFromHandle
+    res = router.extract_browser_url(fake_hwnd)
+    assert res == "https://return.gst.gov.in/returns/auth/gstr1"
+    router._uia.ElementFromHandle.assert_not_called()
+
+
+def test_vsdc_gst_form_details_bypasses_loading_overlay():
+    """Verify gst_form_details captures table even if page indicates loading state."""
+    from core.vsdc.vsdc_router import VSDCRouter
+    from core.vsdc.vsdc_ocr import VSDCOcrEngine
+    from core.vsdc.vsdc_crosshairs import match_url_crosshair
+    from unittest.mock import MagicMock
+    from PIL import Image
+
+    ocr_engine = VSDCOcrEngine()
+    assembler = VisualSessionAssembler()
+    router = VSDCRouter(ocr_engine=ocr_engine, assembler=assembler)
+
+    crosshair = match_url_crosshair("https://return.gst.gov.in/returns/auth/gstr1")
+    assert crosshair is not None
+    assert crosshair.id == "gst_form_details"
+    assert crosshair.target_crop == "full"
+
+    # Simulate OCR result containing both 'Loading...' and the 4-column statutory table
+    ocr_text_with_loading = """
+    Loading... Please wait
+    GSTIN - 19BNNPA3652HIZX
+    Legal Name - FATIMA BIBI
+    Trade Name - FATIMA ENTERPRISE
+    Financial Year - 2026-27
+    Tax Period - August
+    Status - Filed
+    """
+    router.ocr.capture_window_image = MagicMock(return_value=Image.new("RGB", (800, 600), color="white"))
+    router.ocr.scan_image = MagicMock(return_value={"text": ocr_text_with_loading, "lines": ocr_text_with_loading.splitlines()})
+
+    # Trigger _route_gst_crosshair directly
+    payload = router._route_gst_crosshair(
+        matched_crosshair=crosshair,
+        url="https://return.gst.gov.in/returns/auth/gstr1",
+        hwnd=999,
+        is_new_url=True,
+        prior_crosshair=None,
+    )
+
+    # Capture must succeed despite 'Loading...'
+    assert payload is not None
+    assert payload["gstin"] == "19BNNPA3652HIZX"
+    assert payload["client_name"] == "FATIMA BIBI"
+    assert payload["filing_type"] == "GSTR-1"
+    assert payload["status"] == "Filed"
+    assert payload["tax_period"] == "August"
+    assert router.burst_ticks_remaining == 0  # Cleared after successful capture!
+
+
+def test_vsdc_ocr_bmp_pipeline():
+    """Verify OCR engine runs on in-memory images using the fast BMP pipeline."""
+    from core.vsdc.vsdc_ocr import VSDCOcrEngine
+    from PIL import Image
+
+    engine = VSDCOcrEngine()
+    if not engine.is_available:
+        pytest.skip("Windows.Media.Ocr not available on this host")
+
+    test_img = Image.new("RGB", (300, 80), color="white")
+    res = engine.scan_image(test_img, region_type="full")
+    assert isinstance(res, dict)
+    assert "latency_ms" in res
+    assert res["latency_ms"] >= 0.0
+

@@ -306,8 +306,6 @@ def resolve_gst_form_type_from_url(url: Optional[str], text: Optional[str] = Non
     if "gstr8" in u_lower or "gstr-8" in u_lower:
         return "GSTR-8"
     if "gstr1" in u_lower or "gstr-1" in u_lower:
-        if text and ("invoice furnishing facility" in text.lower() or re.search(r"\bIFF\b", text)):
-            return "GSTR-1/IFF"
         return "GSTR-1"
 
     return extract_filing_type(text) if text else None
@@ -470,6 +468,11 @@ def extract_gst_filing_preference(text: str) -> Optional[str]:
     # 3. QRMP indicator
     if re.search(r"\bQRMP\b", text, re.IGNORECASE):
         return "Quarterly"
+    # 4. Quarterly Return descriptor or GSTR-3BQ indicator
+    if re.search(r"\b(?:Quarterly\s+Return|GSTR[-_ ]*3BQ)\b", text, re.IGNORECASE):
+        return "Quarterly"
+    if re.search(r"\bMonthly\s+Return\b", text, re.IGNORECASE):
+        return "Monthly"
     return None
 
 

@@ -25,7 +25,7 @@ class VSDCWorker(QThread):
     activity_event = Signal(str, str, str)  # Emitted on live events: (event_type, title, subtitle)
     status_changed = Signal(str)     # Emitted for status messages (e.g. 'Active', 'Idle')
 
-    def __init__(self, check_interval_sec: float = 1.5, parent=None):
+    def __init__(self, check_interval_sec: float = 0.35, parent=None):
         super().__init__(parent)
         self.check_interval_sec = check_interval_sec
         self._running = False
@@ -45,19 +45,27 @@ class VSDCWorker(QThread):
     def run(self):
         self._running = True
         self.status_changed.emit("Running")
-        print("⚡ VSDC (Visual SDC Engine): Worker started.")
+        print("⚡ VSDC (Visual SDC Engine): Worker started (High-Speed Burst Mode).")
 
         while self._running:
+            sleep_time = self.check_interval_sec
             if not self._paused:
                 try:
                     payload = self.router.evaluate_tick()
                     if payload:
                         print(f"🎯 VSDC Captured Filing! Form={payload.get('filing_type')} ARN={payload.get('arn')}")
                         self.filing_captured.emit(payload)
+
+                    # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll
+                    if getattr(self.router, "burst_ticks_remaining", 0) > 0:
+                        self.router.burst_ticks_remaining -= 1
+                        sleep_time = 0.015  # Ultra-fast 15ms burst loop
+                    else:
+                        sleep_time = self.check_interval_sec
                 except Exception as e:
                     print(f"⚠️ VSDC Worker Tick Error: {e}")
 
-            time.sleep(self.check_interval_sec)
+            time.sleep(sleep_time)
 
         self.status_changed.emit("Stopped")
         print("⚡ VSDC: Worker stopped.")
@@ -72,4 +80,13 @@ class VSDCWorker(QThread):
 
     def stop(self):
         self._running = False
+        try:
+            if hasattr(self, "assembler") and getattr(self.assembler, "_session_started", False):
+                self.assembler.logger.end_session(
+                    reason="Application Shutdown",
+                    summary_items=list(self.assembler.captures.values()),
+                )
+                self.assembler._session_started = False
+        except Exception:
+            pass
         self.wait(3000)

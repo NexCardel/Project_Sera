@@ -175,6 +175,102 @@ class TestVSDCAssembler(unittest.TestCase):
         self.assertIsNone(self.assembler.client_name)
         self.assertIsNone(self.assembler.current_filing_type)
 
+    def test_period_normalization_and_predefined_month_list(self):
+        from core.vsdc.vsdc_assembler import normalize_period, MONTHS, MONTH_MAP
+
+        # Verify predefined months exist
+        self.assertEqual(len(MONTHS), 12)
+        self.assertIn("June", MONTHS)
+        self.assertIn("September", MONTHS)
+
+        # 1. Quarters resolve to statutory terminal months
+        m1, fy1, lbl1 = normalize_period("Apr-Jun", "2026-27", portal="GST Portal")
+        self.assertEqual(m1, "June")
+        self.assertEqual(fy1, "2026-27")
+        self.assertEqual(lbl1, "June (FY 2026-27)")
+
+        m2, fy2, lbl2 = normalize_period("Jul-Sep", "2026-27", portal="GST Portal")
+        self.assertEqual(m2, "September")
+        self.assertEqual(lbl2, "September (FY 2026-27)")
+
+        m3, fy3, lbl3 = normalize_period("Oct-Dec", "2026-27", portal="GST Portal")
+        self.assertEqual(m3, "December")
+        self.assertEqual(lbl3, "December (FY 2026-27)")
+
+        m4, fy4, lbl4 = normalize_period("Jan-Mar", "2026-27", portal="GST Portal")
+        self.assertEqual(m4, "March")
+        self.assertEqual(lbl4, "March (FY 2026-27)")
+
+        # 2. Monthly returns
+        m5, fy5, lbl5 = normalize_period("September", "2026-27", portal="GST Portal")
+        self.assertEqual(m5, "September")
+        self.assertEqual(lbl5, "September (FY 2026-27)")
+
+        # 3. Income Tax AY
+        m_itr, fy_itr, lbl_itr = normalize_period("AY 2026-27", portal="Income Tax")
+        self.assertEqual(lbl_itr, "AY 2026-27")
+
+    def test_strict_pan_entity_id_resolution(self):
+        from core.vsdc.vsdc_assembler import resolve_entity_pan
+
+        # 1. Extracted strictly from GSTIN characters 2..12
+        pan1 = resolve_entity_pan(pan=None, gstin="19CJLPM0265MIZO")
+        self.assertEqual(pan1, "CJLPM0265M")
+
+        # 2. Directly provided PAN takes precedence
+        pan2 = resolve_entity_pan(pan="AHJPR0846B", gstin="27AHJPR0846B1Z5")
+        self.assertEqual(pan2, "AHJPR0846B")
+
+        # 3. Invalid or arbitrary string rejected from being entity_id
+        pan3 = resolve_entity_pan(pan=None, gstin="INVALID")
+        self.assertEqual(pan3, "UNKNOWN")
+
+    def test_multi_filing_in_single_session(self):
+        # Assessee logs in
+        self.assembler.update_identity(name="ARIF MOHAMMAD MOLLA", gstin="19CJLPM0265MIZO", portal="GST Portal")
+        self.assertEqual(self.assembler.client_pan, "CJLPM0265M")
+
+        # Filing 1: GSTR-1 for Apr-Jun (Q1)
+        self.assembler.update_selection(filing_type="GSTR-1", period_label="Apr-Jun (FY 2026-27)")
+        self.assembler.record_submission(
+            ack_number="AA1904260011111",
+            status="Filed",
+            filing_type="GSTR-1",
+            period_label="Apr-Jun (FY 2026-27)",
+        )
+        self.assertEqual(len(self.assembler.records), 1)
+
+        # Assessee navigates back to Returns Dashboard (clear_workflow_selection)
+        self.assembler.clear_workflow_selection()
+        # Identity and completed GSTR-1 record MUST BE PRESERVED!
+        self.assertEqual(self.assembler.client_pan, "CJLPM0265M")
+        self.assertEqual(self.assembler.client_name, "ARIF MOHAMMAD MOLLA")
+        self.assertEqual(len(self.assembler.records), 1)
+
+        # Filing 2: GSTR-3B for Apr-Jun (Q1)
+        self.assembler.update_selection(filing_type="GSTR-3B", period_label="Apr-Jun (FY 2026-27)")
+        self.assembler.record_submission(
+            ack_number="AA1907260022222",
+            status="Filed",
+            filing_type="GSTR-3B",
+            period_label="Apr-Jun (FY 2026-27)",
+        )
+        # Both records co-exist in the registry!
+        self.assertEqual(len(self.assembler.records), 2)
+
+        # Conclude session and flush
+        payload = self.assembler.seal_and_flush()
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["pan"], "CJLPM0265M")
+        self.assertEqual(payload["client_name"], "ARIF MOHAMMAD MOLLA")
+
+        # Master payload captures BOTH returns cleanly
+        captures = payload["raw_payload"]["assembler_captures"]
+        self.assertEqual(len(captures), 2)
+        forms_captured = {c["filing_type"]: c["arn"] for c in captures}
+        self.assertEqual(forms_captured["GSTR-1"], "AA1904260011111")
+        self.assertEqual(forms_captured["GSTR-3B"], "AA1907260022222")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -136,12 +136,13 @@ class PANBeeper:
             
             line_lower = line_str.lower()
             
-            # Discard boilerplate lines
-            if any(bp in line_lower for bp in BOILERPLATE_SUBSTRINGS):
-                continue
-                
             # Keep line if it has valuable anchors or looks like name / form / period
             is_valuable = any(anc in line_lower for anc in VALUABLE_ANCHORS)
+
+            # Discard boilerplate lines only if the line carries no valuable compliance data
+            if not is_valuable and any(bp in line_lower for bp in BOILERPLATE_SUBSTRINGS):
+                continue
+                
             if not is_valuable and len(clean_lines) >= 15:
                 # If we already have enough lines, discard low-relevance noise
                 continue
@@ -203,12 +204,7 @@ class PANBeeper:
         masked = RE_PAN.sub("[PAN_TOKEN]", masked)
         masked = RE_MASKED_PAN.sub("[PAN_TOKEN]", masked)
 
-        # Replace Phone, Email, Bank/IFSC
-        masked = RE_PHONE.sub("[PHONE_REDACTED]", masked)
-        masked = RE_EMAIL.sub("[EMAIL_REDACTED]", masked)
-        masked = RE_IFSC.sub("[IFSC_REDACTED]", masked)
-        masked = RE_BANK_ACC.sub("[BANK_ACC_REDACTED]", masked)
-
+        # Strictly redact only PAN and GSTIN and nothing else
         return masked
 
     @classmethod
@@ -216,8 +212,7 @@ class PANBeeper:
         """
         PRE-FLIGHT LEAK GUARD:
         Strictly scans text before any network transmission.
-        Raises SensitiveDataLeakageError if ANY unmasked PAN, GSTIN,
-        phone, or email pattern is found.
+        Raises SensitiveDataLeakageError if ANY unmasked PAN or GSTIN pattern is found.
         """
         # 1. Check for unmasked 15-char GSTIN
         gst_match = RE_GSTIN.search(text)
@@ -235,15 +230,5 @@ class PANBeeper:
                 raise SensitiveDataLeakageError(
                     f"PRE-FLIGHT SECURITY VIOLATION: Unmasked PAN detected: {p[:3]}***"
                 )
-
-        # 3. Check for unmasked Indian mobile numbers
-        phone_match = RE_PHONE.search(text)
-        if phone_match:
-            raise SensitiveDataLeakageError("PRE-FLIGHT SECURITY VIOLATION: Unmasked phone number detected.")
-
-        # 4. Check for unmasked Email addresses
-        email_match = RE_EMAIL.search(text)
-        if email_match:
-            raise SensitiveDataLeakageError("PRE-FLIGHT SECURITY VIOLATION: Unmasked email address detected.")
 
         return True

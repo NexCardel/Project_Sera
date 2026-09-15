@@ -101,7 +101,7 @@ def sanitize_visual_name(raw_name: str) -> str:
 
     # 5. Strip trailing ellipsis (including multiple dots like '......', '...', and Unicode '…')
     clean = re.sub(r"[\u2026\.]+$", "", clean)
-    clean = re.sub(r"\s*[\u2026\.]+\s*", " ", clean)
+    clean = re.sub(r"\s*(?:\u2026|\.{2,})\s*", " ", clean)
 
     # 6. Keep only valid name characters
     clean = re.sub(r"[^A-Za-z\s.'-]", " ", clean)

@@ -100,6 +100,8 @@ class VSDCRouter:
         self.last_screen_hash: Optional[int] = None
         self.last_logged_name: Optional[str] = None
         self.last_logged_pan: Optional[str] = None
+        self.burst_ticks_remaining: int = 0
+        self._cached_address_elements: Dict[int, Any] = {}
 
     def notify_activity(self, event_type: str, title: str, subtitle: str = ""):
         """Emits real-time visual indicator event (route, identity, capture, flush)."""
@@ -152,9 +154,22 @@ class VSDCRouter:
     def extract_browser_url(self, hwnd: int) -> Optional[str]:
         """
         Reads the active browser address bar URL in < 0.5ms via UIAutomationCore.
+        Uses per-HWND UIA address bar element caching for sub-0.2ms retrieval.
         """
         if not self._uia or not hwnd:
             return None
+
+        # Fast-path: Check cached address bar element for this hwnd (< 0.2ms)
+        cached = self._cached_address_elements.get(hwnd)
+        if cached:
+            edit, val_obj = cached
+            try:
+                url_val = val_obj.CurrentValue
+                if url_val and ("." in url_val or "/" in url_val):
+                    return url_val
+            except Exception:
+                # Element is stale or invalidated (e.g. navigation or tab closed)
+                self._cached_address_elements.pop(hwnd, None)
 
         try:
             element = self._uia.ElementFromHandle(hwnd)
@@ -184,6 +199,9 @@ class VSDCRouter:
                             val_obj = val_pattern.QueryInterface(self._uia_client.IUIAutomationValuePattern)
                             url_val = val_obj.CurrentValue
                             if url_val and ("." in url_val or "/" in url_val):
+                                if len(self._cached_address_elements) > 20:
+                                    self._cached_address_elements.clear()
+                                self._cached_address_elements[hwnd] = (edit, val_obj)
                                 return url_val
                 except Exception:
                     continue
@@ -240,6 +258,7 @@ class VSDCRouter:
             self.route_captured = False
             self.route_poll_count = 0
             self.last_screen_hash = None
+            self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
 
         if is_new_window:
             self.last_hwnd = hwnd
@@ -260,9 +279,7 @@ class VSDCRouter:
         if not is_new_url and (self.route_captured or self.has_flushed_current_route):
             return None
 
-        # Cap polling attempts on the same route if nothing has rendered/changed
-        if not is_new_url and self.route_poll_count >= 15:
-            return None
+        # Route evaluation tick
 
         self.route_poll_count += 1
 
@@ -300,8 +317,12 @@ class VSDCRouter:
         view filed returns, e-verify workflows, and terminal submission pages.
         """
         # Handle session boundaries (Login / Logout / Timeout)
-        if matched_crosshair.is_session_boundary:
+        if matched_crosshair.is_session_boundary or matched_crosshair.id == "itr_logout":
+            ident = self.assembler.client_name or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
             flushed = self.assembler.seal_and_flush()
+            if getattr(self.assembler, "_session_started", False):
+                self.assembler.logger.end_session(reason="Income Tax Logout", summary_items=list(self.assembler.captures.values()))
+                self.assembler._session_started = False
             self.assembler.reset()
             self.has_flushed_current_route = True
             self.last_logged_name = None
@@ -309,22 +330,24 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
-            if flushed and flushed.get("pan"):
-                self.notify_activity("flush", "Session Concluded", f"Archived {flushed.get('pan')} • {flushed.get('filing_type', 'Activity')}")
+            self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
             return flushed
 
         # Handle login screen boundary: returning to login from an active session terminates the prior session
-        if (matched_crosshair.id == "itr_login_auth" or "/login" in url.lower()) and prior_crosshair not in (None, "itr_login_auth"):
-            if self.assembler.client_pan or self.assembler.captures or self.assembler.current_filing_type:
+        if (matched_crosshair.id == "itr_login_auth" or "/login" in url.lower()) and prior_crosshair != "itr_login_auth":
+            if self.assembler.client_pan or self.assembler.captures or self.assembler.current_filing_type or self.last_logged_pan:
+                ident = self.assembler.client_name or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
                 flushed = self.assembler.seal_and_flush()
+                if getattr(self.assembler, "_session_started", False):
+                    self.assembler.logger.end_session(reason="Income Tax Session Concluded (Redirected to Login)", summary_items=list(self.assembler.captures.values()))
+                    self.assembler._session_started = False
                 self.assembler.reset()
                 self.last_logged_name = None
                 self.last_logged_pan = None
                 self.last_screen_hash = None
                 self.route_poll_count = 0
-                if flushed and flushed.get("pan"):
-                    self.notify_activity("flush", "Prior Session Concluded", f"{flushed.get('pan')}")
-                    return flushed
+                self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
+                return flushed
 
         # Hub / Dashboard boundary: clear active workflow selection when returning to landing/dashboard
         if matched_crosshair.id == "itr_landing":
@@ -345,6 +368,9 @@ class VSDCRouter:
             curr_hash = hash(thumb)
             if not is_new_url and self.last_screen_hash == curr_hash and self.route_poll_count > 3:
                 return None
+            if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
+                # Viewport scrolled or content changed — reset poll count to evaluate new view
+                self.route_poll_count = 0
             self.last_screen_hash = curr_hash
         except Exception:
             pass
@@ -563,7 +589,11 @@ class VSDCRouter:
         """
         # Handle GST session boundaries (Logout / Timeout)
         if matched_crosshair.is_session_boundary or matched_crosshair.id == "gst_logout":
+            ident = self.assembler.client_name or self.assembler.gstin or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
             flushed = self.assembler.seal_and_flush()
+            if getattr(self.assembler, "_session_started", False):
+                self.assembler.logger.end_session(reason="GST Logout", summary_items=list(self.assembler.captures.values()))
+                self.assembler._session_started = False
             self.assembler.reset()
             self.has_flushed_current_route = True
             self.last_logged_name = None
@@ -571,24 +601,24 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
-            if flushed and (flushed.get("gstin") or flushed.get("pan")):
-                ident = flushed.get("gstin") or flushed.get("pan")
-                self.notify_activity("flush", "GST Session Concluded", f"Archived {ident} • {flushed.get('filing_type', 'Activity')}")
+            self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
             return flushed
 
         # Returning to GST login screen from an active session terminates prior session
-        if ("login" in url.lower() or matched_crosshair.id == "gst_login") and prior_crosshair not in (None, "gst_login"):
-            if self.assembler.gstin or self.assembler.client_pan or self.assembler.captures:
+        if ("login" in url.lower() or matched_crosshair.id == "gst_login") and prior_crosshair != "gst_login":
+            if self.assembler.gstin or self.assembler.client_pan or self.assembler.captures or self.last_logged_pan:
+                ident = self.assembler.client_name or self.assembler.gstin or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
                 flushed = self.assembler.seal_and_flush()
+                if getattr(self.assembler, "_session_started", False):
+                    self.assembler.logger.end_session(reason="GST Logout (Redirected to Login)", summary_items=list(self.assembler.captures.values()))
+                    self.assembler._session_started = False
                 self.assembler.reset()
                 self.last_logged_name = None
                 self.last_logged_pan = None
                 self.last_screen_hash = None
                 self.route_poll_count = 0
-                if flushed and (flushed.get("gstin") or flushed.get("pan")):
-                    ident = flushed.get("gstin") or flushed.get("pan")
-                    self.notify_activity("flush", "Prior GST Session Concluded", f"{ident}")
-                    return flushed
+                self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
+                return flushed
 
         # Clear active workflow selection when returning to welcome/dashboard
         if matched_crosshair.id in ("gst_welcome_calendar", "gst_returns_dashboard"):
@@ -609,6 +639,9 @@ class VSDCRouter:
             curr_hash = hash(thumb)
             if not is_new_url and self.last_screen_hash == curr_hash and self.route_poll_count > 3:
                 return None
+            if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
+                # Viewport scrolled or content changed — reset poll count to evaluate new view
+                self.route_poll_count = 0
             self.last_screen_hash = curr_hash
         except Exception:
             pass
@@ -618,9 +651,16 @@ class VSDCRouter:
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
-        # Check if page is currently in an asynchronous loading state
+        # Check if page is currently in an asynchronous loading state.
+        # Bypass for gst_form_details if statutory metadata table is already rendered behind loading overlay!
         if is_page_loading(full_text):
-            return None
+            if matched_crosshair.id == "gst_form_details":
+                quick_meta = extract_gst_form_table(full_text, lines=lines, url=url)
+                if not (quick_meta.get("gstin") or quick_meta.get("status") or quick_meta.get("tax_period") or quick_meta.get("fy") or self.assembler.gstin):
+                    return None
+                # Statutory table already rendered behind loading overlay! Proceed with immediate capture!
+            else:
+                return None
 
         # -------------------------------------------------------------
         # CROSSHAIR CALIBRATION: gst_welcome_calendar (fowelcome)
@@ -671,8 +711,8 @@ class VSDCRouter:
                 sub = f"GSTIN: {authoritative_gstin}{pref_suffix}" if authoritative_gstin else f"Portal: GST Portal{pref_suffix}"
                 print(f"[VSDC Router] GST Assessee identified: {authoritative_name} (GSTIN: {authoritative_gstin}, Pref: {authoritative_pref})")
                 self.notify_activity(
-                    "identity",
-                    f"Assessee: {authoritative_name}",
+                    "start",
+                    f"Client: {authoritative_name}",
                     sub,
                 )
             elif authoritative_gstin and authoritative_gstin != self.last_logged_pan:
@@ -681,7 +721,7 @@ class VSDCRouter:
                 name_part = f"{authoritative_name} • " if authoritative_name else ""
                 print(f"[VSDC Router] GSTIN identified: {authoritative_gstin}")
                 self.notify_activity(
-                    "identity",
+                    "start",
                     f"GSTIN: {authoritative_gstin}",
                     f"{name_part}Portal: GST Portal{pref_suffix}",
                 )
@@ -738,30 +778,7 @@ class VSDCRouter:
             if not is_valid_gst_status(meta.get("status")):
                 meta["status"] = None
 
-            # Privacy-First PAN Beeper & Gemini Flash structured enrichment
-            if not meta.get("legal_name") or not meta.get("tax_period") or not meta.get("status"):
-                try:
-                    beeper_res = PANBeeper.anonymize_and_slim(lines, known_pan=pan, known_gstin=gstin)
-                    gem_res = parse_compliance_with_gemini(beeper_res["slimmed_masked_text"])
-                    if gem_res:
-                        if gem_res.get("legal_name") and not meta.get("legal_name"):
-                            meta["legal_name"] = gem_res["legal_name"]
-                        if gem_res.get("trade_name") and not meta.get("trade_name"):
-                            meta["trade_name"] = gem_res["trade_name"]
-                        if gem_res.get("form_type") and not meta.get("form_type"):
-                            meta["form_type"] = gem_res["form_type"]
-                        if gem_res.get("fy") and not meta.get("fy"):
-                            meta["fy"] = gem_res["fy"]
-                        if gem_res.get("tax_period") and is_valid_gst_tax_period(gem_res["tax_period"]):
-                            meta["tax_period"] = gem_res["tax_period"]
-                        if gem_res.get("period_label"):
-                            meta["period_label"] = gem_res["period_label"]
-                        if gem_res.get("status") and is_valid_gst_status(gem_res["status"]):
-                            meta["status"] = gem_res["status"]
-                        if gem_res.get("due_date") and not meta.get("due_date"):
-                            meta["due_date"] = gem_res["due_date"]
-                except Exception as e:
-                    print(f"[VSDC Router] Beeper / Gemini notice: {e}")
+            # Gemini API call removed to prevent synchronous thread blocking.
 
             legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
             trade_name = meta.get("trade_name")
@@ -776,6 +793,7 @@ class VSDCRouter:
             raw_status = meta.get("status") or extract_gst_status(full_text)
             status = raw_status if is_valid_gst_status(raw_status) else None
 
+            pref = extract_gst_filing_preference(full_text)
             if legal_name or trade_name or gstin or pan:
                 flushed_prior = self.assembler.update_identity(
                     name=legal_name,
@@ -783,6 +801,7 @@ class VSDCRouter:
                     gstin=gstin,
                     pan=pan,
                     portal="GST Portal",
+                    filing_preference=pref,
                     is_authoritative=bool(meta.get("legal_name")),
                 )
                 if flushed_prior:
@@ -852,6 +871,7 @@ class VSDCRouter:
             if dataset_payload:
                 self.route_captured = True
                 self.has_flushed_current_route = True
+                self.burst_ticks_remaining = 0
                 return dataset_payload
 
             return None
@@ -964,7 +984,7 @@ class VSDCRouter:
             assessee = self.assembler.client_name or self.assembler.gstin or ""
             trade = f" ({self.assembler.trade_name})" if self.assembler.trade_name else ""
             name_part = f"{assessee}{trade} • " if assessee else ""
-            self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}ARN: {arn}")
+            self.notify_activity("submit", f"{form_lbl} Filed Successfully", f"{name_part}ARN: {arn}")
 
             if is_sub_crosshair:
                 # Seal and flush filing payload!
@@ -974,7 +994,6 @@ class VSDCRouter:
                     self.assembler.clear_workflow_selection()
                     flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
                     print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
-                    self.notify_activity("flush", "GST Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
                 return master_payload
 
         # Dataset Completion Principle:
