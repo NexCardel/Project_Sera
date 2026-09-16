@@ -115,6 +115,14 @@ class VSDCRouter:
 
     def _init_uia(self):
         try:
+            import sys
+            import os
+            if getattr(sys, "frozen", False):
+                import tempfile
+                gen_dir = os.path.join(tempfile.gettempdir(), "comtypes_gen")
+                os.makedirs(gen_dir, exist_ok=True)
+                comtypes.client.gen_dir = gen_dir
+
             self._uia_client = comtypes.client.GetModule("UIAutomationCore.dll")
             self._uia = comtypes.client.CreateObject(
                 self._uia_client.CUIAutomation,

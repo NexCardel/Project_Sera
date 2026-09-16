@@ -365,6 +365,10 @@ class SeraApp:
 
         # Start VSDC (Visual Sera DOM Crosshair) background worker & HUD Indicator
         try:
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                if sys._MEIPASS not in sys.path:
+                    sys.path.insert(0, sys._MEIPASS)
+
             from core.vsdc import VSDCWorker
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
@@ -373,8 +377,18 @@ class SeraApp:
             self.app.aboutToQuit.connect(self.vsdc_worker.stop)
             if self.db.get_setting("vsdc_enabled", "1") == "1":
                 self.vsdc_worker.start()
+                print("⚡ [main] VSDC Worker started successfully.")
         except Exception as vsdc_exc:
-            print(f"⚠️ [main] VSDC Worker initialization warning: {vsdc_exc}")
+            import traceback
+            err_msg = traceback.format_exc()
+            print(f"⚠️ [main] VSDC Worker initialization warning: {vsdc_exc}\n{err_msg}")
+            try:
+                log_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
+                os.makedirs(log_dir, exist_ok=True)
+                with open(os.path.join(log_dir, "vsdc_startup_error.log"), "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now()}] {err_msg}\n")
+            except Exception:
+                pass
 
         # Heavy historical repair/report work is intentionally deferred until
         # after the main window and extension listener are available.
