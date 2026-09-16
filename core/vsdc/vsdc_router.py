@@ -102,6 +102,7 @@ class VSDCRouter:
         self.last_logged_name: Optional[str] = None
         self.last_logged_pan: Optional[str] = None
         self.burst_ticks_remaining: int = 0
+        self.was_page_loading: bool = False
         self._cached_address_elements: Dict[int, Any] = {}
 
     def notify_activity(self, event_type: str, title: str, subtitle: str = ""):
@@ -259,6 +260,7 @@ class VSDCRouter:
             self.route_captured = False
             self.route_poll_count = 0
             self.last_screen_hash = None
+            self.was_page_loading = False
             self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
 
         if is_new_window:
@@ -387,8 +389,12 @@ class VSDCRouter:
             content_crop = img.crop((0, int(h * 0.15), w, h)) if h > 100 else img
             thumb = content_crop.resize((32, 32)).tobytes()
             curr_hash = hash(thumb)
-            if not is_new_url and self.last_screen_hash == curr_hash and self.route_poll_count > 3:
-                return None
+            if not is_new_url and self.last_screen_hash == curr_hash:
+                if self.route_captured or self.has_flushed_current_route:
+                    return None
+                # If page was loading or route data not yet captured, allow continued polling
+                if not self.was_page_loading and self.route_poll_count > 6:
+                    return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
                 self.route_poll_count = 0
@@ -399,6 +405,14 @@ class VSDCRouter:
         ocr_res = self.ocr.scan_image(img, region_type=matched_crosshair.target_crop)
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
+
+        # Loading State Transition: If the page was previously in an async loading state
+        # and has now completed loading, re-trigger a micro-burst so rendered data is captured instantly!
+        if self.was_page_loading and not is_page_loading(full_text):
+            self.was_page_loading = False
+            self.burst_ticks_remaining = 8
+            self.route_poll_count = 0
+            print(f"[VSDC Router] ITR Page finished loading -> triggered burst capture!")
 
         # Process extracted fields based on crosshair type
         pan = extract_pan(full_text)
@@ -533,6 +547,7 @@ class VSDCRouter:
 
         # Check if page is currently in an asynchronous loading state
         if is_page_loading(full_text):
+            self.was_page_loading = True
             return None
 
         # Dedicated parser for Historical Filed Returns (itr_view_filed_returns)
@@ -542,6 +557,7 @@ class VSDCRouter:
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 if is_page_loading(f_text):
+                    self.was_page_loading = True
                     return None
                 card = extract_view_filed_returns_card(f_text)
                 if card:
@@ -673,8 +689,12 @@ class VSDCRouter:
             content_crop = img.crop((0, int(h * 0.15), w, h)) if h > 100 else img
             thumb = content_crop.resize((32, 32)).tobytes()
             curr_hash = hash(thumb)
-            if not is_new_url and self.last_screen_hash == curr_hash and self.route_poll_count > 3:
-                return None
+            if not is_new_url and self.last_screen_hash == curr_hash:
+                if self.route_captured or self.has_flushed_current_route:
+                    return None
+                # If page was loading or route data not yet captured, allow continued polling
+                if not self.was_page_loading and self.route_poll_count > 6:
+                    return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
                 self.route_poll_count = 0
@@ -687,9 +707,18 @@ class VSDCRouter:
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
+        # Loading State Transition: If the page was previously in an async loading state
+        # and has now completed loading, re-trigger a micro-burst so rendered data is captured instantly!
+        if self.was_page_loading and not is_page_loading(full_text):
+            self.was_page_loading = False
+            self.burst_ticks_remaining = 8
+            self.route_poll_count = 0
+            print(f"[VSDC Router] GST Page finished loading -> triggered burst capture!")
+
         # Check if page is currently in an asynchronous loading state.
         # Bypass for gst_form_details if statutory metadata table is already rendered behind loading overlay!
         if is_page_loading(full_text):
+            self.was_page_loading = True
             if matched_crosshair.id == "gst_form_details":
                 quick_meta = extract_gst_form_table(full_text, lines=lines, url=url)
                 if not (quick_meta.get("gstin") or quick_meta.get("status") or quick_meta.get("tax_period") or quick_meta.get("fy") or self.assembler.gstin):
@@ -857,6 +886,7 @@ class VSDCRouter:
 
             if not has_period:
                 # Modal dialog is open or table is still loading
+                self.was_page_loading = True
                 return None
 
             effective_status = status or ("Initiated" if self.route_poll_count >= 5 else None)
