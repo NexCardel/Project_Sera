@@ -13,7 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-STATS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "gemini_token_stats.json"
+def get_stats_file() -> Path:
+    """Returns a guaranteed writable path for gemini_token_stats.json in the user profile."""
+    stats_dir = Path.home() / "AmanAssociates_Sera" / "data"
+    try:
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        return stats_dir / "gemini_token_stats.json"
+    except Exception:
+        import tempfile
+        t_dir = Path(tempfile.gettempdir()) / "AmanAssociates_Sera" / "data"
+        t_dir.mkdir(parents=True, exist_ok=True)
+        return t_dir / "gemini_token_stats.json"
+
+
+STATS_FILE = get_stats_file()
 FREE_TIER_DAILY_LIMIT = 1500  # Google AI Studio Free Tier RPD limit
 
 _lock = threading.Lock()

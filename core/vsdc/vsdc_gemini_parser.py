@@ -18,7 +18,23 @@ from typing import Dict, Any, Optional
 from .vsdc_token_tracker import record_gemini_call
 from .vsdc_beeper import PANBeeper
 
-SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.ini"
+def get_settings_file_path() -> Path:
+    """Resolves settings.ini preferring user profile, then frozen MEIPASS, then dev root."""
+    user_settings = Path.home() / "AmanAssociates_Sera" / "settings.ini"
+    if user_settings.exists():
+        return user_settings
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass_settings = Path(sys._MEIPASS) / "settings.ini"
+        if meipass_settings.exists():
+            return meipass_settings
+    app_root = Path(__file__).resolve().parent.parent.parent
+    dev_settings = app_root / "settings.ini"
+    if dev_settings.exists():
+        return dev_settings
+    return user_settings
+
+
+SETTINGS_FILE = get_settings_file_path()
  
 MODELS_CASCADE = [
     "gemini-flash-lite-latest",
@@ -119,7 +135,12 @@ def save_gemini_config(
         config.set("AppSettings", "gemini_primary_model", primary_model)
         config.set("AppSettings", "gemini_timeout", str(timeout))
 
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        target_file = SETTINGS_FILE
+        if getattr(sys, "frozen", False) or "Program Files" in str(target_file):
+            target_file = Path.home() / "AmanAssociates_Sera" / "settings.ini"
+
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_file, "w", encoding="utf-8") as f:
             config.write(f)
         return True
     except Exception as e:

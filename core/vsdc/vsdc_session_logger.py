@@ -45,11 +45,16 @@ class VSDCSessionLogger:
         if output_dir:
             self.output_dir = Path(output_dir)
         else:
-            # Default to APP_ROOT / Vsdc_Captures
-            app_root = Path(__file__).resolve().parent.parent.parent
-            self.output_dir = app_root / "Vsdc_Captures"
+            # Primary: User profile ~/AmanAssociates_Sera/Vsdc_Captures (guaranteed writable)
+            self.output_dir = Path.home() / "AmanAssociates_Sera" / "Vsdc_Captures"
 
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Fallback to temp directory if user directory creation fails
+            import tempfile
+            self.output_dir = Path(tempfile.gettempdir()) / "Vsdc_Captures"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
         self.current_session_id: Optional[str] = None
