@@ -139,18 +139,108 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
             ltt_status = "Submitted & E-verified"
 
     # Assign color palette matching Google Material / Sera design
-    if ltt_status == "Submitted & E-verified":
-        color = "#39FF14"  # Neon / Emerald Green
-    elif ltt_status == "Submitted (e-verification pending)":
-        color = "#F1E05A"  # Amber / Yellow
-    elif ltt_status == "Other EVC":
-        color = "#58A6FF"  # Soft Blue
-    elif ltt_status == "Option Expired (NA)":
-        color = "#8B949E"  # Muted Gray
-    else:
-        color = "#FF6B6B"  # Soft Red / Not submitted
+    theme = _get_status_theme(ltt_status)
+    return ltt_status, theme["fg"]
 
-    return ltt_status, color
+
+STATUS_THEMES = {
+    "Submitted & E-verified": {
+        "fg": "#39FF14",
+        "bg": "#11281E",
+        "border": "#2E9B5F",
+        "icon": "mdi.check-circle"
+    },
+    "Submitted (e-verification pending)": {
+        "fg": "#F1E05A",
+        "bg": "#2D2612",
+        "border": "#997B22",
+        "icon": "mdi.clock-alert"
+    },
+    "Not submitted": {
+        "fg": "#FF6B6B",
+        "bg": "#2D1616",
+        "border": "#882222",
+        "icon": "mdi.alert-circle"
+    },
+    "Other EVC": {
+        "fg": "#58A6FF",
+        "bg": "#122338",
+        "border": "#1F6FEB",
+        "icon": "mdi.shield-key"
+    },
+    "Option Expired (NA)": {
+        "fg": "#8B949E",
+        "bg": "#1C2128",
+        "border": "#30363D",
+        "icon": "mdi.close-circle"
+    },
+    "Not Applicable (NA)": {
+        "fg": "#8B949E",
+        "bg": "#1C2128",
+        "border": "#30363D",
+        "icon": "mdi.minus-circle"
+    },
+}
+
+
+def _get_status_theme(status_text: str) -> dict:
+    return STATUS_THEMES.get(status_text, {
+        "fg": "#FF6B6B",
+        "bg": "#2D1616",
+        "border": "#882222",
+        "icon": "mdi.alert-circle"
+    })
+
+
+def _create_submission_status_badge(status_text: str, tooltip: str = "") -> QWidget:
+    """
+    Creates a styled, Google Material icon-equipped pill badge for a submission status.
+    """
+    theme = _get_status_theme(status_text)
+    fg = theme["fg"]
+    bg = theme["bg"]
+    border = theme["border"]
+    icon_name = theme["icon"]
+
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(4, 2, 4, 2)
+    layout.setAlignment(Qt.AlignCenter)
+
+    pill = QWidget()
+    pill.setStyleSheet(f"""
+        QWidget {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-radius: 4px;
+        }}
+    """)
+    pill_lay = QHBoxLayout(pill)
+    pill_lay.setContentsMargins(8, 3, 8, 3)
+    pill_lay.setSpacing(6)
+    pill_lay.setAlignment(Qt.AlignCenter)
+
+    if qta is not None:
+        try:
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(qta.icon(icon_name, color=fg).pixmap(13, 13))
+            icon_lbl.setStyleSheet("background: transparent; border: none; padding: 0;")
+            pill_lay.addWidget(icon_lbl)
+        except Exception:
+            pass
+
+    txt_lbl = QLabel(status_text)
+    txt_lbl.setFont(QFont("Segoe UI", 9, QFont.Bold))
+    txt_lbl.setStyleSheet(f"color: {fg}; background: transparent; border: none; padding: 0;")
+    pill_lay.addWidget(txt_lbl)
+
+    if tooltip:
+        container.setToolTip(tooltip)
+        pill.setToolTip(tooltip)
+        txt_lbl.setToolTip(tooltip)
+
+    layout.addWidget(pill)
+    return container
 
 
 def _safe_qta_icon(icon_name, color="#FFFFFF"):
@@ -630,6 +720,8 @@ class PayloadInspectorDialog(QDialog):
             s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             s_item.setForeground(QColor(s_color))
             hist_table.setItem(idx, 2, s_item)
+            hist_badge = _create_submission_status_badge(s_text, tooltip=f"Submission Status: {s_text}")
+            hist_table.setCellWidget(idx, 2, hist_badge)
 
             port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
             port_item.setForeground(QColor("#E6EDF3"))
@@ -949,7 +1041,6 @@ class TrackerDumpWindow(QWidget):
                 selection-color: #FFFFFF;
             }
             QTableWidget::item {
-                color: #F0F6FC;
                 padding: 8px 10px;
                 border-bottom: 1px solid #222222;
             }
@@ -1122,6 +1213,7 @@ class TrackerDumpWindow(QWidget):
         # Data Table
         self.table = QTableWidget()
         self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(36)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
@@ -1191,7 +1283,7 @@ class TrackerDumpWindow(QWidget):
                 (80, 0.0),   # 1. Client ID
                 (110, 1.4),  # 2. Portal / Services
                 (120, 1.8),  # 3. Filings & History
-                (140, 1.8),  # 4. Submission Status
+                (180, 2.0),  # 4. Submission Status
                 (165, 1.8),  # 5. Actions
                 (115, 1.1),  # 6. Last Updated
                 (110, 1.1),  # 7. Capture Method
@@ -1202,7 +1294,7 @@ class TrackerDumpWindow(QWidget):
                 (70, 0.0),   # 1. ID
                 (110, 1.4),  # 2. Service / Portal
                 (110, 1.4),  # 3. Period
-                (140, 1.8),  # 4. Submission Status
+                (180, 2.0),  # 4. Submission Status
                 (165, 1.8),  # 5. Actions
                 (115, 1.1),  # 6. Timestamp
                 (110, 1.1),  # 7. Capture Method
@@ -1568,7 +1660,10 @@ class TrackerDumpWindow(QWidget):
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
-            status_item.setToolTip("\n".join(tooltip_lines))
+            full_tooltip = "\n".join(tooltip_lines)
+            status_item.setToolTip(full_tooltip)
+            status_badge = _create_submission_status_badge(status_text, tooltip=full_tooltip)
+            self.table.setCellWidget(row_idx, 4, status_badge)
 
             # 5. Method
             method_item = _get_item(7, font=QFont("Segoe UI", 9, QFont.Bold), align=Qt.AlignCenter, color="#4CF9B7")
@@ -1675,7 +1770,10 @@ class TrackerDumpWindow(QWidget):
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
-            status_item.setToolTip("\n".join(tooltip_lines))
+            full_tooltip = "\n".join(tooltip_lines)
+            status_item.setToolTip(full_tooltip)
+            status_badge = _create_submission_status_badge(status_text, tooltip=full_tooltip)
+            self.table.setCellWidget(row_idx, 4, status_badge)
 
             # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")
