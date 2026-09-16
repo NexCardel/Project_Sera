@@ -63,7 +63,7 @@ ITR_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
         id="itr_view_filed_returns",
         protocol="Income Tax",
-        pattern=re.compile(r"(?:itr.?status|view.?filed.?returns|fo-view-filed-returns|viewreturns|view-returns|filed-returns|filedreturns)", re.IGNORECASE),
+        pattern=re.compile(r"(?:itr.?status|view.?filed.?returns|fo-view-filed-returns|viewreturns|view-returns|filed-returns|filedreturns|dashboard/returns?|return.?status)", re.IGNORECASE),
         target_crop="center_card",
         description="Historical filed returns view (15-digit Ack recovery)",
         host_pattern=ITR_HOST_PATTERN,

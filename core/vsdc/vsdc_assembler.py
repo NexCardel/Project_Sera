@@ -512,7 +512,9 @@ class VisualSessionAssembler:
             self.gstin = gstin.strip().upper()
 
         if filing_preference:
-            self.filing_preference = filing_preference.strip().title()
+            norm_pref = filing_preference.strip().title()
+            if norm_pref in ("Quarterly", "Monthly"):
+                self.filing_preference = norm_pref
 
         if flushed_prior and self._session_started:
             self.logger.end_session(reason="PAN Context Switch", summary_items=list(self.captures.values()))

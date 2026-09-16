@@ -284,6 +284,95 @@ class TestVSDCNameParser(unittest.TestCase):
         # 5. Identical names do not qualify as 'better'
         self.assertFalse(is_better_taxpayer_name("RABINDRANATH SAGORE", "RABINDRANATH SAGORE"))
 
+    def test_boilerplate_noise_and_phrase_rejection(self):
+        # Header/footer navigational text must be categorically rejected
+        self.assertFalse(is_valid_name("IWEBSITE POLICIES IACCESSIBILITY STATEMENT"))
+        self.assertFalse(is_valid_name("WEBSITE POLICIES"))
+        self.assertFalse(is_valid_name("ACCESSIBILITY STATEMENT"))
+        self.assertFalse(is_valid_name("LO X EXTRACTING CLIENT NAME"))
+        self.assertFalse(is_valid_name("HYPERLINK POLICY"))
+        self.assertFalse(is_valid_name("TERMS OF USE"))
+        self.assertFalse(is_valid_name("DISCLAIMER"))
+
+        # In a list of OCR lines, boilerplate must never be extracted as name
+        lines = [
+            "e-Filing Anywhere Anytime",
+            "WEBSITE POLICIES | ACCESSIBILITY STATEMENT | HELP | CONTACT US",
+            "Dashboard > File Income Tax Return",
+            "Assessment Year 2026-27",
+            "Select Mode of Filing"
+        ]
+        self.assertIsNone(extract_name_from_ocr_lines(lines))
+
+    def test_profile_labels_various_formats(self):
+        # Format 1: "Name (as per PAN)"
+        lines1 = [
+            "Personal Details",
+            "Name (as per PAN)",
+            "WASIL AMAN MANDAL",
+            "PAN : GZEPM6367M"
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines1), "WASIL AMAN MANDAL")
+
+        # Format 2: "Name as per PAN : WASIL AMAN MANDAL"
+        lines2 = [
+            "Personal Details",
+            "Name as per PAN : WASIL AMAN MANDAL",
+            "PAN : GZEPM6367M"
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines2), "WASIL AMAN MANDAL")
+
+        # Format 3: "Taxpayer's Name"
+        lines3 = [
+            "Taxpayer's Name : WASIL AMAN MANDAL",
+            "PAN : GZEPM6367M"
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines3), "WASIL AMAN MANDAL")
+
+    def test_profile_name_authoritative_overwrites_noise(self):
+        # Even if a noise candidate had 4 words, a valid clean name must replace it
+        self.assertTrue(is_better_taxpayer_name("WASIL AMAN MANDAL", "IWEBSITE POLICIES IACCESSIBILITY STATEMENT"))
+        self.assertTrue(is_better_taxpayer_name("WASIL MANDAL", "IWEBSITE POLICIES IACCESSIBILITY STATEMENT"))
+        self.assertTrue(is_better_taxpayer_name("MOHD MARUF GAZI", "LO X EXTRACTING CLIENT NAME"))
+
+    def test_header_pill_name_extraction_formats(self):
+        """
+        Verifies header pill name extraction across all real-world ITR portal formats:
+        - Name with bracketed PAN: RAMESH SHARMA (ABCPE1234F)
+        - Name with unbracketed PAN: PINKI ROY AHJPR0846B
+        - Name with dash PAN: MD SAYID MOLLA - AHJPR0846B
+        - Name adjacent to PAN line: line 1 = PINKI ROY, line 2 = AHJPR0846B
+        - Name with prefix noise in header: e-Filing Income Tax Department PINKI ROY (AHJPR0846B)
+        - Name with role tag and dropdown: AMEJUDDIN SEKH v Individual
+        """
+        # Format 1: Bracketed PAN
+        lines1 = ["e-Filing Income Tax Department", "Notifications Help", "RAMESH SHARMA (ABCPE1234F)", "Individual"]
+        self.assertEqual(extract_name_from_ocr_lines(lines1), "RAMESH SHARMA")
+
+        # Format 2: Unbracketed PAN
+        lines2 = ["Income Tax Department Government of India", "Dashboard e-File Authorised Partners", "PINKI ROY AHJPR0846B", "Taxpayer"]
+        self.assertEqual(extract_name_from_ocr_lines(lines2), "PINKI ROY")
+
+        # Format 3: Hyphenated PAN
+        lines3 = ["Notifications", "MD SAYID MOLLA - AHJPR0846B", "Individual"]
+        self.assertEqual(extract_name_from_ocr_lines(lines3), "MD SAYID MOLLA")
+
+        # Format 4: Role dropdown button
+        lines4 = ["e-Filing Anywhere Anytime", "AMEJUDDIN SEKH v Individual", "AHJPR0846B"]
+        self.assertEqual(extract_name_from_ocr_lines(lines4), "AMEJUDDIN SEKH")
+
+        # Format 5: Multi-line pill (name line followed by PAN line)
+        lines5 = ["Income Tax Department", "PINKI ROY", "AHJPR0846B"]
+        self.assertEqual(extract_name_from_ocr_lines(lines5), "PINKI ROY")
+
+        # Format 6: Header line with portal prefix words
+        lines6 = ["e-Filing Income Tax Department PINKI ROY (AHJPR0846B)"]
+        self.assertEqual(extract_name_from_ocr_lines(lines6), "PINKI ROY")
+
+        # Format 7: Trailing PAN fragment purge in is_better_taxpayer_name
+        self.assertTrue(is_better_taxpayer_name("PINKI ROY", "PINKI ROY AHJPR"))
+
 
 if __name__ == "__main__":
     unittest.main()
+

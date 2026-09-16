@@ -81,11 +81,11 @@ class VSDCHudPill(QWidget):
             "rgba(76, 249, 183, 0.35)",
         ),
         "flush": (
-            "mdi.logout-variant",
-            "#8B949E",
-            "SESSION END",
-            "rgba(139, 148, 158, 0.15)",
-            "rgba(139, 148, 158, 0.30)",
+            "mdi.cloud-check",
+            "#39FF14",
+            "FILED",
+            "rgba(57, 255, 20, 0.20)",
+            "rgba(57, 255, 20, 0.45)",
         ),
         "default": (
             "mdi.radar",

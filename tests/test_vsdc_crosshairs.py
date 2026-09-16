@@ -996,6 +996,174 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertIsNone(res6)
         self.assertEqual(mock_ocr.scan_image.call_count, calls_before, "OCR must be completely suppressed once captured")
 
+    def test_itr_navigation_no_premature_logout_and_authoritative_profile_capture(self):
+        """
+        Verifies that traversing ITR:
+        1. Login page (#/login)
+        2. Dashboard / File Income Tax Return (#/dashboard/fileIncomeTaxReturn)
+        3. Personal Information form (#/foreturns-ay26/fo-itr4-ay2026/personal_information)
+        emits zero 'Session Concluded' toasts and that the authoritative profile name
+        cleanly populates the assembler.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1200, 800), color="white")
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "e-Filing Portal - Google Chrome", "chrome.exe"))
+
+        # Step 1: Login auth page
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/login")
+        mock_ocr.scan_image.return_value = {
+            "text": "User ID : AHJPR0846B\nPlease confirm your Secure Access Message\nPassword :",
+            "lines": ["User ID : AHJPR0846B", "Please confirm your Secure Access Message", "Password :"]
+        }
+        router.evaluate_tick()
+        self.assertEqual(assembler.client_pan, "AHJPR0846B")
+
+        # Step 2: Dashboard landing page - has boilerplate navigation links
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/dashboard/fileIncomeTaxReturn")
+        mock_ocr.scan_image.return_value = {
+            "text": "e-Filing Anywhere Anytime\nWEBSITE POLICIES | ACCESSIBILITY STATEMENT\nFile Income Tax Return\nSelect Assessment Year",
+            "lines": [
+                "e-Filing Anywhere Anytime",
+                "WEBSITE POLICIES | ACCESSIBILITY STATEMENT",
+                "File Income Tax Return",
+                "Select Assessment Year"
+            ]
+        }
+        router.evaluate_tick()
+
+        # Check that NO 'Session Concluded' was emitted during this navigation
+        logout_events = [evt for evt in notified if evt[1] == "Session Concluded" or evt[0] == "logout"]
+        self.assertEqual(len(logout_events), 0, "No 'Session Concluded' should be emitted during forward navigation")
+
+        # Step 3: Personal Information page
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/personal_information")
+        mock_ocr.scan_image.return_value = {
+            "text": "Profile Details\nName (as per PAN)\nMD SAYID MOLLA\nDate of Birth\n15/08/1985\nAadhaar Number\nXXXX-XXXX-1234",
+            "lines": [
+                "Profile Details",
+                "Name (as per PAN)",
+                "MD SAYID MOLLA",
+                "Date of Birth",
+                "15/08/1985",
+                "Aadhaar Number",
+                "XXXX-XXXX-1234"
+            ]
+        }
+        router.evaluate_tick()
+
+        # Authoritative name must be recorded
+        self.assertEqual(assembler.client_name, "MD SAYID MOLLA")
+        self.assertEqual(assembler.client_pan, "AHJPR0846B")
+
+        # Still no premature logout event
+        logout_events = [evt for evt in notified if evt[1] == "Session Concluded" or evt[0] == "logout"]
+        self.assertEqual(len(logout_events), 0, "Zero 'Session Concluded' toasts emitted during active form journey")
+
+    def test_filing_preference_strictly_quarterly_or_monthly(self):
+        """
+        Verifies that filing_preference in VisualSessionAssembler and VSDCRouter is strictly
+        restricted to 'Quarterly' or 'Monthly' and rejects 'Regular', 'Regular / Non-QRMP', etc.
+        """
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        assembler = VisualSessionAssembler()
+        assembler.update_identity(pan="ABCDE1234F", filing_preference="Quarterly")
+        self.assertEqual(assembler.filing_preference, "Quarterly")
+
+        assembler.update_identity(pan="ABCDE1234F", filing_preference="Monthly")
+        self.assertEqual(assembler.filing_preference, "Monthly")
+
+        # Reject any other values (including legacy fallbacks)
+        assembler.update_identity(pan="ABCDE1234F", filing_preference="Regular")
+        self.assertEqual(assembler.filing_preference, "Monthly")  # Kept previous valid
+
+        assembler_clean = VisualSessionAssembler()
+        assembler_clean.update_identity(pan="ABCDE1234F", filing_preference="Regular / Non-QRMP")
+        self.assertIsNone(assembler_clean.filing_preference)
+
+    def test_itr_view_filed_returns_never_emits_session_concluded_and_captures_header_name(self):
+        """
+        Verifies that navigating from login/dashboard to View Filed Returns:
+        1. Never emits 'Session Concluded' or logout events upon entry.
+        2. Cleanly captures assessee name from the header pill even without brackets.
+        3. Captures the filed return card (ACK, AY, Form, Status) and emits clean capture/submit toast.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+
+        assembler = VisualSessionAssembler()
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=assembler,
+            on_activity=lambda evt, title, sub: notified.append((evt, title, sub)),
+        )
+
+        router.get_foreground_info = MagicMock(return_value=(12345, "e-Filing Home Page, Income Tax Department - Google Chrome", "chrome.exe"))
+
+        # Step 1: Login auth page seeds PAN
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/login")
+        mock_ocr.scan_image.return_value = {
+            "text": "User ID : AHJPR0846B\nPlease confirm your Secure Access Message\nPassword :",
+            "lines": ["User ID : AHJPR0846B", "Please confirm your Secure Access Message", "Password :"]
+        }
+        router.evaluate_tick()
+        self.assertEqual(assembler.client_pan, "AHJPR0846B")
+
+        # Step 2: Dashboard landing page
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/dashboard")
+        mock_ocr.scan_image.side_effect = [
+            # Center card scan
+            {"text": "e-Filing Anywhere Anytime\nFile Income Tax Return", "lines": ["e-Filing Anywhere Anytime", "File Income Tax Return"]},
+            # Header scan: Header has name and PAN pill without brackets
+            {"text": "e-Filing Income Tax Department PINKI ROY AHJPR0846B Taxpayer", "lines": ["e-Filing Income Tax Department", "PINKI ROY AHJPR0846B", "Taxpayer"]}
+        ]
+        router.evaluate_tick()
+        self.assertEqual(assembler.client_name, "PINKI ROY")
+
+        # Step 3: Entering View Filed Returns page
+        router.extract_browser_url = MagicMock(return_value="https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus")
+        mock_ocr.scan_image.side_effect = [
+            # Center card: return card details
+            {
+                "text": "View Filed Returns A.Y. 2026-27 ITR : ITR-1 Acknowledgement No : 123456789012345 Status : Successfully e-Verified",
+                "lines": [
+                    "View Filed Returns", "A.Y. 2026-27", "ITR : ITR-1",
+                    "Acknowledgement No : 123456789012345", "Status : Successfully e-Verified"
+                ]
+            },
+            # Header scan
+            {"text": "e-Filing Income Tax Department PINKI ROY AHJPR0846B", "lines": ["e-Filing Income Tax Department", "PINKI ROY AHJPR0846B"]}
+        ]
+        payload = router.evaluate_tick()
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["arn"], "123456789012345")
+        self.assertEqual(payload["client_name"], "PINKI ROY")
+        self.assertEqual(payload["pan"], "AHJPR0846B")
+
+        # Check notifications: ZERO logout or 'Session Concluded' toasts
+        logout_events = [evt for evt in notified if evt[1] == "Session Concluded" or evt[0] == "logout"]
+        self.assertEqual(len(logout_events), 0, "Zero 'Session Concluded' toasts emitted when entering View Filed Returns")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,11 +19,12 @@ from .vsdc_token_tracker import record_gemini_call
 from .vsdc_beeper import PANBeeper
 
 SETTINGS_FILE = Path(__file__).resolve().parent.parent.parent / "settings.ini"
-
+ 
 MODELS_CASCADE = [
     "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
-    "gemini-3.6-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
 ]
 PRIMARY_MODEL = "gemini-3.5-flash-lite"
 FALLBACK_MODEL = "gemini-flash-lite-latest"
@@ -54,13 +55,17 @@ def get_gemini_api_key() -> str:
 def _extract_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
     """
     Bulletproof extraction of a JSON object from raw LLM output,
-    handling markdown fences (```json ... ```) or preamble text.
+    handling markdown fences (```json ... ```), list structures, or preamble text.
     """
     clean = raw_text.strip()
     
     # Try direct parse first
     try:
-        return json.loads(clean)
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+            return parsed[0]
     except Exception:
         pass
 
@@ -68,7 +73,11 @@ def _extract_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
     clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
     clean = re.sub(r"\s*```$", "", clean)
     try:
-        return json.loads(clean)
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+            return parsed[0]
     except Exception:
         pass
 
@@ -78,7 +87,21 @@ def _extract_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
     if s_idx != -1 and e_idx != -1 and e_idx > s_idx:
         bracketed = clean[s_idx : e_idx + 1]
         try:
-            return json.loads(bracketed)
+            parsed = json.loads(bracketed)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    # Extract outermost [ ... ]
+    s_arr = clean.find("[")
+    e_arr = clean.rfind("]")
+    if s_arr != -1 and e_arr != -1 and e_arr > s_arr:
+        bracketed_arr = clean[s_arr : e_arr + 1]
+        try:
+            parsed = json.loads(bracketed_arr)
+            if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+                return parsed[0]
         except Exception:
             pass
 
@@ -88,7 +111,7 @@ def _extract_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
 def parse_compliance_with_gemini(
     masked_prompt_text: str,
     api_key: Optional[str] = None,
-    timeout: float = 15.0
+    timeout: float = 8.0
 ) -> Optional[Dict[str, Any]]:
     """
     Sends the anonymized, slimmed text to Gemini Flash.
@@ -173,7 +196,11 @@ def parse_compliance_with_gemini(
                 content_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
                 parsed = _extract_json_object(content_text)
                 if parsed is not None:
-                    return parsed
+                    # Normalize keys to lowercase for standard consumption
+                    norm_parsed = {}
+                    for k, v in parsed.items():
+                        norm_parsed[k.lower()] = v
+                    return norm_parsed
 
         except urllib.error.HTTPError as e:
             last_error = e
@@ -196,7 +223,7 @@ def parse_compliance_with_gemini(
 
 def enrich_payload_with_gemini(
     payload: Dict[str, Any],
-    timeout: float = 6.0
+    timeout: float = 12.0
 ) -> Dict[str, Any]:
     """
     Checks the payload's raw text capture, redacts sensitive credentials (PAN/GSTIN/PII)
@@ -221,6 +248,26 @@ def enrich_payload_with_gemini(
                 raw_text = captures[0].get("raw_text")
             elif isinstance(payload["raw_payload"].get("dataset_capture"), dict):
                 raw_text = payload["raw_payload"]["dataset_capture"].get("raw_text")
+
+    # If raw_text is still missing, synthesize text from scraped_data (DOM SDC)
+    if not raw_text or not isinstance(raw_text, str) or not raw_text.strip():
+        scraped = payload.get("scraped_data")
+        if not scraped and isinstance(payload.get("raw_payload"), dict):
+            scraped = payload["raw_payload"].get("scraped_data") or payload["raw_payload"].get("summary_data")
+        if not scraped:
+            scraped = payload.get("summary_data")
+
+        if isinstance(scraped, dict):
+            synth_lines = []
+            for k, v in (scraped.get("summary_labels") or {}).items():
+                if v: synth_lines.append(f"{k}: {v}")
+            for k, v in (scraped.get("form_fields") or {}).items():
+                if v: synth_lines.append(f"{k}: {v}")
+            for k, v in scraped.items():
+                if k not in ("summary_labels", "form_fields", "tables", "raw_text") and isinstance(v, (str, int, float)) and v:
+                    synth_lines.append(f"{k}: {v}")
+            if synth_lines:
+                raw_text = "\n".join(synth_lines)
 
     if not raw_text or not isinstance(raw_text, str) or not raw_text.strip():
         return payload

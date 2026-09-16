@@ -132,3 +132,46 @@ def test_tracker_dump_preserves_gemini_extracted(tmp_path):
         assert "gemini_extracted" in saved_payload
         assert saved_payload["gemini_extracted"]["legal_name"] == "FATIMA BIBI"
         assert saved_payload["gemini_extracted"]["status"] == "Filed"
+
+
+def test_enrich_payload_from_scraped_data():
+    """Verify that when raw_text is missing, scraped_data is synthesized into prompt."""
+    payload = {
+        "pan": "BNNPA3652H",
+        "gstin": "19BNNPA3652H1ZX",
+        "scraped_data": {
+            "summary_labels": {
+                "Legal Name": "FATIMA BIBI",
+                "Status": "Filed"
+            },
+            "form_fields": {
+                "Financial Year": "2026-27"
+            }
+        }
+    }
+
+    mock_gemini_output = {
+        "legal_name": "FATIMA BIBI",
+        "fy": "2026-27",
+        "status": "Filed"
+    }
+
+    with patch("core.vsdc.vsdc_gemini_parser.parse_compliance_with_gemini", return_value=mock_gemini_output) as mock_parse:
+        res = enrich_payload_with_gemini(payload)
+        mock_parse.assert_called_once()
+        assert res["gemini_extracted"]["legal_name"] == "FATIMA BIBI"
+        assert res["gemini_extracted"]["fy"] == "2026-27"
+
+
+def test_extract_json_object_handles_lists_and_fences():
+    """Verify _extract_json_object properly unpacks array and markdown wraps."""
+    from core.vsdc.vsdc_gemini_parser import _extract_json_object
+
+    # Test JSON array
+    res = _extract_json_object('[{"legal_name": "TEST ENTERPRISE", "fy": "2024-25"}]')
+    assert res == {"legal_name": "TEST ENTERPRISE", "fy": "2024-25"}
+
+    # Test Markdown fenced block
+    res = _extract_json_object('```json\n{"legal_name": "TEST 2", "status": "Filed"}\n```')
+    assert res == {"legal_name": "TEST 2", "status": "Filed"}
+

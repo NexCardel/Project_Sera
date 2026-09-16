@@ -17,6 +17,7 @@ NOISE_WORDS = {
     "INDIVIDUAL", "TAXPAYER", "HUF", "COMPANY", "REPRESENTATIVE",
     "DIRECTOR", "PARTNER", "PROPRIETOR", "WELCOME", "LOGOUT", "DASHBOARD",
     "SELECT", "PROFILE", "DETAILS", "STATUS", "RETURN", "RETURNS", "INCOME", "TAX", "ITR",
+    "ASSESSMENT", "YEAR", "FINANCIAL", "PERIOD", "QUARTER", "MONTH", "MONTHLY", "QUARTERLY", "MODE",
     "FILING", "FIIING", "EFIIING", "E-FIIING", "FIILING", "FILNG", "E-FILNG",
     "CALL US", "ENGLISH", "HELP", "FEEDBACK", "NOTIFICATIONS",
     "HOME", "VIEW", "DOWNLOAD", "SUBMIT", "SUBMITTED", "PAN", "GSTIN",
@@ -63,8 +64,36 @@ NOISE_WORDS = {
     "ASK", "GEMINI", "CHROME", "EDGE", "BRAVE", "FIREFOX", "BROWSER",
     "NEW", "TAB", "USE", "GCK", "DS",
     # Captcha & Form input placeholders
-    "ENTER", "CHARACTERS", "SHOWN", "BELOW", "CAPTCHA", "REFRESH", "CODE"
+    "ENTER", "CHARACTERS", "SHOWN", "BELOW", "CAPTCHA", "REFRESH", "CODE",
+    # Portal navigational footer / header boilerplate noise
+    "WEBSITE", "POLICIES", "POLICY", "ACCESSIBILITY", "STATEMENT", "STATEMENTS",
+    "EXTRACTING", "CLIENT", "HYPERLINK", "DISCLAIMER", "COPYRIGHT", "TERMS",
+    "CONDITIONS", "PRIVACY", "HELPDESK", "CONTACT", "SITEMAP", "GUIDELINES",
+    "VERSION", "PORTAL", "NATIONAL"
 }
+
+# Categorically rejected boilerplate phrases from portal headers and footers
+REJECTED_PHRASES = [
+    "WEBSITE POLICIES",
+    "ACCESSIBILITY STATEMENT",
+    "EXTRACTING CLIENT NAME",
+    "EXTRACTING CLIENT",
+    "HYPERLINK POLICY",
+    "TERMS OF USE",
+    "TERMS AND CONDITIONS",
+    "TERMS & CONDITIONS",
+    "DISCLAIMER",
+    "COPYRIGHT",
+    "PRIVACY POLICY",
+    "HELP DESK",
+    "CONTACT US",
+    "SITE MAP",
+    "SKIP TO MAIN",
+    "SKIP MAIN CONTENT",
+    "NATIONAL PORTAL",
+    "GOVERNMENT OF INDIA",
+    "INCOME TAX DEPARTMENT",
+]
 
 
 def sanitize_visual_name(raw_name: str) -> str:
@@ -118,14 +147,22 @@ def is_valid_name(name: str) -> bool:
     """
     if not name or len(name) < 3 or len(name) > 70:
         return False
-    if name in NOISE_WORDS:
+    upper_name = name.upper()
+    if upper_name in NOISE_WORDS:
         return False
-    words = name.split()
+    # Categorically reject portal header/footer boilerplate phrases
+    for phrase in REJECTED_PHRASES:
+        if phrase in upper_name:
+            return False
+    words = upper_name.split()
     if not words:
         return False
     # If all words or half or more of the words are portal/UI noise words, reject
     noise_count = sum(1 for w in words if w in NOISE_WORDS)
     if noise_count > 0 and (noise_count == len(words) or noise_count >= len(words) / 2):
+        return False
+    # Any solitary presence of key boilerplate words is disqualifying
+    if any(w in ("WEBSITE", "POLICIES", "ACCESSIBILITY", "STATEMENT", "EXTRACTING", "HYPERLINK", "DISCLAIMER") for w in words):
         return False
     # Must contain at least one vowel
     if not re.search(r"[AEIOUY]", name):
@@ -165,13 +202,20 @@ def is_better_taxpayer_name(new_name: Optional[str], existing_name: Optional[str
     n_words = n_clean.split()
     e_words = e_clean.split()
 
-    # 0. Noise purge: If existing name contains any noise word and new candidate is clean, new candidate wins!
-    e_has_noise = any(w in NOISE_WORDS for w in e_words)
-    n_has_noise = any(w in NOISE_WORDS for w in n_words)
+    # 0. Noise purge: If existing name contains any noise word or rejected phrase and new candidate is clean, new candidate wins!
+    e_has_noise = any(w in NOISE_WORDS for w in e_words) or any(p in e_clean for p in REJECTED_PHRASES)
+    n_has_noise = any(w in NOISE_WORDS for w in n_words) or any(p in n_clean for p in REJECTED_PHRASES)
     if e_has_noise and not n_has_noise:
         return True
     if n_has_noise and not e_has_noise:
         return False
+
+    # 0b. Trailing PAN fragment purge:
+    # If existing name has a trailing word that is a 5-letter PAN prefix (e.g. 'PINKI ROY AHJPR')
+    # and incoming name is the clean sub-phrase (e.g. 'PINKI ROY'), incoming candidate wins!
+    if len(e_words) >= 3 and len(n_words) == len(e_words) - 1:
+        if e_words[:-1] == n_words and len(e_words[-1]) == 5:
+            return True
 
     # 1. Word count expansion (more words is generally more complete)
     if len(n_words) > len(e_words):
@@ -238,7 +282,9 @@ def caps_run_name_candidates(text: str) -> List[str]:
     Adapted from NLP-free entity isolation (Option A).
     """
     candidates = []
-    for match in re.finditer(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,}){1,3}\b", text):
+    # Pre-clean known PAN patterns so they don't break or contaminate all-caps runs
+    cleaned_text = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", " ", text)
+    for match in re.finditer(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,}){1,4}\b", cleaned_text):
         run = match.group()
         words = run.split()
         if any(w not in NOISE_WORDS for w in words):
@@ -451,18 +497,30 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     if composite:
         return composite
 
-    # 1. Check Profile / Personal Details labeled rows (e.g. "Full Name as per PAN", "Name as per PAN", "Legal Name", "Full Name")
+    # 1. Check Profile / Personal Details labeled rows (e.g. "Full Name as per PAN", "Name (as per PAN)", "Name as per PAN", "Legal Name", "Full Name")
+    _PROFILE_LABEL_PATTERN = (
+        r"^(?:Full\s*Name(?:\s*\(?\s*as\s*per\s*PAN\s*\)?)?|"
+        r"Name\s*\(?\s*as\s*per\s*PAN\s*\)?|"
+        r"Name\s*\(?\s*as\s*per\s*Aadhaar\s*\)?|"
+        r"Legal\s*Name|Taxpayer(?:'s)?\s*Name|Assessee(?:'s)?\s*Name)\s*[:\-]?$"
+    )
+    _PROFILE_INLINE_PATTERN = (
+        r"\b(?:Full\s*Name(?:\s*\(?\s*as\s*per\s*PAN\s*\)?)?|"
+        r"Name\s*\(?\s*as\s*per\s*PAN\s*\)?|"
+        r"Name\s*\(?\s*as\s*per\s*Aadhaar\s*\)?|"
+        r"Legal\s*Name|Taxpayer(?:'s)?\s*Name|Assessee(?:'s)?\s*Name)\s*[:\-]\s*([A-Za-z\s.'-]{3,60})"
+    )
     for idx, line in enumerate(lines):
         line_clean = line.strip()
-        # Direct next-line value for Full Name / Name as per PAN / Taxpayer Name / Assessee Name
-        if re.search(r"^(?:Full\s*Name(?:\s*as\s*per\s*PAN)?|Name\s*as\s*per\s*PAN|Legal\s*Name|Taxpayer\s*Name|Assessee\s*Name)\s*[:\-]?$", line_clean, re.IGNORECASE):
+        # Direct next-line value for Profile Name labels
+        if re.search(_PROFILE_LABEL_PATTERN, line_clean, re.IGNORECASE):
             if idx + 1 < len(lines):
                 cand = sanitize_visual_name(lines[idx + 1])
                 words = cand.split()
                 if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
                     return cand
         # Inline with colon or dash: "Full Name as per PAN : WASIL AMAN MANDAL"
-        m_inline = re.search(r"\b(?:Full\s*Name(?:\s*as\s*per\s*PAN)?|Name\s*as\s*per\s*PAN|Legal\s*Name|Taxpayer\s*Name|Assessee\s*Name)\s*[:\-]\s*([A-Za-z\s.'-]{3,60})", line_clean, re.IGNORECASE)
+        m_inline = re.search(_PROFILE_INLINE_PATTERN, line_clean, re.IGNORECASE)
         if m_inline:
             cand = sanitize_visual_name(m_inline.group(1))
             words = cand.split()
@@ -498,24 +556,49 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
             if is_valid_name(clean):
                 return clean
 
-    # 3. Check for '<Name> (<PAN>)' or '<Name> [PAN]' (Standard Portal Header Profile Pill)
-    for line in lines:
-        m_pan = re.search(r"([A-Za-z\s.'-]{3,60})\s*[\(\[]\s*[A-Z]{5}[0-9]{4}[A-Z]\s*[\)\]]", line)
+    # 3. Check for co-located PAN on same line or adjacent lines (Standard Portal Header Profile Pill)
+    # Matches '<Name> (<PAN>)', '<Name> [PAN]', '<Name> - PAN', '<Name> PAN', '<Name> / PAN', etc.
+    for idx, line in enumerate(lines):
+        # (a) Co-located on same line: find 10-char PAN
+        m_pan = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", line)
         if m_pan:
-            clean = sanitize_visual_name(m_pan.group(1))
-            if is_valid_name(clean):
-                return clean
+            prefix = line[:m_pan.start()].rstrip(" ([{<:-/|#")
+            clean_pfx = sanitize_visual_name(prefix)
+            words = clean_pfx.split()
+            while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
+                words.pop(0)
+            while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
+                words.pop(-1)
+            candidate = " ".join(words)
+            if len(words) >= 2 and is_valid_name(candidate) and candidate not in NOISE_WORDS:
+                return candidate
+
+        # (b) PAN on adjacent line: line[idx] is Name, line[idx+1] is PAN
+        if idx + 1 < len(lines):
+            next_line = lines[idx + 1].strip()
+            if re.search(r"^[(\[]?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*[)\]]?$", next_line):
+                clean = sanitize_visual_name(line)
+                words = clean.split()
+                while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
+                    words.pop(0)
+                while words and (words[-1] in NOISE_WORDS or len(words[-1]) <= 1):
+                    words.pop(-1)
+                candidate = " ".join(words)
+                if len(words) >= 2 and is_valid_name(candidate) and candidate not in NOISE_WORDS:
+                    return candidate
 
     # 4. Check for Taxpayer Profile Dropdown Button in Portal Header
-    # Matches patterns like 'AMEJUDDIN SEKH v Individual' or adjacent lines
+    # Matches patterns like 'AMEJUDDIN SEKH v Individual', 'AMEJUDDIN SEKH Individual', or adjacent lines
     for idx, line in enumerate(lines):
         m_profile = re.search(
-            r"\b([A-Za-z][A-Za-z\s.'-]{2,50})\s*(?:[v▼▽⌵^|]|expand_more)?\s*(?:Individual|Taxpayer|HUF|Company|Proprietor|Director|Partner)\b",
+            r"\b([A-Za-z][A-Za-z\s.'-]{2,50})\s*(?:[v▼▽⌵^|]|expand_more|keyboard_arrow_down)?\s*(?:Individual|Taxpayer|HUF|Company|Proprietor|Director|Partner)\b",
             line,
             re.IGNORECASE,
         )
         if m_profile:
             raw_cand = m_profile.group(1).strip()
+            # Strip any co-located PAN (must have 4 digits)
+            raw_cand = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]?\b\s*$", "", raw_cand).strip()
             clean = sanitize_visual_name(raw_cand)
             words = clean.split()
             while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
@@ -529,8 +612,10 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
         # Check adjacent line: line[idx] is Name and line[idx+1] is 'Individual' / role
         if idx + 1 < len(lines):
             next_line = lines[idx + 1].strip()
-            if re.match(r"^(?:[v▼▽⌵^|]|expand_more)?\s*(?:Individual|Taxpayer|HUF|Company|Proprietor|Director|Partner)\b", next_line, re.IGNORECASE):
-                clean = sanitize_visual_name(line)
+            if re.match(r"^(?:[v▼▽⌵^|]|expand_more|keyboard_arrow_down)?\s*(?:Individual|Taxpayer|HUF|Company|Proprietor|Director|Partner)\b", next_line, re.IGNORECASE):
+                # Strip any co-located PAN (must have 4 digits)
+                line_no_pan = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]?\b", "", line).strip()
+                clean = sanitize_visual_name(line_no_pan)
                 words = clean.split()
                 while words and (words[0] in NOISE_WORDS or len(words[0]) <= 1):
                     words.pop(0)

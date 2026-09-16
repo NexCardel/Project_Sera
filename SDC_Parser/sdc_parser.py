@@ -646,7 +646,10 @@ def process_timelines():
                           p_data.get('filing_preference') or 
                           raw_p.get('filing_preference') or 
                           (item.get('scraped_data') or {}).get('filing_preference') or '').strip().title()
-                if (t_pref.lower() == "quarterly" or "quarterly" in str(item.get("scraped_data", {})).lower()) and is_non_quarter_month(t_period):
+                if t_pref not in ("Quarterly", "Monthly"):
+                    t_pref = "Quarterly" if "quarterly" in str(item.get("scraped_data", {})).lower() else ""
+
+                if t_pref == "Quarterly" and is_non_quarter_month(t_period):
                     if t_form == "GSTR-3B" and t_status == "Not submitted":
                         t_status = "Not Applicable (NA)"
                     elif t_form in ("GSTR-1/IFF", "GSTR-1") and t_status == "Not submitted":
@@ -661,7 +664,7 @@ def process_timelines():
                         "GSTIN": t_gstin,
                         "Client Name": t_name,
                         "Portal": portal_val,
-                        "Filing Preference": t_pref or "Regular",
+                        "Filing Preference": t_pref if t_pref in ("Quarterly", "Monthly") else "",
                         "Filing Period": t_period if t_period else "Unknown Period",
                         "Filing Type": t_form,
                         "Submit Status": t_status,
@@ -677,7 +680,7 @@ def process_timelines():
                     existing = ltt_dict[t_key]
                     if t_status and t_status != "Not submitted":
                         existing["Submit Status"] = t_status
-                    if t_pref and (not existing.get("Filing Preference") or existing.get("Filing Preference") == "Regular"):
+                    if t_pref in ("Quarterly", "Monthly") and not existing.get("Filing Preference"):
                         existing["Filing Preference"] = t_pref
                     if t_due:
                         existing["Due Date"] = t_due

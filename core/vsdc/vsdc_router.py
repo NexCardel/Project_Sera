@@ -9,6 +9,7 @@ the SDC crosshair catalog, and delegates to the visual OCR and assembler pipelin
 import ctypes
 from ctypes import wintypes
 import time
+import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
 
 import comtypes.client
@@ -293,11 +294,15 @@ class VSDCRouter:
 
         # Strict Protocol Separation:
         # Route directly to dedicated GST or ITR handlers so changes to one pipeline never alter or degrade the other.
-        is_gst = (
-            matched_crosshair.protocol == "GST Portal"
-            or self.active_portal == "GST Portal"
-            or matched_crosshair.id.startswith("gst_")
-        )
+        if matched_crosshair.protocol == "Income Tax" or matched_crosshair.id.startswith("itr_"):
+            self.active_portal = "Income Tax"
+            is_gst = False
+        elif matched_crosshair.protocol == "GST Portal" or matched_crosshair.id.startswith("gst_"):
+            self.active_portal = "GST Portal"
+            is_gst = True
+        else:
+            is_gst = (self.active_portal == "GST Portal")
+
         if is_gst:
             return self._route_gst_crosshair(matched_crosshair, url, hwnd, is_new_url, prior_crosshair)
         else:
@@ -318,6 +323,12 @@ class VSDCRouter:
         """
         # Handle session boundaries (Login / Logout / Timeout)
         if matched_crosshair.is_session_boundary or matched_crosshair.id == "itr_logout":
+            has_active_session = bool(
+                getattr(self.assembler, "_session_started", False)
+                or self.assembler.client_pan
+                or self.assembler.captures
+                or self.assembler.current_filing_type
+            )
             ident = self.assembler.client_name or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
             flushed = self.assembler.seal_and_flush()
             if getattr(self.assembler, "_session_started", False):
@@ -330,13 +341,23 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
-            self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
+            if has_active_session:
+                self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
             return flushed
 
         # Handle login screen boundary: returning to login from an active session terminates the prior session
-        if (matched_crosshair.id == "itr_login_auth" or "/login" in url.lower()) and prior_crosshair != "itr_login_auth":
-            if self.assembler.client_pan or self.assembler.captures or self.assembler.current_filing_type or self.last_logged_pan:
-                ident = self.assembler.client_name or self.assembler.client_pan or self.last_logged_name or self.last_logged_pan or "Client"
+        # CRITICAL: Regex must NOT match 'preLogin' (used in public-facing /preLogin/viewFiledReturns URL).
+        # Only the literal '#/login' or '/#/login/...' routes are actual authentication boundaries.
+        _login_url_match = re.search(r"[/#]login(?:/password|/otp|/auth)?(?:[?/#]|$)", url, re.IGNORECASE)
+        # Exclude false positives: '/preLogin' and '/prelogin' pages are NOT login boundaries
+        _is_pre_login_url = bool(re.search(r"[/#]pre[_-]?login", url, re.IGNORECASE))
+        is_login_route = (matched_crosshair.id == "itr_login_auth" or (bool(_login_url_match) and not _is_pre_login_url))
+        # Strictly never treat view filed returns, personal info, landing, or form select as login route
+        if matched_crosshair.id in ("itr_view_filed_returns", "itr_personal_info", "itr_landing", "itr_form_select"):
+            is_login_route = False
+        if is_login_route and prior_crosshair not in (None, "itr_login_auth"):
+            if self.assembler.client_pan or self.assembler.captures or self.assembler.current_filing_type:
+                ident = self.assembler.client_name or self.assembler.client_pan or self.last_logged_name or "Client"
                 flushed = self.assembler.seal_and_flush()
                 if getattr(self.assembler, "_session_started", False):
                     self.assembler.logger.end_session(reason="Income Tax Session Concluded (Redirected to Login)", summary_items=list(self.assembler.captures.values()))
@@ -387,10 +408,20 @@ class VSDCRouter:
         # Never extract or register name candidates from the password / secure access message page
         # to prevent breadcrumb spamming and bogus name seeding.
         is_login_auth = (matched_crosshair.id == "itr_login_auth")
+        is_personal_info = (matched_crosshair.id in ("itr_personal_info", "itr_profile"))
         if is_login_auth:
             client_name = None
         else:
             client_name = extract_name_from_ocr_lines(lines)
+
+        # On personal info / profile page: if name wasn't detected in cropped center card, fallback to full image
+        if not client_name and is_personal_info:
+            full_res = self.ocr.scan_image(img, region_type="full")
+            f_lines = full_res.get("lines", [])
+            f_name = extract_name_from_ocr_lines(f_lines)
+            if f_name:
+                client_name = f_name
+                full_text = full_text + "\n" + full_res.get("text", "")
 
         # On login authentication page, if PAN is not in cropped card, fallback to full image
         if not pan and is_login_auth:
@@ -407,7 +438,12 @@ class VSDCRouter:
         # For Personal Info page the center_card already contains the full name table (avoid header truncated pill).
         # For Login Auth page, we strictly do NOT scan header for name.
         _skip_header_for_name = matched_crosshair.id in ("itr_personal_info", "itr_login_auth")
-        if pan_missing or (name_incomplete and not self.assembler.client_name and not _skip_header_for_name):
+        # Scan header if: PAN is missing, OR name is incomplete AND we are not on a page that skips header for name.
+        # NOTE: We also scan header even when assembler already has a name, because the assembled name may be stale
+        # or from a previous session (e.g. assembler.client_name is set from a prior session but current OCR has no name).
+        # The is_better_taxpayer_name() guard ensures we only upgrade, never downgrade.
+        _should_scan_header_for_name = name_incomplete and not _skip_header_for_name
+        if pan_missing or _should_scan_header_for_name:
             if matched_crosshair.target_crop != "header":
                 header_res = self.ocr.scan_image(img, region_type="header")
                 h_text = header_res.get("text", "")
@@ -435,10 +471,10 @@ class VSDCRouter:
                     gstin = h_gstin
 
         if client_name and not is_login_auth:
-            self.assembler.update_identity(name=client_name)
+            self.assembler.update_identity(name=client_name, is_authoritative=is_personal_info)
             authoritative_name = self.assembler.client_name or client_name
             is_better_name = is_better_taxpayer_name(authoritative_name, self.last_logged_name)
-            if is_better_name and authoritative_name != self.last_logged_name:
+            if (is_better_name or is_personal_info) and authoritative_name != self.last_logged_name:
                 print(f"[VSDC Router] Extracted client name: {authoritative_name}")
                 self.last_logged_name = authoritative_name
                 # Trigger live HUD toast update with authoritative full name
@@ -554,7 +590,6 @@ class VSDCRouter:
                         self.assembler.clear_workflow_selection()
                         flush_name = master_payload.get("client_name") or master_payload.get("pan", "")
                         print(f"[VSDC Router] Flushed ITR filing payload to tracker dump: Ack={ack_number} Form={form_lbl} Status={status}")
-                        self.notify_activity("flush", "Filing Saved to Tracker Dump", f"{flush_name} • {form_lbl}")
                     return master_payload
 
         # Dataset Completion Principle:
@@ -882,6 +917,7 @@ class VSDCRouter:
         # Extract GSTIN and Taxpayer Name if not yet identified
         gstin = extract_gstin(full_text)
         client_name = extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
+        pref = extract_gst_filing_preference(full_text)
 
         pan = None
         if gstin and len(gstin) >= 12:
@@ -889,12 +925,13 @@ class VSDCRouter:
             if extract_pan(candidate_pan):
                 pan = candidate_pan
 
-        if client_name or gstin or pan:
+        if client_name or gstin or pan or pref:
             flushed_prior = self.assembler.update_identity(
                 name=client_name,
                 gstin=gstin,
                 pan=pan,
                 portal="GST Portal",
+                filing_preference=pref,
             )
             if flushed_prior:
                 print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")

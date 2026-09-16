@@ -754,7 +754,11 @@
     
     // Fast path for hard termination boundaries (Logout / Login)
     const urlL = (url || '').toLowerCase();
-    const isTermination = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sessionexpire') || urlL.includes('timeout') || urlL.includes('login');
+    // CRITICAL: Exclude '/preLogin' pages (e.g. /preLogin/viewFiledReturns) — they are NOT login/logout boundaries.
+    // Only match explicit logout/signout/sessionexpire URLs, or a bare '/login' route (not 'preLogin').
+    const isPreLogin = /[/#]pre[_-]?login/i.test(url);
+    const hasLogin = urlL.includes('login') && !isPreLogin;
+    const isTermination = urlL.includes('logout') || urlL.includes('signout') || urlL.includes('sessionexpire') || urlL.includes('timeout') || hasLogin;
     
     if (isTermination) {
       _dispatch(url, 0); // Execute instantly (0ms debounce)

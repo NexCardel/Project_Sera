@@ -966,7 +966,7 @@ class LttWorkspaceWindow(QDialog):
             ("PAN", rec.get("PAN")),
             ("GSTIN", rec.get("GSTIN") or "-"),
             ("Portal", rec.get("Portal")),
-            ("Filing Preference", rec.get("Filing Preference") or "Regular / Non-QRMP"),
+            ("Filing Preference", rec.get("Filing Preference") if rec.get("Filing Preference") in ("Quarterly", "Monthly") else "-"),
             ("Filing Type", rec.get("Filing Type")),
             ("Filing Period", rec.get("Filing Period")),
             ("Submit Status", rec.get("Submit Status")),
