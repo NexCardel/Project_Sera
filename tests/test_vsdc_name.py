@@ -10,6 +10,8 @@ from core.vsdc.vsdc_name_parser import (
     parse_human_name,
     extract_name_from_ocr_lines,
     extract_composite_form_name,
+    extract_proximity_labeled_names,
+    extract_header_profile_caps_name,
     caps_run_name_candidates,
     extract_spacy_person_names,
     get_spacy_nlp,
@@ -371,6 +373,117 @@ class TestVSDCNameParser(unittest.TestCase):
 
         # Format 7: Trailing PAN fragment purge in is_better_taxpayer_name
         self.assertTrue(is_better_taxpayer_name("PINKI ROY", "PINKI ROY AHJPR"))
+
+    def test_header_profile_caps_name_live_portal_navbar(self):
+        """
+        Tests the user-provided live portal navbar scenarios:
+        - Position: Top-right navbar with utility items (Call Us, English, A- A A+)
+        - Format: 2-3 words in ALL CAPS
+        - Proximity: Followed by dropdown indicator (v, ▼) and role tag (Individual)
+        """
+        # User screenshot scenario: Same-line navbar with utility controls and zoom buttons
+        line_navbar = "Call Us v English v A- A A+ RAHUL MONDAL v Individual"
+        self.assertEqual(extract_header_profile_caps_name([line_navbar]), "RAHUL MONDAL")
+        self.assertEqual(extract_name_from_ocr_lines([line_navbar]), "RAHUL MONDAL")
+
+        # Multi-line navbar: Name line with trailing arrow followed by role line
+        lines_multiline = [
+            "e-FiIing Income Tax Department, Government Of India",
+            "Authorised Partners Services Pending Actions Grievances Help",
+            "Call Us English A- A A+ RAHUL MONDAL v",
+            "Individual"
+        ]
+        self.assertEqual(extract_header_profile_caps_name(lines_multiline), "RAHUL MONDAL")
+        self.assertEqual(extract_name_from_ocr_lines(lines_multiline), "RAHUL MONDAL")
+
+        # Trailing Unicode dropdown arrow without role badge
+        line_arrow = "Services @ English v Call Us v A- A A+ RAHUL MONDAL ▼"
+        self.assertEqual(extract_header_profile_caps_name([line_arrow]), "RAHUL MONDAL")
+
+        # Compound Indian name (4 words) in navbar
+        line_compound = "Call Us English A A+ MD WASIL AMAN MANDAL v Individual"
+        self.assertEqual(extract_header_profile_caps_name([line_compound]), "MD WASIL AMAN MANDAL")
+
+        # Firm name with safe connector 'AND'
+        line_firm = "Call Us English A A+ SEN AND SONS v Individual"
+        self.assertEqual(extract_header_profile_caps_name([line_firm]), "SEN AND SONS")
+
+        # Pure navigation line must return None
+        line_nav_only = "Call Us v English v Pending Actions v"
+        self.assertIsNone(extract_header_profile_caps_name([line_nav_only]))
+
+    def test_proximity_labeled_statutory_names(self):
+        """
+        Tests statutory labeled proximity scanning:
+        - 'Legal Name of Taxpayer : RAHUL MONDAL'
+        - 'Trade Name : MONDAL ENTERPRISES'
+        - Line-separated label and value
+        - Dict output from extract_proximity_labeled_names()
+        """
+        # Inline with colon
+        lines_inline = ["Legal Name of Taxpayer : RAHUL MONDAL"]
+        res_inline = extract_proximity_labeled_names(lines_inline)
+        self.assertEqual(res_inline.get("legal_name"), "RAHUL MONDAL")
+        self.assertEqual(extract_name_from_ocr_lines(lines_inline), "RAHUL MONDAL")
+
+        # Adjacent lines: Line N is label, Line N+1 is value
+        lines_adj = [
+            "General Information",
+            "Legal Name of Taxpayer",
+            "RAHUL MONDAL",
+            "PAN",
+            "AHJPR0846B"
+        ]
+        res_adj = extract_proximity_labeled_names(lines_adj)
+        self.assertEqual(res_adj.get("legal_name"), "RAHUL MONDAL")
+        self.assertEqual(extract_name_from_ocr_lines(lines_adj), "RAHUL MONDAL")
+
+        # Separator on its own line: Line N is label, Line N+1 is ':', Line N+2 is value
+        lines_sep_line = [
+            "Legal Name",
+            ":",
+            "RAHUL MONDAL"
+        ]
+        res_sep = extract_proximity_labeled_names(lines_sep_line)
+        self.assertEqual(res_sep.get("legal_name"), "RAHUL MONDAL")
+
+        # Both Legal Name and Trade Name extracted simultaneously
+        lines_both = [
+            "Trade Name : MONDAL ENTERPRISES",
+            "Legal Name of Business : RAHUL MONDAL"
+        ]
+        res_both = extract_proximity_labeled_names(lines_both)
+        self.assertEqual(res_both.get("trade_name"), "MONDAL ENTERPRISES")
+        self.assertEqual(res_both.get("legal_name"), "RAHUL MONDAL")
+        # Legal Name takes priority over Trade Name in primary extraction
+        self.assertEqual(extract_name_from_ocr_lines(lines_both), "RAHUL MONDAL")
+
+    def test_noise_disqualification_in_valid_name(self):
+        """
+        Ensures portal instructions, mode guidance, and UI words are 100% disqualified.
+        """
+        self.assertFalse(is_valid_name("ONLINE PREPARED UTILITY"))
+        self.assertFalse(is_valid_name("APPLICABLE LATER"))
+        self.assertFalse(is_valid_name("INFORMATION DIRECTED"))
+        self.assertFalse(is_valid_name("CALL US ENGLISH"))
+        self.assertFalse(is_valid_name("SERVICES PENDING ACTIONS"))
+        self.assertFalse(is_valid_name("INCOME TAX DEPARTMENT"))
+        self.assertFalse(is_valid_name("MAP IBROWSER SUPPORT"))
+        self.assertFalse(is_valid_name("SITE MAP"))
+        self.assertFalse(is_valid_name("BROWSER SUPPORT"))
+        self.assertFalse(is_valid_name("MAP BROWSER SUPPORT"))
+
+    def test_reject_portal_nav_browser_support(self):
+        """
+        Ensures portal navigation boilerplate such as 'MAP IBROWSER SUPPORT' or 'SITE MAP'
+        is strictly rejected from being parsed as a valid client name in OCR lines.
+        """
+        lines = [
+            "Site Map | Browser Support",
+            "MAP IBROWSER SUPPORT",
+            "Skip to Main Content"
+        ]
+        self.assertIsNone(extract_name_from_ocr_lines(lines))
 
 
 if __name__ == "__main__":

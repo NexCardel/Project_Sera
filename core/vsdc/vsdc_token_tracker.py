@@ -148,3 +148,18 @@ def get_token_usage_summary() -> Dict[str, Any]:
                 f"Estimated Cost: <b>$0.00</b> (100% Free Tier)"
             )
         }
+
+
+def reset_token_metrics():
+    """Resets today's and lifetime token metrics."""
+    with _lock:
+        data = {
+            "dates": {},
+            "lifetime_calls": 0,
+            "lifetime_prompt_tokens": 0,
+            "lifetime_candidate_tokens": 0,
+            "lifetime_total_tokens": 0,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        _save_stats(data)
+

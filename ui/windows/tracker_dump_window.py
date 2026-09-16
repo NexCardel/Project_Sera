@@ -338,15 +338,17 @@ class AddClientFromCaptureDialog(QDialog):
     def _extract_info_from_payload(self) -> dict:
         from ui.utils.profile_parser import extract_profile_from_payload
         unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
-        
-        # Check if SRPF container exists in rawPayload.db
-        container = self.db.get_client_raw_container(identity_key=unassigned_key) if unassigned_key else None
-        if container and (container.get("company_name") or container.get("pan") or container.get("gstin")):
-            return container
 
-        # Fallback to current payload extraction
+        # Priority 1: Extract profile from current payload (prioritizes Gemini AI extraction)
         raw_str = self.item_data.get("raw_payload_json") or "{}"
         parsed = extract_profile_from_payload(raw_str)
+
+        # Priority 2: Fallback to existing container in rawPayload.db if current payload yielded no names
+        if not parsed.get("proprietor_name") and not parsed.get("company_name"):
+            container = self.db.get_client_raw_container(identity_key=unassigned_key) if unassigned_key else None
+            if container and (container.get("company_name") or container.get("pan") or container.get("gstin")):
+                return container
+
         if not parsed.get("pan") and unassigned_key:
             parsed["pan"] = unassigned_key
         return parsed
@@ -485,18 +487,35 @@ class PayloadInspectorDialog(QDialog):
         h_layout.setContentsMargins(8, 8, 8, 8)
         h_layout.setSpacing(4)
 
-        # Extract profile from payload if item_data does not already have it
+        # Extract profile from payload (prioritizes Gemini AI extraction)
         raw_json = item_data.get("raw_payload_json") or "{}"
         profile_data = extract_profile_from_payload(raw_json)
 
-        comp_name = item_data.get("company_name") or profile_data.get("company_name") or ""
-        prop_name = item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
+        gemini_info = profile_data.get("gemini_extracted") or {}
+        if not gemini_info and isinstance(raw_json, str):
+            try:
+                pj = json.loads(raw_json)
+                gemini_info = pj.get("gemini_extracted") or (pj.get("raw_payload", {}).get("gemini_extracted") if isinstance(pj.get("raw_payload"), dict) else {})
+            except Exception:
+                pass
+
+        # Give priority to Gemini-extracted details for display
+        prop_name = ""
+        comp_name = ""
+        if gemini_info:
+            if gemini_info.get("legal_name"):
+                prop_name = str(gemini_info["legal_name"]).strip()
+            if gemini_info.get("trade_name"):
+                comp_name = str(gemini_info["trade_name"]).strip()
+
+        comp_name = comp_name or item_data.get("company_name") or profile_data.get("company_name") or ""
+        prop_name = prop_name or item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
         pan_val = item_data.get("pan") or profile_data.get("pan") or item_data.get("identity_key") or ""
         gstin_val = item_data.get("gstin") or profile_data.get("gstin") or ""
 
         # Resolve clean display name for header
         client_name = item_data.get('display_name')
-        if not client_name or client_name.startswith("Unregistered"):
+        if not client_name or client_name.startswith("Unregistered") or (gemini_info and (prop_name or comp_name)):
             if prop_name or comp_name:
                 client_name = f"{prop_name or comp_name} ({pan_val or gstin_val})"
             elif item_data.get('client_name') and not item_data.get('client_name').startswith("Unregistered"):
@@ -506,8 +525,9 @@ class PayloadInspectorDialog(QDialog):
 
         is_unreg = item_data.get('is_unassigned') or not item_data.get('client_id')
         name_color = "#FFA657" if is_unreg else "#4CF9B7"
+        gemini_badge = " &nbsp;<span style='background-color:#14324F; color:#58A6FF; border:1px solid #1F6FEB; border-radius:4px; padding:1px 6px; font-size:11px; font-weight:bold;'>✨ Gemini AI Verified</span>" if gemini_info else ""
 
-        title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span> &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{pan_val or item_data.get('identity_key') or 'N/A'}</span>")
+        title_lbl = QLabel(f"<b>Client:</b> <span style='color:{name_color}; font-size:13px;'>{client_name}</span>{gemini_badge} &nbsp;|&nbsp; <b>Identity Key:</b> <span style='color:#FFFFFF;'>{pan_val or item_data.get('identity_key') or 'N/A'}</span>")
         title_lbl.setTextFormat(Qt.RichText)
 
         sub_info = f"<b>Total Captures:</b> {item_data.get('total_captures', 1)} &nbsp;|&nbsp; <b>Portal:</b> {item_data.get('portal', 'Government Portal')} &nbsp;|&nbsp; <b>Last Updated:</b> {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}"
@@ -541,6 +561,19 @@ class PayloadInspectorDialog(QDialog):
                 v_widget = QLabel(str(val))
                 v_widget.setStyleSheet("color: #F0F6FC; font-weight: 600;")
                 pf_layout.addRow(l_widget, v_widget)
+
+        if gemini_info:
+            ai_lbl = QLabel("✨ <b>Gemini AI Extraction Active</b> (Statutory Priority Applied)")
+            ai_lbl.setStyleSheet("color: #58A6FF; font-size: 11.5px; padding-bottom: 2px;")
+            pf_layout.addRow(ai_lbl)
+            if gemini_info.get("form_type"):
+                _add_pf_row("Form Type (Gemini)", gemini_info.get("form_type"))
+            if gemini_info.get("fy"):
+                _add_pf_row("Financial Year (Gemini)", gemini_info.get("fy"))
+            if gemini_info.get("tax_period"):
+                _add_pf_row("Tax Period (Gemini)", gemini_info.get("tax_period"))
+            if gemini_info.get("status"):
+                _add_pf_row("Filing Status (Gemini)", gemini_info.get("status"))
 
         _add_pf_row("Firm / Trade Name", comp_name)
         _add_pf_row("Proprietor Name", prop_name)
@@ -960,14 +993,17 @@ class TrackerDumpWindow(QWidget):
         self.lbl_counter.setStyleSheet("font-weight: 700; color: #4CF9B7; font-size: 13px; background-color: #1A382B; padding: 6px 12px; border-radius: 4px;")
         header_layout.addWidget(self.lbl_counter)
 
-        self.lbl_token_meter = QLabel("⚡ Gemini: 0 Calls | 1,500 Free Left")
-        self.lbl_token_meter.setStyleSheet(
+        self.btn_gemini_ai = QPushButton("⚡ Gemini: 0 Calls | 1,500 Free Left")
+        self.btn_gemini_ai.setProperty("class", "ActionBtn")
+        self.btn_gemini_ai.setStyleSheet(
             "font-weight: 700; color: #58A6FF; font-size: 12px; "
             "background-color: #0D1D30; border: 1px solid #1F6FEB; "
-            "padding: 6px 12px; border-radius: 4px;"
+            "padding: 6px 12px; border-radius: 4px; text-align: center;"
         )
-        self.lbl_token_meter.setToolTip("Google AI Studio Gemini Flash Free Quota & Daily Token Meter")
-        header_layout.addWidget(self.lbl_token_meter)
+        self.btn_gemini_ai.setToolTip("Google AI Studio Gemini Flash Engine — Click to configure AI settings, multiple API keys, and model parameters")
+        self.btn_gemini_ai.clicked.connect(self._open_ai_settings_dialog)
+        header_layout.addWidget(self.btn_gemini_ai)
+        self.lbl_token_meter = self.btn_gemini_ai
         self._update_token_meter()
 
         btn_refresh = QPushButton("Refresh")
@@ -985,12 +1021,6 @@ class TrackerDumpWindow(QWidget):
         self.btn_ltt_report.setContextMenuPolicy(Qt.CustomContextMenu)
         self.btn_ltt_report.customContextMenuRequested.connect(self._show_ltt_menu)
         header_layout.addWidget(self.btn_ltt_report)
-
-        btn_excel_report = QPushButton("SDC Audit Report (Excel)")
-        btn_excel_report.setProperty("class", "ActionBtn")
-        btn_excel_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
-        btn_excel_report.clicked.connect(self._open_dom_parser_report)
-        header_layout.addWidget(btn_excel_report)
 
         self.btn_preferences = QPushButton("Preferences")
         self.btn_preferences.setProperty("class", "ActionBtn")
@@ -1507,7 +1537,10 @@ class TrackerDumpWindow(QWidget):
             disp_name = r.get('display_name') or r.get('company_name') or r.get('proprietor_name') or f"Unregistered ({r.get('identity_key')})"
             c_item = _get_item(0, font=QFont("Segoe UI", 10.5, QFont.Bold), color="#FFA657" if r.get('is_unassigned') else "#FFFFFF")
             c_item.setText(disp_name)
-            c_item.setToolTip(disp_name)
+            tooltip_txt = disp_name
+            if r.get("has_gemini"):
+                tooltip_txt += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
+            c_item.setToolTip(tooltip_txt)
 
             # 1. ID / Token
             token_str = str(r.get("client_id_token") or (f"CLI-{r['client_id']:05d}" if r.get("client_id") else "Unregistered"))
@@ -1613,7 +1646,10 @@ class TrackerDumpWindow(QWidget):
             full_c_text = f"{client_name}{pan_str}"
             c_item = _get_item(0, font=QFont("Segoe UI", 10, QFont.Bold), color="#FFA657" if r.get('is_unassigned') or not r.get('client_id') else "#FFFFFF")
             c_item.setText(full_c_text)
-            c_item.setToolTip(full_c_text)
+            raw_tooltip = full_c_text
+            if r.get("has_gemini"):
+                raw_tooltip += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
+            c_item.setToolTip(raw_tooltip)
 
             # 1. ID
             id_item = _get_item(1, align=Qt.AlignCenter, color="#8B949E")
@@ -1944,6 +1980,9 @@ class TrackerDumpWindow(QWidget):
 
         menu.addSeparator()
 
+        act_ai_config = menu.addAction(_safe_qta_icon("mdi.robot", "#58A6FF"), "Gemini AI Configuration")
+        act_ai_config.triggered.connect(self._open_ai_settings_dialog)
+
         act_ltt_ws = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7"), "Live Tracking Table (LTT) Workspace")
         act_ltt_ws.triggered.connect(self._open_ltt_workspace)
 
@@ -1956,7 +1995,7 @@ class TrackerDumpWindow(QWidget):
         act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
         act_classifier.triggered.connect(self._open_fst_classifier_report)
 
-        act_dom_parser = menu.addAction(_safe_qta_icon("mdi.view-dashboard-outline", "#4CF9B7"), "DOM Parser 1 (Excel Report)")
+        act_dom_parser = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "SDC Audit Report (Excel)")
         act_dom_parser.triggered.connect(self._open_dom_parser_report)
 
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
@@ -1973,6 +2012,17 @@ class TrackerDumpWindow(QWidget):
             menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
         else:
             menu.exec_(self.cursor().pos())
+
+    def _open_ai_settings_dialog(self):
+        """Opens the full Gemini AI Configuration dialog."""
+        try:
+            from ui.dialogs.ai_settings_dialog import AISettingsDialog
+            dlg = AISettingsDialog(self)
+            dlg.settings_changed.connect(self._update_token_meter)
+            dlg.exec()
+            self._update_token_meter()
+        except Exception as e:
+            QMessageBox.critical(self, "AI Settings Error", f"Could not launch AI Settings Dialog: {e}")
 
 
     def _open_ltt_workspace(self):

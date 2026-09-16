@@ -68,8 +68,13 @@
       'INDIVIDUAL', 'TAXPAYER', 'HUF', 'COMPANY', 'REPRESENTATIVE',
       'DIRECTOR', 'PARTNER', 'WELCOME', 'LOGOUT', 'DASHBOARD', 'SELECT',
       'PROFILE', 'DETAILS', 'STATUS', 'RETURN', 'INCOME', 'TAX', 'FILING',
-      'CALL US', 'ENGLISH', 'HELP', 'FEEDBACK', 'NOTIFICATIONS', 'HOME'
+      'CALL US', 'ENGLISH', 'HELP', 'FEEDBACK', 'NOTIFICATIONS', 'HOME',
+      'BROWSER', 'SUPPORT', 'BROWSER SUPPORT', 'MAP', 'SITE MAP', 'ACCESSIBILITY',
+      'CONTACT US', 'SKIP TO MAIN CONTENT', 'MAIN CONTENT', 'SEARCH', 'REGISTER',
+      'LOGIN', 'TERMS OF USE', 'PRIVACY POLICY'
     ]);
+
+    const PORTAL_NAV_NOISE_RE = /\b(?:BROWSER(?:\s*SUPPORT)?|SUPPORT|SITE\s*MAP|MAP\s+I?BROWSER|ACCESSIBILITY|FEEDBACK|LANGUAGE|CONTACT(?:\s*US)?|CALL\s*US|HELP|FAQ|GRIEVANCE|SETTINGS|NOTIFICATIONS?|DASHBOARD|LOGOUT|LOGIN|REGISTER|MAIN\s*CONTENT|FONT\s*SIZE|ZOOM|ENGLISH|HINDI)\b/i;
 
     function _cleanNameString(str) {
       if (!str) return '';
@@ -87,6 +92,7 @@
     function _isValidName(name) {
       if (!name || name.length < 3 || name.length > 70) return false;
       if (NOISE_WORDS.has(name)) return false;
+      if (PORTAL_NAV_NOISE_RE.test(name)) return false;
       // Must contain at least one vowel and contain only legal name chars
       return /^[A-Z\s.'-]{3,70}$/.test(name) && /[AEIOUY]/.test(name);
     }
@@ -198,8 +204,7 @@
         '.login-user-name',
         '[class*="profile-name" i]',
         '[class*="user-name" i]',
-        '[class*="user-profile" i]',
-        '[class*="header-right" i]'
+        '[class*="user-profile" i]'
       ];
 
       for (const sel of badgeSelectors) {

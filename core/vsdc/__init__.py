@@ -35,6 +35,8 @@ from .vsdc_name_parser import (
     parse_human_name,
     extract_name_from_ocr_lines,
     extract_composite_form_name,
+    extract_proximity_labeled_names,
+    extract_header_profile_caps_name,
     extract_gst_welcome_name,
 )
 from .vsdc_ocr import VSDCOcrEngine
@@ -70,6 +72,8 @@ __all__ = [
     "parse_human_name",
     "extract_name_from_ocr_lines",
     "extract_composite_form_name",
+    "extract_proximity_labeled_names",
+    "extract_header_profile_caps_name",
     "VSDCOcrEngine",
     "VisualSessionAssembler",
     "VSDCRouter",

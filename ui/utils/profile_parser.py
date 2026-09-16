@@ -45,8 +45,17 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         "email": "",
         "dob": "",
         "user_id": "",
-        "address": ""
+        "address": "",
+        "gemini_extracted": {}
     }
+
+    # Gemini AI structured extraction dictionary
+    gemini_data: Dict[str, Any] = {}
+    if isinstance(payload, dict):
+        if isinstance(payload.get("gemini_extracted"), dict) and payload.get("gemini_extracted"):
+            gemini_data = payload["gemini_extracted"]
+        elif isinstance(payload.get("raw_payload"), dict) and isinstance(payload["raw_payload"].get("gemini_extracted"), dict) and payload["raw_payload"].get("gemini_extracted"):
+            gemini_data = payload["raw_payload"]["gemini_extracted"]
 
     def _clean_str(v: Any) -> str:
         if v is None:
@@ -58,9 +67,12 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
     flat_kv: List[tuple[str, str]] = []
 
     def _collect(item, depth=6):
+        nonlocal gemini_data
         if depth <= 0 or not item:
             return
         if isinstance(item, dict):
+            if isinstance(item.get("gemini_extracted"), dict) and item.get("gemini_extracted") and not gemini_data:
+                gemini_data = item["gemini_extracted"]
             for k, v in item.items():
                 if isinstance(v, (str, int, float)) and v is not None:
                     s_val = _clean_str(v)
@@ -132,43 +144,6 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
     pan_val = extracted.get("pan", "").strip().upper()
     is_individual = bool(len(pan_val) == 10 and pan_val[3] == "P")
 
-    # 6. Company / Firm Name Extraction
-    # Specifically targets Trade Names and Business Names from ITR Schedule BP (natOfBus44AD, sec44AD, etc.) and GST
-    if is_individual:
-        company_keys = (
-            "legalname", "legal_name", "nameofbusiness", "name_of_business", "nameofbus", "name_of_bus", "busdtlsname",
-            "tradename", "trade_name", "tradenm", "trade_nm", "trdnm", "tradename_itr",
-            "businessname", "business_name", "bussinessname", "bussiness_name",
-            "firmname", "firm_name", "concernname", "concern_name",
-            "shopname", "shop_name", "storename", "store_name", "enterprisename", "enterprise_name",
-            "entityname", "entity_name", "orgname", "org_name"
-        )
-    else:
-        company_keys = (
-            "nameofbusiness", "name_of_business", "tradename", "trade_name", "tradenm", "trade_nm",
-            "legalname", "legal_name", "companyname", "firmname", "firm_name", "businessname", "business_name",
-            "entityname", "entity_name", "taxpayername", "name", "surnameororgname", "orgname", "org_name"
-        )
-
-    non_identity_name_keys = ("bank", "account", "branch", "ifsc", "institution", "holdertype")
-    for target in company_keys:
-        for k, v in flat_kv:
-            if any(part in k for part in non_identity_name_keys):
-                continue
-            matches = k == target or (target not in ("name", "trade") and target in k and "first" not in k and "last" not in k and "user" not in k)
-            if matches:
-                if len(v) >= 3 and not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", v.upper()) and "@" not in v:
-                    extracted["company_name"] = v
-                    break
-        if extracted["company_name"]:
-            break
-
-    # 7. Proprietor / Individual Name (Full First + Middle + Last Name Assembly & SDC Header Priority)
-    first_name = ""
-    middle_name = ""
-    last_name = ""
-    header_name = ""
-
     def _sanitize_name(n_str: str) -> str:
         if not n_str:
             return ""
@@ -182,17 +157,72 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         clean = re.sub(r"\s+", " ", clean).strip()
         return clean
 
-    # (a) HIGHEST PRIORITY: client_name and taxpayer_name in the payload contain the full legal name
-    #     extracted from profile/personal-info pages. Check these FIRST before client_temp_name.
-    for k, v in flat_kv:
-        if k in ("client_name", "clientname", "taxpayer_name", "taxpayername", "name") and not extracted["proprietor_name"]:
-            v_clean = _sanitize_name(v)
-            if len(v_clean) >= 3 and not any(part in v_clean.lower() for part in ("first name", "last name", "general information")):
-                extracted["proprietor_name"] = v_clean
+    # 6. Company / Firm Name Extraction
+    # Specifically targets Trade Names and Business Names from ITR Schedule BP (natOfBus44AD, sec44AD, etc.) and GST
+    # PRIORITY 1: Gemini AI structured trade name (or legal name for corporate entities)
+    if gemini_data.get("trade_name"):
+        g_trade = _sanitize_name(str(gemini_data["trade_name"]))
+        if len(g_trade) >= 3:
+            extracted["company_name"] = g_trade
+    elif not is_individual and gemini_data.get("legal_name"):
+        g_legal = _sanitize_name(str(gemini_data["legal_name"]))
+        if len(g_legal) >= 3:
+            extracted["company_name"] = g_legal
+
+    if not extracted["company_name"]:
+        if is_individual:
+            company_keys = (
+                "legalname", "legal_name", "nameofbusiness", "name_of_business", "nameofbus", "name_of_bus", "busdtlsname",
+                "tradename", "trade_name", "tradenm", "trade_nm", "trdnm", "tradename_itr",
+                "businessname", "business_name", "bussinessname", "bussiness_name",
+                "firmname", "firm_name", "concernname", "concern_name",
+                "shopname", "shop_name", "storename", "store_name", "enterprisename", "enterprise_name",
+                "entityname", "entity_name", "orgname", "org_name"
+            )
+        else:
+            company_keys = (
+                "nameofbusiness", "name_of_business", "tradename", "trade_name", "tradenm", "trade_nm",
+                "legalname", "legal_name", "companyname", "firmname", "firm_name", "businessname", "business_name",
+                "entityname", "entity_name", "taxpayername", "name", "surnameororgname", "orgname", "org_name"
+            )
+
+        non_identity_name_keys = ("bank", "account", "branch", "ifsc", "institution", "holdertype")
+        for target in company_keys:
+            for k, v in flat_kv:
+                if any(part in k for part in non_identity_name_keys):
+                    continue
+                matches = k == target or (target not in ("name", "trade") and target in k and "first" not in k and "last" not in k and "user" not in k)
+                if matches:
+                    if len(v) >= 3 and not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", v.upper()) and "@" not in v:
+                        extracted["company_name"] = v
+                        break
+            if extracted["company_name"]:
                 break
 
+    # 7. Proprietor / Individual Name (Full First + Middle + Last Name Assembly & SDC Header Priority)
+    first_name = ""
+    middle_name = ""
+    last_name = ""
+    header_name = ""
+
+    # (0) ABSOLUTE HIGHEST PRIORITY: Gemini AI Structured Extraction (gemini_extracted)
+    #     Gemini parses full statutory legal_name directly from document text/screenshot,
+    #     immune to OCR truncations and portal header button noise.
+    if gemini_data.get("legal_name"):
+        g_legal = _sanitize_name(str(gemini_data["legal_name"]))
+        if len(g_legal) >= 3 and not any(part in g_legal.lower() for part in ("first name", "last name", "general information")):
+            extracted["proprietor_name"] = g_legal
+
+    # (a) HIGHEST FALLBACK PRIORITY: client_name and taxpayer_name in the payload contain full legal name
+    if not extracted["proprietor_name"]:
+        for k, v in flat_kv:
+            if k in ("client_name", "clientname", "taxpayer_name", "taxpayername", "name") and not extracted["proprietor_name"]:
+                v_clean = _sanitize_name(v)
+                if len(v_clean) >= 3 and not any(part in v_clean.lower() for part in ("first name", "last name", "general information")):
+                    extracted["proprietor_name"] = v_clean
+                    break
+
     # (b) client_temp_name from SDC top-level payload: ONLY use as a fallback when no full name is found above.
-    #     Header badge names are often truncated (e.g. "INDRAJIT CHATTE...") so we treat them last.
     raw_p = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
     cand_header = payload.get("client_temp_name") or raw_p.get("client_temp_name") or ""
     if not cand_header:
@@ -224,12 +254,11 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         parts = [p for p in (first_name, middle_name, last_name) if p]
         full = " ".join(parts).strip()
         if full and len(full) >= 3:
-            # Override proprietor_name only if assembled name is longer (more complete) or not yet set
-            if not extracted["proprietor_name"] or len(full) > len(extracted["proprietor_name"]):
+            # Override proprietor_name only if assembled name is longer (more complete) and not already set by Gemini
+            if not extracted["proprietor_name"] or (not gemini_data.get("legal_name") and len(full) > len(extracted["proprietor_name"])):
                 extracted["proprietor_name"] = full
 
-    # Personal Info & Profile Page Name has HIGHEST PRIORITY:
-    # Use header_name only as absolute last resort when no full name is available
+    # Personal Info & Profile Page Name fallback:
     if not extracted["proprietor_name"] and header_name:
         extracted["proprietor_name"] = header_name
 
@@ -256,6 +285,7 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
             extracted["user_id"] = v
             break
 
+    extracted["gemini_extracted"] = gemini_data
     return extracted
 
 

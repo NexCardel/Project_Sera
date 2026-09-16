@@ -3081,8 +3081,13 @@ class SeraDatabase:
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
             cid = client_id or existing[1]
-            comp = new_profile.get("company_name") or existing[2] or ""
-            prop = new_profile.get("proprietor_name") or existing[3] or ""
+            has_gemini_new = bool(new_profile.get("gemini_extracted") and (new_profile["gemini_extracted"].get("legal_name") or new_profile["gemini_extracted"].get("trade_name")))
+            if has_gemini_new:
+                comp = new_profile.get("company_name") or existing[2] or ""
+                prop = new_profile.get("proprietor_name") or existing[3] or ""
+            else:
+                comp = existing[2] or new_profile.get("company_name") or ""
+                prop = existing[3] or new_profile.get("proprietor_name") or ""
             pan_val = new_profile.get("pan") or existing[4] or ""
             gst_val = new_profile.get("gstin") or existing[5] or ""
             tan_val = new_profile.get("tan") or existing[6] or ""
@@ -3339,6 +3344,26 @@ class SeraDatabase:
             else:
                 period_summary = f"{len(filing_hist) or r[14] or 1} Capture(s)"
 
+            # Check for Gemini AI extraction in container history to ensure highest priority
+            container_gemini_name = ""
+            for fh in reversed(filing_hist):
+                fh_payload = fh.get("raw_payload_json") or ""
+                if fh_payload and "gemini_extracted" in fh_payload:
+                    try:
+                        p_data = json.loads(fh_payload) if isinstance(fh_payload, str) else fh_payload
+                        g_data = p_data.get("gemini_extracted") or (p_data.get("raw_payload", {}).get("gemini_extracted") if isinstance(p_data.get("raw_payload"), dict) else None)
+                        if isinstance(g_data, dict):
+                            g_cand = (g_data.get("legal_name") or g_data.get("trade_name") or "").strip()
+                            if g_cand and not SKELETON_NAME_REGEX.search(g_cand):
+                                container_gemini_name = g_cand
+                                if g_data.get("legal_name"):
+                                    prop_name = g_data["legal_name"].strip()
+                                if g_data.get("trade_name"):
+                                    comp_name = g_data["trade_name"].strip()
+                                break
+                    except Exception:
+                        pass
+
             is_unassigned = not bool(cid)
             if cid and cid in client_map:
                 c_info = client_map[cid]
@@ -3348,11 +3373,12 @@ class SeraDatabase:
                 display_name = f"{c_info['name']} ({c_pan or identity_key})"
                 display_pan = c_pan
                 id_token = c_info.get("client_id_token", f"CLI-{cid:05d}")
-            elif comp_name or prop_name:
+            elif container_gemini_name or comp_name or prop_name:
                 cand_pan = pan_val
                 if (not cand_pan or len(cand_pan) != 10) and gst_val and len(gst_val) >= 12:
                     cand_pan = gst_val[2:12]
-                display_name = f"{comp_name or prop_name} ({cand_pan or gst_val or identity_key})"
+                chosen_nm = container_gemini_name or prop_name or comp_name
+                display_name = f"{chosen_nm} ({cand_pan or gst_val or identity_key})"
                 display_pan = cand_pan or gst_val or identity_key
                 id_token = "Unregistered"
             else:
@@ -3368,6 +3394,7 @@ class SeraDatabase:
                 "client_id": cid,
                 "client_id_token": id_token,
                 "is_unassigned": is_unassigned,
+                "has_gemini": bool(container_gemini_name),
                 "display_name": display_name,
                 "company_name": comp_name,
                 "proprietor_name": prop_name,
@@ -4622,25 +4649,38 @@ class SeraDatabase:
         for r in rows:
             cid = r[1]
             unassigned_id = r[2]
+            raw_json_str = r[9] or ""
+            p_obj = None
+            gemini_name = ""
+            if raw_json_str and raw_json_str != "{}":
+                try:
+                    p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
+                    if isinstance(p_obj, dict):
+                        g_ext = p_obj.get("gemini_extracted") or (p_obj.get("raw_payload", {}).get("gemini_extracted") if isinstance(p_obj.get("raw_payload"), dict) else None)
+                        if isinstance(g_ext, dict):
+                            gemini_name = (g_ext.get("legal_name") or g_ext.get("trade_name") or "").strip()
+                except Exception:
+                    pass
+
+            has_gemini_record = bool(gemini_name and not SKELETON_NAME_REGEX.search(gemini_name))
+
             if cid and cid in client_map:
                 info = client_map[cid]
             elif unassigned_id:
-                # 1. Try container map
-                c_name = unassigned_map.get(unassigned_id, "")
-                # 2. Try raw_payload_json if container lookup didn't yield a real name
-                if not c_name or SKELETON_NAME_REGEX.search(c_name):
-                    raw_json_str = r[9] or ""
-                    if raw_json_str and raw_json_str != "{}":
-                        try:
-                            p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
-                            if isinstance(p_obj, dict):
-                                c_name = (
-                                    p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
-                                    (p_obj.get("raw_payload", {}).get("client_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or
-                                    (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
-                                )
-                        except Exception:
-                            pass
+                # 0. Check raw_payload_json for Gemini AI extraction FIRST (Highest Priority)
+                if has_gemini_record:
+                    c_name = gemini_name
+                else:
+                    # 1. Try container map
+                    c_name = unassigned_map.get(unassigned_id, "")
+                    # 2. Try raw_payload_json if container lookup didn't yield a real name
+                    if not c_name or SKELETON_NAME_REGEX.search(c_name):
+                        if isinstance(p_obj, dict):
+                            c_name = (
+                                p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
+                                (p_obj.get("raw_payload", {}).get("client_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or
+                                (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
+                            )
                 if c_name and not SKELETON_NAME_REGEX.search(c_name):
                     info = {"name": f"{c_name} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
                 else:
@@ -4651,6 +4691,7 @@ class SeraDatabase:
             results.append({
                 "id": r[0], "client_id": cid, "unassigned_identity": unassigned_id,
                 "is_unassigned": info.get("is_unassigned", False),
+                "has_gemini": has_gemini_record,
                 "client_name": info["name"], "pan": info["pan"],
                 "service_id": r[3], "service_name": r[4] or "Portal", "portal": r[4] or "",
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",

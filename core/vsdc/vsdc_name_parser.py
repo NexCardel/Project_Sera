@@ -19,7 +19,7 @@ NOISE_WORDS = {
     "SELECT", "PROFILE", "DETAILS", "STATUS", "RETURN", "RETURNS", "INCOME", "TAX", "ITR",
     "ASSESSMENT", "YEAR", "FINANCIAL", "PERIOD", "QUARTER", "MONTH", "MONTHLY", "QUARTERLY", "MODE",
     "FILING", "FIIING", "EFIIING", "E-FIIING", "FIILING", "FILNG", "E-FILNG",
-    "CALL US", "ENGLISH", "HELP", "FEEDBACK", "NOTIFICATIONS",
+    "CALL US", "ENGLISH", "HELP", "FEEDBACK", "NOTIFICATIONS", "BROWSER", "SUPPORT", "BROWSER SUPPORT", "SITE MAP", "MAP",
     "HOME", "VIEW", "DOWNLOAD", "SUBMIT", "SUBMITTED", "PAN", "GSTIN",
     "ASSESSEE", "ACK", "ACKNOWLEDGEMENT", "NUMBER", "DATE", "TIME",
     "PENDING", "ACTIONS", "ACTION", "GRIEVANCES", "AUTHORISED", "PARTNERS", "SERVICES",
@@ -69,7 +69,10 @@ NOISE_WORDS = {
     "WEBSITE", "POLICIES", "POLICY", "ACCESSIBILITY", "STATEMENT", "STATEMENTS",
     "EXTRACTING", "CLIENT", "HYPERLINK", "DISCLAIMER", "COPYRIGHT", "TERMS",
     "CONDITIONS", "PRIVACY", "HELPDESK", "CONTACT", "SITEMAP", "GUIDELINES",
-    "VERSION", "PORTAL", "NATIONAL"
+    "VERSION", "PORTAL", "NATIONAL",
+    # Portal dialog, form guidance, and mode indicators
+    "INFORMATION", "DIRECTED", "APPLICABLE", "LATER", "RECOMMENDED",
+    "OFFLINE", "ONLINE", "PREPARED", "UTILITY", "UPLOAD"
 }
 
 # Categorically rejected boilerplate phrases from portal headers and footers
@@ -88,6 +91,12 @@ REJECTED_PHRASES = [
     "HELP DESK",
     "CONTACT US",
     "SITE MAP",
+    "BROWSER SUPPORT",
+    "BROWSER",
+    "IBROWSER",
+    "SUPPORT",
+    "MAP BROWSER",
+    "MAP IBROWSER",
     "SKIP TO MAIN",
     "SKIP MAIN CONTENT",
     "NATIONAL PORTAL",
@@ -141,9 +150,17 @@ def sanitize_visual_name(raw_name: str) -> str:
     return clean
 
 
+SAFE_CONNECTORS = {"AND", "OF", "THE", "&"}
+
+
 def is_valid_name(name: str) -> bool:
     """
     Validates whether a candidate string is a plausible person or firm name.
+    Ensures:
+    - 3 to 70 characters
+    - Must contain at least one vowel
+    - No constituent word may be in NOISE_WORDS (unless it's a safe connector in a 3+ word firm name or single-letter initial)
+    - Rejects portal header/footer boilerplate phrases
     """
     if not name or len(name) < 3 or len(name) > 70:
         return False
@@ -157,18 +174,32 @@ def is_valid_name(name: str) -> bool:
     words = upper_name.split()
     if not words:
         return False
-    # If all words or half or more of the words are portal/UI noise words, reject
-    noise_count = sum(1 for w in words if w in NOISE_WORDS)
-    if noise_count > 0 and (noise_count == len(words) or noise_count >= len(words) / 2):
-        return False
+
+    for i, w in enumerate(words):
+        clean_w = re.sub(r"[^A-Z]", "", w)
+        if not clean_w:
+            continue
+        if len(clean_w) == 1:
+            # Single letter initial (e.g. 'A.', 'K.') is allowed
+            continue
+        if clean_w in SAFE_CONNECTORS:
+            # Allowed as interior word in >= 3 word name (e.g. 'SEN AND SONS')
+            if 0 < i < len(words) - 1 and len(words) >= 3:
+                continue
+            return False
+        if clean_w in NOISE_WORDS:
+            return False
+
     # Any solitary presence of key boilerplate words is disqualifying
-    if any(w in ("WEBSITE", "POLICIES", "ACCESSIBILITY", "STATEMENT", "EXTRACTING", "HYPERLINK", "DISCLAIMER") for w in words):
+    if any(w in ("WEBSITE", "POLICIES", "ACCESSIBILITY", "STATEMENT", "EXTRACTING", "HYPERLINK", "DISCLAIMER", "BROWSER", "IBROWSER", "SUPPORT", "MAP") for w in words):
+        return False
+    if re.search(r"\b(?:BROWSER(?:\s*SUPPORT)?|IBROWSER|SUPPORT|SITE\s*MAP|MAP\s+I?BROWSER)\b", upper_name):
         return False
     # Must contain at least one vowel
-    if not re.search(r"[AEIOUY]", name):
+    if not re.search(r"[AEIOUY]", upper_name):
         return False
     # Must match name character set
-    return bool(re.match(r"^[A-Z\s.'-]{3,70}$", name))
+    return bool(re.match(r"^[A-Z\s.'-]{3,70}$", upper_name))
 
 
 def is_better_taxpayer_name(new_name: Optional[str], existing_name: Optional[str]) -> bool:
@@ -483,72 +514,265 @@ def extract_composite_form_name(lines: List[str]) -> Optional[str]:
     return None
 
 
+PROXIMITY_LABEL_PATTERNS = [
+    ("legal_name", re.compile(
+        r"\bLegal\s+Name(?:\s+of(?:\s+the)?\s+(?:Taxpayer|Business))?(?:\s*\(?\s*as\s*per\s*PAN\s*\)?)?",
+        re.IGNORECASE,
+    )),
+    ("trade_name", re.compile(
+        r"\bTrade\s+Name(?:\s+of(?:\s+the)?\s+Business)?",
+        re.IGNORECASE,
+    )),
+    ("pan_name", re.compile(
+        r"\b(?:Full\s+)?Name\s*(?:\(?\s*as\s*per\s*(?:PAN|Aadhaar)\s*\)?)",
+        re.IGNORECASE,
+    )),
+    ("taxpayer_name", re.compile(
+        r"\b(?:Taxpayer(?:'s)?|Assessee(?:'s)?|(?:Name\s+of\s+)?Proprietor(?:\s+Name)?|Full)\s+Name\b",
+        re.IGNORECASE,
+    )),
+]
+
+
+def extract_proximity_labeled_names(lines: List[str]) -> Dict[str, str]:
+    """
+    Scans OCR lines for statutory name labels using proximity scanning:
+    - Inline with separator: 'Legal Name of Taxpayer : RAHUL MONDAL'
+    - Inline direct ALL-CAPS: 'Legal Name of Taxpayer RAHUL MONDAL'
+    - Adjacent lines: Line N: 'Legal Name of Taxpayer', Line N+1: 'RAHUL MONDAL'
+
+    Returns a dict mapping label key to extracted name:
+    {
+        'legal_name': '...',
+        'trade_name': '...',
+        'pan_name': '...',
+        'taxpayer_name': '...'
+    }
+    """
+    results: Dict[str, str] = {}
+    if not lines:
+        return results
+
+    def _extract_name_candidate(raw: str) -> Optional[str]:
+        if not raw:
+            return None
+        cleaned = sanitize_visual_name(raw)
+        # Strip PAN suffix if present
+        cleaned = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", "", cleaned).strip()
+        words = cleaned.split()
+        while words and (words[0] in NOISE_WORDS or (len(words[0]) <= 1 and not words[0].endswith('.'))):
+            words.pop(0)
+        while words and (words[-1] in NOISE_WORDS or (len(words[-1]) <= 1 and not words[-1].endswith('.'))):
+            words.pop(-1)
+        if not words:
+            return None
+        # Indian taxpayer names are typically 2 to 4 words long
+        if 2 <= len(words) <= 4:
+            cand = " ".join(words)
+            if is_valid_name(cand):
+                return cand
+        # Also check all-caps sub-run of 2-3 words
+        m_run = re.search(r"\b([A-Z]{2,}(?:\s+[A-Z]{2,}){1,2})\b", cleaned)
+        if m_run:
+            cand = m_run.group(1).strip()
+            if is_valid_name(cand):
+                return cand
+        return None
+
+    for idx, line in enumerate(lines):
+        line_str = line.strip()
+        if not line_str:
+            continue
+
+        for key, pattern in PROXIMITY_LABEL_PATTERNS:
+            if key in results:
+                continue
+
+            m_match = pattern.search(line_str)
+            if not m_match:
+                continue
+
+            # Case 1: Inline separator (colon, dash, tab, double-space)
+            m_sep = re.search(
+                pattern.pattern + r"\s*[:\-\t]\s*([A-Za-z0-9\s.'&-]{2,60})",
+                line_str,
+                re.IGNORECASE,
+            )
+            if m_sep:
+                cand = _extract_name_candidate(m_sep.group(1))
+                if cand:
+                    results[key] = cand
+                    continue
+
+            # Case 2: Inline direct without colon (label followed by 2-4 ALL CAPS words)
+            m_direct = re.search(
+                pattern.pattern + r"\s+([A-Z]{2,}(?:\s+[A-Z]{2,}){1,3})\b",
+                line_str,
+            )
+            if m_direct:
+                cand = _extract_name_candidate(m_direct.group(1))
+                if cand:
+                    results[key] = cand
+                    continue
+
+            # Case 3: Label on Line N, Name on Line N+1 (or N+2 if N+1 is solitary separator)
+            if re.match(r"^\s*" + pattern.pattern + r"\s*[:\-]?\s*$", line_str, re.IGNORECASE):
+                next_idx = idx + 1
+                if next_idx < len(lines) and lines[next_idx].strip() in (":", "-", ":-"):
+                    next_idx += 1
+                if next_idx < len(lines):
+                    cand = _extract_name_candidate(lines[next_idx])
+                    if cand:
+                        results[key] = cand
+                        continue
+
+    return results
+
+
+HEADER_ROLES = (
+    r"(?:Individual|Taxpayer|HUFs?|Company|Representative|Director|Partners?|Proprietor)"
+)
+HEADER_ARROWS = r"(?:[v▼▽⌵˅^|]|expand_more|keyboard_arrow_down)"
+
+
+def extract_header_profile_caps_name(lines: List[str]) -> Optional[str]:
+    """
+    Extracts taxpayer name from the top navbar / header profile pill.
+    Based on the insights:
+    1. Names are written in ALL CAPS.
+    2. Names are usually 2 to 3 words long (up to 4 for compound names).
+    3. Positioned immediately preceding a dropdown indicator (v, ▼, expand_more)
+       and/or role badge (Individual, Taxpayer, HUF, etc.).
+    4. Preceded by navbar utility items (Call Us, English, A- A A+, user icon)
+       which must be cleanly excluded.
+    """
+    if not lines:
+        return None
+
+    def _extract_trailing_name_words(text_before: str) -> Optional[str]:
+        if not text_before:
+            return None
+        # Strip any bracketed or unbracketed PAN
+        cleaned = re.sub(r"[(\[{<]?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*[)\]}>]?", " ", text_before)
+        # Strip trailing arrows, icons, colons, vertical bars, bullet points
+        cleaned = re.sub(
+            r"[\s:|\-•/]*(?:" + HEADER_ARROWS + r"|account_circle|person|user)*[\s:|\-•/]*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        # Clean trailing non-letter/digit symbols
+        cleaned = cleaned.rstrip(" ([{<:-/|#•")
+        if not cleaned:
+            return None
+
+        # Split into tokens
+        tokens = cleaned.split()
+        if not tokens:
+            return None
+
+        # Walk backwards from right to left, collecting 2 to 4 consecutive valid name words
+        collected = []
+        for token in reversed(tokens):
+            t_upper = token.upper()
+            t_clean = re.sub(r"[^A-Z]", "", t_upper)
+            if not t_clean:
+                break
+            if t_clean in NOISE_WORDS:
+                if t_clean in SAFE_CONNECTORS and len(collected) >= 1:
+                    collected.append(t_upper)
+                    continue
+                break
+            if len(t_clean) < 2 and not token.endswith('.'):
+                break
+            collected.append(t_upper)
+            if len(collected) == 4:
+                break
+
+        # A name cannot lead with a connector (e.g. 'AND SONS')
+        while collected and re.sub(r"[^A-Z]", "", collected[-1].upper()) in SAFE_CONNECTORS:
+            collected.pop()
+
+        if len(collected) in (2, 3, 4):
+            candidate = " ".join(reversed(collected))
+            candidate_sanitized = sanitize_visual_name(candidate)
+            if is_valid_name(candidate_sanitized):
+                return candidate_sanitized
+
+        return None
+
+    for idx, line in enumerate(lines):
+        line_str = line.strip()
+        if not line_str:
+            continue
+
+        # Case 1: Same line with role badge: '... RAHUL MONDAL v Individual' or '... RAHUL MONDAL Individual'
+        # Iterate matches from right to left
+        role_matches = list(re.finditer(r"\b" + HEADER_ROLES + r"\b", line_str, re.IGNORECASE))
+        for m_role in reversed(role_matches):
+            text_before = line_str[:m_role.start()].strip()
+            cand = _extract_trailing_name_words(text_before)
+            if cand:
+                return cand
+
+        # Case 2: Adjacent lines: Line idx has '... RAHUL MONDAL v', Line idx+1 has 'Individual'
+        if idx + 1 < len(lines):
+            next_line = lines[idx + 1].strip()
+            if re.match(r"^(?:" + HEADER_ARROWS + r"\s*)?" + HEADER_ROLES + r"\b", next_line, re.IGNORECASE):
+                cand = _extract_trailing_name_words(line_str)
+                if cand:
+                    return cand
+
+        # Case 3: Line ending with dropdown arrow: '... RAHUL MONDAL v' or '... RAHUL MONDAL ▼'
+        m_arrow = re.search(r"(?:\s+" + HEADER_ARROWS + r"|\s*▼|\s*▽|\s*⌵|\s*˅|\s*expand_more)\s*$", line_str, re.IGNORECASE)
+        if m_arrow:
+            text_before = line_str[:m_arrow.start()].strip()
+            cand = _extract_trailing_name_words(text_before)
+            if cand:
+                return cand
+
+        # Case 4: Line with co-located PAN: '... RAHUL MONDAL (AHJPR0846B)' or '... RAHUL MONDAL AHJPR0846B'
+        m_pan = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", line_str)
+        if m_pan:
+            text_before = line_str[:m_pan.start()].strip()
+            cand = _extract_trailing_name_words(text_before)
+            if cand:
+                return cand
+
+    return None
+
+
 def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     """
     Scans a list of text lines for taxpayer name patterns:
     - Composite form fields (First Name, Middle Name, Last Name / Surname)
-    - Proximity to 'Name:', 'Taxpayer Name:', 'Legal Name:', 'Assessee Name:'
+    - Proximity labeled statutory names (Legal Name, Name as per PAN, Taxpayer Name, Trade Name)
+    - Header profile pill / dropdown button (2-3 ALL CAPS words before arrow/role)
     - Welcome banner: 'Welcome, <Name>'
     - Header profile badge '<Name> (<PAN>)'
     - Header profile dropdown button with role indicator
     """
+    if not lines:
+        return None
+
     # 0. Check composite form fields first (solves missing last name across separate fields)
     composite = extract_composite_form_name(lines)
     if composite:
         return composite
 
-    # 1. Check Profile / Personal Details labeled rows (e.g. "Full Name as per PAN", "Name (as per PAN)", "Name as per PAN", "Legal Name", "Full Name")
-    _PROFILE_LABEL_PATTERN = (
-        r"^(?:Full\s*Name(?:\s*\(?\s*as\s*per\s*PAN\s*\)?)?|"
-        r"Name\s*\(?\s*as\s*per\s*PAN\s*\)?|"
-        r"Name\s*\(?\s*as\s*per\s*Aadhaar\s*\)?|"
-        r"Legal\s*Name|Taxpayer(?:'s)?\s*Name|Assessee(?:'s)?\s*Name)\s*[:\-]?$"
-    )
-    _PROFILE_INLINE_PATTERN = (
-        r"\b(?:Full\s*Name(?:\s*\(?\s*as\s*per\s*PAN\s*\)?)?|"
-        r"Name\s*\(?\s*as\s*per\s*PAN\s*\)?|"
-        r"Name\s*\(?\s*as\s*per\s*Aadhaar\s*\)?|"
-        r"Legal\s*Name|Taxpayer(?:'s)?\s*Name|Assessee(?:'s)?\s*Name)\s*[:\-]\s*([A-Za-z\s.'-]{3,60})"
-    )
-    for idx, line in enumerate(lines):
-        line_clean = line.strip()
-        # Direct next-line value for Profile Name labels
-        if re.search(_PROFILE_LABEL_PATTERN, line_clean, re.IGNORECASE):
-            if idx + 1 < len(lines):
-                cand = sanitize_visual_name(lines[idx + 1])
-                words = cand.split()
-                if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
-                    return cand
-        # Inline with colon or dash: "Full Name as per PAN : WASIL AMAN MANDAL"
-        m_inline = re.search(_PROFILE_INLINE_PATTERN, line_clean, re.IGNORECASE)
-        if m_inline:
-            cand = sanitize_visual_name(m_inline.group(1))
-            words = cand.split()
-            if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
-                return cand
+    # 1. Check Proximity Labeled Statutory Names (Legal Name, Name as per PAN, Taxpayer Name, Trade Name)
+    labeled = extract_proximity_labeled_names(lines)
+    if labeled:
+        for key in ("legal_name", "pan_name", "taxpayer_name", "trade_name"):
+            if key in labeled and labeled[key]:
+                return labeled[key]
 
-    # 2. Check for labeled fields (excluding individual First/Middle/Last/Surname fragments)
-    for line in lines:
-        m_prefix = re.search(
-            r"\b(First|Middle|Last|Sur(?:name)?|Full|Legal|Taxpayer|Assessee)?\s*Name\s*[:\-]\s*([A-Za-z\s.'-]{3,60})",
-            line,
-            re.IGNORECASE,
-        )
-        if m_prefix:
-            prefix = (m_prefix.group(1) or "").lower()
-            if prefix in ("first", "middle", "last", "sur", "surname"):
-                continue  # Skip solitary composite fragment to avoid dropping last name
-            clean = sanitize_visual_name(m_prefix.group(2))
-            if is_valid_name(clean):
-                return clean
+    # 2. Check Header Profile Pill / Dropdown Button (2-3 ALL CAPS words before arrow / role badge)
+    header_name = extract_header_profile_caps_name(lines)
+    if header_name:
+        return header_name
 
-        m_taxpayer = re.search(r"(?:Taxpayer|Assessee|Legal)\s+Name\s*[:\-]?\s*([A-Za-z\s.'-]{3,60})", line, re.IGNORECASE)
-        if m_taxpayer:
-            clean = sanitize_visual_name(m_taxpayer.group(1))
-            if is_valid_name(clean):
-                return clean
-
-    # 2. Check for welcome banner
+    # 3. Check for welcome banner
     for line in lines:
         m_welcome = re.search(r"(?:Welcome(?:\s+Back)?|Hello)[,\s]+([A-Za-z\s.'-]{3,60})", line, re.IGNORECASE)
         if m_welcome:
