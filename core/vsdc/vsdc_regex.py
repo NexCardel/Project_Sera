@@ -88,32 +88,36 @@ def repair_numeric_ack(raw_str: str) -> Optional[str]:
 
 def repair_gst_arn(raw_str: str) -> Optional[str]:
     """
-    Validates and repairs a 15-character GST ARN (e.g. AA070826000001Z).
-    Format: 2 letters (State Code) + 12 digits + 1 checksum letter/digit.
+    Validates and repairs a 14-16 character GST ARN or Transaction / Ack ID (e.g. AA070826000001Z, AA27032419827364).
+    Format: 2 letters (State Code) + 11-14 digits + optional checksum letter/digit.
     """
     if not raw_str:
         return None
 
-    # 1. Direct regex match on raw text: 2 letters + 12 digits + 1 alnum
-    direct = re.search(r"\b[A-Z]{2}\d{12}[A-Z0-9]\b", raw_str.upper())
+    # 1. Direct regex match on raw text: 2 letters + 11 to 14 digits + optional 1 alnum
+    direct = re.search(r"\b([A-Z]{2}\d{11,14}[A-Z0-9]?)\b", raw_str.upper())
     if direct:
-        return direct.group(0)
+        return direct.group(1)
 
-    # 2. Labeled ARN pattern (e.g. ARN : AA190826000001Z or ARN is AA190826000001Z)
-    labeled = re.search(r"\bARN\s*(?:is|[-:–—=])?\s*([A-Z0-9\s]{14,20})\b", raw_str, re.IGNORECASE)
+    # 2. Labeled ARN / Transaction ID pattern (e.g. ARN : AA190826000001Z, Transaction ID: AA27032419827364)
+    labeled = re.search(
+        r"\b(?:ARN|Transaction\s*(?:ID|No|Number)?|Reference\s*(?:ID|No|Number)?|Ack\s*(?:No|Number)?)\s*(?:is|[-:–—=])?\s*([A-Z0-9\s]{14,20})\b",
+        raw_str,
+        re.IGNORECASE,
+    )
     if labeled:
         clean_tok = re.sub(r"\s+", "", labeled.group(1)).upper()
-        if len(clean_tok) == 15 and re.match(r"^[A-Z]{2}\d{12}[A-Z0-9]$", clean_tok):
+        if 14 <= len(clean_tok) <= 16 and re.match(r"^[A-Z]{2}\d{11,14}[A-Z0-9]?$", clean_tok):
             return clean_tok
 
-    # 3. Optical repair on 15-char tokens
-    for token in re.findall(r"\b[A-Za-z0-9]{15}\b", raw_str):
+    # 3. Optical repair on 14-16 char tokens
+    for token in re.findall(r"\b[A-Za-z0-9]{14,16}\b", raw_str):
         token_upper = token.upper()
         state_code = "".join(LETTER_FIX_MAP.get(c, c) for c in token_upper[:2])
-        digits = "".join(DIGIT_FIX_MAP.get(c, c) for c in token_upper[2:14])
-        checksum = token_upper[14]
-        candidate = state_code + digits + checksum
-        if re.match(r"^[A-Z]{2}\d{12}[A-Z0-9]$", candidate):
+        digits = "".join(DIGIT_FIX_MAP.get(c, c) for c in token_upper[2:-1])
+        suffix = token_upper[-1]
+        candidate = state_code + digits + suffix
+        if re.match(r"^[A-Z]{2}\d{11,14}[A-Z0-9]?$", candidate):
             return candidate
 
     return None
