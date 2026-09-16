@@ -515,9 +515,16 @@ def enrich_payload_with_gemini(
 
             pl_val = clean_res.get("period_label")
             if pl_val and isinstance(pl_val, str) and pl_val.strip():
-                payload["period_label"] = pl_val.strip()
+                clean_pl = pl_val.strip()
+                # Normalize Income Tax Assessment Year strings
+                if "Assessment Year" in clean_pl:
+                    clean_pl = re.sub(r"Assessment\s*Year\s*", "AY ", clean_pl, flags=re.IGNORECASE)
+                elif "A.Y." in clean_pl:
+                    clean_pl = re.sub(r"A\.Y\.\s*", "AY ", clean_pl, flags=re.IGNORECASE)
+                    
+                payload["period_label"] = clean_pl
                 if isinstance(payload.get("raw_payload"), dict):
-                    payload["raw_payload"]["period_label"] = pl_val.strip()
+                    payload["raw_payload"]["period_label"] = clean_pl
 
             st_val = clean_res.get("status")
             if st_val and isinstance(st_val, str) and st_val.strip():

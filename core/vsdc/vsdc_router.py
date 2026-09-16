@@ -444,8 +444,9 @@ class VSDCRouter:
         # The is_better_taxpayer_name() guard ensures we only upgrade, never downgrade.
         _should_scan_header_for_name = name_incomplete and not _skip_header_for_name
         if pan_missing or _should_scan_header_for_name:
-            if matched_crosshair.target_crop != "header":
-                header_res = self.ocr.scan_image(img, region_type="header")
+            if matched_crosshair.target_crop not in ("header", "top_right_profile"):
+                # Use highly precise top right crop to prevent name spoofing from other screen areas
+                header_res = self.ocr.scan_image(img, region_type="top_right_profile")
                 h_text = header_res.get("text", "")
                 h_lines = header_res.get("lines", [])
                 h_pan = extract_pan(h_text)
@@ -460,8 +461,8 @@ class VSDCRouter:
                     gstin = h_gstin
         # If we skipped header for name but still need PAN, scan header for PAN only
         elif pan_missing and _skip_header_for_name:
-            if matched_crosshair.target_crop != "header":
-                header_res = self.ocr.scan_image(img, region_type="header")
+            if matched_crosshair.target_crop not in ("header", "top_right_profile"):
+                header_res = self.ocr.scan_image(img, region_type="top_right_profile")
                 h_text = header_res.get("text", "")
                 h_pan = extract_pan(h_text)
                 h_gstin = extract_gstin(h_text)
@@ -704,18 +705,20 @@ class VSDCRouter:
         # Immune to modal popups (e.g. Aadhaar/E-KYC reminders).
         # -------------------------------------------------------------
         if matched_crosshair.id == "gst_welcome_calendar":
+            # Primary pass on the main crop
             client_name = extract_gst_welcome_name(full_text)
-            if not client_name:
-                client_name = extract_name_from_ocr_lines(lines)
-
             gstin = extract_gstin(full_text)
-            # Fallback to full scan if GSTIN card was not inside crop
-            if not gstin and target_crop != "full":
-                full_res = self.ocr.scan_image(img, region_type="full")
-                f_text = full_res.get("text", "")
-                gstin = extract_gstin(f_text)
-                if gstin:
-                    full_text = full_text + "\n" + f_text
+            
+            # If identity is incomplete, forcefully scan ONLY the top right profile pill
+            if not client_name or not gstin:
+                tr_res = self.ocr.scan_image(img, region_type="top_right_profile")
+                tr_text = tr_res.get("text", "")
+                tr_lines = tr_res.get("lines", [])
+                
+                if not client_name:
+                    client_name = extract_gst_welcome_name(tr_text) or extract_name_from_ocr_lines(tr_lines)
+                if not gstin:
+                    gstin = extract_gstin(tr_text)
 
             pan = None
             if gstin and len(gstin) >= 12:
@@ -815,7 +818,12 @@ class VSDCRouter:
 
             # Gemini API call removed to prevent synchronous thread blocking.
 
-            legal_name = meta.get("legal_name") or extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
+            legal_name = meta.get("legal_name")
+            if not legal_name:
+                # Force precise crop for name instead of full-screen line scanning
+                tr_res = self.ocr.scan_image(img, region_type="top_right_profile")
+                legal_name = extract_gst_welcome_name(tr_res.get("text", "")) or extract_name_from_ocr_lines(tr_res.get("lines", []))
+
             trade_name = meta.get("trade_name")
             form_type = resolve_gst_form_type_from_url(url, full_text) or meta.get("form_type") or extract_filing_type(full_text) or "GSTR-1"
             
@@ -974,12 +982,14 @@ class VSDCRouter:
         arn = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
 
         # Fallback to full image scan if ARN was not found in cropped card on a return/submission card!
+        # Even if the route wasn't technically a "submission" crosshair, if it's GST and they just hit submit
+        # in-place (modal), we want to fallback to full screen just in case.
         is_sub_crosshair = matched_crosshair.is_terminal_submission or matched_crosshair.id in (
             "gst_filing_success",
             "gst_filing_file_success",
-        )
+        ) or ("success" in url.lower() or "/file" in url.lower() or "/filing" in url.lower())
 
-        if not arn and is_sub_crosshair:
+        if not arn and (is_sub_crosshair or matched_crosshair.id == "gst_form_details"):
             if target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
@@ -1023,15 +1033,14 @@ class VSDCRouter:
             name_part = f"{assessee}{trade} • " if assessee else ""
             self.notify_activity("submit", f"{form_lbl} Filed Successfully", f"{name_part}ARN: {arn}")
 
-            if is_sub_crosshair:
-                # Seal and flush filing payload!
-                master_payload = self.assembler.seal_and_flush()
-                if master_payload:
-                    self.has_flushed_current_route = True
-                    self.assembler.clear_workflow_selection()
-                    flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
-                    print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
-                return master_payload
+            # Seal and flush filing payload! If we got an ARN, the submission is confirmed.
+            master_payload = self.assembler.seal_and_flush()
+            if master_payload:
+                self.has_flushed_current_route = True
+                self.assembler.clear_workflow_selection()
+                flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
+                print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
+            return master_payload
 
         # Dataset Completion Principle:
         completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)

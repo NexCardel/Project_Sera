@@ -1003,25 +1003,29 @@
           handler: _handleFilingSuccess
         },
         {
-          id: 'gst_form_details',
-          // Matches GSTR-1, GSTR-3B, CMP-08, IFF, GSTR-4, GSTR-9 form tables on return.gst.gov.in and services.gst.gov.in
-          pattern: /(?:returns|services)\/(?:auth\/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff)/i,
-          handler: _handleFormDetails
-        },
-        {
           id: 'gst_filing_file_success',
-          // The GST confirmation route for IFF, GSTR-1, GSTR-3B
-          pattern: /returns\/auth\/file(?:[?#]|$)/i,
+          pattern: /(?:\/#)?\/?(?:returns|services|payment)\/auth\/(?:[a-zA-Z0-9_-]+\/)?(?:file|filing|success)(?:[?#/]|$)/i,
           handler: _handleIffSubmissionSuccess
         },
         {
+          id: 'gst_audit_history',
+          pattern: /(?:\/#)?\/?(?:returns|services)\/auth\/(?:efiledReturns|trackreturnstatus)(?:[?#/]|$)/i,
+          handler: _handleFormDetails // Reuse form details handler for now
+        },
+        {
+          id: 'gst_form_details',
+          // Matches GSTR-1, GSTR-3B, CMP-08, IFF, GSTR-4, GSTR-9, ITC-04, DRC-03 etc.
+          pattern: /(?:\/#)?\/?(?:returns|services|payment)\/(?:auth\/)?(?:gstr[-_ ]*[1-9A-Z]+|cmp[-_ ]*08|iff|itc[-_ ]*04|drc[-_ ]*03)(?!\/(?:file|filing|success))/i,
+          handler: _handleFormDetails
+        },
+        {
           id: 'gst_welcome_calendar',
-          pattern: /(?:services\/auth\/fowelcome|services\/auth\/dashboard|fowelcome|auth\/dashboard$)/i,
+          pattern: /(?:\/#)?\/?(?:services\/auth\/fowelcome|services\/auth\/dashboard|fowelcome|auth\/dashboard$)/i,
           handler: _handleWelcomeCalendar
         },
         {
           id: 'gst_returns_dashboard',
-          pattern: /(?:services\/auth\/returns|services\/quicklinks\/returns|returns\/dashboard)/i,
+          pattern: /(?:\/#)?\/?(?:services\/auth\/returns|services\/quicklinks\/returns|returns\/(?:auth\/)?dashboard)/i,
           handler: _handleReturnsDashboard
         },
         {

@@ -143,6 +143,13 @@ class VSDCOcrEngine:
         if region_type == "header":
             top_h = max(180, min(int(h * 0.28), 320))
             return img.crop((0, 0, w, min(top_h, h)))
+        elif region_type == "top_right_profile":
+            # Captures exactly the top right 35% of width and top 25% of height
+            # This perfectly isolates the user profile pill on both ITR and GST portals
+            # ensuring no stray names or noise are captured from other header elements.
+            left = int(w * 0.65)
+            bottom = min(250, int(h * 0.25))
+            return img.crop((left, 0, w, bottom))
         elif region_type == "center_card":
             left = int(w * 0.02)
             right = int(w * 0.98)

@@ -284,29 +284,59 @@ def resolve_gst_form_type_from_url(url: Optional[str], text: Optional[str] = Non
     - returns/auth/gstr4/filing -> GSTR-4
     - returns/auth/gstr9/filing -> GSTR-9
     - returns/auth/gstr9c/filing -> GSTR-9C
+    - ?rtn_typ=GSTR1 -> GSTR-1
     """
     if not url:
         return extract_filing_type(text) if text else None
 
-    u_lower = url.lower()
+    import urllib.parse
+    parsed = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parsed.query)
+    
+    # Check query params first (e.g., ?rtn_typ=GSTR1, ?f=gstr3b)
+    url_param_form = ""
+    if "rtn_typ" in qs:
+        url_param_form = qs["rtn_typ"][0].lower()
+    elif "f" in qs:
+        url_param_form = qs["f"][0].lower()
+    elif "returnType" in qs:
+        url_param_form = qs["returnType"][0].lower()
+
+    # Create a concatenated search string from path, query params, and hash fragment
+    u_lower = (parsed.path + " " + url_param_form + " " + parsed.fragment).lower()
+
     if "gstr3b" in u_lower or "gstr-3b" in u_lower:
         return "GSTR-3B"
     if "cmp08" in u_lower or "cmp-08" in u_lower:
         return "CMP-08"
     if "iff" in u_lower:
         return "GSTR-1/IFF"
-    if "gstr4" in u_lower or "gstr-4" in u_lower:
-        return "GSTR-4"
     if "gstr9c" in u_lower or "gstr-9c" in u_lower:
         return "GSTR-9C"
     if "gstr9" in u_lower or "gstr-9" in u_lower:
         return "GSTR-9"
+    if "gstr10" in u_lower or "gstr-10" in u_lower:
+        return "GSTR-10"
+    if "gstr11" in u_lower or "gstr-11" in u_lower:
+        return "GSTR-11"
+    if "gstr4" in u_lower or "gstr-4" in u_lower:
+        return "GSTR-4"
+    if "gstr5a" in u_lower or "gstr-5a" in u_lower:
+        return "GSTR-5A"
+    if "gstr5" in u_lower or "gstr-5" in u_lower:
+        return "GSTR-5"
+    if "gstr6" in u_lower or "gstr-6" in u_lower:
+        return "GSTR-6"
     if "gstr7" in u_lower or "gstr-7" in u_lower:
         return "GSTR-7"
     if "gstr8" in u_lower or "gstr-8" in u_lower:
         return "GSTR-8"
     if "gstr1" in u_lower or "gstr-1" in u_lower:
         return "GSTR-1"
+    if "itc04" in u_lower or "itc-04" in u_lower:
+        return "ITC-04"
+    if "drc03" in u_lower or "drc-03" in u_lower or "drc03a" in u_lower:
+        return "DRC-03"
 
     return extract_filing_type(text) if text else None
 
