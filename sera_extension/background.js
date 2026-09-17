@@ -248,8 +248,8 @@ chrome.runtime.onInstalled.addListener(() => {
 // Broadcast changes to open tabs whenever settings change in storage
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.sdcEnabled || changes.trackerEnabled || changes.fstEnabled || changes.sdsEnabled) {
-    chrome.storage.local.get(['trackerEnabled', 'sdcEnabled', 'fstEnabled', 'sdsEnabled'], (data) => {
+  if (changes.sdcEnabled || changes.trackerEnabled || changes.fstEnabled) {
+    chrome.storage.local.get(['trackerEnabled', 'sdcEnabled', 'fstEnabled'], (data) => {
       const trackerEnabled = data.trackerEnabled !== false;
       const sdcEnabled = data.sdcEnabled !== false && trackerEnabled;
       const fstEnabled = data.fstEnabled !== false && trackerEnabled;
@@ -291,11 +291,10 @@ function injectSDC(tabId, reason) {
   // Reserve the tab before the asynchronous settings lookup to prevent two
   // concurrent injection requests from both passing the guard.
   sdcInjectedTabs.add(tabId);
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled', 'sdsEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
     const sdcEnabled = (data.sdcEnabled !== false) && trackerEnabled;
     const fstEnabled = (data.fstEnabled !== false) && trackerEnabled;
-    const sdsEnabled = false; // SDS Paused
 
     if (!trackerEnabled || (!sdcEnabled && !fstEnabled)) {
       sdcInjectedTabs.delete(tabId);

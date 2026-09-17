@@ -4,7 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const toggleFst = document.getElementById('toggle-fst');
   const toggleVsdc = document.getElementById('toggle-vsdc');
   const vsdcBadge = document.getElementById('vsdc-badge');
-  const toggleSds = document.getElementById('toggle-sds');
   const toggleToast = document.getElementById('toggle-toast');
   const toggleSca = document.getElementById('toggle-sca');
   const statusDot = document.getElementById('status-dot');
@@ -47,7 +46,6 @@ document.addEventListener('DOMContentLoaded', () => {
       'fstEnabled',
       'sdcEnabled',
       'vsdcEnabled',
-      'sdsEnabled',
       'sdcToastEnabled',
       'scaEnabled',
       'manualAssistPayload',
@@ -56,14 +54,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const tracker = data.trackerEnabled !== false;
       const sdc = (data.sdcEnabled !== false) && tracker;
       const vsdc = data.vsdcEnabled !== false;
-      const sds = false; // Paused
       const toast = data.sdcToastEnabled !== false;
       const sca = data.scaEnabled !== false;
 
       if (toggleFst) toggleFst.checked = sdc;
       if (toggleVsdc) toggleVsdc.checked = vsdc;
       updateVsdcBadge(vsdc);
-      if (toggleSds) toggleSds.checked = false;
       if (toggleToast) toggleToast.checked = toast;
       if (toggleSca) toggleSca.checked = sca;
 
@@ -108,7 +104,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const sdcVal = toggleFst ? toggleFst.checked : true;
     const vsdcVal = toggleVsdc ? toggleVsdc.checked : true;
-    const sdsVal = toggleSds ? toggleSds.checked : true;
     const toastVal = toggleToast ? toggleToast.checked : true;
     const scaVal = toggleSca ? toggleSca.checked : true;
 
@@ -118,9 +113,8 @@ document.addEventListener('DOMContentLoaded', () => {
       fstEnabled: sdcVal,
       sdcEnabled: sdcVal,
       vsdcEnabled: vsdcVal,
-      sdsEnabled: sdsVal,
       sdcToastEnabled: toastVal,
-      trackerEnabled: sdcVal || sdsVal || vsdcVal,
+      trackerEnabled: sdcVal || vsdcVal,
       scaEnabled: scaVal
     };
 
@@ -144,7 +138,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Attach toggle change listeners
   if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
   if (toggleVsdc) toggleVsdc.addEventListener('change', () => saveSettings('vsdcEnabled'));
-  if (toggleSds) toggleSds.addEventListener('change', () => saveSettings('sdsEnabled'));
   if (toggleToast) toggleToast.addEventListener('change', () => saveSettings('sdcToastEnabled'));
   if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
 
