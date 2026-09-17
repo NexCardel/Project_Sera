@@ -23,6 +23,7 @@ from .vsdc_regex import (
     repair_gst_arn,
     extract_pan,
     extract_gstin,
+    extract_dob,
     extract_assessment_year,
     extract_filing_type,
     classify_verification_status,
@@ -104,6 +105,7 @@ class VSDCRouter:
         self.last_logged_name: Optional[str] = None
         self.last_logged_pan: Optional[str] = None
         self.last_logged_pref: Optional[str] = None
+        self.last_logged_dob: Optional[str] = None
         self.burst_ticks_remaining: int = 0
         self.was_page_loading: bool = False
         self._cached_address_elements: Dict[int, Any] = {}
@@ -383,6 +385,7 @@ class VSDCRouter:
             self.last_logged_name = None
             self.last_logged_pan = None
             self.last_logged_pref = None
+            self.last_logged_dob = None
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
@@ -411,6 +414,7 @@ class VSDCRouter:
                 self.last_logged_name = None
                 self.last_logged_pan = None
                 self.last_logged_pref = None
+                self.last_logged_dob = None
                 self.last_screen_hash = None
                 self.route_poll_count = 0
                 self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
@@ -482,6 +486,16 @@ class VSDCRouter:
             uia_fields_used.append("pan")
         if uia_gstin:
             uia_fields_used.append("gstin")
+
+        # Date of Birth: only meaningful once the taxpayer identity is being read
+        # (never on the login/password page), and never overwritten once set —
+        # see update_identity()'s dob handling in vsdc_assembler.py.
+        uia_dob = extract_dob(uia_text) if uia_text else None
+        dob = None
+        if matched_crosshair.id != "itr_login_auth" and not self.assembler.dob:
+            dob = uia_dob or extract_dob(full_text)
+            if uia_dob:
+                uia_fields_used.append("dob")
 
         # On login authentication (password) page: strictly capture PAN only.
         # Never extract or register name candidates from the password / secure access message page
@@ -557,7 +571,7 @@ class VSDCRouter:
         # exact UIA text vs VSDC visual/OCR) so the source is visible, not just in logs.
         source_tag = " • VSDC-X (Exact)" if uia_fields_used else " • VSDC (Visual)"
         if client_name and not is_login_auth:
-            self.assembler.update_identity(name=client_name, is_authoritative=is_personal_info)
+            self.assembler.update_identity(name=client_name, dob=dob, is_authoritative=is_personal_info)
             authoritative_name = self.assembler.client_name or client_name
             is_better_name = is_better_taxpayer_name(authoritative_name, self.last_logged_name)
             if (is_better_name or is_personal_info) and authoritative_name != self.last_logged_name:
@@ -572,7 +586,7 @@ class VSDCRouter:
                 )
 
         if pan or gstin:
-            flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, portal=self.active_portal)
+            flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, dob=dob, portal=self.active_portal)
             c_name = self.assembler.client_name or ""
             if pan and pan != self.last_logged_pan:
                 print(f"[VSDC Router] Identity updated: PAN={pan}")
@@ -585,6 +599,23 @@ class VSDCRouter:
             if flushed_prior:
                 print(f"[VSDC Router] Flushed prior client session due to PAN context switch!")
                 return flushed_prior
+        elif dob:
+            # DOB arrived on its own tick (no fresh PAN/GSTIN alongside it) — still
+            # needs to reach the assembler, since the branches above only call
+            # update_identity when pan/gstin/name are present this tick.
+            self.assembler.update_identity(dob=dob)
+
+        # Surface DOB the moment it settles, even if that's a tick after identity
+        # was already announced (mirrors GST's filing-preference-arrives-later toast).
+        if self.assembler.dob and self.assembler.dob != self.last_logged_dob:
+            self.last_logged_dob = self.assembler.dob
+            print(f"[VSDC Router] Extracted DOB: {self.assembler.dob}")
+            ident_label = self.assembler.client_name or self.assembler.client_pan or ""
+            self.notify_activity(
+                "update",
+                f"DOB: {self.assembler.dob}",
+                f"{ident_label}{source_tag}".strip(" •"),
+            )
 
         # Mark route captured when key data points for the matched route render on screen
         if is_login_auth and pan:

@@ -46,6 +46,34 @@ class TestVSDCAssembler(unittest.TestCase):
         self.assertEqual(raw_p["assembler_captures"][0]["dataset_key"], "AHJPR0846B|ITR-4|AY 2026-27")
         self.assertEqual(len(raw_p["timeline"]), 3)
 
+    def test_dob_captured_and_flows_into_sealed_payload(self):
+        self.assembler.record_step("https://eportal.incometax.gov.in/dashboard", "itr_landing")
+        self.assembler.update_identity(pan="AHJPR0846B", name="AMAN ASSOCIATES", dob="06-Aug-1971")
+        self.assertEqual(self.assembler.dob, "06-Aug-1971")
+
+        self.assembler.record_step("https://eportal.incometax.gov.in/fo-return-success", "itr_filed_verified")
+        self.assembler.record_submission(
+            ack_number="982348123456789",
+            status="Submitted (e-Verified)",
+            crosshair_id="itr_filed_verified",
+        )
+
+        payload = self.assembler.seal_and_flush()
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["dob"], "06-Aug-1971")
+
+    def test_dob_is_fixed_once_set_not_overwritten(self):
+        self.assembler.update_identity(pan="AHJPR0846B", dob="06-Aug-1971")
+        # A later, different DOB read (e.g. a mis-OCR) must not overwrite the
+        # first valid value the same way name/pref can be upgraded
+        self.assembler.update_identity(dob="01-Jan-1999")
+        self.assertEqual(self.assembler.dob, "06-Aug-1971")
+
+    def test_dob_resets_on_pan_context_switch(self):
+        self.assembler.update_identity(pan="AHJPR0846B", dob="06-Aug-1971")
+        self.assembler.update_identity(pan="BBBBB2222B", name="CLIENT TWO")
+        self.assertIsNone(self.assembler.dob)
+
     def test_pan_context_switch_guard(self):
         # Client 1 session
         self.assembler.update_identity(pan="AHJPR0846B", name="CLIENT ONE")

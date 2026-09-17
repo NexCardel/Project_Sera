@@ -170,6 +170,30 @@ def extract_pan(text: str) -> Optional[str]:
     return None
 
 
+def extract_dob(text: str) -> Optional[str]:
+    """
+    Extracts Date of Birth from an ITR Personal Info / Profile page.
+    Accepts DD-Mon-YYYY (06-Aug-1971), DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD,
+    immediately after a "Date of Birth" / "DOB" / "Birth Date" label — never an
+    unlabeled bare date, to avoid mistaking a filing/session date for DOB.
+    Mirrors the DOB extraction strategy already proven in the SDC browser
+    extension (sera_extension/sdc/protocols/itr_protocol.js _extractDob), applied
+    here to portal text instead of DOM elements.
+    """
+    if not text:
+        return None
+
+    m = re.search(
+        r"(?:Date\s*of\s*Birth|DOB|Birth\s*Date)\s*[:#\-]?\s*\r?\n?\s*"
+        r"(\d{2}[/\-.](?:[A-Za-z]{3}|\d{2})[/\-.]\d{4}|\d{4}[/\-.]\d{2}[/\-.]\d{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    return m.group(1).strip().replace(".", "-")
+
+
 def extract_gstin(text: str) -> Optional[str]:
     """
     Extracts a 15-character Goods and Services Tax Identification Number (GSTIN).

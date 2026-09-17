@@ -8,6 +8,7 @@ from core.vsdc.vsdc_regex import (
     repair_gst_arn,
     extract_pan,
     extract_gstin,
+    extract_dob,
     extract_assessment_year,
     extract_filing_type,
     classify_verification_status,
@@ -64,6 +65,25 @@ class TestVSDCRegex(unittest.TestCase):
     def test_gstin_extraction(self):
         gstin = extract_gstin("GSTIN of assessee is 07AHJPR0846B1Z5 on invoice")
         self.assertEqual(gstin, "07AHJPR0846B1Z5")
+
+    def test_dob_extraction_label_formats(self):
+        self.assertEqual(extract_dob("Date of Birth : 06-Aug-1971"), "06-Aug-1971")
+        self.assertEqual(extract_dob("DOB: 21/09/2003"), "21/09/2003")
+        self.assertEqual(extract_dob("Birth Date - 1971-08-06"), "1971-08-06")
+        # Dotted separators normalized to hyphens, matching SDC's own normalization
+        self.assertEqual(extract_dob("DOB: 06.08.1971"), "06-08-1971")
+
+    def test_dob_extraction_label_and_value_on_separate_lines(self):
+        # UIA/OCR lines join label and value as adjacent lines, not same line
+        self.assertEqual(extract_dob("Date of Birth\n06-Aug-1971"), "06-Aug-1971")
+
+    def test_dob_extraction_requires_a_label(self):
+        # A bare, unlabeled date must NOT be mistaken for DOB (e.g. a filing date)
+        self.assertIsNone(extract_dob("Filed on 06-Aug-1971 successfully"))
+
+    def test_dob_extraction_no_match_returns_none(self):
+        self.assertIsNone(extract_dob("Part A General - Personal Information"))
+        self.assertIsNone(extract_dob(""))
 
     def test_assessment_year_extraction(self):
         ay = extract_assessment_year("Return filed for AY 2026-27 successfully")

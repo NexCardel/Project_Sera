@@ -243,6 +243,7 @@ class SessionContext:
     client_name: Optional[str] = None
     trade_name: Optional[str] = None
     gstin: Optional[str] = None
+    dob: Optional[str] = None
     filing_preference: Optional[str] = None
     is_active: bool = False
     started_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -267,6 +268,7 @@ class FilingRecord:
     status: str
     status_rank: int
     due_date: str = ""
+    dob: str = ""
     arn: str = ""
     ack_number: str = ""
     portal: str = "GST Portal"
@@ -295,6 +297,7 @@ class FilingRecord:
             "tax_period": self.tax_period,
             "fy": self.fy,
             "due_date": self.due_date,
+            "dob": self.dob,
             "filing_preference": self.filing_preference,
             "arn": self.arn,
             "ack_number": self.ack_number or self.arn,
@@ -378,6 +381,14 @@ class VisualSessionAssembler:
     @gstin.setter
     def gstin(self, val: Optional[str]):
         self.session.gstin = val
+
+    @property
+    def dob(self) -> Optional[str]:
+        return self.session.dob
+
+    @dob.setter
+    def dob(self, val: Optional[str]):
+        self.session.dob = val
 
     @property
     def filing_preference(self) -> Optional[str]:
@@ -471,6 +482,7 @@ class VisualSessionAssembler:
         portal: Optional[str] = None,
         filing_preference: Optional[str] = None,
         trade_name: Optional[str] = None,
+        dob: Optional[str] = None,
         is_authoritative: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -510,6 +522,15 @@ class VisualSessionAssembler:
 
         if gstin:
             self.gstin = gstin.strip().upper()
+
+        if dob and not self.dob:
+            # DOB is a fixed identity attribute (unlike name, which can be refined
+            # across pages) — once captured, it never legitimately changes, so the
+            # first valid read wins rather than overwriting on every later tick.
+            self.dob = dob.strip()
+            for rec in self.records.values():
+                rec.dob = self.dob
+                self.captures[rec.dataset_key] = rec.to_dict()
 
         if filing_preference:
             norm_pref = filing_preference.strip().title()
@@ -648,6 +669,7 @@ class VisualSessionAssembler:
             status=effective_status,
             status_rank=effective_rank,
             due_date=self.due_date or "",
+            dob=self.dob or "",
             arn=effective_arn,
             ack_number=effective_arn,
             portal=self.portal,
@@ -793,6 +815,7 @@ class VisualSessionAssembler:
             "tax_period": record.tax_period,
             "fy": record.fy,
             "due_date": record.due_date,
+            "dob": record.dob,
             "filing_preference": record.filing_preference,
             "arn": record.arn,
             "ack_number": record.ack_number or record.arn,
@@ -913,6 +936,7 @@ class VisualSessionAssembler:
             "period_label": primary.period_label,
             "fy": primary.fy,
             "due_date": primary.due_date,
+            "dob": primary.dob,
             "filing_preference": primary.filing_preference,
             "arn": primary.arn,
             "status": primary.status,
