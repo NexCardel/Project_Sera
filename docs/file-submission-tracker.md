@@ -151,10 +151,10 @@ Because modern portal frontends rotate tokens and fragment single human logins i
 
 ---
 
-### C. Live Watcher & Desktop App Integration
+### C. Direct SQLite & Desktop App Integration
 
-* **Continuous Live Tracking (`--watch`)**:
-  Monitors `seraRawPayloadDump.txt` via non-blocking file polling. Automatically rebuilds `payload_report.xlsx` whenever the interceptor appends new entries.
+* **Direct SQLite Ingestion (`rawPayload.db`)**:
+  Processes real-time entries directly from the local `rawPayload.db` SQLite database, eliminating unnecessary intermediate disk text dumps (`seraRawPayloadDump.txt`).
 * **In-App Preferences Integration**:
   The desktop **Tracker Dump Workspace** exposes a direct trigger button inside the **`Preferences`** menu (`mdi.file-excel`), compiling and opening the report instantly in Microsoft Excel.
 
@@ -164,15 +164,23 @@ Because modern portal frontends rotate tokens and fragment single human logins i
 
 All captured filings and API dumps are logged directly to SQLite table `tracker_dump` (in `rawPayload.db`) and presented in the desktop **Tracker Dump** workspace:
 
-- **Zero-Interrupt Background Logging**: Eliminates intrusive modal prompts; captures save silently.
+- **Zero-Interrupt Background Logging**: Eliminates intrusive modal prompts; captures save silently to encrypted SQLite.
 - **Desktop Toast Alerts**: Non-intrusive 5-second green toasts alert staff upon capture (`Captured Income Tax (ITR-4) — ARN: 125873710140314`).
 - **SRPF Containerization**: Aggregates all fragmented submissions, profile lookups, bank validations, and wizard interactions belonging to the same entity into a single unified client container.
+- **Color-Coded Status Badges & Pills**:
+  The table renders filing statuses as stylized, color-coded Google Material pill badges (`mdi.*`) with strict monotonic status protection:
+  - 🟢 **Verified / Processed**: `mdi.check-decagram` (Emerald Green `#00E676` / `#052e16`) for `"Filed & Verified (Processed)"`, `"Filed & Verified"`, `"Filed"`, `"e-Verified"`.
+  - 🟡 **Pending e-Verification**: `mdi.clock-alert-outline` (Amber Yellow `#FFD600` / `#2e2305`) for `"Submitted (e-verification pending)"`, `"Submitted (Pending e-Verification)"`, `"Submitted"`.
+  - 🔵 **e-Verification Action**: `mdi.shield-check-outline` (Blue `#40C4FF` / `#082f49`) for `"e-Verification completed"`, `"Bank Account e-Verified"`.
+  - 🟣 **Bank Validated**: `mdi.bank-check` (Purple `#E040FB` / `#2e1065`) for `"Validated (Active & Nominated for Refund)"`.
+  - 🟠 **In Progress / Draft**: `mdi.progress-clock` (Orange `#FF9100` / `#381a05`) for `"In Progress"`, `"Draft"`, `"Processing"`.
+  - 🔴 **Failed / Rejected**: `mdi.alert-octagon-outline` (Red `#FF5252` / `#450a0a`) for `"Failed"`, `"Rejected"`, `"Defective"`.
+  - ⚪ **Default / Visited**: `mdi.information-outline` (Neutral Slate `#94A3B8` / `#1e293b`).
 - **Floating Preferences Menu Widget**:
-  The header card consolidates all utilities into a floating **`Preferences`** menu (`mdi.cog-outline`):
-  - 📄 **Open Dump (TXT)** (`mdi.file-document-outline`)
-  - 🔄 **Rebuild TXT Dump** (`mdi.file-sync-outline`)
+  The header card consolidates utilities into a floating **`Preferences`** menu (`mdi.cog-outline`):
   - 🗄️ **Re-Resolve Identities (SRPF)** (`mdi.database-sync`)
   - 📊 **FST Classifier (Excel Report)** (`mdi.file-excel`)
+  - 📑 **DOM Parser 1 (Excel Report)** (`mdi.file-table-outline`)
   - 📤 **Export Captures (CSV)** (`mdi.file-export`)
   - 🧹 **Clear All Captures** (`mdi.delete-sweep`)
 - **Session Audit Timeline Decoder (Inspector Tab 3)**:
@@ -201,13 +209,12 @@ All captured filings and API dumps are logged directly to SQLite table `tracker_
 ---
 
 ## 6. Execution & Operational Commands
-
-### A. Run FST Classifier in Live Watcher Mode
+ 
+### A. Run FST Classifier Against SQLite Database
 ```cmd
 cd "C:\Users\Nex\Downloads\Project Sera\APP\FST_Classifier_1"
-python fst_classifier.py "..\seraRawPayloadDump.txt" "payload_report.xlsx" --watch
+python fst_classifier.py "..\rawPayload.db" "payload_report.xlsx"
 ```
-*(Or simply double-click `FST_Classifier_1\run.bat`)*
 
 ### B. Launch from Sera Desktop UI
 Open **Tracker Dump Workspace** ➔ Click **`Preferences`** ➔ Select **`FST Classifier (Excel Report)`**.

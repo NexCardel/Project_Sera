@@ -1,0 +1,660 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GST Return Portal | GSTR-1 & GSTR-3B Filing Simulation</title>
+    <style>
+        :root {
+            --gst-navy: #1f3a60;
+            --gst-header: #0b2545;
+            --gst-blue: #1e4b85;
+            --gst-btn-blue: #23477d;
+            --gst-green: #2e7d32;
+            --gst-light-green: #e8f5e9;
+            --gst-border: #d1d5db;
+        }
+
+        * {
+            box-sizing: border-box;
+            font-family: Arial, 'Segoe UI', Tahoma, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f0f2f5;
+            color: #333333;
+        }
+
+        /* Top Portal Header */
+        header {
+            background-color: var(--gst-header);
+            color: #ffffff;
+            padding: 12px 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.15);
+        }
+
+        .portal-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .portal-logo-emblem {
+            background: #ffffff;
+            color: var(--gst-navy);
+            font-weight: 900;
+            font-size: 14px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+
+        .portal-title {
+            font-size: 17px;
+            font-weight: bold;
+            letter-spacing: 0.3px;
+        }
+
+        .taxpayer-badge {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            padding: 6px 16px;
+            border-radius: 5px;
+            text-align: right;
+            font-size: 13px;
+        }
+
+        .taxpayer-name {
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .taxpayer-gstin {
+            color: #93c5fd;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        /* Simulation Control Banner */
+        .sim-toolbar {
+            background: #ffffff;
+            border-bottom: 2px solid #e5e7eb;
+            padding: 10px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .tab-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tab-btn {
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            color: #374151;
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn.active {
+            background: var(--gst-navy);
+            color: #ffffff;
+            border-color: var(--gst-navy);
+        }
+
+        .action-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .sim-btn {
+            background: #10b981;
+            color: #ffffff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .sim-btn:hover {
+            background: #059669;
+        }
+
+        /* Main Workspace Container */
+        .workspace {
+            max-width: 1000px;
+            margin: 25px auto;
+            padding: 0 20px;
+        }
+
+        /* ─── GSTR-1 Inline Green Box Success Banner (Requested by User) ─── */
+        /* Exact template as the green box message from user's screenshot */
+        .gstr1-green-success-box {
+            background-color: #dcfce7;
+            color: #166534;
+            padding: 16px 20px;
+            border-radius: 4px;
+            font-size: 14.5px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            border: 1px solid #bbf7d0;
+            box-shadow: 0 2px 8px rgba(22, 101, 52, 0.08);
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .gstr1-green-success-box p {
+            margin: 4px 0;
+        }
+
+        .gstr1-green-success-box .arn-highlight {
+            font-weight: bold;
+            color: #0f4a24;
+            font-family: 'Segoe UI', monospace;
+            letter-spacing: 0.5px;
+            font-size: 15px;
+        }
+
+        /* Form Details Card (Underlying Page View) */
+        .form-details-card {
+            background: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+            border: 1px solid #e5e7eb;
+            padding: 24px;
+            margin-bottom: 25px;
+        }
+
+        .card-header-title {
+            font-size: 19px;
+            font-weight: bold;
+            color: var(--gst-navy);
+            margin-top: 0;
+            margin-bottom: 18px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-pill {
+            font-size: 12px;
+            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .info-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .info-value {
+            font-size: 15px;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        /* Modal Backdrop */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.55);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            backdrop-filter: blur(1px);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* ─── Modal 1: OTP Verification (From User Screenshot 1) ─── */
+        .otp-modal {
+            background: #ffffff;
+            width: 580px;
+            max-width: 95vw;
+            border-radius: 4px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+            border: 1px solid #c7cdd6;
+            overflow: hidden;
+            animation: fadeIn 0.15s ease-out;
+        }
+
+        .otp-modal-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .otp-modal-title {
+            font-size: 18px;
+            color: #1f3a60;
+            margin: 0;
+            font-weight: 600;
+        }
+
+        .otp-modal-body {
+            padding: 24px;
+        }
+
+        .otp-label {
+            display: block;
+            font-size: 15px;
+            color: #222222;
+            margin-bottom: 8px;
+        }
+
+        .otp-input {
+            width: 100%;
+            height: 40px;
+            border: 2px solid #0284c7;
+            border-radius: 3px;
+            padding: 8px 12px;
+            font-size: 16px;
+            letter-spacing: 2px;
+            outline: none;
+            margin-bottom: 16px;
+        }
+
+        .otp-alert-box {
+            background-color: #dcfce7;
+            color: #166534;
+            padding: 14px 18px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1.45;
+            margin-bottom: 24px;
+            border: 1px solid #bbf7d0;
+        }
+
+        .otp-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding-top: 10px;
+            border-top: 1px solid #f3f4f6;
+        }
+
+        .btn-close {
+            background: #ffffff;
+            color: #374151;
+            border: 1px solid #9ca3af;
+            padding: 9px 24px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 3px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .btn-close:hover {
+            background: #f9fafb;
+        }
+
+        .btn-validate {
+            background: #1f3a60;
+            color: #ffffff;
+            border: 1px solid #1f3a60;
+            padding: 9px 24px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 3px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .btn-validate:hover {
+            background: #152943;
+        }
+
+        /* ─── Modal 2: GSTR-3B Filing Successful (From User Screenshot 2) ─── */
+        .success-modal {
+            background: #ffffff;
+            width: 650px;
+            max-width: 95vw;
+            border-radius: 6px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.22);
+            padding: 36px 36px 28px 36px;
+            text-align: center;
+            position: relative;
+            animation: fadeIn 0.15s ease-out;
+        }
+
+        .check-circle {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: #f0fdf4;
+            border: 2px solid #86efac;
+            margin: 0 auto 16px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #22c55e;
+            font-size: 38px;
+            font-weight: bold;
+        }
+
+        .success-heading {
+            font-size: 26px;
+            font-weight: 700;
+            color: #374151;
+            margin: 0 0 18px 0;
+            letter-spacing: 0.2px;
+        }
+
+        .success-text-content {
+            font-size: 15px;
+            color: #374151;
+            line-height: 1.6;
+            text-align: left;
+            margin-bottom: 26px;
+        }
+
+        .success-text-content p {
+            margin: 6px 0;
+        }
+
+        .highlight-bold {
+            font-weight: bold;
+            color: #111827;
+        }
+
+        .arn-value {
+            font-weight: bold;
+            color: #111827;
+            font-family: 'Segoe UI', monospace;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-ok {
+            background: #23477d;
+            color: #ffffff;
+            border: 2px solid #b91c1c; /* Highlight box border as seen in screenshot */
+            padding: 8px 38px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 3px;
+            cursor: pointer;
+            display: inline-block;
+            transition: background 0.15s;
+        }
+
+        .btn-ok:hover {
+            background: #172e54;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.97); }
+            to { opacity: 1; transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Official GST Portal Header Simulation -->
+    <header>
+        <div class="portal-brand">
+            <div class="portal-logo-emblem">GST</div>
+            <div class="portal-title">Goods and Services Tax (Government of India)</div>
+        </div>
+        <div class="taxpayer-badge" id="taxpayerBadge">
+            <div class="taxpayer-name" id="displayLegalName">AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA)</div>
+            <div class="taxpayer-gstin" id="displayGstin">GSTIN: 29ABACD1191FAZK</div>
+        </div>
+    </header>
+
+    <!-- Test Harness Interactive Controls -->
+    <div class="sim-toolbar">
+        <div class="tab-group">
+            <button class="tab-btn active" id="btnTabGstr1" onclick="switchForm('GSTR-1')">GSTR-1 Simulation (Green Box Template)</button>
+            <button class="tab-btn" id="btnTabGstr3b" onclick="switchForm('GSTR-3B')">GSTR-3B Simulation (Modal Popup)</button>
+        </div>
+        <div class="action-group">
+            <button class="sim-btn" onclick="openOtpModal()">1. Open OTP Modal</button>
+            <button class="sim-btn" onclick="showSuccessModal()" style="background: #2563eb;">2. Trigger Filing Success</button>
+            <button class="sim-btn" onclick="resetAll()" style="background: #64748b;">Reset</button>
+        </div>
+    </div>
+
+    <div class="workspace">
+        <!-- ═══════════ GSTR-1 INLINE GREEN BOX SUCCESS MESSAGE ═══════════ -->
+        <!-- Matches the exact green box alert template from the user's screenshot -->
+        <div class="gstr1-green-success-box hidden" id="gstr1GreenBox">
+            <p>
+                <strong>GSTR-1</strong> of GSTIN <strong>29ABACD1191FAZK</strong> for the period <strong>January - 2021</strong> has been successfully filed on <span id="gstr1Date">16/02/2021</span> at <span id="gstr1Time">17:39</span>.
+            </p>
+            <p>
+                The Acknowledgment Reference Number (ARN) is: <span class="arn-highlight" id="gstr1Arn">AA290121000069S</span>.
+            </p>
+            <p style="font-size: 13.5px; margin-top: 8px; color: #14532d;">
+                The GSTR-1 can be viewed on your Dashboard Login =&gt; Taxpayer Dashboard =&gt; Returns =&gt; View e-filed return.
+                This confirmation has also been sent to your registered Email ID and Mobile number.
+            </p>
+        </div>
+
+        <!-- Underlying Page View: GST Return Filing Table -->
+        <div class="form-details-card">
+            <div class="card-header-title">
+                <span id="cardFormHeading">GSTR-1 / IFF - Details of Outward Supplies</span>
+                <span class="status-pill" id="cardStatusPill">Status: Ready for Filing</span>
+            </div>
+
+            <div class="grid-2">
+                <div class="info-field">
+                    <span class="info-label">GSTIN of Taxpayer</span>
+                    <span class="info-value" id="lblGstin">29ABACD1191FAZK</span>
+                </div>
+                <div class="info-field">
+                    <span class="info-label">Legal Name / Trade Name</span>
+                    <span class="info-value" id="lblTradeName">AMAN ASSOCIATES</span>
+                </div>
+                <div class="info-field">
+                    <span class="info-label">Financial Year</span>
+                    <span class="info-value" id="lblFy">2020-21</span>
+                </div>
+                <div class="info-field">
+                    <span class="info-label">Return / Tax Period</span>
+                    <span class="info-value" id="lblPeriod">January - 2021</span>
+                </div>
+            </div>
+
+            <p style="color: #6b7280; font-size: 13px; margin: 0;">
+                <strong>Simulation Notice:</strong><br>
+                • In <strong>GSTR-1</strong> mode: Success renders directly using the <strong>Green Box Message template</strong> (styled like the OTP green alert box from your screenshot).<br>
+                • In <strong>GSTR-3B</strong> mode: Success renders as the <strong>Modal Card Popup</strong> with the green checkmark and OK button.<br>
+                Both modes dynamically update the route hash (<code style="background:#e2e8f0; padding:2px 4px;">/returns/auth/gstr1/file</code> or <code style="background:#e2e8f0; padding:2px 4px;">/returns/auth/gstr3b/filing</code>) and generate random valid 15-char ARNs (<code style="background:#e2e8f0; padding:2px 4px;">AA29...</code>) recognized by Sera VSDC and Sera SDC.
+            </p>
+        </div>
+    </div>
+
+    <!-- ═══════════ MODAL 1: OTP VERIFICATION (From User Screenshot 1) ═══════════ -->
+    <div class="modal-overlay hidden" id="otpOverlay">
+        <div class="otp-modal">
+            <div class="otp-modal-header">
+                <h2 class="otp-modal-title">OTP Verification</h2>
+            </div>
+            <div class="otp-modal-body">
+                <label class="otp-label" for="txtOtp">Please enter OTP</label>
+                <input type="text" id="txtOtp" class="otp-input" value="489125" maxlength="6" autofocus />
+                
+                <div class="otp-alert-box">
+                    OTP has been sent to your Email and Mobile number registered at the GST portal
+                </div>
+
+                <div class="otp-modal-footer">
+                    <button class="btn-close" onclick="closeOtpModal()">CLOSE</button>
+                    <button class="btn-validate" onclick="validateAndSubmit()">VALIDATE OTP</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════ MODAL 2: GSTR-3B FILING SUCCESSFUL POPUP (From User Screenshot 2) ═══════════ -->
+    <div class="modal-overlay hidden" id="successOverlay">
+        <div class="success-modal">
+            <div class="check-circle">✓</div>
+            <h1 class="success-heading">Filing Successful</h1>
+            
+            <div class="success-text-content" id="successDescription">
+                <p>
+                    <span id="succForm">GSTR-3B</span> of GSTIN <span class="highlight-bold" id="succGstin">29ABACD1191FAZK</span> for the period <span class="highlight-bold" id="succPeriod">January - 2021</span> has been successfully filed on <span class="highlight-bold" id="succDate">16/02/2021</span> at <span class="highlight-bold" id="succTime">17:39</span>.
+                </p>
+                <p>
+                    The Acknowledgment Reference Number: is <span class="arn-value" id="succArn">AA290121000069S</span>.
+                </p>
+                <p>
+                    The <span id="succForm2">GSTR-3B</span> can be viewed on your Dashboard Login=&gt;Taxpayer Dashboard=&gt;Returns=&gt;View e-filed return.
+                </p>
+                <p>
+                    This message is sent to your registered Email ID and Mobile Number.
+                </p>
+            </div>
+
+            <button class="btn-ok" onclick="closeSuccessModal()">OK</button>
+        </div>
+    </div>
+
+    <script>
+        let currentForm = 'GSTR-1';
+        let currentGstin = '29ABACD1191FAZK';
+        let currentPeriod = 'January - 2021';
+        let currentFy = '2020-21';
+
+        function generateRandomArn() {
+            // Authentic 15-character GST ARN: State Code 'AA' + 12 digits + 'S'
+            // Example: AA290121000069S
+            const rndNum = Math.floor(100000 + Math.random() * 900000);
+            return 'AA29012100' + rndNum.toString().substring(0, 4) + 'S';
+        }
+
+        function switchForm(formType) {
+            currentForm = formType;
+            const isGstr1 = formType === 'GSTR-1';
+
+            document.getElementById('btnTabGstr1').classList.toggle('active', isGstr1);
+            document.getElementById('btnTabGstr3b').classList.toggle('active', !isGstr1);
+
+            document.getElementById('cardFormHeading').innerText = isGstr1 ? 'GSTR-1 / IFF - Details of Outward Supplies' : 'GSTR-3B - Monthly Return';
+            document.getElementById('succForm').innerText = formType;
+            document.getElementById('succForm2').innerText = formType;
+
+            // Reset views
+            document.getElementById('gstr1GreenBox').classList.add('hidden');
+            document.getElementById('successOverlay').classList.add('hidden');
+
+            // Update route hash so VSDC / SDC matches the appropriate filing URL pattern
+            if (isGstr1) {
+                window.location.hash = '/returns/auth/gstr1/file';
+            } else {
+                window.location.hash = '/returns/auth/gstr3b/filing';
+            }
+        }
+
+        function openOtpModal() {
+            document.getElementById('otpOverlay').classList.remove('hidden');
+            document.getElementById('txtOtp').focus();
+        }
+
+        function closeOtpModal() {
+            document.getElementById('otpOverlay').classList.add('hidden');
+        }
+
+        function validateAndSubmit() {
+            closeOtpModal();
+            showSuccessModal();
+        }
+
+        function showSuccessModal() {
+            const now = new Date();
+            const dateStr = String(now.getDate()).padStart(2, '0') + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + now.getFullYear();
+            const timeStr = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+            const dynamicArn = generateRandomArn();
+
+            document.getElementById('cardStatusPill').innerText = 'Status: Filed & Confirmed';
+            document.getElementById('cardStatusPill').style.background = '#dcfce7';
+            document.getElementById('cardStatusPill').style.color = '#15803d';
+
+            if (currentForm === 'GSTR-1') {
+                // GSTR-1: Display using the Green Box message template (matching user's request)
+                window.location.hash = '/returns/auth/gstr1/file';
+                document.getElementById('gstr1Date').innerText = dateStr;
+                document.getElementById('gstr1Time').innerText = timeStr;
+                document.getElementById('gstr1Arn').innerText = dynamicArn;
+
+                document.getElementById('gstr1GreenBox').classList.remove('hidden');
+                document.getElementById('successOverlay').classList.add('hidden');
+
+                // Smooth scroll to top of workspace so the green box is front and center
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } else {
+                // GSTR-3B: Display using the modal popup card with checkmark
+                window.location.hash = '/returns/auth/gstr3b/filing';
+                document.getElementById('succDate').innerText = dateStr;
+                document.getElementById('succTime').innerText = timeStr;
+                document.getElementById('succArn').innerText = dynamicArn;
+
+                document.getElementById('gstr1GreenBox').classList.add('hidden');
+                document.getElementById('successOverlay').classList.remove('hidden');
+            }
+        }
+
+        function closeSuccessModal() {
+            document.getElementById('successOverlay').classList.add('hidden');
+        }
+
+        function resetAll() {
+            closeOtpModal();
+            closeSuccessModal();
+            document.getElementById('gstr1GreenBox').classList.add('hidden');
+            document.getElementById('cardStatusPill').innerText = 'Status: Ready for Filing';
+            document.getElementById('cardStatusPill').style.background = '#fef3c7';
+            document.getElementById('cardStatusPill').style.color = '#92400e';
+            switchForm('GSTR-1');
+        }
+
+        // Initialize default hash for GSTR-1 Filing route
+        if (!window.location.hash) {
+            window.location.hash = '/returns/auth/gstr1/file';
+        }
+    </script>
+</body>
+</html>

@@ -4438,99 +4438,18 @@ class SeraDatabase:
         return "\n".join(entry_lines)
 
     def _append_raw_payload_dump_file(self, dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name=""):
-        """Appends a raw payload entry to its date-partitioned daily dump."""
-        try:
-            entry_text = self._format_dump_entry_block(
-                dump_id=dump_id, client_id=client_id, portal=portal, period_label=period_label,
-                arn_number=arn_number, capture_method=capture_method, status=status,
-                raw_payload_json=raw_payload_json, captured_by=captured_by, created_at=created_at,
-                client_name=client_name
-            )
-            date_key = self._extract_dump_date_key(created_at)
-
-            # 1. Append to today's daily dump file: seraRawPayload_date(DD-MM-YY).txt
-            for daily_file in self._get_daily_dump_file_paths(date_key):
-                try:
-                    os.makedirs(os.path.dirname(daily_file), exist_ok=True)
-                    if not os.path.exists(daily_file) or os.path.getsize(daily_file) == 0:
-                        header = [
-                            "#" * 88,
-                            f"# PROJECT SERA — DAILY RAW API PAYLOAD DUMP [{date_key}]",
-                            f"# Intercepted government portal API submissions for 24-hour cycle: {date_key}",
-                            "#" * 88,
-                            f"# Initialized at : {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-                            f"# Target Database: {os.path.abspath(self.raw_db_path)}",
-                            "#" * 88,
-                            "\n"
-                        ]
-                        with open(daily_file, "w", encoding="utf-8") as f:
-                            f.write("\n".join(header))
-                    with open(daily_file, "a", encoding="utf-8") as f:
-                        f.write(entry_text)
-                except Exception as file_err:
-                    print(f"[DailyDump] File append error ({daily_file}): {file_err}")
-
-            # Non-partitioned master/full dump files are intentionally not written.
-        except Exception as e:
-            print(f"[seraRawPayloadDump] Append error: {e}")
+        """Appends a raw payload entry to its date-partitioned daily dump (feature removed)."""
+        pass
 
     def sync_raw_payload_dumps_file(self):
-        """Ensures the current daily dump is rebuilt when it is missing."""
-        try:
-            today_key = self._extract_dump_date_key(None)
-            for dump_file in self._get_daily_dump_file_paths(today_key):
-                if os.path.exists(dump_file) and os.path.getsize(dump_file) > 100:
-                    continue
-                self.rebuild_raw_payload_dumps_file()
-                break
-        except Exception as e:
-            print(f"[seraRawPayloadDump] Sync error: {e}")
+        """Ensures the current daily dump is rebuilt when it is missing (feature removed)."""
+        pass
 
     def rebuild_raw_payload_dumps_file(self) -> int:
-        """Rebuilds only the date-partitioned daily raw-payload dumps."""
-        dumps = self.get_tracker_dumps(limit=5000)
-        now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-        # Group dumps by daily date key (DD-MM-YY)
-        daily_groups: dict[str, list[dict]] = {}
-        for item in reversed(dumps):
-            d_key = self._extract_dump_date_key(item.get("created_at"))
-            daily_groups.setdefault(d_key, []).append(item)
-
-        # 1. Rebuild each daily partitioned dump file: seraRawPayload_date(DD-MM-YY).txt
-        for d_key, group_items in daily_groups.items():
-            header = [
-                "#" * 88,
-                f"# PROJECT SERA — DAILY RAW API PAYLOAD DUMP [{d_key}]",
-                f"# Intercepted government portal API submissions for 24-hour cycle: {d_key}",
-                "#" * 88,
-                f"# Rebuilt at      : {now_str}",
-                f"# Total Entries   : {len(group_items)}",
-                f"# Target Database : {os.path.abspath(self.raw_db_path)}",
-                "#" * 88,
-                "\n"
-            ]
-            entries = []
-            for item in group_items:
-                entries.append(self._format_dump_entry_block(
-                    dump_id=item.get("id"), client_id=item.get("client_id"), portal=item.get("portal"),
-                    period_label=item.get("period_label"), arn_number=item.get("arn_number"),
-                    capture_method=item.get("capture_method"), status=item.get("status"),
-                    raw_payload_json=item.get("raw_payload_json"), captured_by=item.get("captured_by"),
-                    created_at=item.get("created_at"), client_name=item.get("client_name", "")
-                ))
-            daily_content = "\n".join(header) + "\n".join(entries)
-            for daily_path in self._get_daily_dump_file_paths(d_key):
-                try:
-                    os.makedirs(os.path.dirname(daily_path), exist_ok=True)
-                    with open(daily_path, "w", encoding="utf-8") as f:
-                        f.write(daily_content)
-                except Exception as e:
-                    print(f"[DailyDump] Rebuild write error ({daily_path}): {e}")
-
+        """Rebuilds only the date-partitioned daily raw-payload dumps (feature removed)."""
         # Refresh only the reports that remain part of the application.
         self.sync_fst_reports()
-        return len(dumps)
+        return 0
 
     def sync_fst_reports(self):
         """Refresh the remaining classifier and DOM reports best-effort."""

@@ -331,14 +331,26 @@ These are the parts most likely to go wrong if skipped:
 
 ---
 
-## Open Questions / Decisions Needed
+---
 
-1. Keep the optional icon-badge signal after a successful fill, or ship
-   completely silent end-to-end with no visible indicator at all?
+## Smart Credential Combinations (SCC / MECP)
 
-~~2. Portal-ambiguity question~~ — **resolved**: SCA now matches the
-focused tab directly against the client's stored Service Management
-link(s) (`service_urls[]`) rather than inferring a portal from field type.
-Since only one tab is focused at a time, this is a direct membership check,
-and it naturally supports clients with more than one service on file
-without any extra logic.
+**SCC (Smart Credential Combinations)** extends the ambient assistance workflow to portal password discovery, credential verification, and automated vault tagging.
+
+### 1. In-Browser Multi-Entry Credential Provider (MECP Widget)
+When navigating to tax portal login and password pages, the browser companion attaches the unobtrusive **MECP Assistant**:
+- **Clean Unmasked Presentation**: Displays cleartext buttons showing the 4 candidate password variations directly alongside the password input.
+- **Single-Click Injection**: Clicking any combination injects the password into the active field, triggers native React/Angular input events, and moves the cursor without breaking the field state.
+- **Fast Dismissal & Auto-Slide**: Clicking the password button slides the widget out immediately to prevent re-triggering or blocking submit buttons.
+
+### 2. Password Formulas & Combination Architecture
+SCC provides 4 standard slots:
+1. **Dynamic PAN Formula 1**: `Pan@123` / `Pan#123` (computed from extracted PAN).
+2. **Dynamic PAN Formula 2**: `Pan@2024` / `Pan#2026` / capitalized variant.
+3. **Fixed String 1**: Configurable firm standard default password.
+4. **Fixed String 2**: Secondary firm standard default password.
+
+### 3. Automatic Vault Tagging & Audit Trail
+- When a login succeeds with an injected SCC formula, Sera detects the navigation transition.
+- Automatically records `"Password verified via SCC"` into the client's notes in `master.db`.
+- Floats a 20-second non-intrusive dark notification banner confirming that the client credentials have been verified and tagged.

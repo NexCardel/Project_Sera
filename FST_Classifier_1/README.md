@@ -1,6 +1,6 @@
 # FST Classifier 1 (`FST_Classifier_1`)
 
-**FST Classifier 1** is the high-precision payload analysis and lifecycle correlation engine for **Project Sera**. It ingests raw government portal API interception streams (`seraRawPayloadDump.txt` or database records), disambiguates fragmented taxpayer sessions, and generates structured, color-coded executive spreadsheets (`payload_report.xlsx`).
+**FST Classifier 1** is the high-precision payload analysis and lifecycle correlation engine for **Project Sera**. It ingests captured filings directly from the SQLite database (`rawPayload.db`), disambiguates fragmented taxpayer sessions, and generates structured, color-coded executive spreadsheets (`payload_report.xlsx`).
 
 ---
 
@@ -19,38 +19,32 @@
    * ⚪ **6. Visited But No Return Submission**: Portal interactions with zero ITR/GST submissions.
    * ⚪ **7. Visited Site (All Visits Enumerated)**: Full chronological step-by-step API audit log.
 
-3. **Live Watcher Mode (`--watch`)**:
-   - Continuously polls `..\seraRawPayloadDump.txt` for live incoming captures and auto-updates `payload_report.xlsx` in real-time.
+3. **Direct SQLite Database Processing**:
+   - Reads directly from `..\rawPayload.db` for instant analysis without creating redundant text dump files.
 
 4. **Direct Desktop Integration**:
    - Accessible directly from Project Sera's **Tracker Dump Workspace** via **`Preferences` ➔ `FST Classifier (Excel Report)`**.
-   - Database sync hook (`sync_fst_classifier`) automatically refreshes reports during database rebuilds.
+   - Database sync hook (`sync_fst_classifier`) automatically refreshes reports upon request.
 
 ---
 
 ## 🚀 Usage
 
-### Option 1: Double-Click Batch Launcher
-Double-click **`run.bat`** in this directory. It automatically installs requirements and starts watching `..\seraRawPayloadDump.txt`.
-
-### Option 2: Command Line Execution
+### Option 1: Command Line Execution
 ```bash
 # Install dependencies
 pip install -r requirements.txt
 
-# Live Watcher Mode (Monitors live dump for changes)
-python fst_classifier.py "..\seraRawPayloadDump.txt" "payload_report.xlsx" --watch
-
-# One-off Manual Run
-python fst_classifier.py "path/to/custom_dump.txt" "custom_output.xlsx"
+# Run classification against SQLite database
+python fst_classifier.py "..\rawPayload.db" "payload_report.xlsx"
 ```
 
-### Option 3: Python In-App API
+### Option 2: Python In-App API
 ```python
 import fst_classifier
 
 # Run classification programmatically
-success = fst_classifier.process_data("seraRawPayloadDump.txt", "payload_report.xlsx")
+success = fst_classifier.process_data("rawPayload.db", "payload_report.xlsx")
 ```
 
 ---

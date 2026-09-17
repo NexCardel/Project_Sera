@@ -7,6 +7,7 @@ Incorporates TokenTracker and falls back gracefully to local regex when offline.
 """
 
 import os
+import sys
 import re
 import json
 import configparser

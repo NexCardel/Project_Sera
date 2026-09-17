@@ -603,6 +603,7 @@ class VisualSessionAssembler:
         period_label: Optional[str] = None,
         raw_text: Optional[str] = None,
         crosshair_id: str = "vsh_submission",
+        engine: str = "VSDC",
     ) -> Dict[str, Any]:
         """
         Records a verified or submitted filing acknowledgement.
@@ -650,7 +651,7 @@ class VisualSessionAssembler:
             arn=effective_arn,
             ack_number=effective_arn,
             portal=self.portal,
-            capture_method=f"VSDC_{crosshair_id}",
+            capture_method=f"{engine}_{crosshair_id}",
             filing_preference=self.filing_preference or "",
             raw_text=raw_text or "",
             session_id=self.session_id,
@@ -687,6 +688,7 @@ class VisualSessionAssembler:
         raw_text: Optional[str] = None,
         crosshair_id: str = "gst_form_details",
         legal_name: Optional[str] = None,
+        engine: str = "VSDC",
     ) -> Dict[str, Any]:
         """
         Records full metadata captured from a GST Return Form page table
@@ -748,7 +750,7 @@ class VisualSessionAssembler:
             arn=effective_arn,
             ack_number=effective_arn,
             portal="GST Portal",
-            capture_method=f"VSDC_{crosshair_id}",
+            capture_method=f"{engine}_{crosshair_id}",
             filing_preference=self.filing_preference or "",
             raw_text=raw_text or "",
             session_id=self.session_id,

@@ -79,3 +79,4 @@ backups/
 scratch/
 .pytest_cache/
 data/
+tools/vsdc_uia_probe_output/

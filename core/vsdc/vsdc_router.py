@@ -8,6 +8,7 @@ the SDC crosshair catalog, and delegates to the visual OCR and assembler pipelin
 
 import ctypes
 from ctypes import wintypes
+import os
 import time
 import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
@@ -15,6 +16,7 @@ from typing import Dict, List, Optional, Tuple, Any, Callable
 import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS
 from .vsdc_ocr import VSDCOcrEngine
+from . import vsdc_uia_text
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
     repair_numeric_ack,
@@ -101,9 +103,30 @@ class VSDCRouter:
         self.last_screen_hash: Optional[int] = None
         self.last_logged_name: Optional[str] = None
         self.last_logged_pan: Optional[str] = None
+        self.last_logged_pref: Optional[str] = None
         self.burst_ticks_remaining: int = 0
         self.was_page_loading: bool = False
         self._cached_address_elements: Dict[int, Any] = {}
+        # Throttles the "Page finished loading" console print to once per
+        # route — the underlying was_page_loading flag can legitimately
+        # oscillate many times per page (e.g. transient "0" placeholders on
+        # GST invoice-count widgets before their real numbers land), and the
+        # burst re-trigger logic tied to it should still fire every time —
+        # only the log line was spammy.
+        self._loading_notice_shown: bool = False
+
+        # Diagnostic-only: when set, GST OCR text is discarded the instant
+        # it's captured (before any extractor sees it), isolating exactly
+        # what VSDC-X (UI Automation) can capture on its own. Off by default —
+        # never affects normal operation unless explicitly opted into. ITR is
+        # untouched by this flag since it has no VSDC-X path yet.
+        self._uia_only_mode = os.environ.get("VSDC_UIA_ONLY") == "1"
+        if self._uia_only_mode:
+            print("=" * 70)
+            print("[VSDC Router] VSDC_UIA_ONLY=1 — legacy OCR capture DISABLED for GST.")
+            print("Every GST field below must come from VSDC-X (UI Automation) alone.")
+            print("Unset VSDC_UIA_ONLY to restore normal OCR+UIA operation.")
+            print("=" * 70)
 
     def notify_activity(self, event_type: str, title: str, subtitle: str = ""):
         """Emits real-time visual indicator event (route, identity, capture, flush)."""
@@ -270,6 +293,7 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.was_page_loading = False
             self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
+            self._loading_notice_shown = False
 
         if is_new_window:
             self.last_hwnd = hwnd
@@ -348,6 +372,7 @@ class VSDCRouter:
             self.has_flushed_current_route = True
             self.last_logged_name = None
             self.last_logged_pan = None
+            self.last_logged_pref = None
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
@@ -375,6 +400,7 @@ class VSDCRouter:
                 self.assembler.reset()
                 self.last_logged_name = None
                 self.last_logged_pan = None
+                self.last_logged_pref = None
                 self.last_screen_hash = None
                 self.route_poll_count = 0
                 self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
@@ -420,7 +446,9 @@ class VSDCRouter:
             self.was_page_loading = False
             self.burst_ticks_remaining = 8
             self.route_poll_count = 0
-            print(f"[VSDC Router] ITR Page finished loading -> triggered burst capture!")
+            if not self._loading_notice_shown:
+                self._loading_notice_shown = True
+                print(f"[VSDC Router] ITR Page finished loading -> triggered burst capture!")
 
         # Process extracted fields based on crosshair type
         pan = extract_pan(full_text)
@@ -658,6 +686,7 @@ class VSDCRouter:
             self.has_flushed_current_route = True
             self.last_logged_name = None
             self.last_logged_pan = None
+            self.last_logged_pref = None
             self.last_screen_hash = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
@@ -675,6 +704,7 @@ class VSDCRouter:
                 self.assembler.reset()
                 self.last_logged_name = None
                 self.last_logged_pan = None
+                self.last_logged_pref = None
                 self.last_screen_hash = None
                 self.route_poll_count = 0
                 self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
@@ -715,22 +745,56 @@ class VSDCRouter:
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
+        # VSDC-X: one exact UI Automation text read per tick, shared below by
+        # the loading-gate short-circuit and whichever crosshair branch runs
+        # (see core/vsdc/vsdc_uia_text.py). Purely additive — if it's
+        # unavailable or empty, uia_text/uia_lines stay empty and every line
+        # below behaves exactly as it always has, driven by OCR alone.
+        uia_text = ""
+        uia_lines: List[str] = []
+        if vsdc_uia_text.is_available():
+            uia_res = vsdc_uia_text.read_page_text(hwnd)
+            uia_text = uia_res.get("text", "")
+            uia_lines = uia_res.get("lines") or []
+
+        if self._uia_only_mode:
+            # Discard OCR's output before any extractor below can see it —
+            # everything from here on must come from uia_text/uia_lines alone.
+            full_text = ""
+            lines = []
+
         # Loading State Transition: If the page was previously in an async loading state
         # and has now completed loading, re-trigger a micro-burst so rendered data is captured instantly!
         if self.was_page_loading and not is_page_loading(full_text):
             self.was_page_loading = False
             self.burst_ticks_remaining = 8
             self.route_poll_count = 0
-            print(f"[VSDC Router] GST Page finished loading -> triggered burst capture!")
+            if not self._loading_notice_shown:
+                self._loading_notice_shown = True
+                print(f"[VSDC Router] GST Page finished loading -> triggered burst capture!")
 
         # Check if page is currently in an asynchronous loading state.
-        # Bypass for gst_form_details if statutory metadata table is already rendered behind loading overlay!
+        # Bypass for gst_form_details if statutory metadata table is already
+        # rendered behind loading overlay — checked against BOTH an OCR
+        # quick-scan and, when available, the exact UIA read. UIA often has
+        # the real data before OCR's "is it done yet" heuristic (which only
+        # sees pixel text) catches up, so it can unlock this bypass on its
+        # own even when the OCR quick-scan still comes up empty.
         if is_page_loading(full_text):
             self.was_page_loading = True
             if matched_crosshair.id == "gst_form_details":
                 quick_meta = extract_gst_form_table(full_text, lines=lines, url=url)
-                if not (quick_meta.get("gstin") or quick_meta.get("status") or quick_meta.get("tax_period") or quick_meta.get("fy") or self.assembler.gstin):
+                uia_quick_meta = extract_gst_form_table(uia_text, lines=uia_lines, url=url) if uia_lines else {}
+                quick_keys = ("gstin", "status", "tax_period", "fy")
+                has_quick_data = (
+                    any(quick_meta.get(k) for k in quick_keys)
+                    or any(uia_quick_meta.get(k) for k in quick_keys)
+                    or self.assembler.gstin
+                )
+                if not has_quick_data:
                     return None
+                if not any(quick_meta.get(k) for k in quick_keys) and any(uia_quick_meta.get(k) for k in quick_keys):
+                    print("[VSDC-X] loading-gate bypassed via UIA (OCR quick-scan still empty)")
                 # Statutory table already rendered behind loading overlay! Proceed with immediate capture!
             else:
                 return None
@@ -742,16 +806,30 @@ class VSDCRouter:
         # Immune to modal popups (e.g. Aadhaar/E-KYC reminders).
         # -------------------------------------------------------------
         if matched_crosshair.id == "gst_welcome_calendar":
+            # VSDC-X: uia_text was already read once, above, before the
+            # loading-gate check — reused here rather than re-reading.
+            uia_fields_from_uia = []
+
             # Primary pass on the main crop
             client_name = extract_gst_welcome_name(full_text)
             gstin = extract_gstin(full_text)
-            
+
+            if uia_text:
+                uia_name = extract_gst_welcome_name(uia_text)
+                uia_gstin = extract_gstin(uia_text)
+                if uia_name:
+                    client_name = uia_name
+                    uia_fields_from_uia.append("client_name")
+                if uia_gstin:
+                    gstin = uia_gstin
+                    uia_fields_from_uia.append("gstin")
+
             # If identity is incomplete, forcefully scan ONLY the top right profile pill
-            if not client_name or not gstin:
+            if (not client_name or not gstin) and not self._uia_only_mode:
                 tr_res = self.ocr.scan_image(img, region_type="top_right_profile")
                 tr_text = tr_res.get("text", "")
                 tr_lines = tr_res.get("lines", [])
-                
+
                 if not client_name:
                     client_name = extract_gst_welcome_name(tr_text) or extract_name_from_ocr_lines(tr_lines)
                 if not gstin:
@@ -765,7 +843,19 @@ class VSDCRouter:
             if not pan:
                 pan = extract_pan(full_text)
 
-            pref = extract_gst_filing_preference(full_text)
+            # Filing preference: try the exact UIA text first, fall back to OCR text.
+            # Note (2026-09-17 probe): the live GST welcome page didn't show a
+            # "filing preference" label at all in testing — that's a page-content
+            # gap neither source can read around. Inferring preference from the
+            # form-type heading (e.g. "GSTR-3BQ - Quarterly Return") happens
+            # separately in gst_form_details below.
+            uia_pref = extract_gst_filing_preference(uia_text) if uia_text else None
+            pref = uia_pref or extract_gst_filing_preference(full_text)
+            if uia_pref:
+                uia_fields_from_uia.append("filing_preference")
+
+            if uia_fields_from_uia:
+                print(f"[VSDC-X] gst_welcome_calendar: UIA provided {', '.join(uia_fields_from_uia)}")
 
             flushed_prior = self.assembler.update_identity(
                 name=client_name,
@@ -779,11 +869,15 @@ class VSDCRouter:
             authoritative_gstin = self.assembler.gstin or gstin
             authoritative_pref = self.assembler.filing_preference or pref
 
-            # Live HUD Toast feedback
+            # Live HUD Toast feedback — tags which engine actually supplied this
+            # identity read (VSDC-X exact UIA text vs VSDC visual/OCR), so the
+            # user can see it directly rather than it being invisible.
+            source_tag = " • VSDC-X (Exact)" if uia_fields_from_uia else " • VSDC (Visual)"
             if authoritative_name and authoritative_name != self.last_logged_name:
                 self.last_logged_name = authoritative_name
+                self.last_logged_pref = authoritative_pref
                 pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
-                sub = f"GSTIN: {authoritative_gstin}{pref_suffix}" if authoritative_gstin else f"Portal: GST Portal{pref_suffix}"
+                sub = (f"GSTIN: {authoritative_gstin}{pref_suffix}" if authoritative_gstin else f"Portal: GST Portal{pref_suffix}") + source_tag
                 print(f"[VSDC Router] GST Assessee identified: {authoritative_name} (GSTIN: {authoritative_gstin}, Pref: {authoritative_pref})")
                 self.notify_activity(
                     "start",
@@ -792,13 +886,30 @@ class VSDCRouter:
                 )
             elif authoritative_gstin and authoritative_gstin != self.last_logged_pan:
                 self.last_logged_pan = authoritative_gstin
+                self.last_logged_pref = authoritative_pref
                 pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
                 name_part = f"{authoritative_name} • " if authoritative_name else ""
                 print(f"[VSDC Router] GSTIN identified: {authoritative_gstin}")
                 self.notify_activity(
                     "start",
                     f"GSTIN: {authoritative_gstin}",
-                    f"{name_part}Portal: GST Portal{pref_suffix}",
+                    f"{name_part}Portal: GST Portal{pref_suffix}{source_tag}",
+                )
+            elif authoritative_pref and authoritative_pref != self.last_logged_pref:
+                # Identity (name/GSTIN) was already known and already notified
+                # about above on an earlier tick — but filing preference just
+                # became available now (e.g. after a popup was dismissed), and
+                # that's new information the user hasn't seen yet. Without this
+                # branch it's captured into the assembler correctly but never
+                # actually shown, since the two branches above only fire on a
+                # truly NEW identity, not on existing identity gaining a
+                # previously-missing field.
+                self.last_logged_pref = authoritative_pref
+                print(f"[VSDC Router] GST Filing Preference identified: {authoritative_pref}")
+                self.notify_activity(
+                    "update",
+                    f"Filing Preference: {authoritative_pref}",
+                    f"{authoritative_name or authoritative_gstin or ''}{source_tag}".strip(" •"),
                 )
 
             # Record step in assembler journey
@@ -816,7 +927,16 @@ class VSDCRouter:
                 print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
                 return flushed_prior
 
-            if authoritative_name or authoritative_gstin:
+            # Don't lock this route purely on identity — name/GSTIN render almost
+            # instantly (the header pill has them before anything else), but
+            # filing preference can take longer to show (e.g. only after the
+            # user dismisses a popup, or a delayed render). Give it the same
+            # "don't declare done too early" patience gst_form_details already
+            # uses for tax_period/status, bounded so a page/account that never
+            # shows a preference at all doesn't poll forever.
+            has_identity = bool(authoritative_name or authoritative_gstin)
+            pref_settled = bool(authoritative_pref) or self.route_poll_count >= 60
+            if has_identity and pref_settled:
                 self.route_captured = True
 
             return None
@@ -828,10 +948,20 @@ class VSDCRouter:
         # Assembles and shoots the complete dataset to the app!
         # -------------------------------------------------------------
         if matched_crosshair.id == "gst_form_details":
+            # VSDC-X: derive form-table fields from the exact UIA text already
+            # read above, before the loading-gate check. Its label/value pairs
+            # arrive as adjacent lines — the same shape extract_gst_form_table
+            # already expects from OCR line-wrapping — so this reuses the
+            # exact same extractor, not new parsing logic. Merged in below
+            # with UIA winning per-field wherever present; if it was
+            # unavailable or empty, uia_meta stays {} and everything behaves
+            # exactly as it always has.
+            uia_meta: Dict[str, Optional[str]] = extract_gst_form_table(uia_text, lines=uia_lines, url=url) if uia_lines else {}
+
             meta = extract_gst_form_table(full_text, lines=lines, url=url)
 
             # Fallback to full window scan if GSTIN, tax_period, or Status was missed in cropped area
-            if (not meta.get("gstin") or not meta.get("tax_period") or not meta.get("status")) and target_crop != "full":
+            if (not meta.get("gstin") or not meta.get("tax_period") or not meta.get("status")) and target_crop != "full" and not self._uia_only_mode:
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 f_lines = full_res.get("lines", [])
@@ -840,6 +970,15 @@ class VSDCRouter:
                     if v and not meta.get(k):
                         meta[k] = v
                 full_text = full_text + "\n" + f_text
+
+            # UIA values win over both OCR passes above wherever present —
+            # exact text beats any pixel reconstruction, cropped or full-window.
+            uia_fields_used = [k for k, v in uia_meta.items() if v]
+            for k, v in uia_meta.items():
+                if v:
+                    meta[k] = v
+            if uia_fields_used:
+                print(f"[VSDC-X] gst_form_details: UIA provided {', '.join(uia_fields_used)}")
 
             gstin = meta.get("gstin") or extract_gstin(full_text)
             pan = meta.get("pan")
@@ -856,7 +995,7 @@ class VSDCRouter:
             # Gemini API call removed to prevent synchronous thread blocking.
 
             legal_name = meta.get("legal_name")
-            if not legal_name:
+            if not legal_name and not self._uia_only_mode:
                 # Force precise crop for name instead of full-screen line scanning
                 tr_res = self.ocr.scan_image(img, region_type="top_right_profile")
                 legal_name = extract_gst_welcome_name(tr_res.get("text", "")) or extract_name_from_ocr_lines(tr_res.get("lines", []))
@@ -873,7 +1012,15 @@ class VSDCRouter:
             raw_status = meta.get("status") or extract_gst_status(full_text)
             status = raw_status if is_valid_gst_status(raw_status) else None
 
-            pref = extract_gst_filing_preference(full_text)
+            # Filing preference: try the exact UIA text first, then OCR text.
+            # extract_gst_filing_preference already recognizes form-heading
+            # phrasing like "GSTR-3BQ - Quarterly Return" (confirmed present
+            # verbatim in UIA reads of the GSTR-3BQ page during probing) —
+            # so feeding it exact text is enough, no separate inference needed.
+            uia_pref = extract_gst_filing_preference(uia_text) if uia_text else None
+            pref = uia_pref or extract_gst_filing_preference(full_text)
+            if uia_pref:
+                print(f"[VSDC-X] gst_form_details: UIA provided filing_preference")
             if legal_name or trade_name or gstin or pan:
                 flushed_prior = self.assembler.update_identity(
                     name=legal_name,
@@ -913,6 +1060,12 @@ class VSDCRouter:
                 raw_text=full_text[:2000],
                 crosshair_id=matched_crosshair.id,
                 legal_name=legal_name,
+                # Persists which engine actually supplied this capture into the
+                # saved record's capture_method (e.g. "VSDC-X_gst_form_details"
+                # vs "VSDC_gst_form_details") — previously this distinction only
+                # ever reached an ephemeral console print / HUD toast, never the
+                # database, so the Tracker Dump table couldn't show it.
+                engine="VSDC-X" if uia_fields_used else "VSDC",
             )
 
             # Record step in timeline
@@ -932,18 +1085,21 @@ class VSDCRouter:
                 },
             )
 
-            # Live HUD Toast Feedback
+            # Live HUD Toast Feedback — tags which engine drove this dataset
+            # (VSDC-X exact UIA text vs VSDC visual/OCR) so the user can see
+            # it directly, not just infer it from the console.
             authoritative_name = legal_name or self.assembler.client_name or ""
             authoritative_trade = trade_name or self.assembler.trade_name or ""
             name_label = f"{authoritative_name}" + (f" ({authoritative_trade})" if authoritative_trade else "")
             display_period = period_label or tax_period
             period_str = f" • {display_period}" if display_period else ""
             status_str = f" • Status: {effective_status}" if effective_status else ""
+            source_str = " • VSDC-X (Exact)" if uia_fields_used else " • VSDC (Visual)"
 
             self.notify_activity(
                 "capture",
                 f"Captured {form_type}{period_str}",
-                f"{name_label}{status_str}".strip(),
+                f"{name_label}{status_str}{source_str}".strip(),
             )
             print(f"[VSDC Router] Captured GST Form Dataset: {form_type} {display_period} | {name_label} | Status={effective_status}")
 
@@ -960,10 +1116,31 @@ class VSDCRouter:
         # -------------------------------------------------------------
         # OTHER GST CROSSHAIRS (Returns Dashboard, Submission)
         # -------------------------------------------------------------
+        # VSDC-X: uia_text was already read once, above, before the
+        # loading-gate check — reused here for identity, ARN, and status
+        # detection below rather than re-reading.
+
         # Extract GSTIN and Taxpayer Name if not yet identified
         gstin = extract_gstin(full_text)
         client_name = extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
         pref = extract_gst_filing_preference(full_text)
+
+        if uia_text:
+            uia_fields_from_uia = []
+            uia_gstin = extract_gstin(uia_text)
+            uia_name = extract_gst_welcome_name(uia_text)
+            uia_pref = extract_gst_filing_preference(uia_text)
+            if uia_gstin:
+                gstin = uia_gstin
+                uia_fields_from_uia.append("gstin")
+            if uia_name:
+                client_name = uia_name
+                uia_fields_from_uia.append("client_name")
+            if uia_pref:
+                pref = uia_pref
+                uia_fields_from_uia.append("filing_preference")
+            if uia_fields_from_uia:
+                print(f"[VSDC-X] gst identity: UIA provided {', '.join(uia_fields_from_uia)}")
 
         pan = None
         if gstin and len(gstin) >= 12:
@@ -991,8 +1168,22 @@ class VSDCRouter:
         period = format_gst_period_label(gst_tp, gst_fy) if (gst_tp or gst_fy) else None
 
         # On GST filing routes (/file or /filing) or success screens, extract full assessee identity if present
+        identity_uia_fields: List[str] = []
         if matched_crosshair.id in ("gst_filing_file_success", "gst_filing_success"):
             meta = extract_gst_form_table(full_text, lines=lines, url=url)
+            # VSDC-X: merge in the exact UIA read too — confirmed reliable on
+            # this exact screen type (submission/ARN confirmation), previously
+            # only OCR was consulted here even though uia_text was already
+            # available. Same merge pattern as gst_form_details: UIA wins
+            # per-field wherever present.
+            if uia_lines:
+                uia_meta = extract_gst_form_table(uia_text, lines=uia_lines, url=url)
+                identity_uia_fields = [k for k, v in uia_meta.items() if v]
+                for k, v in uia_meta.items():
+                    if v:
+                        meta[k] = v
+                if identity_uia_fields:
+                    print(f"[VSDC-X] {matched_crosshair.id}: UIA provided {', '.join(identity_uia_fields)}")
             m_gstin = meta.get("gstin")
             m_pan = meta.get("pan")
             m_legal = meta.get("legal_name")
@@ -1016,8 +1207,19 @@ class VSDCRouter:
             if matched_crosshair.id == "gst_returns_dashboard":
                 self.route_captured = True
 
-        # Check for terminal filing confirmation (ARN)
-        arn = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
+        # Check for terminal filing confirmation (ARN) — VSDC-X tried first, same
+        # priority as every other field, now that it's confirmed to read submission
+        # screens (both inline banners and modal popups) exactly and instantly.
+        # OCR remains the fallback for anything VSDC-X doesn't catch.
+        arn_from_uia = False
+        arn = None
+        if uia_text:
+            arn = repair_gst_arn(uia_text) or repair_numeric_ack(uia_text)
+            if arn:
+                arn_from_uia = True
+                print(f"[VSDC-X] ARN provided by UIA: {arn}")
+        if not arn:
+            arn = repair_gst_arn(full_text) or repair_numeric_ack(full_text)
 
         # Fallback to full image scan if ARN was not found in cropped card on a return/submission card!
         # Even if the route wasn't technically a "submission" crosshair, if it's GST and they just hit submit
@@ -1028,7 +1230,7 @@ class VSDCRouter:
         ) or ("success" in url.lower() or "/file" in url.lower() or "/filing" in url.lower())
 
         if not arn and (is_sub_crosshair or matched_crosshair.id == "gst_form_details"):
-            if target_crop != "full":
+            if target_crop != "full" and not self._uia_only_mode:
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 f_arn = repair_gst_arn(f_text) or repair_numeric_ack(f_text)
@@ -1046,7 +1248,19 @@ class VSDCRouter:
         # STRICT MANDATE: An optical GST submission MUST have a valid ARN
         if arn and arn != "N/A":
             self.route_captured = True
-            status = classify_verification_status(full_text)
+            # Foolproof-er status: classify against both sources when UIA text
+            # is available and keep whichever comes back more confident, rather
+            # than trusting a single OCR pass on its own.
+            ocr_status = classify_verification_status(full_text)
+            status_candidates = [ocr_status]
+            uia_status = None
+            if uia_text:
+                uia_status = classify_verification_status(uia_text)
+                status_candidates.append(uia_status)
+                if uia_status != ocr_status:
+                    print(f"[VSDC-X] status candidates differ — OCR: {ocr_status!r}, UIA: {uia_status!r}")
+            status = max(status_candidates, key=get_status_rank)
+            status_from_uia = bool(uia_status) and status == uia_status and status != ocr_status
             if get_status_rank(status) < 2:
                 status = "Filed"
 
@@ -1063,13 +1277,18 @@ class VSDCRouter:
                 period_label=period,
                 raw_text=full_text[:2000],
                 crosshair_id=matched_crosshair.id,
+                # Persists which engine drove this submission capture into the
+                # saved capture_method (e.g. "VSDC-X_gst_filing_success") — same
+                # reasoning as the gst_form_details call above.
+                engine="VSDC-X" if (arn_from_uia or status_from_uia or identity_uia_fields) else "VSDC",
             )
             form_lbl = filing_type or self.assembler.current_filing_type or "GST Return"
             period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
             assessee = self.assembler.client_name or self.assembler.gstin or ""
             trade = f" ({self.assembler.trade_name})" if self.assembler.trade_name else ""
             name_part = f"{assessee}{trade} • " if assessee else ""
-            self.notify_activity("submit", f"{form_lbl} Filed Successfully", f"{name_part}ARN: {arn}")
+            source_str = " • VSDC-X (Exact)" if (arn_from_uia or status_from_uia) else " • VSDC (Visual)"
+            self.notify_activity("submit", f"{form_lbl} Filed Successfully", f"{name_part}ARN: {arn}{source_str}")
 
             # Seal and flush filing payload! If we got an ARN, the submission is confirmed.
             master_payload = self.assembler.seal_and_flush()

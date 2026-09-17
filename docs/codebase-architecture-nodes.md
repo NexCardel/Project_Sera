@@ -21,6 +21,7 @@ graph TD
         SEC["security.py<br/><i>(PBKDF2 / Salt / Argon2)</i>"]:::core
         SYNC["sync_peer.py<br/><i>(LAN UDP/TCP Peer Sync)</i>"]:::core
         VER["version.py<br/><i>(GitHub Auto-Updater)</i>"]:::core
+        CLIP_WATCH["clipboard_watch.py<br/><i>(SCA Ambient Listener)</i>"]:::core
     end
 
     subgraph Shell & Layout
@@ -33,7 +34,7 @@ graph TD
         SEARCH["ui/windows/search_window.py<br/><i>(Client Search & Formatting Grid)</i>"]:::page
         DETAIL["ui/windows/client_detail_window.py<br/><i>(Client Workspace & FST)</i>"]:::page
         ADMIN["ui/windows/admin_window.py<br/><i>(Admin Management)</i>"]:::page
-        TRACKER_DUMP["ui/windows/tracker_dump_window.py<br/><i>(Tracker Dump & SAD Auditor)</i>"]:::page
+        TRACKER_DUMP["ui/windows/tracker_dump_window.py<br/><i>(Tracker Dump & Status Badges)</i>"]:::page
     end
 
     subgraph Dialogs & Modals
@@ -45,13 +46,14 @@ graph TD
         LOAD_DLG["ui/dialogs/loading_dialog.py<br/><i>(Vault Unlock Modal)</i>"]:::dialog
         CRED_DLG["ui/dialogs/manual_credentials_dialog.py<br/><i>(Credential Editor)</i>"]:::dialog
         SETTINGS_DLG["ui/dialogs/unified_settings_dialog.py<br/><i>(Unified Settings Hub)</i>"]:::dialog
+        AI_DLG["ui/dialogs/ai_settings_dialog.py<br/><i>(Gemini AI Settings)</i>"]:::dialog
     end
 
     subgraph Native Host & Browser Extension
         NH_HOST["native_host/host.py<br/><i>(Chrome Native Messaging Host)</i>"]:::native
         EXT_LISTEN["ui/extension_listener.py<br/><i>(Extension Socket Server)</i>"]:::native
-        SAD_INTERCEPT["sera_extension/content_scripts/net_interceptor.js<br/><i>(Sera SAD API Detector)</i>"]:::native
-        SAD_DETECT["sera_extension/content_scripts/filing_detector.js<br/><i>(Filing Detector Bridge)</i>"]:::native
+        SDC_CORE["sera_extension/sdc/sdc_core.js<br/><i>(SDC Route Gater & Assembler)</i>"]:::native
+        SDC_PROTO["sera_extension/sdc/protocols/*<br/><i>(ITR & GST Crosshair Protocols)</i>"]:::native
     end
 
     subgraph VSDC Optical Harvester
@@ -60,6 +62,8 @@ graph TD
         VSDC_ASSEMBLER["core/vsdc/vsdc_assembler.py<br/><i>(Multi-Screen Session Assembler)</i>"]:::core
         VSDC_OCR["core/vsdc/vsdc_ocr.py<br/><i>(DirectML Windows.Media.Ocr)</i>"]:::core
         VSDC_REGEX["core/vsdc/vsdc_regex.py<br/><i>(Statutory Tax Regex & Repair)</i>"]:::core
+        VSDC_NAME["core/vsdc/vsdc_name_parser.py<br/><i>(Authoritative Legal Name Engine)</i>"]:::core
+        VSDC_GEMINI["core/vsdc/vsdc_gemini_parser.py<br/><i>(Gemini Flash AI Structured Parser)</i>"]:::core
         VSDC_HUD["ui/components/vsdc_hud_pill.py<br/><i>(Ambient HUD Pill Overlay)</i>"]:::shell
     end
 
@@ -68,6 +72,7 @@ graph TD
     MAIN --> SEC
     MAIN --> SYNC
     MAIN --> VER
+    MAIN --> CLIP_WATCH
     MAIN --> SHELL
     MAIN --> SEARCH
     MAIN --> DETAIL
@@ -80,8 +85,10 @@ graph TD
     VSDC_WORKER --> VSDC_ROUTER
     VSDC_ROUTER --> VSDC_OCR
     VSDC_ROUTER --> VSDC_REGEX
+    VSDC_ROUTER --> VSDC_NAME
     VSDC_ROUTER --> VSDC_ASSEMBLER
     VSDC_ROUTER --> VSDC_HUD
+    VSDC_ASSEMBLER --> VSDC_GEMINI
     VSDC_ASSEMBLER --> DB
 
     DB --> SEC
@@ -94,6 +101,7 @@ graph TD
     ADMIN --> MCL_DLG
     ADMIN --> SVC_DLG
     ADMIN --> CSV_DLG
+    SETTINGS_DLG --> AI_DLG
 
     DETAIL --> CRED_DLG
     VER --> UPD_DLG
@@ -194,14 +202,16 @@ graph LR
 | [`database.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/database.py) | `SeraDatabase`, `DatabaseError` | `security` | SQLCipher database CRUD, master column layout (MCL), cell formatting, audit logging, backup/restore, Syncthing/peer conflict matching. |
 | [`security.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/security.py) | `derive_key_hex`, `load_salt`, `verify_pin` | Python standard crypto libraries | PBKDF2 key derivation, salt generation/loading, Argon2id PIN verification. |
 | [`sync_peer.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/sync_peer.py) | `SyncPeerService`, `PeerInfo` | `main` | Zero-configuration UDP LAN peer discovery (`BEACON_PORT 49156`) & TCP raw database/salt push (`SYNC_PORT 49157`). |
-| [`version.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/version.py) | `check_for_updates`, `apply_and_restart` | `update_dialog` | Queries GitHub raw release metadata (`version.json`) and orchestrates mandatory application updating. |
+| [`clipboard_watch.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/clipboard_watch.py) | `ClipboardWatchService` | `QClipboard`, `database` | SCA event-driven ambient clipboard watcher matching copied UIDs against memory index for zero-touch autofill. |
+| [`core/vsdc/vsdc_gemini_parser.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_gemini_parser.py) | `parse_compliance_with_gemini` | `google-genai` | Pre-dump Gemini Flash AI compliance parser converting complex return tables to structured JSON with Privacy Guard. |
 | [`core/vsdc/vsdc_router.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_router.py) | `VsdcRouter` | `vsdc_crosshairs`, `vsdc_ocr`, `vsdc_regex`, `vsdc_assembler` | Windows UIA browser URL inspection, route crosshair matching, regional cropping, and OCR routing. |
-| [`core/vsdc/vsdc_assembler.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_assembler.py) | `VsdcAssembler` | `database` | Multi-screen taxpayer session buffering, boundary reset, Ack validation, and dataset emission. |
+| [`core/vsdc/vsdc_assembler.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_assembler.py) | `VsdcAssembler` | `database`, `vsdc_gemini_parser` | Multi-screen taxpayer session buffering, boundary reset, Ack validation, and dataset emission. |
 | [`core/vsdc/vsdc_name_parser.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_name_parser.py) | `extract_clean_client_name` | `re` | Normalizes OCR text, strips web ligatures and portal noise, and parses multi-word taxpayer names. |
 | [`core/vsdc/vsdc_regex.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_regex.py) | Regex parsers & repair | `re` | Validates PAN, GSTIN, Ack numbers; repairs font confusion; extracts latest filed return cards. |
 | [`core/vsdc/vsdc_ocr.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_ocr.py) | `VsdcOcrEngine` | `winsdk.windows.media.ocr` | Hardware-accelerated offline DirectML OCR via native Windows 10/11 runtime. |
 | [`core/vsdc/vsdc_worker.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_worker.py) | `VsdcWorker` | `QThread`, `vsdc_router` | Background polling loop executing non-blocking frame ticks against active browser windows. |
 | [`ui/components/vsdc_hud_pill.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/components/vsdc_hud_pill.py) | `VsdcHudPill` | `QWidget`, `QPainter` | Floating frameless HUD Pill displaying live taxpayer name, PAN, and filing confirmation badge. |
+| [`ui/dialogs/ai_settings_dialog.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/dialogs/ai_settings_dialog.py) | `AISettingsDialog`, `GeminiSettingsDialog` | `database` | Configuration interface for Gemini API keys, model selection, token budget, and structured parsing rules. |
 | [`ui/shell/app_shell.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/app_shell.py) | `AppShell` | `sidebar`, `slide_panel`, `toast`, `alert_service` | Main application shell frame, tab switcher blur effects, notification alert queue. |
 | [`ui/shell/sidebar.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/sidebar.py) | `Sidebar` | `theme` | Left navigation bar, admin mode toggle, profile row with Sera Sync trigger. |
 | [`ui/shell/slide_panel.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/shell/slide_panel.py) | `SlidePanel` | Qt animation framework | Smooth sliding drawer component for viewing client details over search results. |

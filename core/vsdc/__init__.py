@@ -40,6 +40,7 @@ from .vsdc_name_parser import (
     extract_gst_welcome_name,
 )
 from .vsdc_ocr import VSDCOcrEngine
+from .vsdc_uia_text import is_available as uia_text_available, read_page_text as uia_read_page_text
 from .vsdc_assembler import VisualSessionAssembler
 from .vsdc_router import VSDCRouter
 from .vsdc_worker import VSDCWorker
@@ -75,6 +76,8 @@ __all__ = [
     "extract_proximity_labeled_names",
     "extract_header_profile_caps_name",
     "VSDCOcrEngine",
+    "uia_text_available",
+    "uia_read_page_text",
     "VisualSessionAssembler",
     "VSDCRouter",
     "VSDCWorker",

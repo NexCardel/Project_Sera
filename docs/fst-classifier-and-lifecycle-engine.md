@@ -1,6 +1,6 @@
 # Sera FST Classifier — Technical Specification & Lifecycle Correlation Engine
 
-**FST Classifier 1** (`FST_Classifier_1`) is an advanced, offline-first analysis subsystem of **Project Sera** designed to process continuous government tax portal API interception streams (`seraRawPayloadDump.txt` or `rawPayload.db`), resolve complex multi-session taxpayer identities, and output meticulously formatted, color-coded audit spreadsheets (`payload_report.xlsx`).
+**FST Classifier 1** (`FST_Classifier_1`) is an advanced, offline-first analysis subsystem of **Project Sera** designed to process continuous government tax portal captures directly from SQLite (`rawPayload.db`), resolve complex multi-session taxpayer identities, and output meticulously formatted, color-coded audit spreadsheets (`payload_report.xlsx`).
 
 ---
 
@@ -10,8 +10,8 @@ The classifier operates in 4 decoupled processing stages:
 
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                      Input: Raw Interception Stream                       │
-│    (seraRawPayloadDump.txt, FST TCP captures, or rawPayload.db records)   │
+│                      Input: SQLite Database Records                       │
+│             (rawPayload.db / tracker_dump table records)                  │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │
                                       ▼
@@ -101,18 +101,12 @@ To handle anonymous ITR submissions (where the government API intentionally omit
 
 ---
 
-## 5. Live File Watcher Mode
+## 5. Execution & Database Integration
 
-When executed with `--watch` (or launched via `run.bat`), `fst_classifier.py` runs a lightweight polling loop:
+When executed or invoked via desktop UI, `fst_classifier.py` reads rows directly from `rawPayload.db`:
 ```python
-last_mtime = -1
-while True:
-    if os.path.exists(target_dump):
-        mtime = os.path.getmtime(target_dump)
-        if mtime > last_mtime:
-            process_data(target_dump, output_excel)
-            last_mtime = mtime
-    time.sleep(2)
+# Direct SQLite execution
+python fst_classifier.py "..\rawPayload.db" "payload_report.xlsx"
 ```
 
 ---
@@ -122,8 +116,8 @@ while True:
 The classifier is connected directly to Project Sera's desktop application:
 1. **Header Card Preferences Menu**:
    * Location: [`ui/windows/tracker_dump_window.py`](file:///C:/Users/Nex/Downloads/Project%20Sera/APP/ui/windows/tracker_dump_window.py)
-   * Action: **`FST Classifier (Excel)`** (`mdi.file-excel`)
-   * Trigger: Compiles `payload_report.xlsx` and opens it in Microsoft Excel.
+   * Action: **`FST Classifier (Excel Report)`** (`mdi.file-excel`)
+   * Trigger: Compiles `payload_report.xlsx` directly from the database and opens it in Microsoft Excel.
 2. **Database Hook (`database.py`)**:
    * Method: `sync_fst_classifier()`
-   * Automatically refreshes `FST_Classifier_1/payload_report.xlsx` whenever raw dumps are updated or rebuilt.
+   * Refreshes `FST_Classifier_1/payload_report.xlsx` silently upon demand.

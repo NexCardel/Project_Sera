@@ -227,19 +227,32 @@ class VSDCHudPill(QWidget):
         Formats subtitle details with SDC styling:
         - If an ARN or Acknowledgement number is detected, renders it as a highlighted
           monospace Consolas chip (#39FF14).
+        - If a capture-source tag is present ("VSDC-X (Exact)" from the UI
+          Automation accessibility-tree read, or "VSDC (Visual)" from OCR),
+          renders it in a distinct color so the user can see at a glance
+          which engine actually supplied that capture.
+        Both apply independently — a subtitle can carry either, both, or neither.
         """
         if not raw_text:
             return ""
 
-        arn_pattern = r"(ARN|Ack|Acknowledgement)(?:\s*[:\-–—]?\s*)([A-Za-z0-9]{14,16})"
-        if re.search(arn_pattern, raw_text, re.IGNORECASE):
-            def repl(m):
-                lbl = m.group(1)
-                val = m.group(2)
-                return f'{lbl}: <span style="font-family: Consolas, monospace; color: #39FF14; font-weight: bold;">{val}</span>'
-            return re.sub(arn_pattern, repl, raw_text, flags=re.IGNORECASE)
+        text = raw_text
 
-        return raw_text
+        arn_pattern = r"(ARN|Ack|Acknowledgement)(?:\s*[:\-–—]?\s*)([A-Za-z0-9]{14,16})"
+        def repl_arn(m):
+            lbl = m.group(1)
+            val = m.group(2)
+            return f'{lbl}: <span style="font-family: Consolas, monospace; color: #39FF14; font-weight: bold;">{val}</span>'
+        text = re.sub(arn_pattern, repl_arn, text, flags=re.IGNORECASE)
+
+        source_pattern = r"(VSDC-X \(Exact\)|VSDC \(Visual\))"
+        def repl_source(m):
+            label = m.group(1)
+            color = "#58A6FF" if "VSDC-X" in label else "#8B949E"
+            return f'<span style="color: {color}; font-weight: 700;">{label}</span>'
+        text = re.sub(source_pattern, repl_source, text)
+
+        return text
 
     def show_event(self, event_type: str, title: str, subtitle: str = "", duration_ms: int = 1800):
         """

@@ -31,14 +31,21 @@ The injected `fillCredentialsInPage()` function:
 - **Floating Confirmation Banner**: Simultaneously displays a sleek, non-intrusive floating card in the top-right corner of the page showing the client business name, owner name, and `"Password was autofilled for <Portal>"` confirmation.
 - **Privacy & Safety**: Never persists raw clipboard text, scopes checkbox clicks away from `"Show password"` controls, and can be toggled via **Settings → General**.
 
-## Sera Manual Tracker Injection (SMTI / Manual Assist)
+## Sera Manual Tracker Injection (SMTI) & Smart Credential Combinations (SCC / MECP)
 
 - **Obsidian & Emerald UI Widget**: An interactive floating card widget rendered in an isolated Shadow DOM on the web page.
 - **Independent Field Injection**: Allows staff to independently trigger `👤 Inject User ID` and `🔑 Inject Password` with immediate visual click confirmation (`✓ Injected`).
+- **Smart Credential Combinations (SCC / MECP)**:
+  - Injects candidate password formula variations (dynamic PAN-derived formulas e.g. `Pan@123`, `Pan#2024`, plus 2 configurable static fallback strings) directly onto password fields.
+  - Features unmasked cleartext buttons for instant single-click formula testing without losing focus.
+  - Automatically tags the client record in `master.db` with `"Password verified via SCC"` upon successful login navigation.
 - **Countdown Progress Bar**: Displays a live 30-second countdown indicator bar before auto-dismissal.
 - **Masking Safeguards**: Keeps passwords fully masked (`••••••••`) with zero plaintext exposure in DOM attributes or screen recordings.
 
-## Sera FST: API Detector (SAD v2.9.8), SDC Assembler & DOM Detector
+## Sera FST: SDC DOM Crosshair Assembler & Visual Capture
+
+> [!NOTE]
+> **Sera SAD Retirement**: Sera SAD (Network API Interceptor / `net_interceptor.js`) has been permanently retired and removed from the active workspace. Capture operations rely exclusively on **Sera SDC (DOM Crosshairs)** and **Sera VSDC (Visual Screen Data Capture)**.
 
 - **Sera SDC Assembler (`sdc_core.js` + protocols)**:
   - **In-Memory Aggregation**: Buffers all crosshair events during an active portal session into `sdc_assembler` without emitting premature fragmented entries.
@@ -55,24 +62,7 @@ The injected `fillCredentialsInPage()` function:
 
 The GST multi-dataset flow was not visible in Tracker Dump because the final compressed assembler message was not reaching the desktop ingestion path. The desktop listener was not active on loopback port `49152`, and its decoder also lacked the `base64` import required for `gzip+base64` messages. The source decoder and dataset expansion are now corrected. Testing must use a restarted desktop build and a reloaded extension; otherwise an older process can continue to discard or ignore the final envelope.
 
-- **Sera SAD (`net_interceptor.js` — v2.9.8)**:
-  - Injected into the page's `MAIN` execution world at `document_start` to intercept `fetch()` and `XMLHttpRequest` traffic passively.
-  - **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
-  - **E-Verification State & Intent Detection**:
-    - **`Submitted (e-Verified)`**: Detects completed OTP confirmations (`/verificationservices/auth/validateOTP` returning `"OTP VALIDATED"`) or submissions carrying active EVC tokens.
-    - **`Submitted (Not e-Verified / e-Verify Later)`**: Accurately classifies submissions where the taxpayer chose *"e-Verify Later"* (`selectionFlag: "L"` in `/saveEntity` with `evc: null` in `/submit/wzrd`), capturing the 15-digit Government ARN while preserving pending verification status.
-    - **`Other EVC`**: Separates Non-ITR validations (bank account revalidations, profile OTPs) from actual return filings.
-  - **Entity-Aware PAN Intelligence (`profile_parser.py`)**:
-    - Disables duplication of individual proprietor names into Company Name.
-    - Extracts business and trade names from ITR-4 & ITR-3 Schedule BP / Section 44AD/44ADA (`natOfBus44AD`, `nameOfBusiness`, `tradeName`).
-  - **Asynchronous Blob & ArrayBuffer Decoding**: Automatically unpacks `responseType: 'blob'` and `responseType: 'arraybuffer'` streams via `blob.text()` and `TextDecoder('utf-8')`, capturing files downloaded through Angular `$http` or fetch streams without DOM exceptions.
-  - **Monolithic Document Guard**: Identifies full computational tax return documents (`/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the complete root JSON schema in one un-truncated payload rather than fragmenting internal sub-arrays.
-  - Automatically captures filing confirmations, e-verifications, statutory forms, challans, and full multi-year filed return histories from ITD, GST, and TRACES backends.
-  - Dispatches `CustomEvent("SeraFSTApiCapture")` containing normalized Ack/ARN numbers, Assessment Years, Form types, and client PANs.
-- **Sera Filing Detector (`filing_detector.js`)**:
-  - Runs in the extension's `ISOLATED` world to bridge custom DOM events to `chrome.runtime.sendMessage()`.
-  - Includes disconnection safety guards (`chrome.runtime?.id`) to gracefully survive extension reloads.
-- **Sera DOM (`tracker.js`)**:
+- **Sera DOM Tracker (`tracker.js`)**:
   - Monitors visual on-screen confirmation banners using `MutationObserver` as a fallback for legacy server-rendered HTML pages.
 
 ## Native Messaging on Another PC

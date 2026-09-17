@@ -10,6 +10,7 @@ This README is the quick orientation page. The detailed implementation and archi
 - [Features & Security Controls](docs/features-security.md)
 - [Browser Automation & Extension](docs/browser-automation-extension.md)
 - [File Submission Tracker](docs/file-submission-tracker.md)
+- [Tracker Dump Status Matrix & Storage Architecture](docs/tracker-status-matrix-and-storage.md)
 - [Government API Payload & Interception Matrix](docs/api-payloads-matrix.md)
 - [VSDC — Visual Screen Data Capture Blueprint](docs/Blueprints/Sera_Visual_Screen_Harvester_Blueprint.md)
 - [Build & Release Guide](docs/build-release.md)
@@ -36,8 +37,9 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
   - **Sera DOM — DOM Detector (Visual Layer)**:
     - `MutationObserver` visual fallback (`tracker.js`) monitoring on-screen confirmation banners and rendered HTML elements for legacy/server-rendered portal forms.
 - **Tracker Dump Workspace (`TrackerDumpWindow`)**:
-  - Dedicated desktop workspace logging all raw SAD captures, VSDC captures, and extension dumps into SQLite table `tracker_dump`.
-  - Features real-time multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`SAD_API_Interceptor`, `DOM_Tracker`, `VSDC_Visual`, `Manual_Fallback`), raw JSON payload inspector drawer, CSV export, single-row deletion, and one-click bulk purge.
+  - Dedicated desktop workspace logging all SDC and VSDC captures into SQLite table `tracker_dump` (`rawPayload.db`).
+  - **Color-Coded Submission Badges**: Stylized Google Material pill badges (`mdi.*`) providing instant visual differentiation across lifecycle statuses (Verified/Green, Pending/Yellow, Bank Validated/Purple, In-Progress/Amber, and Failed/Red) with monotonic promotion safeguards.
+  - Features real-time multi-field search (Client Name, PAN, GSTIN, ARN, Period, Portal), method filters (`DOM_Tracker`, `VSDC_Visual`, `Manual_Fallback`), raw JSON payload inspector drawer, CSV export, single-row deletion, and one-click bulk purge.
   - Universal client resolution dynamically matches client primary keys, `client_id_token` (`CLI-00370`), MCL Serial Numbers (`No. 370`), and Name/PAN/GSTIN substring queries.
 - **Sera Clipboard Assist (SCA — Ambient Password Autofill)**:
   - Automatically arms password in memory when staff copy client User IDs from Excel, Sheets, Notepad, or CSV rosters.

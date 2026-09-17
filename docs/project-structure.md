@@ -26,6 +26,7 @@ project_sera/
 |   |-- features-security.md
 |   |-- browser-automation-extension.md
 |   |-- file-submission-tracker.md
+|   |-- tracker-status-matrix-and-storage.md
 |   |-- build-release.md
 |   `-- operations-sync.md
 |-- core/                      # Core OS-level subsystems
@@ -37,6 +38,7 @@ project_sera/
 |       |-- vsdc_name_parser.py# Taxpayer name normalizer, ligature scrubber & composite parser
 |       |-- vsdc_ocr.py        # Windows.Media.Ocr DirectML C++ engine wrapper
 |       |-- vsdc_regex.py      # Deterministic tax regex patterns & optical character repair
+|       |-- vsdc_session_logger.py # Stub (file-based Vsdc_Captures logging retired)
 |       `-- vsdc_worker.py     # Background QThread polling & frame processing worker
 |-- native_host/               # Native Messaging bridge for browser extension
 |   |-- com.amanassociates.sera.json
