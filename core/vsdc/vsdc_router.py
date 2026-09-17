@@ -136,6 +136,16 @@ class VSDCRouter:
             except Exception as e:
                 print(f"[VSDC Router] on_activity callback error: {e}")
 
+    @staticmethod
+    def _source_tag_from_capture_method(capture_method: Optional[str]) -> str:
+        """
+        Derives the same " • VSDC-X (Exact)" / " • VSDC (Visual)" HUD suffix from a
+        stored capture_method string (e.g. "VSDC-X_itr_submitted_pending"), for toasts
+        that fire from an already-assembled dataset (get_completed_dataset_payload)
+        rather than from this tick's own fresh uia_fields_used list.
+        """
+        return " • VSDC-X (Exact)" if (capture_method or "").startswith("VSDC-X") else " • VSDC (Visual)"
+
     def _init_uia(self):
         try:
             import sys
@@ -566,11 +576,11 @@ class VSDCRouter:
             c_name = self.assembler.client_name or ""
             if pan and pan != self.last_logged_pan:
                 print(f"[VSDC Router] Identity updated: PAN={pan}")
-                self.notify_activity("identity", f"Assessee: {pan}", f"{c_name}" if c_name else f"Portal: {self.active_portal}")
+                self.notify_activity("identity", f"Assessee: {pan}", (f"{c_name}" if c_name else f"Portal: {self.active_portal}") + source_tag)
                 self.last_logged_pan = pan
             elif gstin and gstin != self.last_logged_pan:
                 print(f"[VSDC Router] Identity updated: GSTIN={gstin}")
-                self.notify_activity("identity", f"GSTIN: {gstin}", f"{c_name}" if c_name else f"Portal: {self.active_portal}")
+                self.notify_activity("identity", f"GSTIN: {gstin}", (f"{c_name}" if c_name else f"Portal: {self.active_portal}") + source_tag)
                 self.last_logged_pan = gstin
             if flushed_prior:
                 print(f"[VSDC Router] Flushed prior client session due to PAN context switch!")
@@ -707,7 +717,8 @@ class VSDCRouter:
             c_pan = completed_payload.get("pan", "")
             c_name = completed_payload.get("client_name") or c_pan
             print(f"[VSDC Router] Dataset completed & shot to app: PAN={c_pan} Form={c_form}{c_period} Status={c_status}")
-            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}")
+            c_source = self._source_tag_from_capture_method(completed_payload.get("capture_method"))
+            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}{c_source}")
             return completed_payload
 
         return None
@@ -1360,7 +1371,8 @@ class VSDCRouter:
             c_ident = completed_payload.get("gstin") or completed_payload.get("pan", "")
             c_name = completed_payload.get("client_name") or c_ident
             print(f"[VSDC Router] GST Dataset completed & shot to app: {c_ident} Form={c_form}{c_period} Status={c_status}")
-            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}")
+            c_source = self._source_tag_from_capture_method(completed_payload.get("capture_method"))
+            self.notify_activity("capture", f"Dataset: {c_form}{c_period}", f"{c_name} • {c_status}{c_source}")
             return completed_payload
 
         return None
