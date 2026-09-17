@@ -1,7 +1,7 @@
 """
 test_dual_pk_and_sad_resolution.py
 ----------------------------------
-Unit tests verifying Dual Primary Key architecture and authoritative SAD identity resolution.
+Unit tests verifying Dual Primary Key architecture and authoritative extension-capture identity resolution.
 """
 
 import os
@@ -57,7 +57,7 @@ class TestDualPKAndSadResolution(unittest.TestCase):
 
     def test_sad_capture_no_false_attribution(self):
         """
-        Verifies that incoming SAD network capture with a new PAN does NOT get falsely
+        Verifies that incoming extension network capture with a new PAN does NOT get falsely
         attributed to previous active session client_id (e.g. 66).
         """
         mcl_cols = self.db.get_mcl_columns()
@@ -73,7 +73,7 @@ class TestDualPKAndSadResolution(unittest.TestCase):
             client_id=cid_1,
             portal="Income Tax Portal",
             arn_number="PROFILE-AMTPL4994M",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"pan": "AMTPL4994M", "client_id": cid_1})
         )
 
@@ -100,7 +100,7 @@ class TestDualPKAndSadResolution(unittest.TestCase):
             client_id=None,
             portal="Income Tax",
             arn_number="PROFILE-AXTPT8591P",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"pan": "AXTPT8591P"})
         )
 
@@ -176,7 +176,7 @@ class TestDualPKAndSadResolution(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number="315279500290321",
             pan="CIQPM7599L",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"pan": "CIQPM7599L"})
         )
 
@@ -217,7 +217,7 @@ class TestDualPKAndSadResolution(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number="677475180230826",
             pan="",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps(raw_itd_payload)
         )
 

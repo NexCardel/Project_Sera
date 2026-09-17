@@ -275,15 +275,11 @@ class SeraApp:
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
             self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
 
-            # Ensure FST, SDC, SAD, SCA, and tracker settings are initialized
+            # Ensure FST, SDC, SCA, and tracker settings are initialized
             if self.db.get_setting("sdc_enabled") is None:
                 self.db.set_setting("sdc_enabled", "1")
             if self.db.get_setting("fst_enabled") is None:
                 self.db.set_setting("fst_enabled", "1")
-            if self.db.get_setting("sad_enabled") is None:
-                self.db.set_setting("sad_enabled", "1")
-            if self.db.get_setting("sad_browser_notif_enabled") is None:
-                self.db.set_setting("sad_browser_notif_enabled", "1")
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
             if self.db.get_setting("tracker_enabled") is None:
@@ -425,14 +421,10 @@ class SeraApp:
                 to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
             if "fst_enabled" in msg:
                 to_set["fst_enabled"] = "1" if msg["fst_enabled"] else "0"
-            if "sad_enabled" in msg:
-                to_set["sad_enabled"] = "1" if msg["sad_enabled"] else "0"
             if "tracker_enabled" in msg:
                 to_set["tracker_enabled"] = "1" if msg["tracker_enabled"] else "0"
             if "sca_enabled" in msg:
                 to_set["sca_enabled"] = "1" if msg["sca_enabled"] else "0"
-            if "sad_browser_notif_enabled" in msg:
-                to_set["sad_browser_notif_enabled"] = "1" if msg["sad_browser_notif_enabled"] else "0"
             if to_set:
                 self.db.set_settings_bulk(to_set)
                 print(f"[main] Persisted updated extension settings from popup: {to_set}")
@@ -445,8 +437,6 @@ class SeraApp:
             sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
             fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
             vsdc = self.db.get_setting("vsdc_enabled", "1") in ("1", "true", "True")
-            sad = self.db.get_setting("sad_enabled", "1") in ("1", "true", "True")
-            sad_notif = self.db.get_setting("sad_browser_notif_enabled", "1") in ("1", "true", "True")
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
             sca_mode = self.db.get_setting("sca_action_mode", "autofill")
             try:
@@ -461,9 +451,7 @@ class SeraApp:
                 "sdc_enabled": sdc,
                 "fst_enabled": fst or sdc,
                 "vsdc_enabled": vsdc,
-                "sad_enabled": sad,
-                "tracker_enabled": sdc or fst or sad or vsdc,
-                "sad_browser_notif_enabled": sad_notif,
+                "tracker_enabled": sdc or fst or vsdc,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
@@ -485,13 +473,11 @@ class SeraApp:
                     fst_enabled=payload.get("fst_enabled", True),
                     sdc_enabled=payload.get("sdc_enabled", True),
                     vsdc_enabled=payload.get("vsdc_enabled", True),
-                    sad_enabled=payload.get("sad_enabled", True),
                     tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),
                     sca_mode=payload.get("sca_mode", "autofill"),
                     allowed_services=payload.get("allowed_services", []),
                     sca_max_uses=payload.get("sca_max_uses", 1),
-                    sad_browser_notif_enabled=payload.get("sad_browser_notif_enabled", True),
                     registered_pans=payload.get("registered_pans", []),
                     scc_settings=payload.get("scc_settings", {}),
                 )
@@ -536,7 +522,9 @@ class SeraApp:
         if is_vsdc:
             method_label = "Sera VSDC (Visual Harvester)"
         elif capture_method in ("SAD_API_Interceptor", "SAD_API_Detector"):
-            method_label = "Sera SAD (API Detector)"
+            # Historical label only - that capture mechanism was retired and
+            # fully removed from the extension; no longer produces new rows.
+            method_label = "Legacy Capture (Retired)"
         else:
             method_label = "Sera SDC (DOM Crosshair)"
         client_display = ""

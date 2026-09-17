@@ -84,12 +84,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const scaVal = toggleSca ? toggleSca.checked : true;
 
     const storageUpdate = {
-      sadEnabled: false, // Permanently purged
       fstEnabled: fstVal,
       sdcEnabled: fstVal,
       sdcToastEnabled: toastVal,
       trackerEnabled: fstVal,
-      sadBrowserNotifEnabled: false,
       scaEnabled: scaVal
     };
 

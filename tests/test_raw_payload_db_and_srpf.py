@@ -109,7 +109,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number="677475180230826",
             period_label="AY 2026-27",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({
                 "ackNum": "677475180230826",
                 "entityNum": pan_target,
@@ -124,7 +124,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number=f"PROFILE-{pan_target}",
             period_label="Profile Info",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({
                 "pan": pan_target,
                 "firstName": "Ramesh",
@@ -227,7 +227,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         get_srpf_containers() returns EXACTLY 1 single aggregated row instead of 10 individual rows.
         """
         pan = "AXTPT8590N"
-        # Simulate SAD intercepting 10 assessment year filings in 1 session
+        # Simulate the extension capturing 10 assessment year filings in 1 session
         years = ["2018-19", "2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26", "2026-27"]
         for idx, yr in enumerate(years):
             self.db.insert_tracker_dump(
@@ -235,7 +235,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
                 portal="Income Tax Portal (ITR-4)",
                 arn_number=f"10000000000{idx}",
                 period_label=f"AY {yr}",
-                capture_method="SAD_API_Interceptor",
+                capture_method="Extension_Capture",
                 raw_payload_json=json.dumps({
                     "entityNum": pan,
                     "legalName": "DHANAJ TIWARI",
@@ -264,7 +264,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number="1234567890",
             period_label="AY 2026-27",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"entityNum": pan, "legalName": "Test Corp"})
         )
         self.assertEqual(len(self.db.get_srpf_containers()), 1)
@@ -290,13 +290,13 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         # Client 2: Income Tax client (e.g. Anita Tewari)
         cid_itr = self.db.add_client(itr_vals, notes="Anita Tewari", service_ids=[])
 
-        # Step 1: User visits ITR portal, SAD captures profile for AXTPT8591P
+        # Step 1: User visits ITR portal, extension captures profile for AXTPT8591P
         self.db.insert_tracker_dump(
             client_id=None,
             portal="Income Tax Portal",
             arn_number="PROFILE-AXTPT8591P",
             period_label="Profile Info",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"entityNum": "AXTPT8591P", "firstName": "Anita", "lastName": "Tewari"})
         )
 
@@ -306,7 +306,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             portal="Income Tax Portal",
             arn_number="ITR000883707378",
             period_label="",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"arnNumber": "680429730230826", "httpStatus": "ACCEPTED", "transactionNo": "ITR000883707378"})
         )
 
@@ -346,7 +346,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             arn_number="827916720300726",
             period_label="AY 2025-26",
             status="Filed & Verified (Processed)",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"pan": "AEYPH5467G", "status": "Filed & Verified (Processed)"})
         )
 
@@ -357,7 +357,7 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
             arn_number="132255440300826",
             period_label="AY 2026-27",
             status="Submitted (Pending e-Verification)",
-            capture_method="SAD_API_Interceptor",
+            capture_method="Extension_Capture",
             raw_payload_json=json.dumps({"pan": "AEYPH5467G", "status": "Submitted (Pending e-Verification)"})
         )
 

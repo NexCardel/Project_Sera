@@ -53,7 +53,7 @@ def parse_header(chunk: str) -> Dict[str, Any]:
         "entry_num": None,
         "timestamp": None,
         "portal": None,
-        "capture_method": "SAD_API_Interceptor",
+        "capture_method": "Unknown",
         "status": "submitted",
         "arn_ack_no": None,
         "period_label": None,

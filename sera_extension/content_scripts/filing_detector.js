@@ -234,11 +234,9 @@ const SERA_DEBUG = false; // production: silence all console output
                     taxpayer_name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
                     portal: detail.portal || payload.portal || "Portal",
                     arn: detail.arn || "N/A",
-                    // No longer defaults to "SAD_API_Interceptor" - that system
-                    // (net_interceptor.js) is retired and no longer exists in
-                    // this extension; this relay only ever forwards genuine
-                    // filing_result events now (see the type check above),
-                    // which always already carry an "SDC_"-prefixed method.
+                    // This relay only ever forwards genuine filing_result events
+                    // now (see the type check above), which always already carry
+                    // an "SDC_"-prefixed method.
                     capture_method: detail.capture_method || "SDC_Legacy_Relay",
                     period_label: detail.period_label || payload.period_label || "",
                     filing_type: detail.filing_type || payload.filing_type || "",
@@ -254,13 +252,4 @@ const SERA_DEBUG = false; // production: silence all console output
         }
     });
 
-    // Listen for live toggle changes from background worker and forward killswitch to main world
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-        chrome.runtime.onMessage.addListener((msg) => {
-            if (msg.type === "SERA_SAD_STATE_CHANGED" || msg.type === "SERA_TRACKER_STATE_CHANGED") {
-                const isEnabled = msg.sadEnabled !== false && msg.trackerEnabled !== false;
-                window.postMessage({ type: 'SERA_SAD_KILLSWITCH', enabled: isEnabled }, '*');
-            }
-        });
-    }
 })();

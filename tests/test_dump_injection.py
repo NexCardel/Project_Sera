@@ -1,7 +1,7 @@
 """
 test_dump_injection.py
 -----------------------
-Quick test script to send a mock SAD API Interceptor result to Project Sera's
+Quick test script to send a mock Extension capture result to Project Sera's
 ExtensionListener on TCP port 49152.
 
 Usage:
@@ -36,16 +36,16 @@ def test_inject():
         "client_id": target_client_id,
         "portal": portal_name,
         "arn": arn,
-        "capture_method": "SAD_API_Interceptor",
+        "capture_method": "Extension_Capture",
         "period_label": "July 2026",
         "raw_payload": {
             "status_cd": "1",
             "arn": arn,
-            "message": f"Test {portal_name} SAD Interception"
+            "message": f"Test {portal_name} Extension Capture"
         }
     }
 
-    print(f"[Test Inject] Sending SAD capture for Client #{target_client_id} ({portal_name}), ARN: {arn} to TCP port 49152...")
+    print(f"[Test Inject] Sending extension capture for Client #{target_client_id} ({portal_name}), ARN: {arn} to TCP port 49152...")
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2.0)

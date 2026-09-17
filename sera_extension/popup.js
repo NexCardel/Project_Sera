@@ -115,14 +115,12 @@ document.addEventListener('DOMContentLoaded', () => {
     updateVsdcBadge(vsdcVal);
 
     const storageUpdate = {
-      sadEnabled: false, // Permanently purged
       fstEnabled: sdcVal,
       sdcEnabled: sdcVal,
       vsdcEnabled: vsdcVal,
       sdsEnabled: sdsVal,
       sdcToastEnabled: toastVal,
       trackerEnabled: sdcVal || sdsVal || vsdcVal,
-      sadBrowserNotifEnabled: false,
       scaEnabled: scaVal
     };
 

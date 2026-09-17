@@ -683,11 +683,8 @@ class ClientDetailWindow(QWidget):
         self.action_alert_requested.emit("autofill", self._get_identity_label(self.client))
 
         fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
-        service["_sad_enabled"] = sad_on
-        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
-        service["_tracker_enabled"] = fst_on or sad_on
+        service["_tracker_enabled"] = fst_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
             service, uid, pwd, self.client["id"],
@@ -727,11 +724,8 @@ class ClientDetailWindow(QWidget):
             self._launch_manual(service, uid, pwd)
         else:
             fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-            sad_on = self.db.get_setting("sad_enabled", "1") == "1"
             service["_fst_enabled"] = fst_on
-            service["_sad_enabled"] = sad_on
-            service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
-            service["_tracker_enabled"] = fst_on or sad_on
+            service["_tracker_enabled"] = fst_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
                 on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
@@ -772,11 +766,8 @@ class ClientDetailWindow(QWidget):
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
         fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
-        service["_sad_enabled"] = sad_on
-        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
-        service["_tracker_enabled"] = fst_on or sad_on
+        service["_tracker_enabled"] = fst_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_mecp(
             service, uid, pwd or "", self.client["id"],
@@ -802,11 +793,8 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
         fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        sad_on = self.db.get_setting("sad_enabled", "1") == "1"
         service["_fst_enabled"] = fst_on
-        service["_sad_enabled"] = sad_on
-        service["_sad_browser_notif_enabled"] = self.db.get_setting("sad_browser_notif_enabled", "1") == "1"
-        service["_tracker_enabled"] = fst_on or sad_on
+        service["_tracker_enabled"] = fst_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation.trigger_manual_assist(
             service, uid, pwd, self.client["id"],

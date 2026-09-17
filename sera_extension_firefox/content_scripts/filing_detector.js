@@ -1,4 +1,4 @@
-// filing_detector.js - Listens for SAD API captures, displays compact in-browser FST toasts, and routes filing results to app
+// filing_detector.js - Listens for filing capture events, displays compact in-browser FST toasts, and routes filing results to app
 (function() {
     console.log("Project Sera: Filing detector active with FST toast notifier.");
 
@@ -66,7 +66,7 @@
                 const pan = (detail.pan || "").trim().toUpperCase();
                 const clientName = (detail.client_name || detail.name || detail.taxpayer_name || "").trim();
                 const period = (detail.period_label || "").trim();
-                const method = detail.capture_method === "DOM_Tracker" ? "DOM" : "SAD API";
+                const method = detail.capture_method === "DOM_Tracker" ? "DOM" : "Capture";
 
                 toast.innerHTML = `
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
@@ -165,14 +165,13 @@
 
         // sdc_core.js re-dispatches ALL of its internal events on
         // 'SeraFSTApiCapture' for backward compatibility with this listener's
-        // original purpose (catching the now-retired net_interceptor.js/SAD
-        // system, which no longer exists anywhere in this extension). That
-        // includes session_start pings, sdc_session_timeline audit syncs, and
-        // raw sudr_capture envelopes - none of which are a genuine
-        // filing_result and none of which carry a capture_method field, so
-        // they used to fall through the check below and get mislabeled +
-        // re-relayed as "SAD_API_Interceptor" captures. Only a real
-        // filing_result is ever relevant here.
+        // original purpose (catching a now-fully-retired, deleted capture
+        // mechanism). That includes session_start pings, sdc_session_timeline
+        // audit syncs, and raw sudr_capture envelopes - none of which are a
+        // genuine filing_result and none of which carry a capture_method
+        // field, so they used to fall through the check below and get
+        // mislabeled + re-relayed as bogus captures. Only a real filing_result
+        // is ever relevant here.
         if (detail.type !== 'filing_result') {
             return;
         }
@@ -185,7 +184,7 @@
             return;
         }
 
-        console.log("Sera Filing Detector: Received SAD API Capture event", detail);
+        console.log("Sera Filing Detector: Received capture event", detail);
 
         if (!chrome.runtime || !chrome.runtime.id) {
             console.log("Sera Filing Detector: Extension context reloaded.");
@@ -193,23 +192,12 @@
         }
 
         try {
-            chrome.storage.local.get(['sadBrowserNotifEnabled', 'sad_browser_notif_enabled', 'activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled', 'allowedDomains'], (data) => {
-                if (data && (data.sadEnabled === false || data.trackerEnabled === false)) {
-                    return; // SAD is disabled
+            chrome.storage.local.get(['activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'trackerEnabled', 'allowedDomains'], (data) => {
+                if (data && data.trackerEnabled === false) {
+                    return; // Tracker is disabled
                 }
 
-                // Check if in-browser toast notification is enabled
-                let showToast = true;
-                if (data) {
-                    if (data.sadBrowserNotifEnabled === false || data.sad_browser_notif_enabled === false) {
-                        showToast = false;
-                    } else if (data.activeAutofillPayload && data.activeAutofillPayload.sad_browser_notif_enabled === false) {
-                        showToast = false;
-                    }
-                }
-                if (showToast) {
-                    SeraToastManager.notify(detail);
-                }
+                SeraToastManager.notify(detail);
 
                 if (chrome.runtime.lastError || !chrome.runtime || !chrome.runtime.id) return;
                 
@@ -245,11 +233,9 @@
                     taxpayer_name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
                     portal: detail.portal || payload.portal || "Portal",
                     arn: detail.arn || "N/A",
-                    // No longer defaults to "SAD_API_Interceptor" - that system
-                    // (net_interceptor.js) is retired and no longer exists in
-                    // this extension; this relay only ever forwards genuine
-                    // filing_result events now (see the type check above),
-                    // which always already carry an "SDC_"-prefixed method.
+                    // This relay only ever forwards genuine filing_result events
+                    // now (see the type check above), which always already carry
+                    // an "SDC_"-prefixed method.
                     capture_method: detail.capture_method || "SDC_Legacy_Relay",
                     period_label: detail.period_label || payload.period_label || "",
                     filing_type: detail.filing_type || payload.filing_type || "",
@@ -265,13 +251,4 @@
         }
     });
 
-    // Listen for live toggle changes from background worker and forward killswitch to main world
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-        chrome.runtime.onMessage.addListener((msg) => {
-            if (msg.type === "SERA_SAD_STATE_CHANGED" || msg.type === "SERA_TRACKER_STATE_CHANGED") {
-                const isEnabled = msg.sadEnabled !== false && msg.trackerEnabled !== false;
-                window.postMessage({ type: 'SERA_SAD_KILLSWITCH', enabled: isEnabled }, '*');
-            }
-        });
-    }
 })();

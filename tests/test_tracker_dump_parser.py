@@ -40,7 +40,7 @@ class TestTrackerDumpParserPipeline(unittest.TestCase):
             "CAPTURE DUMP ENTRY #11\n"
             "Timestamp       : 2026-08-23T14:43:40.343841+00:00\n"
             "Portal          : Income Tax Portal\n"
-            "Capture Method  : SAD_API_Interceptor\n"
+            "Capture Method  : VSDC_itr_filed_verified\n"
             "Status          : submitted\n"
             "ARN / Ack No    : 662914450160925\n"
             "Period Label    : \n"

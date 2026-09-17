@@ -173,8 +173,6 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "client_name": service.get("_client_name", service.get("name", "Client")),
         "tracker_enabled": service.get("_tracker_enabled", True),
         "fst_enabled": service.get("_fst_enabled", True),
-        "sad_enabled": service.get("_sad_enabled", True),
-        "sad_browser_notif_enabled": service.get("_sad_browser_notif_enabled", True),
         "scc_mode": scc_mode,
         "scc_combos": scc_combos or [],
     }
@@ -278,10 +276,10 @@ def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, vsdc_enabled: bool = True, sad_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, sad_browser_notif_enabled: bool = True, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
+def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, vsdc_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
     """Sends immediate setting updates to native_host -> background.js"""
     if tracker_enabled is None:
-        tracker_enabled = sdc_enabled or fst_enabled or sad_enabled or vsdc_enabled
+        tracker_enabled = sdc_enabled or fst_enabled or vsdc_enabled
 
     # Base government portal domains
     allowed_domains = [
@@ -310,8 +308,6 @@ def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True
         "sdc_enabled": sdc_enabled,
         "vsdc_enabled": vsdc_enabled,
         "fst_enabled": fst_enabled,
-        "sad_enabled": sad_enabled,
-        "sad_browser_notif_enabled": sad_browser_notif_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),

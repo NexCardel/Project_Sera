@@ -660,16 +660,6 @@ class UnifiedSettingsDialog(QDialog):
             "DOM Crosshair engine that watches on-screen confirmation messages and elements on web pages.",
             self.fst_check))
 
-        self.sad_check = QCheckBox()
-        lay.addWidget(_setting_row("Sera SAD \u2014 API Detector (FST)",
-            "Passive network API detector (fetch / XHR) for real-time JSON API capture from government backends.",
-            self.sad_check))
-
-        self.sad_notif_check = QCheckBox()
-        lay.addWidget(_setting_row("SAD Browser Toast Notifications",
-            "Show compact floating notification cards in the browser whenever a filing or verification is captured.",
-            self.sad_notif_check))
-
         self.sca_check = QCheckBox()
         lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
             "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
@@ -708,8 +698,6 @@ class UnifiedSettingsDialog(QDialog):
         self.run_in_bg_check.toggled.connect(self._on_control_changed)
         self.autostart_check.toggled.connect(self._on_control_changed)
         self.fst_check.toggled.connect(self._on_control_changed)
-        self.sad_check.toggled.connect(self._on_control_changed)
-        self.sad_notif_check.toggled.connect(self._on_control_changed)
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
@@ -1197,8 +1185,6 @@ class UnifiedSettingsDialog(QDialog):
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
             state["fst"] = self.fst_check.isChecked()
-            state["sad"] = self.sad_check.isChecked()
-            state["sad_notif"] = self.sad_notif_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
@@ -1260,8 +1246,6 @@ class UnifiedSettingsDialog(QDialog):
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
             self.fst_check.setChecked(g("sdc_enabled", g("fst_enabled", "1")) == "1")
-            self.sad_check.setChecked(g("sad_enabled", "1") == "1")
-            self.sad_notif_check.setChecked(g("sad_browser_notif_enabled", "1") == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
@@ -1320,12 +1304,10 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
                 bulk_settings["sdc_enabled"]                = b(self.fst_check)
                 bulk_settings["fst_enabled"]                = b(self.fst_check)
-                bulk_settings["sad_enabled"]                = b(self.sad_check)
-                bulk_settings["sad_browser_notif_enabled"]  = b(self.sad_notif_check)
                 bulk_settings["sca_enabled"]                = b(self.sca_check)
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-                bulk_settings["tracker_enabled"]            = "1" if (self.fst_check.isChecked() or self.sad_check.isChecked()) else "0"
+                bulk_settings["tracker_enabled"]            = "1" if self.fst_check.isChecked() else "0"
 
                 try:
                     from automation import update_extension_settings
@@ -1343,9 +1325,7 @@ class UnifiedSettingsDialog(QDialog):
                     update_extension_settings(
                         fst_enabled=self.fst_check.isChecked(),
                         sdc_enabled=self.fst_check.isChecked(),
-                        sad_enabled=self.sad_check.isChecked(),
-                        tracker_enabled=(self.fst_check.isChecked() or self.sad_check.isChecked()),
-                        sad_browser_notif_enabled=self.sad_notif_check.isChecked(),
+                        tracker_enabled=self.fst_check.isChecked(),
                         sca_enabled=self.sca_check.isChecked(),
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
                         sca_max_uses=self.sca_max_uses_spin.value(),

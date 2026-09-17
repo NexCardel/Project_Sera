@@ -28,17 +28,13 @@ function connectToNativeHost() {
         handleScaArm(message);
       } else if (message.type === "update_settings") {
         const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
-        const sad = message.sad_enabled !== false && message.tracker_enabled !== false;
-        const sadNotif = message.sad_browser_notif_enabled !== false;
         const sca = message.sca_enabled !== false;
         const scaMode = message.sca_mode || "autofill";
         const allowedDomains = message.allowed_domains || [];
-        const overallTracker = fst || sad;
+        const overallTracker = fst;
         const storageObj = {
           trackerEnabled: overallTracker,
           fstEnabled: fst,
-          sadEnabled: sad,
-          sadBrowserNotifEnabled: sadNotif,
           scaEnabled: sca,
           scaMode: scaMode
         };
@@ -147,10 +143,9 @@ chrome.runtime.onInstalled.addListener(() => {
   // Ensure native connection
   ensureConnected();
   // Enable tracker by default the first time the extension is installed
-  chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled'], (data) => {
+  chrome.storage.local.get(['trackerEnabled', 'fstEnabled'], (data) => {
     const update = {};
     if (data.trackerEnabled === undefined) update.trackerEnabled = true;
-    if (data.sadEnabled === undefined) update.sadEnabled = true;
     if (data.fstEnabled === undefined) update.fstEnabled = true;
     if (Object.keys(update).length > 0) {
       chrome.storage.local.set(update);
@@ -161,24 +156,24 @@ chrome.runtime.onInstalled.addListener(() => {
 // Broadcast changes to open tabs whenever settings change in storage
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.sadEnabled || changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
-    chrome.storage.local.get(['trackerEnabled', 'sadEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
+  if (changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
+    chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
       const trackerEnabled = data.trackerEnabled !== false;
-      const sadEnabled = data.sadEnabled !== false && trackerEnabled;
+      const sdcEnabled = data.sdcEnabled !== false && trackerEnabled;
       const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-      broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled);
+      broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled);
     });
   }
 });
 
 ensureConnected();
 
-console.log('Sera SAD: background.js module loaded, registering listeners.');
+console.log('Sera SDC: background.js module loaded, registering listeners.');
 
-// Helper to broadcast tracker & SAD state changes to open tabs
-function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
+// Helper to broadcast tracker & SDC state changes to open tabs
+function broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled) {
   const tOn = trackerEnabled !== false;
-  const sOn = (sadEnabled !== undefined ? (sadEnabled !== false) : tOn) && tOn;
+  const sOn = (sdcEnabled !== undefined ? (sdcEnabled !== false) : tOn) && tOn;
   const fOn = (fstEnabled !== undefined ? (fstEnabled !== false) : tOn) && tOn;
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) {
@@ -187,13 +182,8 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
         chrome.tabs.sendMessage(tab.id, {
           type: "SERA_TRACKER_STATE_CHANGED",
           trackerEnabled: tOn,
-          sadEnabled: sOn,
+          sdcEnabled: sOn,
           fstEnabled: fOn
-        }).catch(() => {});
-        chrome.tabs.sendMessage(tab.id, {
-          type: "SERA_SAD_STATE_CHANGED",
-          sadEnabled: sOn,
-          trackerEnabled: tOn
         }).catch(() => {});
       } catch (_) {}
     }
@@ -201,7 +191,7 @@ function broadcastTrackerState(trackerEnabled, sadEnabled, fstEnabled) {
 }
 
 // SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
-function injectSAD(tabId, reason) {
+function injectSDC(tabId, reason) {
   chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
     const trackerEnabled = data.trackerEnabled !== false;
     const fstEnabled = data.fstEnabled !== false && trackerEnabled;
@@ -235,10 +225,10 @@ function injectSAD(tabId, reason) {
 // Inject into ALL open tabs
 function injectAllOpenTabs(reason) {
   chrome.tabs.query({}, (tabs) => {
-    console.log('Sera SAD: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
+    console.log('Sera SDC: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
     for (const tab of tabs) {
       if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
-      if (tab.status === 'complete') injectSAD(tab.id, reason || 'startup-scan');
+      if (tab.status === 'complete') injectSDC(tab.id, reason || 'startup-scan');
     }
   });
 }
@@ -247,7 +237,7 @@ function injectAllOpenTabs(reason) {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
   if (changeInfo.status === 'complete' || changeInfo.url) {
-    injectSAD(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
+    injectSDC(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
   }
 });
 
@@ -495,14 +485,10 @@ function handleAutofillTab(message) {
   // Store payload  // Keep the active payload around for the content scripts
   const isTrackerEnabled = message.tracker_enabled === true;
   const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
-  const isSadEnabled = message.sad_enabled !== false && isTrackerEnabled;
-  const isSadNotifEnabled = message.sad_browser_notif_enabled !== false;
-  chrome.storage.local.set({ 
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, sad_enabled: isSadEnabled, sad_browser_notif_enabled: isSadNotifEnabled, ts: Date.now() },
+  chrome.storage.local.set({
+    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, ts: Date.now() },
     trackerEnabled: isTrackerEnabled,
-    fstEnabled: isFstEnabled,
-    sadEnabled: isSadEnabled,
-    sadBrowserNotifEnabled: isSadNotifEnabled
+    fstEnabled: isFstEnabled
   });
 
   chrome.tabs.query({}, (tabs) => {
@@ -1339,17 +1325,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
     const s = msg.settings || {};
-    if (s.trackerEnabled && (s.sadEnabled || s.fstEnabled)) {
+    if (s.trackerEnabled && s.fstEnabled) {
       injectAllOpenTabs('popup-settings-enabled');
     } else {
       broadcastTrackerState(false);
     }
     sendToDesktop({
       type: "extension_settings_updated",
-      sad_enabled: s.sadEnabled,
       fst_enabled: s.fstEnabled,
       tracker_enabled: s.trackerEnabled,
-      sad_browser_notif_enabled: s.sadBrowserNotifEnabled,
       sca_enabled: s.scaEnabled
     });
     sendResponse({ status: "ok" });
