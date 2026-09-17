@@ -165,7 +165,23 @@ const SERA_DEBUG = false; // production: silence all console output
         if (!event || !event.detail) return;
         const detail = event.detail;
 
-        // If this capture was already sent directly by SDC, skip re-sending from filing_detector
+        // sdc_core.js re-dispatches ALL of its internal events on '__se_fs' for
+        // backward compatibility with this listener's original purpose (catching
+        // the now-retired net_interceptor.js/SAD system, which no longer exists
+        // anywhere in this extension). That includes session_start pings,
+        // sdc_session_timeline audit syncs, and raw sudr_capture envelopes -
+        // none of which are a genuine filing_result and none of which carry a
+        // capture_method field, so they used to fall through the check below
+        // and get mislabeled + re-relayed as "SAD_API_Interceptor" captures.
+        // Only a real filing_result is ever relevant here.
+        if (detail.type !== 'filing_result') {
+            return;
+        }
+
+        // If this capture was already sent directly by SDC, skip re-sending from filing_detector.
+        // (Every genuine filing_result SDC emits already sets an "SDC_"-prefixed
+        // capture_method - see sdc_core.js's captureMethod/masterPayload - so this
+        // is always true in practice now; kept as a second, explicit guard.)
         if (detail.capture_method && detail.capture_method.startsWith('SDC_')) {
             return;
         }
@@ -230,7 +246,12 @@ const SERA_DEBUG = false; // production: silence all console output
                     taxpayer_name: detail.client_name || detail.name || detail.taxpayer_name || payload.client_name || payload.name || "",
                     portal: detail.portal || payload.portal || "Portal",
                     arn: detail.arn || "N/A",
-                    capture_method: detail.capture_method || "SAD_API_Interceptor",
+                    // No longer defaults to "SAD_API_Interceptor" - that system
+                    // (net_interceptor.js) is retired and no longer exists in
+                    // this extension; this relay only ever forwards genuine
+                    // filing_result events now (see the type check above),
+                    // which always already carry an "SDC_"-prefixed method.
+                    capture_method: detail.capture_method || "SDC_Legacy_Relay",
                     period_label: detail.period_label || payload.period_label || "",
                     filing_type: detail.filing_type || payload.filing_type || "",
                     pan: detail.pan || payload.pan || "",

@@ -192,59 +192,6 @@ def _get_status_theme(status_text: str) -> dict:
     })
 
 
-def _create_submission_status_badge(status_text: str, tooltip: str = "") -> QWidget:
-    """
-    Creates a styled, Google Material icon-equipped pill badge for a submission status.
-    """
-    theme = _get_status_theme(status_text)
-    fg = theme["fg"]
-    bg = theme["bg"]
-    border = theme["border"]
-    icon_name = theme["icon"]
-
-    container = QWidget()
-    container.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
-    container.setStyleSheet("background: transparent;")
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(4, 2, 4, 2)
-    layout.setAlignment(Qt.AlignCenter)
-
-    pill = QWidget()
-    pill.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
-    pill.setStyleSheet(f"""
-        QWidget {{
-            background-color: {bg};
-            border: 1px solid {border};
-            border-radius: 4px;
-        }}
-    """)
-    pill_lay = QHBoxLayout(pill)
-    pill_lay.setContentsMargins(8, 3, 8, 3)
-    pill_lay.setSpacing(6)
-    pill_lay.setAlignment(Qt.AlignCenter)
-
-    if qta is not None:
-        try:
-            icon_lbl = QLabel()
-            icon_lbl.setPixmap(qta.icon(icon_name, color=fg).pixmap(13, 13))
-            icon_lbl.setStyleSheet("background: transparent; border: none; padding: 0;")
-            pill_lay.addWidget(icon_lbl)
-        except Exception:
-            pass
-
-    txt_lbl = QLabel(status_text)
-    txt_lbl.setFont(QFont("Segoe UI", 9, QFont.Bold))
-    txt_lbl.setStyleSheet(f"color: {fg}; background: transparent; border: none; padding: 0;")
-    pill_lay.addWidget(txt_lbl)
-
-    if tooltip:
-        container.setToolTip(tooltip)
-        pill.setToolTip(tooltip)
-        txt_lbl.setToolTip(tooltip)
-
-    layout.addWidget(pill)
-    return container
-
 
 def _capture_method_color(method: str) -> str:
     """
@@ -742,9 +689,8 @@ class PayloadInspectorDialog(QDialog):
             s_item = QTableWidgetItem(s_text)
             s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             s_item.setForeground(QColor(s_color))
+            s_item.setToolTip(f"Submission Status: {s_text}")
             hist_table.setItem(idx, 2, s_item)
-            hist_badge = _create_submission_status_badge(s_text, tooltip=f"Submission Status: {s_text}")
-            hist_table.setCellWidget(idx, 2, hist_badge)
 
             port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
             port_item.setForeground(QColor("#E6EDF3"))
@@ -1738,15 +1684,13 @@ class TrackerDumpWindow(QWidget):
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_color = _resolve_ltt_submission_status(r)
             status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
-            status_item.setText("")  # Cell widget (badge) renders the status; item text would bleed through around it
+            status_item.setText(status_text)
             arn_val = r.get("latest_arn", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
             status_item.setToolTip(full_tooltip)
-            status_badge = _create_submission_status_badge(status_text, tooltip=full_tooltip)
-            self.table.setCellWidget(row_idx, 4, status_badge)
 
             # 5. Method
             method_val = r.get("capture_method", "SAD_API_Interceptor")
@@ -1829,15 +1773,13 @@ class TrackerDumpWindow(QWidget):
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_color = _resolve_ltt_submission_status(r)
             status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
-            status_item.setText("")  # Cell widget (badge) renders the status; item text would bleed through around it
+            status_item.setText(status_text)
             arn_val = r.get("arn_number", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
             status_item.setToolTip(full_tooltip)
-            status_badge = _create_submission_status_badge(status_text, tooltip=full_tooltip)
-            self.table.setCellWidget(row_idx, 4, status_badge)
 
             # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")
