@@ -689,7 +689,7 @@ class PayloadInspectorDialog(QDialog):
             s_item = QTableWidgetItem(s_text)
             s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
             s_item.setForeground(QColor("#F0F6FC"))
-            s_item.setBackground(QColor(s_theme["bg"]))
+            s_item.setBackground(QColor(s_theme["border"]))
             s_item.setToolTip(f"Submission Status: {s_text}")
             hist_table.setItem(idx, 2, s_item)
 
@@ -1685,7 +1685,7 @@ class TrackerDumpWindow(QWidget):
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_theme = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["bg"])
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["border"])
             status_item.setText(status_text)
             arn_val = r.get("latest_arn", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
@@ -1775,7 +1775,7 @@ class TrackerDumpWindow(QWidget):
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_theme = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["bg"])
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["border"])
             status_item.setText(status_text)
             arn_val = r.get("arn_number", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]

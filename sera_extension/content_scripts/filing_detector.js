@@ -1,6 +1,6 @@
 const SERA_DEBUG = false; // production: silence all console output
 
-// filing_detector.js - Listens for SAD API captures, displays compact in-browser FST toasts, and routes filing results to app
+// filing_detector.js - Listens for filing capture events, displays compact in-browser FST toasts, and routes filing results to app
 (function() {
     if (SERA_DEBUG) console.log("Project Sera: Filing detector active with FST toast notifier.");
 
@@ -68,7 +68,7 @@ const SERA_DEBUG = false; // production: silence all console output
                 const pan = (detail.pan || "").trim().toUpperCase();
                 const clientName = (detail.client_name || detail.name || detail.taxpayer_name || "").trim();
                 const period = (detail.period_label || "").trim();
-                const method = detail.capture_method === "DOM_Tracker" ? "DOM" : "SAD API";
+                const method = detail.capture_method === "DOM_Tracker" ? "DOM" : "Capture";
 
                 toast.innerHTML = `
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
@@ -167,13 +167,12 @@ const SERA_DEBUG = false; // production: silence all console output
 
         // sdc_core.js re-dispatches ALL of its internal events on '__se_fs' for
         // backward compatibility with this listener's original purpose (catching
-        // the now-retired net_interceptor.js/SAD system, which no longer exists
-        // anywhere in this extension). That includes session_start pings,
-        // sdc_session_timeline audit syncs, and raw sudr_capture envelopes -
-        // none of which are a genuine filing_result and none of which carry a
-        // capture_method field, so they used to fall through the check below
-        // and get mislabeled + re-relayed as "SAD_API_Interceptor" captures.
-        // Only a real filing_result is ever relevant here.
+        // a now-fully-retired, deleted capture mechanism). That includes
+        // session_start pings, sdc_session_timeline audit syncs, and raw
+        // sudr_capture envelopes - none of which are a genuine filing_result and
+        // none of which carry a capture_method field, so they used to fall
+        // through the check below and get mislabeled + re-relayed as bogus
+        // captures. Only a real filing_result is ever relevant here.
         if (detail.type !== 'filing_result') {
             return;
         }
@@ -186,7 +185,7 @@ const SERA_DEBUG = false; // production: silence all console output
             return;
         }
 
-        if (SERA_DEBUG) console.log("Sera Filing Detector: Received SAD API Capture event", detail);
+        if (SERA_DEBUG) console.log("Sera Filing Detector: Received capture event", detail);
 
         if (!chrome.runtime || !chrome.runtime.id) {
             if (SERA_DEBUG) console.log("Sera Filing Detector: Extension context reloaded.");
@@ -194,23 +193,12 @@ const SERA_DEBUG = false; // production: silence all console output
         }
 
         try {
-            chrome.storage.local.get(['sadBrowserNotifEnabled', 'sad_browser_notif_enabled', 'activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'sadEnabled', 'trackerEnabled', 'allowedDomains'], (data) => {
-                if (data && (data.sadEnabled === false || data.trackerEnabled === false)) {
-                    return; // SAD is disabled
+            chrome.storage.local.get(['activeAutofillPayload', 'manualAssistPayload', 'mecpPayload', 'trackerEnabled', 'allowedDomains'], (data) => {
+                if (data && data.trackerEnabled === false) {
+                    return; // Tracker is disabled
                 }
 
-                // Check if in-browser toast notification is enabled
-                let showToast = true;
-                if (data) {
-                    if (data.sadBrowserNotifEnabled === false || data.sad_browser_notif_enabled === false) {
-                        showToast = false;
-                    } else if (data.activeAutofillPayload && data.activeAutofillPayload.sad_browser_notif_enabled === false) {
-                        showToast = false;
-                    }
-                }
-                if (showToast) {
-                    SeraToastManager.notify(detail);
-                }
+                SeraToastManager.notify(detail);
 
                 if (chrome.runtime.lastError || !chrome.runtime || !chrome.runtime.id) return;
                 
