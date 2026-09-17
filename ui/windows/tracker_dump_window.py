@@ -192,6 +192,29 @@ def _get_status_theme(status_text: str) -> dict:
     })
 
 
+def _create_colored_cell_widget(status_text: str, bg_color: str, fg_color: str = "#FFFFFF", tooltip: str = "") -> QWidget:
+    """Creates a flat widget that completely fills the table cell to act as a colored cell background."""
+    container = QWidget()
+    container.setStyleSheet(f"QWidget {{ background-color: {bg_color}; }}")
+    
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(10, 0, 10, 0)
+    layout.setSpacing(0)
+    layout.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+    
+    lbl = QLabel(status_text)
+    lbl.setFont(QFont("Segoe UI", 9, QFont.Bold))
+    lbl.setStyleSheet(f"QLabel {{ color: {fg_color}; background-color: transparent; border: none; padding: 0; }}")
+    
+    layout.addWidget(lbl)
+    
+    if tooltip:
+        container.setToolTip(tooltip)
+        lbl.setToolTip(tooltip)
+        
+    return container
+
+
 
 def _capture_method_color(method: str) -> str:
     """
@@ -686,12 +709,11 @@ class PayloadInspectorDialog(QDialog):
             hist_table.setItem(idx, 1, arn_item)
 
             s_text, s_theme = _resolve_ltt_submission_status(fh)
-            s_item = QTableWidgetItem(s_text)
-            s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            s_item.setForeground(QColor("#F0F6FC"))
-            s_item.setBackground(QColor(s_theme["border"]))
-            s_item.setToolTip(f"Submission Status: {s_text}")
+            s_item = QTableWidgetItem("") # Empty text to prevent bleed
             hist_table.setItem(idx, 2, s_item)
+            
+            cell_widget = _create_colored_cell_widget(s_text, s_theme["border"], tooltip=f"Submission Status: {s_text}")
+            hist_table.setCellWidget(idx, 2, cell_widget)
 
             port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
             port_item.setForeground(QColor("#E6EDF3"))
@@ -1685,14 +1707,17 @@ class TrackerDumpWindow(QWidget):
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_theme = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["border"])
-            status_item.setText(status_text)
+            status_item = _get_item(4)
+            status_item.setText("") # Prevent text bleed
+            
             arn_val = r.get("latest_arn", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
-            status_item.setToolTip(full_tooltip)
+            
+            cell_widget = _create_colored_cell_widget(status_text, status_theme["border"], tooltip=full_tooltip)
+            self.table.setCellWidget(row_idx, 4, cell_widget)
 
             # 5. Method
             method_val = r.get("capture_method", "SAD_API_Interceptor")
@@ -1775,14 +1800,17 @@ class TrackerDumpWindow(QWidget):
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
             status_text, status_theme = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["border"])
-            status_item.setText(status_text)
+            status_item = _get_item(4)
+            status_item.setText("") # Prevent text bleed
+            
             arn_val = r.get("arn_number", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
-            status_item.setToolTip(full_tooltip)
+            
+            cell_widget = _create_colored_cell_widget(status_text, status_theme["border"], tooltip=full_tooltip)
+            self.table.setCellWidget(row_idx, 4, cell_widget)
 
             # 5. Capture Method
             method = r.get("capture_method", "DOM_Tracker")
