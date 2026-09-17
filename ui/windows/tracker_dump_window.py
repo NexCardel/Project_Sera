@@ -3,7 +3,7 @@ tracker_dump_window.py
 ----------------------
 Dedicated workspace window for inspecting, filtering, and managing captured
 filing submissions, ARNs, and raw technical payloads received from the browser
-extension and Sera_API_detection (SAD).
+extension and VSDC.
 """
 
 import json
@@ -148,42 +148,42 @@ STATUS_THEMES = {
         "fg": "#39FF14",
         "bg": "#11281E",
         "border": "#2E9B5F",
-        "cell_bg": "#41B06E",
+        "cell_bg": "#1A5936",
         "icon": "mdi.check-circle"
     },
     "Submitted (e-verification pending)": {
         "fg": "#F1E05A",
         "bg": "#2D2612",
         "border": "#997B22",
-        "cell_bg": "#C49B27",
+        "cell_bg": "#594713",
         "icon": "mdi.clock-alert"
     },
     "Not submitted": {
         "fg": "#FF6B6B",
         "bg": "#2D1616",
         "border": "#882222",
-        "cell_bg": "#BA3838",
+        "cell_bg": "#521414",
         "icon": "mdi.alert-circle"
     },
     "Other EVC": {
         "fg": "#58A6FF",
         "bg": "#122338",
         "border": "#1F6FEB",
-        "cell_bg": "#3C89E8",
+        "cell_bg": "#12438A",
         "icon": "mdi.shield-key"
     },
     "Option Expired (NA)": {
         "fg": "#8B949E",
         "bg": "#1C2128",
         "border": "#30363D",
-        "cell_bg": "#4F5863",
+        "cell_bg": "#1D2126",
         "icon": "mdi.close-circle"
     },
     "Not Applicable (NA)": {
         "fg": "#8B949E",
         "bg": "#1C2128",
         "border": "#30363D",
-        "cell_bg": "#4F5863",
+        "cell_bg": "#1D2126",
         "icon": "mdi.minus-circle"
     },
 }
@@ -194,7 +194,7 @@ def _get_status_theme(status_text: str) -> dict:
         "fg": "#FF6B6B",
         "bg": "#2D1616",
         "border": "#882222",
-        "cell_bg": "#BA3838",
+        "cell_bg": "#521414",
         "icon": "mdi.alert-circle"
     })
 
@@ -254,7 +254,7 @@ def _safe_qta_icon(icon_name, color="#FFFFFF"):
 
 
 class AddClientFromCaptureDialog(QDialog):
-    """Modal dialog allowing quick 1-click creation of a client record directly from an unassigned SAD capture."""
+    """Modal dialog allowing quick 1-click creation of a client record directly from an unassigned capture."""
     def __init__(self, db, item_data: dict, parent=None):
         super().__init__(parent)
         self.db = db
@@ -726,7 +726,7 @@ class PayloadInspectorDialog(QDialog):
             port_item.setForeground(QColor("#E6EDF3"))
             hist_table.setItem(idx, 3, port_item)
 
-            m_item = QTableWidgetItem(fh.get("capture_method") or "SAD_API_Interceptor")
+            m_item = QTableWidgetItem(fh.get("capture_method") or "Unknown")
             m_item.setForeground(QColor("#4CF9B7"))
             hist_table.setItem(idx, 4, m_item)
 
@@ -1053,7 +1053,7 @@ class TrackerDumpWindow(QWidget):
         title_vbox = QVBoxLayout()
         lbl_title = QLabel("Tracker Dump Workspace")
         lbl_title.setObjectName("TitleLbl")
-        lbl_sub = QLabel("Client-connected filing logs & SRPF unified containers captured via Extension & SAD")
+        lbl_sub = QLabel("Client-connected filing logs & SRPF unified containers captured via Extension & VSDC")
         lbl_sub.setObjectName("SubtitleLbl")
         title_vbox.addWidget(lbl_title)
         title_vbox.addWidget(lbl_sub)
@@ -1727,7 +1727,7 @@ class TrackerDumpWindow(QWidget):
             self.table.setCellWidget(row_idx, 4, cell_widget)
 
             # 5. Method
-            method_val = r.get("capture_method", "SAD_API_Interceptor")
+            method_val = r.get("capture_method", "Unknown")
             method_item = _get_item(7, font=QFont("Segoe UI", 9, QFont.Bold), align=Qt.AlignCenter, color=_capture_method_color(method_val))
             method_item.setText(method_val)
 
