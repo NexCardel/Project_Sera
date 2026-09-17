@@ -80,22 +80,39 @@ def close_stale_windows(substr: str):
         time.sleep(1.0)
 
 
+def pin_router_to_window(router, hwnd):
+    """
+    Overrides VSDCRouter.get_foreground_info() to always report OUR known test
+    window, regardless of what the OS actually considers foreground.
+
+    Discovered empirically: a background script's SetForegroundWindow() call is
+    NOT reliable while a human is actively using the machine (Windows' focus-steal
+    protection) — when it silently fails, evaluate_tick() ends up reading whatever
+    window genuinely IS foreground instead (e.g. the Claude app window itself,
+    which can contain this very test's ground-truth strings printed to console
+    moments earlier, self-contaminating the read). Calibration should test "does
+    the pipeline extract correctly from OUR window's real content", not "can this
+    script win a focus fight against the user" — those are different questions,
+    and only the first one is what we're actually calibrating here.
+    """
+    def _pinned_foreground_info():
+        length = user32.GetWindowTextLengthW(hwnd)
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        return hwnd, buf.value.strip(), "msedge.exe"
+
+    router.get_foreground_info = _pinned_foreground_info
+
+
 def poll_router(router, hwnd, timeout_sec, label):
+    # router.get_foreground_info is pinned (see pin_router_to_window) so this loop
+    # no longer depends on actually winning OS foreground focus.
     print(f"\nPolling the real router (VSDCRouter.evaluate_tick) every 0.3s for up to {timeout_sec}s [{label}]...")
     t0 = time.perf_counter()
     attempt = 0
     payload = None
-    warned_drift = False
     while time.perf_counter() - t0 < timeout_sec:
         attempt += 1
-        user32.SetForegroundWindow(hwnd)  # keep our test window foreground each tick
-        actual_fg = user32.GetForegroundWindow()
-        if actual_fg != hwnd and not warned_drift:
-            length = user32.GetWindowTextLengthW(actual_fg)
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(actual_fg, buf, length + 1)
-            print(f"  !! FOCUS DRIFT: expected hwnd={hwnd} foreground but OS reports hwnd={actual_fg} ({buf.value!r}) — SetForegroundWindow may be failing silently")
-            warned_drift = True
         result = router.evaluate_tick()
         if result:
             payload = result
@@ -134,7 +151,7 @@ def main():
             browser.close()
             return
         print(f"Found window: {title!r} (hwnd={hwnd})")
-        user32.SetForegroundWindow(hwnd)
+        pin_router_to_window(router, hwnd)
         page.wait_for_timeout(200)
 
         ground_truth_name = "WASIL AMAN MANDAL"
@@ -156,7 +173,9 @@ def main():
         print("\n" + "=" * 70)
         print("Stage 2: Submit Success page")
         print("=" * 70)
-        page.click("a.btn-submit")
+        submit_success_path = os.path.abspath("tests/test_page_submit_success.html")
+        submit_success_url = f"file:///{submit_success_path.replace(os.sep, '/')}"
+        page.goto(submit_success_url)
         page.wait_for_timeout(500)
 
         ground_truth_ack = page.inner_text(".success-desc").strip()
@@ -173,12 +192,15 @@ def main():
             print(f"  filing_type    : {payload.get('filing_type')}")
             print(f"  period         : {payload.get('period_label')}")
             print(f"  status         : {payload.get('status')}")
-            print(f"  ack_number     : {payload.get('ack_number')}")
+            # seal_and_flush()'s master payload stores the Ack/ARN under "arn" for both
+            # portals (FilingRecord is portal-agnostic) — not "ack_number", which is only
+            # the key on record_submission()'s own (discarded) return value.
+            print(f"  ack_number(arn): {payload.get('arn')}")
             print(f"  client_name    : {payload.get('client_name')}")
             print(f"  pan            : {payload.get('pan')}")
             print(f"  capture_method : {payload.get('capture_method')}")
             print(f"\nGround truth Ack : {ground_truth_ack}")
-            print("RESULT: MATCH" if payload.get("ack_number") == ground_truth_ack else "RESULT: MISMATCH")
+            print("RESULT: MATCH" if payload.get("arn") == ground_truth_ack else "RESULT: MISMATCH")
         else:
             print("No payload captured for Stage 2.")
             print("RESULT: NOT CAPTURED")

@@ -236,8 +236,12 @@ def extract_filing_type(text: str, allow_multiple: bool = False) -> Optional[str
     if not text:
         return None
 
-    # 1. Income Tax ITR forms (ITR-1, ITR 1, ITR-4, ITR-4S, Form ITR-1)
-    itr_matches = re.findall(r"\b(?:Form\s*)?(ITR\s*[-_]?\s*[1-7UV]|ITR\s*[-_]?\s*4S)\b", text, re.IGNORECASE)
+    # 1. Income Tax ITR forms (ITR-1, ITR 1, ITR-4, ITR-4S, Form ITR-1).
+    # Deliberately excludes 'V': ITR-V is the post-filing verification/acknowledgement
+    # receipt (e.g. "Download ITR-V" button on the submission success page), not a
+    # selectable filing form — matching it here would overwrite the real captured
+    # form type with a false positive on that exact screen.
+    itr_matches = re.findall(r"\b(?:Form\s*)?(ITR\s*[-_]?\s*[1-7U]|ITR\s*[-_]?\s*4S)\b", text, re.IGNORECASE)
     if itr_matches:
         canonical_forms = []
         for m in itr_matches:
