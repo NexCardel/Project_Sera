@@ -75,11 +75,11 @@ def _parse_record_datetime(ts_str: str) -> datetime | None:
         return None
 
 
-def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
+def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
     """
     Evaluates raw record status via SDC_Parser logic into an authoritative
-    human-readable LTT submission status and corresponding UI display color.
-    Returns: (status_text, hex_color)
+    human-readable LTT submission status and corresponding UI display theme.
+    Returns: (status_text, theme_dict)
     """
     raw_status = record.get("status") or record.get("latest_status") or ""
     arn = (record.get("arn_number") or record.get("latest_arn") or "").strip()
@@ -140,7 +140,7 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, str]:
 
     # Assign color palette matching Google Material / Sera design
     theme = _get_status_theme(ltt_status)
-    return ltt_status, theme["fg"]
+    return ltt_status, theme
 
 
 STATUS_THEMES = {
@@ -685,10 +685,11 @@ class PayloadInspectorDialog(QDialog):
             arn_item.setForeground(QColor("#39FF14"))
             hist_table.setItem(idx, 1, arn_item)
 
-            s_text, s_color = _resolve_ltt_submission_status(fh)
+            s_text, s_theme = _resolve_ltt_submission_status(fh)
             s_item = QTableWidgetItem(s_text)
             s_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            s_item.setForeground(QColor(s_color))
+            s_item.setForeground(QColor("#F0F6FC"))
+            s_item.setBackground(QColor(s_theme["bg"]))
             s_item.setToolTip(f"Submission Status: {s_text}")
             hist_table.setItem(idx, 2, s_item)
 
@@ -1644,13 +1645,14 @@ class TrackerDumpWindow(QWidget):
         self._update_token_meter()
 
         for row_idx, r in enumerate(containers):
-            def _get_item(col, font=None, color=None, align=None):
+            def _get_item(col, font=None, color=None, bg_color=None, align=None):
                 item = self.table.item(row_idx, col)
                 if not item:
                     item = QTableWidgetItem()
                     self.table.setItem(row_idx, col, item)
                 if font: item.setFont(font)
                 if color: item.setForeground(QColor(color))
+                if bg_color: item.setBackground(QColor(bg_color))
                 if align is not None: item.setTextAlignment(align)
                 return item
 
@@ -1682,8 +1684,8 @@ class TrackerDumpWindow(QWidget):
             hist_item.setToolTip(period_sum)
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
-            status_text, status_color = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
+            status_text, status_theme = _resolve_ltt_submission_status(r)
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["bg"])
             status_item.setText(status_text)
             arn_val = r.get("latest_arn", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
@@ -1733,13 +1735,14 @@ class TrackerDumpWindow(QWidget):
         self._update_token_meter()
 
         for row_idx, r in enumerate(records):
-            def _get_item(col, font=None, color=None, align=None):
+            def _get_item(col, font=None, color=None, bg_color=None, align=None):
                 item = self.table.item(row_idx, col)
                 if not item:
                     item = QTableWidgetItem()
                     self.table.setItem(row_idx, col, item)
                 if font: item.setFont(font)
                 if color: item.setForeground(QColor(color))
+                if bg_color: item.setBackground(QColor(bg_color))
                 if align is not None: item.setTextAlignment(align)
                 return item
 
@@ -1771,8 +1774,8 @@ class TrackerDumpWindow(QWidget):
             period_item.setToolTip(period_val)
 
             # 4. Submission Status (Hooked to LTT / SDC_Parser)
-            status_text, status_color = _resolve_ltt_submission_status(r)
-            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color=status_color)
+            status_text, status_theme = _resolve_ltt_submission_status(r)
+            status_item = _get_item(4, font=QFont("Segoe UI", 9, QFont.Bold), color="#F0F6FC", bg_color=status_theme["bg"])
             status_item.setText(status_text)
             arn_val = r.get("arn_number", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
