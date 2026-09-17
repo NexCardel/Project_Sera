@@ -440,6 +440,18 @@ class VSDCRouter:
         full_text = ocr_res.get("text", "")
         lines = ocr_res.get("lines", [])
 
+        # VSDC-X: exact UI-Automation text read (see core/vsdc/vsdc_uia_text.py), same
+        # channel already proven on the GST route. Purely additive — if it's unavailable
+        # or empty, uia_text/uia_lines stay empty and every line below behaves exactly
+        # as it did before VSDC-X existed for ITR.
+        uia_text = ""
+        uia_lines: List[str] = []
+        if vsdc_uia_text.is_available():
+            uia_res = vsdc_uia_text.read_page_text(hwnd)
+            uia_text = uia_res.get("text", "")
+            uia_lines = uia_res.get("lines") or []
+        uia_fields_used: List[str] = []
+
         # Loading State Transition: If the page was previously in an async loading state
         # and has now completed loading, re-trigger a micro-burst so rendered data is captured instantly!
         if self.was_page_loading and not is_page_loading(full_text):
@@ -450,9 +462,16 @@ class VSDCRouter:
                 self._loading_notice_shown = True
                 print(f"[VSDC Router] ITR Page finished loading -> triggered burst capture!")
 
-        # Process extracted fields based on crosshair type
-        pan = extract_pan(full_text)
-        gstin = extract_gstin(full_text)
+        # Process extracted fields based on crosshair type.
+        # VSDC-X: UIA text is exact (no optical noise), so it wins over OCR wherever present.
+        uia_pan = extract_pan(uia_text) if uia_text else None
+        uia_gstin = extract_gstin(uia_text) if uia_text else None
+        pan = uia_pan or extract_pan(full_text)
+        gstin = uia_gstin or extract_gstin(full_text)
+        if uia_pan:
+            uia_fields_used.append("pan")
+        if uia_gstin:
+            uia_fields_used.append("gstin")
 
         # On login authentication (password) page: strictly capture PAN only.
         # Never extract or register name candidates from the password / secure access message page
@@ -462,7 +481,10 @@ class VSDCRouter:
         if is_login_auth:
             client_name = None
         else:
-            client_name = extract_name_from_ocr_lines(lines)
+            uia_name = extract_name_from_ocr_lines(uia_lines) if uia_lines else None
+            client_name = uia_name or extract_name_from_ocr_lines(lines)
+            if uia_name:
+                uia_fields_used.append("client_name")
 
         # On personal info / profile page: if name wasn't detected in cropped center card, fallback to full image
         if not client_name and is_personal_info:
@@ -521,6 +543,9 @@ class VSDCRouter:
                 if h_gstin and not gstin:
                     gstin = h_gstin
 
+        # Live HUD toast feedback tags which engine actually supplied identity (VSDC-X
+        # exact UIA text vs VSDC visual/OCR) so the source is visible, not just in logs.
+        source_tag = " • VSDC-X (Exact)" if uia_fields_used else " • VSDC (Visual)"
         if client_name and not is_login_auth:
             self.assembler.update_identity(name=client_name, is_authoritative=is_personal_info)
             authoritative_name = self.assembler.client_name or client_name
@@ -533,7 +558,7 @@ class VSDCRouter:
                 self.notify_activity(
                     "identity",
                     f"Assessee: {authoritative_name}",
-                    f"PAN: {pan_label}" if pan_label else f"Portal: {self.active_portal}",
+                    (f"PAN: {pan_label}" if pan_label else f"Portal: {self.active_portal}") + source_tag,
                 )
 
         if pan or gstin:
@@ -557,15 +582,24 @@ class VSDCRouter:
         elif matched_crosshair.id in ("itr_personal_info", "itr_profile") and (client_name or pan):
             self.route_captured = True
 
-        filing_type = extract_filing_type(full_text)
-        period = extract_assessment_year(full_text)
+        uia_filing_type = extract_filing_type(uia_text) if uia_text else None
+        uia_period = extract_assessment_year(uia_text) if uia_text else None
+        filing_type = uia_filing_type or extract_filing_type(full_text)
+        period = uia_period or extract_assessment_year(full_text)
+        if uia_filing_type:
+            uia_fields_used.append("filing_type")
+        if uia_period:
+            uia_fields_used.append("period")
         if filing_type or period:
             self.assembler.update_selection(filing_type=filing_type, period_label=period)
             if matched_crosshair.id == "itr_form_selection":
                 self.route_captured = True
 
-        # Check for terminal filing confirmation (Ack / ARN)
-        ack_number = repair_numeric_ack(full_text)
+        # Check for terminal filing confirmation (Ack / ARN) — VSDC-X exact text first.
+        uia_ack = repair_numeric_ack(uia_text) if uia_text else None
+        ack_number = uia_ack or repair_numeric_ack(full_text)
+        if uia_ack:
+            uia_fields_used.append("ack_number")
 
         # Fallback to full image scan if Ack was not found in cropped card on a return/submission card!
         if not ack_number and (matched_crosshair.is_terminal_submission or matched_crosshair.id == "itr_view_filed_returns"):
@@ -588,7 +622,11 @@ class VSDCRouter:
 
         # Dedicated parser for Historical Filed Returns (itr_view_filed_returns)
         if matched_crosshair.id == "itr_view_filed_returns":
-            card = extract_view_filed_returns_card(full_text)
+            card = extract_view_filed_returns_card(uia_text) if uia_text else None
+            if card:
+                uia_fields_used.append("view_filed_returns_card")
+            else:
+                card = extract_view_filed_returns_card(full_text)
             if not card:
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
@@ -617,7 +655,17 @@ class VSDCRouter:
         # STRICT MANDATE: An optical submission MUST have a valid Acknowledgement Number
         if ack_number and ack_number != "N/A":
             if matched_crosshair.id != "itr_view_filed_returns":
-                status = classify_verification_status(full_text)
+                # VSDC-X exact text vs OCR can disagree on status wording — take whichever
+                # classifies to the higher-confidence rank (e.g. UIA catching "e-Verified"
+                # text OCR garbled), never downgrade a status OCR already resolved.
+                uia_status = classify_verification_status(uia_text) if uia_text else None
+                ocr_status = classify_verification_status(full_text)
+                if uia_status and get_status_rank(uia_status) >= get_status_rank(ocr_status):
+                    status = uia_status
+                    if uia_status != ocr_status:
+                        uia_fields_used.append("status")
+                else:
+                    status = ocr_status
             if get_status_rank(status) >= 2:
                 self.route_captured = True
                 self.assembler.record_submission(
@@ -627,13 +675,16 @@ class VSDCRouter:
                     period_label=period,
                     raw_text=full_text[:2000],
                     crosshair_id=matched_crosshair.id,
+                    engine="VSDC-X" if uia_fields_used else "VSDC",
                 )
                 form_lbl = filing_type or self.assembler.current_filing_type or "Return"
                 period_lbl = f" • {period or self.assembler.current_period_label}" if (period or self.assembler.current_period_label) else ""
                 assessee = self.assembler.client_name or ""
                 name_part = f"{assessee} • " if assessee else ""
                 # Toast title: form + period; subtitle: name + ack
-                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}Ack: {ack_number}")
+                self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}Ack: {ack_number}{source_tag}")
+                if uia_fields_used:
+                    print(f"[VSDC-X] itr {matched_crosshair.id}: UIA provided {', '.join(uia_fields_used)}")
 
                 if is_sub_crosshair:
                     # Seal and flush filing payload!
