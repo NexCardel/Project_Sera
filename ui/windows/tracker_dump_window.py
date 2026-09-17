@@ -148,36 +148,42 @@ STATUS_THEMES = {
         "fg": "#39FF14",
         "bg": "#11281E",
         "border": "#2E9B5F",
+        "cell_bg": "#41B06E",
         "icon": "mdi.check-circle"
     },
     "Submitted (e-verification pending)": {
         "fg": "#F1E05A",
         "bg": "#2D2612",
         "border": "#997B22",
+        "cell_bg": "#C49B27",
         "icon": "mdi.clock-alert"
     },
     "Not submitted": {
         "fg": "#FF6B6B",
         "bg": "#2D1616",
         "border": "#882222",
+        "cell_bg": "#BA3838",
         "icon": "mdi.alert-circle"
     },
     "Other EVC": {
         "fg": "#58A6FF",
         "bg": "#122338",
         "border": "#1F6FEB",
+        "cell_bg": "#3C89E8",
         "icon": "mdi.shield-key"
     },
     "Option Expired (NA)": {
         "fg": "#8B949E",
         "bg": "#1C2128",
         "border": "#30363D",
+        "cell_bg": "#4F5863",
         "icon": "mdi.close-circle"
     },
     "Not Applicable (NA)": {
         "fg": "#8B949E",
         "bg": "#1C2128",
         "border": "#30363D",
+        "cell_bg": "#4F5863",
         "icon": "mdi.minus-circle"
     },
 }
@@ -188,6 +194,7 @@ def _get_status_theme(status_text: str) -> dict:
         "fg": "#FF6B6B",
         "bg": "#2D1616",
         "border": "#882222",
+        "cell_bg": "#BA3838",
         "icon": "mdi.alert-circle"
     })
 
@@ -712,7 +719,7 @@ class PayloadInspectorDialog(QDialog):
             s_item = QTableWidgetItem("") # Empty text to prevent bleed
             hist_table.setItem(idx, 2, s_item)
             
-            cell_widget = _create_colored_cell_widget(s_text, s_theme["border"], tooltip=f"Submission Status: {s_text}")
+            cell_widget = _create_colored_cell_widget(s_text, s_theme["cell_bg"], tooltip=f"Submission Status: {s_text}")
             hist_table.setCellWidget(idx, 2, cell_widget)
 
             port_item = QTableWidgetItem(fh.get("portal") or "Income Tax")
@@ -1716,7 +1723,7 @@ class TrackerDumpWindow(QWidget):
                 tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
             
-            cell_widget = _create_colored_cell_widget(status_text, status_theme["border"], tooltip=full_tooltip)
+            cell_widget = _create_colored_cell_widget(status_text, status_theme["cell_bg"], tooltip=full_tooltip)
             self.table.setCellWidget(row_idx, 4, cell_widget)
 
             # 5. Method
@@ -1809,7 +1816,7 @@ class TrackerDumpWindow(QWidget):
                 tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
             full_tooltip = "\n".join(tooltip_lines)
             
-            cell_widget = _create_colored_cell_widget(status_text, status_theme["border"], tooltip=full_tooltip)
+            cell_widget = _create_colored_cell_widget(status_text, status_theme["cell_bg"], tooltip=full_tooltip)
             self.table.setCellWidget(row_idx, 4, cell_widget)
 
             # 5. Capture Method
