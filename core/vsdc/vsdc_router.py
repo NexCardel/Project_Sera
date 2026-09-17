@@ -74,6 +74,62 @@ BROWSER_EXE_NAMES = (
 )
 
 
+class _WindowSession:
+    """
+    Per-window (per-hwnd) VSDC tracking state.
+
+    Two different browser windows — whether the same portal/client or two
+    entirely different ones — must never bleed into each other: e.g. alt-tabbing
+    between a GST client's portal in one window and an ITR client's portal in
+    another used to make update_identity()'s PAN-context-switch guard fire on
+    every focus change, prematurely flushing or silently wiping whichever
+    client's window had just lost focus (see the multi-window architecture
+    discussion this fixes). Everything that evaluate_tick() used to keep as
+    router-level self.* state now lives here instead, one instance per hwnd;
+    VSDCRouter swaps the active window's session into self.* for the duration
+    of a single tick (_load_session / _save_session) so the ~1000 lines of
+    _route_itr_crosshair / _route_gst_crosshair below — which already read and
+    write self.* throughout — need no changes at all.
+    """
+
+    def __init__(self, assembler: Optional[VisualSessionAssembler] = None):
+        self.assembler: VisualSessionAssembler = assembler or VisualSessionAssembler()
+        self.last_url: str = ""
+        self.last_crosshair_id: Optional[str] = None
+        self.active_portal: str = "Income Tax"
+        self.has_flushed_current_route: bool = False
+        self.route_captured: bool = False
+        self.route_poll_count: int = 0
+        self.last_screen_hash: Optional[int] = None
+        self.last_logged_name: Optional[str] = None
+        self.last_logged_pan: Optional[str] = None
+        self.last_logged_pref: Optional[str] = None
+        self.last_logged_dob: Optional[str] = None
+        self.burst_ticks_remaining: int = 0
+        self.was_page_loading: bool = False
+        self._loading_notice_shown: bool = False
+        self.last_seen: float = 0.0
+
+
+# Router attributes swapped in/out of a _WindowSession per tick. Kept as one
+# explicit list (matching the router's OWN attribute names exactly, including
+# the underscore-prefixed one) rather than vars(session), so the ~1000 lines of
+# route-handler code below reading/writing self.* need no changes at all.
+_SESSION_FIELDS: Tuple[str, ...] = (
+    "assembler", "last_url", "last_crosshair_id", "active_portal",
+    "has_flushed_current_route", "route_captured", "route_poll_count",
+    "last_screen_hash", "last_logged_name", "last_logged_pan",
+    "last_logged_pref", "last_logged_dob", "burst_ticks_remaining",
+    "was_page_loading", "_loading_notice_shown",
+)
+
+# How long an untouched window's session is kept before being pruned, so a
+# closed browser window's state (and its assembler, with whatever it hadn't
+# yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
+# but a taxpayer can legitimately sit on one page for minutes while reading it.
+_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+
+
 class VSDCRouter:
     """
     Coordinates browser detection, URL route sniffing via Windows UI Automation,
@@ -87,16 +143,28 @@ class VSDCRouter:
         on_activity: Optional[Callable[[str, str, str], None]] = None,
     ):
         self.ocr = ocr_engine or VSDCOcrEngine()
-        self.assembler = assembler or VisualSessionAssembler()
         self.on_activity = on_activity
 
         self._uia = None
         self._uia_client = None
         self._init_uia()
 
+        # Per-window session registry (see _WindowSession above) — one entry
+        # per foreground hwnd VSDC has ever watched, so two different windows
+        # (same client or two entirely different ones) never bleed into each
+        # other. An explicitly-injected `assembler` (existing callers: tests,
+        # the standalone gap-test scripts) is honored as the FIRST window's
+        # assembler rather than discarded, so single-window callers keep
+        # working unchanged - see _get_or_create_session.
+        self._window_sessions: Dict[int, _WindowSession] = {}
+        self._seed_assembler: Optional[VisualSessionAssembler] = assembler
+        # Mirrors whichever window's session was most recently loaded via
+        # _load_session, for the duration between ticks - existing callers
+        # (tests, tools) read router.assembler / router.last_url / etc. right
+        # after evaluate_tick() and expect them to reflect that tick's window.
+        self.assembler: VisualSessionAssembler = assembler or VisualSessionAssembler()
         self.last_url: str = ""
         self.last_crosshair_id: Optional[str] = None
-        self.last_hwnd: int = 0
         self.active_portal: str = "Income Tax"
         self.has_flushed_current_route: bool = False
         self.route_captured: bool = False
@@ -147,6 +215,84 @@ class VSDCRouter:
         rather than from this tick's own fresh uia_fields_used list.
         """
         return " • VSDC-X (Exact)" if (capture_method or "").startswith("VSDC-X") else " • VSDC (Visual)"
+
+    # ── Per-window session isolation ───────────────────────────────────────────
+
+    def _get_or_create_session(self, hwnd: int) -> _WindowSession:
+        session = self._window_sessions.get(hwnd)
+        if session is None:
+            session = _WindowSession(assembler=self._seed_assembler)
+            self._seed_assembler = None  # only the very first window ever adopts it
+            self._window_sessions[hwnd] = session
+        return session
+
+    def _load_session(self, session: _WindowSession) -> None:
+        """Swaps a window's tracking state into self.* for the duration of one tick."""
+        for field in _SESSION_FIELDS:
+            setattr(self, field, getattr(session, field))
+
+    def _save_session(self, session: _WindowSession) -> None:
+        """Writes self.*'s (possibly mutated) state back into the window's own session."""
+        for field in _SESSION_FIELDS:
+            setattr(session, field, getattr(self, field))
+        session.last_seen = time.time()
+
+    def _prune_stale_sessions(self, current_hwnd: int) -> None:
+        """
+        Drops sessions for windows that no longer exist, or that have simply sat
+        idle too long (_SESSION_IDLE_TIMEOUT_SEC) - e.g. a closed browser window's
+        leftover client identity/records shouldn't linger indefinitely, and (more
+        importantly) so a NEW window that happens to recycle an old, closed
+        window's hwnd value never inherits its stale session. Cheap (dict of a
+        handful of entries at most) so it runs every tick.
+
+        current_hwnd is exempted from the IsWindow() liveness check: it was just
+        read from GetForegroundWindow() this very tick, so by definition it's
+        real right now — checking it anyway is redundant in production and, in
+        tests that drive evaluate_tick() against a mocked/synthetic hwnd, would
+        wrongly prune the session between every tick. It's still subject to the
+        idle-timeout check like any other entry.
+        """
+        now = time.time()
+        stale = [
+            hwnd for hwnd, s in self._window_sessions.items()
+            if (
+                (hwnd != current_hwnd and not user32.IsWindow(hwnd))
+                or (now - s.last_seen) > _SESSION_IDLE_TIMEOUT_SEC
+            )
+        ]
+        for hwnd in stale:
+            del self._window_sessions[hwnd]
+
+    def end_all_active_sessions(self, reason: str) -> None:
+        """
+        Cleanly ends the session log for every window's assembler that has one
+        active — called on application shutdown (VSDCWorker.stop()), which used
+        to only know about a single self.assembler before per-window isolation.
+        """
+        for session in self._window_sessions.values():
+            asm = session.assembler
+            if getattr(asm, "_session_started", False):
+                try:
+                    asm.logger.end_session(reason=reason, summary_items=list(asm.captures.values()))
+                except Exception:
+                    pass
+                asm._session_started = False
+
+    def seed_identity_for_foreground(self, **kwargs) -> None:
+        """
+        Lets an EXTERNAL, out-of-band identity read (e.g. SDC's browser-extension
+        capture, resolved against master.db by name in main.py) seed the same
+        identity into VSDC — but scoped to whichever window is actually in the
+        foreground right now, not a single global assembler, so it lands in the
+        correct per-window session instead of bleeding into (or being silently
+        orphaned relative to) whatever else VSDC happens to be tracking elsewhere.
+        """
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return
+        session = self._get_or_create_session(hwnd)
+        session.assembler.update_identity(**kwargs)
 
     def _init_uia(self):
         try:
@@ -275,6 +421,22 @@ class VSDCRouter:
         if not (is_portal_title or is_browser):
             return None
 
+        # Isolate this window's tracking state for the duration of this tick —
+        # see _WindowSession. Whatever self.* mutates below (assembler included)
+        # is this hwnd's own, never another window's.
+        session = self._get_or_create_session(hwnd)
+        self._load_session(session)
+        try:
+            return self._evaluate_tick_locked(hwnd, title, title_lower, proc_name)
+        finally:
+            self._save_session(session)
+            self._prune_stale_sessions(current_hwnd=hwnd)
+
+    def _evaluate_tick_locked(self, hwnd: int, title: str, title_lower: str, proc_name: str) -> Optional[Dict[str, Any]]:
+        """
+        The original evaluate_tick() body, now running with this hwnd's
+        _WindowSession already swapped into self.* by evaluate_tick() above.
+        """
         # Determine portal dialect
         if "gst" in title_lower or "goods and services" in title_lower:
             self.active_portal = "GST Portal"
@@ -295,7 +457,6 @@ class VSDCRouter:
         url_normalized = url.replace("\\", "/")
 
         is_new_url = (url != self.last_url)
-        is_new_window = (hwnd != self.last_hwnd)
 
         if is_new_url:
             self.last_url = url
@@ -306,9 +467,6 @@ class VSDCRouter:
             self.was_page_loading = False
             self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
             self._loading_notice_shown = False
-
-        if is_new_window:
-            self.last_hwnd = hwnd
 
         # Match against SDC Crosshairs
         matched_crosshair = match_url_crosshair(url_normalized)

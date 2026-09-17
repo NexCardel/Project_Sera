@@ -711,7 +711,10 @@ class SeraApp:
                             pan = row[1]
                             msg["pan"] = pan
                             if hasattr(self, "vsdc_worker") and self.vsdc_worker:
-                                self.vsdc_worker.assembler.update_identity(pan=pan, name=client_name)
+                                # Scoped to whichever window is actually foreground right
+                                # now (per-window session isolation), not a single global
+                                # assembler - see VSDCRouter.seed_identity_for_foreground.
+                                self.vsdc_worker.router.seed_identity_for_foreground(pan=pan, name=client_name)
                             print(f"[main] Resolved client #{raw_client_id} and PAN {pan} from visual name '{client_name}'")
             except Exception as e:
                 print(f"[main] Warning: Failed to resolve PAN from name '{client_name}': {e}")

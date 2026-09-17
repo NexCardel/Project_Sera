@@ -81,12 +81,10 @@ class VSDCWorker(QThread):
     def stop(self):
         self._running = False
         try:
-            if hasattr(self, "assembler") and getattr(self.assembler, "_session_started", False):
-                self.assembler.logger.end_session(
-                    reason="Application Shutdown",
-                    summary_items=list(self.assembler.captures.values()),
-                )
-                self.assembler._session_started = False
+            # Per-window session isolation means there may be several active
+            # assemblers (one per browser window VSDC was watching), not just
+            # the single self.assembler this used to check.
+            self.router.end_all_active_sessions(reason="Application Shutdown")
         except Exception:
             pass
         self.wait(3000)
