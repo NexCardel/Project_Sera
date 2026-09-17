@@ -867,38 +867,70 @@ class VisualSessionAssembler:
         self._emitted_datasets[target_record.dataset_key] = fingerprint
         return self._build_payload(target_record, crosshair_id)
 
+    @staticmethod
+    def _is_dataset_complete(record: "FilingRecord") -> bool:
+        """
+        The one mandatory-field gate for ANY dataset leaving VSDC, uniform across
+        both portals: PAN, name, form type, period, submit status (rank >= 2), and
+        a valid ARN/Ack must all be present. Everything else (DOB, trade name, due
+        date, filing preference, ...) is optional and rides along only if captured.
+
+        Deliberately NOT applied to GST's per-form draft path
+        (get_gst_form_dataset_payload) — that one is meant to ship even an
+        unfiled/incomplete draft so the app can show "Not Filed" status live;
+        this gate exists for the two paths that claim a filing is actually done.
+        """
+        return bool(
+            record.entity_pan and record.entity_pan != "UNKNOWN"
+            and record.client_name
+            and record.filing_type
+            and record.period_label
+            and record.status_rank >= 2
+            and record.arn not in (None, "", "N/A", "UNKNOWN")
+        )
+
     def get_completed_dataset_payload(self, crosshair_id: str = "vsdc_dataset_completion") -> Optional[Dict[str, Any]]:
         """
         Dataset Completion Principle:
-        Emits dataset payload ONLY when submit status is confirmed from the portal (rank >= 2)
-        with a valid statutory ACK / ARN.
+        Emits an updated dataset payload whenever the mandatory fields are all
+        present and the record's fingerprint has changed since it was last shot
+        (e.g. a status PROMOTION such as e-Verified arriving after an earlier
+        flush already sealed the session — seal_and_flush() itself can only fire
+        once per session, so this is the path that keeps later promotions from
+        being silently dropped; see _route_itr_crosshair / _route_gst_crosshair).
         """
         entity_pan = resolve_entity_pan(self.client_pan, self.gstin)
-        name = self.client_name
-        form = self.current_filing_type
-        period = self.current_period_label
-
-        if not entity_pan or entity_pan == "UNKNOWN" or not name or not form or not period:
+        if entity_pan == "UNKNOWN":
             return None
 
-        c_month, c_fy, _ = normalize_period(period, fy=self.fy, portal=self.portal)
-        target_record = self.records.get((entity_pan, form, c_fy, c_month))
+        # Prefer the record matching the currently-tracked form/period (the
+        # normal case). Fall back to any complete record for this entity — a
+        # status-promotion confirmation page (e.g. e-Verified) often doesn't
+        # restate the form type/period as text, so current_filing_type/
+        # current_period_label can be stale/None at that point without this.
+        target_record = None
+        form = self.current_filing_type
+        period = self.current_period_label
+        if form and period:
+            c_month, c_fy, _ = normalize_period(period, fy=self.fy, portal=self.portal)
+            target_record = self.records.get((entity_pan, form, c_fy, c_month))
+            if not target_record:
+                for rec in self.records.values():
+                    if rec.entity_pan == entity_pan and rec.filing_type == form:
+                        target_record = rec
+                        break
 
-        if not target_record:
-            # Fallback scan across all records matching entity and form
+        if not target_record or not self._is_dataset_complete(target_record):
             for rec in self.records.values():
-                if rec.entity_pan == entity_pan and rec.filing_type == form:
+                if rec.entity_pan == entity_pan and self._is_dataset_complete(rec):
                     target_record = rec
                     break
 
-        if not target_record or target_record.status_rank < 2:
+        if not target_record or not self._is_dataset_complete(target_record):
             return None
 
         arn = target_record.arn or target_record.ack_number
-        if not arn or arn in ("N/A", "UNKNOWN"):
-            return None
-
-        fingerprint = (target_record.status, arn, name, target_record.trade_name)
+        fingerprint = (target_record.status, arn, target_record.client_name, target_record.trade_name)
         if self._emitted_datasets.get(target_record.dataset_key) == fingerprint:
             return None
 
@@ -914,10 +946,7 @@ class VisualSessionAssembler:
         if self._flushed:
             return None
 
-        valid_records = [
-            r for r in self.records.values()
-            if r.status_rank >= 2 and r.arn not in (None, "", "N/A", "UNKNOWN")
-        ]
+        valid_records = [r for r in self.records.values() if self._is_dataset_complete(r)]
         if not valid_records:
             return None
 

@@ -75,12 +75,14 @@ class TestVSDCAssembler(unittest.TestCase):
         self.assertIsNone(self.assembler.dob)
 
     def test_pan_context_switch_guard(self):
-        # Client 1 session
-        self.assembler.update_identity(pan="AHJPR0846B", name="CLIENT ONE")
+        # Client 1 session (needs a name that survives is_valid_name() - "CLIENT
+        # ONE" is filtered as noise - otherwise the mandatory client_name gate in
+        # _is_dataset_complete would legitimately reject the flush below)
+        self.assembler.update_identity(pan="AHJPR0846B", name="RAHUL SHARMA")
         self.assembler.record_submission("111111111111111", "Submitted")
 
         # Switch to Client 2
-        flushed_prior = self.assembler.update_identity(pan="BBBBB2222B", name="CLIENT TWO")
+        flushed_prior = self.assembler.update_identity(pan="BBBBB2222B", name="PRIYA VERMA")
         self.assertIsNotNone(flushed_prior)
         self.assertEqual(flushed_prior["pan"], "AHJPR0846B")
         self.assertEqual(self.assembler.client_pan, "BBBBB2222B")
@@ -298,6 +300,92 @@ class TestVSDCAssembler(unittest.TestCase):
         forms_captured = {c["filing_type"]: c["arn"] for c in captures}
         self.assertEqual(forms_captured["GSTR-1"], "AA1904260011111")
         self.assertEqual(forms_captured["GSTR-3B"], "AA1907260022222")
+
+    # ── Uniform mandatory-dataset gate (_is_dataset_complete) ──────────────────
+
+    def test_seal_and_flush_rejects_submission_missing_mandatory_name(self):
+        # PAN, form, period, status and ARN are all present and valid - only the
+        # client name was never captured. The whole dataset must still be
+        # rejected: name is mandatory just like PAN, form type and period.
+        self.assembler.client_pan = "GZEPM6367M"  # bypass update_identity's is_valid_name gate directly
+        self.assembler.update_selection(filing_type="ITR-1", period_label="AY 2026-27")
+        self.assembler.record_submission(
+            ack_number="198273645019283",
+            status="Submitted (Not e-Verified)",
+            crosshair_id="itr_submitted_pending",
+        )
+        self.assertEqual(self.assembler.client_name, None)
+        self.assertIsNone(self.assembler.seal_and_flush())
+
+    def test_seal_and_flush_rejects_submission_missing_mandatory_pan(self):
+        # Never call update_identity with a PAN - entity_pan resolves to "UNKNOWN"
+        self.assembler.update_identity(name="RAHUL SHARMA", portal="Income Tax")
+        self.assembler.update_selection(filing_type="ITR-1", period_label="AY 2026-27")
+        self.assembler.record_submission(
+            ack_number="198273645019283",
+            status="Submitted (Not e-Verified)",
+            crosshair_id="itr_submitted_pending",
+        )
+        self.assertIsNone(self.assembler.seal_and_flush())
+
+    def test_status_promotion_after_seal_still_reaches_dataset_completion(self):
+        # seal_and_flush() can only fire once per session. A later status
+        # PROMOTION (e-Verified arriving after an earlier Not-e-Verified flush,
+        # e.g. itr_submitted_pending then itr_filed_verified in the same app
+        # session) must not be silently dropped - get_completed_dataset_payload()
+        # is the path that's supposed to catch it (mirrors the router-level fix
+        # that lets a None from seal_and_flush() fall through instead of
+        # returning early).
+        self.assembler.update_identity(pan="GZEPM6367M", name="WASIL AMAN MANDAL", portal="Income Tax")
+        self.assembler.update_selection(filing_type="ITR-1", period_label="AY 2026-27")
+        self.assembler.record_submission(
+            ack_number="198273645019283",
+            status="Submitted (Not e-Verified)",
+            crosshair_id="itr_submitted_pending",
+        )
+        first = self.assembler.seal_and_flush()
+        self.assertIsNotNone(first)
+        self.assertEqual(first["status"], "Submitted (Not e-Verified)")
+
+        # A second seal_and_flush() this session is a no-op (already flushed) -
+        # this is the exact case where the router used to return None early.
+        self.assertIsNone(self.assembler.seal_and_flush())
+
+        # The taxpayer completes e-verification later in the same session, on a
+        # confirmation page that doesn't restate the form/period as text (a
+        # realistic case - e.g. just a checkmark + "e-Verified"). Deliberately
+        # do NOT call update_selection() again here: current_filing_type/
+        # current_period_label stay None (cleared by the flush above), proving
+        # get_completed_dataset_payload()'s entity-wide fallback scan (not a
+        # form/period key match) is what finds this record.
+        self.assembler.record_submission(
+            ack_number="198273645019283",
+            status="Submitted (e-Verified)",
+            filing_type="ITR-1",
+            period_label="AY 2026-27",
+            crosshair_id="itr_filed_verified",
+        )
+        promoted = self.assembler.get_completed_dataset_payload(crosshair_id="itr_filed_verified")
+        self.assertIsNotNone(promoted)
+        self.assertEqual(promoted["status"], "Submitted (e-Verified)")
+
+    def test_gst_draft_dataset_path_stays_ungated_by_design(self):
+        # get_gst_form_dataset_payload() is the ONE deliberate exception to the
+        # mandatory-status/arn gate - GST drafts must ship even when unfiled
+        # (e.g. status "Not Filed", no ARN yet) so the app can show live status.
+        self.assembler.update_identity(name="AMAN ASSOCIATES", gstin="19CJLPM0265M1ZO", portal="GST Portal")
+        self.assembler.record_gst_form_details(
+            form_type="GSTR-3B",
+            tax_period="June",
+            status="Not Filed",
+            fy="2026-27",
+        )
+        draft_payload = self.assembler.get_gst_form_dataset_payload()
+        self.assertIsNotNone(draft_payload)
+        self.assertEqual(draft_payload["status"], "Not Filed")
+        self.assertEqual(draft_payload["arn"], "")
+        # But seal_and_flush() must still refuse to seal this same draft session
+        self.assertIsNone(self.assembler.seal_and_flush())
 
 
 if __name__ == "__main__":

@@ -728,14 +728,20 @@ class VSDCRouter:
                     print(f"[VSDC-X] itr {matched_crosshair.id}: UIA provided {', '.join(uia_fields_used)}")
 
                 if is_sub_crosshair:
-                    # Seal and flush filing payload!
+                    # Seal and flush filing payload! seal_and_flush() can only fire
+                    # once per session (self._flushed guard) — if it returns None
+                    # here (already sealed earlier this session), do NOT return
+                    # early: fall through to the Dataset Completion Principle below,
+                    # so a later status PROMOTION (e.g. e-Verified arriving after an
+                    # earlier Not-e-Verified flush) still reaches the app instead of
+                    # being silently dropped.
                     master_payload = self.assembler.seal_and_flush()
                     if master_payload:
                         self.has_flushed_current_route = True
                         self.assembler.clear_workflow_selection()
                         flush_name = master_payload.get("client_name") or master_payload.get("pan", "")
                         print(f"[VSDC Router] Flushed ITR filing payload to tracker dump: Ack={ack_number} Form={form_lbl} Status={status}")
-                    return master_payload
+                        return master_payload
 
         # Dataset Completion Principle:
         # A dataset completes ONLY when submit status is captured from the portal!
@@ -1383,14 +1389,18 @@ class VSDCRouter:
             source_str = " • VSDC-X (Exact)" if (arn_from_uia or status_from_uia) else " • VSDC (Visual)"
             self.notify_activity("submit", f"{form_lbl} Filed Successfully", f"{name_part}ARN: {arn}{source_str}")
 
-            # Seal and flush filing payload! If we got an ARN, the submission is confirmed.
+            # Seal and flush filing payload! If we got an ARN, the submission is
+            # confirmed. seal_and_flush() can only fire once per session — if it
+            # returns None here (already sealed earlier), fall through to the
+            # Dataset Completion Principle below instead of returning early, so a
+            # later status promotion still reaches the app (mirrors the ITR fix).
             master_payload = self.assembler.seal_and_flush()
             if master_payload:
                 self.has_flushed_current_route = True
                 self.assembler.clear_workflow_selection()
                 flush_name = master_payload.get("client_name") or master_payload.get("gstin") or master_payload.get("pan", "")
                 print(f"[VSDC Router] Flushed GST filing payload: ARN={arn} Form={form_lbl} Status={status}")
-            return master_payload
+                return master_payload
 
         # Dataset Completion Principle:
         completed_payload = self.assembler.get_completed_dataset_payload(crosshair_id=matched_crosshair.id)
