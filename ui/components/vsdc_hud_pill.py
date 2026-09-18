@@ -14,7 +14,7 @@ Characteristics:
 
 import re
 import sys
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QSequentialAnimationGroup, QEasingCurve, QPoint
 from PySide6.QtWidgets import QWidget, QFrame, QHBoxLayout, QVBoxLayout, QLabel, QGraphicsOpacityEffect, QApplication
 from PySide6.QtGui import QFont, QColor, QScreen
 
@@ -94,6 +94,17 @@ class VSDCHudPill(QWidget):
             "rgba(56, 139, 253, 0.20)",
             "rgba(56, 139, 253, 0.40)",
         ),
+        # Persistent "actively polling this page, nothing captured yet" state —
+        # a breathing dot rather than a static icon, and never auto-dismisses;
+        # see start_watching()/stop_watching(). Neutral blue-gray on purpose:
+        # this is a "still looking" signal, not a confirmed capture.
+        "watching": (
+            "mdi.radar",
+            "#58A6FF",
+            "WATCHING",
+            "rgba(88, 166, 255, 0.12)",
+            "rgba(88, 166, 255, 0.30)",
+        ),
     }
 
     def __init__(self, parent=None):
@@ -115,6 +126,7 @@ class VSDCHudPill(QWidget):
 
         self._icon_cache = {}
         self._last_event_signature = ""
+        self._is_watching = False
 
         # Opacity animation setup (smooth cubic ease)
         self.opacity_effect = QGraphicsOpacityEffect(self)
@@ -161,6 +173,36 @@ class VSDCHudPill(QWidget):
         self.icon_label.setFixedSize(18, 18)
         self.icon_label.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(self.icon_label, 0, Qt.AlignVCenter)
+
+        # Breathing pulse dot — swapped in for the static icon only while
+        # "watching" (actively polling a page, nothing captured yet). Its own
+        # opacity effect/animation, independent of the card's fade in/out.
+        self.pulse_dot = QLabel(self.card)
+        self.pulse_dot.setFixedSize(10, 10)
+        self.pulse_dot.setStyleSheet("background: #58A6FF; border-radius: 5px;")
+        self.pulse_dot.setVisible(False)
+        card_layout.addWidget(self.pulse_dot, 0, Qt.AlignCenter)
+
+        self.pulse_effect = QGraphicsOpacityEffect(self.pulse_dot)
+        self.pulse_dot.setGraphicsEffect(self.pulse_effect)
+        self.pulse_effect.setOpacity(1.0)
+
+        fade_down = QPropertyAnimation(self.pulse_effect, b"opacity", self)
+        fade_down.setDuration(750)
+        fade_down.setStartValue(1.0)
+        fade_down.setEndValue(0.25)
+        fade_down.setEasingCurve(QEasingCurve.InOutSine)
+
+        fade_up = QPropertyAnimation(self.pulse_effect, b"opacity", self)
+        fade_up.setDuration(750)
+        fade_up.setStartValue(0.25)
+        fade_up.setEndValue(1.0)
+        fade_up.setEasingCurve(QEasingCurve.InOutSine)
+
+        self.pulse_anim = QSequentialAnimationGroup(self)
+        self.pulse_anim.addAnimation(fade_down)
+        self.pulse_anim.addAnimation(fade_up)
+        self.pulse_anim.setLoopCount(-1)  # breathe forever until explicitly stopped
 
         # Content Column
         text_layout = QVBoxLayout()
@@ -257,18 +299,30 @@ class VSDCHudPill(QWidget):
     def show_event(self, event_type: str, title: str, subtitle: str = "", duration_ms: int = 1800):
         """
         Displays the HUD pill at the bottom-left corner with the given event details.
-        Snappy auto-dismiss within 1.8 seconds.
+        Snappy auto-dismiss within 1.8 seconds — except event_type "watching",
+        which persists (breathing dot, no timer) until either a real capture
+        event supersedes it or stop_watching() is called explicitly.
         """
         key = (event_type or "default").lower()
+        is_watching = (key == "watching")
         theme = self.EVENT_THEMES.get(key, self.EVENT_THEMES["default"])
         icon_name, accent_color, badge_text, badge_bg, badge_border = theme
 
-        # Deduplicate identical consecutive event within short window
+        # Deduplicate identical consecutive event within short window. For
+        # "watching", this also covers the common case of re-announcing the
+        # same route on a later tick — no reason to restart the breathing
+        # animation for something that's already showing.
         sig = f"{key}:{title}:{subtitle}"
         if sig == self._last_event_signature and self.isVisible() and self.opacity_effect.opacity() > 0.5:
-            self.dismiss_timer.start(duration_ms)
+            if not is_watching:
+                self.dismiss_timer.start(duration_ms)
             return
         self._last_event_signature = sig
+
+        # A real event (anything but "watching") always supersedes the
+        # breathing dot, even mid-pulse.
+        if not is_watching:
+            self._stop_pulse()
 
         # 1. Update Card Styling (Obsidian background with 3.5px accent line)
         self.card.setStyleSheet(f"""
@@ -299,13 +353,20 @@ class VSDCHudPill(QWidget):
         self.subtitle_label.setText(formatted_sub)
         self.subtitle_label.setVisible(bool(subtitle))
 
-        # 4. Update Google Material Design Icon
-        pixmap = self._get_icon(icon_name, accent_color)
-        if pixmap:
-            self.icon_label.setPixmap(pixmap)
-            self.icon_label.show()
-        else:
+        # 4. Update Google Material Design Icon — swapped for the breathing
+        # pulse dot while watching, since there's nothing concrete to iconify yet.
+        if is_watching:
             self.icon_label.hide()
+            self.pulse_dot.setVisible(True)
+            self._start_pulse()
+        else:
+            self.pulse_dot.setVisible(False)
+            pixmap = self._get_icon(icon_name, accent_color)
+            if pixmap:
+                self.icon_label.setPixmap(pixmap)
+                self.icon_label.show()
+            else:
+                self.icon_label.hide()
 
         self.adjustSize()
         self._reposition_bottom_left()
@@ -318,8 +379,36 @@ class VSDCHudPill(QWidget):
         self.anim.setEndValue(1.0)
         self.anim.start()
 
-        # Snappy Auto-dismiss
-        self.dismiss_timer.start(duration_ms)
+        # Snappy Auto-dismiss — never for "watching", which persists until a
+        # real event replaces it or stop_watching() is called.
+        self.dismiss_timer.stop()
+        if not is_watching:
+            self.dismiss_timer.start(duration_ms)
+
+    def stop_watching(self):
+        """
+        Explicitly ends the "watching" state (e.g. the route was abandoned
+        without ever capturing anything - VSDC gave up, or the session
+        ended). No-ops harmlessly if a real event has already superseded it.
+        """
+        if not self._is_watching:
+            return
+        self._stop_pulse()
+        self._fade_out()
+
+    def _start_pulse(self):
+        if self._is_watching:
+            return
+        self._is_watching = True
+        self.pulse_effect.setOpacity(1.0)
+        self.pulse_anim.start()
+
+    def _stop_pulse(self):
+        if not self._is_watching:
+            return
+        self._is_watching = False
+        self.pulse_anim.stop()
+        self.pulse_effect.setOpacity(1.0)
 
     def _reposition_bottom_left(self):
         """Positions the HUD pill firmly at the bottom-left corner of the active primary screen."""

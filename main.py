@@ -508,7 +508,10 @@ class SeraApp:
     def _on_vsdc_activity_event(self, event_type: str, title: str, subtitle: str = ""):
         """Displays real-time bottom-left HUD overlay (no system tray, disappears within 3s)."""
         if hasattr(self, "vsdc_hud") and self.vsdc_hud:
-            self.vsdc_hud.show_event(event_type, title, subtitle, duration_ms=2500)
+            if event_type == "stop_watching":
+                self.vsdc_hud.stop_watching()
+            else:
+                self.vsdc_hud.show_event(event_type, title, subtitle, duration_ms=2500)
 
     def _on_capture_processed_ui(self, msg: dict, res: dict):
         """Apply only UI updates on the Qt main thread after background work."""

@@ -1,5 +1,6 @@
 """
 tests/test_vsdc_hud_pill.py — Unit Tests for VSDC/VSDC-X HUD source differentiation
+and the persistent "watching" polling indicator.
 
 Covers the two things that determine whether a user can actually SEE which engine
 (VSDC-X exact UIA text vs VSDC/OCR) supplied a given capture:
@@ -8,10 +9,15 @@ Covers the two things that determine whether a user can actually SEE which engin
      tag text for toasts that fire from an already-assembled dataset payload,
      where the fresh per-tick uia_fields_used list from that read is no longer
      in scope).
-Neither requires a QApplication event loop — both are pure functions/staticmethods.
+Plus the breathing "watching" indicator that persists while VSDC is actively
+polling a page with nothing captured yet (TestHudWatchingIndicator), which
+needs a real QApplication since it drives the actual widget/animations.
 """
 
+import sys
 import unittest
+
+from PySide6.QtWidgets import QApplication
 
 from ui.components.vsdc_hud_pill import VSDCHudPill
 from core.vsdc.vsdc_router import VSDCRouter
@@ -70,6 +76,66 @@ class TestSourceTagFromCaptureMethod(unittest.TestCase):
     def test_missing_or_empty_capture_method_defaults_to_visual(self):
         self.assertEqual(VSDCRouter._source_tag_from_capture_method(None), " • VSDC (Visual)")
         self.assertEqual(VSDCRouter._source_tag_from_capture_method(""), " • VSDC (Visual)")
+
+
+class TestHudWatchingIndicator(unittest.TestCase):
+    """
+    The pill must show a persistent breathing dot while VSDC is actively
+    polling a page it hasn't captured anything from yet, distinct from the
+    momentary auto-dismissing toast used for actual captures.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if QApplication.instance() is None:
+            cls.app = QApplication(sys.argv)
+        else:
+            cls.app = QApplication.instance()
+
+    def setUp(self):
+        self.pill = VSDCHudPill()
+
+    def test_watching_shows_pulse_dot_and_never_auto_dismisses(self):
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.assertTrue(self.pill._is_watching)
+        self.assertTrue(self.pill.pulse_dot.isVisible())
+        self.assertFalse(self.pill.icon_label.isVisible())
+        self.assertFalse(self.pill.dismiss_timer.isActive())
+
+    def test_re_announcing_the_same_watching_route_does_not_restart_pulse(self):
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.assertTrue(self.pill._is_watching)
+        self.assertTrue(self.pill.pulse_anim.state() == self.pill.pulse_anim.State.Running)
+
+    def test_watching_a_different_route_keeps_pulsing_but_updates_title(self):
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.pill.show_event("watching", "GST return form table & period details", "")
+        self.assertTrue(self.pill._is_watching)
+        self.assertEqual(self.pill.title_label.text(), "GST return form table & period details")
+
+    def test_real_capture_event_supersedes_watching(self):
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.pill.show_event("capture", "Captured ITR-1", "WASIL AMAN MANDAL • Ack: 123456789012345")
+        self.assertFalse(self.pill._is_watching)
+        self.assertFalse(self.pill.pulse_dot.isVisible())
+        self.assertTrue(self.pill.dismiss_timer.isActive())
+
+    def test_stop_watching_fades_out_the_pulse(self):
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.pill.stop_watching()
+        self.assertFalse(self.pill._is_watching)
+
+    def test_stop_watching_is_a_harmless_no_op_when_not_watching(self):
+        # Never entered watching mode at all - must not raise.
+        self.pill.stop_watching()
+        self.assertFalse(self.pill._is_watching)
+
+        # Also harmless after a real event already superseded watching.
+        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+        self.pill.show_event("capture", "Captured ITR-1", "Ack: 123456789012345")
+        self.pill.stop_watching()
+        self.assertFalse(self.pill._is_watching)
 
 
 if __name__ == "__main__":

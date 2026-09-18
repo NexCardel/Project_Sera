@@ -531,8 +531,13 @@ class VSDCRouter:
             self.last_crosshair_id = matched_crosshair.id
             self.assembler.record_step(url, matched_crosshair.id)
             label_text = getattr(matched_crosshair, "label", getattr(matched_crosshair, "description", matched_crosshair.id))
-            # Route changes are console-only; toast only fires for identity/capture/flush
             print(f"[VSDC Router] Route: {label_text} | Portal: {self.active_portal}")
+            # Persistent "actively polling this page" HUD indicator (breathing
+            # dot, no auto-dismiss) - immediately superseded by a real
+            # identity/capture/submit toast the moment this route actually
+            # yields something, or replaced by the next route's own
+            # "watching" the moment the page changes again.
+            self.notify_activity("watching", label_text, "")
 
         # Strict Protocol Separation:
         # Route directly to dedicated GST or ITR handlers so changes to one pipeline never alter or degrade the other.
@@ -647,6 +652,12 @@ class VSDCRouter:
                 if self.static_since is None:
                     self.static_since = now
                 if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
+                    # Honesty over false comfort: stop showing "watching" once
+                    # VSDC has genuinely given up on this screen, rather than
+                    # implying it's still actively polling. Idempotent on the
+                    # HUD side, so calling this every tick after the timeout
+                    # is harmless.
+                    self.notify_activity("stop_watching", "", "")
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
@@ -1045,6 +1056,12 @@ class VSDCRouter:
                 if self.static_since is None:
                     self.static_since = now
                 if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
+                    # Honesty over false comfort: stop showing "watching" once
+                    # VSDC has genuinely given up on this screen, rather than
+                    # implying it's still actively polling. Idempotent on the
+                    # HUD side, so calling this every tick after the timeout
+                    # is harmless.
+                    self.notify_activity("stop_watching", "", "")
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
