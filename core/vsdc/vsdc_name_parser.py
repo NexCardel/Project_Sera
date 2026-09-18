@@ -316,6 +316,15 @@ def caps_run_name_candidates(text: str) -> List[str]:
     # Pre-clean known PAN patterns so they don't break or contaminate all-caps runs
     cleaned_text = re.sub(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", " ", text)
     for match in re.finditer(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,}){1,4}\b", cleaned_text):
+        # Skip a run immediately followed by an ellipsis - VSDC-X reads the
+        # whole page regardless of on-screen crop, so a header pill visually
+        # truncated to fit a fixed-width badge (e.g. "INDRAJIT CHATTE...")
+        # would otherwise be treated as if it were the complete name, ahead
+        # of a fuller, untruncated version that's very often present
+        # elsewhere on the same page (a profile card, a form field).
+        trailing = cleaned_text[match.end():match.end() + 3]
+        if trailing.startswith("...") or trailing.startswith("…"):
+            continue
         run = match.group()
         words = run.split()
         if any(w not in NOISE_WORDS for w in words):
@@ -651,6 +660,17 @@ def extract_header_profile_caps_name(lines: List[str]) -> Optional[str]:
 
     def _extract_trailing_name_words(text_before: str) -> Optional[str]:
         if not text_before:
+            return None
+        # A header pill visually truncated with an ellipsis (e.g. a name too
+        # long for a fixed-width nav badge, rendered "INDRAJIT CHATTE...")
+        # must NOT be trusted as a complete name - VSDC-X reads the entire
+        # page's accessible text regardless of on-screen crop, so a fuller,
+        # untruncated version of the same name is very often present
+        # elsewhere on the page (a profile card, a form field) and should win
+        # instead. Returning None here lets extract_name_from_ocr_lines fall
+        # through to its later, more thorough checks rather than confidently
+        # reporting a truncated fragment as the taxpayer's name.
+        if re.search(r"\.\.\.|…", text_before):
             return None
         # Strip any bracketed or unbracketed PAN
         cleaned = re.sub(r"[(\[{<]?\s*[A-Z]{5}[0-9]{4}[A-Z]\s*[)\]}>]?", " ", text_before)

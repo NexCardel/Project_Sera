@@ -1248,6 +1248,78 @@ class TestVSDCCrosshairs(unittest.TestCase):
             "HUD pill must activate for identity captured while the form table is still loading",
         )
 
+    def test_unrelated_browser_tab_never_matches_a_crosshair(self):
+        """
+        VSDC's foreground-window gate lets ANY browser process through
+        (is_browser is true for chrome/edge/firefox/brave/opera regardless of
+        site), relying entirely on match_url_crosshair() to filter by URL.
+        When the address bar itself can't be read (extract_browser_url
+        returns falsy - happens for all sorts of mundane reasons, not just on
+        exotic sites), the router used to fall back to matching crosshair
+        patterns against the bare window TITLE with no host/domain to anchor
+        on at all. A YouTube tutorial titled with tax-portal-sounding words
+        (e.g. an "ITR Filing Guide") would then get misread as the real
+        portal and have bogus "identity" extracted from whatever caps-cased
+        text happens to be on screen. Title-only matching must now require
+        the title to independently look like a portal (is_portal_title)
+        before it's ever attempted.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1280, 800), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": "GUIDE YOUTUBE\nHow to file your Income Tax Return - full walkthrough",
+            "lines": ["GUIDE YOUTUBE", "How to file your Income Tax Return - full walkthrough"],
+        }
+
+        router = VSDCRouter(ocr_engine=mock_ocr, assembler=VisualSessionAssembler(), on_activity=lambda *a: None)
+        router.get_foreground_info = MagicMock(
+            return_value=(12345, "ITR Filing Guide 2026 - Full Walkthrough - YouTube - Google Chrome", "chrome.exe")
+        )
+        # Address bar unreadable - the exact condition that used to fall back
+        # to bare-title matching with no host/domain to anchor on at all.
+        router.extract_browser_url = MagicMock(return_value=None)
+
+        result = router.evaluate_tick()
+
+        self.assertIsNone(result)
+        self.assertIsNone(router.assembler.client_name, "No identity should ever be extracted from an unrelated YouTube tab")
+        mock_ocr.capture_window_image.assert_not_called()
+
+    def test_title_only_matching_still_works_for_a_genuine_portal_title(self):
+        """
+        The is_portal_title gate added above must not break the legitimate
+        case it's meant to still allow: a real portal tab whose address bar
+        happens to be unreadable, but whose window title unambiguously
+        identifies it as the tax portal.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1280, 800), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": "e-Filing Income Tax Department RAMESH SHARMA ABCPE1234F",
+            "lines": ["e-Filing Income Tax Department", "RAMESH SHARMA", "ABCPE1234F"],
+        }
+
+        router = VSDCRouter(ocr_engine=mock_ocr, assembler=VisualSessionAssembler(), on_activity=lambda *a: None)
+        router.get_foreground_info = MagicMock(
+            return_value=(12345, "e-Filing Income Tax Department - personal_information - Google Chrome", "chrome.exe")
+        )
+        router.extract_browser_url = MagicMock(return_value=None)
+
+        router.evaluate_tick()
+
+        self.assertEqual(router.assembler.client_name, "RAMESH SHARMA")
+        self.assertEqual(router.assembler.client_pan, "ABCPE1234F")
+
 
 if __name__ == "__main__":
     unittest.main()

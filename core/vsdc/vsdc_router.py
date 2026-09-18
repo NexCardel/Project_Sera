@@ -61,9 +61,13 @@ PORTAL_KEYWORDS = (
     "gstn",
     "traces",
     "mca",
-    "dashboard",
-    "returns",
 )
+# "dashboard" and "returns" were deliberately dropped from PORTAL_KEYWORDS -
+# both are generic enough to appear in countless unrelated sites/apps' window
+# titles, and this list is also used to gate whether title-only crosshair
+# matching (no real URL/host at all - see the extract_browser_url fallback in
+# evaluate_tick) is trusted. A tab whose title merely contains "dashboard" is
+# not evidence it's a tax portal.
 
 BROWSER_EXE_NAMES = (
     "chrome.exe",
@@ -445,6 +449,7 @@ class VSDCRouter:
 
         # Read active URL from browser address bar
         extracted_url = self.extract_browser_url(hwnd)
+        address_bar_readable = bool(extracted_url)
         if extracted_url:
             url = extracted_url
         else:
@@ -468,13 +473,25 @@ class VSDCRouter:
             self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
             self._loading_notice_shown = False
 
-        # Match against SDC Crosshairs
-        matched_crosshair = match_url_crosshair(url_normalized)
-        if not matched_crosshair and url != url_normalized:
-            matched_crosshair = match_url_crosshair(url)
-        if not matched_crosshair:
-            # Fallback: check window title against crosshair patterns
-            matched_crosshair = match_url_crosshair(title)
+        # Match against SDC Crosshairs.
+        # When the address bar itself couldn't be read, `url` above is really
+        # just the window TITLE in disguise - and matching a crosshair
+        # pattern against a bare title with no real host/URL to anchor on is
+        # exactly how an unrelated site (e.g. a YouTube tab whose title
+        # happens to contain "ITR"/"dashboard"/"landing") gets misread as the
+        # real portal. Only trust title-only matching when the title
+        # independently looks like a tax portal (is_portal_title, checked
+        # against the deliberately non-generic PORTAL_KEYWORDS) - a genuinely
+        # readable address bar (real portal URL OR a local file:// test page)
+        # never needs this extra gate, since host_pattern already anchors it.
+        is_portal_title = any(k in title_lower for k in PORTAL_KEYWORDS)
+        matched_crosshair = None
+        if address_bar_readable or is_portal_title:
+            matched_crosshair = match_url_crosshair(url_normalized)
+            if not matched_crosshair and url != url_normalized:
+                matched_crosshair = match_url_crosshair(url)
+            if not matched_crosshair:
+                matched_crosshair = match_url_crosshair(title)
 
         if not matched_crosshair:
             return None
@@ -733,7 +750,7 @@ class VSDCRouter:
             authoritative_name = self.assembler.client_name or client_name
             is_better_name = is_better_taxpayer_name(authoritative_name, self.last_logged_name)
             if (is_better_name or is_personal_info) and authoritative_name != self.last_logged_name:
-                print(f"[VSDC Router] Extracted client name: {authoritative_name}")
+                print(f"[VSDC Router] Extracted client name: {authoritative_name}{source_tag}")
                 self.last_logged_name = authoritative_name
                 # Trigger live HUD toast update with authoritative full name
                 pan_label = self.assembler.client_pan or self.assembler.gstin or ""
@@ -747,11 +764,11 @@ class VSDCRouter:
             flushed_prior = self.assembler.update_identity(pan=pan, gstin=gstin, dob=dob, portal=self.active_portal)
             c_name = self.assembler.client_name or ""
             if pan and pan != self.last_logged_pan:
-                print(f"[VSDC Router] Identity updated: PAN={pan}")
+                print(f"[VSDC Router] Identity updated: PAN={pan}{source_tag}")
                 self.notify_activity("identity", f"Assessee: {pan}", (f"{c_name}" if c_name else f"Portal: {self.active_portal}") + source_tag)
                 self.last_logged_pan = pan
             elif gstin and gstin != self.last_logged_pan:
-                print(f"[VSDC Router] Identity updated: GSTIN={gstin}")
+                print(f"[VSDC Router] Identity updated: GSTIN={gstin}{source_tag}")
                 self.notify_activity("identity", f"GSTIN: {gstin}", (f"{c_name}" if c_name else f"Portal: {self.active_portal}") + source_tag)
                 self.last_logged_pan = gstin
             if flushed_prior:
@@ -767,7 +784,7 @@ class VSDCRouter:
         # was already announced (mirrors GST's filing-preference-arrives-later toast).
         if self.assembler.dob and self.assembler.dob != self.last_logged_dob:
             self.last_logged_dob = self.assembler.dob
-            print(f"[VSDC Router] Extracted DOB: {self.assembler.dob}")
+            print(f"[VSDC Router] Extracted DOB: {self.assembler.dob}{source_tag}")
             ident_label = self.assembler.client_name or self.assembler.client_pan or ""
             self.notify_activity(
                 "update",
@@ -1135,7 +1152,7 @@ class VSDCRouter:
                 self.last_logged_pref = authoritative_pref
                 pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
                 sub = (f"GSTIN: {authoritative_gstin}{pref_suffix}" if authoritative_gstin else f"Portal: GST Portal{pref_suffix}") + source_tag
-                print(f"[VSDC Router] GST Assessee identified: {authoritative_name} (GSTIN: {authoritative_gstin}, Pref: {authoritative_pref})")
+                print(f"[VSDC Router] GST Assessee identified: {authoritative_name} (GSTIN: {authoritative_gstin}, Pref: {authoritative_pref}){source_tag}")
                 self.notify_activity(
                     "start",
                     f"Client: {authoritative_name}",
@@ -1146,7 +1163,7 @@ class VSDCRouter:
                 self.last_logged_pref = authoritative_pref
                 pref_suffix = f" • {authoritative_pref}" if authoritative_pref else ""
                 name_part = f"{authoritative_name} • " if authoritative_name else ""
-                print(f"[VSDC Router] GSTIN identified: {authoritative_gstin}")
+                print(f"[VSDC Router] GSTIN identified: {authoritative_gstin}{source_tag}")
                 self.notify_activity(
                     "start",
                     f"GSTIN: {authoritative_gstin}",
@@ -1162,7 +1179,7 @@ class VSDCRouter:
                 # truly NEW identity, not on existing identity gaining a
                 # previously-missing field.
                 self.last_logged_pref = authoritative_pref
-                print(f"[VSDC Router] GST Filing Preference identified: {authoritative_pref}")
+                print(f"[VSDC Router] GST Filing Preference identified: {authoritative_pref}{source_tag}")
                 self.notify_activity(
                     "update",
                     f"Filing Preference: {authoritative_pref}",

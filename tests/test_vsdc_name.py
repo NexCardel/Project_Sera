@@ -485,6 +485,57 @@ class TestVSDCNameParser(unittest.TestCase):
         ]
         self.assertIsNone(extract_name_from_ocr_lines(lines))
 
+    def test_truncated_header_pill_yields_to_fuller_name_elsewhere_on_page(self):
+        """
+        VSDC-X reads the entire page's accessible text regardless of on-screen
+        crop, unlike OCR which is genuinely cropped to a region - so a header
+        nav pill visually truncated to fit a fixed-width badge (e.g.
+        "INDRAJIT CHATTE..." from a name too long to display) must NOT win
+        over a fuller, untruncated version of the same name that's very often
+        present elsewhere on the same page (a profile card, a labeled form
+        field). Observed live: DOB captured correctly from the profile card
+        while name incorrectly locked onto the truncated header fragment.
+        """
+        # Header pill + icon ligature as one combined line (typical UIA read)
+        lines_combined = [
+            "Dashboard > My Profile > Profile Details",
+            "INDRAJIT CHATTE... expand_more",
+            "Name",
+            "INDRAJIT CHATTERJEE",
+            "Date of Birth",
+            "06-Aug-1971",
+            "PAN",
+            "APFPC0458J",
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines_combined), "INDRAJIT CHATTERJEE")
+
+        # Header pill and icon ligature as two separate lines
+        lines_split = [
+            "INDRAJIT CHATTE...",
+            "expand_more",
+            "Name",
+            "INDRAJIT CHATTERJEE",
+            "PAN",
+            "APFPC0458J",
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines_split), "INDRAJIT CHATTERJEE")
+
+        # Unicode ellipsis character instead of three literal dots
+        lines_unicode_ellipsis = [
+            "INDRAJIT CHATTE… expand_more",
+            "Name",
+            "INDRAJIT CHATTERJEE",
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines_unicode_ellipsis), "INDRAJIT CHATTERJEE")
+
+        # No fuller name anywhere on the page - the truncated fragment is all
+        # there is, so it must still be returned rather than nothing at all.
+        lines_only_truncated = [
+            "INDRAJIT CHATTE... expand_more",
+            "Some unrelated dashboard text",
+        ]
+        self.assertEqual(extract_name_from_ocr_lines(lines_only_truncated), "INDRAJIT CHATTE")
+
 
 if __name__ == "__main__":
     unittest.main()
