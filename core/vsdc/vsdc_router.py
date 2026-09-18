@@ -105,6 +105,17 @@ class _WindowSession:
         self.route_captured: bool = False
         self.route_poll_count: int = 0
         self.last_screen_hash: Optional[int] = None
+        # Wall-clock timestamp (time.time()) of when the on-screen thumbnail
+        # hash first stopped changing, or None while it's still changing /
+        # not yet observed. Used to give up re-scanning a genuinely static,
+        # not-yet-captured screen after a generous timeout - see
+        # _STATIC_SCREEN_TIMEOUT_SEC. Time-based rather than a raw poll count
+        # because poll cadence itself varies wildly (15ms during the initial
+        # burst vs 0.35s normally); a fixed poll-count cap used to be
+        # reachable in well under 200ms for a page that hadn't visibly
+        # painted yet, which is nowhere near enough for a genuinely
+        # slow-loading page (a large GST table, a slow government server).
+        self.static_since: Optional[float] = None
         self.last_logged_name: Optional[str] = None
         self.last_logged_pan: Optional[str] = None
         self.last_logged_pref: Optional[str] = None
@@ -122,10 +133,19 @@ class _WindowSession:
 _SESSION_FIELDS: Tuple[str, ...] = (
     "assembler", "last_url", "last_crosshair_id", "active_portal",
     "has_flushed_current_route", "route_captured", "route_poll_count",
-    "last_screen_hash", "last_logged_name", "last_logged_pan",
+    "last_screen_hash", "static_since", "last_logged_name", "last_logged_pan",
     "last_logged_pref", "last_logged_dob", "burst_ticks_remaining",
     "was_page_loading", "_loading_notice_shown",
 )
+
+# Generous timeout before VSDC stops re-scanning a screen whose visual
+# thumbnail hash has stayed completely unchanged (no captured data yet, and
+# no recognized "loading..." text either) - see _WindowSession.static_since.
+# Deliberately long: a government portal page can legitimately take this
+# long to render under a slow connection, and the cost of a few more OCR/UIA
+# reads is trivial next to silently giving up on a page the user is still
+# waiting on.
+_STATIC_SCREEN_TIMEOUT_SEC = 30.0
 
 # How long an untouched window's session is kept before being pruned, so a
 # closed browser window's state (and its assembler, with whatever it hadn't
@@ -469,6 +489,7 @@ class VSDCRouter:
             self.route_captured = False
             self.route_poll_count = 0
             self.last_screen_hash = None
+            self.static_since = None
             self.was_page_loading = False
             self.burst_ticks_remaining = 10  # Instant micro-burst (15ms) before user can scroll!
             self._loading_notice_shown = False
@@ -562,6 +583,7 @@ class VSDCRouter:
             self.last_logged_pref = None
             self.last_logged_dob = None
             self.last_screen_hash = None
+            self.static_since = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
             if has_active_session:
@@ -591,6 +613,7 @@ class VSDCRouter:
                 self.last_logged_pref = None
                 self.last_logged_dob = None
                 self.last_screen_hash = None
+                self.static_since = None
                 self.route_poll_count = 0
                 self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
                 return flushed
@@ -612,15 +635,23 @@ class VSDCRouter:
             content_crop = img.crop((0, int(h * 0.15), w, h)) if h > 100 else img
             thumb = content_crop.resize((32, 32)).tobytes()
             curr_hash = hash(thumb)
+            now = time.time()
             if not is_new_url and self.last_screen_hash == curr_hash:
                 if self.route_captured or self.has_flushed_current_route:
                     return None
-                # If page was loading or route data not yet captured, allow continued polling
-                if not self.was_page_loading and self.route_poll_count > 6:
+                # If page was loading or route data not yet captured, allow continued polling.
+                # Time-based (not poll-count-based): poll cadence itself varies (15ms during
+                # the initial burst vs 0.35s normally), and some portal pages genuinely take
+                # a long time to render (a large GST table, a slow government server) - only
+                # give up once the screen has TRULY stayed unchanged for a generous stretch.
+                if self.static_since is None:
+                    self.static_since = now
+                if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
                 self.route_poll_count = 0
+                self.static_since = None
             self.last_screen_hash = curr_hash
         except Exception:
             pass
@@ -647,6 +678,7 @@ class VSDCRouter:
             self.was_page_loading = False
             self.burst_ticks_remaining = 8
             self.route_poll_count = 0
+            self.static_since = None  # fresh static-screen grace period now that loading is over
             if not self._loading_notice_shown:
                 self._loading_notice_shown = True
                 print(f"[VSDC Router] ITR Page finished loading -> triggered burst capture!")
@@ -962,6 +994,7 @@ class VSDCRouter:
             self.last_logged_pan = None
             self.last_logged_pref = None
             self.last_screen_hash = None
+            self.static_since = None
             self.last_crosshair_id = None
             self.route_poll_count = 0
             self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
@@ -980,6 +1013,7 @@ class VSDCRouter:
                 self.last_logged_pan = None
                 self.last_logged_pref = None
                 self.last_screen_hash = None
+                self.static_since = None
                 self.route_poll_count = 0
                 self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
                 return flushed
@@ -1001,15 +1035,21 @@ class VSDCRouter:
             content_crop = img.crop((0, int(h * 0.15), w, h)) if h > 100 else img
             thumb = content_crop.resize((32, 32)).tobytes()
             curr_hash = hash(thumb)
+            now = time.time()
             if not is_new_url and self.last_screen_hash == curr_hash:
                 if self.route_captured or self.has_flushed_current_route:
                     return None
-                # If page was loading or route data not yet captured, allow continued polling
-                if not self.was_page_loading and self.route_poll_count > 6:
+                # If page was loading or route data not yet captured, allow continued polling.
+                # Time-based (not poll-count-based) - see the matching comment in
+                # _route_itr_crosshair's identical check for why.
+                if self.static_since is None:
+                    self.static_since = now
+                if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
                 self.route_poll_count = 0
+                self.static_since = None
             self.last_screen_hash = curr_hash
         except Exception:
             pass
@@ -1043,6 +1083,7 @@ class VSDCRouter:
             self.was_page_loading = False
             self.burst_ticks_remaining = 8
             self.route_poll_count = 0
+            self.static_since = None  # fresh static-screen grace period now that loading is over
             if not self._loading_notice_shown:
                 self._loading_notice_shown = True
                 print(f"[VSDC Router] GST Page finished loading -> triggered burst capture!")

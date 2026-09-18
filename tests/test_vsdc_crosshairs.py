@@ -1320,6 +1320,68 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertEqual(router.assembler.client_name, "RAMESH SHARMA")
         self.assertEqual(router.assembler.client_pan, "ABCPE1234F")
 
+    def test_slow_loading_page_keeps_polling_well_past_the_old_six_tick_cutoff(self):
+        """
+        The "give up re-scanning a static screen" gate used to be a raw poll
+        COUNT (6), reachable in well under 200ms during the initial 15ms
+        burst - nowhere near enough for a genuinely slow-loading portal page
+        (a large GST table, a slow government server) that shows no
+        recognized "loading..." text and paints no visible change for
+        several seconds. It's now time-based with a generous 30s allowance.
+        This drives 20 ticks (far more than the old count of 6) spanning
+        ~7 seconds of simulated wall-clock time and confirms VSDC is STILL
+        actively re-scanning on the final tick, not silently given up.
+        """
+        from unittest.mock import MagicMock, patch
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1280, 800), color="white")
+        # Static screen with no recognized loading text and nothing to
+        # capture - the exact condition that used to trip the 6-poll cutoff.
+        mock_ocr.scan_image.return_value = {"text": "Please stand by", "lines": ["Please stand by"]}
+
+        router = VSDCRouter(ocr_engine=mock_ocr, assembler=VisualSessionAssembler(), on_activity=lambda *a: None)
+        router.get_foreground_info = MagicMock(
+            return_value=(12345, "e-Filing - Google Chrome", "chrome.exe")
+        )
+        router.extract_browser_url = MagicMock(
+            return_value="https://eportal.incometax.gov.in/iec/foservices/#/dashboard/personal_information"
+        )
+
+        fake_time = [1_000_000.0]
+
+        def _advancing_time():
+            fake_time[0] += 0.35  # matches the router's normal (non-burst) poll interval
+            return fake_time[0]
+
+        with patch("core.vsdc.vsdc_router.time.time", side_effect=_advancing_time):
+            router.evaluate_tick()
+            calls_after_tick_1 = mock_ocr.scan_image.call_count
+            self.assertGreater(calls_after_tick_1, 0)
+
+            for _ in range(19):
+                router.evaluate_tick()
+            calls_after_20_ticks = mock_ocr.scan_image.call_count
+
+            # 20 ticks * 0.35s = 7s elapsed - comfortably under the 30s
+            # allowance. Under the old 6-poll-count cutoff, scanning would
+            # have stopped entirely well before tick 20; it must still be
+            # actively re-scanning every tick here (proportionally more
+            # total calls than a single tick alone produced).
+            self.assertGreater(calls_after_20_ticks, calls_after_tick_1 * 10)
+
+            # Now push well past the 30s allowance and confirm it DOES
+            # eventually stop - the timeout is generous, not infinite.
+            fake_time[0] += 40.0
+            router.evaluate_tick()
+            self.assertEqual(
+                mock_ocr.scan_image.call_count, calls_after_20_ticks,
+                "Router should give up re-scanning once the screen has genuinely stayed static past the 30s allowance",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
