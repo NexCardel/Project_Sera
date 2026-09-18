@@ -365,6 +365,12 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
+            # TEMPORARY for VSDC-X testing: force UIA-only diagnostic mode so the
+            # worker runs fully connected to the app (HUD, assembler, DB) but
+            # legacy OCR capture is disabled and only VSDC-X (UIA) feeds it.
+            # Remove this line to restore normal OCR+UIA operation.
+            os.environ["VSDC_UIA_ONLY"] = "1"
+
             from core.vsdc import VSDCWorker
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
@@ -373,7 +379,7 @@ class SeraApp:
             self.app.aboutToQuit.connect(self.vsdc_worker.stop)
             if self.db.get_setting("vsdc_enabled", "1") == "1":
                 self.vsdc_worker.start()
-                print("⚡ [main] VSDC Worker started successfully.")
+                print("⚡ [main] VSDC Worker started successfully (VSDC-X/UIA-only mode).")
         except Exception as vsdc_exc:
             import traceback
             err_msg = traceback.format_exc()
