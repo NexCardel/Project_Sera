@@ -31,6 +31,21 @@ user32 = ctypes.windll.user32
 # every comtypes-generated wrapper exposes every named constant.
 UIA_DOCUMENT_CONTROL_TYPE_ID = 50030
 
+# Control types whose displayed text lives in ValuePattern rather than in the
+# element's accessible Name. For a form field, Name is the *label* ("First
+# Name") and the actual content ("WASIL") is only reachable through
+# ValuePattern — so reading Name alone makes every field value invisible.
+# The ITR Personal Info / Profile pages render their prefilled name and date
+# of birth as readonly <input>s, which is exactly this case.
+UIA_COMBOBOX_CONTROL_TYPE_ID = 50003
+UIA_EDIT_CONTROL_TYPE_ID = 50004
+UIA_SPINNER_CONTROL_TYPE_ID = 50016
+_VALUE_BEARING_CONTROL_TYPES = frozenset({
+    UIA_COMBOBOX_CONTROL_TYPE_ID,
+    UIA_EDIT_CONTROL_TYPE_ID,
+    UIA_SPINNER_CONTROL_TYPE_ID,
+})
+
 # Generous versus the ~0.1s observed in practice, while still bounded: a raw
 # UIA call from a thread with no message loop can genuinely hang/deadlock on
 # a complex page (observed while probing), so every call below is guarded.
@@ -106,11 +121,30 @@ def _find_document_elements(uia, uia_client, root_element) -> List[Any]:
     return [found.GetElement(i) for i in range(found.Length)] if found else []
 
 
+def _read_value_pattern(uia_client, element) -> str:
+    """Reads an element's ValuePattern text, or "" if it exposes none. Strictly
+    a property read — never SetValue — so this stays as passive as the rest of
+    VSDC-X (see the module docstring)."""
+    try:
+        pattern = element.GetCurrentPattern(uia_client.UIA_ValuePatternId)
+        if not pattern:
+            return ""
+        value_obj = pattern.QueryInterface(uia_client.IUIAutomationValuePattern)
+        return (value_obj.CurrentValue or "").strip()
+    except Exception:
+        return ""
+
+
 def _collect_descendant_lines(uia, uia_client, root_element) -> List[str]:
-    """Returns the accessible Name of every descendant with non-empty text, in
-    document order — label and value elements arrive as adjacent entries,
-    which is exactly the 'label on line N, value on line N+1' shape
-    vsdc_regex.py's extractors already handle for OCR line-wrapping."""
+    """Returns the visible text of every descendant, in document order — label
+    and value elements arrive as adjacent entries, which is exactly the 'label
+    on line N, value on line N+1' shape vsdc_regex.py's extractors already
+    handle for OCR line-wrapping.
+
+    For form fields, the element's accessible Name is only the label; its
+    displayed content comes from ValuePattern and is emitted as its own line
+    directly after that label, preserving the same adjacency contract.
+    """
     lines: List[str] = []
     true_cond = uia.CreateTrueCondition()
     elements = root_element.FindAll(uia_client.TreeScope_Descendants, true_cond)
@@ -121,6 +155,18 @@ def _collect_descendant_lines(uia, uia_client, root_element) -> List[str]:
             name = (el.CurrentName or "").strip()
             if name:
                 lines.append(name)
+
+            # Only control types that can actually carry one — querying a
+            # pattern on every descendant of a large page would cost a
+            # cross-process call per element for nothing.
+            value = ""
+            try:
+                if el.CurrentControlType in _VALUE_BEARING_CONTROL_TYPES:
+                    value = _read_value_pattern(uia_client, el)
+            except Exception:
+                value = ""
+            if value and value != name:
+                lines.append(value)
         except Exception:
             continue
     return lines

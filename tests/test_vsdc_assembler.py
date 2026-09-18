@@ -388,5 +388,36 @@ class TestVSDCAssembler(unittest.TestCase):
         self.assertIsNone(self.assembler.seal_and_flush())
 
 
+    def test_contact_details_reach_the_sealed_payload(self):
+        from ui.utils.profile_parser import extract_profile_from_payload
+        self.assembler.update_identity(pan="BEBPM9120B", name="RAHUL MONDAL", portal="Income Tax")
+        self.assembler.update_identity(mobile="9732684972", email="RusinaFashion@Gmail.com")
+        self.assembler.record_submission(
+            ack_number="598290000150925", status="Submitted (e-Verified)", filing_type="ITR-4",
+            period_label="AY 2025-26", raw_text="", crosshair_id="itr_view_filed_returns", engine="VSDC-X",
+        )
+        payload = self.assembler.seal_and_flush()
+        self.assertEqual(payload["mobile"], "9732684972")
+        self.assertEqual(payload["email"], "rusinafashion@gmail.com")
+        # The DB layer picks these up with no schema/parser change of its own.
+        profile = extract_profile_from_payload(payload)
+        self.assertEqual(profile["phone"], "9732684972")
+        self.assertEqual(profile["email"], "rusinafashion@gmail.com")
+
+    def test_contact_read_after_a_record_exists_still_propagates(self):
+        self.assembler.update_identity(pan="BEBPM9120B", name="RAHUL MONDAL", portal="Income Tax")
+        self.assembler.record_submission(
+            ack_number="598290000150925", status="Submitted (e-Verified)", filing_type="ITR-4",
+            period_label="AY 2025-26", raw_text="", crosshair_id="itr_view_filed_returns", engine="VSDC-X",
+        )
+        self.assembler.update_identity(mobile="9732684972", email="a@b.in")
+        (capture,) = self.assembler.captures.values()
+        self.assertEqual((capture["mobile"], capture["email"]), ("9732684972", "a@b.in"))
+        # Unlike DOB, a fresh read replaces the old one (contact details are editable).
+        self.assembler.update_identity(mobile="9876543210")
+        (capture,) = self.assembler.captures.values()
+        self.assertEqual(capture["mobile"], "9876543210")
+
+
 if __name__ == "__main__":
     unittest.main()

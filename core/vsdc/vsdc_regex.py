@@ -194,6 +194,104 @@ def extract_dob(text: str) -> Optional[str]:
     return m.group(1).strip().replace(".", "-")
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")
+_MOBILE_LABEL_RE = re.compile(r"^(?:primary\s+)?mobile(?:\s*(?:no\.?|number))?\s*:?$", re.IGNORECASE)
+_EMAIL_LABEL_RE = re.compile(r"^(?:primary\s+)?e-?mail(?:\s*(?:id|address))?\s*:?$", re.IGNORECASE)
+# A new sub-block (Secondary/Residential/Landline) or the next field's label ends the
+# Primary entry — never read past it, or a secondary number would be taken as primary.
+_CONTACT_BLOCK_END_RE = re.compile(
+    r"^(?:secondary|residential|landline|address|communication|e-?mail|mobile|alternate)\b", re.IGNORECASE
+)
+
+
+def _normalize_mobile(raw: str) -> Optional[str]:
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    elif len(digits) == 11 and digits.startswith("0"):
+        digits = digits[1:]
+    return digits if len(digits) == 10 and digits[0] in "6789" else None
+
+
+def _first_contact_value(lines: List[str], label_re: "re.Pattern", value_fn, window: int = 6) -> Optional[str]:
+    """Finds a label line, then returns the first matching value in the few lines
+    after it, stopping at the end of the Primary block. Also handles the inline
+    'Label: value' form. Deliberately line-based: it is only ever fed exact UI
+    Automation lines, where label and value arrive as adjacent entries."""
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        inline = re.match(r"^(?:primary\s+)?(?:mobile(?:\s*(?:no\.?|number))?|e-?mail(?:\s*(?:id|address))?)\s*:\s*(.+)$", stripped, re.IGNORECASE)
+        if inline and label_re.match(stripped.split(":", 1)[0].strip()):
+            val = value_fn(inline.group(1))
+            if val:
+                return val
+        if not label_re.match(stripped):
+            continue
+        for nxt in lines[idx + 1: idx + 1 + window]:
+            n = nxt.strip()
+            if re.match(r"^primary\b", n, re.IGNORECASE):
+                continue
+            if _CONTACT_BLOCK_END_RE.match(n):
+                break
+            val = value_fn(n)
+            if val:
+                return val
+    return None
+
+
+def extract_mobile(lines: List[str]) -> Optional[str]:
+    """Primary mobile number (10 digits) from a Profile / Personal Info page's UIA lines."""
+    if not lines:
+        return None
+    return _first_contact_value(lines, _MOBILE_LABEL_RE, _normalize_mobile)
+
+
+def extract_email(lines: List[str]) -> Optional[str]:
+    """Primary email address from a Profile / Personal Info page's UIA lines."""
+    if not lines:
+        return None
+
+    def _email(raw: str) -> Optional[str]:
+        m = _EMAIL_RE.search(raw)
+        return m.group(0).lower() if m else None
+
+    return _first_contact_value(lines, _EMAIL_LABEL_RE, _email)
+
+
+_EVERIFY_STEPPER_LABELS = re.compile(
+    r"Select\s+The\s+Return\s+To\s+Be\s+Verified"
+    r"|Select\s+Method\s+For\s+Return\s+Verification"
+    r"|Return\s+Successfully\s+Verified",
+    re.IGNORECASE,
+)
+_EVERIFY_SUCCESS_EVIDENCE = re.compile(
+    r"successfully\s+e-?\s*verified"
+    r"|e-?\s*verified\s+successfully"
+    r"|verified\s+successfully"
+    r"|successfully\s+verified"
+    r"|(?:return|itr)\s+(?:has\s+been|is)\s+(?:successfully\s+)?e?-?\s*verified"
+    r"|e-?\s*verification\s+(?:is\s+)?(?:successful|completed|complete)",
+    re.IGNORECASE,
+)
+
+
+def strip_everify_stepper(text: str) -> str:
+    """
+    Removes the e-Verify wizard's three step labels from page text. That stepper
+    ("Select The Return To Be Verified" / "Select Method For Return Verification" /
+    "Return Successfully Verified") is drawn on EVERY step of the wizard, so its last
+    label - a description of a step still to come - reads as "successfully verified"
+    to the status classifier on the return-picker and OTP/EVC pages, long before
+    anything has been verified.
+    """
+    return _EVERIFY_STEPPER_LABELS.sub(" ", text) if text else ""
+
+
+def has_everify_success_evidence(text: str) -> bool:
+    """True only if the page (stepper labels removed) actually says the return was verified."""
+    return bool(_EVERIFY_SUCCESS_EVIDENCE.search(strip_everify_stepper(text)))
+
+
 def extract_gstin(text: str) -> Optional[str]:
     """
     Extracts a 15-character Goods and Services Tax Identification Number (GSTIN).
@@ -408,6 +506,45 @@ def is_page_loading(text: str) -> bool:
     ))
 
 
+_FILING_HEADING_RE = re.compile(
+    r"(?:A\.?\s?Y\.?|Assessment\s*Year)\s*[:\-]?\s*(20(\d{2}))\s*[-–/]\s*(?:20)?(\d{2})\b",
+    re.IGNORECASE,
+)
+_FILING_TYPE_LABEL_RE = re.compile(r"\bFiling\s*Type\b", re.IGNORECASE)
+
+
+def _latest_filing_block(text: str) -> str:
+    """
+    Returns just the first (latest) filing's block from a View Filed Returns page:
+    from its first A.Y. heading up to the next A.Y. heading or the next "Filing Type"
+    label, whichever comes first (the portal lists newest first). Falls back to the
+    full text when no heading is recognised, so unexpected layouts behave as before.
+    Skips the "starting Assessment Year 2013-14" disclaimer, which is not a heading.
+    """
+    headings = []
+    for m in _FILING_HEADING_RE.finditer(text):
+        y1, y2 = int(m.group(2)), int(m.group(3))
+        if y2 != (y1 + 1) % 100:
+            continue
+        prefix = text[max(0, m.start() - 40):m.start()].lower()
+        if any(w in re.split(r"[\n\r.!?*•|]", prefix)[-1] for w in ("starting", "since", "from", "available")):
+            continue
+        headings.append(m.start())
+    if not headings:
+        return text
+
+    start = headings[0]
+    end = len(text)
+    if len(headings) > 1:
+        end = headings[1]
+    labels = [m.start() for m in _FILING_TYPE_LABEL_RE.finditer(text) if m.start() > start]
+    # Two "Filing Type" labels after the heading means the second is a new filing
+    # within the same A.Y. (e.g. a revised return listed under the original).
+    if len(labels) > 1:
+        end = min(end, labels[1])
+    return text[start:end]
+
+
 def extract_view_filed_returns_card(text: str) -> Optional[Dict[str, Any]]:
     """
     Extracts the latest filed return card record from historical view screens
@@ -417,6 +554,13 @@ def extract_view_filed_returns_card(text: str) -> Optional[Dict[str, Any]]:
     """
     if not text or is_page_loading(text):
         return None
+
+    # The page lists every historical filing (e.g. "14 Filings till date"), and
+    # each older card carries its own "e-verified"/"processed" wording. Classifying
+    # status over the whole page lets those older cards override the latest card's
+    # real status (a "Pending for e-verification" return read as e-Verified), so
+    # every field below must come from the latest filing's block alone.
+    text = _latest_filing_block(text)
 
     ay = extract_assessment_year(text)
     ack = repair_numeric_ack(text)

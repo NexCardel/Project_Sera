@@ -187,6 +187,98 @@ class TestVSDCRegex(unittest.TestCase):
         self.assertEqual(wasil_card["form"], "ITR-4")
         self.assertEqual(wasil_card["status"], "Submitted (e-Verified)")
 
+    def test_view_filed_returns_status_ignores_older_filings(self):
+        from core.vsdc.vsdc_regex import extract_view_filed_returns_card
+        # Latest card is still pending e-verification; older cards further down the
+        # same page are e-verified/processed and must not leak into its status.
+        text = (
+            "View Filed Returns\n"
+            "The e-Filed Returns are available for download /view starting Assessment Year 2013-14.\n"
+            "14 Filings till date\n"
+            "A.Y. 2025-26\n"
+            "Filing Type\nOriginal\n"
+            "Pending for e-verification\nSep 15, 2025\n"
+            "ITR Filed\nSep 15, 2025\n"
+            "ITR : ITR-4\n"
+            "Acknowledgement No : 598290000150925\n"
+            "Filing Section : 139(1)\n"
+            "A.Y. 2024-25\n"
+            "Filing Type\nOriginal\n"
+            "Processed with refund\nOct 10, 2024\n"
+            "Successfully e-verified Sep 01, 2024\n"
+            "ITR : ITR-1\n"
+            "Acknowledgement No : 123456780000012\n"
+        )
+        card = extract_view_filed_returns_card(text)
+        self.assertEqual(card["ack"], "598290000150925")
+        self.assertEqual(card["form"], "ITR-4")
+        self.assertEqual(card["ay"], "AY 2025-26")
+        self.assertEqual(card["status"], "Submitted (Not e-Verified)")
+
+    # Lines exactly as the live My Profile page exposes them through UI Automation
+    # (captured with tools/vsdc_uia_probe.py): plain Text label/value pairs.
+    _PROFILE_LINES = [
+        "RAHUL MONDAL Individual", "My Profile", "Personal Details", "Profile",
+        "Name", "RAHUL MONDAL", "Date of Birth", "28-Feb-1983", "PAN", "BEBPM9120B",
+        "Gender", "Male", "Contact", "Mobile", "Primary (Self)", "+91", "9732684972",
+        "Secondary (--)", "--", "Residential/ Office (Mobile)", "--",
+        "Residential/Office (Landline)", "--", "Email", "Primary (Friend)",
+        "rusinafashion@gmail.com", "Secondary (--)", "--", "Address",
+    ]
+
+    def test_profile_contact_extraction(self):
+        from core.vsdc.vsdc_regex import extract_mobile, extract_email
+        self.assertEqual(extract_mobile(self._PROFILE_LINES), "9732684972")
+        self.assertEqual(extract_email(self._PROFILE_LINES), "rusinafashion@gmail.com")
+
+    def test_contact_never_takes_secondary_or_landline(self):
+        from core.vsdc.vsdc_regex import extract_mobile, extract_email
+        # No primary value: a secondary number/email must not be promoted to primary.
+        self.assertIsNone(extract_mobile(["Mobile", "Primary (--)", "--", "Secondary (Self)", "9876543210"]))
+        self.assertIsNone(extract_email(["Email", "Primary (--)", "--", "Secondary (Self)", "a@b.in"]))
+        self.assertIsNone(extract_mobile(["Residential/Office (Landline)", "03472123456"]))
+        self.assertIsNone(extract_mobile([]))
+
+    def test_contact_alternate_layouts(self):
+        from core.vsdc.vsdc_regex import extract_mobile, extract_email
+        # Personal Info / form-field layout (label, then the field value) and inline form.
+        self.assertEqual(extract_mobile(["Mobile No", "Mobile No", "9732684972"]), "9732684972")
+        self.assertEqual(extract_mobile(["Mobile Number: 98765 43210"]), "9876543210")
+        self.assertEqual(extract_email(["Email Address : Foo.Bar@Gmail.com"]), "foo.bar@gmail.com")
+
+    def test_profile_name_field_beats_truncated_header_pill(self):
+        from core.vsdc.vsdc_name_parser import extract_profile_name_field, extract_name_from_ocr_lines
+        self.assertEqual(extract_profile_name_field(self._PROFILE_LINES), "RAHUL MONDAL")
+        lines = ["MOHAMMAD ABDUL KARIM... Individual", "Name", "MOHAMMAD ABDUL KARIM MOLLA"]
+        # The generic tiers would settle for the shortened header pill...
+        self.assertEqual(extract_name_from_ocr_lines(lines), "MOHAMMAD ABDUL KARIM")
+        # ...the exact labeled field is the full name.
+        self.assertEqual(extract_profile_name_field(lines), "MOHAMMAD ABDUL KARIM MOLLA")
+        self.assertIsNone(extract_profile_name_field(["ABDUL KARIM Individual", "Date of Birth", "28-Feb-1983"]))
+
+    def test_everify_stepper_is_not_a_verification(self):
+        from core.vsdc.vsdc_regex import strip_everify_stepper, has_everify_success_evidence
+        stepper = "Select The Return To Be Verified\nSelect Method For Return Verification\nReturn Successfully Verified\n"
+        # The wizard's own step labels appear on EVERY step (incl. the picker and OTP pages)
+        # and must never read as "verified" - the classifier alone gets this wrong.
+        self.assertEqual(classify_verification_status(stepper), "Submitted (e-Verified)")
+        self.assertFalse(has_everify_success_evidence(stepper))
+        self.assertFalse(has_everify_success_evidence(stepper + "Aadhaar OTP\nEVC through Net Banking\nEnter the 6-digit OTP"))
+        # Labels wrapped across lines (as OCR renders them) are stripped as well.
+        self.assertFalse(has_everify_success_evidence("Return Successfully\nVerified"))
+        self.assertNotIn("Verified", strip_everify_stepper(stepper))
+
+    def test_everify_real_confirmation_wording_is_recognised(self):
+        from core.vsdc.vsdc_regex import has_everify_success_evidence
+        stepper = "Return Successfully Verified\n"
+        for msg in (
+            "Your return has been successfully e-Verified.",
+            "You have successfully verified your return",
+            "Return verified successfully",
+            "e-Verification completed",
+        ):
+            self.assertTrue(has_everify_success_evidence(stepper + msg), msg)
+
     def test_extract_gst_fy_smart_regex(self):
         from core.vsdc.vsdc_regex import extract_gst_fy
 

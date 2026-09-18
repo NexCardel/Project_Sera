@@ -244,6 +244,8 @@ class SessionContext:
     trade_name: Optional[str] = None
     gstin: Optional[str] = None
     dob: Optional[str] = None
+    mobile: Optional[str] = None
+    email: Optional[str] = None
     filing_preference: Optional[str] = None
     is_active: bool = False
     started_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -269,6 +271,8 @@ class FilingRecord:
     status_rank: int
     due_date: str = ""
     dob: str = ""
+    mobile: str = ""
+    email: str = ""
     arn: str = ""
     ack_number: str = ""
     portal: str = "GST Portal"
@@ -298,6 +302,8 @@ class FilingRecord:
             "fy": self.fy,
             "due_date": self.due_date,
             "dob": self.dob,
+            "mobile": self.mobile,
+            "email": self.email,
             "filing_preference": self.filing_preference,
             "arn": self.arn,
             "ack_number": self.ack_number or self.arn,
@@ -389,6 +395,22 @@ class VisualSessionAssembler:
     @dob.setter
     def dob(self, val: Optional[str]):
         self.session.dob = val
+
+    @property
+    def mobile(self) -> Optional[str]:
+        return self.session.mobile
+
+    @mobile.setter
+    def mobile(self, val: Optional[str]):
+        self.session.mobile = val
+
+    @property
+    def email(self) -> Optional[str]:
+        return self.session.email
+
+    @email.setter
+    def email(self, val: Optional[str]):
+        self.session.email = val
 
     @property
     def filing_preference(self) -> Optional[str]:
@@ -483,6 +505,8 @@ class VisualSessionAssembler:
         filing_preference: Optional[str] = None,
         trade_name: Optional[str] = None,
         dob: Optional[str] = None,
+        mobile: Optional[str] = None,
+        email: Optional[str] = None,
         is_authoritative: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -530,6 +554,21 @@ class VisualSessionAssembler:
             self.dob = dob.strip()
             for rec in self.records.values():
                 rec.dob = self.dob
+                self.captures[rec.dataset_key] = rec.to_dict()
+
+        # Contact details, unlike DOB, can legitimately change (the taxpayer can edit
+        # them on the portal), so a fresh exact read replaces an earlier one. Kept out
+        # of the session logger on purpose - it never records personal identifiers.
+        if mobile and mobile.strip() != (self.mobile or ""):
+            self.mobile = mobile.strip()
+            for rec in self.records.values():
+                rec.mobile = self.mobile
+                self.captures[rec.dataset_key] = rec.to_dict()
+
+        if email and email.strip().lower() != (self.email or ""):
+            self.email = email.strip().lower()
+            for rec in self.records.values():
+                rec.email = self.email
                 self.captures[rec.dataset_key] = rec.to_dict()
 
         if filing_preference:
@@ -670,6 +709,8 @@ class VisualSessionAssembler:
             status_rank=effective_rank,
             due_date=self.due_date or "",
             dob=self.dob or "",
+            mobile=self.mobile or "",
+            email=self.email or "",
             arn=effective_arn,
             ack_number=effective_arn,
             portal=self.portal,
@@ -816,6 +857,8 @@ class VisualSessionAssembler:
             "fy": record.fy,
             "due_date": record.due_date,
             "dob": record.dob,
+            "mobile": record.mobile,
+            "email": record.email,
             "filing_preference": record.filing_preference,
             "arn": record.arn,
             "ack_number": record.ack_number or record.arn,
@@ -966,6 +1009,8 @@ class VisualSessionAssembler:
             "fy": primary.fy,
             "due_date": primary.due_date,
             "dob": primary.dob,
+            "mobile": primary.mobile,
+            "email": primary.email,
             "filing_preference": primary.filing_preference,
             "arn": primary.arn,
             "status": primary.status,

@@ -24,6 +24,10 @@ from .vsdc_regex import (
     extract_pan,
     extract_gstin,
     extract_dob,
+    strip_everify_stepper,
+    has_everify_success_evidence,
+    extract_mobile,
+    extract_email,
     extract_assessment_year,
     extract_filing_type,
     classify_verification_status,
@@ -42,6 +46,8 @@ from .vsdc_regex import (
 )
 from .vsdc_name_parser import (
     extract_name_from_ocr_lines,
+    extract_profile_name_field,
+    extract_composite_form_name,
     parse_human_name,
     is_better_taxpayer_name,
     extract_gst_welcome_name,
@@ -209,16 +215,20 @@ class VSDCRouter:
         # only the log line was spammy.
         self._loading_notice_shown: bool = False
 
-        # Diagnostic-only: when set, GST OCR text is discarded the instant
-        # it's captured (before any extractor sees it), isolating exactly
-        # what VSDC-X (UI Automation) can capture on its own. Off by default —
-        # never affects normal operation unless explicitly opted into. ITR is
-        # untouched by this flag since it has no VSDC-X path yet.
+        # Portal pages already reported as matching no crosshair, so each unknown page
+        # is logged once (with its link) instead of on every poll tick.
+        self._logged_unmatched_urls: set = set()
+
+        # Diagnostic-only: when set, OCR text is discarded the instant it's
+        # captured (before any extractor sees it), for both GST and ITR,
+        # isolating exactly what VSDC-X (UI Automation) can capture on its
+        # own. Off by default — never affects normal operation unless
+        # explicitly opted into.
         self._uia_only_mode = os.environ.get("VSDC_UIA_ONLY") == "1"
         if self._uia_only_mode:
             print("=" * 70)
-            print("[VSDC Router] VSDC_UIA_ONLY=1 — legacy OCR capture DISABLED for GST.")
-            print("Every GST field below must come from VSDC-X (UI Automation) alone.")
+            print("[VSDC Router] VSDC_UIA_ONLY=1 — legacy OCR capture DISABLED for GST + ITR.")
+            print("Every field below must come from VSDC-X (UI Automation) alone.")
             print("Unset VSDC_UIA_ONLY to restore normal OCR+UIA operation.")
             print("=" * 70)
 
@@ -515,6 +525,15 @@ class VSDCRouter:
                 matched_crosshair = match_url_crosshair(title)
 
         if not matched_crosshair:
+            # Discovery aid: a real portal page that no crosshair recognises is how a
+            # new route (e.g. the pages after e-Verify) gets found. Log its link once.
+            if address_bar_readable and re.search(r"incometax\.gov\.in|gst\.gov\.in", url, re.IGNORECASE):
+                route_only = url.split("?", 1)[0]
+                if route_only not in self._logged_unmatched_urls:
+                    if len(self._logged_unmatched_urls) > 500:
+                        self._logged_unmatched_urls.clear()
+                    self._logged_unmatched_urls.add(route_only)
+                    print(f"[VSDC Router] Unrecognised portal page (no crosshair): {route_only}")
             return None
 
         # Data points do not change after the page loads.
@@ -531,13 +550,7 @@ class VSDCRouter:
             self.last_crosshair_id = matched_crosshair.id
             self.assembler.record_step(url, matched_crosshair.id)
             label_text = getattr(matched_crosshair, "label", getattr(matched_crosshair, "description", matched_crosshair.id))
-            print(f"[VSDC Router] Route: {label_text} | Portal: {self.active_portal}")
-            # Persistent "actively polling this page" HUD indicator (breathing
-            # dot, no auto-dismiss) - immediately superseded by a real
-            # identity/capture/submit toast the moment this route actually
-            # yields something, or replaced by the next route's own
-            # "watching" the moment the page changes again.
-            self.notify_activity("watching", label_text, "")
+            print(f"[VSDC Router] Route: {label_text} | Portal: {self.active_portal} | URL: {url.split('?', 1)[0]}")
 
         # Strict Protocol Separation:
         # Route directly to dedicated GST or ITR handlers so changes to one pipeline never alter or degrade the other.
@@ -652,12 +665,6 @@ class VSDCRouter:
                 if self.static_since is None:
                     self.static_since = now
                 if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
-                    # Honesty over false comfort: stop showing "watching" once
-                    # VSDC has genuinely given up on this screen, rather than
-                    # implying it's still actively polling. Idempotent on the
-                    # HUD side, so calling this every tick after the timeout
-                    # is harmless.
-                    self.notify_activity("stop_watching", "", "")
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view
@@ -682,6 +689,12 @@ class VSDCRouter:
             uia_text = uia_res.get("text", "")
             uia_lines = uia_res.get("lines") or []
         uia_fields_used: List[str] = []
+
+        if self._uia_only_mode:
+            # Discard OCR's output before any extractor below can see it —
+            # everything from here on must come from uia_text/uia_lines alone.
+            full_text = ""
+            lines = []
 
         # Loading State Transition: If the page was previously in an async loading state
         # and has now completed loading, re-trigger a micro-burst so rendered data is captured instantly!
@@ -720,16 +733,38 @@ class VSDCRouter:
         # to prevent breadcrumb spamming and bogus name seeding.
         is_login_auth = (matched_crosshair.id == "itr_login_auth")
         is_personal_info = (matched_crosshair.id in ("itr_personal_info", "itr_profile"))
+        # Only an exact labeled field ("Name" / First-Middle-Last) is the authoritative
+        # full name. A name that merely fell out of the header profile pill can be
+        # shortened or truncated, so it must never overwrite a better one already held.
+        name_is_exact = False
         if is_login_auth:
             client_name = None
         else:
-            uia_name = extract_name_from_ocr_lines(uia_lines) if uia_lines else None
+            uia_name = None
+            if uia_lines:
+                if is_personal_info:
+                    uia_name = extract_profile_name_field(uia_lines) or extract_composite_form_name(uia_lines)
+                    name_is_exact = bool(uia_name)
+                uia_name = uia_name or extract_name_from_ocr_lines(uia_lines)
             client_name = uia_name or extract_name_from_ocr_lines(lines)
             if uia_name:
                 uia_fields_used.append("client_name")
 
+        # Contact details: Profile / Personal Info pages only (elsewhere a mobile or
+        # email may belong to someone else, e.g. a bank or a representative), and
+        # VSDC-X exact text only — a single OCR-misread digit or letter would store a
+        # wrong phone number or email, which is worse than storing none.
+        mobile = email = None
+        if is_personal_info and uia_lines:
+            mobile = extract_mobile(uia_lines)
+            email = extract_email(uia_lines)
+            if mobile:
+                uia_fields_used.append("mobile")
+            if email:
+                uia_fields_used.append("email")
+
         # On personal info / profile page: if name wasn't detected in cropped center card, fallback to full image
-        if not client_name and is_personal_info:
+        if not client_name and is_personal_info and not self._uia_only_mode:
             full_res = self.ocr.scan_image(img, region_type="full")
             f_lines = full_res.get("lines", [])
             f_name = extract_name_from_ocr_lines(f_lines)
@@ -738,7 +773,7 @@ class VSDCRouter:
                 full_text = full_text + "\n" + full_res.get("text", "")
 
         # On login authentication page, if PAN is not in cropped card, fallback to full image
-        if not pan and is_login_auth:
+        if not pan and is_login_auth and not self._uia_only_mode:
             full_res = self.ocr.scan_image(img, region_type="full")
             f_text = full_res.get("text", "")
             pan = extract_pan(f_text)
@@ -757,7 +792,7 @@ class VSDCRouter:
         # or from a previous session (e.g. assembler.client_name is set from a prior session but current OCR has no name).
         # The is_better_taxpayer_name() guard ensures we only upgrade, never downgrade.
         _should_scan_header_for_name = name_incomplete and not _skip_header_for_name
-        if pan_missing or _should_scan_header_for_name:
+        if (pan_missing or _should_scan_header_for_name) and not self._uia_only_mode:
             if matched_crosshair.target_crop not in ("header", "top_right_profile"):
                 # Use highly precise top right crop to prevent name spoofing from other screen areas
                 header_res = self.ocr.scan_image(img, region_type="top_right_profile")
@@ -774,7 +809,7 @@ class VSDCRouter:
                 if h_gstin and not gstin:
                     gstin = h_gstin
         # If we skipped header for name but still need PAN, scan header for PAN only
-        elif pan_missing and _skip_header_for_name:
+        elif pan_missing and _skip_header_for_name and not self._uia_only_mode:
             if matched_crosshair.target_crop not in ("header", "top_right_profile"):
                 header_res = self.ocr.scan_image(img, region_type="top_right_profile")
                 h_text = header_res.get("text", "")
@@ -789,7 +824,10 @@ class VSDCRouter:
         # exact UIA text vs VSDC visual/OCR) so the source is visible, not just in logs.
         source_tag = " • VSDC-X (Exact)" if uia_fields_used else " • VSDC (Visual)"
         if client_name and not is_login_auth:
-            self.assembler.update_identity(name=client_name, dob=dob, is_authoritative=is_personal_info)
+            self.assembler.update_identity(
+                name=client_name, dob=dob,
+                is_authoritative=is_personal_info and (name_is_exact or not uia_lines),
+            )
             authoritative_name = self.assembler.client_name or client_name
             is_better_name = is_better_taxpayer_name(authoritative_name, self.last_logged_name)
             if (is_better_name or is_personal_info) and authoritative_name != self.last_logged_name:
@@ -823,6 +861,17 @@ class VSDCRouter:
             # update_identity when pan/gstin/name are present this tick.
             self.assembler.update_identity(dob=dob)
 
+        # Contact details go in on their own call so a tick that has a mobile/email but
+        # no name or PAN alongside it (they render later than the header pill) still lands.
+        if mobile or email:
+            contact_before = (self.assembler.mobile, self.assembler.email)
+            self.assembler.update_identity(mobile=mobile, email=email)
+            if (self.assembler.mobile, self.assembler.email) != contact_before:
+                # Values deliberately not printed or shown on the HUD - only that they were read.
+                print(f"[VSDC Router] Extracted contact details (mobile={bool(self.assembler.mobile)}, email={bool(self.assembler.email)}){source_tag}")
+                ident_label = self.assembler.client_name or self.assembler.client_pan or ""
+                self.notify_activity("update", "Contact details captured", f"{ident_label}{source_tag}".strip(" •"))
+
         # Surface DOB the moment it settles, even if that's a tick after identity
         # was already announced (mirrors GST's filing-preference-arrives-later toast).
         if self.assembler.dob and self.assembler.dob != self.last_logged_dob:
@@ -839,7 +888,40 @@ class VSDCRouter:
         if is_login_auth and pan:
             self.route_captured = True
         elif matched_crosshair.id in ("itr_personal_info", "itr_profile") and (client_name or pan):
+            # Don't lock this route purely on identity — the header profile pill
+            # carries name/PAN in the page shell from the very first tick, while
+            # DOB and contact details only appear once the profile detail fields finish rendering.
+            # Latching on identity alone locked the route instantly and the page
+            # never got a second look, so DOB was never captured. Same patience
+            # gst_welcome_calendar uses for filing preference, bounded so a
+            # profile that never shows a DOB at all doesn't poll forever.
+            # Contact details (Profile page's separate "Contact" card) can render a beat
+            # after Personal Details, so wait for those too, under the same time bound.
+            profile_settled = bool(self.assembler.dob and self.assembler.mobile and self.assembler.email)
+            if profile_settled or self.route_poll_count >= 60:
+                self.route_captured = True
+
+        # e-Verify return picker (…/eVerifyReturn/eVerifyReturn-al, "Step 1: select the
+        # return to verify"): a list of returns awaiting verification, not a submission
+        # or verification confirmation. Identity above is still read; form/period/ack/
+        # status are deliberately never captured from it.
+        if matched_crosshair.id == "itr_everify_return" and re.search(r"everifyreturn-al\b", url, re.IGNORECASE):
             self.route_captured = True
+            return None
+
+        # Every other page of the e-Verify wizard (method selection, OTP/EVC entry, and
+        # the final confirmation) shares the same stepper, whose "Return Successfully
+        # Verified" label would otherwise be classified as a completed verification on
+        # every step. Strip it, then only proceed once the page genuinely says the
+        # return was verified; until then this is simply a step in progress (the user
+        # entering an OTP), so nothing is captured and the route is NOT latched - it
+        # keeps being re-read and picks up the confirmation the moment it appears.
+        if matched_crosshair.id == "itr_everify_return":
+            uia_text = strip_everify_stepper(uia_text)
+            uia_lines = [ln for ln in uia_lines if strip_everify_stepper(ln).strip()]
+            full_text = strip_everify_stepper(full_text)
+            if not has_everify_success_evidence(uia_text + "\n" + full_text):
+                return None
 
         uia_filing_type = extract_filing_type(uia_text) if uia_text else None
         uia_period = extract_assessment_year(uia_text) if uia_text else None
@@ -861,7 +943,7 @@ class VSDCRouter:
             uia_fields_used.append("ack_number")
 
         # Fallback to full image scan if Ack was not found in cropped card on a return/submission card!
-        if not ack_number and (matched_crosshair.is_terminal_submission or matched_crosshair.id == "itr_view_filed_returns"):
+        if not ack_number and (matched_crosshair.is_terminal_submission or matched_crosshair.id == "itr_view_filed_returns") and not self._uia_only_mode:
             if matched_crosshair.target_crop != "full":
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
@@ -886,7 +968,7 @@ class VSDCRouter:
                 uia_fields_used.append("view_filed_returns_card")
             else:
                 card = extract_view_filed_returns_card(full_text)
-            if not card:
+            if not card and not self._uia_only_mode:
                 full_res = self.ocr.scan_image(img, region_type="full")
                 f_text = full_res.get("text", "")
                 if is_page_loading(f_text):
@@ -1056,12 +1138,6 @@ class VSDCRouter:
                 if self.static_since is None:
                     self.static_since = now
                 if not self.was_page_loading and (now - self.static_since) > _STATIC_SCREEN_TIMEOUT_SEC:
-                    # Honesty over false comfort: stop showing "watching" once
-                    # VSDC has genuinely given up on this screen, rather than
-                    # implying it's still actively polling. Idempotent on the
-                    # HUD side, so calling this every tick after the timeout
-                    # is harmless.
-                    self.notify_activity("stop_watching", "", "")
                     return None
             if self.last_screen_hash is not None and self.last_screen_hash != curr_hash:
                 # Viewport scrolled or content changed — reset poll count to evaluate new view

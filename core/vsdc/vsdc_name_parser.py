@@ -762,6 +762,24 @@ def extract_header_profile_caps_name(lines: List[str]) -> Optional[str]:
     return None
 
 
+def extract_profile_name_field(lines: List[str]) -> Optional[str]:
+    """
+    Reads the taxpayer's full name from a bare "Name" label followed by its value
+    (e.g. the My Profile page's "Name" / "RAHUL MONDAL" pair). Only meant for exact
+    UI Automation lines: that value is the authoritative full name, whereas the
+    header profile pill can be shortened or truncated, and every other tier in
+    extract_name_from_ocr_lines would let a partial pill name win over it.
+    """
+    for idx, line in enumerate(lines[:-1]):
+        if not re.fullmatch(r"(?:Full\s+)?Name\s*:?", line.strip(), re.IGNORECASE):
+            continue
+        cand = sanitize_visual_name(lines[idx + 1])
+        words = cand.split()
+        if len(words) >= 2 and is_valid_name(cand) and not any(w in NOISE_WORDS for w in words):
+            return cand
+    return None
+
+
 def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     """
     Scans a list of text lines for taxpayer name patterns:
