@@ -1164,6 +1164,90 @@ class TestVSDCCrosshairs(unittest.TestCase):
         logout_events = [evt for evt in notified if evt[1] == "Session Concluded" or evt[0] == "logout"]
         self.assertEqual(len(logout_events), 0, "Zero 'Session Concluded' toasts emitted when entering View Filed Returns")
 
+    def test_gst_dashboard_deep_link_activates_hud_for_identity_alone(self):
+        """
+        HUD pill must activate the moment ANY identity is captured, not only
+        once a terminal ARN/submission also appears. Landing directly on a
+        GST returns-dashboard-style page (deep link, browser history, or a
+        mid-session refresh that skips gst_welcome_calendar) still captures
+        GSTIN/name via the generic "OTHER GST CROSSHAIRS" identity block -
+        that alone must fire a HUD toast, immediately, with no ARN involved.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1280, 800), color="white")
+        mock_ocr.scan_image.return_value = {
+            "text": "Returns Dashboard\nGSTIN - 19AAPFU0939L1ZV\nAMAN ASSOCIATES",
+            "lines": ["Returns Dashboard", "GSTIN - 19AAPFU0939L1ZV", "AMAN ASSOCIATES"],
+        }
+
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=VisualSessionAssembler(),
+            on_activity=lambda et, title, desc: notified.append((et, title, desc)),
+        )
+        router.get_foreground_info = MagicMock(
+            return_value=(12345, "Goods & Services Tax (GST) | Dashboard - Google Chrome", "chrome.exe")
+        )
+        router.extract_browser_url = MagicMock(return_value="https://return.gst.gov.in/returns/dashboard")
+
+        router.evaluate_tick()
+
+        identity_events = [evt for evt in notified if evt[0] == "identity"]
+        self.assertGreaterEqual(
+            len(identity_events), 1,
+            "HUD pill must activate for identity captured on a directly-visited dashboard page, "
+            "not stay silent until an ARN/submission also appears",
+        )
+        self.assertIn("AMAN ASSOCIATES", identity_events[0][1])
+
+    def test_gst_form_details_activates_hud_before_table_finishes_loading(self):
+        """
+        HUD pill must activate the moment identity is captured on a
+        gst_form_details page, even on a tick where tax_period/status
+        haven't rendered yet (the has_period/has_status gate returns None
+        for several ticks while a table loads) - identity capture shouldn't
+        have to wait for the rest of the form to finish loading.
+        """
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        mock_ocr = MagicMock()
+        mock_ocr.capture_window_image.return_value = Image.new("RGB", (1280, 800), color="white")
+        # Identity has rendered (header), but the form table (tax period /
+        # status) has not - this must still activate the HUD for identity.
+        mock_ocr.scan_image.return_value = {
+            "text": "GSTIN - 19AAPFU0939L1ZV\nLegal Name - FATIMA BIBI\nLoading...",
+            "lines": ["GSTIN - 19AAPFU0939L1ZV", "Legal Name - FATIMA BIBI", "Loading..."],
+        }
+
+        notified = []
+        router = VSDCRouter(
+            ocr_engine=mock_ocr,
+            assembler=VisualSessionAssembler(),
+            on_activity=lambda et, title, desc: notified.append((et, title, desc)),
+        )
+        router.get_foreground_info = MagicMock(
+            return_value=(12345, "Goods & Services Tax (GST) | Form - Google Chrome", "chrome.exe")
+        )
+        router.extract_browser_url = MagicMock(return_value="https://return.gst.gov.in/returns/auth/gstr1")
+
+        result = router.evaluate_tick()
+
+        self.assertIsNone(result, "Table itself isn't complete yet - no dataset payload expected")
+        identity_events = [evt for evt in notified if evt[0] == "identity"]
+        self.assertGreaterEqual(
+            len(identity_events), 1,
+            "HUD pill must activate for identity captured while the form table is still loading",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

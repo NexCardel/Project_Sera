@@ -1292,6 +1292,32 @@ class VSDCRouter:
                     print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
                     return flushed_prior
 
+                # HUD pill must activate the moment ANYTHING is captured here,
+                # not only once tax_period/status also render further below
+                # (which can gate on a still-loading table for several ticks —
+                # see the has_period/has_status checks right after this).
+                # Without this, landing directly on a gst_form_details page
+                # (e.g. a bookmark, browser history, or revisit) captures
+                # identity correctly but the pill stays silent/inactive until
+                # the rest of the form finishes loading, if it ever fully does.
+                id_source_str = " • VSDC-X (Exact)" if uia_fields_used else " • VSDC (Visual)"
+                authoritative_id_name = self.assembler.client_name or legal_name
+                authoritative_id_gstin = self.assembler.gstin or gstin
+                if authoritative_id_name and authoritative_id_name != self.last_logged_name:
+                    self.last_logged_name = authoritative_id_name
+                    self.notify_activity(
+                        "identity",
+                        f"Client: {authoritative_id_name}",
+                        (f"GSTIN: {authoritative_id_gstin}" if authoritative_id_gstin else "Portal: GST Portal") + id_source_str,
+                    )
+                elif authoritative_id_gstin and authoritative_id_gstin != self.last_logged_pan:
+                    self.last_logged_pan = authoritative_id_gstin
+                    self.notify_activity(
+                        "identity",
+                        f"GSTIN: {authoritative_id_gstin}",
+                        (f"{authoritative_id_name} • " if authoritative_id_name else "") + "Portal: GST Portal" + id_source_str,
+                    )
+
             # Premature lock protection: Ensure tax_period and status have rendered before locking
             has_period = bool(tax_period) and is_valid_gst_tax_period(tax_period)
             has_status = bool(status) and is_valid_gst_status(status)
@@ -1382,8 +1408,8 @@ class VSDCRouter:
         client_name = extract_gst_welcome_name(full_text) or extract_name_from_ocr_lines(lines)
         pref = extract_gst_filing_preference(full_text)
 
+        uia_fields_from_uia: List[str] = []
         if uia_text:
-            uia_fields_from_uia = []
             uia_gstin = extract_gstin(uia_text)
             uia_name = extract_gst_welcome_name(uia_text)
             uia_pref = extract_gst_filing_preference(uia_text)
@@ -1405,6 +1431,7 @@ class VSDCRouter:
             if extract_pan(candidate_pan):
                 pan = candidate_pan
 
+        id_source_str = " • VSDC-X (Exact)" if uia_fields_from_uia else " • VSDC (Visual)"
         if client_name or gstin or pan or pref:
             flushed_prior = self.assembler.update_identity(
                 name=client_name,
@@ -1416,6 +1443,28 @@ class VSDCRouter:
             if flushed_prior:
                 print(f"[VSDC Router] Flushed prior client session due to GSTIN/PAN switch!")
                 return flushed_prior
+
+            # HUD pill must activate for ANY identity capture, not only once an
+            # ARN/submission also shows up further below — a dashboard or
+            # submission page visited directly (deep link, browser history,
+            # mid-session refresh) would otherwise capture identity here and
+            # stay completely silent until (if ever) a terminal ARN appears.
+            authoritative_id_name = self.assembler.client_name or client_name
+            authoritative_id_gstin = self.assembler.gstin or gstin
+            if authoritative_id_name and authoritative_id_name != self.last_logged_name:
+                self.last_logged_name = authoritative_id_name
+                self.notify_activity(
+                    "identity",
+                    f"Client: {authoritative_id_name}",
+                    (f"GSTIN: {authoritative_id_gstin}" if authoritative_id_gstin else "Portal: GST Portal") + id_source_str,
+                )
+            elif authoritative_id_gstin and authoritative_id_gstin != self.last_logged_pan:
+                self.last_logged_pan = authoritative_id_gstin
+                self.notify_activity(
+                    "identity",
+                    f"GSTIN: {authoritative_id_gstin}",
+                    (f"{authoritative_id_name} • " if authoritative_id_name else "") + "Portal: GST Portal" + id_source_str,
+                )
 
         # Resolve filing_type accurately: prioritize URL for GST
         url_form = resolve_gst_form_type_from_url(url, full_text) if self.active_portal == "GST Portal" else None
@@ -1454,6 +1503,27 @@ class VSDCRouter:
                     portal="GST Portal",
                     is_authoritative=bool(m_legal),
                 )
+                # Same HUD-activation guarantee as the identity block above -
+                # the form-table read can refine (e.g. add a legal/trade name)
+                # what was captured there, and that refinement deserves its
+                # own activation if it's genuinely new, not silence.
+                m_source_str = " • VSDC-X (Exact)" if identity_uia_fields else " • VSDC (Visual)"
+                authoritative_m_name = self.assembler.client_name or m_legal
+                authoritative_m_gstin = self.assembler.gstin or m_gstin
+                if authoritative_m_name and authoritative_m_name != self.last_logged_name:
+                    self.last_logged_name = authoritative_m_name
+                    self.notify_activity(
+                        "identity",
+                        f"Client: {authoritative_m_name}",
+                        (f"GSTIN: {authoritative_m_gstin}" if authoritative_m_gstin else "Portal: GST Portal") + m_source_str,
+                    )
+                elif authoritative_m_gstin and authoritative_m_gstin != self.last_logged_pan:
+                    self.last_logged_pan = authoritative_m_gstin
+                    self.notify_activity(
+                        "identity",
+                        f"GSTIN: {authoritative_m_gstin}",
+                        (f"{authoritative_m_name} • " if authoritative_m_name else "") + "Portal: GST Portal" + m_source_str,
+                    )
             if not period and meta.get("period_label"):
                 period = meta["period_label"]
             if not filing_type and meta.get("form_type"):
