@@ -1,6 +1,6 @@
 """
 tests/test_vsdc_hud_pill.py — Unit Tests for VSDC/VSDC-X HUD source differentiation
-and the persistent "watching" polling indicator.
+and the capture pulse.
 
 Covers the two things that determine whether a user can actually SEE which engine
 (VSDC-X exact UIA text vs VSDC/OCR) supplied a given capture:
@@ -9,9 +9,10 @@ Covers the two things that determine whether a user can actually SEE which engin
      tag text for toasts that fire from an already-assembled dataset payload,
      where the fresh per-tick uia_fields_used list from that read is no longer
      in scope).
-Plus the breathing "watching" indicator that persists while VSDC is actively
-polling a page with nothing captured yet (TestHudWatchingIndicator), which
-needs a real QApplication since it drives the actual widget/animations.
+Plus the legacy-SDC-toast-style behavior (TestHudCapturePulse): hidden while VSDC
+is only polling, shown and pulsed on a capture, updated in place with a fresh pulse
+if another event lands while it is up. That needs a real QApplication since it
+drives the actual widget/animations.
 """
 
 import sys
@@ -78,11 +79,11 @@ class TestSourceTagFromCaptureMethod(unittest.TestCase):
         self.assertEqual(VSDCRouter._source_tag_from_capture_method(""), " • VSDC (Visual)")
 
 
-class TestHudWatchingIndicator(unittest.TestCase):
+class TestHudCapturePulse(unittest.TestCase):
     """
-    The pill must show a persistent breathing dot while VSDC is actively
-    polling a page it hasn't captured anything from yet, distinct from the
-    momentary auto-dismissing toast used for actual captures.
+    Mirrors the legacy SDC toast (sdc_toast.js): nothing is on screen while VSDC is
+    merely polling; a capture makes the pill appear and pulse; a further event while
+    it is still up updates it in place with a fresh pulse and a restarted dismiss timer.
     """
 
     @classmethod
@@ -95,47 +96,70 @@ class TestHudWatchingIndicator(unittest.TestCase):
     def setUp(self):
         self.pill = VSDCHudPill()
 
-    def test_watching_shows_pulse_dot_and_never_auto_dismisses(self):
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.assertTrue(self.pill._is_watching)
-        self.assertTrue(self.pill.pulse_dot.isVisible())
-        self.assertFalse(self.pill.icon_label.isVisible())
+    def _running(self):
+        return self.pill.pulse_anim.state() == self.pill.pulse_anim.State.Running
+
+    def test_hidden_until_something_is_captured(self):
+        self.assertFalse(self.pill.isVisible())
         self.assertFalse(self.pill.dismiss_timer.isActive())
 
-    def test_re_announcing_the_same_watching_route_does_not_restart_pulse(self):
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.assertTrue(self.pill._is_watching)
-        self.assertTrue(self.pill.pulse_anim.state() == self.pill.pulse_anim.State.Running)
-
-    def test_watching_a_different_route_keeps_pulsing_but_updates_title(self):
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.pill.show_event("watching", "GST return form table & period details", "")
-        self.assertTrue(self.pill._is_watching)
-        self.assertEqual(self.pill.title_label.text(), "GST return form table & period details")
-
-    def test_real_capture_event_supersedes_watching(self):
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.pill.show_event("capture", "Captured ITR-1", "WASIL AMAN MANDAL • Ack: 123456789012345")
-        self.assertFalse(self.pill._is_watching)
-        self.assertFalse(self.pill.pulse_dot.isVisible())
+    def test_capture_shows_pill_and_auto_dismisses(self):
+        self.pill.show_event("capture", "Captured ITR-1", "Ack: 123456789012345")
+        self.assertTrue(self.pill.isVisible())
+        self.assertEqual(self.pill.title_label.text(), "Captured ITR-1")
         self.assertTrue(self.pill.dismiss_timer.isActive())
 
-    def test_stop_watching_fades_out_the_pulse(self):
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
-        self.pill.stop_watching()
-        self.assertFalse(self.pill._is_watching)
+    def test_first_capture_pulses_only_after_the_fade_in_finishes(self):
+        self.pill.show_event("capture", "Captured ITR-1", "")
+        # Pulse is deferred so it is visible rather than hidden under the fade-in.
+        self.assertTrue(self.pill._pulse_pending)
+        self.assertFalse(self._running())
+        self.pill.opacity_effect.setOpacity(1.0)
+        self.pill._on_fade_finished()
+        self.assertFalse(self.pill._pulse_pending)
+        self.assertTrue(self._running())
 
-    def test_stop_watching_is_a_harmless_no_op_when_not_watching(self):
-        # Never entered watching mode at all - must not raise.
-        self.pill.stop_watching()
-        self.assertFalse(self.pill._is_watching)
+    def test_a_new_event_while_showing_updates_in_place_and_pulses(self):
+        self.pill.show_event("capture", "Captured ITR-1", "")
+        self.pill.opacity_effect.setOpacity(1.0)
+        self.pill.show_event("update", "DOB: 28-Feb-1983", "RAHUL MONDAL")
+        self.assertEqual(self.pill.title_label.text(), "DOB: 28-Feb-1983")
+        self.assertTrue(self._running())
+        self.assertTrue(self.pill.dismiss_timer.isActive())
 
-        # Also harmless after a real event already superseded watching.
-        self.pill.show_event("watching", "Taxpayer landing dashboard", "")
+    def test_identical_event_does_not_pulse_again(self):
+        self.pill.show_event("capture", "Captured ITR-1", "")
+        self.pill.opacity_effect.setOpacity(1.0)
+        self.pill.pulse_anim.stop()
+        self.pill.show_event("capture", "Captured ITR-1", "")
+        self.assertFalse(self._running())
+        self.assertTrue(self.pill.dismiss_timer.isActive())
+
+    def test_pulse_grows_the_pill_slightly_then_returns_to_exact_size(self):
         self.pill.show_event("capture", "Captured ITR-1", "Ack: 123456789012345")
-        self.pill.stop_watching()
-        self.assertFalse(self.pill._is_watching)
+        self.pill.opacity_effect.setOpacity(1.0)
+        self.pill._start_pulse()
+        base = self.pill.card.width()
+        self.pill._apply_pulse(1.0)
+        peak = self.pill.card.width()
+        self.assertGreater(peak, base)
+        self.assertLessEqual(peak - base, round(VSDCHudPill._BASE_WIDTH * 0.05))
+        self.pill.pulse_anim.stop()
+        self.pill._reset_pulse_size()
+        self.assertEqual(self.pill.card.width(), VSDCHudPill._BASE_WIDTH)
+        self.assertEqual(self.pill.card.minimumHeight(), 0)
+
+    def test_pulse_finishing_leaves_no_residual_size(self):
+        self.pill.show_event("capture", "Captured ITR-1", "")
+        self.pill.opacity_effect.setOpacity(1.0)
+        self.pill._start_pulse()
+        self.pill._apply_pulse(0.7)
+        self.pill.pulse_anim.finished.emit()
+        self.assertEqual(self.pill.card.width(), VSDCHudPill._BASE_WIDTH)
+
+    def test_no_watching_state_remains(self):
+        self.assertFalse(hasattr(self.pill, "stop_watching"))
+        self.assertNotIn("watching", VSDCHudPill.EVENT_THEMES)
 
 
 if __name__ == "__main__":
