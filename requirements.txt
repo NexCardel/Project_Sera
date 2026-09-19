@@ -21,6 +21,23 @@ playwright>=1.46
 argon2-cffi>=23.1      # Admin PIN hashing (Argon2id)
 cryptography>=43.0     # PBKDF2 key derivation for the DB encryption key
 
+# --- VSDC visual capture (OS-level screen + accessibility reads) ---
+# Without these the app still installs and launches, but VSDC captures nothing:
+# PyInstaller only WARNS about a missing hidden import, it does not fail the build.
+Pillow>=10.0                            # window screenshots and crops fed to OCR
+comtypes>=1.4                           # Windows UI Automation: VSDC-X exact text + address-bar URL
+winrt-runtime>=3.2                      # Windows.Media.Ocr bindings for legacy VSDC OCR
+winrt-Windows.Foundation>=3.2
+winrt-Windows.Foundation.Collections>=3.2
+winrt-Windows.Graphics.Imaging>=3.2
+winrt-Windows.Media.Ocr>=3.2
+winrt-Windows.Storage.Streams>=3.2
+
+# --- Data processing ---
+pandas>=2.0
+numpy>=1.26
+lxml>=5.0
+
 # --- Packaging ---
 pyinstaller>=6.10
 
