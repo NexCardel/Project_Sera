@@ -11,110 +11,75 @@ In addition to live browser-level interception, Sera FST includes the **FST Clas
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │                         Government Web Portals                         │
-│       (Income Tax 2.0, GST Portal, TRACES, State Tax Systems)          │
+│            (Income Tax 2.0, GST Portal, TRACES, State Tax)             │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
                   ┌─────────────────┴─────────────────┐
-                  │                                   │
+                  │ (Browser Layer)                   │ (OS Native Layer)
                   ▼                                   ▼
       ┌───────────────────────┐           ┌───────────────────────┐
-      │  Sera SAD (API Layer) │           │  Sera DOM (DOM Layer) │
-      │  net_interceptor.js   │           │  tracker.js           │
-      │  (MAIN Execution      │           │  (MutationObserver    │
-      │   World Hook)         │           │   Visual Fallback)    │
+      │  Sera SDC Crosshairs  │           │  Sera VSDC / VSDC-X   │
+      │  • gst_protocol.js    │           │  • vsdc_uia_text.py   │
+      │  • itr_protocol.js    │           │  • vsdc_router.py     │
+      │  • sdc_core.js        │           │  • vsdc_assembler.py  │
       └───────────┬───────────┘           └───────────┬───────────┘
                   │                                   │
-                  │ CustomEvent (SeraFSTApiCapture)   │ chrome.runtime.sendMessage
-                  ▼                                   │
-      ┌───────────────────────┐                       │
-      │  filing_detector.js   │                       │
-      │  (ISOLATED Content    │                       │
-      │   Script Bridge)      │                       │
-      └───────────┬───────────┘                       │
-                  │                                   │
-                  └─────────────────┬─────────────────┘
-                                    │
-                                    ▼
-                      ┌───────────────────────────┐
-                      │   background.js (Worker)  │
-                      └─────────────┬─────────────┘
-                                    │ Native Messaging (stdio)
-                                    ▼
-                      ┌───────────────────────────┐
-                      │   native_host/host.py     │
-                      └─────────────┬─────────────┘
-                                    │ TCP Loopback Socket (Port 49152)
-                                    ▼
-                      ┌───────────────────────────┐
-                      │  ui/extension_listener.py │
-                      │  (PyQt6 QThread Server)   │
-                      └─────────────┬─────────────┘
-                                    │ Qt Signal (filing_result_received)
-                                    ▼
-                      ┌───────────────────────────┐
-                      │   main.py Desktop Core    │
-                      │  • PAN & Token Resolution │
-                      │  • DB tracker_dump Insert │
-                      │  • Non-intrusive Toast    │
-                      └─────────────┬─────────────┘
-                                    │
-            ┌───────────────────────┴───────────────────────┐
-            │                                               │
-            ▼                                               ▼
-┌───────────────────────────┐                 ┌───────────────────────────┐
-│  Tracker Dump Workspace   │                 │   FST Classifier Engine   │
-│  (TrackerDumpWindow UI)   │                 │    (FST_Classifier_1)     │
-│  • SRPF Containers        │                 │  • Temporal Identity Map  │
-│  • Monospace Timeline     │                 │  • 7-Category Correlation │
-│  • Floating Preferences   │◄───────────────►│  • Live File Watcher      │
-│    (QMenu / Tools Panel)  │                 │  • Formatted Excel Report │
-└───────────────────────────┘                 └───────────────────────────┘
+                  │ Direct Local HTTP Loopback        │ Direct In-Process
+                  │ (http://127.0.0.1:49152)          │ Qt Signal
+                  ▼                                   ▼
+      ┌───────────────────────┐           ┌───────────────────────┐
+      │ ui/extension_listener │           │ main.py Desktop Core  │
+      │ (PyQt6 QThread Server)│──────────►│ • Identity Resolution │
+      └───────────────────────┘           │ • Window Session Latch│
+                                          │ • tracker_dump Insert │
+                                          │ • VsdcHudPill Overlay │
+                                          └───────────┬───────────┘
+                                                      │
+                            ┌─────────────────────────┴─────────────────────────┐
+                            │                                                   │
+                            ▼                                                   ▼
+                ┌───────────────────────────┐                       ┌───────────────────────────┐
+                │  Tracker Dump Workspace   │                       │   FST Classifier Engine   │
+                │  (TrackerDumpWindow UI)   │                       │    (FST_Classifier_1)     │
+                │  • Material Status Badges │                       │  • Temporal Identity Map  │
+                │  • Cell Darkened Badges   │◄─────────────────────►│  • 7-Category Correlation │
+                │  • Token Meter & JSON     │                       │  • Formatted Excel Report │
+                └───────────────────────────┘                       └───────────────────────────┘
 ```
+
+> [!NOTE]
+> **Permanent Retirement of Sera SAD & SDS**:
+> - **Sera SAD** (Network API Interceptor / `net_interceptor.js`) has been permanently retired and completely removed from the workspace. All network response hooking has been eliminated in favor of passive DOM crosshairs (SDC) and OS-level optical/accessibility reading (VSDC / VSDC-X).
+> - **Sera SDS** (Dataset Scanner / `sds_core.js`) has also been permanently retired.
 
 ---
 
 ## 2. Detection Tiers & Interception Engines
 
-Sera FST employs a multi-tier detection architecture to ensure 100% filing capture reliability across all government tax portals:
+Sera FST employs a resilient, zero-footprint multi-tier detection architecture across government tax portals:
 
-### Tier 1: Sera SAD — API Detector (Network Layer — v2.8.5.4)
-`net_interceptor.js` is injected into the web page's `MAIN` execution world at `document_start`. It passively intercepts `window.fetch()` and `XMLHttpRequest` JSON responses without modifying or delaying page network traffic:
+### Tier 1: Sera SDC — Smart DOM Crosshairs (Browser Extension Layer)
+`sera_extension/sdc/` runs in the isolated content script world. SDC sleeps completely on non-target routes and wakes exclusively when the URL matches a registered tax portal crosshair:
+* **Session Assembler (`sdc_core.js`)**: Buffers all multi-step filing fragments throughout a taxpayer session into an isolated, portal-scoped storage space (`__SDC_SESSION_ITR__`, `__SDC_SESSION_GST__`).
+* **Direct Local HTTP Loopback (`127.0.0.1:49152`)**: Emits atomic master session payloads directly to the desktop application via `fetch()`, completely bypassing Manifest V3 background service worker idle/sleep cycles.
+* **Multi-Dataset Collection**: Normalizes datasets by `GSTIN/PAN + form + period`. A single taxpayer session filing both GSTR-1 and GSTR-3B records distinct rows without overwriting prior filings.
+* **Protocols**:
+  - `itr_protocol.js`: Full 7-crosshair mapping across Income Tax 2.0 (landing, form select, personal info, view filed returns, submitted pending, filed & verified).
+  - `gst_protocol.js`: Full mapping across GST Portal (welcome calendar, form details table, filing success, modal popups).
 
-* **Strict 15-Digit Government ARN Priority**: Prioritizes genuine 15-digit numeric Acknowledgement Numbers (`arnNumber`, `ackNum`) above ephemeral session transaction tokens (`ITR00...`, `EVERIFY...`).
-* **E-Verification State & Intent Detection**:
-  - **`Submitted (e-Verified)`**: Confirmed when `/verificationservices/auth/validateOTP` returns `"status": "SUCCESS"` with message `"OTP VALIDATED"`, or when `/submit/wzrd` carries a generated EVC token.
-  - **`Submitted (Not e-Verified / e-Verify Later)`**: Accurately classified when `/verificationservices/auth/saveEntity` records `"selectionFlag": "L"` (*Later*) and `/submit/wzrd` returns `evc: null` alongside the 15-digit Government ARN.
-  - **`Other EVC`**: Separates Non-ITR OTP validations (bank account revalidations, profile contact OTPs) from actual return filings.
-* **Entity-Aware PAN Intelligence (`profile_parser.py`)**:
-  - Distinguishes between Individual (`PAN` 4th character `P`) and Corporate/Firm entities (`C`, `F`, `L`, `T`).
-  - Keeps Proprietor Name and Company Name strictly separated.
-  - Automatically extracts business trade names from ITR-4 & ITR-3 Schedule BP / Section 44AD/44ADA (`natOfBus44AD`, `nameOfBusiness`, `tradeName`).
-* **Asynchronous `Blob` & `ArrayBuffer` Stream Decoding**: Directly unpacks `responseType: "blob"` and `responseType: "arraybuffer"` payloads using `blob.text()` and `TextDecoder('utf-8')`. Prevents browser `DOMException` errors on Angular SPAs and captures file downloads in-flight.
-* **Monolithic Computational Document Guard**: Detects complete tax return schema objects (e.g. `/returns/downloadfile`, `ITR`, `ScheduleBP`, `Form_ITR4`, `CreationInfo`) and preserves the entire 100% root computational dataset (Turnover u/s 44AD, Cash, Bank balance, Debtors, Inventory, Deductions, and Tax computations) as a single un-truncated capture without splitting internal sub-arrays.
-* **Income Tax Department (ITD 2.0)**:
-  - **Live Returns & E-Verification**: Intercepts `/iec/itrweb/auth/v0.1/returns/submit/wzrd`, `/iec/verificationservices/auth/validateOTP`, `/iec/verificationservices/auth/saveEntity`, `/iec/itrweb/auth/v0.1/returns/downloadfile`, and `/iec/servicesapi/auth/getEntity`.
-  - **ITD Key Normalization**:
-    - `"assmentYear": "2026"` $\longrightarrow$ Automatically formatted as **`AY 2026-27`**.
-    - `"formTypeCd": "4S"` / `"formTypeCd": "4"` $\longrightarrow$ Formatted as **`ITR-4S`** / **`ITR-4`**.
-    - `"submitUserId": "AHJPR0846B"` $\longrightarrow$ Extracted as **`PAN: AHJPR0846B`**.
-    - `"statusDesc"` $\longrightarrow$ Captured as **`ITR processed no demand no refund`** / **`Filing Submitted`**.
-* **GST Portal (`services.gst.gov.in`)**:
-  - Detects `status_cd: "1"`, `error_cd: null`, extracting `arn`, `rtn_type` (GSTR-1, GSTR-3B, CMP-08, GSTR-9), `ret_period`, `gstin`, and `auth_name`.
-* **TRACES Portal (`tdscpc.gov.in`)**:
-  - Detects `status: "SUCCESS"`, extracting `requestNo` / `ticketNo` / `tokenNo` for Conso files, Justification reports, and Form 16/16A requests.
-* **Universal Array Discovery (`findReturnArrays`)**:
-  - When staff view **"View Filed Returns"** or the **Return Dashboard**, SAD recursively searches the JSON response for arrays of return objects, automatically parsing and logging all past assessment years in one pass.
-* **Service List Scoped Execution**:
-  - **Zero Overhead on Non-Portal Domains**: SAD checks `window.location.hostname` against the configured compliance service catalog. On non-portal websites, SAD stays completely idle.
-* **Strict Validation Filter (`isValidArnOrAck`)**:
-  - Automatically rejects placeholder dummy strings (`_ARN`) and internal tokens, ensuring only genuine 10–15 digit Ack numbers and 15-character GST ARNs are stored.
+### Tier 2: Sera VSDC & VSDC-X (OS-Level Zero-Footprint Sensor Layer)
+`core/vsdc/` operates purely from the desktop layer without entering the browser process, injecting scripts, or touching web network traffic:
+* **VSDC-X Direct UI Automation Sensor (`vsdc_uia_text.py`)**: Reads the Chromium accessibility tree directly via native Windows UI Automation (`UIAutomationCore.dll`). Eliminates character confusion and OCR noise on complex web fonts.
+* **DirectML Visual OCR (`vsdc_ocr.py`)**: Hardware-accelerated offline fallback running on DirectML (`Windows.Media.Ocr`) for legacy or non-standard visual layouts.
+* **ITR Heading Resolution & Statutory Filing Type**: Extracts statutory form type from page headings ahead of wizard URLs, and extracts statutory filing reasons (`Original`, `Revised`, `Belated`, and `Updated u/s 139(8A)`) into `filing_preference`.
+* **Personal Info & Readonly Input Capture**: Uses UIA `ValuePattern` to extract authoritative un-truncated legal names, Date of Birth (DOB), primary phone, and primary email directly into database columns with strict privacy safeguards.
+* **Terminal Submission Gating**: Strictly gates 15-digit ITR Ack extraction to terminal submission crosshairs, completely preventing intermediate wizard pages (like schedules or questionnaires) from minting premature false submission records.
+* **Window-Isolated Session Tracking (`_WindowSession`)**: Prevents multi-window and cross-portal state contamination.
+* **Dynamic HUD Pill Overlay (`VsdcHudPill`)**: Desktop overlay stays hidden while polling, pulses on capture (250ms expansion), and tags engine attribution (`[VSDC-X]` vs `[VSDC]`).
+* **Zero-Leakage PAN Beeper & Gemini AI Enricher**: Zero-leakage audible feedback on PAN detection; optional Gemini Flash 1.5/2.0 structured compliance enricher with live in-app Token Meter.
 
----
-
-### Tier 2: Sera DOM — DOM Detector (Visual Layer)
-`tracker.js` runs in the content script world as a visual fallback:
-* Watches rendered HTML trees via `MutationObserver` for on-screen confirmation banners (*"Submitted successfully"*, *"Acknowledgement Number: ..."*).
-* Activates when legacy portals or server-rendered HTML pages render confirmation screens without background JSON APIs.
+### Tier 3: Sera DOM Tracker — Legacy Visual Fallback
+`tracker.js` runs as a MutationObserver fallback for legacy or server-rendered HTML government portals that do not support modern crosshair navigation.
 
 ---
 

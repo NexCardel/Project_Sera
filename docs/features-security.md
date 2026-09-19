@@ -25,25 +25,32 @@ Back navigation is available on detail/workspace views and slide-panel tools, wi
 ## Sera VSDC & SDC Capture Subsystem
 
 Project Sera relies on two high-reliability, zero-conflict capture engines:
-1. **Sera VSDC (Visual Screen Data Capture — OS Optical Layer)**:
-   - Zero browser footprint: Uses Windows UI Automation (`UIAutomationCore.dll`) for <0.5ms address bar route matching, regional window cropping, and hardware-accelerated DirectML OCR (`Windows.Media.Ocr`).
-   - Captures filing acknowledgements across Income Tax (`vsh_submission`) and GST (`gst_filing_file_success`), parsing 14–16 character ARNs, AY, form types, and submission milestones.
+1. **Sera VSDC & VSDC-X (Visual Screen Data Capture & UI Automation Sensor Layer)**:
+   - **VSDC-X Exact-Text Sensor (`core/vsdc/vsdc_uia_text.py`)**: Direct, passive inspection of the Chromium accessibility tree via Windows UI Automation (`UIAutomationCore.dll`). Eliminates character confusions and optical ambiguity across both GST and Income Tax 2.0.
+   - **DirectML OCR Fallback (`core/vsdc/vsdc_ocr.py`)**: Hardware-accelerated offline fallback running DirectML (`Windows.Media.Ocr`) for legacy or non-standard visual layouts.
+   - **Statutory ITR Form & Filing Type Intelligence**: Extracts form types from page headings ahead of wizard URLs, and extracts statutory filing reasons (`Original`, `Revised`, `Belated`, and `Updated u/s 139(8A)`) into `filing_preference`.
+   - **Personal Info & Readonly Input Capture**: Uses UIA `ValuePattern` to extract un-truncated Legal Name, Date of Birth (DOB), primary phone, and primary email directly into database columns.
+   - **Terminal Submission Gating & Scoping**: Strictly gates 15-digit ITR Ack extraction to terminal submission crosshairs, and scopes `view-filed-returns` exclusively to the topmost return card to prevent historical "Processed" states from overriding new filings.
+   - **Window-Isolated Session Tracking (`_WindowSession`)**: Completely encapsulates session identity, form context, and buffers per native window handle (`hwnd`), preventing cross-window or cross-portal state contamination.
    - **Zero-Leakage PAN Audio Beeper**: Provides instant local audible feedback upon client detection without transmitting any audio or sensitive data.
-   - **Gemini Flash AI Structured Parser**: Pre-dump compliance enrichment converting complex visual return tables into clean structured records.
+   - **Gemini Flash AI Structured Parser**: Pre-dump compliance enrichment converting complex return tables into clean structured records.
    - **Strict Privacy Guard**: Guaranteed exclusion of passwords, emails, phone numbers, bank details, and personal addresses from any telemetry or AI analysis.
-2. **Sera SDC (DOM Crosshair Engine)**:
-   - Lightweight route-gated extension detector (`tracker.js`) waking only upon matching registered tax portal crosshairs.
+   - **Ambient HUD Pill (`VsdcHudPill`)**: Hidden while polling; pulses on capture; displays active client identity, confirmed filing submissions, and engine attribution tags (`[VSDC-X]` vs `[VSDC]`).
+2. **Sera SDC (DOM Crosshair Engine — Extension Layer)**:
+   - Route-gated content script protocols (`itr_protocol.js`, `gst_protocol.js`, `sdc_core.js`) sleeping on non-target routes, aggregating multi-step filing fragments into `sdc_assembler`, and flushing atomic master payloads over direct local HTTP (`http://127.0.0.1:49152`).
+   - *Permanent Retirement*: Sera SAD (API Interceptor / `net_interceptor.js`) and Sera SDS (Dataset Scanner / `sds_core.js`) are permanently retired and completely removed from the workspace.
 
 ---
 
 ## Tracker Dump Subsystem
 
-The **Tracker Dump** workspace (`TrackerDumpWindow`) serves as a central audit repository for all statutory filings captured by **Sera VSDC** and **Sera SDC**:
+The **Tracker Dump** workspace (`TrackerDumpWindow`) serves as a central audit repository for all statutory filings captured by **Sera VSDC / VSDC-X** and **Sera SDC**:
 
-- **Real-Time Data Table**: Displays ID, Client Name & PAN/GSTIN, Service/Portal (`Income Tax (ITR-4)`, `GST (GSTR-3B)`), Period (`AY 2026-27`), ARN/Ack Number, Capture Method (`VSDC_Visual`, `DOM_Tracker`), Timestamp, and Actions.
-- **Color-Coded Status Pill Badges**: Standardized Google Material Design icons (`mdi.*`) and high-contrast color pills across all filing states (Emerald Green for Verified/Processed, Amber Yellow for Pending e-Verification, Cyan Blue for e-Verification actions, Purple for Bank Validated, Orange for In-Progress, and Crimson Red for Rejected/Failed).
+- **Real-Time Data Table**: Displays ID, Client Name & PAN/GSTIN, Service/Portal (`Income Tax (ITR-4)`, `GST (GSTR-3B)`), Period (`AY 2026-27`), ARN/Ack Number, Capture Method (`VSDC-X`, `VSDC_Visual`, `SDC`), Timestamp, and Actions.
+- **Color-Coded Status Pill Badges & Darkened Cell Backgrounds**: Standardized Google Material Design icons (`mdi.*` via QtAwesome) and high-contrast color pills across all filing states with cell background rendering forced via a dedicated `QWidget` wrapper (Option A).
+- **Monotonic Status Promotion Engine**: Submissions only upgrade their lifecycle rank (e.g. Draft -> Submitted -> Verified), ensuring statutory ARNs and valid verifications are never overwritten or downgraded by subsequent navigation passes.
 - **Payload Inspector Drawer**: Click **View Payload** on any row to open the raw JSON drawer, inspecting exact timestamps, timeline sequences, and nested compliance structures.
-- **AI Token & Cost Meter**: Real-time tracking of Gemini AI structured parsing usage and API cost metrics.
+- **AI Token & Cost Meter**: Real-time tracking of Gemini AI structured parsing usage and API cost metrics (`gemini_token_stats.json`).
 - **Multi-Field Filtering & CSV Export**: Real-time search across Client Name, PAN, GSTIN, ARN, Period, or Portal, with capture method and status filter dropdowns, and one-click CSV export.
 - **Row Deletion & Bulk Purge**: Individual **Delete** button per row for immediate removal, plus a **Clear All** action button to wipe stale test dumps.
 - **Automatic Client Resolution**: Automatically maps incoming PAN numbers, token IDs (`CLI-00370`), or MCL Serial numbers to the corresponding client in SQLite.

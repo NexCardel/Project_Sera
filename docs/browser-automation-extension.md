@@ -45,7 +45,11 @@ The injected `fillCredentialsInPage()` function:
 ## Sera FST: SDC DOM Crosshair Assembler & Visual Capture
 
 > [!NOTE]
-> **Sera SAD Retirement**: Sera SAD (Network API Interceptor / `net_interceptor.js`) has been permanently retired and removed from the active workspace. Capture operations rely exclusively on **Sera SDC (DOM Crosshairs)** and **Sera VSDC (Visual Screen Data Capture)**.
+> **Sera SAD & SDS Retirement**:
+> - **Sera SAD** (Network API Interceptor / `net_interceptor.js`) has been permanently retired and removed from the active workspace.
+> - **Sera SDS** (Dataset Scanner / `sds_core.js` and compromise vendor libraries) has been permanently retired and removed from the extension.
+> 
+> Filing capture operations rely exclusively on **Sera SDC (DOM Crosshairs)** within the extension and **Sera VSDC / VSDC-X (Visual Screen Data Capture & UI Automation)** at the OS desktop layer.
 
 - **Sera SDC Assembler (`sdc_core.js` + protocols)**:
   - **In-Memory Aggregation**: Buffers all crosshair events during an active portal session into `sdc_assembler` without emitting premature fragmented entries.

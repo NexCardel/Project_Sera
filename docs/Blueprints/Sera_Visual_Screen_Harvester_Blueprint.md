@@ -259,7 +259,7 @@ For complex return receipts, unassigned identities, or intricate tax computation
 
 ## 11. VSDC-X: UI Automation Exact-Text Capture Mode
 
-**Status:** GST delivered and validated (2026-09-17). ITR not started.
+**Status:** Production (GST delivered 2026-09-17; ITR delivered, validated, and hardened 2026-09-19).
 
 ### 11.1 Why
 
@@ -270,20 +270,28 @@ VSDC-X reads the **Chromium accessibility tree directly** via Windows UI Automat
 ### 11.2 Architecture
 
 ```text
-VSDCRouter._route_gst_crosshair() — once per tick, right after the OCR capture:
+VSDCRouter._route_gst_crosshair() & _route_itr_crosshair() — once per tick, right after the OCR capture:
 
   uia_text, uia_lines = vsdc_uia_text.read_page_text(hwnd)   # ~0.1s, exact text
        │
-       ├─► gst_welcome_calendar   : name/GSTIN/filing_preference — UIA tried first,
-       │                            OCR top_right_profile rescan as fallback
+       ├─► GST Pipeline:
+       │    ├─► gst_welcome_calendar   : name/GSTIN/filing_preference — UIA tried first,
+       │    │                            OCR top_right_profile rescan as fallback
+       │    ├─► gst_form_details       : uia_meta = extract_gst_form_table(uia_text, ...)
+       │    │                            merged OVER the OCR-derived meta — UIA wins per-field
+       │    └─► submission / ARN path : ARN and status each tried via UIA first; consensus
+       │                                 keeps whichever source classifies with higher confidence
        │
-       ├─► gst_form_details       : uia_meta = extract_gst_form_table(uia_text, ...)
-       │                            merged OVER the OCR-derived meta — UIA wins
-       │                            per-field wherever present
-       │
-       └─► submission / ARN path : ARN and status each tried via UIA first;
-                                    status keeps whichever source classifies
-                                    with higher confidence (get_status_rank)
+       └─► ITR Pipeline:
+            ├─► Page Heading Extractor : extract_itr_form_heading() reads exact form ("ITR 4")
+            │                            ahead of wizard URL and body copy
+            ├─► Wizard URL Resolver    : resolve_itr_form_type_from_url() matches form slug
+            ├─► Statutory Filing Type  : extract_itr_filing_type() captures Original/Revised/
+            │                            Belated/Updated u/s 139(8A) into filing_preference
+            ├─► Personal Info Profile  : ValuePattern reads readonly inputs (Full Name, DOB,
+            │                            Primary Phone & Email) directly into DB columns
+            └─► Terminal Ack Gate      : Ack extraction strictly restricted to terminal routes
+                                         (itr_filed_verified, itr_submitted_pending, itr_offline_json_submit)
 ```
 
 The key structural insight: UIA's label/value elements arrive as **adjacent lines in document order** (`"Legal Name -"` then `"NAZRUL HAQUE"` as the next element) — the exact same "label on line N, value on line N+1" shape `extract_gst_form_table()` was already built to handle for OCR line-wrapping. So VSDC-X required **no new parsing logic** — it feeds the identical extractors in `core/vsdc/vsdc_regex.py` exact text instead of noisy OCR text.
@@ -292,32 +300,38 @@ The key structural insight: UIA's label/value elements arrive as **adjacent line
 
 ### 11.3 What's captured, verified against live sessions
 
-All confirmed against real GST portal sessions (multiple different taxpayers), not just local samples:
+All confirmed against real GST and Income Tax portal sessions across multiple live assessees:
 
 | Capability | Status | Notes |
 | :--- | :---: | :--- |
-| Taxpayer name (welcome banner, header pill) | ✅ | Exact, zero reconstruction needed |
-| GSTIN | ✅ | Exact |
-| Filing preference (Quarterly/Monthly) | ✅ | Previously the hardest field to capture at all; now works, including when it renders on a later tick than identity (see 11.4, patience fix) |
-| Full form-table dataset (`gst_form_details`) | ✅ | Legal name, trade name, FY, tax period, status, due date, form type — validated with **legacy OCR fully disabled** (`VSDC_UIA_ONLY=1` diagnostic env var) across two different real filings (GSTR-1, GSTR-3B) |
-| Submission ARN + status | ✅ | Both inline-banner style (GSTR-1) and modal-popup style (GSTR-3B) confirmed working — see 11.4 for an important retracted finding here |
-| Modal dialog content (OTP, filing-success popups) | ✅ | UIA reads straight through Chromium modals — no special handling needed |
+| **GST: Taxpayer name** | ✅ | Exact, zero reconstruction needed |
+| **GST: GSTIN** | ✅ | Exact 15-character validation |
+| **GST: Filing preference** | ✅ | Quarterly vs Monthly captured via patience latch (up to 60 polls) |
+| **GST: Full form-table dataset** | ✅ | Legal name, trade name, FY, tax period, status, due date, form type (GSTR-1, GSTR-3B, CMP-08) |
+| **GST: Submission ARN + status** | ✅ | Inline banners and modal popups confirmed with cross-source consensus (`get_status_rank`) |
+| **ITR: Form Type Heading Resolution** | ✅ | `extract_itr_form_heading()` reads exact form heading ahead of URL; immune to body copy form references |
+| **ITR: Statutory Filing Type** | ✅ | `extract_itr_filing_type()` captures Original, Revised, Belated, and Updated (u/s 139(8A)) into `filing_preference` |
+| **ITR: Profile & Personal Info** | ✅ | UIA `ValuePattern` reads readonly inputs: Full Legal Name, DOB, Primary Phone, Primary Email |
+| **ITR: Offline JSON Flow** | ✅ | Supports `itr_offline_json_upload` and terminal `itr_offline_json_submit` crosshairs |
+| **ITR: False Submission Gating** | ✅ | Terminal submission crosshairs gate ack extraction; prevents previous year acks appearing in wizards from minting false records |
+| **ITR: View Filed Returns Scoping** | ✅ | Only extracts the latest/topmost filing card, preventing past "Processed" status from overriding fresh submissions |
+| **Window Session Isolation** | ✅ | `_WindowSession` prevents multi-window / multi-portal state contamination across browser instances |
+| **Time-Based Static Timeout** | ✅ | 30s wall-clock timeout (`_STATIC_SCREEN_TIMEOUT_SEC`) replaces fragile poll-count cutoffs |
+| **HUD Pill Dynamic Pulse** | ✅ | Hidden while polling; pulses on capture; tags source as `[VSDC-X]` vs `[VSDC]` |
 
-**Known gaps (as of 2026-09-17):**
-1. `gst_audit_history` (Return Filing History and Tracking Status) has **no structured multi-row extraction at all**, from either OCR or VSDC-X — a real page, currently invisible to the pipeline. Not started; would need a new extractor (likely ARN-anchored scanning, since exact table layout hasn't been probed) plus assembler support for recording several historical filings from one page.
-2. Dashboard-level `filing_type`/`tax_period`/`fy` guesses (used while browsing, not the authoritative capture) are still OCR-only in the generic "other GST crosshairs" path. Low priority — it's a background hint, not what gets saved; the authoritative capture on `gst_form_details` already uses VSDC-X fully.
-3. **Notices & Orders** page (show-cause notices, demand orders — deadline-bearing) has no coverage at all. Flagged as the highest-value addition for a compliance practice; scoped but not started.
-4. GSTR-9/9C (Annual Return) — the `gst_form_details` crosshair pattern should match it, but this has never actually been tested against a live annual-return page, which may use a different URL structure (`/annualreturn/...` rather than `/returns/auth/...`).
-5. **ITR is entirely unaddressed** — 100% legacy OCR, VSDC-X not wired in. Same pattern, planned as the next major piece of work.
+**Known gaps & future roadmaps (as of September 2026):**
+1. `gst_audit_history` (Return Filing History and Tracking Status) has **no structured multi-row extraction at all**, from either OCR or VSDC-X — currently invisible to the pipeline. Scoped for future multi-row table assembler.
+2. Dashboard-level `filing_type`/`tax_period`/`fy` guesses (used while browsing, not the authoritative capture) are still OCR-only in the generic "other GST crosshairs" path. Low priority — it's a background hint, not what gets saved; authoritative capture on `gst_form_details` already uses VSDC-X fully.
+3. **Notices & Orders** page (show-cause notices, demand orders — deadline-bearing) has no coverage at all. Flagged as high-value addition for upcoming milestone.
+4. GSTR-9/9C (Annual Return) — the `gst_form_details` crosshair pattern matches it, but requires live annual-return verification when portals open annual filing windows.
 
 ### 11.4 Verified findings and a retraction — read before trusting a "VSDC-X can't read X" conclusion
 
-- **Cross-source status/ARN consensus**: `vsdc_router.py` now classifies status against both UIA and OCR text when both are available and keeps whichever comes back more confident (`get_status_rank`), rather than trusting one source alone. ARN is tried via UIA first (flipped from OCR-first during this pass, for consistency with every other field, once UIA was confirmed reliable there — see the retraction below).
-- **Welcome-page patience fix**: `gst_welcome_calendar` no longer locks the route the instant name+GSTIN are found (which happens almost instantly) — it waits up to `route_poll_count >= 60` ticks for filing preference to also settle before giving up, since that field can render later (e.g. after a popup is dismissed). Costs nothing since the page is polled every ~0.35s regardless.
-- **⚠️ A retracted finding, kept here as a caution:** an early test concluded UIA structurally cannot read static confirmation/success modals (theory: no focus element in the modal means Chromium never syncs that subtree into its accessibility tree). **This was wrong.** It was caused by a bug in the test script itself — `tools/vsdc_x_modal_test.py`'s window-finder was picking up a *stale leftover browser window from a previous script run* instead of the freshly-launched one (separate Playwright launches landed on the same hwnd across runs). Once fixed to close stale windows before launching, the exact same modal captured its ARN correctly on the very first read, every time, across repeated clean runs. **There is no known structural UIA limitation for GST modals.** Lesson for future testing: never trust a "UIA can't read this" conclusion from a test that finds windows by title without verifying it's reading the window *this run* actually launched.
-- **Gap audit fixes applied this pass**: the `gst_filing_success`/`gst_filing_file_success` identity-extraction block previously only ever consulted OCR text even though the exact UIA read was already available — now merges UIA fields the same way `gst_form_details` does.
-- **Persisted capture-method attribution**: `vsdc_assembler.py`'s `record_gst_form_details()` and `record_submission()` now take an `engine` parameter, folded into the saved `capture_method` field (e.g. `VSDC-X_gst_form_details` vs `VSDC_gst_form_details`). Previously this distinction only ever reached an ephemeral console print or HUD toast — it never reached the database. The Tracker Dump table (`ui/windows/tracker_dump_window.py`, `_capture_method_color()`) now color-codes this — blue for VSDC-X (exact), green for legacy VSDC (visual/OCR) — in both the grouped and raw table views.
-- **Live desktop feedback**: the `VSDCHudPill` toast now shows "VSDC-X (Exact)" vs "VSDC (Visual)" as part of the subtitle on identity, form-capture, and submission events, so the source is visible on screen in real time, not just in logs.
+- **Cross-source status/ARN consensus**: `vsdc_router.py` classifies status against both UIA and OCR text when both are available and keeps whichever comes back more confident (`get_status_rank`), rather than trusting one source alone. ARN is tried via UIA first.
+- **Welcome-page patience fix**: `gst_welcome_calendar` and ITR `personal_information` wait up to 60 ticks for trailing async fields (filing preference, DOB, contact cards) before giving up, preventing partial premature lock-in.
+- **Retracted modal finding**: An early test script bug suggested UIA could not read static modals due to stale window handles in `tools/vsdc_x_modal_test.py`. Once fixed, UIA reads through Chromium modals on the very first tick across repeated clean runs.
+- **Persisted capture-method attribution**: `vsdc_assembler.py` logs `VSDC-X_<crosshair_id>` vs `VSDC_<crosshair_id>`, persisted into SQLite `tracker_dump.capture_method` and highlighted in Tracker Dump.
+- **Safe data directory redirection**: In commit `818308b`, `Vsdc_Captures`, token statistics, and user settings were redirected to `%USERPROFILE%\AmanAssociates_Sera` to eliminate Windows `Program Files` permission errors in production.
 
 ### 11.5 Legal/risk posture — do not cross this line
 
@@ -325,8 +339,10 @@ VSDC-X must stay in the same passive-observation risk tier as legacy VSDC, which
 
 ### 11.6 Diagnostic tooling
 
-- `tools/vsdc_uia_probe.py` — standalone accessibility-tree dump of the current foreground browser window. First tool built; use it to see raw UIA output for any new page type before writing an extractor against it.
-- `tools/vsdc_console_watch.py` — runs the real `VSDCWorker` capture pipeline standalone against a live portal session, no database, no main window, nothing saved. Takes a duration argument in seconds.
-- `tools/vsdc_x_modal_test.py` / `tools/vsdc_x_router_gap_test.py` — drive a local test harness (`tests/test_page_gst_submission.html`, a purpose-built simulation of the OTP and Filing-Successful modals) through Playwright, exercising either the raw `vsdc_uia_text` read or the full real router.
-- `VSDC_UIA_ONLY=1` environment variable — diagnostic-only, forces GST OCR text to be discarded immediately after capture (and gates the internal OCR-fallback rescans too), isolating exactly what VSDC-X can do with legacy OCR fully disabled. Off by default, zero effect on normal operation.
+- `tools/vsdc_uia_probe.py` — standalone accessibility-tree dump of the current foreground browser window.
+- `tools/vsdc_console_watch.py` — runs the real `VSDCWorker` capture pipeline standalone against a live portal session without launching the full GUI.
+- `tools/vsdc_x_modal_test.py` / `tools/vsdc_x_router_gap_test.py` — test harness exercising UIA modal extraction and GST routing against `tests/test_page_gst_submission.html`.
+- `tools/vsdc_x_itr_router_gap_test.py` — tests ITR wizard form heading detection, filing type extraction, and terminal submission gating.
+- `VSDC_UIA_ONLY=1` environment variable — diagnostic-only, forces the router to discard OCR text and isolate VSDC-X performance.
+
 

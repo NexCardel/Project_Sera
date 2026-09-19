@@ -1,6 +1,10 @@
 # Government Tax Portals — API Payload & Interception Matrix
 
-This document provides a comprehensive technical reference of the backend REST API endpoints, trigger actions, **multi-layer nested JSON response payloads**, and **Sera SAD (API Detector)** deep extraction mappings across all supported government tax and statutory portals.
+> [!NOTE]
+> **Archival & Schema Reference**:  
+> Sera SAD (`net_interceptor.js`) has been permanently retired and removed from the active workspace. This document is maintained as a technical payload structure and statutory endpoint reference for schema design, offline auditing, and parser validation. Active capture operations are handled by **Sera SDC (DOM Crosshairs)** and **Sera VSDC / VSDC-X (Visual Screen Data Capture & UI Automation)**.
+
+This document provides a comprehensive technical reference of the backend REST API endpoints, trigger actions, **multi-layer nested JSON response payloads**, and schema mappings across all supported government tax and statutory portals.
 
 ---
 
