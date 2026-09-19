@@ -1400,6 +1400,7 @@ class TestItrAckBearingPages(unittest.TestCase):
             allowed,
             {
                 "itr_filed_verified",
+                "itr_everify_success",
                 "itr_everify_return",
                 "itr_submitted_pending",
                 "itr_view_filed_returns",
@@ -1455,6 +1456,179 @@ class TestUpdatedReturnFlowRouting(unittest.TestCase):
         for tail, cid in expected.items():
             self.assertEqual(match_url_crosshair(self.BASE + tail).id, cid, tail)
 
+
+class TestEVerifyReturnWizard(unittest.TestCase):
+    """
+    The e-Verify Return wizard, where a return filed under "Verify Later" is finally
+    e-Verified. All three of its steps - pick the return, choose the method / enter the
+    OTP, and the "Return e-Verified Successfully" confirmation - are served at the SAME
+    Angular route (.../eVerifyReturn/eVerifyReturn-al), so which step the user is on can
+    only be told from the page content.
+    """
+
+    URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/eVerifyReturn/eVerifyReturn-al"
+    TITLE = "Income Tax Portal, Government of India - Google Chrome"
+
+    # The stepper is drawn on every step, including the two where nothing is verified yet.
+    STEPPER = (
+        "Select The Return To Be Verified\n"
+        "Select Method For Return Verification\n"
+        "Return Successfully Verified\n"
+    )
+    PICKER = STEPPER + (
+        "e-Verify Return\n"
+        "PAN: AHJPR0846B  Assessment Year 2026-27  ITR-4\n"
+        "Acknowledgement Number 598290000150925\n"
+        "e-Verify\n"
+    )
+    OTP_STEP = STEPPER + (
+        "Aadhaar OTP\n"
+        "EVC through Net Banking\n"
+        "Enter the 6-digit OTP received on your mobile\n"
+    )
+    # Exactly as the confirmation screen reads: no acknowledgement number anywhere on it.
+    CONFIRMATION = STEPPER + (
+        "Return e-Verified Successfully\n"
+        "Your ITR-4 Assessment Year 2026-27 has been successfully e-verified\n"
+        "Transaction ID: EVERIFY000944284493\n"
+        "Download Return  Download Acknowledgement  Go To Dashboard\n"
+    )
+
+    def _router(self, assembler=None):
+        from unittest.mock import MagicMock
+        from PIL import Image
+        from core.vsdc.vsdc_router import VSDCRouter
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+
+        self.mock_ocr = MagicMock()
+        self.mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
+        router = VSDCRouter(
+            ocr_engine=self.mock_ocr,
+            assembler=assembler or VisualSessionAssembler(),
+            on_activity=lambda *a: None,
+        )
+        router.get_foreground_info = MagicMock(return_value=(4242, self.TITLE, "chrome.exe"))
+        router.extract_browser_url = MagicMock(return_value=self.URL)
+        return router
+
+    def _show(self, router, text):
+        """Renders one screen of the wizard and runs a single tick over it."""
+        router.scan_image_cache = None
+        self.mock_ocr.scan_image.return_value = {"text": text, "lines": text.split("\n")}
+        # Each step repaints the same route; force the tick to re-read rather than
+        # treating the screen as already captured.
+        router.route_captured = False
+        router.last_screen_hash = None
+        router.static_since = None
+        return router.evaluate_tick()
+
+    def test_all_three_steps_share_the_wizard_crosshair(self):
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        self.assertEqual(match_url_crosshair(self.URL).id, "itr_everify_return")
+
+    def test_success_route_matches_the_confirmation_crosshair(self):
+        # Should the portal ever give the confirmation a route of its own, it must land
+        # on itr_everify_success rather than on the generic wizard crosshair.
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        base = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/"
+        for tail in ("eVerifyReturn/eVerifyReturn-success", "eVerifyReturn-confirmation"):
+            self.assertEqual(match_url_crosshair(base + tail).id, "itr_everify_success", tail)
+
+    def test_confirmation_crosshair_is_a_terminal_submission(self):
+        from core.vsdc.vsdc_crosshairs import get_crosshair
+        c = get_crosshair("itr_everify_success")
+        self.assertIsNotNone(c)
+        self.assertTrue(c.is_terminal_submission)
+        self.assertEqual(c.protocol, "Income Tax")
+
+    def test_picker_captures_nothing_but_remembers_the_ack(self):
+        router = self._router()
+        router.assembler.client_pan = "AHJPR0846B"
+        router.assembler.client_name = "JAHANGIR MOLLA"
+
+        self.assertIsNone(self._show(router, self.PICKER))
+        # The wizard's own "Return Successfully Verified" step label must never be read
+        # as a completed verification.
+        self.assertEqual(router.assembler.records, {})
+        # ...but the ack of the return about to be verified is worth holding on to.
+        self.assertEqual(router._everify_pending_ack, "598290000150925")
+
+    def test_otp_step_captures_nothing(self):
+        router = self._router()
+        router.assembler.client_pan = "AHJPR0846B"
+        router.assembler.client_name = "JAHANGIR MOLLA"
+
+        self.assertIsNone(self._show(router, self.OTP_STEP))
+        self.assertEqual(router.assembler.records, {})
+
+    def test_confirmation_promotes_the_filing_to_e_verified(self):
+        router = self._router()
+        router.assembler.client_pan = "AHJPR0846B"
+        router.assembler.client_name = "JAHANGIR MOLLA"
+
+        self._show(router, self.PICKER)
+        payload = self._show(router, self.CONFIRMATION)
+
+        self.assertIsNotNone(payload, "the confirmation screen must produce a capture")
+        self.assertEqual(payload["status"], "Submitted (e-Verified)")
+        self.assertEqual(payload["filing_type"], "ITR-4")
+        self.assertEqual(payload["pan"], "AHJPR0846B")
+        # The confirmation never reprints the ack - it comes from the step before it.
+        self.assertEqual(payload["arn"], "598290000150925")
+        # Stored under the confirmation crosshair, not the generic wizard route.
+        self.assertIn("itr_everify_success", payload["capture_method"])
+        # The Transaction ID is provenance for the promotion, never an acknowledgement.
+        self.assertIn("EVERIFY000944284493", payload["raw_text"])
+        self.assertNotEqual(payload["arn"], "EVERIFY000944284493")
+
+    def test_confirmation_uses_the_ack_already_on_record_when_the_picker_was_missed(self):
+        # The same session filed the return and then e-Verified it, so the ack is already
+        # held against the filing even if the picker step was never read.
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        assembler = VisualSessionAssembler()
+        assembler.portal = "Income Tax"
+        assembler.client_pan = "AHJPR0846B"
+        assembler.client_name = "JAHANGIR MOLLA"
+        assembler.record_submission(
+            ack_number="598290000150925",
+            status="Submitted (Not e-Verified)",
+            filing_type="ITR-4",
+            period_label="2026-27",
+            crosshair_id="itr_submitted_pending",
+        )
+        router = self._router(assembler=assembler)
+
+        payload = self._show(router, self.CONFIRMATION)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["arn"], "598290000150925")
+        self.assertEqual(payload["status"], "Submitted (e-Verified)")
+
+    def test_a_picker_listing_several_returns_is_too_ambiguous_to_read(self):
+        router = self._router()
+        router.assembler.client_pan = "AHJPR0846B"
+        router.assembler.client_name = "JAHANGIR MOLLA"
+
+        many = self.STEPPER + (
+            "Acknowledgement Number 598290000150925  ITR-4  2026-27\n"
+            "Acknowledgement Number 163894330310826  ITR-1  2025-26\n"
+        )
+        self.assertIsNone(self._show(router, many))
+        self.assertIsNone(router._everify_pending_ack)
+
+    def test_the_held_ack_never_leaks_between_browser_windows(self):
+        from unittest.mock import MagicMock
+        router = self._router()
+        router.assembler.client_pan = "AHJPR0846B"
+        router.assembler.client_name = "JAHANGIR MOLLA"
+        self._show(router, self.PICKER)
+        self.assertEqual(router._everify_pending_ack, "598290000150925")
+
+        # A second browser window, on the same wizard for a different taxpayer, must
+        # start with no ack of its own.
+        router.get_foreground_info = MagicMock(return_value=(9999, self.TITLE, "chrome.exe"))
+        self._show(router, self.STEPPER + "e-Verify Return\n")
+        self.assertIsNone(router._everify_pending_ack)
 
 
 if __name__ == "__main__":

@@ -294,6 +294,39 @@ class TestVSDCRegex(unittest.TestCase):
         "Let's Get Started",
     ]
 
+
+    def test_everify_transaction_id_is_read_but_is_never_an_ack(self):
+        from core.vsdc.vsdc_regex import (
+            extract_everify_transaction_id,
+            find_ack_candidates,
+            repair_numeric_ack,
+        )
+        page = (
+            "Return e-Verified Successfully\n"
+            "Your ITR-4 Assessment Year 2026-27 has been successfully e-verified\n"
+            "Transaction ID: EVERIFY000944284493\n"
+        )
+        self.assertEqual(extract_everify_transaction_id(page), "EVERIFY000944284493")
+        # It identifies the VERIFICATION, not the filing: its 12-digit tail must never be
+        # mistaken for a 15-digit acknowledgement number.
+        self.assertEqual(find_ack_candidates(page), [])
+        self.assertIsNone(repair_numeric_ack(page))
+        self.assertIsNone(extract_everify_transaction_id("Return e-Verified Successfully"))
+
+    def test_find_ack_candidates_reports_every_distinct_ack(self):
+        from core.vsdc.vsdc_regex import find_ack_candidates
+        # One pending return: unambiguous.
+        self.assertEqual(
+            find_ack_candidates("Acknowledgement Number 598290000150925 ITR-4"),
+            ["598290000150925"],
+        )
+        # Several: the e-Verify picker cannot say which one is about to be verified.
+        self.assertEqual(
+            find_ack_candidates("598290000150925 ITR-4\n163894330310826 ITR-1\n598290000150925"),
+            ["598290000150925", "163894330310826"],
+        )
+        self.assertEqual(find_ack_candidates(""), [])
+
     def test_itr_filing_type_is_a_different_axis_from_the_form(self):
         from core.vsdc.vsdc_regex import extract_itr_filing_type, extract_itr_form_heading
         # One page states BOTH: the form (ITR-4) and the filing type (Updated).

@@ -2,8 +2,8 @@
 core/vsdc/vsdc_crosshairs.py — Registered Crosshairs for Visual SDC (VSDC)
 ========================================================================
 1-to-1 parity with Sera SDC (Sera DOM Crosshair) protocols:
-- Income Tax Return (ITR) Protocol (8 crosshairs)
-- GST Portal Protocol (6 crosshairs)
+- Income Tax Return (ITR) Protocol (12 crosshairs)
+- GST Portal Protocol (8 crosshairs)
 """
 
 import re
@@ -34,6 +34,26 @@ GST_HOST_PATTERN = re.compile(r"(?:gst\.gov\.in|services\.gst\.gov\.in|return\.g
 # ─── 1. Income Tax (ITR) Protocol Crosshairs ──────────────────────────────────
 ITR_CROSSHAIRS: List[CrosshairDefinition] = [
     CrosshairDefinition(
+        id="itr_everify_success",
+        protocol="Income Tax",
+        # "Return e-Verified Successfully" - the last step of the e-Verify wizard, where a
+        # return filed under "Verify Later" finally becomes e-Verified.
+        #
+        # The wizard is an Angular SPA: all three of its steps (pick the return, choose
+        # the method / enter the OTP, and this confirmation) are served at the SAME route,
+        # .../eVerifyReturn/eVerifyReturn-al, so the URL alone CANNOT tell them apart.
+        # This pattern therefore only covers a distinctly-named success route, should the
+        # portal ever add one; the confirmation as it ships today is reached by content
+        # promotion in the router - itr_everify_return is promoted to this crosshair the
+        # moment the page itself says the return was verified
+        # (see _route_itr_crosshair / has_everify_success_evidence).
+        pattern=re.compile(r"(?:e-?verify(?:return)?|everify)[-_/]?(?:success|confirmation|verified|complete[d]?)", re.IGNORECASE),
+        target_crop="receipt_card",
+        description="Return e-Verified successfully (Verify Later completion)",
+        host_pattern=ITR_HOST_PATTERN,
+        is_terminal_submission=True,
+    ),
+    CrosshairDefinition(
         id="itr_filed_verified",
         protocol="Income Tax",
         pattern=re.compile(r"(?:fo-e-verify-now-success|fo-return-success|e-verify.*success|filing-success|filing.*confirmation.*verified|return.?success)", re.IGNORECASE),
@@ -47,7 +67,7 @@ ITR_CROSSHAIRS: List[CrosshairDefinition] = [
         protocol="Income Tax",
         pattern=re.compile(r"(?:eVerifyReturn|e-verify-return|everifyreturn)", re.IGNORECASE),
         target_crop="receipt_card",
-        description="Step 3 Return e-verification completion page",
+        description="e-Verify Return wizard (return picker, method/OTP, confirmation)",
         host_pattern=ITR_HOST_PATTERN,
         is_terminal_submission=True,
     ),
@@ -219,6 +239,17 @@ GST_CROSSHAIRS: List[CrosshairDefinition] = [
 
 # Unified crosshair catalog
 ALL_CROSSHAIRS: List[CrosshairDefinition] = ITR_CROSSHAIRS + GST_CROSSHAIRS
+
+CROSSHAIRS_BY_ID: Dict[str, CrosshairDefinition] = {c.id: c for c in ALL_CROSSHAIRS}
+
+
+def get_crosshair(crosshair_id: str) -> Optional[CrosshairDefinition]:
+    """
+    Looks a crosshair up by id, for the routes a URL alone cannot identify. The e-Verify
+    wizard is the case this exists for: its three steps share one Angular route, so the
+    confirmation step is resolved from the page content, not the address bar.
+    """
+    return CROSSHAIRS_BY_ID.get(crosshair_id)
 
 
 def match_url_crosshair(url: str, portal_hint: Optional[str] = None) -> Optional[CrosshairDefinition]:

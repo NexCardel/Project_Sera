@@ -14,7 +14,7 @@ import re
 from typing import Dict, List, Optional, Tuple, Any, Callable
 
 import comtypes.client
-from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS
+from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
@@ -29,6 +29,8 @@ from .vsdc_regex import (
     resolve_itr_form_type_from_url,
     strip_everify_stepper,
     has_everify_success_evidence,
+    extract_everify_transaction_id,
+    find_ack_candidates,
     extract_mobile,
     extract_email,
     extract_assessment_year,
@@ -57,6 +59,10 @@ from .vsdc_name_parser import (
 )
 from .vsdc_beeper import PANBeeper
 from .vsdc_gemini_parser import parse_compliance_with_gemini
+
+# The e-Verify confirmation step is resolved from page content, never from the URL
+# (all three wizard steps share one Angular route) - see _route_itr_crosshair.
+EVERIFY_SUCCESS_CROSSHAIR = get_crosshair("itr_everify_success")
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -133,6 +139,11 @@ class _WindowSession:
         self.was_page_loading: bool = False
         self._loading_notice_shown: bool = False
         self._last_announced_selection: Optional[Tuple[str, Tuple[Optional[str], ...]]] = None
+        # The ack of the return currently being e-Verified in THIS window, read off an
+        # earlier step of the e-Verify wizard, plus the last Transaction ID announced
+        # for it - see _route_itr_crosshair.
+        self._everify_pending_ack: Optional[str] = None
+        self._everify_last_txn_id: Optional[str] = None
         self.last_seen: float = 0.0
 
 
@@ -146,6 +157,7 @@ _SESSION_FIELDS: Tuple[str, ...] = (
     "last_screen_hash", "static_since", "last_logged_name", "last_logged_pan",
     "last_logged_pref", "last_logged_dob", "burst_ticks_remaining",
     "was_page_loading", "_loading_notice_shown", "_last_announced_selection",
+    "_everify_pending_ack", "_everify_last_txn_id",
 )
 
 # Generous timeout before VSDC stops re-scanning a screen whose visual
@@ -236,6 +248,13 @@ class VSDCRouter:
         # Portal pages already reported as matching no crosshair, so each unknown page
         # is logged once (with its link) instead of on every poll tick.
         self._logged_unmatched_urls: set = set()
+
+        # The acknowledgement of the return currently being e-Verified, read off an
+        # earlier step of the e-Verify wizard. The confirmation screen names the form and
+        # assessment year but not the ack, and the filing it promotes was usually
+        # submitted in a previous session, so this is what the promotion keys on.
+        self._everify_pending_ack: Optional[str] = None
+        self._everify_last_txn_id: Optional[str] = None
 
         # Diagnostic-only: when set, OCR text is discarded the instant it's
         # captured (before any extractor sees it), for both GST and ITR,
@@ -328,6 +347,19 @@ class VSDCRouter:
         rather than from this tick's own fresh uia_fields_used list.
         """
         return " • VSDC-X (Exact)" if (capture_method or "").startswith("VSDC-X") else " • VSDC (Visual)"
+
+    def _known_session_ack(self) -> Optional[str]:
+        """
+        The acknowledgement number this session has already recorded for the taxpayer,
+        used by the e-Verify confirmation screen (which never reprints it). Only answers
+        when the session holds exactly ONE ack - more than one means several returns were
+        seen and nothing here says which of them was just verified.
+        """
+        acks = {
+            rec.arn for rec in self.assembler.records.values()
+            if rec.arn and rec.arn != "N/A"
+        }
+        return acks.pop() if len(acks) == 1 else None
 
     # ── Per-window session isolation ───────────────────────────────────────────
 
@@ -689,6 +721,8 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.static_since = None
             self.last_crosshair_id = None
+            self._everify_pending_ack = None
+            self._everify_last_txn_id = None
             self.route_poll_count = 0
             if has_active_session:
                 self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
@@ -987,27 +1021,48 @@ class VSDCRouter:
             if profile_settled or self.route_poll_count >= 60:
                 self.route_captured = True
 
-        # e-Verify return picker (…/eVerifyReturn/eVerifyReturn-al, "Step 1: select the
-        # return to verify"): a list of returns awaiting verification, not a submission
-        # or verification confirmation. Identity above is still read; form/period/ack/
-        # status are deliberately never captured from it.
-        if matched_crosshair.id == "itr_everify_return" and re.search(r"everifyreturn-al\b", url, re.IGNORECASE):
-            self.route_captured = True
-            return None
-
-        # Every other page of the e-Verify wizard (method selection, OTP/EVC entry, and
-        # the final confirmation) shares the same stepper, whose "Return Successfully
-        # Verified" label would otherwise be classified as a completed verification on
-        # every step. Strip it, then only proceed once the page genuinely says the
-        # return was verified; until then this is simply a step in progress (the user
-        # entering an OTP), so nothing is captured and the route is NOT latched - it
-        # keeps being re-read and picks up the confirmation the moment it appears.
+        # The whole e-Verify wizard - the return picker (…/eVerifyReturn/eVerifyReturn-al,
+        # "Step 1: select the return to verify"), the method/OTP step, and the final
+        # "Return e-Verified Successfully" confirmation - is ONE Angular route. Every one
+        # of those steps also draws the same three-label stepper, whose last label
+        # ("Return Successfully Verified") describes a step still to come and would
+        # otherwise read as a completed verification on the picker and OTP pages. Strip
+        # it first, then let the page's own words decide which step this actually is.
         if matched_crosshair.id == "itr_everify_return":
             uia_text = strip_everify_stepper(uia_text)
             uia_lines = [ln for ln in uia_lines if strip_everify_stepper(ln).strip()]
             full_text = strip_everify_stepper(full_text)
+
             if not has_everify_success_evidence(uia_text + "\n" + full_text):
+                # Still in progress: the picker, or the user entering an OTP/EVC. Nothing
+                # is captured, and the route is deliberately NOT latched - it keeps being
+                # re-read so the confirmation is picked up the moment it renders.
+                #
+                # One thing IS worth remembering from the steps before it: the 15-digit
+                # acknowledgement of the return being verified. The confirmation screen
+                # states the form and year but NOT the ack, and the filing it upgrades was
+                # usually submitted in an earlier session ("Verify Later"), so without this
+                # the promotion has no acknowledgement to key on. Held only when the page
+                # shows exactly ONE ack - a picker listing several pending returns is
+                # ambiguous about which one is being verified, so it is left alone.
+                acks = find_ack_candidates(uia_text) or find_ack_candidates(full_text)
+                if len(acks) == 1 and acks[0] != self._everify_pending_ack:
+                    self._everify_pending_ack = acks[0]
+                    print(f"[VSDC Router] e-Verify wizard: holding Ack {acks[0]} "
+                          f"pending verification{source_tag}")
                 return None
+
+            # Confirmed: the page itself says the return was verified. Promote to the
+            # dedicated confirmation crosshair so the capture is stored and shown as
+            # "itr_everify_success" rather than as the generic wizard route.
+            matched_crosshair = EVERIFY_SUCCESS_CROSSHAIR
+            everify_txn_id = (
+                extract_everify_transaction_id(uia_text)
+                or extract_everify_transaction_id(full_text)
+            )
+            if everify_txn_id and everify_txn_id != self._everify_last_txn_id:
+                self._everify_last_txn_id = everify_txn_id
+                print(f"[VSDC Router] e-Verification Transaction ID: {everify_txn_id}{source_tag}")
 
         # Form type, most trustworthy source first:
         #   1. the page's own heading ("ITR 4 - (Income Tax Return 4)") - what the
@@ -1093,6 +1148,18 @@ class VSDCRouter:
                     if not period:
                         period = extract_assessment_year(f_text)
 
+        # The e-Verify confirmation screen names the form and assessment year but never
+        # reprints the acknowledgement number, so fall back to the ack held from an
+        # earlier step of this same wizard, and then to the one already on record for
+        # this filing in this session. Without an ack the capture cannot complete
+        # (_is_dataset_complete), so a verification whose ack was never seen stays inert
+        # rather than promoting some other return.
+        if not ack_number and matched_crosshair.id == "itr_everify_success":
+            ack_number = self._everify_pending_ack or self._known_session_ack()
+            if ack_number:
+                print(f"[VSDC Router] e-Verify confirmation: promoting Ack {ack_number} "
+                      f"to e-Verified{source_tag}")
+
         # Check if page is currently in an asynchronous loading state
         if is_page_loading(full_text):
             self.was_page_loading = True
@@ -1127,6 +1194,7 @@ class VSDCRouter:
         is_sub_crosshair = matched_crosshair.is_terminal_submission or matched_crosshair.id in (
             "itr_filed_verified",
             "itr_everify_return",
+            "itr_everify_success",
             "itr_submitted_pending",
         )
 
@@ -1163,6 +1231,9 @@ class VSDCRouter:
                 self.notify_activity("capture", f"Captured {form_lbl}{period_lbl}", f"{name_part}Ack: {ack_number}{source_tag}")
                 if uia_fields_used:
                     print(f"[VSDC-X] itr {matched_crosshair.id}: UIA provided {', '.join(uia_fields_used)}")
+
+                if matched_crosshair.id == "itr_everify_success":
+                    self._everify_pending_ack = None
 
                 if is_sub_crosshair:
                     # Seal and flush filing payload! seal_and_flush() can only fire
@@ -1226,6 +1297,8 @@ class VSDCRouter:
             self.last_screen_hash = None
             self.static_since = None
             self.last_crosshair_id = None
+            self._everify_pending_ack = None
+            self._everify_last_txn_id = None
             self.route_poll_count = 0
             self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
             return flushed

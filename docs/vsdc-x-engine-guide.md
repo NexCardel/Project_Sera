@@ -136,8 +136,26 @@ On `personal_information` and profile pages:
 
 ### 5.4 False Submission Protection on Filing Wizards
 Prior to hardening, intermediate wizard pages (such as `fo-schedules-summary` and `fo-filing-status-questionnaire` during revised returns) caused premature captures because previous returns' acknowledgment numbers appeared on-screen.
-- **Terminal Submission Gating**: 15-digit ITR Ack extraction is strictly restricted to `is_terminal_submission` crosshair routes (`itr_filed_verified`, `itr_submitted_pending`, `itr_offline_json_submit`).
+- **Terminal Submission Gating**: 15-digit ITR Ack extraction is strictly restricted to `is_terminal_submission` crosshair routes (`itr_filed_verified`, `itr_everify_success`, `itr_submitted_pending`, `itr_offline_json_submit`).
 - **View Filed Returns Scoping**: Only extracts the topmost/latest return card on `view-filed-returns`, preventing historical `"Processed"` cards from overriding a newly submitted `"Pending for e-verification"` status.
+
+
+### 5.5 e-Verify Return Wizard & the `itr_everify_success` Crosshair
+A return filed under **"Verify Later"** is recorded as `Submitted (Not e-Verified)` (rank 3) and is only promoted to `Submitted (e-Verified)` (rank 4) when the taxpayer completes the **e-Verify Return** wizard — usually in a later session, days after filing.
+
+All three steps of that wizard are served at **one Angular route**, `.../dashboard/eVerifyReturn/eVerifyReturn-al`:
+
+| Step | On screen | VSDC-X behaviour |
+| :--- | :--- | :--- |
+| 1. Select the return | List of returns awaiting verification, each with its 15-digit ack | Captures nothing. Holds the ack **only when exactly one** is listed (`find_ack_candidates()`); several pending returns are ambiguous and are left alone. |
+| 2. Select method / enter OTP | Aadhaar OTP, EVC, net banking | Captures nothing. The route is deliberately **not latched**, so it keeps being re-read. |
+| 3. Confirmation | *"Return e-Verified Successfully"* + `Transaction ID: EVERIFY…` | Promoted to **`itr_everify_success`** and captured as `Submitted (e-Verified)`. |
+
+- **Content promotion, not URL matching**: because the URL cannot separate the three steps, `itr_everify_return` is promoted to `itr_everify_success` the moment `has_everify_success_evidence()` confirms the page itself says the return was verified. The crosshair's own pattern only covers a distinctly-named success route, should the portal ever add one.
+- **Stepper suppression**: the wizard draws *"Return Successfully Verified"* as a step label on **every** step, including the picker and the OTP page. `strip_everify_stepper()` removes all three labels before the status classifier sees the text — without it, every step reads as a completed verification.
+- **Acknowledgement sourcing**: the confirmation screen states the form and assessment year but **never reprints the ack**. It is taken from, in order: the page itself → the ack held from step 1 of this wizard → the single ack already on record for this session (`_known_session_ack()`). With no ack the capture stays inert, since `_is_dataset_complete()` requires one — a verification whose ack was never seen will never promote some other return by guesswork.
+- **Transaction ID**: `extract_everify_transaction_id()` reads the `EVERIFY…` receipt number as provenance for the promotion. It identifies the *verification event*, not the filing, and is never written to `arn_number`.
+- **Window isolation**: the held ack lives on `_WindowSession` (`_everify_pending_ack`), so two browser windows on the wizard for different taxpayers can never hand each other the wrong acknowledgement.
 
 ---
 

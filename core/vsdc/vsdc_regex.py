@@ -398,6 +398,48 @@ def has_everify_success_evidence(text: str) -> bool:
     return bool(_EVERIFY_SUCCESS_EVIDENCE.search(strip_everify_stepper(text)))
 
 
+# The e-Verification receipt number the confirmation screen prints under the success
+# banner ("Transaction ID: EVERIFY000944284493"). It identifies the VERIFICATION event,
+# not the filing, so it is never a substitute for the 15-digit acknowledgement number -
+# it rides along in the payload as provenance for the status promotion.
+_EVERIFY_TXN_ID = re.compile(
+    r"(?:Transaction\s*(?:ID|No\.?|Number)\s*[:#\-]?\s*)?\b(EVERIFY[0-9OoIl|!DQBSsZzgq]{8,24})\b",
+    re.IGNORECASE,
+)
+
+
+def extract_everify_transaction_id(text: str) -> Optional[str]:
+    """
+    Extracts the e-Verification Transaction ID (EVERIFY + 8-24 digits) from the
+    confirmation screen, repairing the usual OCR digit confusions in the numeric tail.
+    """
+    if not text:
+        return None
+    m = _EVERIFY_TXN_ID.search(text)
+    if not m:
+        return None
+    token = m.group(1)
+    tail = "".join(DIGIT_FIX_MAP.get(c, c) for c in token[7:])
+    return ("EVERIFY" + tail) if tail.isdigit() else None
+
+
+def find_ack_candidates(text: str) -> List[str]:
+    """
+    Every DISTINCT 15-digit acknowledgement number visible in the text, in the order
+    they appear. repair_numeric_ack() answers "which ack is on this page" and stops at
+    the first hit; this answers "how many are on it", which is what the e-Verify return
+    picker needs - a list of several pending returns is ambiguous and must not be read,
+    while a single one is unambiguously the return about to be verified.
+    """
+    if not text:
+        return []
+    out: List[str] = []
+    for tok in re.findall(r"\b\d{15}\b", text):
+        if tok not in out:
+            out.append(tok)
+    return out
+
+
 def extract_gstin(text: str) -> Optional[str]:
     """
     Extracts a 15-character Goods and Services Tax Identification Number (GSTIN).

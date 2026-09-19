@@ -6,6 +6,8 @@ Zero-browser-footprint visual scraping and session assembly subsystem for Projec
 
 from .vsdc_crosshairs import (
     ALL_CROSSHAIRS,
+    CROSSHAIRS_BY_ID,
+    get_crosshair,
     ITR_CROSSHAIRS,
     GST_CROSSHAIRS,
     CrosshairDefinition,
@@ -13,6 +15,8 @@ from .vsdc_crosshairs import (
 )
 from .vsdc_regex import (
     repair_numeric_ack,
+    extract_everify_transaction_id,
+    find_ack_candidates,
     repair_gst_arn,
     extract_pan,
     extract_gstin,
@@ -48,11 +52,15 @@ from .vsdc_session_logger import VSDCSessionLogger
 
 __all__ = [
     "ALL_CROSSHAIRS",
+    "CROSSHAIRS_BY_ID",
+    "get_crosshair",
     "ITR_CROSSHAIRS",
     "GST_CROSSHAIRS",
     "CrosshairDefinition",
     "match_url_crosshair",
     "repair_numeric_ack",
+    "extract_everify_transaction_id",
+    "find_ack_candidates",
     "repair_gst_arn",
     "extract_pan",
     "extract_gstin",
