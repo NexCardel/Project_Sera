@@ -132,6 +132,7 @@ class _WindowSession:
         self.burst_ticks_remaining: int = 0
         self.was_page_loading: bool = False
         self._loading_notice_shown: bool = False
+        self._last_announced_selection: Optional[Tuple[str, Tuple[Optional[str], ...]]] = None
         self.last_seen: float = 0.0
 
 
@@ -144,7 +145,7 @@ _SESSION_FIELDS: Tuple[str, ...] = (
     "has_flushed_current_route", "route_captured", "route_poll_count",
     "last_screen_hash", "static_since", "last_logged_name", "last_logged_pan",
     "last_logged_pref", "last_logged_dob", "burst_ticks_remaining",
-    "was_page_loading", "_loading_notice_shown",
+    "was_page_loading", "_loading_notice_shown", "_last_announced_selection",
 )
 
 # Generous timeout before VSDC stops re-scanning a screen whose visual
@@ -218,6 +219,20 @@ class VSDCRouter:
         # only the log line was spammy.
         self._loading_notice_shown: bool = False
 
+        # HUD events raised during a tick are held and sent when the tick ends, so each
+        # one can carry the form / filing type / period as they stand AFTER the whole
+        # page was read - an identity toast is often raised before the same tick has
+        # read the form and period off the page. See _flush_hud_events().
+        self._hud_buffering: bool = False
+        # (event_type, title, subtitle, context snapshot taken when the event was raised)
+        self._hud_buffer: List[Tuple[str, str, str, Dict[str, Optional[str]]]] = []
+        # Context of the HUD event currently being delivered to on_activity - see
+        # activity_context. Kept off the callback's own signature so the long-standing
+        # 3-argument on_activity(event_type, title, subtitle) contract is unchanged.
+        self._activity_context: Dict[str, Optional[str]] = {}
+        # (session_id, (form, filing_pref, period)) last shown on the HUD for this window.
+        self._last_announced_selection: Optional[Tuple[str, Tuple[Optional[str], ...]]] = None
+
         # Portal pages already reported as matching no crosshair, so each unknown page
         # is logged once (with its link) instead of on every poll tick.
         self._logged_unmatched_urls: set = set()
@@ -237,11 +252,72 @@ class VSDCRouter:
 
     def notify_activity(self, event_type: str, title: str, subtitle: str = ""):
         """Emits real-time visual indicator event (route, identity, capture, flush)."""
+        snapshot = self.current_selection_context()
+        if self._hud_buffering:
+            self._hud_buffer.append((event_type, title, subtitle, snapshot))
+            return
+        self._emit_activity(event_type, title, subtitle, snapshot)
+
+    @property
+    def activity_context(self) -> Dict[str, Optional[str]]:
+        """The form / filing type / period for the HUD event being delivered right now.
+        Only meaningful when read from inside an on_activity callback."""
+        return dict(self._activity_context)
+
+    def _emit_activity(self, event_type: str, title: str, subtitle: str = "", context=None):
+        self._activity_context = dict(context or {})
         if self.on_activity and callable(self.on_activity):
             try:
                 self.on_activity(event_type, title, subtitle)
             except Exception as e:
                 print(f"[VSDC Router] on_activity callback error: {e}")
+
+    def current_selection_context(self) -> Dict[str, Optional[str]]:
+        """
+        The return currently being worked on in this window: its form (ITR-4 / GSTR-3B),
+        its filing type or preference (Original/Revised/Belated/Updated, or GST's
+        Monthly/Quarterly) and its period. The HUD shows these on every event.
+        """
+        a = self.assembler
+        return {
+            "portal": self.active_portal,
+            "form": a.current_filing_type,
+            "filing_pref": a.filing_preference,
+            "period": a.current_period_label,
+        }
+
+    def _flush_hud_events(self) -> None:
+        """
+        Sends this tick's held HUD events, each carrying the return context (see the
+        merge note below). If the tick newly captured a form, filing
+        type or period but raised no event of its own (e.g. the form-selection page,
+        which has nothing else to announce), one "Return Details Captured" event is
+        added so that capture is never silent.
+
+        "Newly" is judged per session: a fresh session (new session_id) starts from
+        nothing, so re-selecting the same form for the next client is announced again.
+        A field being cleared (back on the dashboard) is not announced; it gaining a
+        value, or changing to a different one, is.
+        """
+        events, self._hud_buffer = self._hud_buffer, []
+        ctx = self.current_selection_context()
+        fields = (ctx["form"], ctx["filing_pref"], ctx["period"])
+        session_id = self.assembler.session_id
+        last = self._last_announced_selection
+        previous = last[1] if last and last[0] == session_id else (None, None, None)
+        gained = any(new and new != old for new, old in zip(fields, previous))
+        self._last_announced_selection = (session_id, fields)
+        if gained and not events:
+            ident = self.assembler.client_name or self.assembler.client_pan or self.assembler.gstin or ""
+            events.append(("update", "Return Details Captured", ident, ctx))
+        # Each field prefers its end-of-tick value (so an identity toast raised before
+        # this page's form and period were read still shows them), falling back to the
+        # snapshot taken when the event was raised (so a capture toast still shows the
+        # return it captured, even though sealing that capture cleared the selection
+        # again before the tick ended).
+        for event_type, title, subtitle, snapshot in events:
+            merged = {k: (ctx.get(k) or snapshot.get(k)) for k in set(ctx) | set(snapshot)}
+            self._emit_activity(event_type, title, subtitle, merged)
 
     @staticmethod
     def _source_tag_from_capture_method(capture_method: Optional[str]) -> str:
@@ -463,9 +539,16 @@ class VSDCRouter:
         # is this hwnd's own, never another window's.
         session = self._get_or_create_session(hwnd)
         self._load_session(session)
+        self._hud_buffer = []
+        self._hud_buffering = True
         try:
             return self._evaluate_tick_locked(hwnd, title, title_lower, proc_name)
         finally:
+            # Flushed while this window's session is still loaded, so every event gets
+            # this window's form/period - and before saving, so the "already shown"
+            # marker it updates is stored with the session.
+            self._hud_buffering = False
+            self._flush_hud_events()
             self._save_session(session)
             self._prune_stale_sessions(current_hwnd=hwnd)
 
@@ -963,12 +1046,6 @@ class VSDCRouter:
             if itr_filing_type and itr_filing_type != self.last_logged_pref:
                 self.last_logged_pref = itr_filing_type
                 print(f"[VSDC Router] ITR filing type: {itr_filing_type}{source_tag}")
-                ident = self.assembler.client_name or self.assembler.client_pan or ""
-                self.notify_activity(
-                    "update",
-                    f"{itr_filing_type} Return",
-                    f"{ident} • {self.assembler.current_filing_type or 'ITR'}{source_tag}".strip(" •"),
-                )
             if matched_crosshair.id == "itr_form_selection":
                 self.route_captured = True
 

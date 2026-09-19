@@ -41,7 +41,9 @@ def main():
 
     worker = VSDCWorker(check_interval_sec=0.35)
     worker.filing_captured.connect(lambda payload: print(f"\n=== FILING CAPTURED (not saved anywhere) ===\n{payload}\n", flush=True))
-    worker.activity_event.connect(lambda et, title, sub: print(f"[activity] {et}: {title} | {sub}", flush=True))
+    worker.activity_event.connect(
+        lambda et, title, sub, ctx=None: print(f"[activity] {et}: {title} | {sub} | {ctx or {}}", flush=True)
+    )
     worker.status_changed.connect(lambda s: print(f"[status] {s}", flush=True))
 
     print("=" * 70, flush=True)

@@ -16,6 +16,7 @@ Characteristics:
 - Strictly uses Google Material Design icons (mdi.*) via QtAwesome
 """
 
+import html
 import re
 import sys
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QVariantAnimation, QEasingCurve, QPoint
@@ -211,6 +212,9 @@ class VSDCHudPill(QWidget):
 
         # Primary Title (matches .sera-title in sdc_toast.js)
         self.title_label = QLabel("", self.card)
+        # Wrap rather than clip: the card is a fixed width, and a clipped title or
+        # subtitle hides the very thing the toast exists to show (a name, an Ack).
+        self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet("""
             color: #FFFFFF;
             font-size: 11px;
@@ -223,11 +227,26 @@ class VSDCHudPill(QWidget):
         # Subtitle / Details Row (matches .sera-body in sdc_toast.js, with RichText support)
         self.subtitle_label = QLabel("", self.card)
         self.subtitle_label.setTextFormat(Qt.RichText)
+        self.subtitle_label.setWordWrap(True)
         self.subtitle_label.setStyleSheet("""
             color: #8B949E;
             font-size: 10px;
         """)
         text_layout.addWidget(self.subtitle_label)
+
+        # Return-context row (matches .sera-details-grid chips in sdc_toast.js): the
+        # form, filing type / preference and period of the return being worked on.
+        # Word-wrapped inside the fixed-width card; each chip is kept whole with
+        # non-breaking spaces so a line only ever breaks between chips.
+        self.details_label = QLabel("", self.card)
+        self.details_label.setTextFormat(Qt.RichText)
+        self.details_label.setWordWrap(True)
+        self.details_label.setStyleSheet("""
+            color: #8B949E;
+            font-size: 10px;
+        """)
+        self.details_label.setVisible(False)
+        text_layout.addWidget(self.details_label)
 
         card_layout.addLayout(text_layout)
         root_layout.addWidget(self.card)
@@ -277,13 +296,42 @@ class VSDCHudPill(QWidget):
 
         return text
 
-    def show_event(self, event_type: str, title: str, subtitle: str = "", duration_ms: int = 1800):
+    # GST's QRMP values are a filing *preference*; everything else in filing_pref is
+    # an ITR filing *type* (Original/Revised/Belated/Updated).
+    _GST_PREFERENCES = ("Monthly", "Quarterly")
+
+    @classmethod
+    def _format_context_html(cls, context) -> str:
+        """
+        Renders the return context as label/value chips: Form, Type (ITR) or Pref
+        (GST), and Period. Only captured values are shown; nothing at all when the
+        session has not captured any of them yet.
+        """
+        if not context:
+            return ""
+        pref = context.get("filing_pref")
+        pref_label = "Pref" if pref in cls._GST_PREFERENCES else "Type"
+        chips = []
+        for label, value in (("Form", context.get("form")), (pref_label, pref), ("Period", context.get("period"))):
+            if not value:
+                continue
+            safe = html.escape(str(value)).replace(" ", "&nbsp;")
+            chips.append(
+                f'<span style="color:#8B949E;">{label}</span>&nbsp;'
+                f'<span style="color:#E6EDF3; font-weight:600;">{safe}</span>'
+            )
+        return ' <span style="color:#484F58;">&middot;</span> '.join(chips)
+
+    def show_event(self, event_type: str, title: str, subtitle: str = "", duration_ms: int = 1800, context=None):
         """
         Shows the HUD pill at the bottom-left corner for a capture/identity event,
         then auto-dismisses. Nothing is shown while VSDC is merely polling a page.
 
         Like the legacy SDC toast, every new event pulses the pill; if it is already
         on screen it is updated in place (and pulses) instead of re-entering.
+
+        context carries the return being worked on (form, filing type/preference,
+        period) and is shown as a chip row under the subtitle.
         """
         key = (event_type or "default").lower()
         theme = self.EVENT_THEMES.get(key, self.EVENT_THEMES["default"])
@@ -291,7 +339,8 @@ class VSDCHudPill(QWidget):
 
         # Identical consecutive event while still showing: just keep it up a little
         # longer - no new pulse for something the user has already just seen.
-        sig = f"{key}:{title}:{subtitle}"
+        context_html = self._format_context_html(context)
+        sig = f"{key}:{title}:{subtitle}:{context_html}"
         already_showing = self.isVisible() and self.opacity_effect.opacity() > 0.5
         if sig == self._last_event_signature and already_showing:
             self.dismiss_timer.start(duration_ms)
@@ -326,6 +375,8 @@ class VSDCHudPill(QWidget):
         formatted_sub = self._format_subtitle_html(subtitle)
         self.subtitle_label.setText(formatted_sub)
         self.subtitle_label.setVisible(bool(subtitle))
+        self.details_label.setText(context_html)
+        self.details_label.setVisible(bool(context_html))
 
         # 4. Update Google Material Design Icon
         pixmap = self._get_icon(icon_name, accent_color)

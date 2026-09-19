@@ -22,7 +22,9 @@ class VSDCWorker(QThread):
     # Signals
     filing_captured = Signal(dict)   # Emitted when a verified filing payload is sealed
     step_recorded = Signal(str, str)  # Emitted on route transition: (crosshair_id, url)
-    activity_event = Signal(str, str, str)  # Emitted on live events: (event_type, title, subtitle)
+    # Emitted on live events: (event_type, title, subtitle, context), where context is
+    # the return the event belongs to - form, filing type/preference and period.
+    activity_event = Signal(str, str, str, object)
     status_changed = Signal(str)     # Emitted for status messages (e.g. 'Active', 'Idle')
 
     def __init__(self, check_interval_sec: float = 0.35, parent=None):
@@ -40,7 +42,13 @@ class VSDCWorker(QThread):
         )
 
     def _on_router_activity(self, event_type: str, title: str, subtitle: str = ""):
-        self.activity_event.emit(event_type, title, subtitle)
+        # Called synchronously from inside the router while it delivers this event, so
+        # activity_context is exactly this event's form / filing type / period.
+        try:
+            context = self.router.activity_context
+        except Exception:
+            context = {}
+        self.activity_event.emit(event_type, title, subtitle, context)
 
     def run(self):
         self._running = True

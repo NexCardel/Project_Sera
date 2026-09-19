@@ -238,7 +238,8 @@ def get_status_rank(status_str: Optional[str]) -> int:
 #   GST  - the taxpayer's return filing preference under QRMP
 #   ITR  - the statutory filing type of THIS return (139(1)/(4)/(5)/(8A))
 # The ITR form (ITR-1..ITR-7) is a different axis and lives in filing_type.
-VALID_FILING_PREFERENCES = ("Quarterly", "Monthly", "Original", "Revised", "Belated", "Updated")
+ITR_FILING_TYPES = ("Original", "Revised", "Belated", "Updated")
+VALID_FILING_PREFERENCES = ("Quarterly", "Monthly") + ITR_FILING_TYPES
 
 
 @dataclass
@@ -475,6 +476,12 @@ class VisualSessionAssembler:
         self.current_period_label = None
         self.fy = None
         self.due_date = None
+        # An ITR filing type (Original/Revised/Belated/Updated) belongs to the return
+        # being worked on, so it goes with the form and period - otherwise an
+        # "Updated" from one return would leak into the next ordinary filing. GST's
+        # Monthly/Quarterly is a standing taxpayer setting and is kept.
+        if self.filing_preference in ITR_FILING_TYPES:
+            self.filing_preference = None
         self._flushed = False
 
     def record_step(self, route_url: str, crosshair_id: str, details: Optional[Dict[str, Any]] = None):
