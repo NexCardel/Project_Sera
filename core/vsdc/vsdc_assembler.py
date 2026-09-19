@@ -868,7 +868,9 @@ class VisualSessionAssembler:
             "raw_payload": {
                 "source": {
                     "protocol": record.portal,
-                    "engine": "VSDC",
+                    # Which engine actually supplied this capture, so the stored payload
+                    # agrees with capture_method instead of always claiming plain VSDC.
+                    "engine": "VSDC-X" if (record.capture_method or "").startswith("VSDC-X") else "VSDC",
                     "version": "1.0.0",
                 },
                 "raw_text": record.raw_text,
@@ -1019,7 +1021,9 @@ class VisualSessionAssembler:
             "raw_payload": {
                 "source": {
                     "protocol": primary.portal,
-                    "engine": "VSDC",
+                    # Which engine actually supplied this capture, so the stored payload
+                    # agrees with capture_method instead of always claiming plain VSDC.
+                    "engine": "VSDC-X" if (primary.capture_method or "").startswith("VSDC-X") else "VSDC",
                     "version": "1.0.0",
                 },
                 "raw_text": primary.raw_text,

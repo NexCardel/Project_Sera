@@ -1383,6 +1383,37 @@ class TestVSDCCrosshairs(unittest.TestCase):
             )
 
 
+
+class TestItrAckBearingPages(unittest.TestCase):
+    """
+    The ITR route only reads an acknowledgement number from crosshairs flagged
+    is_terminal_submission. Anything else is pre-submission, and a 15-digit number
+    seen there belongs to a different filing (a revised return shows the ORIGINAL
+    return's ack), which previously minted a bogus "Filing Submitted" record.
+    """
+
+    def test_only_submission_and_history_pages_may_carry_an_ack(self):
+        from core.vsdc.vsdc_crosshairs import ALL_CROSSHAIRS
+        itr = [c for c in ALL_CROSSHAIRS if c.protocol == "Income Tax"]
+        allowed = {c.id for c in itr if c.is_terminal_submission}
+        self.assertEqual(
+            allowed,
+            {"itr_filed_verified", "itr_everify_return", "itr_submitted_pending", "itr_view_filed_returns"},
+        )
+        # The client-info, wizard, dashboard and login pages must never be in that set.
+        for cid in ("itr_personal_info", "itr_form_select", "itr_landing", "itr_login_auth", "itr_logout"):
+            self.assertNotIn(cid, allowed, f"{cid} must not be treated as ack-bearing")
+
+    def test_personal_info_crosshair_also_matches_other_wizard_pages(self):
+        # Documents WHY the gate above matters: itr_personal_info's pattern covers the
+        # whole .../foreturns-ayNN/fo-itrN-.../ wizard, not only the client-info page,
+        # so a stray ack on any wizard step would otherwise be captured as a submission.
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        base = "eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/"
+        for page in ("personal_information", "fo-schedules-summary", "fo-filing-status-questionnaire"):
+            self.assertEqual(match_url_crosshair(base + page).id, "itr_personal_info", page)
+
+
 if __name__ == "__main__":
     unittest.main()
 

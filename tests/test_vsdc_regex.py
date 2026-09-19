@@ -279,6 +279,26 @@ class TestVSDCRegex(unittest.TestCase):
         ):
             self.assertTrue(has_everify_success_evidence(stepper + msg), msg)
 
+    def test_itr_form_type_resolved_from_wizard_url(self):
+        from core.vsdc.vsdc_regex import resolve_itr_form_type_from_url
+        base = "eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/"
+        self.assertEqual(resolve_itr_form_type_from_url(base + "fo-itr4-ay2026/fo-schedules-summary"), "ITR-4")
+        self.assertEqual(resolve_itr_form_type_from_url(base + "fo-itr1-ay2026/fo-e-verify-later"), "ITR-1")
+        # Shared / non-form routes must fall through to the text-based path, not guess.
+        self.assertIsNone(resolve_itr_form_type_from_url(base + "fo-itr-shared/fo-select-itr-form"))
+        self.assertIsNone(resolve_itr_form_type_from_url("#/dashboard/itrStatus"))
+        self.assertIsNone(resolve_itr_form_type_from_url(""))
+        self.assertIsNone(resolve_itr_form_type_from_url(None))
+
+    def test_itr_url_form_beats_a_stray_form_name_in_page_copy(self):
+        from core.vsdc.vsdc_regex import resolve_itr_form_type_from_url, extract_filing_type
+        # Live defect: wizard help copy mentioning another form won over the real one,
+        # mis-keying the dataset as ITR-3 for an ITR-4 filing.
+        copy = "Taxpayers having income from business or profession should file ITR-3."
+        self.assertEqual(extract_filing_type(copy), "ITR-3")
+        url = "#/foreturns-ay26/fo-itr4-ay2026/fo-schedules-summary"
+        self.assertEqual(resolve_itr_form_type_from_url(url), "ITR-4")
+
     def test_extract_gst_fy_smart_regex(self):
         from core.vsdc.vsdc_regex import extract_gst_fy
 

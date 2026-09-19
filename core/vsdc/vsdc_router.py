@@ -24,6 +24,7 @@ from .vsdc_regex import (
     extract_pan,
     extract_gstin,
     extract_dob,
+    resolve_itr_form_type_from_url,
     strip_everify_stepper,
     has_everify_success_evidence,
     extract_mobile,
@@ -923,11 +924,16 @@ class VSDCRouter:
             if not has_everify_success_evidence(uia_text + "\n" + full_text):
                 return None
 
+        # The filing wizard's own URL (.../fo-itr4-ay2026/...) names the form the
+        # taxpayer actually selected, so it outranks any form name scraped from page
+        # copy - a passing "ITR-3" in wizard text was overwriting the real ITR-4 and
+        # mis-keying the whole dataset. Mirrors the GST route's URL-first resolution.
+        url_filing_type = resolve_itr_form_type_from_url(url)
         uia_filing_type = extract_filing_type(uia_text) if uia_text else None
         uia_period = extract_assessment_year(uia_text) if uia_text else None
-        filing_type = uia_filing_type or extract_filing_type(full_text)
+        filing_type = url_filing_type or uia_filing_type or extract_filing_type(full_text)
         period = uia_period or extract_assessment_year(full_text)
-        if uia_filing_type:
+        if uia_filing_type and not url_filing_type:
             uia_fields_used.append("filing_type")
         if uia_period:
             uia_fields_used.append("period")
@@ -937,10 +943,22 @@ class VSDCRouter:
                 self.route_captured = True
 
         # Check for terminal filing confirmation (Ack / ARN) — VSDC-X exact text first.
-        uia_ack = repair_numeric_ack(uia_text) if uia_text else None
-        ack_number = uia_ack or repair_numeric_ack(full_text)
-        if uia_ack:
-            uia_fields_used.append("ack_number")
+        #
+        # Only submission/confirmation screens and the filed-returns history carry an
+        # acknowledgement number for THIS filing (is_terminal_submission covers exactly
+        # those four crosshairs). Everything else is pre-submission — the filing wizard,
+        # the profile/personal-info pages, the dashboard — and a 15-digit number seen
+        # there belongs to some OTHER filing (a revised return references the original
+        # return's ack). Reading it anywhere else minted a "Filing Submitted" record for
+        # a return the session never submitted, and latched the route early enough to
+        # starve the DOB/contact capture. Note itr_personal_info's pattern matches every
+        # page under .../foreturns-ayNN/fo-itrN-.../, not just the client-info page.
+        ack_number = None
+        if matched_crosshair.is_terminal_submission:
+            uia_ack = repair_numeric_ack(uia_text) if uia_text else None
+            ack_number = uia_ack or repair_numeric_ack(full_text)
+            if uia_ack:
+                uia_fields_used.append("ack_number")
 
         # Fallback to full image scan if Ack was not found in cropped card on a return/submission card!
         if not ack_number and (matched_crosshair.is_terminal_submission or matched_crosshair.id == "itr_view_filed_returns") and not self._uia_only_mode:

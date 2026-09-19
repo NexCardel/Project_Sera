@@ -258,6 +258,28 @@ def extract_email(lines: List[str]) -> Optional[str]:
     return _first_contact_value(lines, _EMAIL_LABEL_RE, _email)
 
 
+_ITR_URL_FORM_RE = re.compile(r"\bfo-itr[-_]?([1-7])\b", re.IGNORECASE)
+
+
+def resolve_itr_form_type_from_url(url: Optional[str]) -> Optional[str]:
+    """
+    Reads the ITR form type out of the filing wizard's own URL
+    (e.g. .../foreturns-ay26/fo-itr4-ay2026/... -> "ITR-4").
+
+    The portal derives that segment from the form the taxpayer actually selected, so
+    it beats any form name scraped from page copy, where a passing mention of a
+    different ITR form (wizard help text, an eligibility note) can win and silently
+    mis-key the whole filing. Mirrors resolve_gst_form_type_from_url.
+
+    Returns None for shared / non-form routes (e.g. fo-itr-shared, the dashboard, the
+    filed-returns history), leaving those to the existing text-based extraction.
+    """
+    if not url:
+        return None
+    m = _ITR_URL_FORM_RE.search(url)
+    return f"ITR-{m.group(1)}" if m else None
+
+
 _EVERIFY_STEPPER_LABELS = re.compile(
     r"Select\s+The\s+Return\s+To\s+Be\s+Verified"
     r"|Select\s+Method\s+For\s+Return\s+Verification"
