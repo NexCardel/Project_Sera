@@ -279,6 +279,52 @@ class TestVSDCRegex(unittest.TestCase):
         ):
             self.assertTrue(has_everify_success_evidence(stepper + msg), msg)
 
+    # Lines exactly as VSDC-X reads the live "Let's Get Started" page
+    # (.../fo-itr-shared/fo-lets-get-started), whose URL carries no form segment -
+    # the page heading is the only source of the form type there.
+    _LETS_GET_STARTED_LINES = [
+        "e-Filing Anywhere Anytime",
+        "WASIL MANDAL Individual",
+        "Dashboard > e-file > Income Tax Return > Select Status > Filing Returns for A.Y. 2026-27 > ITR",
+        "ITR 4 - (Income Tax Return 4)",
+        "[For Individuals, HUFs and Firms (other than LLP) being a Resident having total income "
+        "upto Rs.50 lakh and having income from business and profession which is computed under "
+        "sections 44AD, 44ADA or 44AE, and having long-term capital gains under section 112A upto Rs. 1.25 lakh]",
+        "1 Validate your Returns breakup (Pre-filled)",
+        "Let's Get Started",
+    ]
+
+    def test_itr_form_heading_read_from_the_page(self):
+        from core.vsdc.vsdc_regex import extract_itr_form_heading
+        self.assertEqual(extract_itr_form_heading(self._LETS_GET_STARTED_LINES), "ITR-4")
+        self.assertEqual(extract_itr_form_heading(["ITR-4"]), "ITR-4")
+        self.assertEqual(extract_itr_form_heading(["Form ITR 1 - (Income Tax Return 1)"]), "ITR-1")
+
+    def test_itr_form_heading_ignores_body_copy_mentioning_another_form(self):
+        from core.vsdc.vsdc_regex import extract_itr_form_heading, extract_filing_type
+        copy = "Taxpayers having income from business or profession should file ITR-3."
+        # The loose scan takes the bait; the heading extractor must not.
+        self.assertEqual(extract_filing_type(copy), "ITR-3")
+        self.assertIsNone(extract_itr_form_heading([copy]))
+        # Real heading present alongside that copy -> the heading wins outright.
+        self.assertEqual(extract_itr_form_heading(["ITR 4 - (Income Tax Return 4)", copy]), "ITR-4")
+
+    def test_itr_form_heading_refuses_to_guess_on_a_chooser_page(self):
+        from core.vsdc.vsdc_regex import extract_itr_form_heading
+        # A page listing the options is not a page committed to one form.
+        self.assertIsNone(extract_itr_form_heading(["ITR 1", "ITR 2", "ITR 3", "ITR 4"]))
+        # Mismatched heading numbers are rejected rather than guessed at.
+        self.assertIsNone(extract_itr_form_heading(["ITR 4 - (Income Tax Return 3)"]))
+        self.assertIsNone(extract_itr_form_heading([]))
+        self.assertIsNone(extract_itr_form_heading(None))
+
+    def test_assessment_year_from_the_material_select_value(self):
+        # The AY dropdown on .../dashboard/fileIncomeTaxReturn is an Angular Material
+        # select; UIA exposes its selected value both on the combobox itself and as
+        # its own line (confirmed against the live portal's language select too).
+        self.assertEqual(extract_assessment_year("Select Assessment year * 2026-27  (Current A.Y.)"), "AY 2026-27")
+        self.assertEqual(extract_assessment_year("2026-27  (Current A.Y.)"), "AY 2026-27")
+
     def test_itr_form_type_resolved_from_wizard_url(self):
         from core.vsdc.vsdc_regex import resolve_itr_form_type_from_url
         base = "eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/"

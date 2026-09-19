@@ -24,6 +24,7 @@ from .vsdc_regex import (
     extract_pan,
     extract_gstin,
     extract_dob,
+    extract_itr_form_heading,
     resolve_itr_form_type_from_url,
     strip_everify_stepper,
     has_everify_success_evidence,
@@ -924,16 +925,22 @@ class VSDCRouter:
             if not has_everify_success_evidence(uia_text + "\n" + full_text):
                 return None
 
-        # The filing wizard's own URL (.../fo-itr4-ay2026/...) names the form the
-        # taxpayer actually selected, so it outranks any form name scraped from page
-        # copy - a passing "ITR-3" in wizard text was overwriting the real ITR-4 and
-        # mis-keying the whole dataset. Mirrors the GST route's URL-first resolution.
+        # Form type, most trustworthy source first:
+        #   1. the page's own heading ("ITR 4 - (Income Tax Return 4)") - what the
+        #      portal states this return IS, and the only source on fo-lets-get-started,
+        #      whose URL (fo-itr-shared) carries no form at all;
+        #   2. the wizard URL (.../fo-itr4-ay2026/...) once inside the form;
+        #   3. a loose scan of page text, last resort - this is the one that let a
+        #      passing "...should file ITR-3." in body copy mis-key an ITR-4 filing.
+        heading_filing_type = extract_itr_form_heading(uia_lines) or extract_itr_form_heading(lines)
         url_filing_type = resolve_itr_form_type_from_url(url)
         uia_filing_type = extract_filing_type(uia_text) if uia_text else None
         uia_period = extract_assessment_year(uia_text) if uia_text else None
-        filing_type = url_filing_type or uia_filing_type or extract_filing_type(full_text)
+        filing_type = heading_filing_type or url_filing_type or uia_filing_type or extract_filing_type(full_text)
         period = uia_period or extract_assessment_year(full_text)
-        if uia_filing_type and not url_filing_type:
+        if heading_filing_type and extract_itr_form_heading(uia_lines):
+            uia_fields_used.append("filing_type")
+        elif uia_filing_type and not (heading_filing_type or url_filing_type):
             uia_fields_used.append("filing_type")
         if uia_period:
             uia_fields_used.append("period")

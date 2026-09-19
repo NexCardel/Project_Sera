@@ -258,6 +258,38 @@ def extract_email(lines: List[str]) -> Optional[str]:
     return _first_contact_value(lines, _EMAIL_LABEL_RE, _email)
 
 
+_ITR_FORM_HEADING_RE = re.compile(
+    r"^(?:Form\s+)?ITR\s*[-_ ]?\s*([1-7])(S)?\s*"
+    r"(?:[-–—]\s*\(\s*Income\s+Tax\s+Return\s+\1S?\s*\)\s*)?$",
+    re.IGNORECASE,
+)
+
+
+def extract_itr_form_heading(lines: Optional[List[str]]) -> Optional[str]:
+    """
+    Reads the ITR form from a line that *is* the form declaration — the filing
+    wizard's own page heading, e.g. "ITR 4 - (Income Tax Return 4)".
+
+    Deliberately anchored to a whole line rather than scanning free text: a sentence
+    that merely mentions another form ("...should file ITR-3.") is body copy, not a
+    declaration, and letting that win is what previously mis-keyed an ITR-4 filing
+    as ITR-3.
+
+    Returns None when several distinct form headings appear, which means the page is
+    a chooser listing the options rather than a page committed to one form — the same
+    reasoning as extract_filing_type's dropdown guard.
+    """
+    found: List[str] = []
+    for line in lines or []:
+        m = _ITR_FORM_HEADING_RE.match((line or "").strip())
+        if not m:
+            continue
+        val = f"ITR-{m.group(1)}" + ("S" if m.group(2) else "")
+        if val not in found:
+            found.append(val)
+    return found[0] if len(found) == 1 else None
+
+
 _ITR_URL_FORM_RE = re.compile(r"\bfo-itr[-_]?([1-7])\b", re.IGNORECASE)
 
 
