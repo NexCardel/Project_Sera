@@ -348,17 +348,35 @@ class VSDCRouter:
         """
         return " • VSDC-X (Exact)" if (capture_method or "").startswith("VSDC-X") else " • VSDC (Visual)"
 
-    def _known_session_ack(self) -> Optional[str]:
+    def _known_session_ack(self, filing_type: Optional[str] = None, period: Optional[str] = None) -> Optional[str]:
         """
         The acknowledgement number this session has already recorded for the taxpayer,
         used by the e-Verify confirmation screen (which never reprints it). Only answers
-        when the session holds exactly ONE ack - more than one means several returns were
-        seen and nothing here says which of them was just verified.
+        when exactly ONE ack qualifies - more than one means several returns were seen and
+        nothing here says which of them was just verified.
+
+        The confirmation names the form and assessment year of the return it verified, and
+        a record only qualifies if it agrees with them. Without that, a session that filed
+        return A and then verified a DIFFERENT pending return B (the picker listed both, so
+        no ack was held) would stamp A's acknowledgement onto a record for B's form and
+        year - an e-Verified filing under the wrong ack. When the page gives neither, there
+        is nothing to disagree with and the sole recorded ack is used, as before.
         """
-        acks = {
-            rec.arn for rec in self.assembler.records.values()
-            if rec.arn and rec.arn != "N/A"
-        }
+        def year_key(label: Optional[str]) -> Optional[str]:
+            m = re.search(r"(20\d{2})\s*[-–/]\s*(?:20)?(\d{2})", label or "")
+            return f"{m.group(1)}-{m.group(2)}" if m else None
+
+        want_form = (filing_type or "").strip().upper() or None
+        want_year = year_key(period)
+        acks = set()
+        for rec in self.assembler.records.values():
+            if not rec.arn or rec.arn == "N/A":
+                continue
+            if want_form and (rec.filing_type or "").strip().upper() != want_form:
+                continue
+            if want_year and year_key(rec.period_label) not in (None, want_year):
+                continue
+            acks.add(rec.arn)
         return acks.pop() if len(acks) == 1 else None
 
     # ── Per-window session isolation ───────────────────────────────────────────
@@ -1155,7 +1173,7 @@ class VSDCRouter:
         # (_is_dataset_complete), so a verification whose ack was never seen stays inert
         # rather than promoting some other return.
         if not ack_number and matched_crosshair.id == "itr_everify_success":
-            ack_number = self._everify_pending_ack or self._known_session_ack()
+            ack_number = self._everify_pending_ack or self._known_session_ack(filing_type, period)
             if ack_number:
                 print(f"[VSDC Router] e-Verify confirmation: promoting Ack {ack_number} "
                       f"to e-Verified{source_tag}")

@@ -1631,6 +1631,68 @@ class TestEVerifyReturnWizard(unittest.TestCase):
         self.assertIsNone(router._everify_pending_ack)
 
 
+    # ── The session-ack fallback must not promote the wrong return ────────────
+    # The confirmation screen never reprints the ack, so when the picker was ambiguous the
+    # router falls back to the sole ack this session recorded. That fallback must only be
+    # used when the record agrees with the form and year the confirmation names.
+
+    ACK_A = "598290000150925"   # filed this session: ITR-4, AY 2026-27, Verify Later
+    ACK_B = "163894330310826"   # a different pending return: ITR-1, AY 2025-26
+
+    def _session_that_filed_a(self):
+        from core.vsdc.vsdc_assembler import VisualSessionAssembler
+        asm = VisualSessionAssembler()
+        asm.portal = "Income Tax"
+        asm.client_pan = "AHJPR0846B"
+        asm.client_name = "JAHANGIR MOLLA"
+        asm.record_submission(
+            ack_number=self.ACK_A, status="Submitted (Not e-Verified)", filing_type="ITR-4",
+            period_label="AY 2026-27", crosshair_id="itr_submitted_pending",
+        )
+        return self._router(assembler=asm)
+
+    def _confirmation_for(self, form, year):
+        return self.STEPPER + (
+            "Return e-Verified Successfully@@"
+            f"Your {form} Assessment Year {year} has been successfully e-verified@@"
+            "Transaction ID: EVERIFY000944284493@@"
+        ).replace("@@", "\n")
+
+    def test_a_different_returns_confirmation_never_borrows_the_sessions_ack(self):
+        router = self._session_that_filed_a()
+        ambiguous_picker = self.STEPPER + (
+            f"Acknowledgement Number {self.ACK_A}  ITR-4  2026-27\n"
+            f"Acknowledgement Number {self.ACK_B}  ITR-1  2025-26\n"
+        )
+        self._show(router, ambiguous_picker)
+        self.assertIsNone(router._everify_pending_ack)
+
+        # The user verified B (ITR-1, 2025-26); the only ack on record is A's (ITR-4, 2026-27).
+        self._show(router, self._confirmation_for("ITR-1", "2025-26"))
+
+        for rec in router.assembler.records.values():
+            self.assertFalse(
+                rec.filing_type == "ITR-1" and rec.arn == self.ACK_A,
+                "A's acknowledgement was attached to a record for a different return",
+            )
+        a = next(r for r in router.assembler.records.values() if r.arn == self.ACK_A)
+        self.assertEqual(a.status, "Submitted (Not e-Verified)", "A was never verified and must stay as filed")
+
+    def test_the_matching_return_is_still_promoted_from_the_sessions_ack(self):
+        router = self._session_that_filed_a()
+        self._show(router, self.STEPPER + "e-Verify Return" + "\n")   # picker never listed an ack
+        payload = self._show(router, self._confirmation_for("ITR-4", "2026-27"))
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["arn"], self.ACK_A)
+        self.assertEqual(payload["status"], "Submitted (e-Verified)")
+
+    def test_a_confirmation_naming_neither_form_nor_year_still_uses_the_sole_ack(self):
+        router = self._session_that_filed_a()
+        payload = self._show(router, self.STEPPER + "Return e-Verified Successfully" + "\n")
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["arn"], self.ACK_A)
+
+
 if __name__ == "__main__":
     unittest.main()
 
