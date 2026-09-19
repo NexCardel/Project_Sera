@@ -294,6 +294,34 @@ class TestVSDCRegex(unittest.TestCase):
         "Let's Get Started",
     ]
 
+    def test_itr_filing_type_is_a_different_axis_from_the_form(self):
+        from core.vsdc.vsdc_regex import extract_itr_filing_type, extract_itr_form_heading
+        # One page states BOTH: the form (ITR-4) and the filing type (Updated).
+        page = ("Select Assessment year * 2025-26\n"
+                "Select Filing Type * 139(8A) - Updated Return\n"
+                "Select ITR Type * ITR-4")
+        self.assertEqual(extract_itr_filing_type(page), "Updated")
+        self.assertEqual(extract_itr_form_heading(["ITR-4"]), "ITR-4")
+
+    def test_itr_filing_type_from_section_and_from_label(self):
+        from core.vsdc.vsdc_regex import extract_itr_filing_type
+        self.assertEqual(extract_itr_filing_type("File Income Tax Return u/s 139(8A) for A.Y. 2025-26"), "Updated")
+        self.assertEqual(extract_itr_filing_type("Select Filing Type * 139(5) - Revised Return"), "Revised")
+        self.assertEqual(extract_itr_filing_type("Select Filing Type * 139(4) - Belated Return"), "Belated")
+        self.assertEqual(extract_itr_filing_type("Filing Section : 139(1)"), "Original")
+        # Bare word, but only under an explicit "Filing Type" label.
+        self.assertEqual(extract_itr_filing_type("Filing Type\nOriginal"), "Original")
+
+    def test_itr_filing_type_never_guesses(self):
+        from core.vsdc.vsdc_regex import extract_itr_filing_type
+        # An open Filing Type dropdown lists every option - not a committed choice.
+        self.assertIsNone(extract_itr_filing_type(
+            "139(1) - Original\n139(4) - Belated Return\n139(5) - Revised Return\n139(8A) - Updated Return"))
+        # "Original" here refers to the ORIGINAL return being revised, not a filing type.
+        self.assertIsNone(extract_itr_filing_type("Acknowledgement Number of Original Return : 901036690280826"))
+        self.assertIsNone(extract_itr_filing_type("Personal Information First Name"))
+        self.assertIsNone(extract_itr_filing_type(""))
+
     def test_itr_form_heading_read_from_the_page(self):
         from core.vsdc.vsdc_regex import extract_itr_form_heading
         self.assertEqual(extract_itr_form_heading(self._LETS_GET_STARTED_LINES), "ITR-4")

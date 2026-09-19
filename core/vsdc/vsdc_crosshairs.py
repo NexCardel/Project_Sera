@@ -70,6 +70,37 @@ ITR_CROSSHAIRS: List[CrosshairDefinition] = [
         is_terminal_submission=True,
     ),
     CrosshairDefinition(
+        id="itr_offline_json_upload",
+        protocol="Income Tax",
+        # Anchored to the end of the path on purpose: a deeper route beneath it
+        # (.../offlineJsonSubmission/<verification step>) is the SUBMISSION page and
+        # must fall through to itr_offline_json_submit below, not stop here.
+        pattern=re.compile(r"offline[-_]?json[-_]?submission(?:[?#]|$)", re.IGNORECASE),
+        target_crop="center_card",
+        description="Updated/Revised return JSON upload (u/s 139(8A) offline utility)",
+        host_pattern=ITR_HOST_PATTERN,
+    ),
+    CrosshairDefinition(
+        id="itr_offline_json_submit",
+        protocol="Income Tax",
+        # The submit + mandatory e-verification step that follows the JSON upload. Its
+        # exact route was not available when this was written, so the pattern covers
+        # the verification/submission steps beneath the two paths this flow is known to
+        # live under. Matching alone captures nothing: recording still requires a real
+        # acknowledgement number and a submitted-or-better status, so a wrong match
+        # here stays inert rather than inventing a filing.
+        pattern=re.compile(
+            r"(?:fileincometaxreturn|offline[-_]?json[-_]?submission)/"
+            r"(?:[A-Za-z0-9_-]+/)*"
+            r"(?:verif\w*|preview\w*|submit\w*|success|confirmation|acknowledg\w*)",
+            re.IGNORECASE,
+        ),
+        target_crop="receipt_card",
+        description="Updated/Revised return submission & mandatory e-verification",
+        host_pattern=ITR_HOST_PATTERN,
+        is_terminal_submission=True,
+    ),
+    CrosshairDefinition(
         id="itr_personal_info",
         protocol="Income Tax",
         pattern=re.compile(r"(?:personal.?information|personal.?info|test_page_personal_info|myProfile|profileDetail|profile-detail|my-profile|profile|partA|part-a|foreturns-ay\d+/(?:fo-itr\d+|fo-schedule|fo-return|parta)|return-summary|user-profile|view-profile)", re.IGNORECASE),

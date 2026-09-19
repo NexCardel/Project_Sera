@@ -419,5 +419,30 @@ class TestVSDCAssembler(unittest.TestCase):
         self.assertEqual(capture["mobile"], "9876543210")
 
 
+    def test_filing_preference_carries_the_itr_filing_type_axis(self):
+        # filing_type holds the FORM (ITR-4); filing_preference holds WHY the return is
+        # filed (Original/Revised/Belated/Updated) - and still GST's Monthly/Quarterly.
+        self.assembler.update_identity(pan="BJYPM4326D", name="WASIL AMAN MANDAL", portal="Income Tax")
+        self.assembler.update_selection(filing_type="ITR-4", period_label="AY 2025-26", filing_preference="Updated")
+        self.assertEqual(self.assembler.current_filing_type, "ITR-4")
+        self.assertEqual(self.assembler.filing_preference, "Updated")
+
+        self.assembler.record_submission(
+            ack_number="774193820150925", status="Submitted (e-Verified)", filing_type="ITR-4",
+            period_label="AY 2025-26", raw_text="", crosshair_id="itr_offline_json_submit", engine="VSDC-X",
+        )
+        payload = self.assembler.seal_and_flush()
+        self.assertEqual(payload["filing_type"], "ITR-4")
+        self.assertEqual(payload["filing_preference"], "Updated")
+
+    def test_filing_preference_rejects_values_from_neither_axis(self):
+        self.assembler.update_identity(pan="BJYPM4326D", name="WASIL AMAN MANDAL", portal="Income Tax")
+        self.assembler.update_selection(filing_preference="Banana")
+        self.assertIsNone(self.assembler.filing_preference)
+        # GST's own values still work through the same field.
+        self.assembler.update_selection(filing_preference="Quarterly")
+        self.assertEqual(self.assembler.filing_preference, "Quarterly")
+
+
 if __name__ == "__main__":
     unittest.main()

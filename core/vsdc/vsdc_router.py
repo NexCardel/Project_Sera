@@ -24,6 +24,7 @@ from .vsdc_regex import (
     extract_pan,
     extract_gstin,
     extract_dob,
+    extract_itr_filing_type,
     extract_itr_form_heading,
     resolve_itr_form_type_from_url,
     strip_everify_stepper,
@@ -944,8 +945,30 @@ class VSDCRouter:
             uia_fields_used.append("filing_type")
         if uia_period:
             uia_fields_used.append("period")
-        if filing_type or period:
-            self.assembler.update_selection(filing_type=filing_type, period_label=period)
+        # Filing type (Original/Revised/Belated/Updated) - the statutory "why" of this
+        # return, stored in filing_preference. Distinct from filing_type above, which
+        # holds the FORM (ITR-4). Read from the section the portal states on the setup
+        # page ("139(8A) - Updated Return") and on the upload page's heading.
+        uia_itr_filing_type = extract_itr_filing_type(uia_text) if uia_text else None
+        itr_filing_type = uia_itr_filing_type or extract_itr_filing_type(full_text)
+        if uia_itr_filing_type:
+            uia_fields_used.append("itr_filing_type")
+
+        if filing_type or period or itr_filing_type:
+            self.assembler.update_selection(
+                filing_type=filing_type,
+                period_label=period,
+                filing_preference=itr_filing_type,
+            )
+            if itr_filing_type and itr_filing_type != self.last_logged_pref:
+                self.last_logged_pref = itr_filing_type
+                print(f"[VSDC Router] ITR filing type: {itr_filing_type}{source_tag}")
+                ident = self.assembler.client_name or self.assembler.client_pan or ""
+                self.notify_activity(
+                    "update",
+                    f"{itr_filing_type} Return",
+                    f"{ident} • {self.assembler.current_filing_type or 'ITR'}{source_tag}".strip(" •"),
+                )
             if matched_crosshair.id == "itr_form_selection":
                 self.route_captured = True
 
@@ -961,6 +984,18 @@ class VSDCRouter:
         # starve the DOB/contact capture. Note itr_personal_info's pattern matches every
         # page under .../foreturns-ayNN/fo-itrN-.../, not just the client-info page.
         ack_number = None
+        if not matched_crosshair.is_terminal_submission:
+            # Discovery aid for routes not yet mapped (e.g. the updated-return submit
+            # page): a 15-digit ack on a page we do not treat as a submission screen is
+            # either a reference to another filing or a submission route still missing a
+            # crosshair. Logged once per URL, never captured - see the ack gate below.
+            probe_ack = repair_numeric_ack(uia_text) if uia_text else None
+            if probe_ack:
+                route_only = url.split("?", 1)[0]
+                if route_only not in self._logged_unmatched_urls:
+                    self._logged_unmatched_urls.add(route_only)
+                    print(f"[VSDC Router] Ack {probe_ack} seen on NON-submission page "
+                          f"({matched_crosshair.id}) - not captured: {route_only}")
         if matched_crosshair.is_terminal_submission:
             uia_ack = repair_numeric_ack(uia_text) if uia_text else None
             ack_number = uia_ack or repair_numeric_ack(full_text)

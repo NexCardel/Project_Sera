@@ -234,6 +234,13 @@ def get_status_rank(status_str: Optional[str]) -> int:
 
 # ─── 3. Data Structures: SessionContext & FilingRecord ─────────────────────────
 
+# Accepted values for the filing_preference field, which spans both portals:
+#   GST  - the taxpayer's return filing preference under QRMP
+#   ITR  - the statutory filing type of THIS return (139(1)/(4)/(5)/(8A))
+# The ITR form (ITR-1..ITR-7) is a different axis and lives in filing_type.
+VALID_FILING_PREFERENCES = ("Quarterly", "Monthly", "Original", "Revised", "Belated", "Updated")
+
+
 @dataclass
 class SessionContext:
     """Represents the post-login taxpayer session boundary (IN -> OUT)."""
@@ -573,7 +580,11 @@ class VisualSessionAssembler:
 
         if filing_preference:
             norm_pref = filing_preference.strip().title()
-            if norm_pref in ("Quarterly", "Monthly"):
+            # This one field carries the "how/why is this return being filed" axis for
+            # both portals: GST's return-filing preference (Monthly/Quarterly) and the
+            # ITR statutory filing type (Original/Revised/Belated/Updated). The ITR
+            # form itself (ITR-4, ...) stays in filing_type, which is the form axis.
+            if norm_pref in VALID_FILING_PREFERENCES:
                 self.filing_preference = norm_pref
 
         if flushed_prior and self._session_started:
@@ -607,13 +618,25 @@ class VisualSessionAssembler:
         period_label: Optional[str] = None,
         fy: Optional[str] = None,
         due_date: Optional[str] = None,
+        filing_preference: Optional[str] = None,
     ):
         """
         Records the active form type and assessment year / return period.
         If a new filing form is selected, any prior unsubmitted draft for this assessee & period
         is superseded to ensure only one active draft return per period.
+
+        filing_preference is the separate "why/how" axis (ITR: Original/Revised/Belated/
+        Updated; GST: Monthly/Quarterly) — it is chosen per return, alongside the form,
+        which is why it is accepted here as well as on update_identity.
         """
         self.last_activity = time.time()
+        if filing_preference:
+            norm_pref = filing_preference.strip().title()
+            if norm_pref in VALID_FILING_PREFERENCES and norm_pref != self.filing_preference:
+                self.filing_preference = norm_pref
+                for rec in self.records.values():
+                    rec.filing_preference = norm_pref
+                    self.captures[rec.dataset_key] = rec.to_dict()
         if filing_type:
             new_ft = filing_type.strip().upper()
             if self.current_filing_type and self.current_filing_type != new_ft:

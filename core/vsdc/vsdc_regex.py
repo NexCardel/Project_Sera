@@ -258,6 +258,58 @@ def extract_email(lines: List[str]) -> Optional[str]:
     return _first_contact_value(lines, _EMAIL_LABEL_RE, _email)
 
 
+# "Filing type" in the statutory sense — WHY this return is being filed — as opposed
+# to the ITR form (ITR-1..ITR-7), which vsdc stores in filing_type/form_type. The
+# portal states it either as a section ("139(8A) - Updated Return", "u/s 139(8A)") or
+# as a bare word under a "Filing Type" label ("Original" on View Filed Returns).
+_ITR_SECTION_TO_FILING_TYPE = {
+    "139(1)": "Original",
+    "139(4)": "Belated",
+    "139(5)": "Revised",
+    "139(8A)": "Updated",
+}
+_ITR_SECTION_RE = re.compile(r"\b139\s*\(\s*(1|4|5|8\s*A)\s*\)", re.IGNORECASE)
+_ITR_FILING_TYPE_WORD_RE = re.compile(
+    r"\bFiling\s*Type\b\s*\*?\s*[:\-]?\s*\r?\n?\s*"
+    r"(?:139\s*\([0-9A]+\)\s*[-–—]\s*)?"
+    r"(Original|Revised|Belated|Updated)\b",
+    re.IGNORECASE,
+)
+
+
+def extract_itr_filing_type(text: str) -> Optional[str]:
+    """
+    Extracts the ITR *filing* type — Original / Revised / Belated / Updated — which is
+    a different axis from the ITR form (ITR-4 etc). Reads the statutory section first
+    ("139(8A) - Updated Return", "File Income Tax Return u/s 139(8A) for A.Y. 2025-26")
+    and falls back to a word sitting under an explicit "Filing Type" label.
+
+    Returns None when several distinct sections appear, which means the Filing Type
+    dropdown is open and listing the options rather than showing a committed choice —
+    same guard as extract_filing_type and extract_itr_form_heading.
+
+    The bare word is only ever read next to a "Filing Type" label on purpose: the
+    phrase "Acknowledgement Number of Original Return" appears on revised-return
+    screens and must not be mistaken for a filing type of "Original".
+    """
+    if not text:
+        return None
+
+    found: List[str] = []
+    for m in _ITR_SECTION_RE.finditer(text):
+        key = "139(" + re.sub(r"\s+", "", m.group(1)).upper() + ")"
+        val = _ITR_SECTION_TO_FILING_TYPE.get(key)
+        if val and val not in found:
+            found.append(val)
+    if len(found) == 1:
+        return found[0]
+    if len(found) > 1:
+        return None
+
+    m_word = _ITR_FILING_TYPE_WORD_RE.search(text)
+    return m_word.group(1).title() if m_word else None
+
+
 _ITR_FORM_HEADING_RE = re.compile(
     r"^(?:Form\s+)?ITR\s*[-_ ]?\s*([1-7])(S)?\s*"
     r"(?:[-–—]\s*\(\s*Income\s+Tax\s+Return\s+\1S?\s*\)\s*)?$",

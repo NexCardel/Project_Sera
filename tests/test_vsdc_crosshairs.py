@@ -1398,10 +1398,18 @@ class TestItrAckBearingPages(unittest.TestCase):
         allowed = {c.id for c in itr if c.is_terminal_submission}
         self.assertEqual(
             allowed,
-            {"itr_filed_verified", "itr_everify_return", "itr_submitted_pending", "itr_view_filed_returns"},
+            {
+                "itr_filed_verified",
+                "itr_everify_return",
+                "itr_submitted_pending",
+                "itr_view_filed_returns",
+                "itr_offline_json_submit",
+            },
         )
-        # The client-info, wizard, dashboard and login pages must never be in that set.
-        for cid in ("itr_personal_info", "itr_form_select", "itr_landing", "itr_login_auth", "itr_logout"):
+        # The client-info, wizard, dashboard, login and JSON-upload pages must never be
+        # in that set — the upload step in particular precedes submission entirely.
+        for cid in ("itr_personal_info", "itr_form_select", "itr_landing", "itr_login_auth",
+                    "itr_logout", "itr_offline_json_upload"):
             self.assertNotIn(cid, allowed, f"{cid} must not be treated as ack-bearing")
 
     def test_personal_info_crosshair_also_matches_other_wizard_pages(self):
@@ -1412,6 +1420,41 @@ class TestItrAckBearingPages(unittest.TestCase):
         base = "eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/"
         for page in ("personal_information", "fo-schedules-summary", "fo-filing-status-questionnaire"):
             self.assertEqual(match_url_crosshair(base + page).id, "itr_personal_info", page)
+
+
+class TestUpdatedReturnFlowRouting(unittest.TestCase):
+    """The u/s 139(8A) updated-return flow: setup -> JSON upload -> submit/e-verify."""
+
+    BASE = "eportal.incometax.gov.in/iec/foservices/#/dashboard/"
+
+    def test_json_upload_page_is_its_own_non_submission_crosshair(self):
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        c = match_url_crosshair(self.BASE + "fileIncomeTaxReturn/offlineJsonSubmission")
+        self.assertEqual(c.id, "itr_offline_json_upload")
+        # Uploading a JSON is not submitting it - this page must never carry an ack.
+        self.assertFalse(c.is_terminal_submission)
+
+    def test_step_beneath_the_upload_page_is_the_submission_crosshair(self):
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        # The upload pattern is end-anchored so deeper routes fall through to the
+        # submit crosshair rather than being swallowed as another upload page.
+        for tail in ("fileIncomeTaxReturn/offlineJsonSubmission/verification",
+                     "fileIncomeTaxReturn/verification"):
+            c = match_url_crosshair(self.BASE + tail)
+            self.assertEqual(c.id, "itr_offline_json_submit", tail)
+            self.assertTrue(c.is_terminal_submission, tail)
+
+    def test_new_crosshairs_do_not_steal_existing_routes(self):
+        from core.vsdc.vsdc_crosshairs import match_url_crosshair
+        expected = {
+            "fileIncomeTaxReturn": "itr_landing",
+            "itrStatus": "itr_view_filed_returns",
+            "eVerifyReturn/eVerifyReturn-al": "itr_everify_return",
+            "myProfile/profileDetail": "itr_personal_info",
+        }
+        for tail, cid in expected.items():
+            self.assertEqual(match_url_crosshair(self.BASE + tail).id, cid, tail)
+
 
 
 if __name__ == "__main__":
