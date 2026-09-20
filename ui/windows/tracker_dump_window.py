@@ -7,11 +7,12 @@ extension and VSDC.
 """
 
 import json
-import csv
+import os
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QClipboard
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QClipboard, QPixmap, QImage
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -836,6 +837,66 @@ class PayloadInspectorDialog(QDialog):
         tl_layout.addWidget(self.txt_timeline)
         tabs.addTab(tab_timeline, "Timeline")
 
+        # Tab 4: Notes & Media
+        tab_notes = QWidget()
+        notes_layout = QVBoxLayout(tab_notes)
+        notes_layout.setContentsMargins(10, 10, 10, 10)
+
+        self.txt_notes = QTextEdit()
+        self.txt_notes.setPlaceholderText("Write notes here...")
+
+        media_toolbar = QHBoxLayout()
+        self.btn_attach_img = QPushButton("Attach Image")
+        self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
+        self.btn_paste_img = QPushButton("Paste Image")
+        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#FFFFFF"))
+        
+        self.btn_clear_img = QPushButton("Clear Image")
+        self.btn_clear_img.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
+        self.btn_clear_img.setStyleSheet("background-color: transparent; border: 1px solid #FF6B6B; color: #FF6B6B;")
+        
+        media_toolbar.addWidget(self.btn_attach_img)
+        media_toolbar.addWidget(self.btn_paste_img)
+        media_toolbar.addWidget(self.btn_clear_img)
+        media_toolbar.addStretch()
+
+        self.lbl_save_status = QLabel("")
+        self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
+        media_toolbar.addWidget(self.lbl_save_status)
+        
+        self.btn_expand_img = QPushButton("View Full Image")
+        self.btn_expand_img.setIcon(_safe_qta_icon("mdi.fullscreen", "#FFFFFF"))
+        self.btn_expand_img.setProperty("class", "SecondaryBtn")
+        media_toolbar.addWidget(self.btn_expand_img)
+
+        self.lbl_image_preview = QLabel("No image attached")
+        self.lbl_image_preview.setAlignment(Qt.AlignCenter)
+        self.lbl_image_preview.setStyleSheet("border: 1px dashed #444; color: #888;")
+        self.lbl_image_preview.setMinimumHeight(200)
+
+        notes_layout.addWidget(self.txt_notes, stretch=1)
+        notes_layout.addLayout(media_toolbar)
+        notes_layout.addWidget(self.lbl_image_preview)
+
+        tabs.addTab(tab_notes, "Notes & Media")
+
+        # Connect signals
+        self.current_screenshot_path = ""
+        self.btn_attach_img.clicked.connect(self._attach_image)
+        self.btn_paste_img.clicked.connect(self._paste_image)
+        self.btn_clear_img.clicked.connect(self._clear_image)
+        self.btn_expand_img.clicked.connect(self._expand_image)
+        
+        # Auto-save setup
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(1000)
+        self._save_timer.timeout.connect(self._save_notes)
+        self.txt_notes.textChanged.connect(self._on_notes_changed)
+        
+        # Load existing data
+        QTimer.singleShot(0, self._load_notes_and_media)
+
         layout.addWidget(tabs, stretch=1)
 
         # Actions Box
@@ -906,6 +967,118 @@ class PayloadInspectorDialog(QDialog):
         btn_box.addWidget(btn_copy)
         btn_box.addWidget(btn_close)
         layout.addLayout(btn_box)
+
+    def _load_notes_and_media(self):
+        if not self.db: return
+        try:
+            notes = ""
+            spath = ""
+            if self.is_container:
+                ikey = self.item_data.get('identity_key')
+                if ikey and hasattr(self.db, 'get_srpf_container_media'):
+                    notes, spath = self.db.get_srpf_container_media(ikey)
+            else:
+                uid = self.item_data.get('id')
+                if uid and hasattr(self.db, 'get_tracker_dump_media'):
+                    notes, spath = self.db.get_tracker_dump_media(uid)
+            
+            if notes:
+                self.txt_notes.setPlainText(notes)
+            if spath and os.path.exists(spath):
+                self.current_screenshot_path = spath
+                self._show_preview(spath)
+        except Exception as e:
+            print(f"Error loading media: {e}")
+
+    def _show_preview(self, path):
+        pixmap = QPixmap(path)
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(600, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.lbl_image_preview.setPixmap(scaled_pixmap)
+            self.lbl_image_preview.setText("")
+        else:
+            self.lbl_image_preview.setText("Failed to load image")
+
+    def _on_notes_changed(self):
+        self.lbl_save_status.setText("Saving...")
+        self.lbl_save_status.setStyleSheet("color: #F1E05A; font-size: 12px; font-weight: bold;")
+        self._save_timer.start()
+
+    def _clear_image(self):
+        self.current_screenshot_path = ""
+        self.lbl_image_preview.setPixmap(QPixmap())
+        self.lbl_image_preview.setText("No image attached")
+        self._save_notes()
+
+    def _expand_image(self):
+        if self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
+            try:
+                os.startfile(self.current_screenshot_path)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not open image: {e}")
+
+    def _attach_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+        if file_path:
+            self.current_screenshot_path = file_path
+            self._show_preview(file_path)
+            self._save_notes()
+
+    def _paste_image(self):
+        clipboard = QGuiApplication.clipboard()
+        mime_data = clipboard.mimeData()
+        if mime_data.hasImage():
+            image = clipboard.image()
+            if not image.isNull():
+                temp_path = os.path.join(os.path.expanduser("~"), "temp_sera_paste.png")
+                image.save(temp_path, "PNG")
+                self.current_screenshot_path = temp_path
+                self._show_preview(temp_path)
+                self._save_notes()
+        else:
+            QMessageBox.information(self, "No Image", "No image found in clipboard.")
+
+    def _save_notes(self):
+        if not self.db: return
+        notes = self.txt_notes.toPlainText()
+        final_path = ""
+        
+        if self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
+            try:
+                media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
+                os.makedirs(media_dir, exist_ok=True)
+                
+                # Copy file if it's not already in the media directory
+                if not self.current_screenshot_path.startswith(media_dir):
+                    ext = os.path.splitext(self.current_screenshot_path)[1]
+                    if not ext: ext = ".png"
+                    filename = f"screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+                    final_path = os.path.join(media_dir, filename)
+                    shutil.copy2(self.current_screenshot_path, final_path)
+                    self.current_screenshot_path = final_path
+                else:
+                    final_path = self.current_screenshot_path
+            except Exception as e:
+                self.lbl_save_status.setText("Failed to save image")
+                self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+                return
+        
+        try:
+            if self.is_container:
+                ikey = self.item_data.get('identity_key')
+                if ikey and hasattr(self.db, 'save_srpf_container_media'):
+                    self.db.save_srpf_container_media(ikey, notes, final_path)
+            else:
+                uid = self.item_data.get('id')
+                if uid and hasattr(self.db, 'save_tracker_dump_media'):
+                    self.db.save_tracker_dump_media(uid, notes, final_path)
+                    
+            self.lbl_save_status.setText("✓ Saved!")
+            self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
+            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
+        except Exception as e:
+            self.lbl_save_status.setText("Failed to save to database")
+            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
 
     def _create_client(self):
         if not self.db:
@@ -1507,7 +1680,7 @@ class TrackerDumpWindow(QWidget):
                     d.get("period_label", ""), d.get("period_summary", ""),
                     d.get("latest_arn", ""), d.get("arn_number", ""),
                     d.get("company_name", ""), d.get("proprietor_name", ""),
-                    d.get("identity_key", "")
+                    d.get("identity_key", ""), d.get("notes", "")
                 ]
                 if not any(search_txt in str(f).lower() for f in match_fields):
                     continue

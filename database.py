@@ -631,6 +631,12 @@ class SeraDatabase:
                     last_updated        TEXT NOT NULL
                 );
             """)
+            
+            self._ensure_column(conn, "tracker_dump", "notes", "TEXT")
+            self._ensure_column(conn, "tracker_dump", "screenshot_path", "TEXT")
+            self._ensure_column(conn, "client_raw_containers", "notes", "TEXT")
+            self._ensure_column(conn, "client_raw_containers", "screenshot_path", "TEXT")
+            
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_containers_last_updated ON client_raw_containers(last_updated DESC);")
@@ -3287,7 +3293,7 @@ class SeraDatabase:
                 self.re_resolve_all_tracker_dumps()
 
             # 2. Query containers
-            sql = "SELECT identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated FROM client_raw_containers WHERE 1=1"
+            sql = "SELECT identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated, notes FROM client_raw_containers WHERE 1=1"
             params = []
             if search_query:
                 q = f"%{search_query}%"
@@ -3415,7 +3421,8 @@ class SeraDatabase:
                 "capture_method": capture_method,
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
-                "last_updated": r[15]
+                "last_updated": r[15],
+                "notes": r[16] if len(r) > 16 else ""
             })
 
         # Default chronological entry organisation: latest entry at top
@@ -4524,7 +4531,7 @@ class SeraDatabase:
         with self._connect_raw() as r_conn:
             sql = """SELECT id, client_id, unassigned_identity, service_id, portal,
                             period_label, arn_number, capture_method, status,
-                            raw_payload_json, captured_by, created_at, dataset_key
+                            raw_payload_json, captured_by, created_at, dataset_key, notes
                      FROM tracker_dump
                      WHERE 1=1"""
             params = []
@@ -4629,12 +4636,38 @@ class SeraDatabase:
                 "service_id": r[3], "service_name": r[4] or "Portal", "portal": r[4] or "",
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",
                 "status": r[8] or "submitted", "raw_payload_json": r[9] or "{}", "captured_by": r[10] or "System",
-                "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else ""
+                "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
             })
 
         # Default chronological entry organisation: latest entry at top
         results.sort(key=lambda x: (str(x.get("created_at") or ""), x.get("id") or 0), reverse=True)
         return results
+
+    def get_tracker_dump_media(self, dump_id: int) -> dict:
+        with self._connect_raw() as conn:
+            cur = conn.execute("SELECT notes, screenshot_path FROM tracker_dump WHERE id = ?", (dump_id,))
+            row = cur.fetchone()
+            if row:
+                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
+            return {"notes": "", "screenshot_path": ""}
+
+    def save_tracker_dump_media(self, dump_id: int, notes: str, screenshot_path: str) -> bool:
+        with self._connect_raw() as conn:
+            cur = conn.execute("UPDATE tracker_dump SET notes = ?, screenshot_path = ? WHERE id = ?", (notes, screenshot_path, dump_id))
+            return cur.rowcount > 0
+
+    def get_srpf_container_media(self, identity_key: str) -> dict:
+        with self._connect_raw() as conn:
+            cur = conn.execute("SELECT notes, screenshot_path FROM client_raw_containers WHERE identity_key = ?", (identity_key,))
+            row = cur.fetchone()
+            if row:
+                return {"notes": row[0] or "", "screenshot_path": row[1] or ""}
+            return {"notes": "", "screenshot_path": ""}
+
+    def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str) -> bool:
+        with self._connect_raw() as conn:
+            cur = conn.execute("UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?", (notes, screenshot_path, identity_key))
+            return cur.rowcount > 0
 
     def delete_tracker_dump(self, dump_id: int) -> bool:
         with self._connect_raw() as conn:

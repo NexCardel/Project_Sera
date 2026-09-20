@@ -267,6 +267,7 @@ _P_ADMIN_VIS = 7
 _P_EXPORT    = 8
 _P_BACKUP    = 9
 _P_PURGE     = 10
+_P_TRACKER   = 11
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -280,9 +281,10 @@ _PAGE_MAP = {
     "export":   _P_EXPORT,
     "backup":   _P_BACKUP,
     "purge":    _P_PURGE,
+    "tracker":  _P_TRACKER,
 }
 
-_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS}
+_SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
 
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
@@ -335,6 +337,7 @@ class UnifiedSettingsDialog(QDialog):
             _P_EXPORT: self._build_page_export,
             _P_BACKUP: self._build_page_backup,
             _P_PURGE: self._build_page_purge,
+            _P_TRACKER: self._build_page_tracker,
         }
         self._page_widgets = {}
 
@@ -528,6 +531,7 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.cog-outline",            "General",            _P_GENERAL)
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
+        _item("mdi.radar",                  "Tracker",            _P_TRACKER)
 
         _sec("Column Schema")
         _item("mdi.view-column-outline",    "Master Column List", _P_MCL)
@@ -1100,6 +1104,38 @@ class UnifiedSettingsDialog(QDialog):
         lay.addStretch()
         return _wrap_scroll(w)
 
+
+    def _build_page_tracker(self) -> QScrollArea:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(0)
+
+        lay.addWidget(_page_header("Tracker",
+            "Configure settings for VSDC, VSDC-X, and VSDC 24/7 background capture engines."))
+
+        lay.addWidget(_sub_header("Visual Sera DOM Crosshair (VSDC)"))
+        self.vsdc_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable VSDC",
+            "Extracts structured data from client-facing compliance portals visually using DOM coordinates.", self.vsdc_check))
+
+        lay.addWidget(_sub_header("VSDC-X (UI Automation)"))
+        self.vsdc_x_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable VSDC-X",
+            "Advanced fallback capture method that navigates modal overlays and complex popups using UI Automation exact-text reading.", self.vsdc_x_check))
+
+        lay.addWidget(_sub_header("VSDC 24/7 (Optical)"))
+        self.vsdc247_check = QCheckBox()
+        lay.addWidget(_setting_row("Enable VSDC 24/7",
+            "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
+
+        self.vsdc_check.toggled.connect(self._on_control_changed)
+        self.vsdc_x_check.toggled.connect(self._on_control_changed)
+        self.vsdc247_check.toggled.connect(self._on_control_changed)
+
+        lay.addStretch()
+        return _wrap_scroll(w)
+
     def _build_page_export(self) -> QScrollArea:
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -1203,6 +1239,11 @@ class UnifiedSettingsDialog(QDialog):
             state["scc_opt3_str"] = getattr(self, "scc_opt3_str_edit", QLineEdit()).text()
             state["scc_opt4_label"] = getattr(self, "scc_opt4_label_edit", QLineEdit()).text()
             state["scc_opt4_str"] = getattr(self, "scc_opt4_str_edit", QLineEdit()).text()
+
+        if hasattr(self, "vsdc_check"):
+            state["vsdc_enabled"] = self.vsdc_check.isChecked()
+            state["vsdc_x_enabled"] = self.vsdc_x_check.isChecked()
+            state["vsdc247_enabled"] = self.vsdc247_check.isChecked()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1288,6 +1329,12 @@ class UnifiedSettingsDialog(QDialog):
             self.btn_copy_check.setChecked(g("manual_copy_btn_enabled", "1") == "1")
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
+
+        if hasattr(self, "vsdc_check"):
+            self.vsdc_check.setChecked(g("vsdc_enabled", "1") == "1")
+            self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "1") == "1")
+            self.vsdc247_check.setChecked(g("vsdc247_enabled", "0") == "1")
+
     # ── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
         try:
@@ -1332,6 +1379,7 @@ class UnifiedSettingsDialog(QDialog):
                         allowed_services=self.db.get_services(),
                         registered_pans=self.db.get_all_registered_pans(),
                         scc_settings=scc_payload,
+                        vsdc_enabled=self.vsdc_check.isChecked() if hasattr(self, "vsdc_check") else True,
                     )
                 except Exception:
                     pass
@@ -1366,6 +1414,12 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["manual_assist_enabled"]      = b(self.btn_assist_check)
                 bulk_settings["manual_copy_btn_enabled"]    = b(self.btn_copy_check)
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)
+
+
+            if hasattr(self, "vsdc_check"):
+                bulk_settings["vsdc_enabled"] = b(self.vsdc_check)
+                bulk_settings["vsdc_x_enabled"] = b(self.vsdc_x_check)
+                bulk_settings["vsdc247_enabled"] = b(self.vsdc247_check)
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
