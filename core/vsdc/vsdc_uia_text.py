@@ -20,7 +20,7 @@ much heavier capture + BMP encode + WinRT async decode + recognize round trip.
 
 import ctypes
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import comtypes.client
 
@@ -135,7 +135,7 @@ def _read_value_pattern(uia_client, element) -> str:
         return ""
 
 
-def _collect_descendant_lines(uia, uia_client, root_element) -> List[str]:
+def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional[int] = None) -> List[str]:
     """Returns the visible text of every descendant, in document order — label
     and value elements arrive as adjacent entries, which is exactly the 'label
     on line N, value on line N+1' shape vsdc_regex.py's extractors already
@@ -150,6 +150,8 @@ def _collect_descendant_lines(uia, uia_client, root_element) -> List[str]:
     elements = root_element.FindAll(uia_client.TreeScope_Descendants, true_cond)
     count = elements.Length if elements else 0
     for i in range(count):
+        if max_lines is not None and len(lines) >= max_lines:
+            break
         try:
             el = elements.GetElement(i)
             name = (el.CurrentName or "").strip()
@@ -172,7 +174,7 @@ def _collect_descendant_lines(uia, uia_client, root_element) -> List[str]:
     return lines
 
 
-def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dict[str, Any]:
+def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_lines: Optional[int] = None) -> Dict[str, Any]:
     """
     Reads the visible text of the web page content (not browser chrome —
     tabs, toolbar, address bar) hosted in the given window handle, via its
@@ -181,6 +183,9 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dict[
     Returns {"text": str, "lines": list[str]}, empty on any failure —
     callers should treat an empty result as "UIA didn't get anything this
     tick" and fall back to / merge with OCR as usual, not as an error.
+
+    max_lines stops the walk once that many lines are collected - used by the portal-logo
+    tripwire, which only needs the head of a page it is not cleared to read.
     """
     empty: Dict[str, Any] = {"text": "", "lines": []}
     if not hwnd or not user32.IsWindow(hwnd):
@@ -198,7 +203,10 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> Dict[
             return empty
         all_lines: List[str] = []
         for doc_el in doc_elements:
-            all_lines.extend(_collect_descendant_lines(uia, uia_client, doc_el))
+            all_lines.extend(_collect_descendant_lines(uia, uia_client, doc_el, max_lines))
+            if max_lines is not None and len(all_lines) >= max_lines:
+                all_lines = all_lines[:max_lines]
+                break
         return {"text": "\n".join(all_lines), "lines": all_lines}
 
     result = _run_with_timeout(_do_read, timeout_sec)
