@@ -849,7 +849,9 @@ class PayloadInspectorDialog(QDialog):
         self.btn_attach_img = QPushButton("Attach Image")
         self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
         self.btn_paste_img = QPushButton("Paste Image")
-        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#FFFFFF"))
+        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
+        self.btn_ocr_img = QPushButton("Scan Text (OCR)")
+        self.btn_ocr_img.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
         
         self.btn_clear_img = QPushButton("Clear Image")
         self.btn_clear_img.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
@@ -857,6 +859,7 @@ class PayloadInspectorDialog(QDialog):
         
         media_toolbar.addWidget(self.btn_attach_img)
         media_toolbar.addWidget(self.btn_paste_img)
+        media_toolbar.addWidget(self.btn_ocr_img)
         media_toolbar.addWidget(self.btn_clear_img)
         media_toolbar.addStretch()
 
@@ -884,6 +887,7 @@ class PayloadInspectorDialog(QDialog):
         self.current_screenshot_path = ""
         self.btn_attach_img.clicked.connect(self._attach_image)
         self.btn_paste_img.clicked.connect(self._paste_image)
+        self.btn_ocr_img.clicked.connect(self._trigger_ocr_manually)
         self.btn_clear_img.clicked.connect(self._clear_image)
         self.btn_expand_img.clicked.connect(self._expand_image)
         
@@ -976,11 +980,15 @@ class PayloadInspectorDialog(QDialog):
             if self.is_container:
                 ikey = self.item_data.get('identity_key')
                 if ikey and hasattr(self.db, 'get_srpf_container_media'):
-                    notes, spath = self.db.get_srpf_container_media(ikey)
+                    media_data = self.db.get_srpf_container_media(ikey)
+                    notes = media_data.get("notes", "")
+                    spath = media_data.get("screenshot_path", "")
             else:
                 uid = self.item_data.get('id')
                 if uid and hasattr(self.db, 'get_tracker_dump_media'):
-                    notes, spath = self.db.get_tracker_dump_media(uid)
+                    media_data = self.db.get_tracker_dump_media(uid)
+                    notes = media_data.get("notes", "")
+                    spath = media_data.get("screenshot_path", "")
             
             if notes:
                 self.txt_notes.setPlainText(notes)
@@ -1023,6 +1031,7 @@ class PayloadInspectorDialog(QDialog):
             self.current_screenshot_path = file_path
             self._show_preview(file_path)
             self._save_notes()
+            self._run_ocr(file_path)
 
     def _paste_image(self):
         clipboard = QGuiApplication.clipboard()
@@ -1035,8 +1044,35 @@ class PayloadInspectorDialog(QDialog):
                 self.current_screenshot_path = temp_path
                 self._show_preview(temp_path)
                 self._save_notes()
+                self._run_ocr(temp_path)
         else:
             QMessageBox.information(self, "No Image", "No image found in clipboard.")
+
+    def _trigger_ocr_manually(self):
+        if hasattr(self, 'current_screenshot_path') and self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
+            self._run_ocr(self.current_screenshot_path)
+        else:
+            QMessageBox.information(self, "No Image", "Please attach or paste an image first to scan text.")
+
+    def _run_ocr(self, img_path):
+        from ui.utils.ocr_worker import OCRWorker
+        self.lbl_save_status.setText("Scanning OCR...")
+        self.lbl_save_status.setStyleSheet("color: #58A6FF; font-size: 12px; font-weight: bold;")
+        self.ocr_thread = OCRWorker(img_path)
+        self.ocr_thread.finished.connect(self._on_ocr_finished)
+        self.ocr_thread.start()
+
+    def _on_ocr_finished(self, text):
+        if text and not text.startswith("OCR Error") and not text.startswith("OCR Failed") and not text.startswith("OCR Engine"):
+            current_text = self.txt_notes.toPlainText()
+            if text.strip() not in current_text:
+                new_text = f"{current_text}\n\n--- OCR Extracted Text ---\n{text}".strip()
+                self.txt_notes.setPlainText(new_text)
+                self._save_notes()
+        else:
+            self.lbl_save_status.setText("OCR Failed")
+            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
 
     def _save_notes(self):
         if not self.db: return

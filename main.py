@@ -591,6 +591,14 @@ class SeraApp:
                 print(f"[main] audit_event error: {e}")
             return
 
+        # Every stored capture says which PC produced it (the name from this PC's
+        # device_identity.txt), inside its own payload.
+        try:
+            from core.vsdc.vsdc_alerts import stamp_device_name
+            stamp_device_name(msg)
+        except Exception:
+            pass
+
         # Enrich identity and return details from DOM scraped_data if available
         scraped = msg.get("scraped_data") or (msg.get("raw_payload", {}).get("scraped_data") if isinstance(msg.get("raw_payload"), dict) else None)
         if scraped and isinstance(scraped, dict):
@@ -1234,10 +1242,15 @@ class SeraApp:
         engine is on; turning everything off leaves it idle (the router ignores every tick).
         """
         try:
+            # The HUD pill switch is independent of the engines: it only decides whether the
+            # pill is shown, so it applies even when no engine is on.
+            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled
+            hud = getattr(self, "vsdc_hud", None)
+            if hud is not None:
+                hud.set_enabled(read_hud_enabled(self.db.get_setting))
             worker = getattr(self, "vsdc_worker", None)
             if worker is None:
                 return
-            from core.vsdc.vsdc_engines import read_engine_flags
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247)
             if (vsdc or vsdc_x or vsdc247) and not worker.isRunning():

@@ -139,6 +139,7 @@ class VSDCHudPill(QWidget):
         self._last_event_signature = ""
         self._pulse_pending = False
         self._pulse_base_height = 0
+        self._enabled = True      # Settings -> Tracker "HUD pill" switch, see set_enabled()
 
         # Opacity animation setup (smooth cubic ease)
         self.opacity_effect = QGraphicsOpacityEffect(self)
@@ -167,6 +168,28 @@ class VSDCHudPill(QWidget):
 
         self._build_ui()
         self.hide()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """
+        The Settings -> Tracker "HUD pill" switch. Off: no event is ever shown, and a pill
+        that is on screen right now is dismissed at once. It only silences the pill - the
+        engines keep capturing and saving exactly as before.
+        """
+        self._enabled = bool(enabled)
+        if self._enabled:
+            return
+        self.dismiss_timer.stop()
+        self.anim.stop()
+        self.pulse_anim.stop()
+        self._reset_pulse_size()
+        self.opacity_effect.setOpacity(0.0)
+        self.hide()
+        self._last_event_signature = ""
+        self._pulse_pending = False
+
+    @property
+    def is_enabled(self) -> bool:
+        return self._enabled
 
     def _build_ui(self):
         root_layout = QHBoxLayout(self)
@@ -344,6 +367,8 @@ class VSDCHudPill(QWidget):
         context carries the return being worked on (form, filing type/preference,
         period) and is shown as a chip row under the subtitle.
         """
+        if not self._enabled:
+            return
         key = (event_type or "default").lower()
         theme = self.EVENT_THEMES.get(key, self.EVENT_THEMES["default"])
         icon_name, accent_color, badge_text, badge_bg, badge_border = theme

@@ -21,7 +21,7 @@ from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
     sanitize_page_url,
 )
-from .vsdc_alerts import AlertSender
+from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
@@ -886,6 +886,7 @@ class VSDCRouter:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
             if result:
                 self._remember_dispatch(result)
+                stamp_device_name(result)        # which PC captured it, inside the payload
             return result
         finally:
             # Flushed while this window's session is still loaded, so every event gets

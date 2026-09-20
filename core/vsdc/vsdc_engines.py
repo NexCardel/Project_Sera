@@ -18,6 +18,11 @@ from typing import Callable, Optional, Tuple
 # The defaults the Settings -> Tracker page shows for a switch that was never saved.
 ENGINE_DEFAULTS = {"vsdc_enabled": "1", "vsdc_x_enabled": "1", "vsdc247_enabled": "0"}
 
+# The HUD pill switch (Settings -> Tracker). It is not an engine - it only decides whether the
+# pill is shown - so it lives beside ENGINE_DEFAULTS rather than in it.
+HUD_SETTING = "vsdc_hud_enabled"
+HUD_DEFAULT = "1"
+
 _TRUE = ("1", "true", "yes", "on")
 
 
@@ -34,3 +39,11 @@ def read_engine_flags(get_setting: Callable[..., object]) -> Tuple[bool, bool, b
         except Exception:
             return _on(None, ENGINE_DEFAULTS[key])
     return flag("vsdc_enabled"), flag("vsdc_x_enabled"), flag("vsdc247_enabled")
+
+
+def read_hud_enabled(get_setting: Callable[..., object]) -> bool:
+    """Whether the HUD pill is switched on (default on, matching the settings page)."""
+    try:
+        return _on(get_setting(HUD_SETTING, HUD_DEFAULT), HUD_DEFAULT)
+    except Exception:
+        return _on(None, HUD_DEFAULT)

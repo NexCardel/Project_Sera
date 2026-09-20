@@ -108,6 +108,10 @@ pipeline's `records`, and carries **only structured fields** — never page text
   can carry tokens after a `?`, even inside a `#/route?x=` hash) along with any user-info; the host, path
   and hash route stay. It is empty when the address bar could not be read - never the window title.
   Payloads from the crosshair pipeline keep their routed pages in `raw_payload.timeline`.
+* **`device_name`** - every capture payload (VSDC, VSDC-X, VSDC247 and, through the `main.py` sink,
+  extension captures) carries the PC that produced it, at the top level and inside `raw_payload`. It is
+  the first line of that PC's own `device_identity.txt` (falling back to the computer name), read at the
+  moment the payload is made, and never overwrites a value the payload already has.
 * **Phone alert** - when a submission is captured with **no client**, one push message goes to the
   designer's phone through [ntfy](https://ntfy.sh). Off until configured: put `{"topic": "sera-alerts-<long random string>"}`
   in `vsdc_alert.json` next to the program (git-ignored - the topic is a secret and this repository is public),

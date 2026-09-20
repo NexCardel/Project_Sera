@@ -83,6 +83,23 @@ def device_name() -> str:
     return name or re.sub(r"[^\w .\-]", "", socket.gethostname()).strip()[:40] or "unknown PC"
 
 
+def stamp_device_name(payload):
+    """
+    Records which PC produced a capture inside its JSON payload: "device_name" at the top level
+    and inside "raw_payload" (the envelope the tracker stores). An existing value is never
+    overwritten, so a payload that already says where it came from keeps saying it. Returns the
+    payload (unchanged if it is not a dict) so callers can use it inline.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    name = device_name()
+    payload.setdefault("device_name", name)
+    raw = payload.get("raw_payload")
+    if isinstance(raw, dict):
+        raw.setdefault("device_name", name)
+    return payload
+
+
 def _config_path() -> Path:
     override = os.environ.get(ALERT_CONFIG_ENV)
     if override:
