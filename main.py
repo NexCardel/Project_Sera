@@ -365,21 +365,15 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
-            # TEMPORARY for VSDC-X testing: force UIA-only diagnostic mode so the
-            # worker runs fully connected to the app (HUD, assembler, DB) but
-            # legacy OCR capture is disabled and only VSDC-X (UIA) feeds it.
-            # Remove this line to restore normal OCR+UIA operation.
-            os.environ["VSDC_UIA_ONLY"] = "1"
-
             from core.vsdc import VSDCWorker
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
             self.vsdc_worker.activity_event.connect(self._on_vsdc_activity_event)
             self.app.aboutToQuit.connect(self.vsdc_worker.stop)
-            if self.db.get_setting("vsdc_enabled", "1") == "1":
-                self.vsdc_worker.start()
-                print("⚡ [main] VSDC Worker started successfully (VSDC-X/UIA-only mode).")
+            # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
+            # itself only starts when at least one of them is on.
+            self._apply_vsdc_engine_settings()
         except Exception as vsdc_exc:
             import traceback
             err_msg = traceback.format_exc()
@@ -1193,6 +1187,7 @@ class SeraApp:
         self.admin_win.toast_requested.connect(self.shell.show_toast)
         self.admin_win.action_alert_requested.connect(self.shell.show_action_alert)
         self.admin_win.settings_saved.connect(self._apply_run_in_background)
+        self.admin_win.settings_saved.connect(self._apply_vsdc_engine_settings)
 
         # Sidebar Connections
         sidebar = self.shell.sidebar
@@ -1230,6 +1225,28 @@ class SeraApp:
         # Apply run_in_background setting so closeEvent behaves correctly from startup
         self._apply_run_in_background()
         self._apply_window_mode()
+
+    def _apply_vsdc_engine_settings(self):
+        """Apply the Settings -> Tracker switches (VSDC, VSDC-X, VSDC 24/7) to the running worker.
+
+        Called once at startup and again every time the user saves settings, so a switch takes
+        effect at once, without a restart. The worker thread only starts once at least one
+        engine is on; turning everything off leaves it idle (the router ignores every tick).
+        """
+        try:
+            worker = getattr(self, "vsdc_worker", None)
+            if worker is None:
+                return
+            from core.vsdc.vsdc_engines import read_engine_flags
+            vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
+            worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247)
+            if (vsdc or vsdc_x or vsdc247) and not worker.isRunning():
+                worker.start()
+                print("⚡ [main] VSDC Worker started "
+                      f"(VSDC={'on' if vsdc else 'off'}, VSDC-X={'on' if vsdc_x else 'off'}, "
+                      f"VSDC 24/7={'on' if vsdc247 else 'off'}).")
+        except Exception as e:
+            print(f"⚠️ [main] Could not apply the VSDC engine settings: {e}")
 
     def _apply_run_in_background(self):
         """Read the run_in_background db setting and push it onto the shell.

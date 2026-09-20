@@ -63,6 +63,28 @@ ITR_CROSSHAIRS: List[CrosshairDefinition] = [
         is_terminal_submission=True,
     ),
     CrosshairDefinition(
+        id="itr_everify_pending",
+        protocol="Income Tax",
+        # The e-Verify RETURN PICKER: "e-Verify / Discard Return - Please select the return you
+        # would like to verify/discard", listing every filed return still awaiting
+        # e-Verification (assessment year, form, filing type, PAN, ack, filed-on date).
+        #
+        # Like the confirmation step, it is served at the shared wizard route
+        # .../eVerifyReturn/eVerifyReturn-al, so the address bar cannot identify it - and this
+        # crosshair is therefore NEVER matched by URL: the pattern below can match nothing. It
+        # is reached only by content promotion in the router (itr_everify_return is promoted
+        # to it when the page shows the picker's own heading and cards - see
+        # _capture_everify_picker / extract_everify_picker_cards) and looked up by id with
+        # get_crosshair(). A URL pattern here would be a guess at portal routes that do not
+        # exist, and a wrong guess would pull the OTP and confirmation steps - which share the
+        # route - out of the wizard handler.
+        pattern=re.compile(r"(?!x)x"),
+        target_crop="center_card",
+        description="e-Verify return picker - filed returns pending e-Verification",
+        host_pattern=ITR_HOST_PATTERN,
+        is_terminal_submission=True,
+    ),
+    CrosshairDefinition(
         id="itr_everify_return",
         protocol="Income Tax",
         pattern=re.compile(r"(?:eVerifyReturn|e-verify-return|everifyreturn)", re.IGNORECASE),
@@ -256,8 +278,18 @@ def match_url_crosshair(url: str, portal_hint: Optional[str] = None) -> Optional
     """
     Evaluates a browser URL string against all registered crosshairs in priority order.
     Checks hostMatch pattern when available.
+
+    A string that names a real host outside the two portals never matches. Without this
+    the fallback loop below - which deliberately ignores host_pattern so bare path
+    fragments still resolve - matched ANY site's /home, /profile or /dashboard page.
+    Bare fragments and titles carry no host, so they are unaffected.
     """
     if not url:
+        return None
+
+    from .vsdc_scope import extract_host, is_in_scope_url
+    host = extract_host(url)
+    if host and ("://" in url or "." in host) and not is_in_scope_url(url):
         return None
 
     if not portal_hint:

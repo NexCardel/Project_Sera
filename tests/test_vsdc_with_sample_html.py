@@ -80,6 +80,10 @@ class TestVSDCSampleHtml(unittest.TestCase):
             success_html_path = os.path.abspath("tests/test_page_submit_success.html")
             success_url = f"file:///{success_html_path.replace(os.sep, '/')}"
             page.goto(success_url)
+            # The page builds today's ack on load (an ack carries its own filing date), so the
+            # ground truth is whatever the page itself shows.
+            expected_ack = page.inner_text("#ackNumber").strip()
+            self.assertRegex(expected_ack, r"^\d{15}$")
 
             # Route hash in sample file: #/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later
             page.wait_for_timeout(300) # wait for hash to settle
@@ -106,7 +110,7 @@ class TestVSDCSampleHtml(unittest.TestCase):
             print("Extracted Ack Number:", ack_found)
             print("Extracted Status:", status_found)
 
-            self.assertEqual(ack_found, "198273645019283", "Ack number must match 198273645019283")
+            self.assertEqual(ack_found, expected_ack, "Ack number must match the one the page shows")
             self.assertEqual(status_found, "Submitted (Not e-Verified)")
 
             # Record submission & flush master payload
@@ -130,7 +134,7 @@ class TestVSDCSampleHtml(unittest.TestCase):
         self.assertEqual(master_payload["source"], "vsdc_optical")
         self.assertEqual(master_payload["pan"], "GZEPM6367M")
         self.assertEqual(master_payload["client_name"], "WASIL AMAN MANDAL")
-        self.assertEqual(master_payload["arn"], "198273645019283")
+        self.assertEqual(master_payload["arn"], expected_ack)
         self.assertEqual(master_payload["status"], "Submitted (Not e-Verified)")
         self.assertEqual(len(master_payload["raw_payload"]["assembler_captures"]), 1)
         print("\n[SUCCESS] VSDC End-to-End Test with Sample HTML Passed Successfully!")
@@ -151,6 +155,7 @@ class TestVSDCSampleHtml(unittest.TestCase):
             success_url = f"file:///{success_html_path.replace(os.sep, '/')}"
             page.goto(success_url)
             page.wait_for_timeout(300)
+            expected_ack = page.inner_text("#ackNumber").strip()
 
             full_route = page.evaluate("() => window.location.href")
             crosshair = match_url_crosshair(full_route) or match_url_crosshair(page.title())
@@ -164,7 +169,7 @@ class TestVSDCSampleHtml(unittest.TestCase):
             receipt_scan = self.ocr.scan_image(success_img, region_type=crosshair.target_crop)
             ack_found = repair_numeric_ack(receipt_scan["text"])
             status_found = classify_verification_status(receipt_scan["text"])
-            self.assertEqual(ack_found, "198273645019283")
+            self.assertEqual(ack_found, expected_ack)
 
             # 2. Header fallback scan on the SAME image (because PAN is in header profile pill)
             header_scan = self.ocr.scan_image(success_img, region_type="header")
@@ -189,7 +194,7 @@ class TestVSDCSampleHtml(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(payload["pan"], "GZEPM6367M")
         self.assertEqual(payload["client_name"], "WASIL AMAN MANDAL")
-        self.assertEqual(payload["arn"], "198273645019283")
+        self.assertEqual(payload["arn"], expected_ack)
         print("\n[SUCCESS] Direct single-page landing test passed seamlessly!")
 
 

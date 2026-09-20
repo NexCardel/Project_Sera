@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Income Tax Portal - e-Verify Return</title>
+<!--
+  Simulation of the e-Filing portal's "e-Verify / Discard Return" page (the return picker),
+  laid out as UI Automation really reports it (tools/vsdc_uia_probe_output): every label and
+  its value are separate text elements. Fictional taxpayer and acknowledgement numbers.
+  Used by tools/vsdc_x_everify_picker_test.py, which opens it at
+  #/dashboard/eVerifyReturn/eVerifyReturn-al - the route the real picker shares with the OTP
+  step and the confirmation.
+-->
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f4f6fa; color: #1f2937; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 12px 40px; background: #fff; border-bottom: 1px solid #d0d5dd; }
+  .user span { display: block; }
+  .user .name { font-weight: 600; font-size: 18px; }
+  nav { background: #2f3b9c; color: #fff; padding: 16px 40px; font-weight: 600; }
+  .wrap { max-width: 1100px; margin: 24px auto; padding: 0 24px; }
+  .stepper { display: flex; gap: 40px; margin: 24px 0; }
+  .step span { display: block; }
+  h1 { font-size: 34px; margin: 28px 0 8px; }
+  .panel { background: #fff; border: 1px solid #d0d5dd; border-radius: 4px; padding: 24px; }
+  .card { border: 1px solid #d0d5dd; margin-top: 20px; }
+  .card .ay { background: #eef0f7; padding: 18px 28px; font-size: 20px; }
+  .card .ay span { display: inline-block; }
+  .card .body { display: flex; gap: 40px; padding: 22px 28px; align-items: flex-start; }
+  .col span, .col a { display: block; margin: 4px 0; }
+  .col a { color: #1d4ed8; font-size: 22px; text-decoration: none; }
+  .btns { margin-left: auto; }
+  button { padding: 10px 24px; border: 1px solid #1d4ed8; background: #fff; color: #1d4ed8; font-size: 16px; margin-left: 12px; }
+  footer { margin: 40px; color: #667085; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><span>e-Filing</span> <span>Anywhere Anytime</span></div>
+  <div class="user"><span class="name">ARJUN VERMA</span><span>Individual</span></div>
+</header>
+<nav>Dashboard &nbsp;&nbsp; e-File &nbsp;&nbsp; Authorised Partners &nbsp;&nbsp; Services</nav>
+
+<div class="wrap">
+  <ul class="stepper" style="list-style:none;padding:0">
+    <li class="step"><span>Select The Return To Be Verified</span><span>1</span></li>
+    <li class="step"><span>Select Method For Return Verification</span><span>2</span></li>
+    <li class="step"><span>Return Successfully Verified</span><span>3</span></li>
+  </ul>
+
+  <h1>e-Verify / Discard Return</h1>
+  <div class="panel">
+    <span style="display:block">Please select the return you would like to verify/discard</span>
+    <span style="display:block;margin-top:10px">Showing (1) returns</span>
+    <input type="text" aria-label="Search Box Input Field" placeholder="Search by Acknowledgement No">
+
+    <div class="card">
+      <div class="ay"><span>Assessment Year</span> <span id="ay"><b>2026-27</b></span></div>
+      <div class="body">
+        <div class="col"><span>ITR</span><a href="#/x">ITR 4</a></div>
+        <div class="col"><span>Filing Type</span><span><b>Original</b></span></div>
+        <div class="col">
+          <span>PAN :</span><span><b>ABCPD5678E</b></span>
+          <span>Acknowledgement Number :</span><span><b>123456789290826</b></span>
+          <span>Filed On :</span><span><b>Aug 29, 2026</b></span>
+          <span>Applicable Act :</span><span><b>Income Tax Act 1961</b></span>
+        </div>
+        <div class="btns"><button>e verify</button><button>Discard</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<footer>Last reviewed and updated on : 20-Sep-2026</footer>
+<script>
+  if (!window.location.hash) { window.location.hash = "/dashboard/eVerifyReturn/eVerifyReturn-al"; }
+</script>
+</body>
+</html>

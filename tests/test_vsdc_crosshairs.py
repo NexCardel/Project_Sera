@@ -2,8 +2,9 @@
 tests/test_vsdc_crosshairs.py — Unit Tests for VSDC Crosshair Matching
 """
 
+import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from PIL import Image
 from core.vsdc.vsdc_crosshairs import match_url_crosshair, ITR_CROSSHAIRS, GST_CROSSHAIRS
 from core.vsdc.vsdc_router import VSDCRouter
@@ -613,11 +614,14 @@ class TestVSDCCrosshairs(unittest.TestCase):
         mock_ocr.capture_window_image.return_value = Image.new("RGB", (1366, 768), color="white")
 
         assembler = VisualSessionAssembler()
-        router = VSDCRouter(
-            ocr_engine=mock_ocr,
-            assembler=assembler,
-            on_activity=lambda *args: None,
-        )
+        # This test counts the CROSSHAIR pipeline's own OCR reads; VSDC247 (which reads a
+        # window's first frame once) has its own tests and is switched off here.
+        with patch.dict(os.environ, {"VSDC247_MODE": "off"}):
+            router = VSDCRouter(
+                ocr_engine=mock_ocr,
+                assembler=assembler,
+                on_activity=lambda *args: None,
+            )
 
         form_url = "https://return.gst.gov.in/returns/auth/gstr1"
         router.get_foreground_info = MagicMock(return_value=(12345, "Goods & Services Tax (GST) | Form - Google Chrome", "chrome.exe"))
@@ -1290,14 +1294,14 @@ class TestVSDCCrosshairs(unittest.TestCase):
         self.assertIsNone(router.assembler.client_name, "No identity should ever be extracted from an unrelated YouTube tab")
         mock_ocr.capture_window_image.assert_not_called()
 
-    def test_title_only_matching_still_works_for_a_genuine_portal_title(self):
+    def test_a_portal_window_survives_a_momentarily_unreadable_address_bar(self):
         """
-        The is_portal_title gate added above must not break the legitimate
-        case it's meant to still allow: a real portal tab whose address bar
-        happens to be unreadable, but whose window title unambiguously
-        identifies it as the tax portal.
+        The address bar of a real portal tab can be momentarily unreadable (UI Automation
+        hiccups mid-navigation). A window that was verifiably on the portal a moment ago
+        and is still titled like it stays trusted for a short grace period - but a window
+        that was never verified gets nothing (see the YouTube test above).
         """
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
         from PIL import Image
         from core.vsdc.vsdc_router import VSDCRouter
         from core.vsdc.vsdc_assembler import VisualSessionAssembler
@@ -1313,12 +1317,32 @@ class TestVSDCCrosshairs(unittest.TestCase):
         router.get_foreground_info = MagicMock(
             return_value=(12345, "e-Filing Income Tax Department - personal_information - Google Chrome", "chrome.exe")
         )
-        router.extract_browser_url = MagicMock(return_value=None)
+        portal_url = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/personal_information"
+        clock = [1_000_000.0]
+        with patch("core.vsdc.vsdc_router.time.time", side_effect=lambda: clock[0]):
+            # 1. Cold: never verified on a portal, address bar unreadable -> nothing at all.
+            router.extract_browser_url = MagicMock(return_value=None)
+            router.evaluate_tick()
+            self.assertIsNone(router.assembler.client_name)
+            mock_ocr.capture_window_image.assert_not_called()
 
-        router.evaluate_tick()
+            # 2. Verified on the portal.
+            router.extract_browser_url = MagicMock(return_value=portal_url)
+            router.evaluate_tick()
+            self.assertEqual(router.assembler.client_pan, "ABCPE1234F")
 
-        self.assertEqual(router.assembler.client_name, "RAMESH SHARMA")
-        self.assertEqual(router.assembler.client_pan, "ABCPE1234F")
+            # 3. The bar goes unreadable for a moment: still trusted inside the grace period...
+            router.extract_browser_url = MagicMock(return_value=None)
+            clock[0] += 3.0
+            mock_ocr.capture_window_image.reset_mock()
+            router.evaluate_tick()
+            self.assertTrue(mock_ocr.capture_window_image.called)
+
+            # 4. ...and NOT once it has stayed unreadable past it.
+            clock[0] += 30.0
+            mock_ocr.capture_window_image.reset_mock()
+            router.evaluate_tick()
+            mock_ocr.capture_window_image.assert_not_called()
 
     def test_slow_loading_page_keeps_polling_well_past_the_old_six_tick_cutoff(self):
         """
@@ -1402,6 +1426,9 @@ class TestItrAckBearingPages(unittest.TestCase):
                 "itr_filed_verified",
                 "itr_everify_success",
                 "itr_everify_return",
+                # The e-Verify return picker: every card on it is a submitted return, ack and all,
+                # that still awaits e-Verification (tests/test_vsdc_everify_picker.py).
+                "itr_everify_pending",
                 "itr_submitted_pending",
                 "itr_view_filed_returns",
                 "itr_offline_json_submit",

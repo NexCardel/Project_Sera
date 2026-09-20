@@ -17,6 +17,12 @@ import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
+from .vsdc_scope import (
+    is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
+    sanitize_page_url,
+)
+from .vsdc_alerts import AlertSender
+from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
     repair_numeric_ack,
@@ -29,6 +35,9 @@ from .vsdc_regex import (
     resolve_itr_form_type_from_url,
     strip_everify_stepper,
     has_everify_success_evidence,
+    is_everify_picker_page,
+    extract_everify_picker_cards,
+    extract_everify_picker_count,
     extract_everify_transaction_id,
     find_ack_candidates,
     extract_mobile,
@@ -63,6 +72,7 @@ from .vsdc_gemini_parser import parse_compliance_with_gemini
 # The e-Verify confirmation step is resolved from page content, never from the URL
 # (all three wizard steps share one Angular route) - see _route_itr_crosshair.
 EVERIFY_SUCCESS_CROSSHAIR = get_crosshair("itr_everify_success")
+EVERIFY_PENDING_CROSSHAIR = get_crosshair("itr_everify_pending")
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -74,8 +84,6 @@ PORTAL_KEYWORDS = (
     "gst portal",
     "goods and services tax",
     "gstn",
-    "traces",
-    "mca",
 )
 # "dashboard" and "returns" were deliberately dropped from PORTAL_KEYWORDS -
 # both are generic enough to appear in countless unrelated sites/apps' window
@@ -139,11 +147,22 @@ class _WindowSession:
         self.was_page_loading: bool = False
         self._loading_notice_shown: bool = False
         self._last_announced_selection: Optional[Tuple[str, Tuple[Optional[str], ...]]] = None
+        # When this window's address bar last verifiably showed one of the two portals -
+        # see _SCOPE_GRACE_SEC.
+        self._scope_verified_at: float = 0.0
+        # VSDC247's per-window scanner (change/green-box cadence, agreement) and any
+        # captures it made before the client was known - see _run_vsdc247.
+        self._scanner_247: Optional[Vsdc247Scanner] = None
+        self._pending_247_orphans: Dict[str, Any] = {}
         # The ack of the return currently being e-Verified in THIS window, read off an
         # earlier step of the e-Verify wizard, plus the last Transaction ID announced
         # for it - see _route_itr_crosshair.
         self._everify_pending_ack: Optional[str] = None
         self._everify_last_txn_id: Optional[str] = None
+        # Acks already captured from the e-Verify RETURN PICKER in this window, and how many
+        # ticks a half-rendered picker has been waited on - see _capture_everify_picker.
+        self._everify_picker_dispatched: set = set()
+        self._everify_picker_settle: int = 0
         self.last_seen: float = 0.0
 
 
@@ -156,9 +175,17 @@ _SESSION_FIELDS: Tuple[str, ...] = (
     "has_flushed_current_route", "route_captured", "route_poll_count",
     "last_screen_hash", "static_since", "last_logged_name", "last_logged_pan",
     "last_logged_pref", "last_logged_dob", "burst_ticks_remaining",
-    "was_page_loading", "_loading_notice_shown", "_last_announced_selection",
+    "was_page_loading", "_loading_notice_shown", "_last_announced_selection", "_scope_verified_at",
+    "_scanner_247", "_pending_247_orphans",
     "_everify_pending_ack", "_everify_last_txn_id",
+    "_everify_picker_dispatched", "_everify_picker_settle",
 )
+
+# How long a window that was verifiably on one of the two portals stays trusted when its
+# address bar momentarily cannot be read (UI Automation hiccups mid-navigation). Kept
+# short and never refreshed while the bar stays unreadable, so it cannot be stretched
+# into following the user onto some other site.
+_SCOPE_GRACE_SEC = 8.0
 
 # Generous timeout before VSDC stops re-scanning a screen whose visual
 # thumbnail hash has stayed completely unchanged (no captured data yet, and
@@ -244,10 +271,33 @@ class VSDCRouter:
         self._activity_context: Dict[str, Optional[str]] = {}
         # (session_id, (form, filing_pref, period)) last shown on the HUD for this window.
         self._last_announced_selection: Optional[Tuple[str, Tuple[Optional[str], ...]]] = None
+        self._scope_verified_at: float = 0.0
+        self._scanner_247: Optional[Vsdc247Scanner] = None
+        self._pending_247_orphans: Dict[str, Any] = {}
+
+        # VSDC247 - the crosshair-independent submission safety net (core/vsdc/vsdc247.py).
+        # Mode comes from VSDC247_MODE: live (default) saves CERTAIN captures and prompts on
+        # PROBABLE ones; shadow only logs; off disables it.
+        self._mode_247: str = configured_mode()
+        # Every ack/ARN already dispatched from this router - by the crosshair pipeline or by
+        # VSDC247 - so the same filing is never sent twice. Maps identifier -> timestamp.
+        self._dispatched_ids: Dict[str, float] = {}
+        # Identifiers already announced as merely "possible", so a probable candidate that
+        # stays on screen prompts once, not on every tick.
+        self._prompted_ids: Dict[str, float] = {}
+        # One screenshot per tick, shared by the route handlers and VSDC247.
+        self._tick_capture: Optional[Tuple[int, Any]] = None
+        self._scope_ok_this_tick: bool = False
+        self._tick_portal: Optional[str] = None
+        self._tick_page_url: str = ""       # this tick's address-bar URL, query stripped
 
         # Portal pages already reported as matching no crosshair, so each unknown page
         # is logged once (with its link) instead of on every poll tick.
         self._logged_unmatched_urls: set = set()
+        # host -> [probe attempts, time of the last one]; see _check_unlisted_portal.
+        self._tripwire_hosts: Dict[str, List[float]] = {}
+        # Phone alert for a submission captured with no client (off unless configured).
+        self.alerts: AlertSender = AlertSender()
 
         # The acknowledgement of the return currently being e-Verified, read off an
         # earlier step of the e-Verify wizard. The confirmation screen names the form and
@@ -255,6 +305,8 @@ class VSDCRouter:
         # submitted in a previous session, so this is what the promotion keys on.
         self._everify_pending_ack: Optional[str] = None
         self._everify_last_txn_id: Optional[str] = None
+        self._everify_picker_dispatched: set = set()
+        self._everify_picker_settle: int = 0
 
         # Diagnostic-only: when set, OCR text is discarded the instant it's
         # captured (before any extractor sees it), for both GST and ITR,
@@ -267,7 +319,115 @@ class VSDCRouter:
             print("[VSDC Router] VSDC_UIA_ONLY=1 — legacy OCR capture DISABLED for GST + ITR.")
             print("Every field below must come from VSDC-X (UI Automation) alone.")
             print("Unset VSDC_UIA_ONLY to restore normal OCR+UIA operation.")
+            # VSDC247 is the OCR safety net. Left running, it could capture a submission
+            # before VSDC-X does and hide a VSDC-X failure - the very thing this mode exists
+            # to expose - so it stays off unless VSDC247_MODE is set explicitly.
+            if not os.environ.get("VSDC247_MODE"):
+                self._mode_247 = MODE_OFF
+                print("VSDC247 (OCR submission safety net) is OFF in this mode; set VSDC247_MODE=live to run it anyway.")
             print("=" * 70)
+        # Test switch: VSDC247_ONLY=1 runs VSDC247 ALONE. No page is matched to a crosshair, so
+        # neither the crosshair pipeline (legacy VSDC) nor VSDC-X - which only ever run from a
+        # crosshair's route handler - reads anything; every in-scope page is an "unmapped" page and
+        # goes straight to VSDC247. Off by default; it changes nothing unless set.
+        self._247_only: bool = os.environ.get("VSDC247_ONLY") == "1"
+        if self._247_only:
+            if self._mode_247 == MODE_OFF and os.environ.get("VSDC247_MODE", "").strip().lower() != "off":
+                self._mode_247 = MODE_LIVE      # overrides the UIA-only default-off
+            print("=" * 70)
+            print("VSDC247_ONLY=1 - TEST MODE: crosshair routing and VSDC-X are switched off.")
+            print("Only VSDC247 (screen + OCR) is looking; nothing else will capture.")
+            print("=" * 70)
+        # One line at start-up, in every mode, so "is VSDC247 running?" is answered in the console.
+        print(f"[VSDC247] mode = {self._mode_247.upper()}"
+              f"{' (local test pages allowed)' if os.environ.get('VSDC_ALLOW_LOCAL_TEST') == '1' else ''}")
+
+        # Settings -> Tracker: which of the three engines are switched on. All on until
+        # apply_engine_settings() says otherwise, so a router built without the app (tests,
+        # dev tools) behaves exactly as before. The env switches above stay developer overrides.
+        self._env_uia_only: bool = self._uia_only_mode
+        self._env_247_only: bool = self._247_only
+        self._vsdc_x_enabled: bool = True          # False: UI Automation is never read
+        self._engines_off: bool = False            # all three off: the tick does nothing at all
+
+    def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool) -> None:
+        """
+        Applies the three Settings -> Tracker switches, live (no restart):
+
+          VSDC     the crosshair pipeline reading the screen (OCR). Off while VSDC-X is on =
+                   "VSDC-X only": the OCR text is discarded and only UI Automation feeds it.
+          VSDC-X   UI Automation exact-text reading. Off = it is never read, not even by the
+                   portal-address tripwire.
+          VSDC247  the crosshair-independent submission safety net. On = live, unless the
+                   VSDC247_MODE env override says shadow / off.
+
+        Only VSDC247 on = it works alone, exactly like the VSDC247_ONLY test switch: no page is
+        matched to a crosshair. All three off = the tick returns immediately. The
+        VSDC_UIA_ONLY / VSDC247_ONLY / VSDC247_MODE environment variables keep working as
+        developer overrides on top of this.
+        """
+        env_mode = os.environ.get("VSDC247_MODE", "").strip().lower()
+        self._vsdc_x_enabled = bool(vsdc_x)
+        self._uia_only_mode = self._env_uia_only or (bool(vsdc_x) and not vsdc)
+        if env_mode in (MODE_LIVE, MODE_SHADOW, MODE_OFF):
+            self._mode_247 = configured_mode()
+        elif self._env_uia_only and not vsdc247:
+            self._mode_247 = MODE_OFF
+        else:
+            self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
+        self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
+        self._engines_off = not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
+        print(f"[VSDC] engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
+              f"VSDC247={self._mode_247.upper()}"
+              f"{' (works alone)' if self._247_only else ''}{' - ALL OFF' if self._engines_off else ''}")
+
+    _TRIPWIRE_MAX_PROBES = 3
+    _TRIPWIRE_RETRY_SEC = 5.0
+
+    def _check_unlisted_portal(self, hwnd: int, url: str) -> None:
+        """
+        Portal-address tripwire. If a portal moves to a domain that is not on the allowlist, the
+        scope gate silently refuses it and every capture stops. This makes that visible - it never
+        widens the scope and never captures anything.
+
+        It is deliberately narrow, because it looks at a page VSDC is NOT cleared to read: only
+        a government-registry host (gov.in / nic.in) that is not listed, only the names of the
+        first few UI elements, only for a portal logo, at most 3 tries per host per run. The
+        lines are dropped immediately; all that is kept is the hostname, in a console line and
+        one HUD prompt.
+        """
+        if not self._vsdc_x_enabled or not is_government_registry_host(url):
+            return
+        host = extract_host(url)
+        state = self._tripwire_hosts.get(host)
+        now = time.time()
+        if state is not None and (state[0] >= self._TRIPWIRE_MAX_PROBES or state[0] < 0
+                                  or now - state[1] < self._TRIPWIRE_RETRY_SEC):
+            return
+        attempts = (state[0] if state else 0) + 1
+        self._tripwire_hosts[host] = [attempts, now]
+        try:
+            lines = vsdc_uia_text.read_page_text(hwnd, max_lines=TRIPWIRE_TOP_LINES).get("lines") or []
+        except Exception:
+            lines = []
+        cue = portal_logo_cue(lines)
+        del lines
+        if not cue:
+            return      # nothing to see yet (UIA warm-up, page still loading) or not a portal: retry / ignore
+        self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
+        print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
+              f"Add it to vsdc_scope.json if this is the real portal.")
+        self.notify_activity("prompt", "Portal address looks new - VSDC paused",
+                             f"{host} shows the {cue} logo but is not on the allowed list")
+
+    def _capture_window(self, hwnd: int):
+        """One screenshot per tick, shared by the route handlers and VSDC247."""
+        cached = self._tick_capture
+        if cached and cached[0] == hwnd:
+            return cached[1]
+        img = self.ocr.capture_window_image(hwnd)
+        self._tick_capture = (hwnd, img)
+        return img
 
     def notify_activity(self, event_type: str, title: str, subtitle: str = ""):
         """Emits real-time visual indicator event (route, identity, capture, flush)."""
@@ -347,6 +507,124 @@ class VSDCRouter:
         rather than from this tick's own fresh uia_fields_used list.
         """
         return " • VSDC-X (Exact)" if (capture_method or "").startswith("VSDC-X") else " • VSDC (Visual)"
+
+    # ── VSDC247: the crosshair-independent submission safety net ────────────────
+    _DISPATCH_TTL_SEC = 24 * 3600
+    _PROMPT_TTL_SEC = 600
+
+    def _remember_dispatch(self, payload: Dict[str, Any]) -> None:
+        """Records every ack/ARN in a dispatched payload so nothing is sent twice."""
+        now = time.time()
+        ids = {str(payload.get("arn") or "")}
+        raw = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
+        for cap in raw.get("assembler_captures") or []:
+            if isinstance(cap, dict):
+                ids.add(str(cap.get("arn") or cap.get("ack_number") or ""))
+        for ident in ids:
+            if ident and ident != "N/A":
+                self._dispatched_ids[ident] = now
+        if len(self._dispatched_ids) > 500:
+            cutoff = now - self._DISPATCH_TTL_SEC
+            self._dispatched_ids = {k: v for k, v in self._dispatched_ids.items() if v >= cutoff}
+
+    def _observe_247(self, hwnd: int) -> None:
+        cached = self._tick_capture
+        if cached and cached[0] == hwnd and cached[1] is not None:
+            if self._scanner_247 is None:
+                self._scanner_247 = Vsdc247Scanner()
+            self._scanner_247.observe(cached[1])
+
+    def _run_vsdc247(self, hwnd: int) -> Optional[Dict[str, Any]]:
+        portal = self._tick_portal
+        if portal not in ("Income Tax", "GST Portal"):
+            return None
+        img = self._capture_window(hwnd)
+        if img is None:
+            return None
+        if self._scanner_247 is None:
+            self._scanner_247 = Vsdc247Scanner()
+        outcome = self._scanner_247.scan(
+            img, self.ocr, portal, time.time(),
+            known_form=self.assembler.current_filing_type,
+            known_period=self.assembler.current_period_label,
+        )
+        det = outcome.detection
+        if det is not None:
+            det.page_url = self._tick_page_url
+        payload = None
+        if det is not None:
+            if det.tier == "vetoed":
+                # Worth a console line (once per reason) - it is how a wrong veto is found -
+                # but never saved and never shown to the user.
+                key = f"veto:{det.identifier}:{'|'.join(det.vetoes)}"
+                if key not in self._prompted_ids:
+                    self._prompted_ids[key] = time.time()
+                    print(f"[VSDC247] not a submission ({'; '.join(det.vetoes)}): {det.identifier}")
+            else:
+                payload = self._handle_247_detection(det)
+        if payload is None:
+            payload = self._attribute_pending_247_orphans()
+        return payload
+
+    def _handle_247_detection(self, det) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        ident = det.identifier
+        source_tag = " • VSDC247 (Visual)"
+
+        if ident in self._dispatched_ids:
+            return None      # already sent - by the crosshair pipeline or by us earlier
+
+        if self._mode_247 == MODE_SHADOW:
+            key = f"shadow:{ident}:{det.tier}"
+            if key not in self._prompted_ids:
+                self._prompted_ids[key] = now
+                print(f"[VSDC247] (shadow) {det.tier} {det.kind} {ident} score={det.score}: {'; '.join(det.reasons)}")
+            return None
+
+        if det.tier == "probable":
+            last = self._prompted_ids.get(f"prompt:{ident}", 0.0)
+            if now - last >= self._PROMPT_TTL_SEC:
+                self._prompted_ids[f"prompt:{ident}"] = now
+                print(f"[VSDC247] possible submission, not saved (score {det.score}): {ident}")
+                self.notify_activity("prompt", "Possible submission seen - not saved",
+                                     f"{ident} • confidence {det.score}% • check it in the tracker{source_tag}")
+            return None
+
+        # CERTAIN: save it, whatever else is or is not known yet.
+        payload = self.assembler.build_247_payload(det)
+        self._dispatched_ids[ident] = now
+        print(f"[VSDC247] captured {det.kind} {ident} score={det.score} ({'; '.join(det.reasons)})")
+        who = self.assembler.client_name or self.assembler.client_pan or ""
+        form_lbl = det.form or self.assembler.current_filing_type or "Submission"
+        if payload.get("identity_resolved"):
+            self.notify_activity("submit", f"{form_lbl} Submission Captured",
+                                 f"{who} • ARN: {ident}{source_tag}".strip(" •"))
+        else:
+            self._pending_247_orphans[ident] = det
+            self.notify_activity("prompt", "Submission captured - client unknown",
+                                 f"ARN: {ident} • open the taxpayer profile page to attach it{source_tag}")
+            self.alerts.notify_unattributed_submission(det.form, det.page_url)
+        return payload
+
+    def _attribute_pending_247_orphans(self) -> Optional[Dict[str, Any]]:
+        """
+        A submission captured before the client was known is re-sent, now attributed, the
+        moment this window learns who the client is (the tracker replaces the unattributed
+        row with the same ARN).
+        """
+        if not self._pending_247_orphans:
+            return None
+        if not (self.assembler.client_pan or self.assembler.gstin):
+            return None
+        ident, det = next(iter(self._pending_247_orphans.items()))
+        del self._pending_247_orphans[ident]
+        payload = self.assembler.build_247_payload(det)
+        if not payload.get("identity_resolved"):
+            return None
+        print(f"[VSDC247] attributed {ident} to {self.assembler.client_name or self.assembler.client_pan}")
+        self.notify_activity("submit", f"{det.form or 'Submission'} Attributed",
+                             f"{self.assembler.client_name or self.assembler.client_pan} • ARN: {ident} • VSDC247 (Visual)")
+        return payload
 
     def _known_session_ack(self, filing_type: Optional[str] = None, period: Optional[str] = None) -> Optional[str]:
         """
@@ -571,6 +849,8 @@ class VSDCRouter:
         Executes a single monitoring tick (called every 1–2s by worker).
         Returns completed master payload dictionary if a filing is finalized, else None.
         """
+        if self._engines_off:
+            return None
         hwnd, title, proc_name = self.get_foreground_info()
         if not hwnd or not title:
             return None
@@ -591,8 +871,22 @@ class VSDCRouter:
         self._load_session(session)
         self._hud_buffer = []
         self._hud_buffering = True
+        self._tick_capture = None
+        self._scope_ok_this_tick = False
+        self._tick_page_url = ""
         try:
-            return self._evaluate_tick_locked(hwnd, title, title_lower, proc_name)
+            result = self._evaluate_tick_locked(hwnd, title, title_lower, proc_name)
+            # VSDC247 runs on EVERY in-scope page, crosshair or not - but only when the
+            # crosshair pipeline has nothing to dispatch this tick, and never outside the
+            # two portals (the scope gate already ran).
+            if self._scope_ok_this_tick and self._mode_247 != MODE_OFF:
+                if result is None:
+                    result = self._run_vsdc247(hwnd)
+                else:
+                    self._observe_247(hwnd)      # the crosshair pipeline handled this frame
+            if result:
+                self._remember_dispatch(result)
+            return result
         finally:
             # Flushed while this window's session is still loaded, so every event gets
             # this window's form/period - and before saving, so the "already shown"
@@ -652,13 +946,42 @@ class VSDCRouter:
         # readable address bar (real portal URL OR a local file:// test page)
         # never needs this extra gate, since host_pattern already anchors it.
         is_portal_title = any(k in title_lower for k in PORTAL_KEYWORDS)
+        # SCOPE GATE - nothing below (screenshot, OCR, UI Automation page read, identity
+        # extraction) may run for a page outside the two portals. A readable address bar
+        # must show one of their hosts; an unreadable one is only trusted briefly, for a
+        # window already verified on a portal and still titled like one. Cold, title-only
+        # matching is not allowed: a YouTube video titled "Income Tax Return guide" would
+        # otherwise be read as the real portal.
+        now_scope = time.time()
+        if address_bar_readable:
+            in_scope = is_in_scope_url(extracted_url)
+            if in_scope:
+                self._scope_verified_at = now_scope
+        else:
+            in_scope = is_portal_title and (now_scope - self._scope_verified_at) <= _SCOPE_GRACE_SEC
+        self._scope_ok_this_tick = in_scope
+        if not in_scope and address_bar_readable:
+            self._check_unlisted_portal(hwnd, extracted_url)
+        # The portal is read off the host, not guessed from text; local test pages (opt-in
+        # only) have no portal host, so they fall back to what the window title implies.
+        self._tick_portal = (portal_for_url(extracted_url) if address_bar_readable else None) or self.active_portal
+        self._tick_page_url = sanitize_page_url(extracted_url) if address_bar_readable else ""
+
         matched_crosshair = None
-        if address_bar_readable or is_portal_title:
+        if in_scope and (address_bar_readable or is_portal_title):
             matched_crosshair = match_url_crosshair(url_normalized)
             if not matched_crosshair and url != url_normalized:
                 matched_crosshair = match_url_crosshair(url)
-            if not matched_crosshair:
+            # The window title is only a stand-in for a URL that could not be read. When the
+            # address bar IS readable and matches nothing, the page has no crosshair -
+            # matching its title anyway routed unmapped pages (a GST confirmation titled
+            # "...Returns", a page titled "Dashboard") to the wrong handler, which then
+            # extracted a bogus identity from them. Such pages belong to VSDC247 and to the
+            # "unrecognised portal page" log, not to a guessed crosshair.
+            if not matched_crosshair and not address_bar_readable:
                 matched_crosshair = match_url_crosshair(title)
+        if self._247_only:
+            matched_crosshair = None      # see VSDC247_ONLY in __init__
 
         if not matched_crosshair:
             # Discovery aid: a real portal page that no crosshair recognises is how a
@@ -704,6 +1027,114 @@ class VSDCRouter:
         else:
             return self._route_itr_crosshair(matched_crosshair, url, hwnd, is_new_url, prior_crosshair)
 
+    _PICKER_SETTLE_TICKS = 8
+
+    def _capture_everify_picker(
+        self, uia_text: str, uia_lines: List[str], full_text: str, ocr_lines: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        The e-Verify RETURN PICKER ("e-Verify / Discard Return") lists every filed return that
+        is still awaiting e-Verification, one card each: assessment year, form, filing type
+        (Original / Revised / ...), PAN, acknowledgement number, filed-on date. Every card is by
+        definition "Submitted, e-Verification pending", so each is captured as that.
+
+        The picker shares its URL with the OTP and confirmation steps, so it is recognised by
+        its own heading (crosshair "itr_everify_pending"). The route is deliberately never
+        latched: the confirmation step, seconds later, must still be read.
+
+        Rules that keep it exact:
+          * one card per tick, each recorded and dispatched before the next (two cards for the
+            same form and year would otherwise overwrite each other in the assembler);
+          * "Showing (N) returns" must be matched by N parsed cards before anything is captured
+            (a half-rendered list is waited for, a bounded number of ticks);
+          * a card whose PAN differs from the client already identified in this window is never
+            attributed to that client;
+          * each ack is dispatched once per window, and only once the dataset is complete
+            (client name, PAN, form, period, status, ack) - otherwise it is retried.
+        """
+        if not (is_everify_picker_page(uia_text) or is_everify_picker_page(full_text)):
+            self._everify_picker_settle = 0
+            return None
+
+        engine = "VSDC-X"
+        cards = extract_everify_picker_cards(uia_lines) if uia_lines else []
+        if not cards:
+            engine = "VSDC"
+            cards = extract_everify_picker_cards(ocr_lines)
+        if not cards:
+            return None
+        source_tag = " • VSDC-X (Exact)" if engine == "VSDC-X" else " • VSDC (Visual)"
+
+        expected = extract_everify_picker_count(uia_text) or extract_everify_picker_count(full_text)
+        if expected is not None and len(cards) < expected:
+            self._everify_picker_settle += 1
+            if self._everify_picker_settle <= self._PICKER_SETTLE_TICKS:
+                return None          # the list is still rendering
+            self._log_once(f"picker-partial:{expected}:{len(cards)}",
+                           f"[VSDC Router] e-Verify picker says {expected} returns but only {len(cards)} could be read - "
+                           f"capturing those{source_tag}")
+
+        a = self.assembler
+        for card in cards:
+            ack = card["ack"]
+            if ack in self._everify_picker_dispatched:
+                continue
+            if not card.get("form") or not card.get("ay"):
+                self._log_once(f"picker-incomplete:{ack}",
+                               f"[VSDC Router] e-Verify picker: a return card has no readable form/year - not captured{source_tag}")
+                continue
+            if card.get("pan") and a.client_pan and card["pan"] != a.client_pan:
+                self._log_once(f"picker-pan:{ack}",
+                               "[VSDC Router] e-Verify picker: a card carries a different PAN than the client "
+                               f"identified in this window - not attributed{source_tag}")
+                continue
+            if card.get("pan") and not a.client_pan:
+                a.update_identity(pan=card["pan"], portal="Income Tax")
+
+            a.record_submission(
+                ack_number=ack,
+                status="Submitted (Not e-Verified)",
+                filing_type=card["form"],
+                period_label=f"AY {card['ay']}",
+                raw_text="",
+                crosshair_id=EVERIFY_PENDING_CROSSHAIR.id,
+                engine=engine,
+                filing_preference=card.get("filing_preference") or None,
+                filing_date=card.get("filed_on"),
+            )
+            rec = next((r for r in a.records.values() if r.ack_number == ack), None)
+            if rec is None or not a._is_dataset_complete(rec):
+                self._log_once(f"picker-wait:{ack}",
+                               f"[VSDC Router] e-Verify picker: {card['form']} AY {card['ay']} read, waiting for the "
+                               f"client's name before it can be sent{source_tag}")
+                return None
+
+            payload = a._build_payload(rec, EVERIFY_PENDING_CROSSHAIR.id)
+            self._everify_picker_dispatched.add(ack)
+            a._emitted_datasets[rec.dataset_key] = (rec.status, rec.arn or rec.ack_number, rec.client_name, rec.trade_name)
+
+            # The HUD shows the return just captured (form, filing type, period) - set for the
+            # event, then cleared again so nothing leaks into whatever the user opens next.
+            a.current_filing_type = card["form"]
+            a.current_period_label = f"AY {card['ay']}"
+            if card.get("filing_preference"):
+                a.filing_preference = card["filing_preference"]
+            who = f"{a.client_name} • " if a.client_name else ""
+            self.notify_activity("capture", f"Captured {card['form']} • AY {card['ay']}",
+                                 f"{who}Pending e-Verify • Ack: {ack}{source_tag}")
+            a.clear_workflow_selection()
+            print(f"[VSDC Router] e-Verify picker: captured {card['form']} AY {card['ay']} "
+                  f"({card.get('filing_preference') or 'filing type not shown'}) Ack={ack} - pending e-Verification{source_tag}")
+            return payload
+        return None
+
+    def _log_once(self, key: str, message: str) -> None:
+        """Prints a diagnostic line once per key (the picker is re-read every tick)."""
+        if key in self._prompted_ids:
+            return
+        self._prompted_ids[key] = time.time()
+        print(message)
+
     def _route_itr_crosshair(
         self,
         matched_crosshair: CrosshairDefinition,
@@ -741,6 +1172,8 @@ class VSDCRouter:
             self.last_crosshair_id = None
             self._everify_pending_ack = None
             self._everify_last_txn_id = None
+            self._everify_picker_dispatched = set()
+            self._everify_picker_settle = 0
             self.route_poll_count = 0
             if has_active_session:
                 self.notify_activity("logout", "Session Concluded", f"Archived: {ident}")
@@ -780,7 +1213,7 @@ class VSDCRouter:
                 self.assembler.clear_workflow_selection()
 
         # Capture target region and execute OCR
-        img = self.ocr.capture_window_image(hwnd)
+        img = self._capture_window(hwnd)
         if not img:
             return None
 
@@ -822,7 +1255,7 @@ class VSDCRouter:
         # as it did before VSDC-X existed for ITR.
         uia_text = ""
         uia_lines: List[str] = []
-        if vsdc_uia_text.is_available():
+        if self._vsdc_x_enabled and vsdc_uia_text.is_available():
             uia_res = vsdc_uia_text.read_page_text(hwnd)
             uia_text = uia_res.get("text", "")
             uia_lines = uia_res.get("lines") or []
@@ -1068,7 +1501,10 @@ class VSDCRouter:
                     self._everify_pending_ack = acks[0]
                     print(f"[VSDC Router] e-Verify wizard: holding Ack {acks[0]} "
                           f"pending verification{source_tag}")
-                return None
+                # The RETURN PICKER lists filed returns that still await e-Verification: each
+                # card is a submitted-but-unverified return, so it is captured here (the OTP
+                # step, which has no cards, still returns None).
+                return self._capture_everify_picker(uia_text, uia_lines, full_text, lines)
 
             # Confirmed: the page itself says the return was verified. Promote to the
             # dedicated confirmation crosshair so the capture is stored and shown as
@@ -1317,6 +1753,8 @@ class VSDCRouter:
             self.last_crosshair_id = None
             self._everify_pending_ack = None
             self._everify_last_txn_id = None
+            self._everify_picker_dispatched = set()
+            self._everify_picker_settle = 0
             self.route_poll_count = 0
             self.notify_activity("logout", "GST Session Concluded", f"Archived: {ident}")
             return flushed
@@ -1345,7 +1783,7 @@ class VSDCRouter:
                 self.assembler.clear_workflow_selection()
 
         # Capture target region and execute OCR
-        img = self.ocr.capture_window_image(hwnd)
+        img = self._capture_window(hwnd)
         if not img:
             return None
 
@@ -1387,7 +1825,7 @@ class VSDCRouter:
         # below behaves exactly as it always has, driven by OCR alone.
         uia_text = ""
         uia_lines: List[str] = []
-        if vsdc_uia_text.is_available():
+        if self._vsdc_x_enabled and vsdc_uia_text.is_available():
             uia_res = vsdc_uia_text.read_page_text(hwnd)
             uia_text = uia_res.get("text", "")
             uia_lines = uia_res.get("lines") or []

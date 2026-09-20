@@ -780,6 +780,19 @@ def extract_profile_name_field(lines: List[str]) -> Optional[str]:
     return None
 
 
+_UI_CONTROL_LINE_RE = re.compile(
+    r"\b(?:input\s+field|search\s+box|text\s*box|edit\s+box|combo\s*box|check\s*box|radio\s+button|"
+    r"drop\s*-?\s*down|scroll\s*bar|placeholder)\b"
+    r"|^(?:e[\s-]?verify|discard|search|showing\b.*|please\s+select\b.*|current\s+step\b.*|"
+    r"unvisited\s+step\b.*|filed\s+on|filing\s+type|applicable\s+act|original|revised|belated|updated)\s*:?$",
+    re.IGNORECASE)
+
+
+# A PAN (5 letters, 4 digits, 1 letter) or a GSTIN.
+_IDENTIFIER_TOKEN_RE = re.compile(
+    r"\b(?:[A-Z]{5}[0-9]{4}[A-Z]|[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][A-Z0-9]Z[A-Z0-9])\b")
+
+
 def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     """
     Scans a list of text lines for taxpayer name patterns:
@@ -790,6 +803,14 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
     - Header profile badge '<Name> (<PAN>)'
     - Header profile dropdown button with role indicator
     """
+    if not lines:
+        return None
+
+    # UI Automation reports controls by what they ARE ("Search Box Input Field"), and the
+    # end-trimming below strips the noise words off such a line and leaves "BOX INPUT" - a
+    # wrong client name that would then be stored on a capture. A line that describes a
+    # control is never a name.
+    lines = [ln for ln in lines if not _UI_CONTROL_LINE_RE.search(ln or "")]
     if not lines:
         return None
 
@@ -886,6 +907,14 @@ def extract_name_from_ocr_lines(lines: List[str]) -> Optional[str]:
                 candidate = " ".join(words)
                 if is_valid_name(candidate) and candidate not in NOISE_WORDS and len(words) >= 2:
                     return candidate
+
+    # The stages below guess a name from loose text. An identifier is never a name, but once its
+    # digits are stripped a PAN's letters look like one ("ABCPD5678E" -> "ABCPD E"), so PANs and
+    # GSTINs are taken out of what they see. (Stages 3-4 above USE a PAN, as the anchor next to a
+    # real name, and have already run.)
+    lines = [ln for ln in lines if not _IDENTIFIER_TOKEN_RE.search(ln or "")]
+    if not lines:
+        return None
 
     # 5. ALL-CAPS Run Candidate Detection (NLP-Free Entity Isolation)
     full_block = " \n ".join(lines)

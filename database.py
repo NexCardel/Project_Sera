@@ -3701,6 +3701,20 @@ class SeraDatabase:
         # 2. Write capture to rawPayload.db and update SRPF container
         is_replaced = False
         with self._connect_raw() as r_conn:
+            # An unattributed capture (VSDC247 saw an ARN before it knew the client) is stored
+            # as "Pending_<ARN>". When the SAME ARN arrives again with an identity it replaces
+            # that placeholder - it must neither be dropped as a duplicate by the check below
+            # nor leave the placeholder behind as a second row for one filing.
+            incoming_resolved = bool(valid_id) or bool(
+                unassigned_identity and not str(unassigned_identity).startswith("Pending_")
+                and unassigned_identity != "Unassigned"
+            )
+            if arn_number and arn_number != "N/A" and incoming_resolved:
+                r_conn.execute(
+                    "DELETE FROM tracker_dump WHERE unassigned_identity = ? AND arn_number = ?",
+                    (f"Pending_{arn_number}", arn_number),
+                )
+
             # Deduplication Check (for immediate identical bursts within 10s)
             if arn_number and arn_number != "N/A":
                 cur = r_conn.execute(

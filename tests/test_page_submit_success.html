@@ -40,7 +40,7 @@
                 <h1 class="success-title">You have successfully submitted your return!</h1>
             </div>
             <p class="success-desc">
-                <strong>Acknowledgement Number :</strong> 198273645019283<br><br>
+                <strong>Acknowledgement Number :</strong> <span id="ackNumber">198273645019283</span><br><br>
                 You still need to e-Verify within 30 days to complete the process of return filing.
             </p>
             <div class="actions">
@@ -51,6 +51,13 @@
     </div>
 
     <script>
+        // A real ITR acknowledgement number ends with its own filing date as DDMMYY, and VSDC247
+        // only believes an ack dated today. So the page builds one for today, on every load.
+        (function () {
+            var d = new Date(), p2 = function (n) { return String(n).padStart(2, "0"); };
+            document.getElementById("ackNumber").textContent =
+                "198273645" + p2(d.getDate()) + p2(d.getMonth() + 1) + p2(d.getFullYear() % 100);
+        })();
         // Ensure hash matches ITD 2.0 completion route
         if (!window.location.hash) {
             window.location.hash = "/foreturns-ay26/fo-itr1-ay2026/fo-e-verify-later";

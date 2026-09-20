@@ -694,11 +694,19 @@ class VisualSessionAssembler:
         raw_text: Optional[str] = None,
         crosshair_id: str = "vsh_submission",
         engine: str = "VSDC",
+        filing_preference: Optional[str] = None,
+        filing_date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Records a verified or submitted filing acknowledgement.
         Constructs a typed FilingRecord keyed by (PAN, FormType, FY, Month).
         Enforces monotonic status promotion: status only upgrades, valid ARNs are never lost.
+
+        filing_preference and filing_date belong to THIS return and are stored on its record
+        only. A page listing several returns (the e-Verify picker) must pass them here rather
+        than through update_selection(), which applies a preference to every record held.
+        filing_date is the portal's own date ("YYYY-MM-DD"); without it the record is stamped
+        with the moment of capture.
         """
         self.last_activity = time.time()
         ft = filing_type or self.current_filing_type or ("Return" if self.portal != "Income Tax" else "ITR")
@@ -745,10 +753,11 @@ class VisualSessionAssembler:
             ack_number=effective_arn,
             portal=self.portal,
             capture_method=f"{engine}_{crosshair_id}",
-            filing_preference=self.filing_preference or "",
+            filing_preference=filing_preference or self.filing_preference or "",
             raw_text=raw_text or "",
             session_id=self.session_id,
             steps=list(self.session.steps),
+            **({"filing_date": f"{filing_date} 00:00:00"} if filing_date else {}),
         )
 
         self.records[record_key] = record
@@ -768,6 +777,107 @@ class VisualSessionAssembler:
             )
 
         return record.to_dict()
+
+    def build_247_payload(self, detection: Any) -> Dict[str, Any]:
+        """
+        Builds the master payload for a submission that VSDC247 recognised from the SCREEN
+        alone, independently of any crosshair.
+
+        Unlike seal_and_flush() this does NOT require the dataset to be complete. A
+        confirmation that carries an ARN is worth saving even when the client, form or
+        period is not known yet: the tracker stores it as an unattributed row (and the HUD
+        tells the user what is missing) rather than losing it. It is also kept out of
+        self.records, so it can never interfere with the crosshair pipeline's own
+        bookkeeping for the same filing.
+
+        `detection` is a vsdc247.Detection (kept untyped here to avoid a circular import).
+        Only structured fields go in - never page text.
+        """
+        self.last_activity = time.time()
+        portal = detection.portal or self.portal
+        if portal:
+            self.portal = portal
+        entity_pan = resolve_entity_pan(self.client_pan, self.gstin)
+        identity_resolved = entity_pan != "UNKNOWN"
+
+        default_form = "ITR" if portal == "Income Tax" else "GST Submission"
+        form = detection.form or self.current_filing_type or default_form
+        known_period = detection.period or self.current_period_label
+        if known_period or self.fy:
+            c_month, c_fy, p_label = normalize_period(tax_period=known_period, fy=self.fy, portal=portal)
+        else:
+            # Nothing on screen or in the session says which period this is. normalize_period()
+            # would invent one from today's date (for ITR, the upcoming AY - wrong for a return
+            # filed now), and a made-up period is worse than a blank one.
+            c_month = c_fy = p_label = ""
+        rank = get_status_rank(detection.status)
+        filing_date = (f"{detection.filing_date} 00:00:00" if detection.filing_date
+                       else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        capture_method = f"VSDC247_{detection.kind}"
+
+        record = FilingRecord(
+            key=(entity_pan if identity_resolved else f"UNKNOWN:{detection.identifier}", form, c_fy, c_month),
+            entity_pan=entity_pan,
+            gstin=self.gstin or "",
+            client_name=self.client_name or "",
+            trade_name=self.trade_name or "",
+            filing_type=form,
+            tax_period=c_month,
+            fy=c_fy or self.fy or "",
+            period_label=p_label,
+            status=detection.status,
+            status_rank=rank,
+            due_date=self.due_date or "",
+            dob=self.dob or "",
+            mobile=self.mobile or "",
+            email=self.email or "",
+            arn=detection.identifier,
+            ack_number=detection.identifier,
+            portal=portal,
+            capture_method=capture_method,
+            filing_date=filing_date,
+            filing_preference=self.filing_preference or "",
+            raw_text="",
+            session_id=self.session_id,
+            steps=list(self.session.steps),
+        )
+        capture = record.to_dict()
+        pan_out = entity_pan if identity_resolved else ""
+
+        return {
+            "source": "vsdc_optical",
+            "session_id": self.session_id,
+            "portal": portal,
+            "pan": pan_out,
+            "gstin": record.gstin,
+            "client_name": record.client_name,
+            "trade_name": record.trade_name,
+            "filing_type": form,
+            "period_label": p_label,
+            "fy": record.fy,
+            "due_date": record.due_date,
+            "dob": record.dob,
+            "mobile": record.mobile,
+            "email": record.email,
+            "filing_preference": record.filing_preference,
+            "arn": detection.identifier,
+            "status": detection.status,
+            "raw_text": "",
+            "capture_method": capture_method,
+            "identity_resolved": identity_resolved,
+            # Where the submission was seen (query string stripped) - the crosshair pipeline
+            # has a timeline of routed pages, but a page no crosshair knows has none.
+            "page_url": getattr(detection, "page_url", "") or "",
+            "raw_payload": {
+                "source": {"protocol": portal, "engine": "VSDC247", "version": "1.0.0"},
+                "raw_text": "",
+                "client_temp_name": record.client_name,
+                "trade_name": record.trade_name,
+                "assembler_captures": [dict(capture, pan=pan_out)],
+                "timeline": list(self.session.steps),
+                "vsdc247": dict(detection.evidence, page_url=getattr(detection, "page_url", "") or ""),
+            },
+        }
 
     def record_gst_form_details(
         self,

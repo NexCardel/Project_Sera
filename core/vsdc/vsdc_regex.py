@@ -440,6 +440,129 @@ def find_ack_candidates(text: str) -> List[str]:
     return out
 
 
+# ── e-Verify return picker ("e-Verify / Discard Return") ─────────────────────────────
+# The picker lists every filed return still awaiting e-Verification, one card each:
+#   Assessment Year 2026-27 | ITR 4 | Filing Type: Original | PAN : ... |
+#   Acknowledgement Number : ... | Filed On : Aug 29, 2026 | [E-Verify] [Discard]
+# As UI Automation reports it, every label and its value are SEPARATE lines ("PAN :" then the
+# PAN); as OCR reads it, they share a line ("PAN : ABCPD5678E"). Both are handled.
+_PICKER_HEADING_RE = re.compile(
+    r"(?:e-?\s*verify\s*/\s*discard\s+return|would\s+like\s+to\s+verify\s*/\s*discard)", re.IGNORECASE)
+_PICKER_SHOWING_RE = re.compile(r"showing\s*\(\s*(\d+)\s*\)\s*returns?", re.IGNORECASE)
+_PK_AY = re.compile(r"^assessment\s+year\b[\s:]*(.*)$", re.IGNORECASE)
+_PK_FORM = re.compile(r"^ITR[\s\-]?([1-7]|U)$", re.IGNORECASE)
+_PK_FTYPE = re.compile(r"^filing\s+type\b[\s:]*(.*)$", re.IGNORECASE)
+_PK_PAN = re.compile(r"^PAN\b[\s:]*(.*)$", re.IGNORECASE)
+_PK_ACK = re.compile(r"^ack\w*(?:\s+(?:number|no\.?))?\b[\s:]*(.*)$", re.IGNORECASE)
+_PK_FILED = re.compile(r"^filed\s+on\b[\s:]*(.*)$", re.IGNORECASE)
+_PK_LABELS = (_PK_AY, _PK_FTYPE, _PK_PAN, _PK_ACK, _PK_FILED)
+_PORTAL_DATE_FORMATS = ("%b %d, %Y", "%B %d, %Y", "%d-%b-%Y", "%d %b %Y", "%d/%m/%Y", "%d-%m-%Y")
+
+
+def is_everify_picker_page(text: str) -> bool:
+    """True when the text is the e-Verify return picker (its own heading), not the OTP or
+    confirmation step that shares its URL."""
+    return bool(text and _PICKER_HEADING_RE.search(text))
+
+
+def extract_everify_picker_count(text: str) -> Optional[int]:
+    """The N in "Showing (N) returns", or None."""
+    m = _PICKER_SHOWING_RE.search(text or "")
+    return int(m.group(1)) if m else None
+
+
+def _parse_portal_date(value: str) -> Optional[str]:
+    """'Aug 29, 2026' -> '2026-08-29', or None."""
+    from datetime import datetime as _dt
+    v = re.sub(r"\s+", " ", (value or "").strip())
+    for fmt in _PORTAL_DATE_FORMATS:
+        try:
+            return _dt.strptime(v, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _normalise_filing_preference(value: str) -> str:
+    v = (value or "").strip()
+    for word in ("original", "revised", "belated", "updated"):
+        if v.lower().startswith(word):
+            return word.title()
+    return v.title()
+
+
+def extract_everify_picker_cards(lines: List[str]) -> List[Dict[str, Any]]:
+    """
+    Every return card on the e-Verify picker, in page order:
+    {"ay", "form", "filing_preference", "pan", "ack", "filed_on"}. A card without an
+    acknowledgement is dropped - it cannot be a capture. `form` is "ITR-4" style.
+    """
+    cleaned = [re.sub(r"\s+", " ", (ln or "")).strip() for ln in (lines or [])]
+    cleaned = [ln for ln in cleaned if ln]
+
+    def value_at(i: int, inline: str) -> str:
+        """The label's value: on the same line, else on the next unless that is another label."""
+        if inline.strip():
+            return inline.strip()
+        if i + 1 < len(cleaned):
+            nxt = cleaned[i + 1]
+            if not any(p.match(nxt) for p in _PK_LABELS) and not _PK_FORM.match(nxt):
+                return nxt
+        return ""
+
+    cards: List[Dict[str, Any]] = []
+    cur: Dict[str, Any] = {}
+    ay: Optional[str] = None
+
+    def flush():
+        nonlocal cur
+        if cur.get("ack"):
+            cards.append({
+                "ay": cur.get("ay") or ay, "form": cur.get("form"),
+                "filing_preference": cur.get("filing_preference") or "",
+                "pan": cur.get("pan") or "", "ack": cur["ack"], "filed_on": cur.get("filed_on"),
+            })
+        cur = {}
+
+    for i, ln in enumerate(cleaned):
+        m = _PK_AY.match(ln)
+        if m:
+            am = re.search(r"\b(20\d{2})\s*[-–/]\s*(?:20)?(\d{2})\b", value_at(i, m.group(1)))
+            if am:
+                if cur.get("ack"):
+                    flush()
+                ay = f"{am.group(1)}-{am.group(2)}"
+            continue
+        m = _PK_FORM.match(ln)
+        if m:
+            if cur.get("ack"):
+                flush()                     # a new card begins: the previous one is complete
+            cur["form"] = f"ITR-{m.group(1).upper()}"
+            cur["ay"] = ay
+            continue
+        m = _PK_FTYPE.match(ln)
+        if m:
+            cur["filing_preference"] = _normalise_filing_preference(value_at(i, m.group(1)))
+            continue
+        m = _PK_PAN.match(ln)
+        if m:
+            pm = re.search(r"\b([A-Z]{5}\d{4}[A-Z])\b", value_at(i, m.group(1)).upper())
+            if pm:
+                cur["pan"] = pm.group(1)
+            continue
+        m = _PK_ACK.match(ln)
+        if m:
+            am = re.search(r"\b(\d{15})\b", value_at(i, m.group(1)))
+            if am:
+                cur["ack"] = am.group(1)
+            continue
+        m = _PK_FILED.match(ln)
+        if m:
+            cur["filed_on"] = _parse_portal_date(value_at(i, m.group(1)))
+    flush()
+    return cards
+
+
 def extract_gstin(text: str) -> Optional[str]:
     """
     Extracts a 15-character Goods and Services Tax Identification Number (GSTIN).

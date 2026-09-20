@@ -92,6 +92,16 @@ class VSDCHudPill(QWidget):
             "rgba(57, 255, 20, 0.20)",
             "rgba(57, 255, 20, 0.45)",
         ),
+        # Something the user should look at: a VSDC247 capture that has no client yet, or a
+        # possible submission that was seen but NOT saved. Amber, so it never reads as a
+        # confirmed capture.
+        "prompt": (
+            "mdi.alert-circle-outline",
+            "#D29922",
+            "ACTION NEEDED",
+            "rgba(210, 153, 34, 0.15)",
+            "rgba(210, 153, 34, 0.40)",
+        ),
         "default": (
             "mdi.radar",
             "#388BFD",
@@ -287,10 +297,11 @@ class VSDCHudPill(QWidget):
             return f'{lbl}: <span style="font-family: Consolas, monospace; color: #39FF14; font-weight: bold;">{val}</span>'
         text = re.sub(arn_pattern, repl_arn, text, flags=re.IGNORECASE)
 
-        source_pattern = r"(VSDC-X \(Exact\)|VSDC \(Visual\))"
+        source_pattern = r"(VSDC-X \(Exact\)|VSDC247 \(Visual\)|VSDC \(Visual\))"
         def repl_source(m):
             label = m.group(1)
-            color = "#58A6FF" if "VSDC-X" in label else "#8B949E"
+            # VSDC-X blue, the VSDC247 safety net purple, plain VSDC OCR muted grey.
+            color = "#58A6FF" if "VSDC-X" in label else ("#D2A8FF" if "VSDC247" in label else "#8B949E")
             return f'<span style="color: {color}; font-weight: 700;">{label}</span>'
         text = re.sub(source_pattern, repl_source, text)
 
