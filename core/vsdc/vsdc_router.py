@@ -779,6 +779,15 @@ class VSDCRouter:
         if self._sgt is not None:
             self._sgt.end_all(reason)
 
+    def drain_sgt_dispatches(self) -> List[Dict[str, Any]]:
+        """Every SGT tracker row still waiting - for the worker to send on shutdown."""
+        if self._sgt is None:
+            return []
+        rows = self._sgt.drain()
+        for r in rows:
+            stamp_device_name(r)
+        return rows
+
     def seed_identity_for_foreground(self, **kwargs) -> None:
         """
         Lets an EXTERNAL, out-of-band identity read (e.g. SDC's browser-extension
@@ -908,6 +917,15 @@ class VSDCRouter:
         Executes a single monitoring tick (called every 1–2s by worker).
         Returns completed master payload dictionary if a filing is finalized, else None.
         """
+        # SGT tracker rows waiting to be saved go out first, one per tick - even when the
+        # engines were just switched off (switching SGT off queues its last rows) and whatever
+        # window is in front. They are SGT's own rows: never recorded in _dispatched_ids, so
+        # they can never stop VSDC247 from saving its own capture of the same filing.
+        if self._sgt is not None and self._sgt.pending():
+            sgt_row = self._sgt.pop_dispatch()
+            if sgt_row:
+                stamp_device_name(sgt_row)
+                return sgt_row
         if self._engines_off:
             return None
         hwnd, title, proc_name = self.get_foreground_info()

@@ -3625,6 +3625,16 @@ class SeraDatabase:
 
         return f"{p_canon}:{id_str}:{f_canon}:{per_canon}"
 
+    def delete_sgt_rows_by_dataset_key(self, dataset_key: str) -> int:
+        """Removes SGT's own row(s) for a dataset key it has superseded. Refuses any key outside
+        SGT's "SGT:" namespace, so it can never delete another engine's rows."""
+        if not dataset_key or not str(dataset_key).startswith("SGT:"):
+            return 0
+        with self._connect_raw() as r_conn:
+            cur = r_conn.execute(
+                "DELETE FROM tracker_dump WHERE dataset_key = ? AND capture_method LIKE 'SGT%'", (dataset_key,))
+            return cur.rowcount or 0
+
     def insert_tracker_dump(self, client_id: int = None, service_id: int = None, portal: str = None,
                             period_label: str = None, arn_number: str = None,
                             capture_method: str = "DOM_Tracker", status: str = "submitted",
@@ -3707,6 +3717,13 @@ class SeraDatabase:
 
         # 2. Write capture to rawPayload.db and update SRPF container
         is_replaced = False
+        # SGT (the Sera Global Tracker, running beside the other engines) keeps its own rows. Every
+        # clean-up below - pending placeholders, burst duplicates, draft supersession - only ever
+        # looks at rows of the SAME side, so SGT can never replace, drop or purge another
+        # engine's capture and no other engine can remove an SGT row.
+        is_sgt = str(capture_method or "").startswith("SGT")
+        same_engine = ("capture_method LIKE 'SGT%'" if is_sgt
+                       else "(capture_method IS NULL OR capture_method NOT LIKE 'SGT%')")
         with self._connect_raw() as r_conn:
             # An unattributed capture (VSDC247 saw an ARN before it knew the client) is stored
             # as "Pending_<ARN>". When the SAME ARN arrives again with an identity it replaces
@@ -3718,14 +3735,14 @@ class SeraDatabase:
             )
             if arn_number and arn_number != "N/A" and incoming_resolved:
                 r_conn.execute(
-                    "DELETE FROM tracker_dump WHERE unassigned_identity = ? AND arn_number = ?",
+                    f"DELETE FROM tracker_dump WHERE unassigned_identity = ? AND arn_number = ? AND {same_engine}",
                     (f"Pending_{arn_number}", arn_number),
                 )
 
             # Deduplication Check (for immediate identical bursts within 10s)
             if arn_number and arn_number != "N/A":
                 cur = r_conn.execute(
-                    "SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ?",
+                    f"SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ? AND {same_engine}",
                     (arn_number, (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)).isoformat())
                 )
                 row = cur.fetchone()
@@ -3785,6 +3802,7 @@ class SeraDatabase:
                               AND status NOT IN ('Not Submitted', '', 'Pending', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected')
                               AND status IS NOT NULL
                               AND ({' OR '.join(assessee_conds)})
+                              AND {same_engine}
                             ORDER BY id DESC LIMIT 1
                         """
                         filed_row = r_conn.execute(chk_sql, assessee_params).fetchone()
@@ -3805,6 +3823,7 @@ class SeraDatabase:
                           AND period_label = ?
                           AND (status IN ('Not Submitted', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
                           AND ({' OR '.join(assessee_conds)})
+                          AND {same_engine}
                     """
                     del_unsub = r_conn.execute(purge_sql, assessee_params)
                     if del_unsub.rowcount > 0:
@@ -3821,7 +3840,8 @@ class SeraDatabase:
                     id_clauses.append("unassigned_identity = ?")
                     id_vals.append(unassigned_identity)
                 if id_clauses:
-                    url_sql = f"SELECT id, raw_payload_json FROM tracker_dump WHERE ({' OR '.join(id_clauses)}) ORDER BY id DESC"
+                    url_sql = (f"SELECT id, raw_payload_json FROM tracker_dump WHERE ({' OR '.join(id_clauses)}) "
+                               f"AND {same_engine} ORDER BY id DESC")
                     cur = r_conn.execute(url_sql, id_vals)
                     for r_id, r_json in cur.fetchall():
                         if r_json:

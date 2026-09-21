@@ -235,6 +235,11 @@ def _capture_method_color(method: str) -> str:
     """
     if not method:
         return "#FFA657"
+    # Same colours as the HUD pill's source tags: VSDC247 purple, SGT orange.
+    if method.startswith("SGT"):
+        return "#FFA657"
+    if method.startswith("VSDC247_"):
+        return "#D2A8FF"
     if method.startswith("VSDC-X_"):
         return "#58A6FF"
     if method.startswith("VSDC_") or method == "SAD_API_Interceptor":
@@ -242,6 +247,25 @@ def _capture_method_color(method: str) -> str:
     if method == "DOM_Tracker":
         return "#58A6FF"
     return "#FFA657"
+
+
+def _passes_source_filter(record: dict, source_filter: str, is_grouped: bool) -> bool:
+    """
+    "Hide SGT" / "SGT Only" for the Source dropdown. A raw row is SGT's when its capture
+    method starts with "SGT". A client container can hold rows from several engines: "Hide SGT"
+    hides a container made ONLY of SGT rows, "SGT Only" shows any container with an SGT row.
+    """
+    if is_grouped:
+        methods = [str(h.get("capture_method") or "") for h in (record.get("filing_history") or [])]
+        methods = methods or [str(record.get("capture_method") or "")]
+    else:
+        methods = [str(record.get("capture_method") or "")]
+    sgt = [m.startswith("SGT") for m in methods]
+    if source_filter == "Hide SGT":
+        return not all(sgt)
+    if source_filter == "SGT Only":
+        return any(sgt)
+    return True
 
 
 def _safe_qta_icon(icon_name, color="#FFFFFF"):
@@ -1394,6 +1418,17 @@ class TrackerDumpWindow(QWidget):
         self.cmb_date.currentIndexChanged.connect(self._on_filter_changed)
         filter_layout.addWidget(self.cmb_date, stretch=1)
 
+        self.cmb_source = QComboBox()
+        self.cmb_source.addItems([
+            "All Sources",
+            "Hide SGT",
+            "SGT Only"
+        ])
+        self.cmb_source.setToolTip("SGT (Sera Global Tracker) rows are shadow captures shown beside the "
+                                   "other engines' rows for comparison. Hide them, or show only them.")
+        self.cmb_source.currentIndexChanged.connect(self._on_filter_changed)
+        filter_layout.addWidget(self.cmb_source, stretch=1)
+
         self.btn_reset_filters = QPushButton(" Reset")
         self.btn_reset_filters.setProperty("class", "ActionBtnGhost")
         self.btn_reset_filters.setIcon(_safe_qta_icon("mdi.filter-off", "#C9D1D9"))
@@ -1618,6 +1653,10 @@ class TrackerDumpWindow(QWidget):
         self.cmb_date.setCurrentIndex(0)
         self.cmb_date.blockSignals(False)
 
+        self.cmb_source.blockSignals(True)
+        self.cmb_source.setCurrentIndex(0)
+        self.cmb_source.blockSignals(False)
+
         self._current_page = 1
         self._apply_filters()
 
@@ -1663,6 +1702,7 @@ class TrackerDumpWindow(QWidget):
         portal_filter = self.cmb_portal.currentText()
         client_filter = self.cmb_client.currentText()
         date_filter = self.cmb_date.currentText()
+        source_filter = self.cmb_source.currentText()
         is_grouped = (self.cmb_view_mode.currentIndex() == 0)
 
         now_dt = datetime.now().astimezone()
@@ -1721,7 +1761,11 @@ class TrackerDumpWindow(QWidget):
                     if delta_sec < 0 or delta_sec > 30 * 86400:
                         continue
 
-            # 5. Search Text Filter
+            # 5. Capture Source Filter (SGT shadow rows)
+            if source_filter != "All Sources" and not _passes_source_filter(d, source_filter, is_grouped):
+                continue
+
+            # 6. Search Text Filter
             if search_txt:
                 match_fields = [
                     d.get("display_name", ""), d.get("client_name", ""), d.get("pan", ""),

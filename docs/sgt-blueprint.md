@@ -1,7 +1,18 @@
 # Sera Global Tracker (SGT) — blueprint
 
-**Status:** shadow mode built and field-tested (logs + HUD pill, saves nothing). Live mode —
-crash-safe persistence and session-end dispatch to the tracker — not built yet.
+**Status:** shadow mode built and field-tested. Its returns go into the tracker dump as their own
+tagged rows (decided 2026-09-21: "mixed into the tracker, tagged"), beside the other engines'
+rows, plus the HUD pill and a local log. Live mode (SGT replacing an engine) is not built.
+
+**Tracker rows (2.10.1):** capture method `SGT_shadow`; dataset keys in an `SGT:` namespace
+(`SGT:ITR:<PAN>:<FORM>:<PERIOD>`, stable across sessions). Written as soon as a return can be
+keyed and again on every change - never only at session end, so a crash loses nothing; a return
+in progress is written once complete and moved (old key superseded) if its form changes; rows
+written before the client was known are rewritten under the PAN. In `insert_tracker_dump` every
+clean-up (pending placeholders, 10-second duplicates, draft supersession) only looks at rows of
+the same side, so SGT and the other engines can never remove each other's rows. SGT rows never
+enter the router's `_dispatched_ids`, so they cannot stop VSDC247 saving its own capture. The
+tracker window colours them orange and has a Source filter (All / Hide SGT / SGT Only).
 **Date:** 2026-09-21
 
 ---

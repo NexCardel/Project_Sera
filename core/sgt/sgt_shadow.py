@@ -2,10 +2,12 @@
 core/sgt/sgt_shadow.py — SGT in shadow mode
 ============================================
 Runs beside the live pipeline on every in-scope page, builds the session SGT WOULD have
-dispatched, and writes it to a local log. It saves nothing to the tracker and sends nothing
-anywhere: its only job is to be compared with what the live pipeline actually captured, before
-SGT is trusted with anything. Its captures do show on the HUD pill, tagged "SGT (Shadow)", so
-they can be watched live - only real captures, never page reads.
+dispatched, and writes it to a local log. Its returns also go into the tracker dump as their
+OWN rows (capture method "SGT_shadow", keys in an "SGT:" namespace), beside the other engines'
+rows so the two can be compared - an SGT row can never replace, drop or purge another engine's
+row, nor be removed by one. A row is written as soon as SGT has a return it can key, and again
+when it changes, so nothing waits for the session to end. Its captures also show on the HUD
+pill, tagged "SGT (Shadow)" - only real captures, never page reads.
 
 Per browser window (one client per session, two windows = two sessions):
 
@@ -40,6 +42,7 @@ import os
 import re
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -54,6 +57,7 @@ from .sgt_toolbox import MERGES
 
 SHADOW_DIR_ENV = "SGT_SHADOW_DIR"
 HUD_TAG = "SGT (Shadow)"        # the pill colours this tag (ui/components/vsdc_hud_pill.py)
+CAPTURE_METHOD = "SGT_shadow"   # tracker rows; the tracker colours and can hide rows starting "SGT"
 IDLE_END_SEC = 20 * 60
 REREAD_AFTER_SEC = 15.0
 MIN_UIA_LINES = 3               # fewer than this and the page is treated as blind
@@ -94,6 +98,7 @@ class _Slot:
     record: str
     confidence: int
     first_page: str
+    sent_key: Optional[str] = None      # the tracker dataset_key this slot was last written under
 
     @property
     def ack(self) -> Optional[str]:
@@ -113,6 +118,7 @@ class _Draft:
     field there changes or clears the piece.
     """
     pieces: Dict[str, Dict[str, str]] = field(default_factory=dict)   # field -> {value, page, source, spec}
+    slot: Optional["_Slot"] = None      # the row this return was written as, once complete
 
     def values(self, rules: Any = None) -> Dict[str, str]:
         vals = {k: p["value"] for k, p in self.pieces.items()}
@@ -175,6 +181,9 @@ class SgtShadow:
         # client identified, a return found or promoted, a session with something in it
         # ending - never page reads or half-built returns, so the pill stays quiet otherwise.
         self._notify = notify
+        # Tracker rows waiting to be handed to the router (one entry per return; a return that
+        # changes again before it is sent is simply sent once, in its latest state).
+        self._outbox: "OrderedDict[int, Tuple[_Session, _Slot]]" = OrderedDict()
         if read_uia is None:
             from core.vsdc import vsdc_uia_text
 
@@ -325,13 +334,28 @@ class SgtShadow:
                         previous=old["value"] if old else None, spec=hit.spec, via=hit.source, page=url, source=source)
             self._echo(f"[SGT] (shadow) return in progress: {fld} = {hit.value}"
                        f"{' (was ' + old['value'] + ')' if old else ''}  [{hit.spec}, {hit.source}]")
+        # Complete already? Then it is a return now - written at once rather than when it
+        # closes, so quitting the app (or a crash) in the middle of a filing loses nothing.
+        # It keeps building; later pieces update the same row.
+        vals, missing = self._draft_as_dataset(d, rules)
+        if not missing:
+            prev = d.slot
+            if (prev is not None and prev in s.slots and not prev.ack
+                    and prev.form_period != (vals.get("form"), vals.get("period"))):
+                # The CA went back and changed the form (or year) of this same return: move its
+                # row rather than leave a stale one behind (the old key is superseded on send).
+                old = dict(prev.values)
+                prev.values.update(vals)
+                self._queue(s, prev)
+                self._event(s, "dataset", change="moved", record="current_return", previous=old,
+                            values=prev.values, page=url, source=source)
+                self._echo(f"[SGT] (shadow) return in progress moved: {self._label(old)} -> {self._label(prev.values)}")
+            else:
+                d.slot = self._merge_values(s, vals, "current_return", 85, url, source)
 
-    def _close_draft(self, s: _Session, rules: Any, reason: str, url: str) -> None:
-        """Turns the return being built into a dataset if it is complete; logs it if not."""
-        d = s.draft
-        s.draft = _Draft()
-        if not d.pieces:
-            return
+    @staticmethod
+    def _draft_as_dataset(d: _Draft, rules: Any) -> Tuple[Dict[str, str], List[str]]:
+        """The return being built as dataset values, plus what it still lacks (empty = complete)."""
         vals = d.values(rules)
         missing = [f for f in getattr(rules, "complete_when", ("form", "period")) if not vals.get(f)]
         if not missing and not vals.get("status"):
@@ -340,6 +364,15 @@ class SgtShadow:
                 vals["status"] = status
             else:
                 missing.append("status (nothing shows it, and no link evidence that it was being filed)")
+        return vals, missing
+
+    def _close_draft(self, s: _Session, rules: Any, reason: str, url: str) -> None:
+        """Turns the return being built into a dataset if it is complete; logs it if not."""
+        d = s.draft
+        s.draft = _Draft()
+        if not d.pieces:
+            return
+        vals, missing = self._draft_as_dataset(d, rules)
         if missing:
             self._event(s, "current", change="incomplete - not dispatched", values=vals, missing=missing, reason=reason)
             self._echo(f"[SGT] (shadow) return in progress dropped ({reason}): missing {', '.join(missing)}")
@@ -366,6 +399,100 @@ class SgtShadow:
         return used
 
     # ── Folding a page into the session ──────────────────────────────────────────
+    # ── Tracker rows ─────────────────────────────────────────────────────────────
+    def _queue(self, s: _Session, slot: _Slot) -> None:
+        self._outbox[id(slot)] = (s, slot)
+        self._outbox.move_to_end(id(slot))
+
+    def _queue_all(self, s: _Session) -> None:
+        """The client became known (or their name completed): every row of the session is
+        rewritten under the client's key, replacing the rows written before it was known."""
+        for slot in s.slots:
+            if slot.sent_key is not None:
+                self._queue(s, slot)
+
+    def pending(self) -> int:
+        return len(self._outbox)
+
+    def pop_dispatch(self) -> Optional[Dict[str, Any]]:
+        """The next tracker row to save, in the pipeline's payload shape, or None."""
+        while self._outbox:
+            _, (s, slot) = self._outbox.popitem(last=False)
+            try:
+                return self._tracker_payload(s, slot)
+            except Exception as e:                  # never let one bad row block the rest
+                self._echo(f"[SGT] could not build a tracker row: {e}")
+        return None
+
+    def drain(self) -> List[Dict[str, Any]]:
+        out = []
+        while True:
+            p = self.pop_dispatch()
+            if p is None:
+                return out
+            out.append(p)
+
+    @staticmethod
+    def dataset_key(s: _Session, values: Dict[str, str]) -> str:
+        """
+        SGT's own key namespace ("SGT:..."), so an SGT row only ever replaces an SGT row - never
+        VSDC's row for the same return. Stable across sessions for a known client, so seeing
+        the same return again updates its row instead of adding one.
+        """
+        def norm(x: Any) -> str:
+            return re.sub(r"[^A-Z0-9]", "", str(x or "").upper())
+        portal = "GST" if "gst" in (s.portal or "").lower() else "ITR"
+        prof = {k: v["value"] for k, v in s.profile.items()}
+        ident = (prof.get("gstin") or prof.get("pan")) if portal == "GST" else (prof.get("pan") or prof.get("gstin"))
+        ident = norm(ident) or f"S{norm(s.session_id)}"
+        if values.get("form") and values.get("period"):
+            return f"SGT:{portal}:{ident}:{norm(values['form'])}:{norm(values['period'])}"
+        return f"SGT:{portal}:{ident}:ACK:{norm(values.get('ack'))}"
+
+    def _tracker_payload(self, s: _Session, slot: _Slot) -> Dict[str, Any]:
+        v = dict(slot.values)
+        prof = {k: p["value"] for k, p in s.profile.items()}
+        key = self.dataset_key(s, v)
+        supersedes = slot.sent_key if slot.sent_key and slot.sent_key != key else None
+        slot.sent_key = key
+        gstin = prof.get("gstin") or ""
+        pan = prof.get("pan") or (gstin[2:12] if len(gstin) == 15 else "")
+        status = v.get("status") or ("Submitted" if v.get("ack") else "In Progress")
+        filing_date = (f"{v['filing_date']} 00:00:00" if v.get("filing_date")
+                       else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        default_form = "GST Return" if "gst" in (s.portal or "").lower() else "ITR"
+        return {
+            "source": "sgt",
+            "session_id": f"SGT-{s.session_id}",
+            "portal": s.portal,
+            "pan": pan,
+            "gstin": gstin,
+            "client_name": prof.get("name", ""),
+            "dob": prof.get("dob", ""),
+            "mobile": prof.get("phone", ""),
+            "email": prof.get("email", ""),
+            "filing_type": v.get("form") or default_form,
+            "filing_preference": v.get("filing_type", ""),
+            "period_label": v.get("period", ""),
+            "arn": v.get("ack") or "N/A",
+            "status": status,
+            "filing_date": filing_date,
+            "raw_text": "",                         # SGT never stores page text
+            "capture_method": CAPTURE_METHOD,
+            "identity_resolved": bool(pan),
+            "page_url": slot.first_page,
+            "dataset_key": key,
+            "supersedes_dataset_key": supersedes,
+            "raw_payload": {
+                "source": {"engine": "SGT", "mode": "shadow", "record": slot.record, "confidence": slot.confidence},
+                "sgt_dataset": v,
+                "client_profile": prof,
+                "timeline": list(s.timeline),
+                "session_id": f"SGT-{s.session_id}",
+                "dataset_key": key,
+            },
+        }
+
     # ── HUD pill ─────────────────────────────────────────────────────────────────
     def _hud(self, s: _Session, event_type: str, title: str, subtitle: str,
              values: Optional[Dict[str, str]] = None) -> None:
@@ -402,10 +529,13 @@ class SgtShadow:
             s.profile[fld] = {"value": value, "spec": spec, "confidence": confidence}
             if fld == "name":
                 self._hud(s, "update", "Client name completed", value)
+                self._queue_all(s)
             return
         s.profile[fld] = {"value": value, "spec": spec, "confidence": confidence}
         self._event(s, "profile", field=fld, value=value, spec=spec, confidence=confidence, page=url, source=source)
         self._echo(f"[SGT] (shadow) profile {fld} = {value}  [{spec}]")
+        if fld in ("pan", "gstin", "name"):
+            self._queue_all(s)                  # rows written before the client was known get their identity
         if fld in ("pan", "gstin"):             # the moment the client is known
             name = (s.profile.get("name") or {}).get("value", "")
             self._hud(s, "identity", "Client identified", f"{name} • {fld.upper()}: {value}".strip(" •"))
@@ -448,13 +578,14 @@ class SgtShadow:
         self._merge_values(s, values, ds.record, ds.confidence, url, source)
 
     def _merge_values(self, s: _Session, values: Dict[str, str], record: str, confidence: int,
-                      url: str, source: str) -> None:
+                      url: str, source: str) -> Optional[_Slot]:
         if not values.get("ack") and not (values.get("form") and values.get("period")):
-            return                              # nothing to key it on - not a return yet
+            return None                         # nothing to key it on - not a return yet
         slot = self._find_slot(s, values)
         if slot is None:
             slot = _Slot(dict(values), record, confidence, url)
             s.slots.append(slot)
+            self._queue(s, slot)
             self._event(s, "dataset", change="new", record=record, values=values,
                         confidence=confidence, page=url, source=source)
             self._echo(f"[SGT] (shadow) dataset {self._label(values)}  [{record}]")
@@ -463,7 +594,7 @@ class SgtShadow:
             self._hud(s, "submit" if submitted else "capture",
                       "Submission captured" if submitted else "Return captured",
                       f"{self._who(s)} • {detail}".strip(" •"), slot.values)
-            return
+            return slot
         ds_record = record
         changes = {}
         for k, v in values.items():
@@ -477,6 +608,8 @@ class SgtShadow:
                 changes[k] = [None, v]
             elif old != v:
                 changes[k] = [old, v, "disagrees - kept the first"]
+        if any(len(c) == 2 for c in changes.values()):     # a real change, not just a disagreement
+            self._queue(s, slot)
         if changes:
             self._event(s, "dataset", change="updated", record=ds_record, key=self._label(slot.values),
                         changes=changes, page=url, source=source)
@@ -485,6 +618,7 @@ class SgtShadow:
             if "status" in changes and changes["status"][0]:        # a status that moved forward
                 self._hud(s, "update", "Return status updated",
                           f"{changes['status'][0]} → {changes['status'][1]}", slot.values)
+        return slot
 
     @staticmethod
     def _label(values: Dict[str, str]) -> str:

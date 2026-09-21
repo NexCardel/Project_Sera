@@ -1135,9 +1135,10 @@ class UnifiedSettingsDialog(QDialog):
         self.sgt_mode_combo.addItem("Shadow (log only, saves nothing)", "shadow")
         lay.addWidget(_setting_row("SGT mode",
             "Reads every portal page and works out every datapoint from its field list, without crosshairs. "
-            "Shadow writes what it would have captured to a log on this PC (sgt_shadow folder) so it can be "
-            "compared with the tracker, and shows its captures on the HUD pill tagged \"SGT (Shadow)\". "
-            "Nothing is saved to the tracker or sent anywhere.", self.sgt_mode_combo))
+            "Shadow adds its captures to the tracker as separate rows tagged SGT (orange; the tracker's "
+            "Source filter hides or isolates them), shows them on the HUD pill tagged \"SGT (Shadow)\", and "
+            "keeps a detailed log on this PC (sgt_shadow folder). It never changes or removes another engine's "
+            "rows.", self.sgt_mode_combo))
 
         lay.addWidget(_sub_header("HUD Pill"))
         self.vsdc_hud_check = QCheckBox()

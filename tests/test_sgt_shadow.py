@@ -543,9 +543,16 @@ class TestHud:
 
     def test_page_reads_and_half_built_returns_never_reach_the_pill(self, tmp_path):
         r = self.rig(tmp_path)
-        r.see(WIZ_STATUS, ["Assessment Year", "2026-27", "x"], shade=100)
-        r.see(WIZ_FORM, ["Select ITR Form", "ITR-4", "y"], shade=110)
+        r.see(DASHBOARD, ["For Assessment Year 2026-27", "x", "y"], shade=100)       # a period, no form
+        r.see(DASHBOARD, ["Your ITR-4 draft", "x", "y"], shade=110)                  # no link evidence
         assert r.hud == []
+
+    def test_a_return_in_progress_is_announced_once_it_is_complete(self, tmp_path):
+        r = self.rig(tmp_path)
+        r.see(WIZ_STATUS, ["Assessment Year", "2026-27", "x"], shade=100)
+        assert r.hud == []                                                            # period only
+        r.see(WIZ_FORM, ["Select ITR Form", "ITR-4", "y"], shade=110)                  # now complete
+        assert [(h[0], h[1]) for h in r.hud] == [("capture", "Return captured")]
 
     def test_client_identified_once(self, tmp_path):
         r = self.rig(tmp_path)
@@ -653,6 +660,7 @@ class TestSwitch:
         seen = []
         fake = MagicMock()
         fake.observe.side_effect = lambda *a, **k: seen.append((a, k))
+        fake.pending.return_value = 0                   # no tracker rows waiting
         r._sgt = fake
         harness.screen(["Dashboard"])
         out = harness.tick()
@@ -665,6 +673,7 @@ class TestSwitch:
         r = harness.router
         r.apply_engine_settings(True, True, False, sgt="shadow")
         r._sgt = MagicMock()
+        r._sgt.pending.return_value = 0                 # else the tick returns early and proves nothing
         r.extract_browser_url.return_value = "https://www.youtube.com/watch?v=x"
         harness.tick()
         r._sgt.observe.assert_not_called()

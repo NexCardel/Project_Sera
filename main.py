@@ -371,6 +371,9 @@ class SeraApp:
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
             self.vsdc_worker.activity_event.connect(self._on_vsdc_activity_event)
             self.app.aboutToQuit.connect(self.vsdc_worker.stop)
+            # After stop() (slots run in connection order): the captures stop() just handed over
+            # - SGT rows completed at quit - are saved before the process exits.
+            self.app.aboutToQuit.connect(self._flush_capture_queue_on_quit)
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self._apply_vsdc_engine_settings()
@@ -518,6 +521,10 @@ class SeraApp:
         portal = msg.get("portal", "Portal")
         arn = msg.get("arn", "N/A")
         capture_method = msg.get("capture_method", "DOM_Tracker")
+        # SGT rows are shown on the HUD pill as SGT sees them (tagged "SGT (Shadow)"); a second
+        # toast / tray balloon for every SGT row would only double the noise.
+        if str(capture_method).startswith("SGT"):
+            return
         is_vsdc = "VSDC" in capture_method
         if is_vsdc:
             method_label = "Sera VSDC (Visual Harvester)"
@@ -736,6 +743,9 @@ class SeraApp:
         arn = msg.get('arn', 'N/A')
         portal = msg.get('portal', 'Portal')
         filing_type = str(msg.get('filing_type') or "").strip()
+        # Used as the fallback period for each dataset's key below; it was referenced without
+        # ever being defined, so a dataset arriving without its own period crashed this handler.
+        period = str(msg.get("period_label") or "").strip()
         portal_display = f"{portal} ({filing_type})" if filing_type else portal
         capture_method = msg.get("capture_method", "DOM_Tracker")
         capture_status = msg.get("status") or (scraped.get("summary_labels", {}).get("Status") if scraped else None) or "Submitted"
@@ -797,6 +807,11 @@ class SeraApp:
                 dataset_portal = dataset_msg.get("portal") or portal
                 dataset_portal_display = f"{dataset_portal} ({dataset_filing_type})" if dataset_filing_type else dataset_portal
                 dataset_status = dataset_msg.get("status") or capture_status
+                # SGT rewrites a row under a new key once the client becomes known; the row it
+                # wrote before (keyed by its session) is removed. SGT keys only - see the DB method.
+                superseded = dataset_msg.get("supersedes_dataset_key")
+                if superseded:
+                    self.db.delete_sgt_rows_by_dataset_key(superseded)
                 result = self.db.insert_tracker_dump(
                     client_id=raw_client_id,
                     service_id=None,
@@ -1416,6 +1431,14 @@ class SeraApp:
                 print(f"[AutoUpdater] Applying downloaded update immediately: {installer}")
                 import version
                 version.apply_and_restart(installer, silent=True)
+
+    def _flush_capture_queue_on_quit(self, timeout_sec: float = 5.0):
+        """Waits (bounded) for queued captures to be written; the capture thread is a daemon."""
+        import time as _time
+        deadline = _time.monotonic() + timeout_sec
+        q = getattr(self, "_capture_queue", None)
+        while q is not None and q.unfinished_tasks and _time.monotonic() < deadline:
+            _time.sleep(0.05)
 
     def _on_app_about_to_quit(self):
         if self._update_applied:

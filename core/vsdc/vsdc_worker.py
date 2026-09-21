@@ -61,7 +61,8 @@ class VSDCWorker(QThread):
                 try:
                     payload = self.router.evaluate_tick()
                     if payload:
-                        print(f"🎯 VSDC Captured Filing! Form={payload.get('filing_type')} ARN={payload.get('arn')}")
+                        who = "SGT row" if str(payload.get("capture_method", "")).startswith("SGT") else "VSDC Captured Filing!"
+                        print(f"🎯 {who} Form={payload.get('filing_type')} ARN={payload.get('arn')}")
                         self.filing_captured.emit(payload)
 
                     # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll
@@ -93,6 +94,10 @@ class VSDCWorker(QThread):
             # assemblers (one per browser window VSDC was watching), not just
             # the single self.assembler this used to check.
             self.router.end_all_active_sessions(reason="Application Shutdown")
+            # Rows SGT produced while closing its sessions (a return in progress completed at
+            # quit) - the loop has stopped, so send them here rather than lose them.
+            for row in self.router.drain_sgt_dispatches():
+                self.filing_captured.emit(row)
         except Exception:
             pass
         self.wait(3000)
