@@ -1244,7 +1244,7 @@ class SeraApp:
         try:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
-            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled
+            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled, read_sgt_mode
             hud = getattr(self, "vsdc_hud", None)
             if hud is not None:
                 hud.set_enabled(read_hud_enabled(self.db.get_setting))
@@ -1252,12 +1252,13 @@ class SeraApp:
             if worker is None:
                 return
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
-            worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247)
-            if (vsdc or vsdc_x or vsdc247) and not worker.isRunning():
+            sgt = read_sgt_mode(self.db.get_setting)
+            worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt)
+            if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "
                       f"(VSDC={'on' if vsdc else 'off'}, VSDC-X={'on' if vsdc_x else 'off'}, "
-                      f"VSDC 24/7={'on' if vsdc247 else 'off'}).")
+                      f"VSDC 24/7={'on' if vsdc247 else 'off'}, SGT={sgt}).")
         except Exception as e:
             print(f"⚠️ [main] Could not apply the VSDC engine settings: {e}")
 

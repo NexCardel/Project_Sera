@@ -23,6 +23,9 @@ from .vsdc_scope import (
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
+
+SGT_OFF = "off"
+SGT_SHADOW = "shadow"
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
     repair_numeric_ack,
@@ -350,7 +353,24 @@ class VSDCRouter:
         self._vsdc_x_enabled: bool = True          # False: UI Automation is never read
         self._engines_off: bool = False            # all three off: the tick does nothing at all
 
-    def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool) -> None:
+        # SGT - Sera Global Tracker (core/sgt). Only "shadow" exists so far: it builds the
+        # session it WOULD dispatch and logs it, saving nothing. Off unless Settings -> Tracker
+        # or SGT_MODE=shadow says otherwise.
+        self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
+        self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
+        self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
+        if self._sgt_mode != SGT_OFF:
+            print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
+
+    @staticmethod
+    def _env_sgt_mode() -> Optional[str]:
+        env = os.environ.get("SGT_MODE", "").strip().lower()
+        if env == "live":
+            print("[SGT] SGT_MODE=live is not built yet - running in shadow mode")
+            return SGT_SHADOW
+        return env if env in (SGT_OFF, SGT_SHADOW) else None
+
+    def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off") -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -365,7 +385,17 @@ class VSDCRouter:
         matched to a crosshair. All three off = the tick returns immediately. The
         VSDC_UIA_ONLY / VSDC247_ONLY / VSDC247_MODE environment variables keep working as
         developer overrides on top of this.
+
+        SGT (off / shadow) is the fourth switch. Shadow never saves anything, so it can run
+        beside the others; SGT alone (the other three off) reads every in-scope page with no
+        crosshair routing, the same way VSDC247 works alone. SGT_MODE overrides it.
         """
+        sgt_mode = self._env_sgt_mode() or (SGT_SHADOW if str(sgt).strip().lower() in (SGT_SHADOW, "live") else SGT_OFF)
+        if sgt_mode == SGT_OFF and self._sgt is not None:
+            self._sgt.end_all("SGT switched off")
+        self._sgt_mode = sgt_mode
+        sgt_on = sgt_mode != SGT_OFF
+        self._sgt_alone = sgt_on and not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
         env_mode = os.environ.get("VSDC247_MODE", "").strip().lower()
         self._vsdc_x_enabled = bool(vsdc_x)
         self._uia_only_mode = self._env_uia_only or (bool(vsdc_x) and not vsdc)
@@ -376,10 +406,19 @@ class VSDCRouter:
         else:
             self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
         self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
-        self._engines_off = not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
+        self._engines_off = not (vsdc or vsdc_x or vsdc247 or sgt_on) and not self._env_247_only
         print(f"[VSDC] engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
               f"VSDC247={self._mode_247.upper()}"
-              f"{' (works alone)' if self._247_only else ''}{' - ALL OFF' if self._engines_off else ''}")
+              f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
+              f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
+
+    def _run_sgt_shadow(self, hwnd: int, title: str = "") -> None:
+        """SGT beside the live pipeline: observes this page, returns nothing, saves nothing."""
+        if self._sgt is None:
+            from core.sgt.sgt_shadow import SgtShadow
+            self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt)
+        self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
+                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0
@@ -436,6 +475,19 @@ class VSDCRouter:
             self._hud_buffer.append((event_type, title, subtitle, snapshot))
             return
         self._emit_activity(event_type, title, subtitle, snapshot)
+
+    def notify_sgt(self, event_type: str, title: str, subtitle: str, context: Dict[str, Optional[str]]) -> None:
+        """
+        A HUD event from SGT. It carries SGT's OWN return context (form / type / period as SGT
+        resolved them), which must not be replaced by VSDC's assembler context at flush time -
+        the two engines can disagree, and the pill must show what SGT saw.
+        """
+        own = {k: context.get(k) for k in ("portal", "form", "filing_pref", "period")}
+        own["_own"] = True
+        if self._hud_buffering:
+            self._hud_buffer.append((event_type, title, subtitle, own))
+        else:
+            self._emit_activity(event_type, title, subtitle, {k: v for k, v in own.items() if k != "_own"})
 
     @property
     def activity_context(self) -> Dict[str, Optional[str]]:
@@ -495,6 +547,9 @@ class VSDCRouter:
         # return it captured, even though sealing that capture cleared the selection
         # again before the tick ended).
         for event_type, title, subtitle, snapshot in events:
+            if snapshot.get("_own"):            # SGT: its own context, never VSDC's (see notify_sgt)
+                self._emit_activity(event_type, title, subtitle, {k: v for k, v in snapshot.items() if k != "_own"})
+                continue
             merged = {k: (ctx.get(k) or snapshot.get(k)) for k in set(ctx) | set(snapshot)}
             self._emit_activity(event_type, title, subtitle, merged)
 
@@ -704,6 +759,8 @@ class VSDCRouter:
         ]
         for hwnd in stale:
             del self._window_sessions[hwnd]
+            if self._sgt is not None:
+                self._sgt.end_session(hwnd, "window closed")
 
     def end_all_active_sessions(self, reason: str) -> None:
         """
@@ -719,6 +776,8 @@ class VSDCRouter:
                 except Exception:
                     pass
                 asm._session_started = False
+        if self._sgt is not None:
+            self._sgt.end_all(reason)
 
     def seed_identity_for_foreground(self, **kwargs) -> None:
         """
@@ -884,6 +943,10 @@ class VSDCRouter:
                     result = self._run_vsdc247(hwnd)
                 else:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
+            # SGT shadow: after everything else, on the same scope-gated pages; it cannot
+            # change `result`.
+            if self._scope_ok_this_tick and self._sgt_mode == SGT_SHADOW:
+                self._run_sgt_shadow(hwnd, title)
             if result:
                 self._remember_dispatch(result)
                 stamp_device_name(result)        # which PC captured it, inside the payload
@@ -981,8 +1044,8 @@ class VSDCRouter:
             # "unrecognised portal page" log, not to a guessed crosshair.
             if not matched_crosshair and not address_bar_readable:
                 matched_crosshair = match_url_crosshair(title)
-        if self._247_only:
-            matched_crosshair = None      # see VSDC247_ONLY in __init__
+        if self._247_only or self._sgt_alone:
+            matched_crosshair = None      # see VSDC247_ONLY in __init__ / SGT alone in apply_engine_settings
 
         if not matched_crosshair:
             # Discovery aid: a real portal page that no crosshair recognises is how a

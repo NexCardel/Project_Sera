@@ -1,0 +1,674 @@
+{
+  "version": 1,
+  "about": "Sera Global Tracker field specs. Edit to add or remove datapoints - no code change. Every spec must carry examples; a spec that fails its own examples is refused at load and the previous version keeps running. Put local overrides in an sgt_fields.json next to the app: a spec with the same name replaces this one, \"disabled\": true removes it. See docs/sgt-blueprint.md.",
+
+  "profile_rules": {
+    "note": "Profile datapoints built from parts. {x?} may be missing. A composed value is offered like a read one, so the name still only ever grows (promote_longer).",
+    "compose": {"name": "{first_name} {middle_name?} {last_name}"}
+  },
+
+  "profile": [
+    {
+      "name": "itr_header_name",
+      "field": "name",
+      "merge": "promote_longer",
+      "portals": ["Income Tax"],
+      "take": "anywhere",
+      "pattern": "^([A-Z][A-Z .'&]*[A-Z.]) (?:Individual|HUF|Company|Firm|AOP|BOI|Trust|Local Authority|Artificial Juridical Person)$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["looks_like_name", "not_ui_chrome"],
+      "confidence": 85,
+      "note": "The profile menu button in the portal header, on every page: '<NAME> Individual'. The CA's own login shows a CA/ERI role, which this does not accept.",
+      "examples": ["ASHOK KUMAR SEN Individual", "SEN TRADING CO Firm"],
+      "counter_examples": ["ASHOK KUMAR SEN Chartered Accountant", "Dashboard Individual", "Individual"]
+    },
+    {
+      "name": "itr_profile_name",
+      "field": "name",
+      "merge": "promote_longer",
+      "portals": ["Income Tax"],
+      "urls": ["myProfile"],
+      "labels": ["Name"],
+      "label_rest": "separated",
+      "within": 1,
+      "pattern": "^([A-Za-z][A-Za-z .'&]*[A-Za-z.])$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["looks_like_name", "not_ui_chrome"],
+      "confidence": 90,
+      "examples": [
+        "ASHOK KUMAR SEN",
+        {"lines": ["Profile", "Name", "ASHOK KUMAR SEN", "Date of Birth", "12-Mar-1980"], "expect": "ASHOK KUMAR SEN"}
+      ],
+      "counter_examples": [
+        "Search Box Input Field",
+        "ABCPD1234E",
+        {"lines": ["Name of the Bank", "STATE BANK OF INDIA"]}
+      ]
+    },
+    {
+      "name": "itr_first_name",
+      "field": "first_name",
+      "portals": ["Income Tax"],
+      "labels": ["First Name"],
+      "within": 2,
+      "pattern": "^(?!.*\\bName\\b)([A-Za-z][A-Za-z .'-]*[A-Za-z.]|[A-Za-z])$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["not_ui_chrome"],
+      "confidence": 90,
+      "note": "Name parts, joined by profile_rules.compose. A value may never contain the word 'Name': an empty field would otherwise swallow the next label.",
+      "examples": ["WASIL", {"lines": ["First Name", "First Name", "ASHOK"], "expect": "ASHOK"}],
+      "counter_examples": ["Last Name", "12345", {"lines": ["First Name", "First Name", "Middle Name"]}]
+    },
+    {
+      "name": "itr_middle_name",
+      "field": "middle_name",
+      "portals": ["Income Tax"],
+      "labels": ["Middle Name"],
+      "within": 2,
+      "pattern": "^(?!.*\\bName\\b)([A-Za-z][A-Za-z .'-]*[A-Za-z.]|[A-Za-z])$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["not_ui_chrome"],
+      "confidence": 90,
+      "examples": ["KUMAR", "K", {"lines": ["Middle Name", "Middle Name", "KUMAR"], "expect": "KUMAR"}],
+      "counter_examples": [{"lines": ["Middle Name", "Middle Name", "Last Name", "Last Name", "SEN"]}]
+    },
+    {
+      "name": "itr_last_name",
+      "field": "last_name",
+      "portals": ["Income Tax"],
+      "labels": ["Last Name", "Surname"],
+      "within": 2,
+      "pattern": "^(?!.*\\bName\\b)([A-Za-z][A-Za-z .'-]*[A-Za-z.]|[A-Za-z])$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["not_ui_chrome"],
+      "confidence": 90,
+      "examples": ["SEN", {"lines": ["Last Name", "Last Name", "SEN", "PAN"], "expect": "SEN"}],
+      "counter_examples": [{"lines": ["Last Name", "Last Name", "PAN", "ABCPD1234E"]}]
+    },
+    {
+      "name": "itr_pan",
+      "field": "pan",
+      "portals": ["Income Tax"],
+      "urls": ["myProfile", "foreturns", "fo-itr", "#/login/password"],
+      "note": "The password page shows 'PAN' and the PAN being logged into, before the dashboard.",
+      "labels": ["PAN"],
+      "within": 2,
+      "pattern": "(?<![A-Z0-9])([A-Z]{5}[0-9]{4}[A-Z])(?![A-Z0-9])",
+      "confidence": 95,
+      "examples": [
+        "ABCPD1234E",
+        {"lines": ["PAN", "PAN", "ABCPD1234E", "Gender"], "expect": "ABCPD1234E"},
+        {"lines": ["PAN : ABCPD1234E"], "expect": "ABCPD1234E"}
+      ],
+      "counter_examples": [
+        "ABCPD1234",
+        {"lines": ["PAN of the Employer", "XYZAB9876C"]},
+        {"lines": ["PAN", "ABCPD1234E", "PAN", "XYZAB9876C"]}
+      ]
+    },
+    {
+      "name": "itr_dashboard_pan",
+      "field": "pan",
+      "portals": ["Income Tax"],
+      "urls": ["#/dashboard/?$"],
+      "labels": ["Welcome Back"],
+      "label_rest": "ignore",
+      "within": 2,
+      "pattern": "^([A-Z]{5}[0-9]{4}[A-Z])$",
+      "confidence": 90,
+      "note": "The dashboard greets the taxpayer by first name and prints the PAN on the next line, unlabelled.",
+      "examples": [
+        {"lines": ["Welcome Back, ASHOK", "ABCPD1234E", "XXXXXXXX1234"], "expect": "ABCPD1234E"}
+      ],
+      "counter_examples": [
+        {"lines": ["Welcome Back, ASHOK", "Update Contact Details", "Pending Actions", "ABCPD1234E"]}
+      ]
+    },
+    {
+      "name": "itr_dob",
+      "field": "dob",
+      "portals": ["Income Tax"],
+      "urls": ["myProfile", "foreturns", "fo-itr"],
+      "labels": ["Date of Birth", "Date of Birth / Formation", "Date of Birth/Formation", "Date of Birth / Incorporation"],
+      "within": 2,
+      "pattern": "(\\d{1,2}-[A-Za-z]{3}-\\d{4}|\\d{2}/\\d{2}/\\d{4})",
+      "transforms": ["parse_date"],
+      "checks": ["not_future"],
+      "confidence": 90,
+      "examples": [
+        "12-Mar-1980",
+        {"lines": ["Date of Birth / Formation", "Date of Birth / Formation", "12-Mar-1980"], "expect": "1980-03-12"}
+      ],
+      "counter_examples": ["31-Feb-1980", "12-Mar-2099"]
+    },
+    {
+      "name": "itr_email",
+      "field": "email",
+      "portals": ["Income Tax"],
+      "urls": ["myProfile", "foreturns", "fo-itr"],
+      "labels": ["Email", "Primary Email ID of the taxpayer", "Primary Email ID"],
+      "within": 3,
+      "pattern": "(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})",
+      "transforms": ["lower"],
+      "confidence": 90,
+      "examples": [
+        "ashok.sen@example.com",
+        {"lines": ["Email", "Primary (Self)", "ashok.sen@example.com", "Secondary (--)"], "expect": "ashok.sen@example.com"}
+      ],
+      "counter_examples": ["ashok.sen@", "Email"]
+    },
+    {
+      "name": "itr_phone",
+      "field": "phone",
+      "portals": ["Income Tax"],
+      "urls": ["myProfile", "foreturns", "fo-itr"],
+      "labels": ["Mobile", "Primary Mobile No.", "Primary Mobile No"],
+      "within": 4,
+      "pattern": "(?<![0-9])([6-9][0-9]{9})(?![0-9])",
+      "confidence": 85,
+      "examples": [
+        "9876543210",
+        {"lines": ["Mobile", "Primary (Self)", "+91", "9876543210", "Secondary (--)"], "expect": "9876543210"}
+      ],
+      "counter_examples": ["12345", "1234567890", "98765432101"]
+    },
+    {
+      "name": "gst_welcome_name",
+      "field": "name",
+      "merge": "promote_longer",
+      "portals": ["GST Portal"],
+      "labels": ["Welcome"],
+      "pattern": "^(.+?) to GST Common Portal$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["looks_like_name", "not_ui_chrome"],
+      "confidence": 90,
+      "examples": [
+        "ASHOK KUMAR SEN to GST Common Portal",
+        {"lines": ["Welcome ASHOK KUMAR SEN to GST Common Portal"], "expect": "ASHOK KUMAR SEN"}
+      ],
+      "counter_examples": [{"lines": ["Welcome to GST Common Portal"]}, "Dashboard to GST Common Portal"]
+    },
+    {
+      "name": "gst_gstin",
+      "field": "gstin",
+      "portals": ["GST Portal"],
+      "urls": ["fowelcome", "/auth/dashboard"],
+      "take": "anywhere",
+      "pattern": "(?<![A-Z0-9])([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])(?![A-Z0-9])",
+      "checks": ["gstin_checksum"],
+      "confidence": 90,
+      "note": "The welcome page prints the logged-in GSTIN under the name. Two different GSTINs on one page are a conflict and neither is taken.",
+      "examples": [
+        "19ABCPD1234E1ZB",
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"], "expect": "19ABCPD1234E1ZB"}
+      ],
+      "counter_examples": [
+        "19ABCPD1234E1ZC",
+        {"lines": ["19ABCPD1234E1ZB", "27AAACZ9876K1ZE"]}
+      ]
+    }
+  ],
+
+  "records": [
+    {
+      "name": "itr_filed_returns",
+      "portals": ["Income Tax"],
+      "note": "View Filed Returns: one card per return, each starting with its A.Y. line.",
+      "start": "^A\\.Y\\.\\s*20\\d{2}-\\d{2}$",
+      "max_lines": 45,
+      "require": ["period", "status"],
+      "fields": [
+        {
+          "field": "period",
+          "take": "anywhere",
+          "pattern": "A\\.Y\\.\\s*(20\\d{2}-\\d{2})",
+          "transforms": ["ay_label"],
+          "checks": ["years_consecutive"],
+          "confidence": 95,
+          "examples": ["A.Y. 2025-26"],
+          "counter_examples": ["A.Y. 2025-27"]
+        },
+        {
+          "field": "form",
+          "labels": ["ITR"],
+          "within": 2,
+          "pattern": "^(ITR ?-? ?[1-7])$",
+          "transforms": ["dash_form"],
+          "confidence": 95,
+          "examples": ["ITR-4", "ITR 1"],
+          "counter_examples": ["ITR-9", "ITR Filed"]
+        },
+        {
+          "field": "ack",
+          "labels": ["Acknowledgement No", "Acknowledgement Number"],
+          "within": 2,
+          "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
+          "transforms": ["ocr_digits"],
+          "checks": ["all_digits", "ddmmyy_tail_real"],
+          "confidence": 95,
+          "examples": ["123456789150925", "12345678915O925"],
+          "counter_examples": ["123456789320925", "12345678915092"]
+        },
+        {
+          "field": "filing_type",
+          "labels": ["Filing Type"],
+          "within": 2,
+          "pattern": "^(Original|Revised|Belated|Updated)$",
+          "confidence": 90,
+          "examples": ["Original"],
+          "counter_examples": ["done"]
+        },
+        {
+          "field": "filing_date",
+          "labels": ["Filing Date"],
+          "within": 2,
+          "pattern": "([A-Z][a-z]{2} \\d{1,2}, 20\\d{2})",
+          "transforms": ["parse_date"],
+          "checks": ["not_future"],
+          "confidence": 90,
+          "examples": ["Sep 15, 2025"],
+          "counter_examples": ["Sep 31, 2025"]
+        },
+        {
+          "field": "status",
+          "take": "anywhere",
+          "case": "insensitive",
+          "pattern": "^(pending for e-?verification|itr filed|e-?verified|return verified|under processing|processed.*)$",
+          "pick": "map_order",
+          "map": [
+            ["processed with demand", "Processed with demand"],
+            ["processed with refund", "Processed with refund"],
+            ["processed with no demand", "Processed with no demand/refund"],
+            ["^processed", "Processed"],
+            ["under processing|verified", "Submitted (e-Verified)"],
+            ["pending for e-?verification", "Submitted (Not e-Verified)"],
+            ["itr filed", "Submitted"]
+          ],
+          "confidence": 90,
+          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along status on the card wins.",
+          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund"],
+          "counter_examples": ["done", "Filing Type"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": [
+            "View Filed Returns",
+            "The e-Filed Returns are available for download /view starting Assessment Year 2013-14.",
+            "2 Filings till date",
+            "A.Y. 2025-26", "Filing Type", "Original", "done", "Pending for e-verification", "Sep 15, 2025",
+            "done", "ITR Filed", "Sep 15, 2025", "ITR :", "ITR-4", "Acknowledgement No :", "123456789150925",
+            "Filed By :", "self", "Filing Date :", "Sep 15, 2025", "Filing Section :", "139(1)", "View Details",
+            "A.Y. 2024-25", "Filing Type", "Original", "done", "Processed with no demand/refund", "Sep 3, 2024",
+            "done", "Under Processing", "Sep 3, 2024", "done", "ITR Filed", "Jul 31, 2024", "ITR :", "ITR-1",
+            "Acknowledgement No :", "987654321310724", "Filing Date :", "Jul 31, 2024", "View Details"
+          ],
+          "expect": [
+            {"period": "AY 2025-26", "form": "ITR-4", "ack": "123456789150925", "filing_type": "Original",
+             "filing_date": "2025-09-15", "status": "Submitted (Not e-Verified)"},
+            {"period": "AY 2024-25", "form": "ITR-1", "ack": "987654321310724", "filing_type": "Original",
+             "filing_date": "2024-07-31", "status": "Processed with no demand/refund"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "itr_submit_success",
+      "portals": ["Income Tax"],
+      "note": "The confirmation shown right after submitting. The ack must carry today's date (its last six digits are DDMMYY), so an old ack on a revised-return page never counts as a new filing.",
+      "require": ["ack", "status"],
+      "fields": [
+        {
+          "field": "ack",
+          "labels": ["Acknowledgement Number", "Acknowledgement No"],
+          "within": 2,
+          "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
+          "transforms": ["ocr_digits"],
+          "checks": ["all_digits", "ddmmyy_tail_today"],
+          "confidence": 90,
+          "examples": ["123456789150726"],
+          "counter_examples": ["123456789150925"]
+        },
+        {
+          "field": "status",
+          "take": "anywhere",
+          "case": "insensitive",
+          "pattern": "(successfully (?:submitted|filed|e-?verified)|(?:submitted|filed|e-?verified) successfully|still need to e-?verify|e-?verify within \\d+ days)",
+          "pick": "map_order",
+          "map": [
+            ["e-?verified", "Submitted (e-Verified)"],
+            ["still need|within", "Submitted (Not e-Verified)"],
+            ["submitted|filed", "Submitted"]
+          ],
+          "confidence": 90,
+          "examples": ["You have successfully submitted your return!", "Return filed successfully"],
+          "counter_examples": ["Once you submit, you will receive an acknowledgement"]
+        },
+        {
+          "field": "form",
+          "take": "anywhere",
+          "pattern": "(?<![A-Za-z0-9])(ITR ?-? ?[1-7])(?![0-9])",
+          "transforms": ["dash_form"],
+          "confidence": 80,
+          "examples": ["ITR-4 for A.Y. 2026-27"]
+        },
+        {
+          "field": "period",
+          "take": "anywhere",
+          "pattern": "A\\.?Y\\.? ?(20\\d{2} ?- ?\\d{2,4})",
+          "transforms": ["ay_label"],
+          "checks": ["years_consecutive"],
+          "confidence": 80,
+          "examples": ["A.Y. 2026-27"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": ["You have successfully submitted your return!", "Acknowledgement Number :", "123456789150726",
+                    "You still need to e-Verify within 30 days to complete the process of return filing."],
+          "expect": [{"ack": "123456789150726", "status": "Submitted (Not e-Verified)"}]
+        },
+        {
+          "lines": ["Original return details", "Acknowledgement Number :", "123456789150925", "Filed successfully"],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "gst_returns_calendar",
+      "portals": ["GST Portal"],
+      "note": "The welcome page's Returns Calendar: a form heading, then one line per period.",
+      "start": "^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) - 20\\d{2}\\b",
+      "max_lines": 1,
+      "require": ["form", "period", "status"],
+      "fields": [
+        {
+          "field": "form",
+          "take": "nearest_above",
+          "pattern": "^(GSTR-? ?[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
+          "transforms": ["dash_form"],
+          "confidence": 90,
+          "examples": ["GSTR-1 / IFF", "GSTR-3B"],
+          "counter_examples": ["Returns Calendar (Last 5 return periods)"]
+        },
+        {
+          "field": "period",
+          "take": "anywhere",
+          "pattern": "^([A-Z][a-z]{2} - 20\\d{2})\\b",
+          "transforms": ["gst_month_period"],
+          "confidence": 95,
+          "examples": ["Jun - 2026 Filed"],
+          "counter_examples": ["Xyz - 2026"]
+        },
+        {
+          "field": "status",
+          "take": "anywhere",
+          "pattern": "(?<![A-Za-z])(Not Filed|To be Filed|Filed|Submitted|NA)(?![A-Za-z])",
+          "map": [
+            ["^(not|to be) filed$", "Not Filed"],
+            ["^filed$", "Filed"],
+            ["^submitted$", "Submitted"],
+            ["^na$", null]
+          ],
+          "confidence": 90,
+          "examples": ["Jun - 2026 Filed Filed on : 11/07/2026", "Jun - 2026 Not Filed"],
+          "counter_examples": ["May - 2026 NA Option expired"]
+        },
+        {
+          "field": "filing_date",
+          "labels": ["Filed on"],
+          "label_at": "anywhere",
+          "pattern": "(\\d{2}/\\d{2}/20\\d{2})",
+          "transforms": ["parse_date"],
+          "checks": ["not_future"],
+          "confidence": 90,
+          "examples": ["11/07/2026"],
+          "counter_examples": ["31/02/2026"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": ["Returns Calendar (Last 5 return periods)", "GSTR-1 / IFF", "May - 2026 NA Option expired",
+                    "Jun - 2026 Filed Filed on : 11/07/2026", "GSTR-3B", "May - 2026 NA", "Jun - 2026 Not Filed"],
+          "expect": [
+            {"form": "GSTR-1", "period": "June (FY 2026-27)", "status": "Filed", "filing_date": "2026-07-11"},
+            {"form": "GSTR-3B", "period": "June (FY 2026-27)", "status": "Not Filed"}
+          ]
+        }
+      ]
+    }
+  ],
+
+  "current_return": {
+    "rules": {
+      "note": "The return being worked on is built from pieces on ANY page - nothing here names a page. A value shown once on a page is about that page's return; several different values mean a list and are ignored (or, for periods, the latest is taken). The link and the window title are read with the same patterns. Only complete returns (complete_when) are ever dispatched.",
+      "compose": {"period": "{tax_period} (FY {fy})"},
+      "complete_when": ["form", "period"],
+      "in_progress_status": "In Progress",
+      "in_progress_needs_link": true
+    },
+    "fields": [
+      {
+        "name": "cur_itr_form_link",
+        "field": "form",
+        "portals": ["Income Tax"],
+        "source": "link",
+        "take": "anywhere",
+        "case": "insensitive",
+        "pattern": "fo-(itr[1-7])-ay20[0-9]{2}",
+        "transforms": ["dash_form"],
+        "confidence": 95,
+        "note": "The portal writes the form into the link while you are inside that return.",
+        "examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/personal_information", "expect": "ITR-4"}],
+        "counter_examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr-shared/fo-select-status"}]
+      },
+      {
+        "name": "cur_itr_period_link",
+        "field": "period",
+        "portals": ["Income Tax"],
+        "source": "link",
+        "take": "anywhere",
+        "case": "insensitive",
+        "pattern": "foreturns-ay([0-9]{2})(?![0-9])",
+        "transforms": ["ay_from_year"],
+        "confidence": 95,
+        "examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr-shared/fo-select-status", "expect": "AY 2026-27"}],
+        "counter_examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus"}]
+      },
+      {
+        "name": "cur_itr_form_title",
+        "field": "form",
+        "portals": ["Income Tax"],
+        "source": "title",
+        "take": "anywhere",
+        "pattern": "^(ITR ?-? ?[1-7])(?![0-9])",
+        "transforms": ["dash_form"],
+        "confidence": 90,
+        "examples": [{"title": "ITR4 Part A General - Personal Information - Google Chrome", "expect": "ITR-4"}],
+        "counter_examples": [{"title": "Income Tax Portal, Government of India File Income Tax Return - Google Chrome"}]
+      },
+      {
+        "name": "cur_itr_form_label",
+        "field": "form",
+        "portals": ["Income Tax"],
+        "labels": ["Select ITR Form", "ITR Form", "ITR Type"],
+        "within": 1,
+        "pattern": "^(ITR ?-? ?[1-7])(?![0-9])",
+        "transforms": ["dash_form"],
+        "confidence": 90,
+        "examples": [{"lines": ["Select ITR Form", "ITR-4"], "expect": "ITR-4"}],
+        "counter_examples": [{"lines": ["Select ITR Form", "Select"]}]
+      },
+      {
+        "name": "cur_itr_form_page",
+        "field": "form",
+        "portals": ["Income Tax"],
+        "take": "anywhere",
+        "pattern": "(?<![A-Za-z0-9])(ITR ?-? ?[1-7])(?![0-9A-Za-z])",
+        "transforms": ["dash_form"],
+        "confidence": 75,
+        "note": "One form named on the page = that page's return. The form-choice page names all seven: a list, ignored.",
+        "examples": [{"lines": ["Filing Returns for A.Y. 2026-27", "ITR-4", "Personal Information"], "expect": "ITR-4"}],
+        "counter_examples": [{"lines": ["ITR-1 (SAHAJ)", "ITR-2", "ITR-4 (SUGAM)"]}]
+      },
+      {
+        "name": "cur_itr_period_page",
+        "field": "period",
+        "portals": ["Income Tax"],
+        "take": "anywhere",
+        "case": "insensitive",
+        "multiple": "latest_period",
+        "pattern": "(?<!starting )(?<!since )(?<!from )(?:A\\.Y\\.|Assessment Year)\\s*[:\\-]?\\s*(20[0-9]{2}\\s*-\\s*[0-9]{2,4})",
+        "transforms": ["ay_label"],
+        "checks": ["years_consecutive"],
+        "confidence": 85,
+        "note": "A year after 'starting / since / from' is the portal's disclaimer, not a return.",
+        "examples": [
+          "Filing Returns for A.Y. 2026-27",
+          {"lines": ["Filing Returns for A.Y. 2026-27", "The e-Filed Returns are available for download starting Assessment Year 2013-14."], "expect": "AY 2026-27"}
+        ],
+        "counter_examples": [
+          "A.Y. 2025-27",
+          {"lines": ["The e-Filed Returns are available for download /view starting Assessment Year 2013-14."]}
+        ]
+      },
+      {
+        "name": "cur_itr_period_label",
+        "field": "period",
+        "portals": ["Income Tax"],
+        "labels": ["Assessment Year", "Select Assessment Year"],
+        "within": 1,
+        "pattern": "^(20[0-9]{2}\\s*-\\s*[0-9]{2,4})$",
+        "transforms": ["ay_label"],
+        "checks": ["years_consecutive"],
+        "confidence": 90,
+        "note": "A dropdown reads as its label, then its selected value on the next line.",
+        "examples": [{"lines": ["Assessment Year", "2026-27"], "expect": "AY 2026-27"}],
+        "counter_examples": [{"lines": ["Assessment Year", "Select"]}]
+      },
+      {
+        "name": "cur_itr_filing_type_selected",
+        "field": "filing_type",
+        "portals": ["Income Tax"],
+        "take": "anywhere",
+        "case": "insensitive",
+        "pattern": "^Selected: .*?(original|revised|belated|updated|condonation|119\\s*\\(\\s*2\\s*\\)\\s*\\(\\s*b\\s*\\)|139\\s*\\(\\s*(?:1|4|5|8A)\\s*\\))",
+        "map": [
+          ["139\\s*\\(\\s*1\\s*\\)|original", "Original"],
+          ["139\\s*\\(\\s*4\\s*\\)|belated", "Belated"],
+          ["139\\s*\\(\\s*5\\s*\\)|revised", "Revised"],
+          ["139\\s*\\(\\s*8A\\s*\\)|updated", "Updated"],
+          ["condonation|119\\s*\\(\\s*2\\s*\\)\\s*\\(\\s*b\\s*\\)", "Condonation of Delay"]
+        ],
+        "confidence": 90,
+        "note": "ONLY a chosen value counts: a ticked radio button or a dropdown's value (the reader marks both 'Selected: ...'). The page also lists every option as plain text under 'Filed u/s' - reading the line after that label once took 'Belated' from the option list. The section numbers are the Act's, not the page's.",
+        "examples": [
+          "Selected: Original",
+          "Selected: 139(5) - Revised Return",
+          "Selected: 139(1) Return filed on or before due date",
+          "Selected: Select Filing Type = 139(4)-After due date",
+          "Selected: u/s 139(9A) - After condonation of delay / Court Order selected in filing type = u/s 139(9A) - After condonation of delay u/s 119(2)(b) / Court Order"
+        ],
+        "counter_examples": [
+          "Original",
+          "139(4) Belated- Return filed after due date",
+          "Selected: I agree",
+          "Selected: Filed u/s",
+          {"lines": ["Filing Section", "Filed u/s", "139(1) Return filed on or before due date", "139(4) Belated- Return filed after due date",
+                     "139(5) Revised- Return revised after filing original return"]}
+        ]
+      },
+      {
+        "name": "cur_itr_form_selected",
+        "field": "form",
+        "portals": ["Income Tax"],
+        "take": "anywhere",
+        "pattern": "^Selected: (?:[^=]* = )?.*?(?<![A-Za-z0-9])(ITR ?-? ?[1-7])(?![0-9])",
+        "transforms": ["dash_form"],
+        "confidence": 92,
+        "note": "The form the user picked - a ticked card/radio or a dropdown value.",
+        "examples": ["Selected: ITR-4", "Selected: Select ITR Form = ITR 4", "Selected: I know which ITR Form I need to file = ITR - 2", "Selected: ITR-4 (SUGAM) For Individuals, HUFs and Firms",
+                     "Selected: Select ITR Type = ITR-3"],
+        "counter_examples": ["ITR-4", "Selected: I agree"]
+      },
+      {
+        "name": "cur_itr_period_selected",
+        "field": "period",
+        "portals": ["Income Tax"],
+        "take": "anywhere",
+        "case": "insensitive",
+        "pattern": "^Selected: (?:[^=]*(?:Assessment Year|A\\.Y\\.)[^=]* = )(20[0-9]{2}\\s*-\\s*[0-9]{2,4})",
+        "transforms": ["ay_label"],
+        "checks": ["years_consecutive"],
+        "confidence": 97,
+        "note": "Outranks the link (95): what the user picked beats the route the page happens to sit under.",
+        "examples": ["Selected: Assessment Year = 2026-27", "Selected: Select Assessment Year = 2025-26",
+                     "Selected: 2025-26 selected in assessment year = 2025-26"],
+        "counter_examples": ["Selected: Financial Year = 2026-27", "Assessment Year 2026-27"]
+      },
+      {
+        "name": "cur_gst_form_link",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "source": "link",
+        "take": "anywhere",
+        "case": "insensitive",
+        "pattern": "/returns/auth/(gstr[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
+        "transforms": ["dash_form"],
+        "confidence": 95,
+        "examples": [{"link": "https://return.gst.gov.in/returns/auth/gstr3b", "expect": "GSTR-3B"}],
+        "counter_examples": [{"link": "https://services.gst.gov.in/services/auth/fowelcome"}]
+      },
+      {
+        "name": "cur_gst_form_page",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "take": "anywhere",
+        "pattern": "^(GSTR-? ?[0-9]{1,2}[A-Z]?)Q? - ",
+        "transforms": ["dash_form"],
+        "confidence": 85,
+        "examples": ["GSTR-3BQ - Quarterly Return", "GSTR-1 - Details of outward supplies of goods or services"],
+        "counter_examples": ["GSTR-1 / IFF"]
+      },
+      {
+        "name": "cur_gst_fy",
+        "field": "fy",
+        "portals": ["GST Portal"],
+        "labels": ["FY", "Financial Year"],
+        "within": 1,
+        "pattern": "^(20[0-9]{2}-[0-9]{2})$",
+        "checks": ["years_consecutive"],
+        "confidence": 90,
+        "examples": [{"lines": ["FY -", "2026-27"], "expect": "2026-27"}],
+        "counter_examples": [{"lines": ["FY -", "Return Period -"]}]
+      },
+      {
+        "name": "cur_gst_tax_period",
+        "field": "tax_period",
+        "portals": ["GST Portal"],
+        "labels": ["Tax Period", "Return Period", "Period"],
+        "within": 1,
+        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December)$",
+        "confidence": 90,
+        "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"}],
+        "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}]
+      },
+      {
+        "name": "cur_gst_status",
+        "field": "status",
+        "portals": ["GST Portal"],
+        "labels": ["Status"],
+        "within": 1,
+        "pattern": "^(Filed|Not Filed|Submitted|To be Filed|Ready to File)$",
+        "map": [
+          ["^filed$", "Filed"],
+          ["^submitted$", "Submitted"],
+          ["not filed|to be filed|ready to file", "Not Filed"]
+        ],
+        "confidence": 85,
+        "examples": [{"lines": ["Status -", "Filed"], "expect": "Filed"}],
+        "counter_examples": [{"lines": ["Status -", "FY -"]}]
+      }
+    ]
+  }
+}

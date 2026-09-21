@@ -46,6 +46,14 @@ _VALUE_BEARING_CONTROL_TYPES = frozenset({
     UIA_SPINNER_CONTROL_TYPE_ID,
 })
 
+# Choice controls: UIA gives their label as Name ("Original", "Revised") but NOT which one is
+# ticked - that is a separate pattern query. Measured in Edge: a radio group reads as both
+# labels, indistinguishable, unless SelectionItem / Toggle is asked. Only done when a caller
+# opts in (include_selection), so VSDC-X's lines are unchanged.
+UIA_RADIOBUTTON_CONTROL_TYPE_ID = 50013
+UIA_CHECKBOX_CONTROL_TYPE_ID = 50002
+SELECTED_PREFIX = "Selected: "
+
 # Generous versus the ~0.1s observed in practice, while still bounded: a raw
 # UIA call from a thread with no message loop can genuinely hang/deadlock on
 # a complex page (observed while probing), so every call below is guarded.
@@ -135,7 +143,22 @@ def _read_value_pattern(uia_client, element) -> str:
         return ""
 
 
-def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional[int] = None) -> List[str]:
+def _is_chosen(uia_client, element, control_type: int) -> bool:
+    """Whether a radio button is selected / a checkbox is ticked. A property read only."""
+    try:
+        if control_type == UIA_RADIOBUTTON_CONTROL_TYPE_ID:
+            p = element.GetCurrentPattern(uia_client.UIA_SelectionItemPatternId)
+            return bool(p and p.QueryInterface(uia_client.IUIAutomationSelectionItemPattern).CurrentIsSelected)
+        if control_type == UIA_CHECKBOX_CONTROL_TYPE_ID:
+            p = element.GetCurrentPattern(uia_client.UIA_TogglePatternId)
+            return bool(p and p.QueryInterface(uia_client.IUIAutomationTogglePattern).CurrentToggleState == 1)
+    except Exception:
+        pass
+    return False
+
+
+def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional[int] = None,
+                              include_selection: bool = False) -> List[str]:
     """Returns the visible text of every descendant, in document order — label
     and value elements arrive as adjacent entries, which is exactly the 'label
     on line N, value on line N+1' shape vsdc_regex.py's extractors already
@@ -162,19 +185,29 @@ def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional
             # pattern on every descendant of a large page would cost a
             # cross-process call per element for nothing.
             value = ""
+            ctype = None
             try:
-                if el.CurrentControlType in _VALUE_BEARING_CONTROL_TYPES:
+                ctype = el.CurrentControlType
+                if ctype in _VALUE_BEARING_CONTROL_TYPES:
                     value = _read_value_pattern(uia_client, el)
             except Exception:
                 value = ""
             if value and value != name:
                 lines.append(value)
+                # A dropdown's value IS the user's choice; mark it as one, so a rule can tell
+                # it apart from the option labels a page lists under the same heading.
+                if include_selection and ctype == UIA_COMBOBOX_CONTROL_TYPE_ID:
+                    lines.append(SELECTED_PREFIX + (f"{name} = {value}" if name else value))
+            if include_selection and name and ctype in (UIA_RADIOBUTTON_CONTROL_TYPE_ID, UIA_CHECKBOX_CONTROL_TYPE_ID) \
+                    and _is_chosen(uia_client, el, ctype):
+                lines.append(SELECTED_PREFIX + name)
         except Exception:
             continue
     return lines
 
 
-def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_lines: Optional[int] = None) -> Dict[str, Any]:
+def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_lines: Optional[int] = None,
+                   include_selection: bool = False) -> Dict[str, Any]:
     """
     Reads the visible text of the web page content (not browser chrome —
     tabs, toolbar, address bar) hosted in the given window handle, via its
@@ -186,6 +219,10 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_line
 
     max_lines stops the walk once that many lines are collected - used by the portal-logo
     tripwire, which only needs the head of a page it is not cleared to read.
+
+    include_selection adds a "Selected: <label>" line after each ticked radio button or
+    checkbox, and "Selected: <label> = <value>" after each dropdown's value (SGT uses it;
+    VSDC-X does not, so its lines are exactly as before).
     """
     empty: Dict[str, Any] = {"text": "", "lines": []}
     if not hwnd or not user32.IsWindow(hwnd):
@@ -203,7 +240,7 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_line
             return empty
         all_lines: List[str] = []
         for doc_el in doc_elements:
-            all_lines.extend(_collect_descendant_lines(uia, uia_client, doc_el, max_lines))
+            all_lines.extend(_collect_descendant_lines(uia, uia_client, doc_el, max_lines, include_selection))
             if max_lines is not None and len(all_lines) >= max_lines:
                 all_lines = all_lines[:max_lines]
                 break

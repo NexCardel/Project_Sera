@@ -101,11 +101,20 @@ def stamp_device_name(payload):
 
 
 def _config_path() -> Path:
+    """
+    Installed app: next to the program first, else the PC's Sera data folder. The program sits
+    in Program Files, which staff cannot write to without admin rights; the data folder (where
+    device_identity.txt already lives) they can. The file is never bundled into the installer:
+    installers are published as public GitHub releases, and the topic is a secret.
+    """
     override = os.environ.get(ALERT_CONFIG_ENV)
     if override:
         return Path(override)
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / ALERT_CONFIG_NAME
+        beside_exe = Path(sys.executable).resolve().parent / ALERT_CONFIG_NAME
+        if beside_exe.is_file():
+            return beside_exe
+        return Path.home() / SERA_DATA_DIR_NAME / ALERT_CONFIG_NAME
     return Path(__file__).resolve().parents[2] / ALERT_CONFIG_NAME
 
 

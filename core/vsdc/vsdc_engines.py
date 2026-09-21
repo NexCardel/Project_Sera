@@ -23,6 +23,12 @@ ENGINE_DEFAULTS = {"vsdc_enabled": "1", "vsdc_x_enabled": "1", "vsdc247_enabled"
 HUD_SETTING = "vsdc_hud_enabled"
 HUD_DEFAULT = "1"
 
+# SGT - Sera Global Tracker - the fourth switch. Not on/off but a mode: "off" or "shadow"
+# ("live" arrives once shadow mode has been compared against the live pipeline).
+SGT_SETTING = "sgt_mode"
+SGT_DEFAULT = "off"
+SGT_MODES = ("off", "shadow")
+
 _TRUE = ("1", "true", "yes", "on")
 
 
@@ -39,6 +45,15 @@ def read_engine_flags(get_setting: Callable[..., object]) -> Tuple[bool, bool, b
         except Exception:
             return _on(None, ENGINE_DEFAULTS[key])
     return flag("vsdc_enabled"), flag("vsdc_x_enabled"), flag("vsdc247_enabled")
+
+
+def read_sgt_mode(get_setting: Callable[..., object]) -> str:
+    """SGT's mode: "off" or "shadow". Anything unrecognised reads as off."""
+    try:
+        value = str(get_setting(SGT_SETTING, SGT_DEFAULT) or SGT_DEFAULT).strip().lower()
+    except Exception:
+        return SGT_DEFAULT
+    return value if value in SGT_MODES else SGT_DEFAULT
 
 
 def read_hud_enabled(get_setting: Callable[..., object]) -> bool:

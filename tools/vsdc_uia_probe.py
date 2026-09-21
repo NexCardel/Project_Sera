@@ -158,10 +158,40 @@ def find_document_elements(uia, uia_client, root_element):
     return [found.GetElement(i) for i in range(found.Length)]
 
 
+# Dropdowns / text fields keep what is SELECTED or TYPED in ValuePattern, not in Name; radio
+# buttons and checkboxes keep whether they are ticked in SelectionItem / Toggle. Without these
+# a dump shows a dropdown's label but never its chosen value - what VSDC-X and SGT really read.
+_VALUE_TYPES = (50003, 50004, 50016)          # ComboBox, Edit, Spinner
+_RADIO, _CHECKBOX = 50013, 50002
+
+
+def _value_of(uia_client, el):
+    try:
+        p = el.GetCurrentPattern(uia_client.UIA_ValuePatternId)
+        return (p.QueryInterface(uia_client.IUIAutomationValuePattern).CurrentValue or "").strip() if p else ""
+    except Exception:
+        return ""
+
+
+def _ticked(uia_client, el, ctype):
+    try:
+        if ctype == _RADIO:
+            p = el.GetCurrentPattern(uia_client.UIA_SelectionItemPatternId)
+            return bool(p and p.QueryInterface(uia_client.IUIAutomationSelectionItemPattern).CurrentIsSelected)
+        if ctype == _CHECKBOX:
+            p = el.GetCurrentPattern(uia_client.UIA_TogglePatternId)
+            return bool(p and p.QueryInterface(uia_client.IUIAutomationTogglePattern).CurrentToggleState == 1)
+    except Exception:
+        pass
+    return False
+
+
 def collect_descendant_text(uia, uia_client, root_element):
     """
     Pulls every descendant element under root_element and returns a list of
-    (control_type_name, name, class_name) for elements with a non-empty Name.
+    (control_type_name, text, class_name) for elements with a Name or a value. The text
+    is the Name, plus "  => <value>" for a dropdown / field that holds one, plus
+    "  [selected]" for a ticked radio button / checkbox.
     Meant to be called through run_with_timeout — no printing in here since
     this runs on a worker thread.
     """
@@ -173,12 +203,18 @@ def collect_descendant_text(uia, uia_client, root_element):
         try:
             el = elements.GetElement(i)
             name = (el.CurrentName or "").strip()
-            if not name:
-                continue
             ctype = el.CurrentControlType
+            value = _value_of(uia_client, el) if ctype in _VALUE_TYPES else ""
+            if not name and not value:
+                continue
+            text = name
+            if value and value != name:
+                text = f"{name}  => {value}".strip()
+            if ctype in (_RADIO, _CHECKBOX) and _ticked(uia_client, el, ctype):
+                text += "  [selected]"
             ctype_name = CONTROL_TYPE_NAMES.get(ctype, str(ctype))
             cls = el.CurrentClassName or ""
-            results.append((ctype_name, name, cls))
+            results.append((ctype_name, text, cls))
         except Exception:
             continue
     return results, count
@@ -209,7 +245,7 @@ def main():
     say("VSDC UI Automation Accessibility-Tree Probe (diagnostic only)")
     say("=" * 70)
 
-    countdown = 5
+    countdown = 10
     say(f"\nSwitch to the browser tab now — capturing foreground window in {countdown}s...")
     for remaining in range(countdown, 0, -1):
         say(f"  {remaining}...")

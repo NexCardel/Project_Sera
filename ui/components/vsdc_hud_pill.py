@@ -303,7 +303,8 @@ class VSDCHudPill(QWidget):
         - If an ARN or Acknowledgement number is detected, renders it as a highlighted
           monospace Consolas chip (#39FF14).
         - If a capture-source tag is present ("VSDC-X (Exact)" from the UI
-          Automation accessibility-tree read, or "VSDC (Visual)" from OCR),
+          Automation accessibility-tree read, "VSDC (Visual)" from OCR,
+          "VSDC247 (Visual)" or "SGT (Shadow)"),
           renders it in a distinct color so the user can see at a glance
           which engine actually supplied that capture.
         Both apply independently — a subtitle can carry either, both, or neither.
@@ -320,11 +321,18 @@ class VSDCHudPill(QWidget):
             return f'{lbl}: <span style="font-family: Consolas, monospace; color: #39FF14; font-weight: bold;">{val}</span>'
         text = re.sub(arn_pattern, repl_arn, text, flags=re.IGNORECASE)
 
-        source_pattern = r"(VSDC-X \(Exact\)|VSDC247 \(Visual\)|VSDC \(Visual\))"
+        source_pattern = r"(VSDC-X \(Exact\)|VSDC247 \(Visual\)|VSDC \(Visual\)|SGT \((?:Shadow|Live)\))"
         def repl_source(m):
             label = m.group(1)
-            # VSDC-X blue, the VSDC247 safety net purple, plain VSDC OCR muted grey.
-            color = "#58A6FF" if "VSDC-X" in label else ("#D2A8FF" if "VSDC247" in label else "#8B949E")
+            # VSDC-X blue, the VSDC247 safety net purple, SGT orange, plain VSDC OCR muted grey.
+            if "VSDC-X" in label:
+                color = "#58A6FF"
+            elif "VSDC247" in label:
+                color = "#D2A8FF"
+            elif label.startswith("SGT"):
+                color = "#FFA657"
+            else:
+                color = "#8B949E"
             return f'<span style="color: {color}; font-weight: 700;">{label}</span>'
         text = re.sub(source_pattern, repl_source, text)
 

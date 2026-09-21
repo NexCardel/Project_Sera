@@ -1129,6 +1129,16 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Enable VSDC 24/7",
             "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
 
+        lay.addWidget(_sub_header("SGT - Sera Global Tracker"))
+        self.sgt_mode_combo = QComboBox()
+        self.sgt_mode_combo.addItem("Off", "off")
+        self.sgt_mode_combo.addItem("Shadow (log only, saves nothing)", "shadow")
+        lay.addWidget(_setting_row("SGT mode",
+            "Reads every portal page and works out every datapoint from its field list, without crosshairs. "
+            "Shadow writes what it would have captured to a log on this PC (sgt_shadow folder) so it can be "
+            "compared with the tracker, and shows its captures on the HUD pill tagged \"SGT (Shadow)\". "
+            "Nothing is saved to the tracker or sent anywhere.", self.sgt_mode_combo))
+
         lay.addWidget(_sub_header("HUD Pill"))
         self.vsdc_hud_check = QCheckBox()
         lay.addWidget(_setting_row("Show HUD pill",
@@ -1138,6 +1148,7 @@ class UnifiedSettingsDialog(QDialog):
         self.vsdc_x_check.toggled.connect(self._on_control_changed)
         self.vsdc247_check.toggled.connect(self._on_control_changed)
         self.vsdc_hud_check.toggled.connect(self._on_control_changed)
+        self.sgt_mode_combo.currentIndexChanged.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
@@ -1251,6 +1262,7 @@ class UnifiedSettingsDialog(QDialog):
             state["vsdc_x_enabled"] = self.vsdc_x_check.isChecked()
             state["vsdc247_enabled"] = self.vsdc247_check.isChecked()
             state["vsdc_hud_enabled"] = self.vsdc_hud_check.isChecked()
+            state["sgt_mode"] = self.sgt_mode_combo.currentData()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1342,8 +1354,9 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "1") == "1")
             self.vsdc247_check.setChecked(g("vsdc247_enabled", "0") == "1")
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
+            _set(self.sgt_mode_combo, g("sgt_mode", "off"))
 
-    # ── Save settings ─────────────────────────────────────────────────────────
+    #── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
         try:
             bulk_settings = {}
@@ -1429,6 +1442,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_x_enabled"] = b(self.vsdc_x_check)
                 bulk_settings["vsdc247_enabled"] = b(self.vsdc247_check)
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
+                bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "off"
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
