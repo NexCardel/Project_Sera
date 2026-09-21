@@ -846,16 +846,27 @@ class PayloadInspectorDialog(QDialog):
         self.txt_notes.setPlaceholderText("Write notes here...")
 
         media_toolbar = QHBoxLayout()
-        self.btn_attach_img = QPushButton("Attach Image")
-        self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
-        self.btn_paste_img = QPushButton("Paste Image")
-        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
-        self.btn_ocr_img = QPushButton("Scan Text (OCR)")
-        self.btn_ocr_img.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
         
-        self.btn_clear_img = QPushButton("Clear Image")
+        self.btn_attach_img = QPushButton()
+        self.btn_attach_img.setToolTip("Attach Image")
+        self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
+        self.btn_attach_img.setFixedSize(36, 36)
+        
+        self.btn_paste_img = QPushButton()
+        self.btn_paste_img.setToolTip("Paste Image")
+        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
+        self.btn_paste_img.setFixedSize(36, 36)
+        
+        self.btn_ocr_img = QPushButton()
+        self.btn_ocr_img.setToolTip("Scan Text (OCR)")
+        self.btn_ocr_img.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
+        self.btn_ocr_img.setFixedSize(36, 36)
+        
+        self.btn_clear_img = QPushButton()
+        self.btn_clear_img.setToolTip("Clear Image")
         self.btn_clear_img.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
-        self.btn_clear_img.setStyleSheet("background-color: transparent; border: 1px solid #FF6B6B; color: #FF6B6B;")
+        self.btn_clear_img.setStyleSheet("background-color: transparent; border: 1px solid #FF6B6B;")
+        self.btn_clear_img.setFixedSize(36, 36)
         
         media_toolbar.addWidget(self.btn_attach_img)
         media_toolbar.addWidget(self.btn_paste_img)
@@ -867,9 +878,11 @@ class PayloadInspectorDialog(QDialog):
         self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
         media_toolbar.addWidget(self.lbl_save_status)
         
-        self.btn_expand_img = QPushButton("View Full Image")
+        self.btn_expand_img = QPushButton()
+        self.btn_expand_img.setToolTip("View Full Image")
         self.btn_expand_img.setIcon(_safe_qta_icon("mdi.fullscreen", "#FFFFFF"))
         self.btn_expand_img.setProperty("class", "SecondaryBtn")
+        self.btn_expand_img.setFixedSize(36, 36)
         media_toolbar.addWidget(self.btn_expand_img)
 
         self.lbl_image_preview = QLabel("No image attached")
