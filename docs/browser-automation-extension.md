@@ -2,13 +2,15 @@
 
 Project Sera supports browser automation through `automation.py`, Playwright, and the companion Chrome/Edge extension.
 
-## Native Host Bridge
+## WebSocket Bridge (2026-09-22)
 
-`automation.py` routes extension-mode services to `sera_extension` through the local TCP bridge in `native_host/host.py` on port 49153.
+`automation.py` routes extension-mode services to `sera_extension` through `ui/ws_bridge.py`, one local WebSocket server the app hosts on the first free port from `48765-48768`. `background.js` holds the connection and is the only part of either extension allowed to talk to the app; a content script or the SDC page script goes through it via `chrome.runtime.sendMessage`, never straight to a port. Only the Sera extension's own origin may connect - see `ui/ws_bridge.py` for how that is checked.
 
-Settings changes, such as enabling or disabling the filing tracker, are broadcast from the desktop app to the native host so the browser extension updates immediately.
+This replaces Chrome/Firefox Native Messaging (`native_host/`, removed) and the old direct-HTTP fallback on port 49152 (`ui/extension_listener.py`, removed): both required per-browser registry setup, sat inside Windows' own dynamic port range (so another program could already be holding the port at random), and stalled every request on a hand-rolled server. See `docs/app-extension-communication-report.md` for the full comparison and the reasoning behind the switch.
 
-If the extension is asleep or the browser is closed when Autofill is clicked, `automation.py` opens the login URL, wakes Chrome/Edge background service workers, and retries connection for up to 10 seconds.
+Settings changes, such as enabling or disabling the filing tracker, are broadcast from the desktop app to every connected browser so the extension updates immediately.
+
+If the extension is asleep or the browser is closed when Autofill is clicked, `automation.py` opens the login URL, wakes Chrome/Edge background service workers, and retries the connection for up to 10 seconds.
 
 ## Extension Injection & Cookie Management
 
@@ -58,7 +60,7 @@ The injected `fillCredentialsInPage()` function:
   - **Compressed Transport**: Optionally sends the complete lossless assembler envelope as `filing_result_compressed` (`gzip+base64`); the desktop listener restores it to the normal `filing_result` contract before database insertion.
   - **Serialized Session Persistence**: Queues browser storage writes and avoids reloading stale session snapshots during SPA route changes, preventing earlier datasets from being replaced by a later capture.
   - **Portal-Scoped Storage**: Completely isolates session memory keys across portals (`__SDC_SESSION_ITR__`, `__SDC_SESSION_GST__`, `__SDC_SESSION_TRACES__`, `__SDC_SESSION_MCA__`).
-  - **Direct HTTP Loopback (Primary)**: Emits final atomic session payloads directly to `http://127.0.0.1:49152` via `fetch()`, bypassing Manifest V3 service worker sleep cycles with automatic fallback to Chrome Runtime Native Messaging.
+  - **Background-Worker Delivery**: Hands final atomic session payloads to `background.js` via `chrome.runtime.sendMessage`, which forwards them over the WebSocket bridge and waits for the app's acknowledgement before clearing the durable outbox. (Before 2026-09-22 this went straight from the page script to `http://127.0.0.1:49152`; browsers increasingly block that kind of direct localhost access from a live page, so it now always goes through the background worker.)
   - **Double-Flush & Context Protection**: Guarded with `_assembler_flushed` lock and client PAN context switch monitors to prevent duplicated tracker dump rows.
   - **Ledger Card Milestone Resolver**: Evaluates milestone timelines on `view-filed-returns` to distinguish verified returns from "e-Verify Later" submissions.
 
@@ -69,26 +71,14 @@ The GST multi-dataset flow was not visible in Tracker Dump because the final com
 - **Sera DOM Tracker (`tracker.js`)**:
   - Monitors visual on-screen confirmation banners using `MutationObserver` as a fallback for legacy server-rendered HTML pages.
 
-## Native Messaging on Another PC
+## Setting Up on Another PC
 
-The browser extension requires the native messaging host to be registered on each Windows machine.
-
-Distribute the complete PyInstaller output folder, including `native_host/`, then run:
-
-```bat
-native_host\register_native_host.bat
-```
-
-Run it once as the logged-in Windows user. Start the desktop app once before testing the extension so it can also register the host automatically.
-
-The packaged build includes `native_host.host`, allowing `Amas_Sera.exe --native-host` to stay alive as Chrome's stdio bridge.
-
-If Chrome reports `Native host has exited`, check `native_host\host_error.log` and confirm that the registry entry points to the `com.amanassociates.sera.json` inside the copied application folder.
+Nothing to register. Install the app and load/force-install the extension (the Windows installer does the latter automatically, see below); `background.js` finds the app on its own by trying `48765-48768` in order, and reconnects if the app restarts. There is no registry key, no host manifest, and no per-browser setup step.
 
 ## Packaged Browser Deployment
 
-The Windows installer deploys the signed `ProjectSeraCompanion.crx` for both Google Chrome and Microsoft Edge. It registers the extension under each browser's machine-wide `Extensions` registry key and the native host under `NativeMessagingHosts`, so staff do not need to manually load an unpacked extension.
+The Windows installer deploys the signed `ProjectSeraCompanion.crx` for both Google Chrome and Microsoft Edge. It registers the extension under each browser's machine-wide `Extensions` registry key, so staff do not need to manually load an unpacked extension.
 
-The extension manifest (`manifest.json`) includes permissions for `"nativeMessaging"`, `"storage"`, `"activeTab"`, `"scripting"`, `"tabs"`, `"alarms"`, `"browsingData"`, and `"cookies"`.
+The extension manifest (`manifest.json`) includes permissions for `"storage"`, `"activeTab"`, `"scripting"`, `"tabs"`, `"alarms"`, `"browsingData"`, and `"cookies"`.
 
-The installer requires administrator approval. After installation, restart Chrome or Edge if it was already open; the Sera Companion extension is then available and can connect to the desktop app through `com.amanassociates.sera`.
+The installer requires administrator approval. After installation, restart Chrome or Edge if it was already open; the Sera Companion extension is then available and connects to the desktop app on its own over the WebSocket bridge.

@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         statusDot.className = 'status-dot connected';
         statusLabel.textContent = 'Connected to Sera Host';
-        statusDetail.textContent = resp.mode === 'native' ? 'Active Sync: Native Host' : 'Active Sync: Local Bridge (Port 49152)';
+        statusDetail.textContent = 'Active Sync: WebSocket Bridge';
       }
     });
   }

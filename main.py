@@ -16,11 +16,10 @@ from datetime import datetime
 # Qt probes a couple of legacy Windows bitmap fonts during platform startup;
 # suppress that harmless diagnostic while keeping other Qt warnings visible.
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
-
-if "--native-host" in sys.argv or any(arg.startswith("chrome-extension://") for arg in sys.argv):
-    import native_host.host as nh
-    nh.main()
-    sys.exit(0)
+# numpy's OpenBLAS reserves buffers for one thread per CPU core the moment numpy is imported
+# (~225 MB of private commit on this PC, measured 2026-09-21). The app only uses numpy for
+# small pixel checks, so one thread loses nothing. Must be set before anything imports numpy.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy, QSystemTrayIcon, QMenu
 from ui.shell.app_shell import AppShell
@@ -31,6 +30,10 @@ try:
     import qtawesome as qta
 except Exception:
     qta = None
+# Only the Material Design icon font is used; loading qtawesome's other 11 costs ~15 MB.
+from ui.utils.icon_fonts import restrict_icon_fonts
+restrict_icon_fonts()
+from core.memlog import mark as memory_mark
 
 def _safe_qta_icon(icon_name, color=None):
     if qta is not None:
@@ -51,6 +54,7 @@ class SyncSignalBridge(QObject):
     capture_processed_signal = Signal(dict, dict)
     update_found_signal = Signal(dict)
     update_ready_signal = Signal(str, dict)
+    maintenance_done_signal = Signal()
 
 import security
 from database import SeraDatabase
@@ -59,10 +63,23 @@ from ui.windows.client_detail_window import ClientDetailWindow
 from ui.windows.admin_window import AdminWindow, AdminPinDialog, NewClientDialog
 from ui.windows.tracker_dump_window import TrackerDumpWindow
 from ui.utils.theme import get_theme_stylesheet
-from ui.extension_listener import ExtensionListener
+from ui.ws_bridge import WSBridge
 from ui.components.vsdc_hud_pill import VSDCHudPill
 
 APP_DIR = Path.home() / "AmanAssociates_Sera"
+
+def _copy_if_changed(src: Path, dst: Path) -> None:
+    """copy2 keeps the modified time, so a same-size, same-time copy is already up to date -
+    runs on every start, and re-copying unchanged files was ~0.1 s of it."""
+    import shutil
+    try:
+        s, d = src.stat(), dst.stat()
+        if s.st_size == d.st_size and int(s.st_mtime) == int(d.st_mtime):
+            return
+    except OSError:
+        pass
+    shutil.copy2(src, dst)
+
 
 def ensure_permanent_extension() -> Path:
     import shutil
@@ -82,7 +99,7 @@ def ensure_permanent_extension() -> Path:
                     rel_path = item.relative_to(source_ext)
                     dest_file = target_ext / rel_path
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(item, dest_file)
+                    _copy_if_changed(item, dest_file)
 
         target_ff = APP_DIR / "sera_extension_firefox"
         if source_ff.exists():
@@ -92,96 +109,20 @@ def ensure_permanent_extension() -> Path:
                     rel_path = item.relative_to(source_ff)
                     dest_file = target_ff / rel_path
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(item, dest_file)
+                    _copy_if_changed(item, dest_file)
 
         return target_ext
     except Exception as e:
         print(f"Could not sync permanent extension folder: {e}")
         return APP_DIR / "sera_extension"
 
-def register_native_messaging_host():
-    if sys.platform != "win32":
-        return
-    import winreg
-    import json
-    import shutil
-    try:
-        ensure_permanent_extension()
-        
-        # Use permanent APP_DIR/native_host directory so registry path never points to temporary _MEIPASS
-        perm_native_dir = APP_DIR / "native_host"
-        perm_native_dir.mkdir(parents=True, exist_ok=True)
-
-        if getattr(sys, 'frozen', False):
-            source_native = Path(sys._MEIPASS) / "native_host"
-        else:
-            source_native = Path(__file__).resolve().parent / "native_host"
-
-        if source_native.exists():
-            for item in source_native.glob("*"):
-                if item.is_file():
-                    try:
-                        shutil.copy2(item, perm_native_dir / item.name)
-                    except Exception:
-                        pass
-
-        json_path = perm_native_dir / "com.amanassociates.sera.json"
-        firefox_json_path = perm_native_dir / "com.amanassociates.sera.firefox.json"
-        host_bat_path = perm_native_dir / "host.bat"
-
-        # Explicitly configure host.bat with the exact active Python/Executable path
-        if not getattr(sys, 'frozen', False):
-            python_exe = sys.executable
-            bat_content = f'@echo off\n"{python_exe}" -u "%~dp0host.py" %*\n'
-            try:
-                host_bat_path.write_text(bat_content, encoding="utf-8")
-            except Exception:
-                pass
-
-        if json_path.exists():
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                data["path"] = str(host_bat_path.resolve())
-                with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-            except Exception as e:
-                print(f"Could not update native host JSON path: {e}")
-
-        if firefox_json_path.exists():
-            try:
-                with open(firefox_json_path, "r", encoding="utf-8") as f:
-                    ff_data = json.load(f)
-                ff_data["path"] = str(host_bat_path.resolve())
-                with open(firefox_json_path, "w", encoding="utf-8") as f:
-                    json.dump(ff_data, f, indent=2)
-            except Exception as e:
-                print(f"Could not update Firefox native host JSON path: {e}")
-
-        targets = []
-        if json_path.exists():
-            targets.extend([
-                (r"Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera", str(json_path.resolve())),
-                (r"Software\Microsoft\Edge\NativeMessagingHosts\com.amanassociates.sera", str(json_path.resolve())),
-            ])
-        if firefox_json_path.exists():
-            targets.append(
-                (r"Software\Mozilla\NativeMessagingHosts\com.amanassociates.sera", str(firefox_json_path.resolve()))
-            )
-        
-        for subkey, target_json in targets:
-            try:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, subkey) as key:
-                    winreg.SetValueEx(key, "", 0, winreg.REG_SZ, target_json)
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Could not register native messaging host: {e}")
-
-
 class SeraApp:
     def __init__(self):
-        register_native_messaging_host()
+        # Keeps the extension folders on disk in a stable location (outside the temporary
+        # PyInstaller extraction dir) so the browser has somewhere fixed to load them from.
+        # Native messaging's registry registration used to happen here too; the bridge to the
+        # extension is a WebSocket now (ui/ws_bridge.py) and needs no registration at all.
+        self._permanent_extension_dir = ensure_permanent_extension()
 
         # Fix Windows Taskbar preview icon grouping & display
         if sys.platform == "win32":
@@ -197,6 +138,7 @@ class SeraApp:
                 Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
             )
 
+        memory_mark("start-up: code loaded")
         self.app = QApplication(sys.argv)
         # Avoid Windows legacy bitmap-font fallback warnings (8514oem/Fixedsys)
         # and keep all dialogs consistent with the app stylesheet.
@@ -213,6 +155,7 @@ class SeraApp:
         self.sync_bridge.capture_processed_signal.connect(self._on_capture_processed_ui)
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
+        self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
         self._pending_update_installer = None
         self._pending_update_info = None
         self._update_applied = False
@@ -266,6 +209,7 @@ class SeraApp:
 
         loading_dlg.show()
         self.app.processEvents()
+        memory_mark("  vault: loading dialog shown")
 
         try:
             loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
@@ -274,6 +218,7 @@ class SeraApp:
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
             self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
+            memory_mark("  vault: database opened")
 
             # Ensure FST, SDC, SCA, and tracker settings are initialized
             if self.db.get_setting("sdc_enabled") is None:
@@ -294,8 +239,12 @@ class SeraApp:
             from clipboard_watch import ClipboardWatchService
             self.clipboard_watcher = ClipboardWatchService(self.db, self.app)
             self.clipboard_watcher.sca_armed.connect(self._on_sca_armed)
+            # Why a fill did not happen (e.g. an Income Tax password SCC has not verified yet)
+            self.clipboard_watcher.sca_notice.connect(
+                lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=6000))
             sca_active = (self.db.get_setting("sca_enabled", "1") == "1")
             self.clipboard_watcher.set_enabled(sca_active)
+            memory_mark("start-up: vault unlocked")
         except Exception as e:
             loading_dlg.close()
             QMessageBox.critical(None, "Database Error", str(e))
@@ -340,26 +289,69 @@ class SeraApp:
             on_error=lambda err: print(f"[AutoUpdater] {err}")
         )
         self.update_manager.start(initial_delay_seconds=3)
+        memory_mark("start-up: sync + updater started")
 
         loading_dlg.set_status("Initializing User Interface...")
         self._build_ui()
         loading_dlg.close()
+        memory_mark("start-up: main window built")
 
-        # Start extension listener on port 49152
-        self.ext_listener = ExtensionListener(self.app)
-        self.ext_listener.filing_result_received.connect(self._handle_extension_result)
-        self.ext_listener.uncertain_result_received.connect(self._handle_extension_result)
-        self.ext_listener.session_started_received.connect(self._handle_session_started)
-        self.ext_listener.scc_password_verified_received.connect(self._handle_scc_password_verified)
-        self.ext_listener.sdc_timeline_received.connect(self._handle_sdc_timeline)
-        self.ext_listener.sudr_capture_received.connect(self._handle_sudr_capture)
-        self.ext_listener.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
-        self.ext_listener.settings_provider = self._get_extension_settings_payload
-        self.app.aboutToQuit.connect(self.ext_listener.stop)
+        # Start the WebSocket bridge to the extension (ui/ws_bridge.py). Only the Sera extension's
+        # own background page may connect - see that module for how the origin is checked.
+        from ui import ws_bridge as _ws_bridge_module
+        self.bridge = WSBridge(self.app)
+        self.bridge.filing_result_received.connect(self._handle_extension_result)
+        self.bridge.uncertain_result_received.connect(self._handle_extension_result)
+        self.bridge.session_started_received.connect(self._handle_session_started)
+        self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
+        self.bridge.sdc_timeline_received.connect(self._handle_sdc_timeline)
+        self.bridge.sudr_capture_received.connect(self._handle_sudr_capture)
+        self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
+        self.bridge.settings_provider = self._get_extension_settings_payload
+        self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
+        self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
+        self.app.aboutToQuit.connect(self.bridge.stop)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
-        self.ext_listener.start()
+        self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
+        # automation.py's module-level functions (autofill, SCA arm, settings push) reach this
+        # bridge through here - they have no object of their own to hold a reference on.
+        _ws_bridge_module.set_active_bridge(self.bridge)
 
-        # Start VSDC (Visual Sera DOM Crosshair) background worker & HUD Indicator
+        # The capture engines start on the first turn of the event loop, i.e. right after the
+        # window has painted: loading them (OCR, numpy, UI Automation) is ~0.5 s the window used
+        # to wait for (measured 2026-09-22). Every use of vsdc_worker / vsdc_hud is guarded.
+        self.app.processEvents()                      # paint the window now
+        memory_mark("start-up: window painted")
+        QTimer.singleShot(0, self._start_capture_engines)
+
+        # Memory over the working day (~/AmanAssociates_Sera/logs/memory.log): once a minute after
+        # start-up, then every 10 minutes - steady growth here is a leak, a jump is a feature
+        # loading something heavy.
+        # A minute in, start-up is over: hand back what it touched once and will not use again
+        # (~40% of the working set, measured). Later samples trim only above 120 MB.
+        # Trims happen only while the window is NOT in use (minimised, hidden to the tray): a trim
+        # empties the working set and the next click has to page it all back in, which was felt
+        # as a slow search grid (2026-09-22). If the window is open a minute in, the start-up
+        # trim waits for the next minimise / hide.
+        from core.memlog import sample_and_maybe_trim
+        QTimer.singleShot(60_000, lambda: (memory_mark("running: 1 min after start-up"),
+                                           self._trim_if_idle("start-up finished")))
+        self._memory_timer = QTimer(self.app)
+        self._memory_timer.timeout.connect(
+            lambda: sample_and_maybe_trim("running: periodic sample", may_trim=lambda: not self._window_in_use()))
+        self._memory_timer.start(10 * 60_000)
+
+        # Heavy historical repair/report work is intentionally deferred until
+        # after the main window and extension listener are available.
+        threading.Thread(
+            target=self._run_deferred_startup_maintenance,
+            name="sera-startup-maintenance",
+            daemon=True,
+        ).start()
+
+    def _start_capture_engines(self):
+        """VSDC / VSDC-X / VSDC 24/7 / SGT worker and the HUD pill - started just after the window
+        first paints (see __init__)."""
         try:
             if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
                 if sys._MEIPASS not in sys.path:
@@ -377,6 +369,7 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self._apply_vsdc_engine_settings()
+            memory_mark("start-up: capture engines ready")
         except Exception as vsdc_exc:
             import traceback
             err_msg = traceback.format_exc()
@@ -389,23 +382,33 @@ class SeraApp:
             except Exception:
                 pass
 
-        # Heavy historical repair/report work is intentionally deferred until
-        # after the main window and extension listener are available.
-        threading.Thread(
-            target=self._run_deferred_startup_maintenance,
-            name="sera-startup-maintenance",
-            daemon=True,
-        ).start()
-
     def _run_deferred_startup_maintenance(self):
         try:
             self.db.run_startup_maintenance()
             print("[Startup] Deferred maintenance completed")
+            memory_mark("start-up: deferred maintenance done")
+            self.sync_bridge.maintenance_done_signal.emit()
         except Exception as exc:
             # Startup maintenance is best-effort; the already-open app remains
             # usable and the error is visible in the diagnostic console.
             print(f"[Startup] Deferred maintenance failed: {exc}")
         self._sync_extension_settings()
+
+    def _on_startup_maintenance_done(self):
+        """The background maintenance re-links tracker rows to clients and tidies names, after the
+        window is already showing - redraw the views that show them (main thread)."""
+        for name in ("tracker_dump_win", "search_win"):
+            win = getattr(self, name, None)
+            try:
+                if win is None:
+                    continue
+                if name == "tracker_dump_win":
+                    if not getattr(win, "_first_load_pending", False):   # not filled yet: fills when opened
+                        win.load_data()
+                else:
+                    win._on_search_changed()     # redraw only - refresh() would clear the search box
+            except Exception as exc:
+                print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
     def _handle_extension_settings_updated(self, msg: dict):
         """Persists extension settings toggled from browser popup into SQLite database and controls VSDC worker."""
@@ -486,6 +489,13 @@ class SeraApp:
                 )
         except Exception as e:
             print(f"[main] Failed to sync extension settings: {e}")
+
+    def _handle_sca_password_request(self, msg: dict):
+        """SCA v2: the extension asks for one portal password after the client's id was entered
+        on that portal. clipboard_watch decides; the answer goes back only on the socket that
+        asked (WSBridge.reply), never to every connected browser."""
+        reply = self.clipboard_watcher.handle_password_request(msg)
+        self.bridge.reply(msg, reply)
 
     def _on_sca_armed(self, client_id: int, client_token: str, services: list):
         try:
@@ -1178,12 +1188,17 @@ class SeraApp:
     def _build_ui(self):
         self._apply_theme()
         self.shell = AppShell()
+        memory_mark("  window: theme + shell")
         self.shell.sidebar.set_user_name(self.actor_alias)
         
         self.search_win = SearchWindow(self.db)
+        memory_mark("  window: search")
         self.detail_win = ClientDetailWindow(self.db, actor=self.actor)
+        memory_mark("  window: client detail")
         self.admin_win = AdminWindow(self.db, actor=self.actor)
-        self.tracker_dump_win = TrackerDumpWindow(self.db)
+        memory_mark("  window: admin")
+        self.tracker_dump_win = TrackerDumpWindow(self.db, defer_first_load=True)   # hidden page: fill when shown
+        memory_mark("  window: tracker dump")
         self.shell.add_page(self.search_win)          # Index 0
         self.shell.add_page(self.admin_win)           # Index 1
         self.shell.add_page(self.tracker_dump_win)    # Index 2
@@ -1242,12 +1257,14 @@ class SeraApp:
         self.admin_win.set_sync_service(self.sync_service)
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
-        self.shell.on_minimized_to_tray = self._show_tray_minimized_hint
+        self.shell.on_minimized_to_tray = self._on_window_put_away
+        self.shell.on_minimized = lambda: QTimer.singleShot(5_000, lambda: self._trim_if_idle("window minimised"))
         self.shell.on_quit_requested = self._quit_application
         self._setup_system_tray()
         # Apply run_in_background setting so closeEvent behaves correctly from startup
         self._apply_run_in_background()
         self._apply_window_mode()
+        memory_mark("  window: tray + shown")
 
     def _apply_vsdc_engine_settings(self):
         """Apply the Settings -> Tracker switches (VSDC, VSDC-X, VSDC 24/7) to the running worker.
@@ -1259,7 +1276,7 @@ class SeraApp:
         try:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
-            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled, read_sgt_mode
+            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled, read_sgt_mode, read_sgt_record_pages
             hud = getattr(self, "vsdc_hud", None)
             if hud is not None:
                 hud.set_enabled(read_hud_enabled(self.db.get_setting))
@@ -1268,7 +1285,8 @@ class SeraApp:
                 return
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
-            worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt)
+            worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
+                                                sgt_record=read_sgt_record_pages(self.db.get_setting))
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "
@@ -1390,6 +1408,21 @@ class SeraApp:
             self.shell.raise_()
             self.shell.activateWindow()
 
+    def _window_in_use(self) -> bool:
+        shell = getattr(self, "shell", None)
+        return bool(shell is not None and shell.isVisible() and not shell.isMinimized())
+
+    def _trim_if_idle(self, reason: str) -> None:
+        """Hand back touched-once memory, but only while nobody is looking at the window."""
+        if self._window_in_use():
+            return
+        from core.memlog import trim_working_set
+        trim_working_set(reason)
+
+    def _on_window_put_away(self):
+        self._show_tray_minimized_hint()
+        QTimer.singleShot(5_000, lambda: self._trim_if_idle("hidden to the tray"))
+
     def _show_tray_minimized_hint(self):
         """Displays a one-time balloon toast notifying user that the app is active in background."""
         if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
@@ -1459,9 +1492,9 @@ class SeraApp:
             self.shell.close()
         if hasattr(self, "tray_icon") and self.tray_icon:
             self.tray_icon.hide()
-        if hasattr(self, "ext_listener") and self.ext_listener:
+        if hasattr(self, "bridge") and self.bridge:
             try:
-                self.ext_listener.stop()
+                self.bridge.stop()
             except Exception:
                 pass
         if hasattr(self, "sync_service") and self.sync_service:
@@ -1491,10 +1524,12 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_search_from_admin(self):
-        self.shell.dismiss_detail_on_outside = False
-        self.search_win.refresh()
-        self.shell.set_current_page(0)
-        self.shell.slide_panel.slide_out()
+        from core.memlog import timed
+        with timed("opening the search grid"):
+            self.shell.dismiss_detail_on_outside = False
+            self.search_win.refresh()
+            self.shell.set_current_page(0)
+            self.shell.slide_panel.slide_out()
 
     def _show_client_detail(self, client_id: int):
         self.shell.dismiss_detail_on_outside = True
@@ -1569,12 +1604,22 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_manage_clients(self):
+        from core.memlog import timed
+        with timed("opening manage clients"):
+            self._show_manage_clients_now()
+
+    def _show_manage_clients_now(self):
         self.shell.dismiss_detail_on_outside = False
         self.admin_win.refresh()
         self.shell.set_current_page(1)
         self.shell.slide_panel.slide_out()
 
     def _show_tracker_dump(self):
+        from core.memlog import timed
+        with timed("opening the tracker"):
+            self._show_tracker_dump_now()
+
+    def _show_tracker_dump_now(self):
         self.shell.dismiss_detail_on_outside = False
         if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
             self.tracker_dump_win.load_data()
@@ -1732,7 +1777,8 @@ class SeraApp:
     def _show_sca_diagnostics(self):
         from ui.dialogs.sca_diagnostics_dialog import ScaDiagnosticsDialog
         if not hasattr(self, "sca_diag") or self.sca_diag is None:
-            self.sca_diag = ScaDiagnosticsDialog(listener=self.ext_listener, parent=self.shell)
+            self.sca_diag = ScaDiagnosticsDialog(listener=self.bridge, parent=self.shell,
+                                                watcher=getattr(self, "clipboard_watcher", None))
         self.sca_diag.show()
         self.sca_diag.raise_()
         self.sca_diag.activateWindow()
@@ -1790,10 +1836,6 @@ class SeraApp:
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
-    if "--native-host" in sys.argv:
-        from native_host.host import main as run_native_host
-        run_native_host()
-        sys.exit(0)
     SeraApp().run()
 
 

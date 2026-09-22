@@ -370,7 +370,8 @@ class VSDCRouter:
             return SGT_SHADOW
         return env if env in (SGT_OFF, SGT_SHADOW) else None
 
-    def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off") -> None:
+    def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
+                              sgt_record: bool = True) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -391,6 +392,9 @@ class VSDCRouter:
         crosshair routing, the same way VSDC247 works alone. SGT_MODE overrides it.
         """
         sgt_mode = self._env_sgt_mode() or (SGT_SHADOW if str(sgt).strip().lower() in (SGT_SHADOW, "live") else SGT_OFF)
+        self._sgt_record = bool(sgt_record)
+        if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
+            self._sgt._recorder.enabled = self._sgt_record
         if sgt_mode == SGT_OFF and self._sgt is not None:
             self._sgt.end_all("SGT switched off")
         self._sgt_mode = sgt_mode
@@ -415,8 +419,14 @@ class VSDCRouter:
     def _run_sgt_shadow(self, hwnd: int, title: str = "") -> None:
         """SGT beside the live pipeline: observes this page, returns nothing, saves nothing."""
         if self._sgt is None:
-            from core.sgt.sgt_shadow import SgtShadow
-            self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt)
+            from core.sgt.sgt_corpus import PageRecorder
+            from core.sgt.sgt_health import SpecStats
+            from core.sgt.sgt_shadow import SgtShadow, shadow_dir
+            folder = shadow_dir()
+            # recorder: pages for replay; stats: portal-change watch; state: crash recovery
+            self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt,
+                                  recorder=PageRecorder(enabled=getattr(self, "_sgt_record", True)),
+                                  stats=SpecStats(folder), state_path=folder / "sessions_state.json")
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
                           frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
 

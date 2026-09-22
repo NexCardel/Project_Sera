@@ -24,12 +24,12 @@ In addition to live browser-level interception, Sera FST includes the **FST Clas
       │  • sdc_core.js        │           │  • vsdc_assembler.py  │
       └───────────┬───────────┘           └───────────┬───────────┘
                   │                                   │
-                  │ Direct Local HTTP Loopback        │ Direct In-Process
-                  │ (http://127.0.0.1:49152)          │ Qt Signal
+                  │ background.js's WebSocket Bridge  │ Direct In-Process
+                  │ (ports 48765-48768)               │ Qt Signal
                   ▼                                   ▼
       ┌───────────────────────┐           ┌───────────────────────┐
-      │ ui/extension_listener │           │ main.py Desktop Core  │
-      │ (PyQt6 QThread Server)│──────────►│ • Identity Resolution │
+      │    ui/ws_bridge.py    │           │ main.py Desktop Core  │
+      │ (QWebSocketServer)    │──────────►│ • Identity Resolution │
       └───────────────────────┘           │ • Window Session Latch│
                                           │ • tracker_dump Insert │
                                           │ • VsdcHudPill Overlay │
@@ -61,7 +61,7 @@ Sera FST employs a resilient, zero-footprint multi-tier detection architecture a
 ### Tier 1: Sera SDC — Smart DOM Crosshairs (Browser Extension Layer)
 `sera_extension/sdc/` runs in the isolated content script world. SDC sleeps completely on non-target routes and wakes exclusively when the URL matches a registered tax portal crosshair:
 * **Session Assembler (`sdc_core.js`)**: Buffers all multi-step filing fragments throughout a taxpayer session into an isolated, portal-scoped storage space (`__SDC_SESSION_ITR__`, `__SDC_SESSION_GST__`).
-* **Direct Local HTTP Loopback (`127.0.0.1:49152`)**: Emits atomic master session payloads directly to the desktop application via `fetch()`, completely bypassing Manifest V3 background service worker idle/sleep cycles.
+* **WebSocket Bridge Delivery**: Hands atomic master session payloads to `background.js` (`chrome.runtime.sendMessage`), which forwards them over its WebSocket connection to the desktop app (`ui/ws_bridge.py`) and waits for an acknowledgement before clearing the durable outbox.
 * **Multi-Dataset Collection**: Normalizes datasets by `GSTIN/PAN + form + period`. A single taxpayer session filing both GSTR-1 and GSTR-3B records distinct rows without overwriting prior filings.
 * **Protocols**:
   - `itr_protocol.js`: Full 7-crosshair mapping across Income Tax 2.0 (landing, form select, personal info, view filed returns, submitted pending, filed & verified).

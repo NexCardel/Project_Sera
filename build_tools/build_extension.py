@@ -1,4 +1,4 @@
-"""Create the signed Chrome/Edge CRX and align native messaging with its ID."""
+"""Create the signed Chrome/Edge CRX and the Firefox XPI."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 ROOT = Path(__file__).resolve().parent.parent
 EXTENSION_DIR = ROOT / "sera_extension"
 FIREFOX_EXTENSION_DIR = ROOT / "sera_extension_firefox"
-NATIVE_MANIFEST = ROOT / "native_host" / "com.amanassociates.sera.json"
 KEY_PATH = ROOT / "build_tools" / "sera_extension.pem"
 OUTPUT_DIR = ROOT / "package_assets" / "extension"
 
@@ -87,16 +86,16 @@ def build() -> tuple[str, str]:
     manifest["key"] = base64.b64encode(public_key_der).decode("ascii")
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-    native = json.loads(NATIVE_MANIFEST.read_text(encoding="utf-8"))
-    native["allowed_origins"] = [f"chrome-extension://{ext_id}/"]
-    NATIVE_MANIFEST.write_text(json.dumps(native, indent=2) + "\n", encoding="utf-8")
-
     zip_path = OUTPUT_DIR / "ProjectSeraCompanion.zip"
     create_zip(zip_path)
     # Firefox uses its Firefox-specific manifest (background scripts rather than
     # Chromium's service worker) but shares the synchronized runtime files.
     xpi_path = OUTPUT_DIR / "ProjectSeraCompanion.xpi"
     firefox_zip_path = OUTPUT_DIR / "ProjectSeraCompanion.firefox.zip"
+    # SCA is one source for both browsers (tests/test_sca_v2.py checks the copies match)
+    shutil.copytree(EXTENSION_DIR / "sca", FIREFOX_EXTENSION_DIR / "sca", dirs_exist_ok=True)
+    for rel in ("content_scripts/login.js", "content_scripts/sca_adapters.js"):
+        shutil.copy2(EXTENSION_DIR / rel, FIREFOX_EXTENSION_DIR / rel)
     create_zip(firefox_zip_path, FIREFOX_EXTENSION_DIR)
     xpi_path.write_bytes(firefox_zip_path.read_bytes())
     firefox_zip_path.unlink()

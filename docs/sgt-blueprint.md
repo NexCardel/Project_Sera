@@ -380,12 +380,13 @@ so one card's status can never be attached to another card's ack. `nearest_above
 from the closest heading above the block (the GST calendar's form name). `require` lists the
 fields without which a block is not a return. A page with no `start` is one block.
 
-### The return in progress — datasets from many pages (added after the first shadow test)
+### The dataset in progress — built from many pages (added after the first shadow test)
 
 The first shadow test showed form and period only being captured on View Filed Returns: the
 filing-wizard pages had no specs, and a piece that could not identify a return on its own page
 (a form without a period) was thrown away. Writing a spec per wizard page would have turned SGT
-into VSDC-X in a JSON file, so the fix is page-agnostic (`current_return` in `sgt_fields.json`):
+into VSDC-X in a JSON file, so the fix is page-agnostic (`current_dataset` in `sgt_fields.json`;
+the old section name `current_return` is still accepted in override files):
 
 * **One value on a page = that page's return; many = a list.** A form or AY shown once is a
   piece of the return being worked on; several different ones are ignored — except periods,
@@ -397,8 +398,8 @@ into VSDC-X in a JSON file, so the fix is page-agnostic (`current_return` in `sg
   a blanket reset on every revisit would wipe good data on dashboard round-trips.)
 * **A different period starts a different return.** The old one is closed.
 * **Status from evidence, not pages:** submission wording + today-dated ack → submitted;
-  a complete return nothing submitted → "In Progress", but only if some piece came from the
-  link (the portals only put the form/year in the link while you are inside that return).
+  a complete dataset nothing submitted → "Draft", but only if some piece came from the
+  link (the portals only put the form/year in the link while you are inside that filing).
 * **Only complete returns are dispatched** (`complete_when`). An incomplete one is logged as
   "incomplete – not dispatched".
 * **List pages never feed it.** A confirmation page's ack joins the return in progress (it
@@ -454,7 +455,122 @@ dropdown values (it skipped unnamed elements and never read values); it now prin
   card away while `form` was required. A filed return is identified by its ack + period +
   status, so `form` is no longer required there — a one-line config change, as intended.
 
+### Submit status: one ladder on every portal (2026-09-22)
+
+Field report: the ITR e-Verify picker (`.../eVerifyReturn/eVerifyReturn-al`) was read — form and
+AY were picked up — but nothing was saved: no rule described a card headed "Assessment Year" on
+its own line, and the page never prints a status word (its status is what the page *is*). The
+fix was made for every portal, not that page (user rule: SGT fixes are global).
+
+* **A dataset = form + period + submit status.** The submit status carries the identifier
+  (`arn`: ARN / ack), the level, and the portal's own wording as `status_evidence`. The code and
+  config say *dataset*, not *return* — returns, applications and refunds are all datasets.
+* **One ladder, four levels, every portal** (`sgt_toolbox.SUBMIT_LEVELS`):
+  `Not Submitted` (default) → `Draft` → `Submitted (Not Verified)` → `Submitted & Verified`.
+  Status only moves up. Portal jargon ("Pending for e-verification", "Filed", "Processed with
+  refund", "Ready to File") is evidence that a spec's `map` turns into a level; the **loader
+  refuses a status map with any other output**, so a new portal cannot bring its own words.
+* **The level climbs with the datapoints captured** (user's rule, 2026-09-22):
+  form + period of the dataset being worked on → `Draft`; + ARN/ack → `Submitted (Not
+  Verified)`; + a submit message → whatever its wording says ("still need to e-Verify" stays
+  Not Verified, "e-Verified successfully" is Verified). Each step only raises the level, and
+  `status_evidence` records which step did (`form + period captured`, `ARN captured`, or the
+  full line of the message).
+* **One portal exception, in config** (`submit_rules.identifier_proves`): GST issues the ARN
+  only when the return is filed with DSC/EVC, so a GST ARN alone proves `Submitted & Verified`.
+  Every other portal uses the ladder's default.
+* The ITR submit confirmation needs only the today-dated ack (the message is optional); the
+  e-Verify confirmation carries the ack of the return verified and joins by it.
+* **Page-scope record fields** (`"scope": "page"`): a fact the page states once about every card
+  on it — "select the return you would like to verify" makes every card awaiting verification.
+  Only one distinct value counts. A card's own status, when it has one, wins.
+* **One card rule for the ITR portal's lists** (`itr_dataset_cards`): cards headed `A.Y. 2025-26`
+  (View Filed Returns) or `Assessment Year` / `2025-26` (e-Verify picker); needs period + ack.
+  A card naming another PAN than the session's client is never attributed.
+* **Future stepper steps are never evidence.** UIA marks them "Unvisited Step N of M"; the
+  label and number after that marker are dropped before any rule sees the page (the e-Verify
+  wizard draws "Return Successfully Verified" on step 1).
+* **A confirmation is never read on a list page.** Whole-page records (submit / verification
+  confirmations) are skipped on a page whose cards matched — an older card's "Successfully
+  e-Verified" is not a confirmation.
+* New records: `itr_verification_success` (form + year, no ack — joins the dataset by form +
+  period) and `gst_submit_success` (ARN + past-tense wording). **Both use the common success
+  wording, not wording confirmed on the live portals** — check them in the next shadow test.
+* The tracker, `get_status_rank` and the LTT status reader all understand the four labels
+  ("not verified" was read as verified before). The tracker shows `Draft` as "Not submitted" -
+  it has no Draft pill yet.
+
 ---
+
+## 10a. Reliability by design (2026-09-22)
+
+Built after a review of SGT itself. The finding was that SGT's rules were good, but there was
+almost no evidence they were right (7 shadow sessions, 5 datasets) and no guard against its worst
+mistake. Measuring agreement with VSDC (the go-live bar) is deliberately left for later. What
+exists now:
+
+**Replay: every field bug becomes a permanent test.**
+- `core/sgt/sgt_corpus.py` records the text lines of every page SGT resolves. They go to
+  `~/AmanAssociates_Sera/sgt_corpus/`, one file per day, deduplicated, kept 30 days, 50 MB a
+  day at most. It is controlled by Settings → Tracker → "Record pages for SGT testing" (on by
+  default). It holds client data, so it never goes into the repository.
+- `core/sgt/sgt_replay.py` runs recorded pages through a fresh `SgtShadow` with the recorded time
+  and date. It touches nothing real.
+- `tools/sgt_replay.py` has four commands:
+  - `baseline`, then edit specs, then `diff` (or `diff --specs file.json`): shows what a spec
+    change does on real pages;
+  - `show`: what SGT would write for each recorded session;
+  - `health`: pages read, OCR share and spec hits over the last 7 days.
+- `tests/sgt_golden/*.json` holds fictional sessions with their expected rows:
+  - positive: ITR login to filed returns, the ITR wizard to submission, GST filed;
+  - held: an ack dated before its assessment year;
+  - negative: a help page, and another client's card.
+- `tests/test_sgt_replay.py` replays them exactly, then runs noise over them: OCR confusions,
+  repeated blocks, stray, blank and lost lines, and shuffles. The rules it enforces:
+  - SGT never crashes;
+  - it never *invents* a value (one printed nowhere on the clean pages);
+  - it never attributes another client's card while that client's PAN is readable.
+
+**Identity: never the wrong client, and never lose a dataset.**
+- The first sighting of the PAN or GSTIN attributes the rows. The portals often show it only
+  once. A two-sightings rule was tried and dropped the same day at the user's request: it
+  delayed attribution and could leave datasets unwritten. The log notes "seen once" or "seen
+  on two pages".
+- The protection comes from contradiction, not repetition. A different PAN or GSTIN ends the
+  session on the spot; nothing is overwritten, and the clashing value is not taken from that
+  page.
+- Datasets carry the PANs printed where they were read: their card's own PAN, or every PAN on a
+  page whose text built them. They are attributed only to a client among those PANs, and wait
+  while the client is unknown. At session end, a dataset still waiting is written
+  **unattributed** (the VSDC247 client-unknown path), never dropped.
+- While another PAN is readable on a page, that page's cards are not attributed, and its text
+  doesn't feed the dataset in progress. Its link and title still do, because the wizard lists
+  landlord and donee PANs.
+
+**Dataset rules: a dataset is checked as a whole.** The `dataset_rules` section of
+`sgt_fields.json` holds rules built from `when`, `require`, `checks` and `date_tail`, each with
+examples it passes and holds. The loader refuses a rule whose examples fail, and the previous
+version keeps running. A dataset that breaks a rule is held with the reason, and written once it
+passes. The built-in rules:
+- an ITR period is an assessment year with consecutive years;
+- an ITR ack's own DDMMYY date falls between the start of the AY and today;
+- a GST period is a tax period of a financial year;
+- a form belongs to its portal.
+
+**Crash safety.** Open sessions are snapshotted to `sgt_shadow/sessions_state.json` (atomic
+replace, at most every 2 s). On the next start, sessions the app never ended are finished and
+their datasets re-written. Dataset keys make that idempotent.
+
+**Portal-change watch.** `core/sgt/sgt_health.py` counts reads, OCR reads and spec hits per
+portal per day in `sgt_shadow/spec_stats.json` (counts only). Once a day it raises a HUD prompt
+in two cases:
+- a spec that usually hits has been silent on the last 3 busy days;
+- a portal's OCR share jumps above 50 % from under 10 %, meaning it went canvas.
+
+**UI Automation hang.** `vsdc_uia_text._run_with_timeout` used to leave a wedged worker in
+place, so every later read queued behind it and failed after 3 s, until a restart. That blinded
+VSDC-X and SGT alike. Now the wedged worker is abandoned and a fresh one (with its own COM
+objects, kept thread-local) takes over. After 5 in one run, UIA is switched off.
 
 ## 11. Risks to hold onto
 

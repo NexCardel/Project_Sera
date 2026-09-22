@@ -31,7 +31,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .sgt_toolbox import CHECKS, MERGES, TRANSFORMS
+from .sgt_toolbox import CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, is_submit_level, period_start
 
 try:                                    # Python 3.11+
     import re._parser as _sre_parse     # type: ignore[import-not-found]
@@ -63,6 +63,10 @@ MULTIPLES = ("conflict", "latest_period")
 #   separated  - as "value", but only after a ":" or "-" ("Name: X" yes, "Name of the Bank" no)
 #   ignore     - disregarded; the value is looked for on the following lines
 LABEL_RESTS = ("value", "separated", "ignore")
+# Where a record field looks: inside its own block (a card), or anywhere on the page - for a
+# fact the page states once about every card on it ("select the return you would like to
+# verify" makes every card on that page one awaiting verification).
+SCOPES = ("record", "page")
 
 
 class SpecError(ValueError):
@@ -163,6 +167,7 @@ class FieldSpec:
     merge: str = "latch"                    # profile only - see sgt_toolbox.MERGES
     source: str = "page"                    # see SOURCES
     multiple: str = "conflict"              # see MULTIPLES
+    scope: str = "record"                   # record fields only - see SCOPES
     # Every label known to the whole spec file (set by the loader). Looking for a value after
     # a label stops at a line that is itself a label: the field is empty, and the next field's
     # label ("PAN" after an empty "Last Name") must never be read as its value.
@@ -192,19 +197,35 @@ class RecordSpec:
 @dataclass
 class CurrentRules:
     """
-    How the return being worked on is assembled from pieces seen across pages.
+    How the dataset being worked on is assembled from pieces seen across pages.
       compose          builds a field from others once they are all present, e.g.
                        {"period": "{tax_period} (FY {fy})"}
-      complete_when    the fields a return must have before it can ever be dispatched
+      complete_when    the fields a dataset must have before it can ever be dispatched
       in_progress_status / in_progress_needs_link
-                       the status given to a complete return nothing has submitted yet -
-                       only when some piece came from the page LINK (the portals only put
-                       the form / year in the link while you are inside that return)
+                       the status given to a complete dataset nothing has submitted yet
+                       ("Draft") - only when some piece came from the page LINK (the portals
+                       only put the form / year in the link while you are inside that filing)
     """
     compose: Tuple[Tuple[str, str], ...] = ()
     complete_when: Tuple[str, ...] = ("form", "period")
-    in_progress_status: Optional[str] = "In Progress"
+    in_progress_status: Optional[str] = "Draft"
     in_progress_needs_link: bool = True
+
+
+@dataclass
+class SubmitRules:
+    """
+    How a dataset's submit status is decided beyond its own status wording. The portal's
+    submission identifier (ARN / ack) is always the dataset field "arn".
+      identifier_proves  the exceptions to the ladder's rule that an ARN proves "Submitted
+                         (Not Verified)": a portal whose ARN proves more on its own. The GST
+                         portal issues the ARN only once the return is filed with DSC/EVC
+                         (-> "Submitted & Verified"). A submit message can still raise it.
+    """
+    identifier_proves: Tuple[Tuple[str, str], ...] = ()
+
+    def proven_by_identifier(self, portal: str) -> str:
+        return dict(self.identifier_proves).get(portal) or SUBMIT_LEVELS[2]
 
 
 @dataclass
@@ -215,14 +236,77 @@ class ProfileRules:
 
 
 @dataclass
+class DatasetRule:
+    """
+    A check on a WHOLE dataset before it is written - every field can look plausible on its own
+    and still not fit together (an ITR with a GST month for its period; an ack dated before its
+    assessment year began). A dataset that breaks a rule is HELD, with the reason, not written.
+      portals     the portals it applies to (empty = all)
+      when        field -> regex: the rule applies only if every one matches
+      require     field -> regex: a present value must match (a missing one is not this rule's job)
+      checks      field -> toolbox check names (sgt_toolbox.CHECKS)
+      date_tail   {"field", "not_future", "not_before_period_start"}: the DDMMYY date an ITR ack
+                  carries in its last six digits must be a real date inside the period's window
+      message     what staff see when it holds a dataset
+    """
+    name: str
+    message: str
+    portals: Tuple[str, ...] = ()
+    when: Tuple[Tuple[str, "re.Pattern[str]"], ...] = ()
+    require: Tuple[Tuple[str, "re.Pattern[str]"], ...] = ()
+    checks: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    date_tail: Optional[Tuple[str, bool, bool]] = None
+    examples: Tuple[Dict[str, Any], ...] = ()
+
+    def problem(self, portal: str, values: Dict[str, str], today: date) -> Optional[str]:
+        if self.portals and portal not in self.portals:
+            return None
+        for fld, rx in self.when:
+            if not values.get(fld) or not rx.search(str(values[fld])):
+                return None
+        for fld, rx in self.require:
+            if values.get(fld) and not rx.search(str(values[fld])):
+                return self.message
+        for fld, names in self.checks:
+            if values.get(fld) and not all(CHECKS[n](str(values[fld]), today) for n in names):
+                return self.message
+        if self.date_tail and values.get(self.date_tail[0]):
+            fld, not_future, not_before = self.date_tail
+            d = ddmmyy_tail_date(str(values[fld]))
+            if d is None:
+                return self.message
+            if not_future and d > today:
+                return self.message
+            start = period_start(values.get("period"))
+            if not_before and start is not None and d < start:
+                return self.message
+        return None
+
+
+@dataclass
+class DatasetRules:
+    rules: Tuple[DatasetRule, ...] = ()
+
+    def problems(self, portal: str, values: Dict[str, str], today: date) -> List[str]:
+        out = []
+        for r in self.rules:
+            p = r.problem(portal, values, today)
+            if p:
+                out.append(f"{r.name}: {p}")
+        return out
+
+
+@dataclass
 class Registry:
     profile: Tuple[FieldSpec, ...] = ()
     records: Tuple[RecordSpec, ...] = ()
     current: Tuple[FieldSpec, ...] = ()
     current_rules: CurrentRules = field(default_factory=CurrentRules)
     profile_rules: ProfileRules = field(default_factory=ProfileRules)
+    submit_rules: SubmitRules = field(default_factory=SubmitRules)
     errors: Tuple[str, ...] = ()
     sources: Tuple[str, ...] = ()
+    dataset_rules: DatasetRules = field(default_factory=DatasetRules)
 
     def by_name(self) -> Dict[str, Any]:
         return {s.name: s for s in (*self.profile, *self.records, *self.current)}
@@ -257,7 +341,7 @@ def _int(raw: Any, default: int, lo: int, hi: int, what: str) -> int:
 
 _FIELD_KEYS = {"name", "field", "slot", "take", "pattern", "case", "labels", "label_at", "label_rest",
                "within", "pick", "map", "transforms", "checks", "portals", "urls", "confidence", "merge",
-               "source", "multiple",
+               "source", "multiple", "scope",
                "examples", "counter_examples", "disabled", "note"}
 
 
@@ -319,7 +403,20 @@ def build_field(raw: Dict[str, Any], slot: str, owner: str = "") -> FieldSpec:
     if multiple not in MULTIPLES:
         raise SpecError(f"'multiple' must be one of {MULTIPLES}")
     if slot == "dataset" and (source != "page" or multiple != "conflict"):
-        raise SpecError("'source' / 'multiple' are for profile and current_return fields")
+        raise SpecError("'source' / 'multiple' are for profile and current_dataset fields")
+    scope = raw.get("scope", "record")
+    if scope not in SCOPES:
+        raise SpecError(f"'scope' must be one of {SCOPES}")
+    if scope != "record" and slot != "dataset":
+        raise SpecError("'scope' is for record fields")
+    if fld == "status":
+        # One vocabulary on every portal: the page's wording is evidence, the map turns it
+        # into a level of the submit ladder.
+        if not value_map:
+            raise SpecError(f"a status field needs a 'map' onto the submit ladder {list(SUBMIT_LEVELS)}")
+        bad = sorted({out for _, out in value_map if out is not None and not is_submit_level(out)})
+        if bad:
+            raise SpecError(f"status map output(s) {bad} are not on the submit ladder {list(SUBMIT_LEVELS)}")
 
     return FieldSpec(
         name=str(name), field=fld, slot=slot, take=take, pattern=pattern,
@@ -329,7 +426,7 @@ def build_field(raw: Dict[str, Any], slot: str, owner: str = "") -> FieldSpec:
         portals=_str_list(raw.get("portals"), "'portals'"),
         urls=tuple(safe_compile(u, re.IGNORECASE, "'urls' entry") for u in _str_list(raw.get("urls"), "'urls'")),
         confidence=_int(raw.get("confidence"), 80, 1, 100, "'confidence'"), merge=merge,
-        source=source, multiple=multiple,
+        source=source, multiple=multiple, scope=scope,
         examples=tuple(raw.get("examples") or ()), counter_examples=tuple(raw.get("counter_examples") or ()),
     )
 
@@ -471,6 +568,10 @@ def load_registry(paths: Optional[Sequence[Path]] = None, previous: Optional[Reg
     errors: List[str] = []
     rules = previous.current_rules if previous else CurrentRules()
     prules = previous.profile_rules if previous else ProfileRules()
+    srules = previous.submit_rules if previous else SubmitRules()
+    prev_drules = {r.name: r for r in (previous.dataset_rules.rules if previous else ())}
+    drules: Dict[str, DatasetRule] = {}
+    drules_order: List[str] = []
     raw_specs: Dict[str, Tuple[str, Dict[str, Any], str]] = {}      # name -> (kind, raw, file)
     order: List[str] = []
     sources: List[str] = []
@@ -484,15 +585,44 @@ def load_registry(paths: Optional[Sequence[Path]] = None, previous: Optional[Reg
                 prules = build_profile_rules(data["profile_rules"])
             except SpecError as e:
                 errors.append(f"{path.name}: profile_rules refused: {e} - the previous rules keep running")
-        current = data.get("current_return") if isinstance(data.get("current_return"), dict) else {}
+        if "submit_rules" in data:
+            try:
+                srules = build_submit_rules(data["submit_rules"])
+            except SpecError as e:
+                errors.append(f"{path.name}: submit_rules refused: {e} - the previous rules keep running")
+        section = data.get("dataset_rules")
+        for raw in (section.get("rules") if isinstance(section, dict) else None) or []:
+            nm = raw.get("name") if isinstance(raw, dict) else None
+            if not isinstance(nm, str) or not nm:
+                errors.append(f"{path.name}: a dataset rule has no name - skipped")
+                continue
+            if nm not in drules_order:
+                drules_order.append(nm)
+            if raw.get("disabled") is True:
+                drules.pop(nm, None)
+                continue
+            try:
+                rule = build_dataset_rule(raw)
+                self_test_dataset_rule(rule)
+                drules[nm] = rule
+            except SpecError as e:
+                kept = prev_drules.get(nm)
+                errors.append(f"{path.name}: dataset rule {nm!r} refused: {e}"
+                              + (" - the previous version keeps running" if kept else ""))
+                if kept is not None:
+                    drules[nm] = kept
+        # "current_return" is the section's old name; an override file written before the
+        # rename still works.
+        ckey = "current_dataset" if isinstance(data.get("current_dataset"), dict) else "current_return"
+        current = data.get(ckey) if isinstance(data.get(ckey), dict) else {}
         if "rules" in current:
             try:
                 rules = build_current_rules(current["rules"])
             except SpecError as e:
-                errors.append(f"{path.name}: current_return rules refused: {e} - the previous rules keep running")
+                errors.append(f"{path.name}: {ckey} rules refused: {e} - the previous rules keep running")
         for kind, entries, key in (("profile", data.get("profile"), "profile"),
                                    ("record", data.get("records"), "records"),
-                                   ("current", current.get("fields"), "current_return.fields")):
+                                   ("current", current.get("fields"), f"{ckey}.fields")):
             for raw in entries or []:
                 if not isinstance(raw, dict):
                     errors.append(f"{path.name}: an entry under '{key}' is not an object - skipped")
@@ -553,7 +683,69 @@ def load_registry(paths: Optional[Sequence[Path]] = None, previous: Optional[Reg
                 (profile if kind == "profile" else current).append(obj)
         except SpecError as e:
             refuse(nm, fname, e)
-    return Registry(tuple(profile), tuple(records), tuple(current), rules, prules, tuple(errors), tuple(sources))
+    return Registry(tuple(profile), tuple(records), tuple(current), rules, prules, srules,
+                    tuple(errors), tuple(sources),
+                    DatasetRules(tuple(drules[n] for n in drules_order if n in drules)))
+
+
+def build_dataset_rule(raw: Dict[str, Any]) -> DatasetRule:
+    known = {"name", "note", "message", "portals", "when", "require", "checks", "date_tail", "examples", "disabled"}
+    unknown = set(raw) - known
+    if unknown:
+        raise SpecError(f"unknown key(s) {sorted(unknown)} - check the spelling")
+    message = raw.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise SpecError("'message' (what staff see when the rule holds a dataset) is required")
+
+    def patterns(key: str) -> Tuple[Tuple[str, "re.Pattern[str]"], ...]:
+        spec = raw.get(key) or {}
+        if not isinstance(spec, dict):
+            raise SpecError(f"'{key}' must map a field to a regex")
+        return tuple((f, safe_compile(rx, re.IGNORECASE, f"{key}.{f}")) for f, rx in spec.items())
+
+    checks_raw = raw.get("checks") or {}
+    if not isinstance(checks_raw, dict):
+        raise SpecError("'checks' must map a field to a list of check names")
+    checks = []
+    for fld, names in checks_raw.items():
+        names = _str_list(names, f"checks.{fld}")
+        bad = [n for n in names if n not in CHECKS]
+        if bad:
+            raise SpecError(f"unknown check(s) {bad} - the toolbox has {sorted(CHECKS)}")
+        checks.append((fld, names))
+    dt = raw.get("date_tail")
+    date_tail = None
+    if dt is not None:
+        if not isinstance(dt, dict) or not isinstance(dt.get("field"), str):
+            raise SpecError("'date_tail' must be an object naming its 'field'")
+        date_tail = (dt["field"], bool(dt.get("not_future", True)), bool(dt.get("not_before_period_start", True)))
+    examples = raw.get("examples") or []
+    if not isinstance(examples, list) or not examples:
+        raise SpecError("every dataset rule needs examples - at least one it passes and one it holds")
+    rule = DatasetRule(name=raw["name"], message=message.strip(), portals=_str_list(raw.get("portals"), "'portals'"),
+                       when=patterns("when"), require=patterns("require"), checks=tuple(checks),
+                       date_tail=date_tail, examples=tuple(examples))
+    if not (rule.when or rule.require or rule.checks or rule.date_tail):
+        raise SpecError("a dataset rule must check something (when / require / checks / date_tail)")
+    return rule
+
+
+def self_test_dataset_rule(rule: DatasetRule) -> None:
+    """Each example: {"portal", "dataset": {...}, "ok": true|false, "today": "YYYY-MM-DD"?}.
+    It needs at least one it passes and one it holds, so a rule that never fires is caught."""
+    outcomes = set()
+    for ex in rule.examples:
+        if not isinstance(ex, dict) or not isinstance(ex.get("dataset"), dict) or "ok" not in ex:
+            raise SpecError("each example must be an object with 'dataset' and 'ok'")
+        today = date.fromisoformat(ex["today"]) if ex.get("today") else date.today()
+        portal = ex.get("portal") or (rule.portals[0] if rule.portals else "")
+        got = rule.problem(portal, {k: str(v) for k, v in ex["dataset"].items()}, today) is None
+        if got != bool(ex["ok"]):
+            raise SpecError(f"example {ex['dataset']} should be {'passed' if ex['ok'] else 'held'} "
+                            f"but was {'passed' if got else 'held'}")
+        outcomes.add(got)
+    if outcomes != {True, False}:
+        raise SpecError("examples must include at least one dataset it passes and one it holds")
 
 
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]*)(\??)\}")
@@ -604,15 +796,30 @@ def build_current_rules(raw: Any) -> CurrentRules:
     unknown = set(raw) - {"compose", "complete_when", "in_progress_status", "in_progress_needs_link", "note"}
     if unknown:
         raise SpecError(f"unknown key(s) {sorted(unknown)} - check the spelling")
-    status = raw.get("in_progress_status", "In Progress")
-    if status is not None and not isinstance(status, str):
-        raise SpecError("'in_progress_status' must be text or null")
+    status = raw.get("in_progress_status", "Draft")
+    if status is not None and not is_submit_level(status):
+        raise SpecError(f"'in_progress_status' must be a submit-ladder level {list(SUBMIT_LEVELS)} or null")
     return CurrentRules(
         compose=build_compose(raw.get("compose")),
         complete_when=_str_list(raw.get("complete_when", ["form", "period"]), "'complete_when'"),
         in_progress_status=status,
         in_progress_needs_link=bool(raw.get("in_progress_needs_link", True)),
     )
+
+
+def build_submit_rules(raw: Any) -> SubmitRules:
+    if not isinstance(raw, dict):
+        raise SpecError("'submit_rules' must be a JSON object")
+    unknown = set(raw) - {"identifier_proves", "note"}
+    if unknown:
+        raise SpecError(f"unknown key(s) {sorted(unknown)} - check the spelling")
+    proves = raw.get("identifier_proves") or {}
+    if not isinstance(proves, dict):
+        raise SpecError("'identifier_proves' must map a portal to a submit-ladder level")
+    for portal, level in proves.items():
+        if not isinstance(portal, str) or not is_submit_level(level):
+            raise SpecError(f"'identifier_proves' for {portal!r} must be one of {list(SUBMIT_LEVELS)}")
+    return SubmitRules(identifier_proves=tuple(proves.items()))
 
 
 class SpecStore:

@@ -18,7 +18,10 @@ class TestQtAwesomeIcons(unittest.TestCase):
         
         mdi_icons = set()
         for root, dirs, files in os.walk(root_dir):
-            if any(p in root for p in [".git", "__pycache__", "venv", ".gemini", "installer_output", "build_tools"]):
+            # Build output (package_dist / package_build) and old copies (source_2, .restore_points)
+            # are not the source - a stale copy there must not fail the check for fixed code.
+            if any(p in root for p in [".git", "__pycache__", "venv", ".gemini", "installer_output", "build_tools",
+                                       "package_dist", "package_build", "source_2", ".restore_points", "backups"]):
                 continue
             for f in files:
                 if f.endswith(".py"):

@@ -173,6 +173,24 @@
       "counter_examples": ["12345", "1234567890", "98765432101"]
     },
     {
+      "name": "itr_tan",
+      "field": "tan",
+      "portals": ["Income Tax"],
+      "labels": ["TAN", "Tax Deduction Account Number", "TAN of the Deductor", "TAN of Deductor"],
+      "within": 3,
+      "pattern": "(?<![A-Z0-9])([A-Z]{4}[0-9]{5}[A-Z])(?![A-Z0-9])",
+      "confidence": 95,
+      "examples": [
+        "MUMA12345B",
+        {"lines": ["TAN of the Deductor", "MUMA12345B", "Name"], "expect": "MUMA12345B"}
+      ],
+      "counter_examples": [
+        "ABCPD1234E",
+        "Search Box Input Field",
+        {"lines": ["TAN of the Deductor", "MUMA12345"]}
+      ]
+    },
+    {
       "name": "gst_welcome_name",
       "field": "name",
       "merge": "promote_longer",
@@ -209,14 +227,84 @@
     }
   ],
 
+  "submit_rules": {
+    "note": "Every dataset's status is one level of the same ladder on every portal: Not Submitted (default) -> Draft -> Submitted (Not Verified) -> Submitted & Verified, and it only ever moves up. It climbs with what has been captured: form + period of the dataset being worked on -> Draft; + an ARN/ack -> Submitted (Not Verified); + a submit message -> whatever the message says (its wording decides: 'pending e-verification' stays Not Verified, 'e-verified' is Verified). A status field's map turns the portal's wording into a level (the loader refuses any other output) and the wording is kept as evidence. identifier_proves is the exception list: a portal whose ARN proves MORE on its own. GST issues the ARN only once the return is filed with DSC/EVC.",
+    "identifier_proves": {
+      "GST Portal": "Submitted & Verified"
+    }
+  },
+
+  "dataset_rules": {
+    "note": "Checks on a WHOLE dataset before it is written to the tracker. Every field can look right on its own and still not fit together; a dataset that breaks a rule is HELD with the reason (in the SGT log) and written once later pages fix it. Rules only check values that are present - a missing field is the completeness rule's job. Every rule carries examples it passes and holds; the loader refuses a rule whose examples fail.",
+    "rules": [
+      {
+        "name": "itr_period_is_an_assessment_year",
+        "portals": ["Income Tax"],
+        "when": {"form": "^ITR"},
+        "require": {"period": "^AY 20\\d{2}-\\d{2}$"},
+        "checks": {"period": ["years_consecutive"]},
+        "message": "an ITR's period must be an assessment year such as AY 2026-27",
+        "examples": [
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27"}, "ok": true},
+          {"dataset": {"form": "ITR-4", "period": "June (FY 2026-27)"}, "ok": false},
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-28"}, "ok": false}
+        ]
+      },
+      {
+        "name": "itr_ack_date_fits_its_year",
+        "portals": ["Income Tax"],
+        "date_tail": {"field": "arn", "not_future": true, "not_before_period_start": true},
+        "message": "the acknowledgement's own date (its last six digits, DDMMYY) is not a real date between the assessment year's start and today - probably a misread number",
+        "examples": [
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27", "arn": "123456789150726"}, "today": "2026-09-22", "ok": true},
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27", "arn": "123456789150725"}, "today": "2026-09-22", "ok": false},
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27", "arn": "123456789151226"}, "today": "2026-09-22", "ok": false},
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27", "arn": "123456789993026"}, "today": "2026-09-22", "ok": false}
+        ]
+      },
+      {
+        "name": "gst_period_is_a_tax_period",
+        "portals": ["GST Portal"],
+        "when": {"form": "^(GSTR|CMP|IFF)"},
+        "require": {"period": "\\(FY 20\\d{2}-\\d{2}\\)$|^FY 20\\d{2}-\\d{2}$"},
+        "message": "a GST return's period must be a tax period of a financial year, such as August (FY 2026-27)",
+        "examples": [
+          {"dataset": {"form": "GSTR-3B", "period": "August (FY 2026-27)"}, "ok": true},
+          {"dataset": {"form": "GSTR-9", "period": "FY 2025-26"}, "ok": true},
+          {"dataset": {"form": "GSTR-3B", "period": "AY 2026-27"}, "ok": false}
+        ]
+      },
+      {
+        "name": "form_belongs_to_the_portal",
+        "portals": ["Income Tax"],
+        "require": {"form": "^(?!GSTR|CMP|IFF)"},
+        "message": "a GST form was read on the Income Tax portal - probably text from another tab or a help panel",
+        "examples": [
+          {"dataset": {"form": "ITR-4", "period": "AY 2026-27"}, "ok": true},
+          {"dataset": {"form": "GSTR-3B", "period": "AY 2026-27"}, "ok": false}
+        ]
+      },
+      {
+        "name": "gst_form_belongs_to_the_portal",
+        "portals": ["GST Portal"],
+        "require": {"form": "^(?!ITR)"},
+        "message": "an ITR form was read on the GST portal - probably text from another tab or a help panel",
+        "examples": [
+          {"dataset": {"form": "GSTR-1", "period": "August (FY 2026-27)"}, "ok": true},
+          {"dataset": {"form": "ITR-4", "period": "August (FY 2026-27)"}, "ok": false}
+        ]
+      }
+    ]
+  },
+
   "records": [
     {
-      "name": "itr_filed_returns",
+      "name": "itr_dataset_cards",
       "portals": ["Income Tax"],
-      "note": "View Filed Returns: one card per return, each starting with its A.Y. line.",
-      "start": "^A\\.Y\\.\\s*20\\d{2}-\\d{2}$",
+      "note": "One card per filed dataset, wherever the portal lists them: View Filed Returns heads each card 'A.Y. 2025-26'; the e-Verify picker heads it 'Assessment Year' then '2025-26'. The card's own history decides the status when it has one; otherwise what the page says about all its cards does; otherwise the ack alone (submit_rules).",
+      "start": "^(?:A\\.Y\\.\\s*20\\d{2}-\\d{2}|Assessment Year)$",
       "max_lines": 45,
-      "require": ["period", "status"],
+      "require": ["period", "arn"],
       "fields": [
         {
           "field": "period",
@@ -229,6 +317,17 @@
           "counter_examples": ["A.Y. 2025-27"]
         },
         {
+          "field": "period",
+          "labels": ["Assessment Year"],
+          "within": 1,
+          "pattern": "^(20\\d{2}-\\d{2})$",
+          "transforms": ["ay_label"],
+          "checks": ["years_consecutive"],
+          "confidence": 95,
+          "examples": ["2025-26"],
+          "counter_examples": ["2025-27"]
+        },
+        {
           "field": "form",
           "labels": ["ITR"],
           "within": 2,
@@ -239,7 +338,7 @@
           "counter_examples": ["ITR-9", "ITR Filed"]
         },
         {
-          "field": "ack",
+          "field": "arn",
           "labels": ["Acknowledgement No", "Acknowledgement Number"],
           "within": 2,
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
@@ -248,6 +347,16 @@
           "confidence": 95,
           "examples": ["123456789150925", "12345678915O925"],
           "counter_examples": ["123456789320925", "12345678915092"]
+        },
+        {
+          "field": "pan",
+          "labels": ["PAN"],
+          "within": 2,
+          "pattern": "(?<![A-Z0-9])([A-Z]{5}[0-9]{4}[A-Z])(?![A-Z0-9])",
+          "confidence": 95,
+          "note": "The client the card belongs to. A card naming another PAN than the session's client is never attributed to them.",
+          "examples": ["ABCPD1234E"],
+          "counter_examples": ["ABCPD1234"]
         },
         {
           "field": "filing_type",
@@ -260,7 +369,7 @@
         },
         {
           "field": "filing_date",
-          "labels": ["Filing Date"],
+          "labels": ["Filing Date", "Filed On"],
           "within": 2,
           "pattern": "([A-Z][a-z]{2} \\d{1,2}, 20\\d{2})",
           "transforms": ["parse_date"],
@@ -273,21 +382,30 @@
           "field": "status",
           "take": "anywhere",
           "case": "insensitive",
-          "pattern": "^(pending for e-?verification|itr filed|e-?verified|return verified|under processing|processed.*)$",
+          "pattern": "^(pending for e-?verification|itr filed|e-?verified|successfully e-?verified|return verified|under processing|processed.*)$",
           "pick": "map_order",
           "map": [
-            ["processed with demand", "Processed with demand"],
-            ["processed with refund", "Processed with refund"],
-            ["processed with no demand", "Processed with no demand/refund"],
-            ["^processed", "Processed"],
-            ["under processing|verified", "Submitted (e-Verified)"],
-            ["pending for e-?verification", "Submitted (Not e-Verified)"],
-            ["itr filed", "Submitted"]
+            ["processed|under processing|verified", "Submitted & Verified"],
+            ["pending for e-?verification|itr filed", "Submitted (Not Verified)"]
           ],
           "confidence": 90,
-          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along status on the card wins.",
-          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund"],
+          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along level on the card wins. 'Processed ...' / 'Under Processing' come after verification, so they prove it.",
+          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund", "Successfully e-Verified"],
           "counter_examples": ["done", "Filing Type"]
+        },
+        {
+          "field": "status",
+          "scope": "page",
+          "take": "anywhere",
+          "case": "insensitive",
+          "pattern": "(select the return you would like to (?:e-?)?verify|e-?verify\\s*/\\s*discard return)",
+          "map": [
+            [".", "Submitted (Not Verified)"]
+          ],
+          "confidence": 90,
+          "note": "A page that asks which return to verify lists only returns awaiting verification - a fact about every card on it.",
+          "examples": ["Please select the return you would like to verify/discard", "e-Verify / Discard Return"],
+          "counter_examples": ["Return Successfully Verified", "e-Verify Return"]
         }
       ],
       "examples": [
@@ -304,22 +422,42 @@
             "Acknowledgement No :", "987654321310724", "Filing Date :", "Jul 31, 2024", "View Details"
           ],
           "expect": [
-            {"period": "AY 2025-26", "form": "ITR-4", "ack": "123456789150925", "filing_type": "Original",
-             "filing_date": "2025-09-15", "status": "Submitted (Not e-Verified)"},
-            {"period": "AY 2024-25", "form": "ITR-1", "ack": "987654321310724", "filing_type": "Original",
-             "filing_date": "2024-07-31", "status": "Processed with no demand/refund"}
+            {"period": "AY 2025-26", "form": "ITR-4", "arn": "123456789150925", "filing_type": "Original",
+             "filing_date": "2025-09-15", "status": "Submitted (Not Verified)"},
+            {"period": "AY 2024-25", "form": "ITR-1", "arn": "987654321310724", "filing_type": "Original",
+             "filing_date": "2024-07-31", "status": "Submitted & Verified"}
           ]
+        },
+        {
+          "lines": [
+            "Current Step 1 of 3 in stepper", "Select The Return To Be Verified", "1",
+            "Unvisited Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+            "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+            "e-Verify / Discard Return", "Please select the return you would like to verify/discard",
+            "Showing (1) returns", "Search Box Input Field",
+            "Assessment Year", "2025-26", "ITR", "ITR 4", "Filing Type", "Original",
+            "PAN :", "ABCPD1234E", "Acknowledgement Number :", "123456789180925",
+            "Filed On :", "Sep 18, 2025", "Applicable Act :", "Income Tax Act 1961", "e verify", "Discard"
+          ],
+          "expect": [
+            {"period": "AY 2025-26", "form": "ITR-4", "arn": "123456789180925", "pan": "ABCPD1234E",
+             "filing_type": "Original", "filing_date": "2025-09-18", "status": "Submitted (Not Verified)"}
+          ]
+        },
+        {
+          "lines": ["Select Assessment Year", "Assessment Year", "2026-27", "Filing Type", "Original", "Continue"],
+          "expect": []
         }
       ]
     },
     {
       "name": "itr_submit_success",
       "portals": ["Income Tax"],
-      "note": "The confirmation shown right after submitting. The ack must carry today's date (its last six digits are DDMMYY), so an old ack on a revised-return page never counts as a new filing.",
-      "require": ["ack", "status"],
+      "note": "The confirmation shown right after submitting. The ack must carry today's date (its last six digits are DDMMYY), so an old ack on a revised-return page never counts as a new filing. The ack alone is a submission (Submitted, Not Verified); the message, when read, decides the rest.",
+      "require": ["arn"],
       "fields": [
         {
-          "field": "ack",
+          "field": "arn",
           "labels": ["Acknowledgement Number", "Acknowledgement No"],
           "within": 2,
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
@@ -336,9 +474,9 @@
           "pattern": "(successfully (?:submitted|filed|e-?verified)|(?:submitted|filed|e-?verified) successfully|still need to e-?verify|e-?verify within \\d+ days)",
           "pick": "map_order",
           "map": [
-            ["e-?verified", "Submitted (e-Verified)"],
-            ["still need|within", "Submitted (Not e-Verified)"],
-            ["submitted|filed", "Submitted"]
+            ["e-?verified", "Submitted & Verified"],
+            ["still need|within", "Submitted (Not Verified)"],
+            ["submitted|filed", "Submitted (Not Verified)"]
           ],
           "confidence": 90,
           "examples": ["You have successfully submitted your return!", "Return filed successfully"],
@@ -366,10 +504,116 @@
         {
           "lines": ["You have successfully submitted your return!", "Acknowledgement Number :", "123456789150726",
                     "You still need to e-Verify within 30 days to complete the process of return filing."],
-          "expect": [{"ack": "123456789150726", "status": "Submitted (Not e-Verified)"}]
+          "expect": [{"arn": "123456789150726", "status": "Submitted (Not Verified)"}]
         },
         {
           "lines": ["Original return details", "Acknowledgement Number :", "123456789150925", "Filed successfully"],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "itr_verification_success",
+      "portals": ["Income Tax"],
+      "note": "The confirmation that a return was e-Verified. It shows the ack of the return verified - the dataset is joined by it. A return filed earlier is verified today, so the ack only has to carry a real date, not today's. Unconfirmed against the live portal's exact wording.",
+      "require": ["status"],
+      "fields": [
+        {
+          "field": "arn",
+          "labels": ["Acknowledgement Number", "Acknowledgement No"],
+          "within": 2,
+          "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
+          "transforms": ["ocr_digits"],
+          "checks": ["all_digits", "ddmmyy_tail_real"],
+          "confidence": 90,
+          "examples": ["123456789180925"],
+          "counter_examples": ["123456789320925"]
+        },
+        {
+          "field": "status",
+          "take": "anywhere",
+          "case": "insensitive",
+          "pattern": "(successfully e-?verified|e-?verified successfully|(?:return|itr) (?:has been|is) (?:successfully )?e-?verified|e-?verification (?:is )?(?:successful|completed?))",
+          "map": [
+            [".", "Submitted & Verified"]
+          ],
+          "confidence": 90,
+          "examples": ["Return e-Verified successfully", "Your return has been successfully e-Verified"],
+          "counter_examples": ["You still need to e-Verify within 30 days", "e-Verify / Discard Return"]
+        },
+        {
+          "field": "form",
+          "take": "anywhere",
+          "pattern": "(?<![A-Za-z0-9])(ITR ?-? ?[1-7])(?![0-9])",
+          "transforms": ["dash_form"],
+          "confidence": 80,
+          "examples": ["ITR-4 for A.Y. 2025-26"]
+        },
+        {
+          "field": "period",
+          "take": "anywhere",
+          "pattern": "A\\.?Y\\.? ?(20\\d{2} ?- ?\\d{2,4})",
+          "transforms": ["ay_label"],
+          "checks": ["years_consecutive"],
+          "confidence": 80,
+          "examples": ["A.Y. 2025-26"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": ["Visited Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+                    "Current Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+                    "Return e-Verified successfully", "Acknowledgement Number :", "123456789180925",
+                    "ITR-4 for A.Y. 2025-26"],
+          "expect": [{"arn": "123456789180925", "status": "Submitted & Verified", "form": "ITR-4", "period": "AY 2025-26"}]
+        },
+        {
+          "lines": ["Current Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+                    "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+                    "Enter the OTP sent to your mobile"],
+          "expect": []
+        }
+      ]
+    },
+    {
+      "name": "gst_submit_success",
+      "portals": ["GST Portal"],
+      "note": "The confirmation shown after filing. The GST ARN is issued only when the return is filed (DSC/EVC), which submit_rules records - so an ARN with success wording is 'Submitted & Verified'. Form and period come from the dataset in progress. The success wording is the common past-tense set; unconfirmed against the live portal's exact text.",
+      "require": ["arn", "status"],
+      "fields": [
+        {
+          "field": "arn",
+          "labels": ["ARN", "Acknowledgement Reference Number", "Application Reference Number"],
+          "label_at": "anywhere",
+          "within": 2,
+          "pattern": "(?<![0-9A-Za-z])([A-Z]{2}[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
+          "confidence": 90,
+          "note": "No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
+          "examples": ["AA070826000001Z", "AB0708260000012"],
+          "counter_examples": ["AA07082600000", "12070826000001Z"]
+        },
+        {
+          "field": "status",
+          "take": "anywhere",
+          "case": "insensitive",
+          "pattern": "((?:filed|submitted) successfully|successfully (?:filed|submitted)|(?:has|have) been (?:successfully )?(?:filed|submitted)|filing successful|arn (?:has been |is )?generated)",
+          "pick": "map_order",
+          "map": [
+            ["filed|filing|generated", "Submitted & Verified"],
+            ["submitted", "Submitted (Not Verified)"]
+          ],
+          "confidence": 90,
+          "examples": ["GSTR-3B has been filed successfully", "Filing Successful", "ARN generated"],
+          "counter_examples": ["Return can be filed after submission", "Filed"]
+        }
+      ],
+      "examples": [
+        {
+          "lines": ["Filing Successful", "GSTR-3B filed successfully. ARN: AA070826000001Z", "OK"],
+          "expect": [{"arn": "AA070826000001Z", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"],
           "expect": []
         }
       ]
@@ -405,12 +649,13 @@
           "take": "anywhere",
           "pattern": "(?<![A-Za-z])(Not Filed|To be Filed|Filed|Submitted|NA)(?![A-Za-z])",
           "map": [
-            ["^(not|to be) filed$", "Not Filed"],
-            ["^filed$", "Filed"],
-            ["^submitted$", "Submitted"],
+            ["^(not|to be) filed$", "Not Submitted"],
+            ["^filed$", "Submitted & Verified"],
+            ["^submitted$", "Submitted (Not Verified)"],
             ["^na$", null]
           ],
           "confidence": 90,
+          "note": "GST 'Filed' means filed with DSC/EVC - verified. 'Submitted' means frozen for filing but not yet filed.",
           "examples": ["Jun - 2026 Filed Filed on : 11/07/2026", "Jun - 2026 Not Filed"],
           "counter_examples": ["May - 2026 NA Option expired"]
         },
@@ -431,21 +676,21 @@
           "lines": ["Returns Calendar (Last 5 return periods)", "GSTR-1 / IFF", "May - 2026 NA Option expired",
                     "Jun - 2026 Filed Filed on : 11/07/2026", "GSTR-3B", "May - 2026 NA", "Jun - 2026 Not Filed"],
           "expect": [
-            {"form": "GSTR-1", "period": "June (FY 2026-27)", "status": "Filed", "filing_date": "2026-07-11"},
-            {"form": "GSTR-3B", "period": "June (FY 2026-27)", "status": "Not Filed"}
+            {"form": "GSTR-1", "period": "June (FY 2026-27)", "status": "Submitted & Verified", "filing_date": "2026-07-11"},
+            {"form": "GSTR-3B", "period": "June (FY 2026-27)", "status": "Not Submitted"}
           ]
         }
       ]
     }
   ],
 
-  "current_return": {
+  "current_dataset": {
     "rules": {
-      "note": "The return being worked on is built from pieces on ANY page - nothing here names a page. A value shown once on a page is about that page's return; several different values mean a list and are ignored (or, for periods, the latest is taken). The link and the window title are read with the same patterns. Only complete returns (complete_when) are ever dispatched.",
+      "note": "The dataset being worked on is built from pieces on ANY page - nothing here names a page. A value shown once on a page is about that page's dataset; several different values mean a list and are ignored (or, for periods, the latest is taken). The link and the window title are read with the same patterns. Only complete datasets (complete_when) are ever dispatched. A complete dataset (form + period) is at least a Draft - its datapoints show work on it.",
       "compose": {"period": "{tax_period} (FY {fy})"},
       "complete_when": ["form", "period"],
-      "in_progress_status": "In Progress",
-      "in_progress_needs_link": true
+      "in_progress_status": "Draft",
+      "in_progress_needs_link": false
     },
     "fields": [
       {
@@ -458,7 +703,7 @@
         "pattern": "fo-(itr[1-7])-ay20[0-9]{2}",
         "transforms": ["dash_form"],
         "confidence": 95,
-        "note": "The portal writes the form into the link while you are inside that return.",
+        "note": "The portal writes the form into the link while you are inside that filing.",
         "examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/personal_information", "expect": "ITR-4"}],
         "counter_examples": [{"link": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr-shared/fo-select-status"}]
       },
@@ -507,7 +752,7 @@
         "pattern": "(?<![A-Za-z0-9])(ITR ?-? ?[1-7])(?![0-9A-Za-z])",
         "transforms": ["dash_form"],
         "confidence": 75,
-        "note": "One form named on the page = that page's return. The form-choice page names all seven: a list, ignored.",
+        "note": "One form named on the page = that page's dataset. The form-choice page names all seven: a list, ignored.",
         "examples": [{"lines": ["Filing Returns for A.Y. 2026-27", "ITR-4", "Personal Information"], "expect": "ITR-4"}],
         "counter_examples": [{"lines": ["ITR-1 (SAHAJ)", "ITR-2", "ITR-4 (SUGAM)"]}]
       },
@@ -522,7 +767,7 @@
         "transforms": ["ay_label"],
         "checks": ["years_consecutive"],
         "confidence": 85,
-        "note": "A year after 'starting / since / from' is the portal's disclaimer, not a return.",
+        "note": "A year after 'starting / since / from' is the portal's disclaimer, not a dataset's period.",
         "examples": [
           "Filing Returns for A.Y. 2026-27",
           {"lines": ["Filing Returns for A.Y. 2026-27", "The e-Filed Returns are available for download starting Assessment Year 2013-14."], "expect": "AY 2026-27"}
@@ -661,12 +906,14 @@
         "within": 1,
         "pattern": "^(Filed|Not Filed|Submitted|To be Filed|Ready to File)$",
         "map": [
-          ["^filed$", "Filed"],
-          ["^submitted$", "Submitted"],
-          ["not filed|to be filed|ready to file", "Not Filed"]
+          ["^filed$", "Submitted & Verified"],
+          ["^submitted$", "Submitted (Not Verified)"],
+          ["ready to file", "Draft"],
+          ["not filed|to be filed", "Not Submitted"]
         ],
         "confidence": 85,
-        "examples": [{"lines": ["Status -", "Filed"], "expect": "Filed"}],
+        "examples": [{"lines": ["Status -", "Filed"], "expect": "Submitted & Verified"},
+                     {"lines": ["Status -", "Ready to File"], "expect": "Draft"}],
         "counter_examples": [{"lines": ["Status -", "FY -"]}]
       }
     ]

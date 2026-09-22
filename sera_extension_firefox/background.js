@@ -1,108 +1,192 @@
-let nativePort = null;
+// ---------------- WebSocket bridge to the desktop app (ui/ws_bridge.py) ----------------
+// 2026-09-22: replaces Firefox Native Messaging (a registry key + host manifest that routinely
+// failed to register on a fresh PC) and the direct HTTP fallback to port 49152 (which sat
+// inside Windows' own dynamic port range, so another program could already be using it at
+// random, and stalled every request ~2s). One WebSocket, tried on a short list of fixed ports
+// below that range - nothing to install, nothing to register. See
+// docs/app-extension-communication-report.md for the full comparison.
+const WS_PORTS = [48765, 48766, 48767, 48768];
+let ws = null;
+let wsConnecting = false;
+let wsPortIndex = 0;
+let wsReconnectDelay = 1000;
+const WS_RECONNECT_MAX_MS = 15000;
+const _pendingWsRequests = new Map(); // "_id" -> {resolve, timer}
 
-function connectToNativeHost() {
-  if (nativePort !== null) return;
-  const hostName = "com.amanassociates.sera";
+// ---------------- SCA (Sera Clipboard Assist) - protocol v2 ----------------
+// All SCA logic is in sca/sca_coordinator.js, shared with the Chrome build. Arms carry no
+// passwords; one is requested from the desktop only after the client's id is entered on that
+// client's portal (see sca_protocol.py).
+if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") {
+  importScripts("sca/sca_coordinator.js");
+}
+// SCA v1 kept every armed client password in chrome.storage.local (written to disk). Remove
+// anything it left behind.
+try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
+const scaCoordinator = self.SeraSCA.createCoordinator({
+  postNative: (msg) => wsSendNow(msg),
+  postDesktop: (msg) => { sendToDesktop(msg); },
+  getSettings: () => new Promise((resolve) => {
+    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains", "manualAssistPayload"], (d) => {
+      const ma = d.manualAssistPayload;
+      resolve({
+        scaEnabled: d.scaEnabled,
+        scaMode: d.scaMode,
+        allowedDomains: d.allowedDomains || [],
+        manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
+      });
+    });
+  }),
+  executeScript: (details) => chrome.scripting.executeScript(details),
+  sessionStore: (chrome.storage && chrome.storage.session) || null,
+});
+
+function _wsMessageId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Fire-and-forget send on the open socket only - used where the caller just needs a quick,
+// synchronous "did this go out" answer (e.g. an SCA_ACK), the same role a raw
+// nativePort.postMessage() used to play.
+function wsSendNow(msg) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    ensureConnected();
+    return false;
+  }
   try {
-    nativePort = chrome.runtime.connectNative(hostName);
-    console.log('Sera native host connection established');
-    nativePort.onMessage.addListener((message) => {
-      console.log("Received from Sera desktop:", message);
-      if (message.type && message.type.startsWith("SCA_")) {
-        if (message.command_id) {
-          try {
-            nativePort.postMessage({ type: "SCA_ACK", command_id: message.command_id });
-          } catch(e) {}
-          if (!self.seenScaCommands) self.seenScaCommands = new Set();
-          if (self.seenScaCommands.has(message.command_id)) return;
-          self.seenScaCommands.add(message.command_id);
-        }
-        handleScaCommand(message, {id: "nativeHost"}, () => {});
-        return;
-      }
-      if (message.type === "autofill" && message.url) {
-        if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
-        else if (message.mode === "manual_assist") handleManualAssistTab(message);
-        else handleAutofillTab(message);
-      } else if (message.type === "SCA_ARM") {
-        handleScaArm(message);
-      } else if (message.type === "update_settings") {
-        const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
-        const sca = message.sca_enabled !== false;
-        const scaMode = message.sca_mode || "autofill";
-        const allowedDomains = message.allowed_domains || [];
-        const overallTracker = fst;
-        const storageObj = {
-          trackerEnabled: overallTracker,
-          fstEnabled: fst,
-          scaEnabled: sca,
-          scaMode: scaMode
-        };
-        if (allowedDomains && allowedDomains.length > 0) {
-          storageObj.allowedDomains = allowedDomains;
-        }
-        if (!overallTracker) {
-          storageObj.activeAutofillPayload = null;
-        }
-        chrome.storage.local.set(storageObj, () => {
-          if (overallTracker) {
-            injectAllOpenTabs('desktop-settings-enabled');
-          } else {
-            broadcastTrackerState(false);
-          }
-        });
-      }
-    });
-    nativePort.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        console.log("Sera desktop host status:", err.message || "Native host inactive");
-      } else {
-        console.log("Disconnected from Sera desktop app");
-      }
-      nativePort = null;
-      setTimeout(ensureConnected, 5000);
-    });
+    ws.send(JSON.stringify({ ...msg, _id: _wsMessageId() }));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
+function connectWS() {
+  if (ws || wsConnecting) return;
+  wsConnecting = true;
+  const port = WS_PORTS[wsPortIndex % WS_PORTS.length];
+  let socket;
+  try {
+    socket = new WebSocket(`ws://127.0.0.1:${port}/`);
   } catch (e) {
-    console.error("Failed to connect to native host:", e);
-    nativePort = null;
+    wsConnecting = false;
+    scheduleReconnect();
+    return;
+  }
+
+  const connectTimeout = setTimeout(() => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      try { socket.close(); } catch (_) {}
+    }
+  }, 2500);
+
+  socket.onopen = () => {
+    clearTimeout(connectTimeout);
+    ws = socket;
+    wsConnecting = false;
+    wsReconnectDelay = 1000;
+    console.log(`Sera: WebSocket bridge connected on port ${port}`);
+  };
+  socket.onmessage = (event) => {
+    let message;
+    try { message = JSON.parse(event.data); } catch (_) { return; }
+    handleDesktopMessage(message);
+  };
+  socket.onerror = () => {};
+  socket.onclose = () => {
+    clearTimeout(connectTimeout);
+    wsConnecting = false;
+    if (ws === socket) ws = null;
+    wsPortIndex++; // try the next candidate port next time
+    scheduleReconnect();
+  };
+}
+
+function scheduleReconnect() {
+  setTimeout(() => { if (!ws) connectWS(); }, wsReconnectDelay);
+  wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX_MS);
+}
+
+function handleDesktopMessage(message) {
+  console.log("Received from Sera desktop:", message);
+
+  // A reply to a message this background page itself sent (a generic ack).
+  if (message.type === '_ack' && message._id && _pendingWsRequests.has(message._id)) {
+    const pending = _pendingWsRequests.get(message._id);
+    clearTimeout(pending.timer);
+    _pendingWsRequests.delete(message._id);
+    pending.resolve(true);
+    return;
+  }
+
+  if (message.type && message.type.startsWith("SCA_")) {
+    scaCoordinator.handleDesktopMessage(message);
+    return;
+  }
+  if (message.type === "autofill" && message.url) {
+    if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
+    else if (message.mode === "manual_assist") handleManualAssistTab(message);
+    else handleAutofillTab(message);
+  } else if (message.type === "update_settings") {
+    const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
+    const sca = message.sca_enabled !== false;
+    const scaMode = message.sca_mode || "autofill";
+    const allowedDomains = message.allowed_domains || [];
+    const overallTracker = fst;
+    const storageObj = {
+      trackerEnabled: overallTracker,
+      fstEnabled: fst,
+      scaEnabled: sca,
+      scaMode: scaMode
+    };
+    if (allowedDomains && allowedDomains.length > 0) {
+      storageObj.allowedDomains = allowedDomains;
+    }
+    if (!overallTracker) {
+      storageObj.activeAutofillPayload = null;
+    }
+    chrome.storage.local.set(storageObj, () => {
+      if (overallTracker) {
+        injectAllOpenTabs('desktop-settings-enabled');
+      } else {
+        broadcastTrackerState(false);
+      }
+    });
   }
 }
 
 function ensureConnected() {
-  if (!nativePort) connectToNativeHost();
+  if (!ws || ws.readyState !== WebSocket.OPEN) connectWS();
 }
 
-async function sendToDesktop(msg, requireHttpAck = false) {
-  let sent = false;
-  if (!requireHttpAck && !nativePort) {
-    ensureConnected();
-  }
-  if (!requireHttpAck && nativePort) {
+// Sends one message over the bridge. With waitForAck=true, resolves only once the app has
+// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
+// final SDC flush, which needs to know for certain before it clears its durable outbox.
+function sendToDesktop(msg, waitForAck = false) {
+  return new Promise((resolve) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      ensureConnected();
+      resolve(false);
+      return;
+    }
+    const id = _wsMessageId();
     try {
-      nativePort.postMessage(msg);
-      sent = true;
+      ws.send(JSON.stringify({ ...msg, _id: id }));
     } catch (e) {
-      console.warn("Sera background: native postMessage failed, falling back to HTTP:", e);
+      console.warn("Sera background: WebSocket send failed:", e);
+      resolve(false);
+      return;
     }
-  }
-  if (!sent) {
-    try {
-      const resp = await fetch('http://127.0.0.1:49152', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(msg)
-      });
-      sent = resp.ok;
-      if (sent) {
-        console.log("Sera background: successfully delivered to desktop via HTTP port 49152");
-      }
-    } catch (err) {
-      console.warn("Sera background: direct HTTP delivery failed:", err);
+    if (!waitForAck) {
+      resolve(true);
+      return;
     }
-  }
-  return sent;
+    const timer = setTimeout(() => {
+      _pendingWsRequests.delete(id);
+      resolve(false);
+    }, 4000);
+    _pendingWsRequests.set(id, { resolve, timer });
+  });
 }
 
 // Reopen the last Manual Assist widget from the browser toolbar if clicked directly
@@ -1263,8 +1347,7 @@ function clearBrowserCookies(callback) {
 function injectManualAssist(tabId, message) {
   recordInjectionAndClearCookiesIfNeeded();
   // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
-  armedSCAPayload = null;
-  chrome.storage.local.remove(['armedSCAPayload']);
+  scaCoordinator.disarm("manual assist started");
   chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
     args:[message.userid, message.password, message.username_selector, message.password_selector,
       message.client_name || message.portal, 30000] })
@@ -1277,13 +1360,11 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   chrome.storage.local.get(['trackingTabId', 'activeAutofillPayload'], (data) => {
     if (data.trackingTabId === tabId && data.activeAutofillPayload) {
       // The tracked tab was closed. Send uncertain_result to desktop app
-      if (nativePort) {
-        nativePort.postMessage({
-          type: "uncertain_result",
-          client_id: data.activeAutofillPayload.client_id,
-          portal: data.activeAutofillPayload.portal
-        });
-      }
+      sendToDesktop({
+        type: "uncertain_result",
+        client_id: data.activeAutofillPayload.client_id,
+        portal: data.activeAutofillPayload.portal
+      });
       // Clear tracking state
       chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
     }
@@ -1303,24 +1384,12 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   console.log("Sera background: received runtime message:", msg);
   if (msg.type === "CHECK_NATIVE_STATUS") {
-    if (nativePort) {
-      sendResponse({ connected: true, mode: "native" });
-      return true;
-    }
-    fetch('http://127.0.0.1:49152', { method: 'OPTIONS' })
-      .then(r => sendResponse({ connected: r.ok, mode: "http" }))
-      .catch(() => sendResponse({ connected: false }));
+    sendResponse({ connected: !!(ws && ws.readyState === WebSocket.OPEN), mode: "ws" });
     return true;
   }
   if (msg.type === "RECONNECT_NATIVE_HOST") {
     ensureConnected();
-    if (nativePort) {
-      sendResponse({ connected: true, mode: "native" });
-      return true;
-    }
-    fetch('http://127.0.0.1:49152', { method: 'OPTIONS' })
-      .then(r => sendResponse({ connected: r.ok, mode: "http" }))
-      .catch(() => sendResponse({ connected: false }));
+    sendResponse({ connected: !!(ws && ws.readyState === WebSocket.OPEN), mode: "ws" });
     return true;
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
@@ -1363,6 +1432,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ status: sent ? "accepted" : "failed" });
     }).catch((err) => {
       console.warn("Sera background: filing_result delivery error:", err);
+      sendResponse({ status: "failed" });
+    });
+    return true;
+  }
+  // sudr_capture / sdc_session_timeline / session_start / audit_event: SDC's page script
+  // (sdc_core.js) hands every capture to this background page over chrome.runtime.sendMessage
+  // now (it never talks to the app directly - see that file's _emitDual). 2026-09-22: this
+  // listener used to only recognise filing_result, so a capture with any other type silently
+  // reached here and was dropped (no case matched it, no reply was ever sent).
+  if (["sudr_capture", "sdc_session_timeline", "session_start", "audit_event", "uncertain_result"].includes(msg.type)) {
+    sendToDesktop(msg, true).then((sent) => {
+      if (!sent) console.warn(`Sera background: ${msg.type} was not delivered to desktop.`);
+      sendResponse({ status: sent ? "accepted" : "failed" });
+    }).catch((err) => {
+      console.warn(`Sera background: ${msg.type} delivery error:`, err);
       sendResponse({ status: "failed" });
     });
     return true;
@@ -1618,614 +1702,7 @@ function injectMECP(tabId, message) {
     .catch(err => console.error("Sera: MECP injection failed", err));
 }
 
-// ---------------- SCA (Sera Clipboard Assist) ----------------
-let armedSCAPayload = null;
-let armedSCATimer = null;
-
-// Recover state on service worker restart
-chrome.storage.local.get(['armedSCAPayload'], (data) => {
-  if (data.armedSCAPayload && data.armedSCAPayload.expiresAt > Date.now()) {
-    armedSCAPayload = data.armedSCAPayload;
-    const remaining = data.armedSCAPayload.expiresAt - Date.now();
-    armedSCATimer = setTimeout(() => {
-      clearScaArm();
-    }, remaining);
-  } else {
-    chrome.storage.local.remove(['armedSCAPayload']);
-  }
-});
-
-
-function notifyStateChange(state) {
-  try {
-    if (nativePort && armedSCAPayload) {
-      nativePort.postMessage({
-        type: "SCA_STATE",
-        arm: { ...armedSCAPayload, state: state }
-      });
-    } else if (nativePort) {
-      nativePort.postMessage({
-        type: "SCA_STATE",
-        arm: { state: state }
-      });
-    }
-  } catch(e) {}
-}
-function clearScaArm() {
-  notifyStateChange("IDLE");
-  armedSCAPayload = null;
-  if (armedSCATimer) {
-    clearTimeout(armedSCATimer);
-    armedSCATimer = null;
-  }
-  chrome.storage.local.remove(['armedSCAPayload']);
-}
-
-function handleScaCommand(req, sender, sendResponse) {
-  if (req.type === "SCA_PING") {
-    return; // Ack was enough
-  } else if (req.type === "SCA_STATE_REQUEST") {
-    try {
-      nativePort.postMessage({
-        type: "SCA_STATE",
-        arm: armedSCAPayload || { state: "IDLE" }
-      });
-    } catch(e) {}
-  } else if (req.type === "SCA_DISARM_REQUEST") {
-    clearScaArm();
-  } else if (req.type === "SCA_ARM_REQUEST") {
-    chrome.storage.local.get(['scaEnabled'], (data) => {
-      if (data.scaEnabled === false) return;
-      
-      const newArm = req.arm;
-      if (!newArm) return;
-      
-      console.log(`Sera SCA: Coordinator arming for client ${newArm.client_id_token || newArm.client_id}`);
-      
-      if (armedSCATimer) clearTimeout(armedSCATimer);
-      
-      armedSCAPayload = newArm;
-      
-      const remaining = newArm.expires_at - Date.now();
-      if (remaining > 0) {
-        armedSCATimer = setTimeout(() => clearScaArm(), remaining);
-      } else {
-        clearScaArm();
-        return;
-      }
-      
-      chrome.storage.local.remove(['manualAssistPayload']);
-      chrome.storage.local.set({ armedSCAPayload: armedSCAPayload });
-      notifyStateChange("ARMED");
-    });
-  }
-}
-
-
-function handleScaArm(message) {
-  chrome.storage.local.get(['scaEnabled'], (data) => {
-    if (data.scaEnabled === false) {
-      console.log("Sera SCA: SCA is disabled in settings. Skipping arm.");
-      return;
-    }
-    console.log("Sera SCA: Silently arming password for client", message.client_id_token || message.client_id);
-    if (armedSCATimer) {
-      clearTimeout(armedSCATimer);
-      armedSCATimer = null;
-    }
-    const ttl = message.ttl_ms || 45000;
-    armedSCAPayload = {
-      ...message,
-      expiresAt: Date.now() + ttl
-    };
-    armedSCATimer = setTimeout(() => {
-      console.log("Sera SCA: Armed state expired.");
-      armedSCAPayload = null;
-      armedSCATimer = null;
-    }, ttl);
-
-    // Broadcast armed payload to active tabs for instantaneous paste readiness
-    chrome.storage.local.set({ armedSCAPayload: armedSCAPayload });
-  });
-}
-
-// Global runtime message listener from content scripts (e.g. paste triggered)
-chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
-  if (req.type && req.type.startsWith("SCA_")) {
-    // Send ACK immediately if it's a request from native host
-    if (req.command_id) {
-      try {
-        nativePort.postMessage({ type: "SCA_ACK", command_id: req.command_id });
-      } catch(e) {}
-      
-      // Check dedup
-      if (!self.seenScaCommands) self.seenScaCommands = new Set();
-      if (self.seenScaCommands.has(req.command_id)) return;
-      self.seenScaCommands.add(req.command_id);
-    }
-    
-    if (req.type === "SCA_ERROR" || req.type === "SCA_FILL_RESULT") {
-      try {
-        nativePort.postMessage(req);
-      } catch(e) {}
-      return;
-    }
-    
-    handleScaCommand(req, sender, sendResponse);
-  }
-
-  if (req.type === "sca_fill_completed") {
-    chrome.storage.local.get(['armedSCAPayload'], (stored) => {
-      console.log("Sera SCA: Successful fill reported; consuming one use.");
-      const payload = armedSCAPayload || stored.armedSCAPayload;
-      if (!payload || payload.fillCompletionHandled) return;
-      payload.fillCompletionHandled = true;
-      payload.fillInProgress = false;
-      payload.remainingUses = Math.max(0, Number(payload.remainingUses || 1) - 1);
-      if (payload.remainingUses <= 0) {
-        clearScaArm();
-      } else {
-        payload.fillCompletionHandled = false;
-        armedSCAPayload = payload;
-        chrome.storage.local.set({ armedSCAPayload: payload });
-      }
-    });
-    return;
-  }
-
-  if (req.type === "sca_paste_matched" || req.type === "SCA_MATCH_CANDIDATE") {
-    console.log("Sera SCA: UID paste detected on portal", req.portal, "tab", sender.tab ? sender.tab.id : "unknown");
-    if (!sender.tab || !sender.tab.id) return;
-
-    chrome.storage.local.get(['armedSCAPayload', 'scaEnabled', 'scaMode', 'manualAssistPayload'], (data) => {
-      if (data.scaEnabled === false) return;
-      // Don't trigger SCA if SMTI (Manual Assist) widget is currently active
-      const smtiActive = data.manualAssistPayload && data.manualAssistPayload.expiresAt && data.manualAssistPayload.expiresAt > Date.now();
-      if (smtiActive) {
-        console.log("Sera SCA: Skipping — SMTI (Manual Assist) is currently active on this tab.");
-        return;
-      }
-      const payload = data.armedSCAPayload || armedSCAPayload;
-      if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
-        console.log("Sera SCA: No active armed payload found for paste event.");
-        return;
-      }
-
-      const matchedService = (payload.services || []).find(s => {
-        try {
-          const uHost = new URL(s.url).hostname.toLowerCase();
-          const targetPortal = (req.portal || '').toLowerCase();
-          let tHost = '';
-          if (sender.tab && sender.tab.url) {
-            try { tHost = new URL(sender.tab.url).hostname.toLowerCase(); } catch (_) {}
-          }
-          return (tHost && (tHost.includes(uHost) || uHost.includes(tHost))) ||
-                 (targetPortal && (targetPortal.includes(uHost) || uHost.includes(targetPortal)));
-        } catch (_) {
-          return true;
-        }
-      }) || (payload.services && payload.services[0]);
-
-      if (matchedService && matchedService.password) {
-        const isWidgetMode = (payload.sca_mode === "widget" || payload.sca_mode === "assist") || (data.scaMode === "widget" || data.scaMode === "assist");
-
-        if (isWidgetMode) {
-          // Trigger interactive SCA Widget on this tab
-          chrome.scripting.executeScript({
-            target: { tabId: sender.tab.id, allFrames: true },
-            func: (pwd, pwdSel, bizName, ownName, portalName, matchedUid, clientId, clientToken) => {
-              function isVis(el) {
-                if (!el || el.disabled || el.type === "hidden" || el.getAttribute("tabindex") === "-1") return false;
-                try {
-                  const style = window.getComputedStyle(el);
-                  return style.display !== "none" && style.visibility !== "hidden";
-                } catch (_) { return true; }
-              }
-
-              function simType(el, val) {
-                if (!el) return;
-                try { el.focus(); } catch (_) {}
-                try {
-                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                  setter.call(el, val);
-                } catch (_) { el.value = val; }
-                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-
-              const fallbacks = [
-                pwdSel,
-                "input[id*='psw']",
-                "input[name*='psw']",
-                "input[id$='psw']",
-                "input[name$='psw']",
-                "input[name='psw']",
-                "#psw",
-                "input[name='Passwd']",
-                "input[type='password']",
-                "input[id*='password']",
-                "input[name*='password']",
-                "#password",
-                "#passwordInput",
-                "#user_pass",
-                "input[name='password']",
-                "input[name='pass']"
-              ].filter(Boolean);
-
-              function findPassField() {
-                for (const sel of fallbacks) {
-                  try {
-                    const els = document.querySelectorAll(sel);
-                    for (const el of els) {
-                      if (isVis(el)) return el;
-                    }
-                  } catch (_) {}
-                }
-                return null;
-              }
-
-              function renderAndShowWidget(targetField) {
-                const hostId = "sera-sca-widget-host";
-                const old = document.getElementById(hostId);
-                if (old) old.remove();
-                const assistOld = document.getElementById("sera-sca-assist-host");
-                if (assistOld) assistOld.remove();
-                const toastOld = document.getElementById("sera-sca-toast-host");
-                if (toastOld) toastOld.remove();
-
-                const host = document.createElement("div");
-                host.id = hostId;
-                const shadow = host.attachShadow({ mode: "closed" });
-
-                const style = document.createElement("style");
-                style.textContent = `
-                  .card {
-                    position: fixed; top: 20px; right: 24px; z-index: 2147483647;
-                    width: 320px; padding: 14px 16px;
-                    background: linear-gradient(145deg, #111814, #0B130E);
-                    border: 1.5px solid #2E9B5F;
-                    border-radius: 12px;
-                    box-shadow: none;
-                    color: #FFFFFF;
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                    transform: translateX(120%);
-                    opacity: 0;
-                    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
-                    box-sizing: border-box;
-                  }
-                  .header {
-                    display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
-                  }
-                  .badge {
-                    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
-                    color: #4CF9B7; background: rgba(46, 155, 95, 0.22);
-                    border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px;
-                    display: flex; align-items: center; gap: 4px;
-                  }
-                  .close-btn {
-                    background: transparent; border: none; cursor: pointer; font-size: 14px;
-                    color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;
-                  }
-                  .close-btn:hover { color: #FFFFFF; }
-                  .title {
-                    font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3;
-                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px;
-                  }
-                  .subtitle {
-                    font-size: 12px; color: #9FB3A8; line-height: 1.2; margin-bottom: 10px;
-                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-                  }
-                  .btn-inject {
-                    display: flex; align-items: center; justify-content: center; gap: 6px;
-                    width: 100%; padding: 9px 12px; font-size: 13px; font-weight: 700;
-                    color: #FFFFFF; background: #2E9B5F; border: 1px solid #34B76D;
-                    border-radius: 8px; cursor: pointer; transition: all 0.15s ease;
-                    box-shadow: 0 4px 12px rgba(46, 155, 95, 0.3);
-                    box-sizing: border-box;
-                  }
-                  .btn-inject:hover {
-                    background: #34B76D; box-shadow: 0 6px 16px rgba(52, 183, 109, 0.45);
-                  }
-                  .btn-inject:active {
-                    transform: scale(0.98);
-                  }
-                  .btn-inject.done {
-                    background: #102B1E; border-color: #2E9B5F; color: #4CF9B7;
-                  }
-                  .timer-container {
-                    margin-top: 10px; height: 3px; background: rgba(255, 255, 255, 0.08);
-                    border-radius: 2px; overflow: hidden;
-                  }
-                  .timer-bar {
-                    height: 100%; width: 100%; background: #2E9B5F; transform-origin: left;
-                    transition: transform 30s linear;
-                  }
-                `;
-
-                shadow.appendChild(style);
-
-                const card = document.createElement("div");
-                card.className = "card";
-
-                const header = document.createElement("div");
-                header.className = "header";
-
-                const badge = document.createElement("div");
-                badge.className = "badge";
-                badge.textContent = "⚡ SCA Widget";
-
-                const closeBtn = document.createElement("button");
-                closeBtn.className = "close-btn";
-                closeBtn.textContent = "✕";
-
-                header.append(badge, closeBtn);
-
-                const title = document.createElement("div");
-                title.className = "title";
-                title.textContent = bizName || "Client Profile";
-
-                const subtitle = document.createElement("div");
-                subtitle.className = "subtitle";
-                subtitle.textContent = ownName ? `👤 ${ownName} • ${portalName}` : `${portalName}`;
-
-                const injectBtn = document.createElement("button");
-                injectBtn.className = "btn-inject";
-                injectBtn.innerHTML = "🔑  Inject Password";
-
-                const timerContainer = document.createElement("div");
-                timerContainer.className = "timer-container";
-                const timerBar = document.createElement("div");
-                timerBar.className = "timer-bar";
-                timerContainer.appendChild(timerBar);
-
-                card.append(header, title, subtitle, injectBtn, timerContainer);
-                shadow.appendChild(card);
-                document.body.appendChild(host);
-
-                // Animate in
-                setTimeout(() => {
-                  card.style.transform = "translateX(0)";
-                  card.style.opacity = "1";
-                  timerBar.style.transform = "scaleX(0)";
-                }, 40);
-
-                function dismiss() {
-                  card.style.transform = "translateX(120%)";
-                  card.style.opacity = "0";
-                  setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
-                }
-
-                closeBtn.onclick = dismiss;
-                const autoTimer = setTimeout(dismiss, 30000);
-
-                injectBtn.onclick = () => {
-                  const currentField = targetField && isVis(targetField) ? targetField : findPassField();
-                  if (currentField) {
-                    simType(currentField, pwd);
-                    clearTimeout(autoTimer);
-                    injectBtn.className = "btn-inject done";
-                    injectBtn.innerHTML = "✓  Password Injected";
-                    setTimeout(dismiss, 500);
-                  } else {
-                    injectBtn.innerHTML = "⚠️ Password field not visible";
-                    setTimeout(() => {
-                      injectBtn.innerHTML = "🔑  Inject Password";
-                    }, 1500);
-                  }
-                };
-              }
-
-              // Check if password field is already visible (single-page login)
-              const initialField = findPassField();
-              if (initialField) {
-                renderAndShowWidget(initialField);
-              } else {
-                // Two-page login: wait up to 45s for user to click Next and password field to appear
-                let attempts = 0;
-                const waitInterval = setInterval(() => {
-                  attempts++;
-                  const pf = findPassField();
-                  if (pf) {
-                    clearInterval(waitInterval);
-                    renderAndShowWidget(pf);
-                  } else if (attempts >= 300) {
-                    clearInterval(waitInterval);
-                  }
-                }, 150);
-              }
-            },
-            args: [
-              matchedService.password,
-              matchedService.password_selector,
-              payload.business_name || "",
-              payload.owner_name || "",
-              matchedService.name || "Portal",
-              payload.matched_uid || "",
-              payload.client_id || 0,
-              payload.client_id_token || ""
-            ]
-          }).then(() => {
-            sendToDesktop({
-              type: "audit_event",
-              action: "SCA widget armed",
-              client_id: payload.client_id,
-              detail: `SCA widget armed — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
-            });
-          }).catch(err => console.error("Sera SCA: Widget injection error", err));
-        } else {
-          // Trigger ambient silent password fill on this tab
-          chrome.scripting.executeScript({
-            target: { tabId: sender.tab.id, allFrames: true },
-            func: (pwd, pwdSel, flow, bizName, ownName, portalName) => {
-              function isVis(el) {
-                if (!el) return false;
-                if (el.type === 'hidden' || el.getAttribute('tabindex') === '-1') return false;
-                try {
-                  const style = window.getComputedStyle(el);
-                  return style.display !== 'none' && style.visibility !== 'hidden';
-                } catch (_) { return true; }
-              }
-              function simType(el, val) {
-                if (!el) return;
-                try { el.focus(); } catch (_) {}
-                try {
-                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                  setter.call(el, val);
-                } catch (_) { el.value = val; }
-                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: val }));
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-
-              function showScaToast() {
-                const existing = document.getElementById('sera-sca-toast-host');
-                if (existing) existing.remove();
-
-                const host = document.createElement('div');
-                host.id = 'sera-sca-toast-host';
-                host.style.cssText = 'position: fixed; top: 20px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; pointer-events: auto;';
-
-                const shadow = host.attachShadow({ mode: 'closed' });
-                const container = document.createElement('div');
-                container.style.cssText = `
-                  display: flex;
-                  flex-direction: column;
-                  gap: 6px;
-                  min-width: 290px;
-                  max-width: 380px;
-                  padding: 14px 16px;
-                  background: linear-gradient(145deg, #111814, #0B130E);
-                  border: 1.5px solid #2E9B5F;
-                  border-radius: 12px;
-                  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 16px rgba(46, 155, 95, 0.25);
-                  color: #FFFFFF;
-                  transform: translateX(120%);
-                  opacity: 0;
-                  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
-                `;
-
-                const headerRow = document.createElement('div');
-                headerRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px;';
-
-                const badge = document.createElement('span');
-                badge.style.cssText = 'font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #4CF9B7; background: rgba(46, 155, 95, 0.22); border: 1px solid rgba(76, 249, 183, 0.35); padding: 3px 7px; border-radius: 6px; display: flex; align-items: center; gap: 4px;';
-                badge.innerHTML = '⚡ Sera Clipboard Assist';
-
-                const closeBtn = document.createElement('span');
-                closeBtn.style.cssText = 'cursor: pointer; font-size: 14px; color: #889988; line-height: 1; padding: 2px 4px; border-radius: 4px;';
-                closeBtn.textContent = '✕';
-                closeBtn.onclick = () => {
-                  container.style.transform = 'translateX(120%)';
-                  container.style.opacity = '0';
-                  setTimeout(() => host.remove(), 400);
-                };
-
-                headerRow.appendChild(badge);
-                headerRow.appendChild(closeBtn);
-
-                const title = document.createElement('div');
-                title.style.cssText = 'font-size: 14px; font-weight: 700; color: #FFFFFF; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
-                title.textContent = bizName || 'Client Profile';
-
-                let ownerDiv = null;
-                if (ownName) {
-                  ownerDiv = document.createElement('div');
-                  ownerDiv.style.cssText = 'font-size: 12px; color: #9FB3A8; line-height: 1.2;';
-                  ownerDiv.textContent = `👤 ${ownName}`;
-                }
-
-                const statusDiv = document.createElement('div');
-                statusDiv.style.cssText = 'display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #34D399; margin-top: 4px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08);';
-                statusDiv.innerHTML = `<span>✓</span> <span>Password was autofilled for ${portalName || 'Portal'}</span>`;
-
-                container.appendChild(headerRow);
-                container.appendChild(title);
-                if (ownerDiv) container.appendChild(ownerDiv);
-                container.appendChild(statusDiv);
-                shadow.appendChild(container);
-                document.body.appendChild(host);
-
-                // Slide in
-                setTimeout(() => {
-                  container.style.transform = 'translateX(0)';
-                  container.style.opacity = '1';
-                }, 40);
-
-                // Auto-dismiss after 6.5 seconds
-                setTimeout(() => {
-                  container.style.transform = 'translateX(120%)';
-                  container.style.opacity = '0';
-                  setTimeout(() => host.remove(), 400);
-                }, 6500);
-              }
-
-              // Find password field (includes TRACES and Google's Passwd field)
-              const fallbacks = [
-                pwdSel,
-                "input[id*='psw']",
-                "input[name*='psw']",
-                "input[id$='psw']",
-                "input[name$='psw']",
-                "input[name='psw']",
-                "#psw",
-                "input[name='Passwd']",
-                "input[type='password']",
-                "input[id*='password']",
-                "input[name*='password']",
-                "#password",
-                "#passwordInput",
-                "#user_pass",
-                "input[name='password']",
-                "input[name='pass']"
-              ].filter(Boolean);
-
-              let attempts = 0;
-              // Poll for up to 30 seconds waiting for password field to appear when user advances to step 2
-              const interval = setInterval(() => {
-                attempts++;
-                let passField = null;
-                for (const sel of fallbacks) {
-                  try {
-                    const els = document.querySelectorAll(sel);
-                    for (const el of els) {
-                      if (isVis(el)) { passField = el; break; }
-                    }
-                    if (passField) break;
-                  } catch (_) {}
-                }
-
-                if (passField) {
-                  clearInterval(interval);
-                  setTimeout(() => {
-                    simType(passField, pwd);
-                    showScaToast();
-                    console.log("Sera SCA: Password filled safely & notification banner displayed.");
-                  }, 100);
-                } else if (attempts >= 200) {
-                  clearInterval(interval);
-                }
-              }, 150);
-            },
-            args: [
-              matchedService.password,
-              matchedService.password_selector,
-              matchedService.extension_flow || "double",
-              payload.business_name || "",
-              payload.owner_name || "",
-              matchedService.name || "Portal"
-            ]
-          }).then(() => {
-            // Send audit trail notification back to desktop app
-            sendToDesktop({
-              type: "audit_event",
-              action: "SCA autofill triggered",
-              client_id: payload.client_id,
-              detail: `SCA ambient autofill — client ${payload.client_id_token || payload.client_id} — portal ${matchedService.name || 'Portal'}`
-            });
-          }).catch(err => console.error("Sera SCA: Injection error", err));
-        }
-      }
-    });
-  }
+// ---------------- SCA page events -> coordinator ----------------
+chrome.runtime.onMessage.addListener((req, sender) => {
+  scaCoordinator.handleRuntimeMessage(req, sender);
 });

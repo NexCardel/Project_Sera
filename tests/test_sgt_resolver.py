@@ -11,11 +11,12 @@ from pathlib import Path
 import pytest
 
 from core.sgt import sgt_specs
-from core.sgt.sgt_resolver import (prepare_lines, resolve_page, resolve_profile_field, resolve_records,
-                                   resolve_single)
+from core.sgt.sgt_resolver import (drop_future_steps, prepare_lines, resolve_page, resolve_profile_field,
+                                   resolve_records, resolve_single)
 from core.sgt.sgt_specs import (BUILTIN_FIELDS_PATH, SpecError, SpecStore, build_current_rules, build_field,
-                                build_record, label_regex, load_registry, safe_compile)
-from core.sgt.sgt_toolbox import CHECKS, MERGES, TRANSFORMS, ddmmyy_tail_date, period_sort_key
+                                build_record, build_submit_rules, label_regex, load_registry, safe_compile)
+from core.sgt.sgt_toolbox import (CHECKS, MERGES, SUBMIT_LEVELS, TRANSFORMS, ddmmyy_tail_date, period_sort_key,
+                                  submit_level)
 
 TODAY = date(2026, 7, 15)
 ITR = "Income Tax"
@@ -131,7 +132,7 @@ class TestLoading:
         reg = load_registry([BUILTIN_FIELDS_PATH])
         assert reg.errors == ()
         assert {s.field for s in reg.profile} >= {"pan", "name", "gstin", "dob", "email", "phone"}
-        assert {r.name for r in reg.records} >= {"itr_filed_returns", "itr_submit_success", "gst_returns_calendar"}
+        assert {r.name for r in reg.records} >= {"itr_dataset_cards", "itr_submit_success", "itr_verification_success", "gst_submit_success", "gst_returns_calendar"}
 
     def test_every_builtin_spec_has_examples(self):
         data = json.loads(BUILTIN_FIELDS_PATH.read_text(encoding="utf-8"))
@@ -206,7 +207,7 @@ class TestLoading:
 
     def test_record_require_must_name_its_own_fields(self):
         with pytest.raises(SpecError, match="require"):
-            build_record({"name": "r", "require": ["ack"], "fields": [
+            build_record({"name": "r", "require": ["arn"], "fields": [
                 {"field": "form", "take": "anywhere", "pattern": "(ITR-[1-7])", "examples": ["ITR-4"]}]})
 
     def test_spec_store_reloads_on_edit(self, tmp_path):
@@ -357,31 +358,166 @@ class TestRecords:
     def test_filed_returns_cards_each_become_a_dataset(self):
         lines = ["A.Y. 2025-26", "Filing Type", "Revised", "done", "e-Verified", "ITR Filed", "ITR :", "ITR-2",
                  "Acknowledgement No :", "123456789150925",
-                 "A.Y. 2024-25", "ITR :", "ITR-1", "ITR Filed"]
-        rec = next(r for r in self.reg().records if r.name == "itr_filed_returns")
+                 "A.Y. 2024-25", "ITR :", "ITR-1", "ITR Filed", "Acknowledgement No :", "987654321310724"]
+        rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
         got = [d.values() for d in resolve_records(rec, lines, TODAY)]
         assert got == [
-            {"period": "AY 2025-26", "form": "ITR-2", "ack": "123456789150925", "filing_type": "Revised",
-             "status": "Submitted (e-Verified)"},
-            {"period": "AY 2024-25", "form": "ITR-1", "status": "Submitted"},
+            {"period": "AY 2025-26", "form": "ITR-2", "arn": "123456789150925", "filing_type": "Revised",
+             "status": "Submitted & Verified"},
+            {"period": "AY 2024-25", "form": "ITR-1", "arn": "987654321310724", "status": "Submitted (Not Verified)"},
         ]
 
     def test_a_record_missing_a_required_field_is_dropped(self):
-        rec = next(r for r in self.reg().records if r.name == "itr_filed_returns")
-        assert resolve_records(rec, ["A.Y. 2025-26", "ITR :", "ITR-4"], TODAY) == []     # no status
+        rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
+        assert resolve_records(rec, ["A.Y. 2025-26", "ITR :", "ITR-4"], TODAY) == []     # no ack
 
     def test_an_old_ack_on_a_confirmation_page_is_not_a_new_filing(self):
         rec = next(r for r in self.reg().records if r.name == "itr_submit_success")
         old = ["Return filed successfully", "Acknowledgement Number :", "123456789150925"]
         new = ["Return filed successfully", "Acknowledgement Number :", "123456789150726"]
         assert resolve_records(rec, old, TODAY) == []
-        assert resolve_records(rec, new, TODAY)[0].values() == {"ack": "123456789150726", "status": "Submitted"}
+        assert resolve_records(rec, new, TODAY)[0].values() == {"arn": "123456789150726",
+                                                                "status": "Submitted (Not Verified)"}
 
     def test_gst_calendar_takes_the_form_from_the_heading_above(self):
         rec = next(r for r in self.reg().records if r.name == "gst_returns_calendar")
         lines = ["GSTR-3B", "Apr - 2026 NA", "May - 2026 Filed Filed on : 20/06/2026", "Jun - 2026 NA"]
         got = [d.values() for d in resolve_records(rec, lines, TODAY)]
-        assert got == [{"form": "GSTR-3B", "period": "May (FY 2026-27)", "status": "Filed", "filing_date": "2026-06-20"}]
+        assert got == [{"form": "GSTR-3B", "period": "May (FY 2026-27)", "status": "Submitted & Verified",
+                        "filing_date": "2026-06-20"}]
+
+
+# The e-Verify picker exactly as UI Automation reads it (tools/vsdc_uia_probe_output/
+# uia_probe_20260920_134430.txt), with made-up identifiers.
+EVERIFY_PICKER = [
+    "Dashboard", "e-File", "Session Time", "1", "1", ":", "4", "8",
+    "stepper", "Current Step 1 of 3 in stepper", "Select The Return To Be Verified", "1",
+    "Unvisited Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+    "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+    "e-Verify / Discard Return", "Please select the return you would like to verify/discard",
+    "Showing (2) returns", "Search Box Input Field",
+    "Assessment Year", "2025-26", "ITR", "ITR 4", "Filing Type", "Original", "PAN :", "ABCPD1234E",
+    "Acknowledgement Number :", "123456789180925", "Filed On :", "Sep 18, 2025",
+    "Applicable Act :", "Income Tax Act 1961", "e verify", "Discard",
+    "Assessment Year", "2024-25", "ITR", "ITR 1", "Filing Type", "Belated", "PAN :", "ABCPD1234E",
+    "Acknowledgement Number :", "987654321100325", "Filed On :", "Mar 10, 2025",
+    "Applicable Act :", "Income Tax Act 1961", "e verify", "Discard",
+    "Last reviewed and updated on :", "20-Sep-2026",
+]
+
+
+class TestSubmitLadder:
+    """One submit status vocabulary on every portal; portal wording is only evidence."""
+
+    def reg(self):
+        return load_registry([BUILTIN_FIELDS_PATH])
+
+    def test_the_ladder_orders_the_four_levels(self):
+        assert SUBMIT_LEVELS == ("Not Submitted", "Draft", "Submitted (Not Verified)", "Submitted & Verified")
+        assert [submit_level(x) for x in SUBMIT_LEVELS] == [0, 1, 2, 3]
+        assert submit_level("Filed") == 0 and submit_level(None) == 0      # portal jargon is not a level
+
+    def test_a_status_map_outside_the_ladder_is_refused(self):
+        raw = {"field": "status", "take": "anywhere", "pattern": "(Filed)", "map": [["filed", "Filed"]],
+               "examples": ["Filed"]}
+        with pytest.raises(SpecError, match="submit ladder"):
+            build_field(raw, "current")
+        with pytest.raises(SpecError, match="needs a 'map'"):
+            build_field(dict(raw, map=None), "current")
+        assert build_field(dict(raw, map=[["filed", "Submitted & Verified"]]), "current").field == "status"
+
+    def test_every_status_spec_in_the_builtin_file_speaks_the_ladder(self):
+        reg = self.reg()
+        specs = [f for r in reg.records for f in r.fields] + list(reg.current)
+        outs = {out for f in specs if f.field == "status" for _, out in f.value_map if out}
+        assert outs and outs <= set(SUBMIT_LEVELS)
+
+    def test_what_an_arn_proves_is_the_portals_own(self):
+        rules = self.reg().submit_rules
+        assert rules.proven_by_identifier(ITR) == "Submitted (Not Verified)"     # ack before e-Verification
+        assert rules.proven_by_identifier(GST) == "Submitted & Verified"         # ARN only once filed
+        with pytest.raises(SpecError):
+            build_submit_rules({"identifier_proves": {"GST Portal": "Filed"}})
+
+    def test_the_status_keeps_the_portals_wording_as_evidence(self):
+        rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
+        ds = resolve_records(rec, ["A.Y. 2025-26", "Processed with refund", "ITR :", "ITR-4",
+                                   "Acknowledgement No :", "123456789150925"], TODAY)[0]
+        assert ds.values()["status"] == "Submitted & Verified"
+        assert ds.evidence("status") == "Processed with refund"
+
+
+class TestEverifyPicker:
+    def reg(self):
+        return load_registry([BUILTIN_FIELDS_PATH])
+
+    def test_every_card_is_a_dataset_awaiting_verification(self):
+        rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
+        got = [d.values() for d in resolve_records(rec, EVERIFY_PICKER, TODAY)]
+        assert got == [
+            {"period": "AY 2025-26", "form": "ITR-4", "arn": "123456789180925", "pan": "ABCPD1234E",
+             "filing_type": "Original", "filing_date": "2025-09-18", "status": "Submitted (Not Verified)"},
+            {"period": "AY 2024-25", "form": "ITR-1", "arn": "987654321100325", "pan": "ABCPD1234E",
+             "filing_type": "Belated", "filing_date": "2025-03-10", "status": "Submitted (Not Verified)"},
+        ]
+
+    def test_the_page_is_a_list_and_keeps_the_latest_period(self):
+        res = resolve_page(self.reg(), EVERIFY_PICKER, ITR,
+                           "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/eVerifyReturn/eVerifyReturn-al", TODAY)
+        assert res.is_list
+        assert [(d.record, d.values()["period"]) for d in res.datasets] == [("itr_dataset_cards", "AY 2025-26")]
+
+    def test_the_future_stepper_step_is_never_a_verification(self):
+        """'Return Successfully Verified' is drawn on step 1 as the step still to come."""
+        res = resolve_page(self.reg(), EVERIFY_PICKER, ITR, "https://x/#/dashboard/eVerifyReturn/eVerifyReturn-al", TODAY)
+        assert all(d.values()["status"] != "Submitted & Verified" for d in res.datasets)
+        assert all(d.record != "itr_verification_success" for d in res.datasets)
+
+    def test_a_card_status_of_its_own_beats_the_page_fact(self):
+        rec = next(r for r in self.reg().records if r.name == "itr_dataset_cards")
+        lines = ["Please select the return you would like to verify/discard", "A.Y. 2025-26", "Processed",
+                 "ITR :", "ITR-4", "Acknowledgement No :", "123456789150925"]
+        assert resolve_records(rec, lines, TODAY)[0].values()["status"] == "Submitted & Verified"
+
+
+class TestNeverOnAList:
+    def test_a_confirmation_record_is_not_read_on_a_list_page(self):
+        """An older card's 'Successfully e-Verified' must not confirm the page's latest dataset."""
+        reg = load_registry([BUILTIN_FIELDS_PATH])
+        lines = ["View Filed Returns",
+                 "A.Y. 2025-26", "Pending for e-verification", "ITR :", "ITR-4", "Acknowledgement No :", "123456789150925",
+                 "A.Y. 2024-25", "Successfully e-Verified", "ITR :", "ITR-1", "Acknowledgement No :", "987654321310724"]
+        res = resolve_page(reg, lines, ITR, "https://x/#/dashboard/itrStatus", TODAY)
+        assert {d.record for d in res.datasets} == {"itr_dataset_cards"}
+        assert [d.values()["status"] for d in res.datasets] == ["Submitted (Not Verified)"]
+
+
+class TestFutureSteps:
+    def test_unvisited_steps_are_dropped_with_their_label_and_number(self):
+        lines = ["Current Step 1 of 3 in stepper", "Select", "1", "Unvisited Step 2 of 3 in stepper", "Pay", "2",
+                 "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3", "Body text"]
+        assert drop_future_steps(lines) == ["Current Step 1 of 3 in stepper", "Select", "1", "Body text"]
+
+    def test_a_step_without_a_number_keeps_the_next_line(self):
+        assert drop_future_steps(["Unvisited Step 2 of 2", "Done", "Acknowledgement Number :"]) == ["Acknowledgement Number :"]
+
+    def test_prepare_lines_applies_it(self):
+        assert prepare_lines(["Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3"]) == []
+
+
+class TestGstSubmission:
+    def reg(self):
+        return load_registry([BUILTIN_FIELDS_PATH])
+
+    def test_filing_with_an_arn_is_submitted_and_verified(self):
+        rec = next(r for r in self.reg().records if r.name == "gst_submit_success")
+        got = resolve_records(rec, ["Filing Successful", "GSTR-3B filed successfully. ARN: AA070826000001Z"], TODAY)
+        assert got[0].values() == {"arn": "AA070826000001Z", "status": "Submitted & Verified"}
+
+    def test_an_arn_in_a_status_table_is_not_a_new_filing(self):
+        rec = next(r for r in self.reg().records if r.name == "gst_submit_success")
+        assert resolve_records(rec, ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"], TODAY) == []
+
 
     def test_dataset_confidence_is_its_weakest_field(self):
         rec = next(r for r in self.reg().records if r.name == "itr_submit_success")

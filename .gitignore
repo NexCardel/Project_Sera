@@ -46,7 +46,6 @@ master.db
 sera.salt
 device_identity.txt
 *.log
-native_host/host_error.log
 
 # IDE & Tool caches
 .vscode/

@@ -9,7 +9,6 @@ from pathlib import Path
 
 from database import SeraDatabase
 import security
-import native_host.host as nh
 
 
 class TestStorageOptimization(unittest.TestCase):
@@ -76,26 +75,6 @@ class TestStorageOptimization(unittest.TestCase):
 
         # Assert ancient dump was purged
         self.assertFalse(os.path.exists(ancient_dump))
-
-    def test_host_log_rotation(self):
-        """Native messaging host rotates host_log.txt when it exceeds MAX_LOG_SIZE."""
-        orig_log = nh.LOG_FILE
-        orig_max = nh.MAX_LOG_SIZE
-        try:
-            test_log = os.path.join(self.temp_dir, "test_host_log.txt")
-            nh.LOG_FILE = test_log
-            nh.MAX_LOG_SIZE = 1024  # 1 KB limit for fast testing
-
-            # Write ~2.5 KB to trigger rotation
-            for i in range(50):
-                nh.log(f"IPC Message entry {i}: " + ("x" * 60))
-
-            self.assertTrue(os.path.exists(test_log))
-            self.assertTrue(os.path.exists(test_log + ".1"))
-            self.assertLessEqual(os.path.getsize(test_log), 1500)
-        finally:
-            nh.LOG_FILE = orig_log
-            nh.MAX_LOG_SIZE = orig_max
 
     def test_optimize_storage_checkpoints_wal(self):
         """optimize_storage flushes SQLite WAL pages into the database and truncates WAL."""

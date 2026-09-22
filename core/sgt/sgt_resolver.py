@@ -29,14 +29,38 @@ _PRIVATE_USE = re.compile("[-]")
 _SPACES = re.compile(r"\s+")
 
 
+# A wizard stepper names every step, including the ones still to come ("Return Successfully
+# Verified" is drawn on step 1 of the e-Verify wizard). The accessibility tree marks those
+# "Unvisited Step N of M"; their label - and the bare step number after it - describe
+# something that has NOT happened, so they are never evidence of anything.
+_FUTURE_STEP = re.compile(r"^\s*(?:unvisited|upcoming|future|not\s+started)\s+step\s+\d+\s+of\s+\d+\b", re.IGNORECASE)
+_STEP_NUMBER = re.compile(r"^\s*\d{1,2}\s*$")
+
+
+def drop_future_steps(lines: Sequence[str]) -> List[str]:
+    out: List[str] = []
+    skip = 0
+    for ln in lines:
+        if _FUTURE_STEP.match(ln):
+            skip = 2                    # the marker is dropped, then its label, then its number
+            continue
+        if skip:
+            skip -= 1
+            if skip == 1 or _STEP_NUMBER.match(ln):
+                continue
+        out.append(ln)
+    return out
+
+
 def prepare_lines(lines: Iterable[Any]) -> List[str]:
-    """Strips icon glyphs, collapses whitespace, bounds line length, drops empty lines."""
+    """Strips icon glyphs, collapses whitespace, bounds line length, drops empty lines and
+    the steps of a wizard stepper that are still to come."""
     out = []
     for ln in lines or ():
         s = _SPACES.sub(" ", _PRIVATE_USE.sub(" ", str(ln))).strip()
         if s:
             out.append(s[:MAX_LINE_LEN])
-    return out
+    return drop_future_steps(out)
 
 
 @dataclass
@@ -48,6 +72,7 @@ class Hit:
     line: int
     rank: int = 0           # position of the matching map entry (for pick "map_order")
     source: str = "page"    # page / link / title
+    evidence: str = ""      # the line as the page printed it, before transforms and the map
 
     def as_dict(self) -> Dict[str, Any]:
         return {"value": self.value, "confidence": self.confidence, "spec": self.spec}
@@ -66,6 +91,10 @@ class Dataset:
     def values(self) -> Dict[str, str]:
         return {k: h.value for k, h in self.fields.items()}
 
+    def evidence(self, field_name: str) -> str:
+        hit = self.fields.get(field_name)
+        return hit.evidence if hit else ""
+
     def as_dict(self) -> Dict[str, Any]:
         return {"record": self.record, "confidence": self.confidence, "values": self.values()}
 
@@ -74,10 +103,10 @@ class Dataset:
 class PageResult:
     profile: Dict[str, Hit] = field(default_factory=dict)
     datasets: List[Dataset] = field(default_factory=list)
-    # Pieces of the return being worked on (form, period, filing type...) seen on this page.
+    # Pieces of the dataset being worked on (form, period, filing type...) seen on this page.
     current: Dict[str, Hit] = field(default_factory=dict)
-    # True when the page listed returns (a record with a "start" matched): a list page shows
-    # many returns, so it never feeds the return being worked on.
+    # True when the page listed datasets (a record with a "start" matched): a list page shows
+    # many datasets, so it never feeds the dataset being worked on.
     is_list: bool = False
     conflicts: List[str] = field(default_factory=list)
 
@@ -94,7 +123,7 @@ class PageResult:
 
 
 # ── One value ────────────────────────────────────────────────────────────────────
-def _finish(spec: FieldSpec, raw: str, today: date) -> Optional[Tuple[str, int]]:
+def _finish(spec: FieldSpec, raw: str, today: date) -> Optional[Tuple[str, int, str]]:
     value: Optional[str] = raw
     for t in spec.transforms:
         value = TRANSFORMS[t](value)
@@ -113,10 +142,10 @@ def _finish(spec: FieldSpec, raw: str, today: date) -> Optional[Tuple[str, int]]
     for c in spec.checks:
         if not CHECKS[c](value, today):
             return None
-    return value, rank
+    return value, rank, raw
 
 
-def extract_value(spec: FieldSpec, text: str, today: date) -> Optional[Tuple[str, int]]:
+def extract_value(spec: FieldSpec, text: str, today: date) -> Optional[Tuple[str, int, str]]:
     """The first value in `text` that has the spec's shape and passes its tools."""
     for m in spec.pattern.finditer(text or ""):
         raw = next((g for g in m.groups() if g), None) if m.re.groups else m.group(0)
@@ -132,8 +161,9 @@ def extract_value(spec: FieldSpec, text: str, today: date) -> Optional[Tuple[str
 def _hits(spec: FieldSpec, lines: Sequence[str], lo: int, hi: int, today: date) -> List[Hit]:
     hits: List[Hit] = []
 
-    def add(line: int, got: Tuple[str, int]) -> None:
-        hits.append(Hit(spec.field, got[0], spec.confidence, spec.name, line, got[1], spec.source))
+    def add(line: int, got: Tuple[str, int, str]) -> None:
+        # Evidence is the whole line the value came from: a submit message's wording, in full.
+        hits.append(Hit(spec.field, got[0], spec.confidence, spec.name, line, got[1], spec.source, lines[line]))
 
     if spec.take == "anywhere":
         for i in range(lo, hi):
@@ -256,12 +286,19 @@ def _blocks(spec: RecordSpec, lines: Sequence[str]) -> List[Tuple[int, int]]:
 def resolve_records(spec: RecordSpec, lines: Sequence[str], today: date) -> List[Dataset]:
     lines = prepare_lines(lines)
     out: List[Dataset] = []
+    # A page-scope field states one fact about every card on the page: read once, over the
+    # whole page, and only a single distinct value counts (two would be ambiguous).
+    page_hits: Dict[int, Optional[Hit]] = {}
+    for n, f in enumerate(spec.fields):
+        if f.scope == "page":
+            hits = _hits(f, lines, 0, len(lines), today)
+            page_hits[n] = _pick(f, hits) if len({h.value for h in hits}) == 1 else None
     for lo, hi in _blocks(spec, lines):
         found: Dict[str, Hit] = {}
-        for f in spec.fields:
+        for n, f in enumerate(spec.fields):
             if f.field in found:
                 continue                # an earlier spec for the same field already answered
-            hit = _pick(f, _hits(f, lines, lo, hi, today))
+            hit = page_hits[n] if n in page_hits else _pick(f, _hits(f, lines, lo, hi, today))
             if hit:
                 found[f.field] = hit
         if found and all(r in found for r in spec.require):
@@ -292,12 +329,16 @@ def resolve_page(registry: Registry, lines: Sequence[str], portal: str, url: str
         hit = resolve_single(spec, lines, today, link=url, title=title, conflicts=result.conflicts)
         if hit:
             _best(result.profile, hit)
-    for rec in registry.records:
-        if rec.applies(portal, url):
-            found = resolve_records(rec, lines, today)
-            result.datasets.extend(found)
-            if found and rec.start is not None:
-                result.is_list = True
+    # Card records (with a "start") first: a page that lists datasets is a list, and a
+    # whole-page record (a confirmation) is never read on a list - one card's "Successfully
+    # e-Verified" is not a confirmation of the page's dataset.
+    for rec in sorted(registry.records, key=lambda r: r.start is None):
+        if not rec.applies(portal, url) or (rec.start is None and result.is_list):
+            continue
+        found = resolve_records(rec, lines, today)
+        result.datasets.extend(found)
+        if found and rec.start is not None:
+            result.is_list = True
     result.datasets = latest_period_only(result.datasets)
     for spec in registry.current:
         if spec.applies(portal, url):

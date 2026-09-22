@@ -709,7 +709,7 @@
         if (SDC_DEBUG) console.warn(`⚡ Sera SDC: SUDR.emit() called with unknown event.type "${eventType}" — check event_types.json.`);
       }
       const envelope = {
-        type: 'sudr_capture', // top-level routing key for extension_listener.py
+        type: 'sudr_capture', // top-level routing key for ui/ws_bridge.py
         schema_version: '1.0',
         capture_id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `sudr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         captured_at: new Date().toISOString(),
@@ -1411,7 +1411,15 @@
   }
 
   // ─── Dispatch Pipeline ──────────────────────────────────────────────────
-  function _emitDual(payload, preferRuntime = false) {
+  // 2026-09-22: this page script used to call the app's local HTTP port FIRST, straight
+  // from the portal page, and only fell back to the background worker if that failed. Browsers
+  // increasingly block a live web page from reaching localhost at all (Private Network Access),
+  // so that "primary" path was silently failing more and more often - and the background worker
+  // fallback had no handler for anything but filing_result, so a capture that took this path
+  // was simply dropped. The desktop app is only reachable through background.js's WebSocket
+  // bridge (ui/ws_bridge.py) now, so this page script always hands the capture to the
+  // background worker and lets it own delivery.
+  function _emitDual(payload) {
     // 1. Dispatch events for page-level test harness & filing detector listeners
     try {
       window.dispatchEvent(new CustomEvent('__se_su', { detail: payload }));
@@ -1420,76 +1428,18 @@
       window.dispatchEvent(new CustomEvent('__se_fs', { detail: payload }));
     } catch (_) {}
 
-    const _chromeRuntimeFallback = (p) => {
-      try {
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage(p, () => {
-            if (chrome.runtime && chrome.runtime.lastError) {
-              if (SDC_DEBUG) console.warn('⚡ Sera SDC: Background worker fallback failed.', chrome.runtime.lastError);
-              _directHttpDispatch(p);
-            } else {
-              if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via Chrome Runtime fallback.');
-            }
-          });
-        }
-      } catch (err) {
-        if (SDC_DEBUG) console.warn('⚡ Sera SDC: sendMessage threw error during fallback.', err);
-        _directHttpDispatch(p);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage(payload, (response) => {
+          if (chrome.runtime && chrome.runtime.lastError) {
+            if (SDC_DEBUG) console.warn('⚡ Sera SDC: background worker unreachable.', chrome.runtime.lastError);
+          } else if (SDC_DEBUG) {
+            console.log('⚡ Sera SDC: delivered to background worker.', response);
+          }
+        });
       }
-    };
-
-    const _directHttpDispatch = (p, callback) => {
-      if (typeof fetch !== 'function') return;
-      fetch('http://127.0.0.1:49152', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(p),
-        mode: 'cors',
-        credentials: 'omit',
-        keepalive: true
-      }).then(response => {
-        if (!response.ok) {
-          if (SDC_DEBUG) console.warn(`⚡ Sera SDC: Direct HTTP fallback failed with status ${response.status}.`);
-          if (callback) callback(false);
-        } else {
-          if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via direct HTTP fallback.');
-          if (callback) callback(true);
-        }
-      }).catch(err => {
-        if (SDC_DEBUG) console.warn('⚡ Sera SDC: Direct HTTP fallback error.', err);
-        if (callback) callback(false);
-      });
-    };
-
-    if (preferRuntime && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-      _chromeRuntimeFallback(payload);
-      return;
-    }
-
-    // 2. Direct HTTP Dispatch (Primary) - Fast, stateless, reliable
-    if (typeof fetch === 'function') {
-      fetch('http://127.0.0.1:49152', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        mode: 'cors',
-        credentials: 'omit',
-        keepalive: true
-      })
-      .then(response => {
-        if (!response.ok) {
-          if (SDC_DEBUG) console.warn(`⚡ Sera SDC: Direct HTTP failed with status ${response.status}. Falling back to Service Worker.`);
-          _chromeRuntimeFallback(payload);
-        } else {
-          if (SDC_DEBUG) console.log('⚡ Sera SDC: Successfully delivered payload via Direct HTTP.');
-        }
-      })
-      .catch(err => {
-        if (SDC_DEBUG) console.warn('⚡ Sera SDC: Direct HTTP fetch error. Desktop app might be closed or port blocked. Falling back to Service Worker.', err);
-        _chromeRuntimeFallback(payload);
-      });
-    } else {
-      _chromeRuntimeFallback(payload);
+    } catch (err) {
+      if (SDC_DEBUG) console.warn('⚡ Sera SDC: sendMessage threw.', err);
     }
   }
 

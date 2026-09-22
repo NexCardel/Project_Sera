@@ -38,7 +38,7 @@ installer_output\Amas_Sera_Setup_v2.4.2.exe
 ### Key Installer Specifications:
 - **Shortcut Name**: Configured as **`CompanyInfo1`** on Desktop and Start Menu.
 - **Application AppID**: `D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B`
-- **Native Host Registration**: Installs persistent native host manifest to `~/AmanAssociates_Sera/native_host/` and registers registry entries under `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.amanassociates.sera`.
+- **App-Extension Bridge**: One local WebSocket (`ui/ws_bridge.py`, ports `48765-48768`) - no registration step. (Before 2026-09-22 this installed a native messaging host manifest and registry entries; see `docs/app-extension-communication-report.md`.)
 
 ---
 

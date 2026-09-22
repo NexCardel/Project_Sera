@@ -468,6 +468,82 @@ QLabel[class="ClientName"] { font-size: 16px; font-weight: 700; color: #F8FAFC; 
 /* Admin Window */
 QFrame[class="ConflictBanner"] { background-color: #7f1d1d; border: 1px solid #dc2626; border-radius: 6px; }
 QLabel[class="ConflictLabel"] { font-weight: 600; color: #fca5a5; }
+
+/* Manage Clients: profile editor (list chips, editor header, section cards) */
+QWidget#ManageClientsPage QDateEdit {
+    background-color: #171717;
+    border: 1px solid #333333;
+    border-radius: 7px;
+    padding: 6px 9px;
+    color: #F8FAFC;
+}
+QWidget#ManageClientsPage QPushButton[class="primary"]:disabled { background-color: #1F3A2B; border-color: #26402F; color: #6F8F7C; }
+QWidget#ManageClientsPage QLabel[class="CountLabel"] { color: #8E8D88; font-size: 12px; padding-bottom: 4px; }
+QWidget#ManageClientsPage QPushButton[class="FilterChip"],
+QWidget#ManageClientsPage QToolButton[class="FilterChip"] {
+    background-color: #1B1B1B;
+    border: 1px solid #333333;
+    border-radius: 12px;
+    padding: 3px 11px;
+    color: #C9D1D9;
+    font-size: 12px;
+}
+QWidget#ManageClientsPage QPushButton[class="FilterChip"]:hover,
+QWidget#ManageClientsPage QToolButton[class="FilterChip"]:hover { border-color: #4F4F4F; color: #FFFFFF; }
+QWidget#ManageClientsPage QPushButton[class="FilterChip"]:checked,
+QWidget#ManageClientsPage QToolButton[class="FilterChip"]:checked {
+    background-color: #1A382B;
+    border-color: #2B5E46;
+    color: #4CF9B7;
+    font-weight: 600;
+}
+QWidget#ManageClientsPage QToolButton[class="FilterChip"]::menu-indicator { image: none; width: 0; }
+QWidget#ClientFormCanvas { background: transparent; }
+QFrame[class="FormCard"], QFrame[class="EditorHeader"] {
+    background-color: #141414;
+    border: 1px solid #262626;
+    border-radius: 8px;
+}
+QFrame[class="FormCard"] QLabel, QFrame[class="EditorHeader"] QLabel { background: transparent; }
+QLabel[class="FieldLabel"] { color: #8E8D88; font-size: 12px; padding-top: 4px; }
+QLabel[class="FieldHint"] { color: #6F6E6A; font-size: 11px; background: transparent; }
+QLabel[class="EditorTitle"] { color: #F8FAFC; font-size: 16px; font-weight: 700; }
+QLabel[class="EditorSub"] { color: #8E8D88; font-size: 12px; }
+QFrame[class="EditorHeader"] QLabel[class="EditorAvatar"] {
+    background-color: #1A382B;
+    color: #4CF9B7;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 14px;
+}
+QLabel[class="DirtyLabel"] { color: #E3B341; font-size: 12px; }
+QWidget#ManageClientsPage QToolButton[class="MoreBtn"] {
+    background-color: transparent;
+    border: 1px solid #333333;
+    border-radius: 7px;
+    padding: 6px 10px;
+    color: #C9D1D9;
+}
+QWidget#ManageClientsPage QToolButton[class="MoreBtn"]:hover { background-color: #262626; color: #FFFFFF; }
+QWidget#ManageClientsPage QToolButton[class="MoreBtn"]:disabled { color: #555555; border-color: #262626; }
+QWidget#ManageClientsPage QToolButton[class="MoreBtn"]::menu-indicator { image: none; width: 0; }
+QWidget#ManageClientsPage QPushButton[class="ServiceChip"] {
+    background-color: #1B1B1B;
+    border: 1px solid #333333;
+    border-radius: 7px;
+    padding: 6px 12px;
+    color: #C9D1D9;
+}
+QWidget#ManageClientsPage QPushButton[class="ServiceChip"]:hover { border-color: #4F4F4F; color: #FFFFFF; }
+QWidget#ManageClientsPage QPushButton[class="ServiceChip"]:checked {
+    background-color: #1A382B;
+    border-color: #2E9B5F;
+    color: #4CF9B7;
+    font-weight: 600;
+}
+QFrame[class="BulkBar"] { background-color: #10231A; border: 1px solid #245A3E; border-radius: 7px; }
+QFrame[class="BulkBar"] QLabel[class="BulkLabel"] { color: #4CF9B7; font-weight: 600; background: transparent; }
+QWidget#ManageClientsPage QFrame[class="BulkBar"] QPushButton { padding: 4px 10px; }
 """
 
 def get_theme_stylesheet(theme_name: str = "light") -> str:

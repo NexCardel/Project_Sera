@@ -1,0 +1,94 @@
+{
+ "about": "Password page shows the PAN, the dashboard shows it again (confirmed), View Filed Returns lists two years: only the latest is taken.",
+ "pages": [
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/login",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Enter your User ID",
+    "PAN/Aadhaar",
+    "Continue"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/login/password",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "PAN",
+    "ABCPD1234E",
+    "Please confirm your secure access message",
+    "Password"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Welcome Back, ASHOK",
+    "ABCPD1234E",
+    "XXXXXXXX1234"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000021.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "View Filed Returns",
+    "2 Filings till date",
+    "A.Y. 2025-26",
+    "Filing Type",
+    "Original",
+    "done",
+    "Pending for e-verification",
+    "ITR :",
+    "ITR-4",
+    "Acknowledgement No :",
+    "123456789150925",
+    "A.Y. 2024-25",
+    "Filing Type",
+    "Original",
+    "done",
+    "Processed",
+    "ITR :",
+    "ITR-4",
+    "Acknowledgement No :",
+    "987654321250724"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000028.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [
+   {
+    "pan": "ABCPD1234E",
+    "gstin": "",
+    "client_name": "",
+    "filing_type": "ITR-4",
+    "period_label": "AY 2025-26",
+    "arn": "123456789150925",
+    "status": "Submitted (Not Verified)",
+    "filing_preference": "Original"
+   }
+  ],
+  "held": 0
+ }
+}

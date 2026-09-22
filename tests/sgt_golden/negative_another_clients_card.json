@@ -1,0 +1,63 @@
+{
+ "about": "The session's client is PAN A; a returns card naming PAN B is someone else's and is not attributed to A.",
+ "pages": [
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ASHOK KUMAR SEN Individual",
+    "Profile",
+    "Name",
+    "ASHOK KUMAR SEN",
+    "PAN",
+    "ABCPD1234E"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Welcome Back, ASHOK",
+    "ABCPD1234E",
+    "XXXXXXXX1234"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "View Filed Returns",
+    "A.Y. 2025-26",
+    "PAN :",
+    "XYZAB9876C",
+    "Filing Type",
+    "Original",
+    "done",
+    "Pending for e-verification",
+    "ITR :",
+    "ITR-4",
+    "Acknowledgement No :",
+    "555555555150925"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000021.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [],
+  "held": 0
+ }
+}

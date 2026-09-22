@@ -49,9 +49,8 @@ graph TD
         AI_DLG["ui/dialogs/ai_settings_dialog.py<br/><i>(Gemini AI Settings)</i>"]:::dialog
     end
 
-    subgraph Native Host & Browser Extension
-        NH_HOST["native_host/host.py<br/><i>(Chrome Native Messaging Host)</i>"]:::native
-        EXT_LISTEN["ui/extension_listener.py<br/><i>(Extension Socket Server)</i>"]:::native
+    subgraph WebSocket Bridge & Browser Extension
+        WS_BRIDGE["ui/ws_bridge.py<br/><i>(Local WebSocket Server, ports 48765-48768)</i>"]:::native
         SDC_CORE["sera_extension/sdc/sdc_core.js<br/><i>(SDC Route Gater & Assembler)</i>"]:::native
         SDC_PROTO["sera_extension/sdc/protocols/*<br/><i>(ITR & GST Crosshair Protocols)</i>"]:::native
     end
@@ -82,8 +81,7 @@ graph TD
     MAIN --> DETAIL
     MAIN --> ADMIN
     MAIN --> TRACKER_DUMP
-    MAIN --> EXT_LISTEN
-    MAIN --> NH_HOST
+    MAIN --> WS_BRIDGE
     MAIN --> VSDC_WORKER
 
     VSDC_WORKER --> VSDC_ROUTER
@@ -127,12 +125,11 @@ graph LR
     main["main.py"] --> database["database.py"]
     main["main.py"] --> sync_peer["sync_peer.py"]
     main["main.py"] --> version["version.py"]
-    main["main.py"] --> native_host["native_host/host.py"]
     main["main.py"] --> app_shell["ui/shell/app_shell.py"]
     main["main.py"] --> search_window["ui/windows/search_window.py"]
     main["main.py"] --> client_detail_window["ui/windows/client_detail_window.py"]
     main["main.py"] --> admin_window["ui/windows/admin_window.py"]
-    main["main.py"] --> extension_listener["ui/extension_listener.py"]
+    main["main.py"] --> ws_bridge["ui/ws_bridge.py"]
     main["main.py"] --> update_dialog["ui/dialogs/update_dialog.py"]
     main["main.py"] --> loading_dialog["ui/dialogs/loading_dialog.py"]
 
@@ -180,8 +177,7 @@ graph LR
     service_manager_dialog["ui/dialogs/service_manager_dialog.py"] --> database["database.py"]
     manual_credentials_dialog["ui/dialogs/manual_credentials_dialog.py"] --> database["database.py"]
 
-    extension_listener["ui/extension_listener.py"] --> database["database.py"]
-    native_host["native_host/host.py"] --> extension_listener["ui/extension_listener.py"]
+    ws_bridge["ui/ws_bridge.py"] --> database["database.py"]
 ```
 
 ---
@@ -231,8 +227,7 @@ graph LR
 | [`ui/windows/client_detail_window.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/windows/client_detail_window.py) | `ClientDetailWindow` | `database`, `manual_credentials_dialog` | Full client profile workspace, credentials, File Submission Tracker (FST) status & actions. |
 | [`ui/windows/admin_window.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/windows/admin_window.py) | `AdminWindow` | `database`, `sera_sync_dialog`, `mcl_manager_dialog`, `service_manager_dialog`, `csv_import_dialog` | System administration panel for MCL, CSV operations, backup/restore, and launching Sera Sync. |
 | [`ui/dialogs/sera_sync_dialog.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/dialogs/sera_sync_dialog.py) | `SeraSyncDialog` | `sync_peer` | Admin modal dialog displaying online LAN peers and executing database push actions. |
-| [`native_host/host.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/native_host/host.py) | `main` | Chrome Native Messaging API | Binary STDIN/STDOUT native host bridge forwarding credentials to Chrome/Edge extension. |
-| [`ui/extension_listener.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/extension_listener.py) | `ExtensionListener` | `database` | Local socket server listening for extension auto-fill requests and logging audit actions. |
+| [`ui/ws_bridge.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/ui/ws_bridge.py) | `WSBridge` | `database`, `automation` | Local WebSocket server (ports `48765-48768`) - the only channel between the desktop app and the browser extension's background page. |
 | [`build_tools/build_package.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/build_tools/build_package.py) | Automated script | PyInstaller, spec file, CRX packer | Bundles executable directory (`package_dist/Amas_Sera`) and packages Chrome extension `.crx`. |
 | [`build_tools/installer_setup.iss`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/build_tools/installer_setup.iss) | Inno Setup script | `package_dist/Amas_Sera` | Compiles single-file Windows setup installer (`Amas_Sera_Setup_vX.X.X.X.exe`). |
 
@@ -255,7 +250,7 @@ main.py ──> security.load_salt() ──> security.derive_key_hex() ──> d
 
 ### C. Browser Extension Credentials Injection & FST Capture
 ```
-Chrome/Edge Extension ──(Native Messaging STDIN)──> native_host/host.py ──(Socket)──> ui/extension_listener.py ──> database.py
+Chrome/Edge Extension (background.js) ──(WebSocket)──> ui/ws_bridge.py ──> database.py
 ```
 
 ### D. VSDC / VSDC-X Zero-Browser Optical & Exact-Text Session Capture

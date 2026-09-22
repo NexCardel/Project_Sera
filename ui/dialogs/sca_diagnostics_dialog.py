@@ -4,12 +4,13 @@ from PySide6.QtCore import Qt, QTimer
 import datetime
 
 class ScaDiagnosticsDialog(QDialog):
-    def __init__(self, listener, parent=None):
+    def __init__(self, listener, parent=None, watcher=None):
         super().__init__(parent)
         self.setWindowTitle("SCA Diagnostics View")
         self.resize(700, 500)
         
         self.listener = listener
+        self.watcher = watcher          # clipboard_watch.ClipboardWatchService - owns the arm
         self._setup_ui()
         
         if self.listener:
@@ -59,16 +60,15 @@ class ScaDiagnosticsDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def _request_state(self):
-        # We can ping the extension or ask automation for current arm
-        import automation
-        arm = automation._current_arm
+        """The desktop's own view of the arm (it decides every password request)."""
+        arm = getattr(self.watcher, "_arm", None) if self.watcher else None
         if arm:
-            self.arm_state_label.setText(f"Current Arm State: {arm.get('state', 'ARMED (Local)')}")
-            self.client_label.setText(f"Client ID: {arm.get('client_id_token') or arm.get('client_id')}")
-            exp = arm.get('expires_at', 0)
-            if exp:
-                dt = datetime.datetime.fromtimestamp(exp/1000)
-                self.expiry_label.setText(f"Expiry: {dt.strftime('%H:%M:%S')}")
+            left = int(arm.expires_at - datetime.datetime.now().timestamp())
+            state = "ARMED" if left > 0 else "EXPIRED"
+            self.arm_state_label.setText(f"Current Arm State: {state} - {arm.uses_remaining} use(s) left, "
+                                         f"{len(arm.fills)} fill(s)")
+            self.client_label.setText(f"Client ID: {arm.client_token}")
+            self.expiry_label.setText(f"Expiry: {datetime.datetime.fromtimestamp(arm.expires_at):%H:%M:%S}")
         else:
             self.arm_state_label.setText("Current Arm State: IDLE (No local arm)")
             self.client_label.setText("Client ID: N/A")
@@ -86,19 +86,16 @@ class ScaDiagnosticsDialog(QDialog):
         self.log_table.scrollToBottom()
 
     def on_sca_state(self, msg):
-        arm = msg.get('arm', {})
-        state = arm.get('state', 'UNKNOWN')
-        self.arm_state_label.setText(f"Current Arm State: {state}")
-        self.client_label.setText(f"Client ID: {arm.get('client_id_token') or arm.get('client_id')}")
-        self._add_log("SCA_STATE", state, f"State transitioned to {state}")
+        state = msg.get('state') or (msg.get('arm') or {}).get('state') or 'UNKNOWN'
+        self._add_log("SCA_STATE", state, f"Browser: arm {msg.get('arm_id') or '-'} is {state}")
 
     def on_sca_error(self, msg):
         detail = msg.get('detail', 'Unknown error')
         self._add_log("SCA_ERROR", "FAILED", detail)
         
     def on_sca_fill_result(self, msg):
-        res = msg.get('result', 'success')
-        detail = msg.get('detail', '')
+        res = msg.get('result', 'unknown')
+        detail = msg.get('reason') or msg.get('detail', '')
         self._add_log("SCA_FILL_RESULT", res.upper(), detail)
         
     def on_audit_event(self, msg):

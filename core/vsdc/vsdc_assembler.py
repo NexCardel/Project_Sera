@@ -205,6 +205,10 @@ STATUS_RANK: Dict[str, int] = {
     "submitted (pending e-verification)": 3,
     "submitted (e-verified)": 4,
     "filed & verified": 4,
+    # SGT's submit ladder (core/sgt/sgt_toolbox.SUBMIT_LEVELS), the same on every portal
+    "draft": 0,
+    "submitted (not verified)": 3,
+    "submitted & verified": 4,
     "processed": 5,
     "processed with no demand/refund": 5,
     "processed with refund": 5,
@@ -224,7 +228,7 @@ def get_status_rank(status_str: Optional[str]) -> int:
     if any(k in clean for k in ("processed",)):
         return 5
     if any(k in clean for k in ("verified", "e-verified")):
-        if "not e-verified" in clean or "pending" in clean:
+        if "not e-verified" in clean or "not verified" in clean or "pending" in clean:
             return 3
         return 4
     if any(k in clean for k in ("submitted", "filed", "success")):

@@ -42,6 +42,13 @@ class DatabaseError(Exception):
     pass
 
 
+# Rows changed through master.db in this process, per database file (every SeraDatabase instance
+# on the same file shares it - sync_peer opens its own). Screens compare it to skip redrawing
+# data that has not changed; it only ever goes up.
+_WRITE_GENERATION: dict = {}
+_WRITE_GENERATION_LOCK = threading.Lock()
+
+
 class SeraDatabase:
     def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False):
         self.db_path = db_path
@@ -67,6 +74,10 @@ class SeraDatabase:
 
     def run_startup_maintenance(self):
         """Runs background resequencing and FST report generation."""
+        try:
+            self.re_resolve_all_tracker_dumps()
+        except Exception as e:
+            print(f"[-] Startup tracker re-resolve skipped: {e}")
         try:
             self.resequence_client_serial_numbers()
         except Exception as e:
@@ -378,6 +389,8 @@ class SeraDatabase:
             conn.execute("PRAGMA mmap_size = 268435456;")      # 256MB memory-mapped fast reads
             yield conn
             conn.commit()
+            if conn.total_changes:
+                self._note_write()
         except sqlite3.IntegrityError as e:
             conn.rollback()
             raise e
@@ -395,6 +408,20 @@ class SeraDatabase:
             raise
         finally:
             conn.close()
+
+    def _generation_key(self) -> str:
+        return os.path.normcase(os.path.abspath(self.db_path))
+
+    def _note_write(self) -> None:
+        key = self._generation_key()
+        with _WRITE_GENERATION_LOCK:
+            _WRITE_GENERATION[key] = _WRITE_GENERATION.get(key, 0) + 1
+
+    def data_generation(self) -> int:
+        """Goes up after every committed change to master.db made in this process. Equal
+        numbers = nothing written in between (another program writing the file is not seen -
+        callers cap how long they trust it)."""
+        return _WRITE_GENERATION.get(self._generation_key(), 0)
 
     @contextmanager
     def _connect_raw(self):
@@ -868,10 +895,10 @@ class SeraDatabase:
                 """)
 
         self.load_ini_defaults()
-        try:
-            self.re_resolve_all_tracker_dumps()
-        except Exception:
-            pass
+        # re_resolve_all_tracker_dumps() used to run here, on every open: ~3 s of the app's
+        # start-up spent before the window appeared (measured 2026-09-22). It is part of
+        # run_startup_maintenance() now, which the app runs in the background after the window
+        # shows; callers that don't defer maintenance still get it before the constructor returns.
 
     def _find_ini_file(self, ini_path: str = None) -> str:
         if ini_path and os.path.exists(ini_path):
@@ -3792,14 +3819,14 @@ class SeraDatabase:
                     assessee_params.append(f"%:{taxpayer_id}:%")
 
                 if assessee_conds:
-                    is_draft = status in ("Not Submitted", "Visited / In Progress", "Draft / Personal Info", "Form Selected", "Pending")
+                    is_draft = status in ("Not Submitted", "Draft", "Visited / In Progress", "Draft / Personal Info", "Form Selected", "Pending")
                     if is_draft:
                         # Check if already submitted under any form for this period
                         chk_sql = f"""
                             SELECT id, client_id, status, arn_number, dataset_key FROM tracker_dump
                             WHERE portal = ?
                               AND period_label = ?
-                              AND status NOT IN ('Not Submitted', '', 'Pending', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected')
+                              AND status NOT IN ('Not Submitted', 'Draft', '', 'Pending', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected')
                               AND status IS NOT NULL
                               AND ({' OR '.join(assessee_conds)})
                               AND {same_engine}
@@ -3821,7 +3848,7 @@ class SeraDatabase:
                         DELETE FROM tracker_dump
                         WHERE portal = ?
                           AND period_label = ?
-                          AND (status IN ('Not Submitted', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
+                          AND (status IN ('Not Submitted', 'Draft', 'Visited / In Progress', 'Draft / Personal Info', 'Form Selected', 'Pending') OR status IS NULL OR status = '')
                           AND ({' OR '.join(assessee_conds)})
                           AND {same_engine}
                     """

@@ -1,0 +1,79 @@
+{
+ "about": "GST: the welcome page names the client and GSTIN (PAN and GSTIN agree), GSTR-1 page gives FY and month, the success page the ARN.",
+ "pages": [
+  {
+   "portal": "GST Portal",
+   "url": "https://services.gst.gov.in/services/auth/fowelcome",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Welcome ASHOK KUMAR SEN to GST Common Portal",
+    "19ABCPD1234E1ZB",
+    "View Profile"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "GST Portal",
+   "url": "https://services.gst.gov.in/services/auth/fowelcome#profile",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ASHOK KUMAR SEN",
+    "19ABCPD1234E1ZB",
+    "View Profile"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  },
+  {
+   "portal": "GST Portal",
+   "url": "https://return.gst.gov.in/returns/auth/gstr1",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "GSTR-1 - Details of outward supplies",
+    "FY -",
+    "2026-27",
+    "Tax Period -",
+    "August",
+    "x"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000021.0,
+   "session": "golden"
+  },
+  {
+   "portal": "GST Portal",
+   "url": "https://return.gst.gov.in/returns/auth/gstr1/success",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Success",
+    "Return submitted successfully. ARN: AA070826000001Z",
+    "OK"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000028.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [
+   {
+    "pan": "ABCPD1234E",
+    "gstin": "19ABCPD1234E1ZB",
+    "client_name": "ASHOK KUMAR SEN",
+    "filing_type": "GSTR-1",
+    "period_label": "August (FY 2026-27)",
+    "arn": "AA070826000001Z",
+    "status": "Submitted & Verified",
+    "filing_preference": ""
+   }
+  ],
+  "held": 0
+ }
+}

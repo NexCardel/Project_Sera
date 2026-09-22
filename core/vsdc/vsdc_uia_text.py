@@ -19,6 +19,7 @@ much heavier capture + BMP encode + WinRT async decode + recognize round trip.
 """
 
 import ctypes
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
@@ -74,25 +75,37 @@ def _init_com_on_worker_thread():
 _POOL = ThreadPoolExecutor(max_workers=1, initializer=_init_com_on_worker_thread)
 
 # UIA COM objects are apartment-bound: they must be both created AND used from
-# the same thread. These are only ever touched from inside functions dispatched
-# through _POOL below — never read or written directly from a caller's thread.
-_uia = None
-_uia_client = None
+# the same thread - so they are kept per thread. A worker that hangs is replaced
+# (see _run_with_timeout) and the new one creates its own.
+_tls = threading.local()
+
+# A read that times out may still be running - wedged inside a UIA call that never
+# returns. The pool has ONE worker, so before 2026-09-22 every later read queued
+# behind it and failed after the full timeout, forever: VSDC-X and SGT were blind
+# (and each tick 3-6 s slower) until the app restarted. Now the wedged worker is
+# abandoned and a fresh one takes over; after MAX_ABANDONED_WORKERS in one run UIA is
+# switched off rather than leak threads.
+MAX_ABANDONED_WORKERS = 5
+_pool_lock = threading.Lock()
+_inflight = None
+_abandoned = 0
+_disabled_reason: Optional[str] = None
 _uia_init_failed = False
 
 
 def _get_uia_on_worker():
     """Must only be called from within the _POOL worker thread. Lazily creates
     and caches the UIA COM objects there (expensive to recreate per call)."""
-    global _uia, _uia_client, _uia_init_failed
-    if _uia is not None:
-        return _uia, _uia_client
+    global _uia_init_failed
+    uia = getattr(_tls, "uia", None)
+    if uia is not None:
+        return uia, _tls.uia_client
     if _uia_init_failed:
         return None, None
     try:
         uia_client = comtypes.client.GetModule("UIAutomationCore.dll")
         uia = comtypes.client.CreateObject(uia_client.CUIAutomation, interface=uia_client.IUIAutomation)
-        _uia, _uia_client = uia, uia_client
+        _tls.uia, _tls.uia_client = uia, uia_client
         return uia, uia_client
     except Exception as e:
         print(f"[VSDC-X] UI Automation init failed: {e}")
@@ -108,13 +121,38 @@ def _run_with_timeout(fn, timeout_sec: float):
     QThread, and OCR capture shares that same per-tick loop: an unguarded
     hang would silently kill the entire VSDC pipeline, not just UIA reads.
     """
-    future = _POOL.submit(fn)
+    global _POOL, _inflight, _abandoned, _disabled_reason
+    with _pool_lock:
+        if _disabled_reason:
+            return None
+        if _inflight is not None and not _inflight.done():
+            # The last read never came back: its worker is wedged. Leave it, start afresh.
+            _abandoned += 1
+            old = _POOL
+            if _abandoned > MAX_ABANDONED_WORKERS:
+                _disabled_reason = (f"{_abandoned - 1} UI Automation reads hung this run - UIA reading is "
+                                    f"off until the app restarts (OCR still works)")
+                print(f"[VSDC-X] {_disabled_reason}")
+                return None
+            _POOL = ThreadPoolExecutor(max_workers=1, initializer=_init_com_on_worker_thread)
+            try:
+                old.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            print(f"[VSDC-X] a UI Automation read hung - replaced its worker ({_abandoned} this run)")
+        future = _POOL.submit(fn)
+        _inflight = future
     try:
         return future.result(timeout=timeout_sec)
     except FutureTimeoutError:
         return None
     except Exception:
         return None
+
+
+def worker_health() -> Dict[str, Any]:
+    """How many UIA workers were abandoned this run, and whether UIA reading is off."""
+    return {"abandoned_workers": _abandoned, "disabled": _disabled_reason}
 
 
 def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:

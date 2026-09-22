@@ -1,0 +1,62 @@
+{
+ "about": "An ack whose own date (last six digits) is before the assessment year began is a misread: held, not written.",
+ "pages": [
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ASHOK KUMAR SEN Individual",
+    "Profile",
+    "Name",
+    "ASHOK KUMAR SEN",
+    "PAN",
+    "ABCPD1234E"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Welcome Back, ASHOK",
+    "ABCPD1234E",
+    "XXXXXXXX1234"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "View Filed Returns",
+    "1 Filings till date",
+    "A.Y. 2026-27",
+    "Filing Type",
+    "Original",
+    "done",
+    "Pending for e-verification",
+    "ITR :",
+    "ITR-4",
+    "Acknowledgement No :",
+    "123456789150725"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000021.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [],
+  "held": 1
+ }
+}

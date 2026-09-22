@@ -4,6 +4,7 @@ search_window.py
 Window 1: employee-facing search bar + spreadsheet-style results.
 """
 
+import time
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize, QMimeData
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -157,7 +158,11 @@ class SearchWindow(QWidget):
         self._column_resize_timer.setInterval(40)
         self._column_resize_timer.timeout.connect(self._adjust_column_widths)
 
+        # _build_ui() ends with set_admin_mode(False), which used to run a full search that
+        # refresh() then ran again (~0.1 s of start-up each) - search once.
+        self._building = True
         self._build_ui()
+        self._building = False
         self.refresh()
 
     def _build_ui(self):
@@ -555,6 +560,7 @@ class SearchWindow(QWidget):
             self._restoring_scroll = False
 
     def _on_search_changed(self, *_):
+        state_at_start = self._grid_state()     # before reading: a write during the rebuild counts
         v_val = self.results_table.verticalScrollBar().value()
         h_val = self.results_table.horizontalScrollBar().value()
         curr_row = self.results_table.currentRow()
@@ -714,6 +720,9 @@ class SearchWindow(QWidget):
                             self.results_table.setRangeSelected(
                                 QTableWidgetSelectionRange(top, left, bottom, right), True
                             )
+
+            # What the grid now shows, for refresh() to reuse (unfiltered only)
+            self._drawn_grid = (state_at_start, time.monotonic()) if not text else None
 
             # Store current column definitions and max string lengths for dynamic responsiveness
             self._current_mcl_cols = mcl_cols
@@ -1194,7 +1203,7 @@ class SearchWindow(QWidget):
         for btn in admin_buttons:
             if btn is not None:
                 btn.setVisible(active)
-        if hasattr(self, "results_table"):
+        if hasattr(self, "results_table") and not getattr(self, "_building", False):
             self._reload_filters()
             self._on_search_changed()
 
@@ -1209,7 +1218,30 @@ class SearchWindow(QWidget):
         except Exception:
             pass
 
+    # Switching back to the search tab calls refresh(), which rebuilt every cell (~0.2 s for a
+    # few hundred clients, measured 2026-09-22) even when nothing had changed. If no row has been
+    # written since the grid was last drawn unfiltered, it is kept - for at most this long, so a
+    # change made by another program and the "5m ago" activity tags still catch up.
+    REUSE_GRID_FOR_S = 60.0
+
+    def _grid_state(self):
+        gen = getattr(self.db, "data_generation", None)
+        return (gen() if callable(gen) else None, self.service_filter.currentData(),
+                bool(getattr(self, "is_admin_mode", False)))
+
+    def _grid_is_current(self) -> bool:
+        drawn = getattr(self, "_drawn_grid", None)
+        if drawn is None or drawn[0][0] is None or self.search_box.text().strip():
+            return False
+        state, when = drawn
+        return (state == self._grid_state() and self.results_table.rowCount() > 0
+                and time.monotonic() - when < self.REUSE_GRID_FOR_S)
+
     def refresh(self):
+        if self._grid_is_current():
+            self._search_timer.stop()
+            self.search_box.setFocus()
+            return
         self._reload_filters()
         self.search_box.blockSignals(True)
         self.search_box.clear()

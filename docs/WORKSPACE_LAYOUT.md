@@ -5,7 +5,7 @@ The root is intentionally reserved for the application entry points and configur
 - `main.py`, `database.py`, `sync_peer.py`, and related runtime modules: application code
 - `sera_extension/`, `sera_extension_firefox/`: browser-extension source
 - `source_2/`: source mirror/archive
-- `ui/`, `services/`, `native_host/`: application subsystems
+- `ui/`, `services/`: application subsystems
 - `docs/`: project documentation and design notes
 - `tools/maintenance/`: maintenance and versioning scripts
 - `tools/patches/`: one-off patch scripts and patch files

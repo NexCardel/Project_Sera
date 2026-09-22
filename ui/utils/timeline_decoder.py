@@ -317,7 +317,7 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
 
             step_title = f"Viewed Filed Return: {ay_str} ({form_type})"
             category = "Filing History"
-            icon = "mdi.file-document-check-outline"
+            icon = "mdi.file-check-outline"
             color = "#58A6FF"
             
             narrative = f"Reviewed filed return record for {ay_str} (Ack: {ack_no})."
@@ -551,7 +551,7 @@ def decode_single_capture(capture: Dict[str, Any], index: int = 1, elapsed_sec: 
             else:
                 step_title = f"Viewed GST Form Receipt ({form_code})"
                 category = "GST Filing"
-                icon = "mdi.receipt-text-check-outline"
+                icon = "mdi.text-box-check-outline"
                 color = "#4CF9B7"
                 narrative = f"Loaded official filing acknowledgement receipt for {b_name} (Period: {period_str}, FY: {fy})."
                 chips.append({"label": "Business", "val": str(b_name)})

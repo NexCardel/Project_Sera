@@ -183,7 +183,7 @@ class LttWorkspaceWindow(QDialog):
         btn_live_excel = QPushButton(" Live Excel (Power Query)")
         btn_live_excel.setProperty("class", "ActionBtn")
         btn_live_excel.setStyleSheet("background-color: #238636; color: #FFFFFF; font-weight: 700;")
-        btn_live_excel.setIcon(_safe_qta_icon("mdi.refresh-auto", "#FFFFFF"))
+        btn_live_excel.setIcon(_safe_qta_icon("mdi.autorenew", "#FFFFFF"))
         btn_live_excel.setToolTip("Open Live-Linked Excel Workbook (1-Click Data -> Refresh All without compiling)")
         btn_live_excel.clicked.connect(self._open_live_excel)
         h_layout.addWidget(btn_live_excel)
@@ -385,7 +385,7 @@ class LttWorkspaceWindow(QDialog):
             if sdc_parser_dir not in sys.path:
                 sys.path.insert(0, sdc_parser_dir)
             
-            import sdc_parser
+            from SDC_Parser import sdc_parser
             import importlib
             importlib.reload(sdc_parser)
 
@@ -1006,7 +1006,7 @@ class LttWorkspaceWindow(QDialog):
         """Generates and opens the enhanced multi-sheet LTT Excel workbook."""
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            import sdc_parser
+            from SDC_Parser import sdc_parser
             out_file = sdc_parser.generate_ltt_excel()
             QApplication.restoreOverrideCursor()
             if out_file and os.path.exists(out_file):
@@ -1028,7 +1028,7 @@ class LttWorkspaceWindow(QDialog):
         """Opens the live-linked Excel workbook powered by Power Query / QueryTable."""
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            import sdc_parser
+            from SDC_Parser import sdc_parser
             csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
             QApplication.restoreOverrideCursor()
             if xlsx_p and os.path.exists(xlsx_p):

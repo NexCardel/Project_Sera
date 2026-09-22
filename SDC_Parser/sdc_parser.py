@@ -1,12 +1,14 @@
+import csv
 import os
 import sys
 import json
 import re
 import subprocess
-import pandas as pd
 from datetime import datetime, date
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
+# pandas + openpyxl cost ~60 MB of memory once imported and never leave the process. The
+# app imports this module for small helpers (evaluate_status) and refreshes the live CSV feed
+# after every capture, so they are imported only inside generate_ltt_excel(), the one
+# function that builds a styled Excel workbook. The live feed is written with the csv module.
 
 DEBUG = True
 
@@ -223,7 +225,8 @@ def evaluate_status(raw_status):
         return "Not submitted"
 
     # Step 1: Check pending / unverified FIRST before checking "verified"
-    if "not e-verified" in raw or "pending" in raw or "verify later" in raw or "unverified" in raw:
+    if ("not e-verified" in raw or "not verified" in raw or "pending" in raw or "verify later" in raw
+            or "unverified" in raw):
         return "Submitted (e-verification pending)"
 
     # Step 2: Check verified / confirmed submissions
@@ -874,6 +877,9 @@ def generate_ltt_excel():
     - Sheet 5: Action Required & Defaulters
     - Sheet 6: GST Compliance Matrix
     """
+    import pandas as pd
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
     data, kpis = get_ltt_dataset()
     if not data:
         print("No SDC timeline data found or extracted.")
@@ -1188,42 +1194,57 @@ def export_ltt_live_feed(output_dir=None, force_recreate_workbook=False):
         print("[SDC_Parser] Notice: No LTT data to export to live feed.")
         return None, None
 
-    df_master = pd.DataFrame(data)
-    
-    # Clean up multi-line string columns to ensure exactly one line per row in CSV/Excel
-    for col in df_master.select_dtypes(include=['object']):
-        df_master[col] = (
-            df_master[col]
-            .astype(str)
-            .replace('None', '')
-            .replace('nan', '')
-            .str.replace('\r\n', ' ; ')
-            .str.replace('\n', ' ; ')
-            .str.replace('\r', ' ; ')
-        )
+    # Same output as the former pandas version: every key that appears in any row becomes a
+    # column (first-seen order), None/"None"/"nan" become empty, line breaks inside a value
+    # become " ; ", UTF-8 with BOM so Excel detects the encoding.
+    columns = []
+    seen_cols = set()
+    for row in data:
+        for key in row:
+            if key not in seen_cols:
+                seen_cols.add(key)
+                columns.append(key)
+
+    def _cell(value):
+        if value is None:
+            return ""
+        if isinstance(value, float) and value != value:          # NaN
+            return ""
+        text = str(value)
+        if text in ("None", "nan"):
+            return ""
+        return text.replace("\r\n", " ; ").replace("\n", " ; ").replace("\r", " ; ")
+
+    rows = [{col: _cell(r.get(col)) for col in columns} for r in data]
+
+    def _write_csv(path, subset):
+        with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+            writer = csv.DictWriter(fh, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(subset)
 
     # 1. Export Master CSV Feed
     csv_master_path = os.path.join(output_dir, "LTT_Data_Feed.csv")
-    df_master.to_csv(csv_master_path, index=False, encoding='utf-8-sig')
+    _write_csv(csv_master_path, rows)
 
     # Also keep a copy in local SDC_Parser dir for local access
     local_csv = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LTT_Data_Feed.csv")
     try:
-        df_master.to_csv(local_csv, index=False, encoding='utf-8-sig')
+        _write_csv(local_csv, rows)
     except Exception:
         pass
 
     # 2. Export Defaulters CSV Feed
-    df_action = df_master[
-        (
-            df_master['Compliance Alert'].str.contains("Overdue|Expired|Soon|🚨|⚠️", case=False, na=False) |
-            (df_master['Discrepancy Note'] != "") |
-            (df_master['Submit Status'] == "Not submitted")
-        ) &
-        (~df_master['Submit Status'].isin(["Option Expired (NA)", "Not Applicable (NA)", "Submitted & E-verified"]))
-    ].copy()
+    alert_re = re.compile("Overdue|Expired|Soon|🚨|⚠️", re.IGNORECASE)
+    excluded = ("Option Expired (NA)", "Not Applicable (NA)", "Submitted & E-verified")
+    action_rows = [
+        r for r in rows
+        if (alert_re.search(r.get("Compliance Alert", "")) or r.get("Discrepancy Note", "") != ""
+            or r.get("Submit Status", "") == "Not submitted")
+        and r.get("Submit Status", "") not in excluded
+    ]
     csv_action_path = os.path.join(output_dir, "LTT_Defaulters_Feed.csv")
-    df_action.to_csv(csv_action_path, index=False, encoding='utf-8-sig')
+    _write_csv(csv_action_path, action_rows)
 
     # 3. Create or maintain the Live Excel Workbook (Power Query / Data Connection)
     live_xlsx_path = os.path.join(output_dir, "Live_Tracking_Table_Live.xlsx")
@@ -1261,7 +1282,7 @@ def export_ltt_live_feed(output_dir=None, force_recreate_workbook=False):
             if DEBUG:
                 print(f"[SDC_Parser] PowerShell workbook creation notice: {e}")
 
-    print(f"[SDC_Parser] Live data feed updated: {csv_master_path} ({len(df_master)} records)")
+    print(f"[SDC_Parser] Live data feed updated: {csv_master_path} ({len(rows)} records)")
     return csv_master_path, live_xlsx_path
 
 

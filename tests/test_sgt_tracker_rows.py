@@ -23,6 +23,8 @@ PROFILE_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myPro
 FILED_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus"
 WIZ_PI = "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/personal_information"
 PROFILE_PAGE = ["Name", "ASHOK KUMAR SEN", "PAN", "ABCPD1234E", "Date of Birth", "12-Mar-1980"]
+# A second page showing the same PAN: the client is confirmed only on two sightings.
+CONTACT_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/contactDetails"
 
 
 def filed_page(status="Pending for e-verification", ack="123456789150925"):
@@ -50,13 +52,14 @@ class TestRows:
     def test_a_return_becomes_one_tagged_row(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE)
+        r.see(CONTACT_URL, PROFILE_PAGE)
         r.see(FILED_URL, filed_page())
         rows = r.sgt.drain()
         assert len(rows) == 1
         row = rows[0]
         assert row["capture_method"] == CAPTURE_METHOD
         assert (row["pan"], row["client_name"], row["filing_type"], row["period_label"], row["arn"], row["status"]) == \
-            ("ABCPD1234E", "ASHOK KUMAR SEN", "ITR-4", "AY 2025-26", "123456789150925", "Submitted (Not e-Verified)")
+            ("ABCPD1234E", "ASHOK KUMAR SEN", "ITR-4", "AY 2025-26", "123456789150925", "Submitted (Not Verified)")
         assert row["filing_preference"] == "Original"
         assert row["dataset_key"] == "SGT:ITR:ABCPD1234E:ITR4:AY202526"
         assert row["raw_text"] == "" and row["supersedes_dataset_key"] is None
@@ -73,12 +76,13 @@ class TestRows:
     def test_a_status_promotion_resends_the_same_row(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE)
-        r.see(FILED_URL, filed_page("ITR Filed"))
-        first = r.sgt.drain()
         r.see(FILED_URL, filed_page("Pending for e-verification"))
+        first = r.sgt.drain()
+        r.see(FILED_URL, filed_page("Successfully e-Verified"))
         again = r.sgt.drain()
         assert len(first) == len(again) == 1
-        assert again[0]["dataset_key"] == first[0]["dataset_key"] and again[0]["status"] == "Submitted (Not e-Verified)"
+        assert again[0]["dataset_key"] == first[0]["dataset_key"] and again[0]["status"] == "Submitted & Verified"
+        assert again[0]["raw_payload"]["sgt_dataset"]["status_evidence"] == "Successfully e-Verified"
 
     def test_a_row_sent_before_the_client_was_known_is_superseded(self, tmp_path):
         r = Rig(tmp_path)
@@ -97,7 +101,7 @@ class TestRows:
         r.sgt.drain()
         r.see(WIZ_PI, ["Personal Information", "x", "y"])                  # form + AY from the link
         rows = r.sgt.drain()
-        assert [(x["filing_type"], x["period_label"], x["status"]) for x in rows] == [("ITR-4", "AY 2026-27", "In Progress")]
+        assert [(x["filing_type"], x["period_label"], x["status"]) for x in rows] == [("ITR-4", "AY 2026-27", "Draft")]
 
     def test_changing_the_form_moves_the_row_instead_of_leaving_a_stale_one(self, tmp_path):
         r = Rig(tmp_path)
@@ -194,7 +198,7 @@ class TestDatabaseIsolation(unittest.TestCase):
 
     def test_an_sgt_row_never_purges_a_vsdc_draft(self):
         self.insert("VSDC-X_itr_personal_info", status="Visited / In Progress")
-        self.insert(CAPTURE_METHOD, status="In Progress", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
+        self.insert(CAPTURE_METHOD, status="Draft", key="SGT:ITR:ABCPD1234E:ITR4:AY202526")
         assert [r[0] for r in self.rows()] == ["VSDC-X_itr_personal_info", CAPTURE_METHOD]
 
     def test_a_vsdc_row_never_purges_an_sgt_row(self):
@@ -204,16 +208,16 @@ class TestDatabaseIsolation(unittest.TestCase):
 
     def test_sgt_rows_replace_only_themselves(self):
         key = "SGT:ITR:ABCPD1234E:ITR4:AY202526"
-        self.insert(CAPTURE_METHOD, status="In Progress", key=key)
-        self.insert(CAPTURE_METHOD, status="Submitted", arn="123456789150925", key=key)
+        self.insert(CAPTURE_METHOD, status="Draft", key=key)
+        self.insert(CAPTURE_METHOD, status="Submitted (Not Verified)", arn="123456789150925", key=key)
         sgt = [r for r in self.rows() if r[0] == CAPTURE_METHOD]
-        assert len(sgt) == 1 and sgt[0][2] == "Submitted"
+        assert len(sgt) == 1 and sgt[0][2] == "Submitted (Not Verified)"
 
     def test_superseded_delete_is_sgt_only(self):
         self.insert("VSDC-X_itr_submitted", arn="123456789150925")
         vsdc_key = self.rows()[0][4]
         assert self.db.delete_sgt_rows_by_dataset_key(vsdc_key) == 0          # not an SGT key: refused
-        self.insert(CAPTURE_METHOD, status="In Progress", key="SGT:ITR:SABC:ITR4:AY202526")
+        self.insert(CAPTURE_METHOD, status="Draft", key="SGT:ITR:SABC:ITR4:AY202526")
         assert self.db.delete_sgt_rows_by_dataset_key("SGT:ITR:SABC:ITR4:AY202526") == 1
         assert [r[0] for r in self.rows()] == ["VSDC-X_itr_submitted"]
 
@@ -239,3 +243,51 @@ def test_main_skips_toasts_for_sgt_rows():
     if not src:
         pytest.skip("main's app class name differs")
     assert 'startswith("SGT")' in src
+
+
+# ── Who the rows belong to (2026-09-22: a wrong client is worse than a miss) ─────
+class TestIdentity:
+    def test_one_sighting_attributes_the_rows_at_once(self, tmp_path):
+        """Portals often show the PAN only once (user, 2026-09-22): it must be enough."""
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE)
+        r.see(FILED_URL, filed_page())
+        rows = r.sgt.drain()
+        assert [(x["pan"], x["client_name"]) for x in rows] == [("ABCPD1234E", "ASHOK KUMAR SEN")]
+        assert rows[0]["raw_payload"]["source"]["identity"] == "PAN seen once"
+
+    def test_a_dataset_waiting_for_its_client_is_written_unattributed_not_dropped(self, tmp_path):
+        r = Rig(tmp_path)
+        card = ["View Filed Returns", "A.Y. 2025-26", "PAN :", "ABCPD1234E", "Filing Type", "Original",
+                "done", "Pending for e-verification", "ITR :", "ITR-4", "Acknowledgement No :", "123456789150925"]
+        r.see(FILED_URL, card)                                          # client not known yet: waits
+        assert r.sgt.drain() == []
+        r.sgt.end_all("test")                                           # never identified
+        rows = r.sgt.drain()
+        assert [(x["pan"], x["arn"]) for x in rows] == [("", "123456789150925")]
+
+    def test_another_pan_ends_the_session_and_nothing_is_overwritten(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE)
+        r.see(CONTACT_URL, PROFILE_PAGE)
+        r.see(FILED_URL, filed_page())
+        first = r.sgt.drain()
+        other = ["Name", "MEERA RAO", "PAN", "XYZAB9876C", "Date of Birth", "01-Jan-1990"]
+        r.see(PROFILE_URL + "?x", other)
+        r.see(FILED_URL, filed_page(ack="987654321150925"))
+        rows = r.sgt.drain()
+        assert first[0]["pan"] == "ABCPD1234E"
+        assert all(x["pan"] != "ABCPD1234E" for x in rows)            # the new client's filing is not the old client's
+        assert all(x["pan"] == "" for x in rows)                      # and the new client is not confirmed from that page
+
+    def test_the_new_session_confirms_its_client_on_two_fresh_sightings(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE)
+        r.see(CONTACT_URL, PROFILE_PAGE)
+        other = ["Name", "MEERA RAO", "PAN", "XYZAB9876C", "Date of Birth", "01-Jan-1990"]
+        r.see(PROFILE_URL + "?x", other)                                # clash: split, value not taken
+        r.see(PROFILE_URL + "?y", other)                                # sighting 1
+        r.see(CONTACT_URL + "?y", other)                                # sighting 2 -> confirmed
+        r.see(FILED_URL, filed_page(ack="987654321150925"))
+        rows = [x for x in r.sgt.drain() if x["arn"] == "987654321150925"]
+        assert rows[-1]["pan"] == "XYZAB9876C"

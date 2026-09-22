@@ -214,7 +214,8 @@ class TestReturnInProgress:
         r.see(WIZ_PI, ["Personal Information", "PAN", "ABCPD1234E"], shade=120)
         ds = self.end(r)
         assert ds == [{"form": "ITR-4", "period": "AY 2026-27", "filing_type": "Original",
-                       "status": "In Progress", "record": "current_return"}]
+                       "status": "Draft", "status_evidence": "form + period captured (in the page link)",
+                       "record": "current_dataset"}]
 
     def test_a_submission_takes_form_and_period_from_the_return_in_progress(self, tmp_path):
         r = Rig(tmp_path)
@@ -224,8 +225,8 @@ class TestReturnInProgress:
                "You still need to e-Verify within 30 days"], shade=110)
         ds = self.end(r)
         assert len(ds) == 1
-        assert (ds[0]["form"], ds[0]["period"], ds[0]["ack"], ds[0]["status"]) == \
-            ("ITR-4", "AY 2026-27", "123456789150726", "Submitted (Not e-Verified)")
+        assert (ds[0]["form"], ds[0]["period"], ds[0]["arn"], ds[0]["status"]) == \
+            ("ITR-4", "AY 2026-27", "123456789150726", "Submitted (Not Verified)")
         assert any(e.get("change") == "completed by a submission" for e in r.events("current"))
 
     def test_going_back_and_changing_a_field_changes_the_piece(self, tmp_path):
@@ -348,11 +349,13 @@ class TestReturnInProgress:
         dropped = [e for e in r.events("current") if e["change"].startswith("incomplete")]
         assert dropped and "form" in dropped[0]["missing"]
 
-    def test_without_link_evidence_there_is_no_in_progress_status(self, tmp_path):
+    def test_form_and_period_captured_make_a_draft_even_without_the_link(self, tmp_path):
+        """The user's rule (2026-09-22): the datapoints captured decide the level - form + period = Draft."""
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         r.see(DASHBOARD, ["For Assessment Year 2026-27", "Your ITR-4", "c"], shade=100)
-        assert self.end(r) == []                                                # seen, but never being filed
+        ds = self.end(r)
+        assert [(d["form"], d["period"], d["status"], d["status_evidence"]) for d in ds] ==             [("ITR-4", "AY 2026-27", "Draft", "form + period captured")]
 
     def test_list_pages_never_feed_the_return_in_progress(self, tmp_path):
         r = Rig(tmp_path)
@@ -365,8 +368,8 @@ class TestReturnInProgress:
               shade=100, portal=GST)
         r.see(GST_R1, ["GSTR-1 - Details of outward supplies", "Status -", "Filed", "x"], shade=110, portal=GST)
         ds = self.end(r)
-        assert ds == [{"fy": "2026-27", "tax_period": "August", "form": "GSTR-1", "status": "Filed",
-                       "period": "August (FY 2026-27)", "record": "current_return"}]
+        assert ds == [{"fy": "2026-27", "tax_period": "August", "form": "GSTR-1", "status": "Submitted & Verified",
+                       "status_evidence": "Filed", "period": "August (FY 2026-27)", "record": "current_dataset"}]
 
     def test_title_is_read_too(self, tmp_path):
         r = Rig(tmp_path)
@@ -425,12 +428,13 @@ class TestNameParts:
 class TestDatasets:
     def test_status_promotes_and_never_demotes(self, tmp_path):
         r = Rig(tmp_path)
-        r.see(FILED_URL, filed_page("ITR Filed"), shade=100)
-        r.see(FILED_URL, filed_page("Pending for e-verification"), shade=110)
+        r.see(FILED_URL, filed_page("Pending for e-verification"), shade=100)
+        r.see(FILED_URL, filed_page("Processed with refund"), shade=110)
         r.see(FILED_URL, filed_page("ITR Filed"), shade=120)
         r.sgt.end_all("test")
         ds = r.events("session_end")[0]["payload"]["datasets"]
-        assert len(ds) == 1 and ds[0]["status"] == "Submitted (Not e-Verified)"
+        assert len(ds) == 1 and ds[0]["status"] == "Submitted & Verified"
+        assert ds[0]["status_evidence"] == "Processed with refund"             # the portal's own wording
         updates = r.events("dataset")
         assert [e["change"] for e in updates] == ["new", "updated"]
 
@@ -452,7 +456,7 @@ class TestDatasets:
         r.see(FILED_URL, filed_page(ack="123456789150726"), shade=100)
         r.sgt.end_all("test")
         ds = r.events("session_end")[0]["payload"]["datasets"]
-        assert len(ds) == 1 and ds[0]["form"] == "ITR-4" and ds[0]["ack"] == "123456789150726"
+        assert len(ds) == 1 and ds[0]["form"] == "ITR-4" and ds[0]["arn"] == "123456789150726"
 
 
 class TestSessions:
@@ -541,18 +545,19 @@ class TestHud:
         r.sgt._notify = lambda *a: r.hud.append(a)
         return r
 
-    def test_page_reads_and_half_built_returns_never_reach_the_pill(self, tmp_path):
+    def test_page_reads_and_half_built_datasets_never_reach_the_pill(self, tmp_path):
         r = self.rig(tmp_path)
         r.see(DASHBOARD, ["For Assessment Year 2026-27", "x", "y"], shade=100)       # a period, no form
-        r.see(DASHBOARD, ["Your ITR-4 draft", "x", "y"], shade=110)                  # no link evidence
         assert r.hud == []
+        r.see(DASHBOARD, ["Your ITR-4 draft", "x", "y"], shade=110)                  # now form + period
+        assert [(h[0], h[1]) for h in r.hud] == [("capture", "Dataset captured")]
 
     def test_a_return_in_progress_is_announced_once_it_is_complete(self, tmp_path):
         r = self.rig(tmp_path)
         r.see(WIZ_STATUS, ["Assessment Year", "2026-27", "x"], shade=100)
         assert r.hud == []                                                            # period only
         r.see(WIZ_FORM, ["Select ITR Form", "ITR-4", "y"], shade=110)                  # now complete
-        assert [(h[0], h[1]) for h in r.hud] == [("capture", "Return captured")]
+        assert [(h[0], h[1]) for h in r.hud] == [("capture", "Dataset captured")]
 
     def test_client_identified_once(self, tmp_path):
         r = self.rig(tmp_path)
@@ -568,15 +573,15 @@ class TestHud:
         cap = [h for h in r.hud if h[0] in ("capture", "submit")]
         assert len(cap) == 1
         event_type, title, subtitle, ctx = cap[0]
-        assert "Ack: 123456789150925" in subtitle and "ASHOK KUMAR SEN" in subtitle
+        assert "ARN: 123456789150925" in subtitle and "ASHOK KUMAR SEN" in subtitle
         assert (ctx["form"], ctx["filing_pref"], ctx["period"], ctx["portal"]) == ("ITR-4", "Original", "AY 2025-26", ITR)
 
     def test_a_status_moving_forward_is_announced(self, tmp_path):
         r = self.rig(tmp_path)
-        r.see(FILED_URL, filed_page("ITR Filed"), shade=100)
-        r.see(FILED_URL, filed_page("Pending for e-verification"), shade=110)
+        r.see(FILED_URL, filed_page("Pending for e-verification"), shade=100)
+        r.see(FILED_URL, filed_page("Processed"), shade=110)
         ups = [h for h in r.hud if h[0] == "update"]
-        assert ups and "Submitted → Submitted (Not e-Verified)" in ups[0][2]
+        assert ups and "Submitted (Not Verified) → Submitted & Verified" in ups[0][2]
 
     def test_session_end_on_logout_but_not_on_app_quit(self, tmp_path):
         r = self.rig(tmp_path)
@@ -684,3 +689,126 @@ class TestSwitch:
         r._sgt = MagicMock()
         r.apply_engine_settings(True, True, False, sgt="off")
         r._sgt.end_all.assert_called_once_with("SGT switched off")
+
+
+# ── The submit ladder, on every portal ──────────────────────────────────────────
+EVERIFY_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/eVerifyReturn/eVerifyReturn-al"
+
+
+def everify_picker(pan="ABCPD1234E", ack="123456789180925"):
+    return ["Current Step 1 of 3 in stepper", "Select The Return To Be Verified", "1",
+            "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+            "e-Verify / Discard Return", "Please select the return you would like to verify/discard",
+            "Showing (1) returns", "Assessment Year", "2025-26", "ITR", "ITR 4", "Filing Type", "Original",
+            "PAN :", pan, "Acknowledgement Number :", ack, "Filed On :", "Sep 18, 2025", "e verify", "Discard"]
+
+
+class TestSubmitLadder:
+    def test_the_everify_picker_is_captured_as_submitted_not_verified(self, tmp_path):
+        """The page from the field report: the ack, form, year, filing type and date all captured."""
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(EVERIFY_URL, everify_picker(), shade=100)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert len(ds) == 1
+        d = ds[0]
+        assert (d["form"], d["period"], d["arn"], d["filing_type"], d["filing_date"], d["status"]) == \
+            ("ITR-4", "AY 2025-26", "123456789180925", "Original", "2025-09-18", "Submitted (Not Verified)")
+        assert "pan" not in d                                     # whose it is was checked, not stored
+
+    def test_a_card_of_another_client_is_not_attributed(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)                               # client ABCPD1234E
+        r.see(EVERIFY_URL, everify_picker(pan="XYZAB9876C"), shade=100)
+        r.sgt.end_all("test")
+        assert r.events("session_end")[0]["payload"]["datasets"] == []
+        assert any(e.get("change", "").startswith("not attributed") for e in r.events("dataset"))
+
+    def test_verifying_the_picked_return_promotes_the_same_dataset(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(EVERIFY_URL, everify_picker(), shade=100)
+        r.see(EVERIFY_URL, ["Visited Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+                            "Current Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+                            "Return e-Verified successfully", "ITR-4 for A.Y. 2025-26"], shade=110)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert len(ds) == 1 and ds[0]["arn"] == "123456789180925" and ds[0]["status"] == "Submitted & Verified"
+
+    def test_the_otp_step_is_not_a_verification(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(EVERIFY_URL, everify_picker(), shade=100)
+        r.see(EVERIFY_URL, ["Current Step 2 of 3 in stepper", "Select Method For Return Verification", "2",
+                            "Unvisited Step 3 of 3 in stepper", "Return Successfully Verified", "3",
+                            "Enter the OTP", "ITR-4 for A.Y. 2025-26"], shade=110)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert [d["status"] for d in ds] == ["Submitted (Not Verified)"]
+
+    def test_a_gst_arn_alone_proves_the_return_was_filed_and_verified(self, tmp_path):
+        """GST issues the ARN only on filing with DSC/EVC - the portal's rule, from submit_rules."""
+        r = Rig(tmp_path)
+        r.see(GST_R1, ["GSTR-1 - Details of outward supplies", "FY -", "2026-27", "Tax Period -", "August", "x"],
+              shade=100, portal=GST)
+        r.see(GST_R1, ["Success", "Return submitted successfully. ARN: AA070826000001Z", "OK"], shade=110, portal=GST)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert len(ds) == 1
+        assert (ds[0]["form"], ds[0]["arn"], ds[0]["status"]) == ("GSTR-1", "AA070826000001Z", "Submitted & Verified")
+        assert ds[0]["status_evidence"].startswith("ARN captured")
+
+    def test_an_itr_ack_alone_proves_submission_but_not_verification(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(FILED_URL, ["View Filed Returns", "A.Y. 2025-26", "ITR :", "ITR-4",
+                          "Acknowledgement No :", "123456789150925"], shade=100)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert [d["status"] for d in ds] == ["Submitted (Not Verified)"]
+
+    def test_a_truncated_name_is_logged_once(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)                               # ASHOK KUMAR SEN
+        for n in range(5):
+            r.see(DASHBOARD, ["ASHOK KUMAR S... Individual", "x", f"y{n}"], shade=100 + n)
+        assert len([e for e in r.events("profile") if e.get("change") == "not promoted"]) <= 1
+
+
+class TestLadderClimbsWithDatapoints:
+    """form + period -> Draft; + ARN -> Submitted (Not Verified); + message -> what it says."""
+
+    def test_each_datapoint_raises_the_level_and_the_message_decides_the_last_step(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)                       # form + period
+        levels = [e["values"]["status"] for e in r.events("dataset") if e["change"] == "new"]
+        assert levels == ["Draft"]
+        r.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
+              ["Return submission", "Acknowledgement Number :", "123456789150726", "OK"], shade=110)   # + ack
+        r.see(EVERIFY_URL, ["Return e-Verified successfully", "Acknowledgement Number :", "123456789150726",
+                            "ITR-4 for A.Y. 2026-27"], shade=120)                                      # + message
+        r.sgt.end_all("test")
+        ups = [e["changes"]["status"] for e in r.events("dataset") if "status" in e.get("changes", {})]
+        assert [u[1] for u in ups] == ["Submitted (Not Verified)", "Submitted & Verified"]
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert len(ds) == 1 and ds[0]["status_evidence"] == "Return e-Verified successfully"
+
+    def test_a_pending_verification_message_keeps_it_not_verified(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
+        r.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
+              ["You have successfully submitted your return!", "Acknowledgement Number :", "123456789150726",
+               "You still need to e-Verify within 30 days"], shade=110)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert [d["status"] for d in ds] == ["Submitted (Not Verified)"]
+
+    def test_the_verification_page_joins_by_its_ack(self, tmp_path):
+        """The e-Verify confirmation shows the ack of the return verified - an older filing."""
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(EVERIFY_URL, everify_picker(), shade=100)
+        r.see(EVERIFY_URL, ["Return e-Verified successfully", "Acknowledgement Number :", "123456789180925",
+                            "Transaction ID", "x"], shade=110)
+        r.sgt.end_all("test")
+        ds = r.events("session_end")[0]["payload"]["datasets"]
+        assert len(ds) == 1 and (ds[0]["arn"], ds[0]["status"]) == ("123456789180925", "Submitted & Verified")

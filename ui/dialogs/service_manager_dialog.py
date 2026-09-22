@@ -198,14 +198,21 @@ class ServiceEditDialog(QDialog):
             (['mca.gov.in', 'mca21', 'mca'], '#userName, #userId, input[name="userName"]', '#password, input[type="password"]', 'https://www.mca.gov.in/content/mca/global/en/foportal/fologin.html', 'double', ['mca', 'user', 'din', 'pan'], ['mca', 'pass', 'pwd']),
         ]
         
+        matched = False
         for kws, u_sel, p_sel, def_url, def_flow, u_mcl_hints, p_mcl_hints in presets:
             if any(k in combined for k in kws):
+                matched = True
+                if getattr(self, '_last_preset', None) == def_url:
+                    break
+                self._last_preset = def_url
+                
                 if not self.uid_sel.text().strip() or self.uid_sel.text() in ['#username', "input[type='text']"]:
                     self.uid_sel.setText(u_sel)
                 if not self.pwd_sel.text().strip() or self.pwd_sel.text() in ['#password', "input[type='password']"]:
                     self.pwd_sel.setText(p_sel)
-                if not self.url_input.text().strip():
+                if not self.url_input.text().strip() and not self.url_input.hasFocus():
                     self.url_input.setText(def_url)
+                
                 idx = self.ext_flow_combo.findData(def_flow)
                 if idx >= 0:
                     self.ext_flow_combo.setCurrentIndex(idx)
@@ -224,6 +231,9 @@ class ServiceEditDialog(QDialog):
                             self.pwd_combo.setCurrentIndex(i)
                             break
                 break
+                
+        if not matched:
+            self._last_preset = None
 
     def _on_mode_changed(self):
         is_ext = (self.mode_combo.currentData() == "extension")

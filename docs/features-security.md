@@ -37,7 +37,7 @@ Project Sera relies on two high-reliability, zero-conflict capture engines:
    - **Strict Privacy Guard**: Guaranteed exclusion of passwords, emails, phone numbers, bank details, and personal addresses from any telemetry or AI analysis.
    - **Ambient HUD Pill (`VsdcHudPill`)**: Hidden while polling; pulses on capture; displays active client identity, confirmed filing submissions, and engine attribution tags (`[VSDC-X]` vs `[VSDC]`).
 2. **Sera SDC (DOM Crosshair Engine — Extension Layer)**:
-   - Route-gated content script protocols (`itr_protocol.js`, `gst_protocol.js`, `sdc_core.js`) sleeping on non-target routes, aggregating multi-step filing fragments into `sdc_assembler`, and flushing atomic master payloads over direct local HTTP (`http://127.0.0.1:49152`).
+   - Route-gated content script protocols (`itr_protocol.js`, `gst_protocol.js`, `sdc_core.js`) sleeping on non-target routes, aggregating multi-step filing fragments into `sdc_assembler`, and flushing atomic master payloads through `background.js`'s WebSocket bridge (`ui/ws_bridge.py`, ports `48765-48768`).
    - *Permanent Retirement*: Sera SAD (API Interceptor / `net_interceptor.js`) and Sera SDS (Dataset Scanner / `sds_core.js`) are permanently retired and completely removed from the workspace.
 
 ---

@@ -492,34 +492,40 @@ class TestSccVaultTagger(unittest.TestCase):
 
     def test_automation_update_extension_settings_includes_registered_pans_and_scc(self):
         """Verify update_extension_settings formats payload with registered_pans and scc_settings."""
-        import json
+        from ui import ws_bridge
         from automation import update_extension_settings
-        with patch("socket.socket") as mock_sock_cls:
-            mock_sock = MagicMock()
-            mock_sock_cls.return_value.__enter__.return_value = mock_sock
 
+        broadcasts = []
+
+        class _FakeBridge:
+            def broadcast(self, payload):
+                broadcasts.append(payload)
+                return 1
+
+        ws_bridge.set_active_bridge(_FakeBridge())
+        try:
             update_extension_settings(
                 registered_pans=["ABCDE1234F", "ZZZZZ9999Z"],
                 scc_settings={"enabled": True, "opt1_label": "Combo 1", "opt1_fixed_str": "@"}
             )
-            # Give background socket thread a brief moment
+            # Give the background send thread a brief moment
             import time
             time.sleep(0.3)
 
-            # Assert sendall was called with JSON containing registered_pans and scc_settings
-            calls = mock_sock.sendall.call_args_list
-            self.assertTrue(len(calls) > 0)
-            sent_payload = json.loads(calls[0][0][0].decode("utf-8"))
+            self.assertTrue(len(broadcasts) > 0)
+            sent_payload = broadcasts[0]
             self.assertIn("registered_pans", sent_payload)
             self.assertEqual(sent_payload["registered_pans"], ["ABCDE1234F", "ZZZZZ9999Z"])
             self.assertIn("scc_settings", sent_payload)
             self.assertTrue(sent_payload["scc_settings"]["enabled"])
+        finally:
+            ws_bridge.set_active_bridge(None)
 
     def test_extension_listener_settings_provider_response(self):
-        """Verify ExtensionListener settings_provider callback returns expected payload."""
-        from ui.extension_listener import ExtensionListener
+        """Verify WSBridge's settings_provider callback returns expected payload."""
+        from ui.ws_bridge import WSBridge
         mock_app = MagicMock()
-        listener = ExtensionListener(mock_app)
+        listener = WSBridge(mock_app)
         listener.settings_provider = lambda: {
             "status": "ok",
             "registered_pans": ["ABCDE1234F"],

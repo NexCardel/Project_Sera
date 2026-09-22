@@ -1,0 +1,97 @@
+{
+ "about": "Filing wizard: year, form and personal-information pages build the dataset; the success page adds the ack.",
+ "pages": [
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ASHOK KUMAR SEN Individual",
+    "Profile",
+    "Name",
+    "ASHOK KUMAR SEN",
+    "PAN",
+    "ABCPD1234E"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr-shared/fo-select-status",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Assessment Year",
+    "2026-27",
+    "Filing Type",
+    "Selected: 139(1)-On or before due date"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr-shared/fo-select-itr-form",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ITR-1 (SAHAJ)",
+    "ITR-2",
+    "ITR-4 (SUGAM)",
+    "Select ITR Form",
+    "ITR-4"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000021.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/personal_information",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Personal Information",
+    "PAN",
+    "ABCPD1234E"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000028.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26/fo-itr4-ay2026/fo-submit-success",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "You have successfully submitted your return!",
+    "Acknowledgement Number :",
+    "123456789220926",
+    "You still need to e-Verify within 30 days"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000035.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [
+   {
+    "pan": "ABCPD1234E",
+    "gstin": "",
+    "client_name": "ASHOK KUMAR SEN",
+    "filing_type": "ITR-4",
+    "period_label": "AY 2026-27",
+    "arn": "123456789220926",
+    "status": "Submitted (Not Verified)",
+    "filing_preference": "Original"
+   }
+  ],
+  "held": 0
+ }
+}

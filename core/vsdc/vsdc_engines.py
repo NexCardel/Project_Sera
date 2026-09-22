@@ -28,6 +28,10 @@ HUD_DEFAULT = "1"
 SGT_SETTING = "sgt_mode"
 SGT_DEFAULT = "off"
 SGT_MODES = ("off", "shadow")
+# Record the text of the pages SGT reads, for replaying spec changes against real pages
+# (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
+SGT_RECORD_SETTING = "sgt_record_pages"
+SGT_RECORD_DEFAULT = "1"
 
 _TRUE = ("1", "true", "yes", "on")
 
@@ -54,6 +58,14 @@ def read_sgt_mode(get_setting: Callable[..., object]) -> str:
     except Exception:
         return SGT_DEFAULT
     return value if value in SGT_MODES else SGT_DEFAULT
+
+
+def read_sgt_record_pages(get_setting: Callable[..., object]) -> bool:
+    """Whether SGT records the pages it reads (default on)."""
+    try:
+        return str(get_setting(SGT_RECORD_SETTING, SGT_RECORD_DEFAULT) or SGT_RECORD_DEFAULT).strip() == "1"
+    except Exception:
+        return True
 
 
 def read_hud_enabled(get_setting: Callable[..., object]) -> bool:

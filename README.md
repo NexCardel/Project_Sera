@@ -35,7 +35,7 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
   - **Zero-Leakage PAN Audio Beeper & Gemini AI Enricher**: Zero-leakage audible feedback upon client detection; optional Gemini Flash 1.5/2.0 structured compliance enricher with live in-app Token Meter.
 
 - **Sera SDC (Smart DOM Crosshairs — Extension Layer)**:
-  - Route-gated content script protocols (`itr_protocol.js`, `gst_protocol.js`, `sdc_core.js`) sleeping on non-target routes, aggregating multi-step filing fragments into `sdc_assembler`, and flushing atomic master payloads over direct local HTTP (`http://127.0.0.1:49152`).
+  - Route-gated content script protocols (`itr_protocol.js`, `gst_protocol.js`, `sdc_core.js`) sleeping on non-target routes, aggregating multi-step filing fragments into `sdc_assembler`, and flushing atomic master payloads through `background.js`'s WebSocket bridge (`ui/ws_bridge.py`, ports `48765-48768`).
   - *Permanent Retirement Notice*: Sera SAD (API Interceptor / `net_interceptor.js`) and Sera SDS (Dataset Scanner / `sds_core.js`) are permanently retired and completely removed from the workspace.
 
 - **Tracker Dump Workspace (`TrackerDumpWindow`)**:
@@ -82,11 +82,7 @@ Project Sera stores encrypted vault data and session state in the user profile d
 |-- sera.key                   # Auto-unlock keyfile
 |-- device_identity.txt        # Local machine GUID identifier
 |-- gemini_token_stats.json    # Gemini AI structured parser token and cost metrics
-|-- Vsdc_Captures\             # Local diagnostic captures (redirected from Program Files)
-`-- native_host\
-    |-- com.amanassociates.sera.json
-    |-- host.bat
-    `-- host.py
+`-- Vsdc_Captures\             # Local diagnostic captures (redirected from Program Files)
 ```
 
 `master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.

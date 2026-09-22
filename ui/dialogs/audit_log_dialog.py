@@ -233,7 +233,7 @@ class AuditLogDialog(QDialog):
         title_row.setSpacing(12)
 
         icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_qta_icon("mdi.shield-search-outline", "#4CF9B7").pixmap(24, 24))
+        icon_lbl.setPixmap(_safe_qta_icon("mdi.shield-search", "#4CF9B7").pixmap(24, 24))
         title_row.addWidget(icon_lbl)
 
         title = QLabel("Sera-Sync Audit Log (SSAL)")
@@ -455,7 +455,7 @@ class AuditLogDialog(QDialog):
         inspector_header.addWidget(self.btn_copy_insp)
 
         self.btn_filter_client = QPushButton("Filter Client")
-        self.btn_filter_client.setIcon(_safe_qta_icon("mdi.account-filter", "#F0F6FC"))
+        self.btn_filter_client.setIcon(_safe_qta_icon("mdi.account-search", "#F0F6FC"))
         self.btn_filter_client.setFixedHeight(24)
         self.btn_filter_client.setStyleSheet("font-size: 11px; padding: 2px 8px;")
         self.btn_filter_client.clicked.connect(self._on_filter_by_selected_client)

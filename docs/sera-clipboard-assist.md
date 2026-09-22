@@ -1,5 +1,58 @@
 # Sera Clipboard Assist (SCA)
 
+> **Current design: protocol v2 (2026-09-22).** The sections further down describe the
+> original push design (v1) and are kept for history. Where they disagree, this box wins.
+>
+> **Why v2.** A review found that v1 pushed every one of a client's portal passwords to every
+> browser on each copy. Those passwords ended up in a log (about 2,700 in plain text) and in
+> `chrome.storage.local`, which Chrome writes to disk. v1 also filled the first service's
+> password on *any* site where the PAN was pasted. It let any website read the PAN list from
+> the app's local port and forge `scc_password_verified`. It also went silent in a tab after
+> its first fill.
+>
+> **Flow** (`sca_protocol.py`, `clipboard_watch.py`, `sera_extension/sca/sca_coordinator.js`):
+> 1. **Copy → arm.** Copying a client id (PAN, GSTIN, login id, token) arms SCA. The arm says
+>    which client, which portals (with their hosts), which ids trigger it and when it expires
+>    (5 min). It carries **no password**.
+> 2. **Paste → match.** `login.js` reports id-shaped input to the background. The coordinator
+>    fires only if the id is one of the arm's ids **and** the frame's site is one of the
+>    client's portals. The site must match exactly or as a sub-domain, label by label, and be
+>    on the approved-domain list. There is no fallback to another service.
+> 3. **Request → grant.** The extension asks the desktop, over the WebSocket bridge
+>    (`ui/ws_bridge.py`), for that one portal's password. The desktop checks the arm id, the
+>    expiry, the uses left and the page host, then reads the password from the vault at that
+>    moment. The ITR SCC gate still applies. The answer goes back only on the socket that asked
+>    (`WSBridge.reply`) - never to every connected browser.
+> 3b. **Income Tax passwords SCC has not verified** (your choice, 2026-09-22). These are never
+>    filled automatically. Once the password box appears, a card warns that the password isn't
+>    verified and offers **Inject Password**. Only that click sends `confirmed: true`, and the
+>    desktop refuses an unverified IT password without it. Verified clients fill automatically.
+>    If a portal has no saved password, a Sera alert says so instead of staying silent.
+> 4. **Fill → report.** The password is filled in the frame where the id was entered, and only
+>    into a real password box or the portal's configured selector. The result goes back as
+>    `SCA_FILL_RESULT` (see SCA Diagnostics). The password is never stored.
+>
+> **Transport (2026-09-22: moved from native messaging + port 49152 to one local WebSocket -
+> see `docs/app-extension-communication-report.md`).**
+> - One WebSocket, `ui/ws_bridge.py`, on the first free port from `48765-48768`.
+> - Only the Sera extension's own background page may connect; the connection's Origin is
+>   checked against the extension's real id (Chrome/Edge: derived from the manifest key;
+>   Firefox: trusted on first connect, then pinned - see that module for why). A website
+>   cannot forge this the way it could fake an HTTP request's Origin header.
+> - Page scripts (the SDC content script) never connect directly - only `background.js` does;
+>   everything else goes through it via `chrome.runtime.sendMessage`.
+>
+> **Reliability.**
+> - The id index refreshes itself when the database changes.
+> - Copying the same id again re-arms it after 2 s.
+> - Nothing stays "filled" per tab.
+> - A client armed 5 times without a fill is paused for the session.
+> - One source for Chrome and Firefox (`build_extension.py` copies `sca/` and the content
+>   scripts).
+>
+> **Tests.** `tests/test_sca_v2.py`, `tests/test_clipboard_assist.py`,
+> `tests/test_sca_protocol.py` and `tests/js/test_sca_coordinator.js`.
+
 ## Purpose
 
 Employees currently trust Excel because copy-paste "just works" and there's no

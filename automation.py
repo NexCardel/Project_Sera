@@ -2,12 +2,10 @@
 automation.py
 --------------
 Routes autofill, SMTI (Manual Assist), and MECP (Manual Extension Copy/Paste)
-payloads to the Companion Extension via the native host socket.
+payloads to the Companion Extension over the WebSocket bridge (ui/ws_bridge.py).
 """
 
 import threading
-import socket
-import json
 import time
 import webbrowser
 import os
@@ -22,12 +20,39 @@ try:
 except ImportError:
     sca_protocol = None
 
+BASE_PORTAL_DOMAINS = (
+    "incometax.gov.in",
+    "incometaxindiaefiling.gov.in",
+    "gst.gov.in",
+    "tdscpc.gov.in",
+    "mca.gov.in",
+)
+
+
+def allowed_portal_domains(services: Optional[list] = None) -> list:
+    """The portal hosts the extension may act on: the base government portals plus every
+    configured service's login host."""
+    from urllib.parse import urlparse
+    domains = list(BASE_PORTAL_DOMAINS)
+    for s in services or []:
+        link = (s or {}).get("login_page_link") or (s or {}).get("url") or ""
+        if not link:
+            continue
+        try:
+            host = urlparse(link if link.startswith("http") else f"https://{link}").hostname
+        except Exception:
+            host = None
+        if host and host.lower() not in domains:
+            domains.append(host.lower())
+    return domains
+
+
 # Registry for tracking extension acknowledgements
 _pending_acks = set()
 _pending_acks_lock = threading.Lock()
 
 def register_ack(command_id: str):
-    """Called by extension_listener when an SCA_ACK is received."""
+    """Called by ws_bridge when an SCA_ACK is received."""
     with _pending_acks_lock:
         if command_id in _pending_acks:
             _pending_acks.remove(command_id)
@@ -148,7 +173,7 @@ def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
 
 
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
-    """Sends the autofill/SMTI/MECP payload to the native_host via TCP with retry & auto-launch fallback."""
+    """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
     # Defense-in-depth: SCC is strictly an ITR-only one-time utility
     if scc_mode and not is_itr_service(service):
         scc_mode = False
@@ -178,129 +203,61 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
     }
 
     def _attempt_send():
+        from ui import ws_bridge
         max_attempts = 20
         launched_browser = False
 
         for attempt in range(1, max_attempts + 1):
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(2.0)
-                    s.connect(('127.0.0.1', 49153))
-                    s.sendall(json.dumps(payload).encode('utf-8'))
-                    return
-            except (ConnectionRefusedError, socket.timeout, OSError):
-                if not launched_browser:
-                    launched_browser = True
-                    try:
-                        open_in_default_browser(service.get("login_page_link", ""))
-                    except Exception:
-                        pass
-                time.sleep(0.5)
-                if on_error and attempt == max_attempts:
-                    on_error(
-                        "Could not connect to Sera Extension host after 10 seconds.\n"
-                        "Please ensure the extension is installed and enabled in your browser."
-                    )
+            bridge = ws_bridge.get_active_bridge()
+            if bridge and bridge.send_first(payload):
+                return
+            if not launched_browser:
+                launched_browser = True
+                try:
+                    open_in_default_browser(service.get("login_page_link", ""))
+                except Exception:
+                    pass
+            time.sleep(0.5)
+            if on_error and attempt == max_attempts:
+                on_error(
+                    "Could not connect to the Sera Extension after 10 seconds.\n"
+                    "Please ensure the extension is installed and enabled in your browser."
+                )
 
     threading.Thread(target=_attempt_send, daemon=True).start()
 
 
-def arm_sca(client_id: int, client_token: str, matched_uid: str, services: list[dict], business_name: str = "", owner_name: str = "", ttl_ms: int = 45000, sca_mode: str = "autofill", max_uses: int = 1, candidate_uids: Optional[list[str]] = None):
-    """Sends SCA_ARM payload to native_host -> background.js over TCP 49153, retrying until acked."""
-    if sca_protocol:
-        payload = sca_protocol.build_arm_request(
-            client_id=client_id,
-            client_token=client_token,
-            matched_uid=matched_uid,
-            candidate_uids=candidate_uids or [matched_uid],
-            services=services,
-            business_name=business_name,
-            owner_name=owner_name,
-            ttl_ms=ttl_ms,
-            sca_mode=sca_mode,
-            max_uses=max_uses
-        )
-        cmd_id = payload["command_id"]
-        with _pending_acks_lock:
-            _pending_acks.add(cmd_id)
-    else:
-        # Legacy fallback if sca_protocol missing
-        cmd_id = "legacy"
-        payload = {
-            "type": "SCA_ARM",
-            "client_id": client_id,
-            "client_id_token": client_token,
-            "matched_uid": matched_uid,
-            "candidate_uids": candidate_uids or [matched_uid],
-            "business_name": business_name,
-            "owner_name": owner_name,
-            "services": services,
-            "ttl_ms": ttl_ms,
-            "sca_mode": sca_mode,
-            "max_uses": max(1, min(int(max_uses), 20)),
-        }
+def arm_sca(arm_request: dict, attempts_s: int = 35):
+    """Sends an SCA arm (protocol v2: NO passwords - see sca_protocol) to every connected
+    browser, once a second until one acknowledges it (a browser may still be starting)."""
+    from ui import ws_bridge
+    cmd_id = arm_request["command_id"]
+    with _pending_acks_lock:
+        _pending_acks.add(cmd_id)
 
     def _do_send():
-        # Retry logic: Phase 1 says desktop retries an unacknowledged command
-        # We try every 1s for up to 35 seconds (handles browser cold start)
-        max_attempts = int(min(ttl_ms, 35000) / 1000)
-        
-        for attempt in range(max_attempts):
-            if cmd_id != "legacy":
-                with _pending_acks_lock:
-                    if cmd_id not in _pending_acks:
-                        print(f"automation.py: Received ack for {cmd_id}, stopping retries.")
-                        return  # Ack received!
-            
-            try:
-                for p in range(49153, 49156):
-                    try:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            s.settimeout(0.2)
-                            s.connect(('127.0.0.1', p))
-                            s.sendall(json.dumps(payload).encode('utf-8'))
-                    except Exception:
-                        pass
-                if cmd_id == "legacy":
-                    return # Fire and forget for legacy
-            except Exception:
-                pass
-                
-            time.sleep(1.0)
-            
-        print(f"automation.py: Warning: Never received SCA_ACK for {cmd_id} after {max_attempts} attempts.")
-        if cmd_id != "legacy":
+        for _ in range(max(1, int(attempts_s))):
             with _pending_acks_lock:
-                _pending_acks.discard(cmd_id)
+                if cmd_id not in _pending_acks:
+                    return  # acknowledged
+            bridge = ws_bridge.get_active_bridge()
+            if bridge:
+                bridge.broadcast(arm_request)
+            time.sleep(1.0)
+        print(f"automation.py: no browser acknowledged SCA arm {cmd_id}")
+        with _pending_acks_lock:
+            _pending_acks.discard(cmd_id)
 
     threading.Thread(target=_do_send, daemon=True).start()
 
 
 def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, vsdc_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
-    """Sends immediate setting updates to native_host -> background.js"""
+    """Sends immediate setting updates to every connected browser's background.js."""
+    from ui import ws_bridge
     if tracker_enabled is None:
         tracker_enabled = sdc_enabled or fst_enabled or vsdc_enabled
 
-    # Base government portal domains
-    allowed_domains = [
-        "incometax.gov.in",
-        "incometaxindiaefiling.gov.in",
-        "gst.gov.in",
-        "tdscpc.gov.in",
-        "mca.gov.in"
-    ]
-    if allowed_services:
-        for s in allowed_services:
-            link = s.get("login_page_link") or s.get("url") or ""
-            if link:
-                try:
-                    from urllib.parse import urlparse
-                    raw_link = link if link.startswith("http") else f"https://{link}"
-                    host = urlparse(raw_link).hostname
-                    if host and host.lower() not in allowed_domains:
-                        allowed_domains.append(host.lower())
-                except Exception:
-                    pass
+    allowed_domains = allowed_portal_domains(allowed_services)
 
     payload = {
         "type": "update_settings",
@@ -317,22 +274,11 @@ def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True
         payload["registered_pans"] = registered_pans
     if scc_settings is not None:
         payload["scc_settings"] = scc_settings
+
     def _do_send():
         for _ in range(5):
-            success = False
-            try:
-                for p in range(49153, 49156):
-                    try:
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            s.settimeout(0.2)
-                            s.connect(('127.0.0.1', p))
-                            s.sendall(json.dumps(payload).encode('utf-8'))
-                            success = True
-                    except Exception:
-                        pass
-                if success:
-                    return
-            except Exception:
-                pass
+            bridge = ws_bridge.get_active_bridge()
+            if bridge and bridge.broadcast(payload) > 0:
+                return
             time.sleep(0.2)
     threading.Thread(target=_do_send, daemon=True).start()

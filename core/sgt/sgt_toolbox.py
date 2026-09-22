@@ -109,6 +109,45 @@ def period_sort_key(value: Optional[str]) -> Optional[tuple]:
     return (int(m.group(1)), month)
 
 
+def period_start(value: Optional[str]) -> Optional[date]:
+    """
+    The first day a dataset for this period can exist: 'AY 2026-27' -> 1 Apr 2026 (returns for
+    an assessment year are filed from its first day); 'June (FY 2026-27)' -> 1 Jun 2026;
+    'FY 2026-27' -> 1 Apr 2026. None when the value is not a period.
+    """
+    key = period_sort_key(value)
+    if key is None:
+        return None
+    start_year, fy_month = key
+    if fy_month == 0:
+        return date(start_year, 4, 1)
+    month = fy_month + 3 if fy_month <= 9 else fy_month - 9     # 1 = April ... 12 = March
+    return date(start_year if month >= 4 else start_year + 1, month, 1)
+
+
+# ── The submit-status ladder ─────────────────────────────────────────────────────
+# ONE status vocabulary for every portal. What a portal prints ("Pending for e-verification",
+# "Filed", "Processed with refund"...) is only evidence; a spec's "map" turns it into one of
+# these four levels, and the loader refuses a status map that names anything else. A dataset's
+# status only ever moves up this ladder.
+SUBMIT_LEVELS = (
+    "Not Submitted",                # 0 - the default: nothing shows any work on it
+    "Draft",                        # 1 - being prepared on the portal, not submitted
+    "Submitted (Not Verified)",     # 2 - submitted, verification (e-Verify / DSC / EVC) outstanding
+    "Submitted & Verified",         # 3 - submitted and verified - complete on the portal
+)
+_LEVEL_OF = {s.lower(): i for i, s in enumerate(SUBMIT_LEVELS)}
+
+
+def submit_level(status: Optional[str]) -> int:
+    """The ladder position of a status (0-3). Anything that is not a ladder label is 0."""
+    return _LEVEL_OF.get(str(status or "").strip().lower(), 0)
+
+
+def is_submit_level(status: Optional[str]) -> bool:
+    return str(status or "").strip().lower() in _LEVEL_OF
+
+
 TRANSFORMS: Dict[str, Transform] = {
     "upper": lambda v: v.upper(),
     "lower": lambda v: v.lower(),

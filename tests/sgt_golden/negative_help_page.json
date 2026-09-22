@@ -1,0 +1,43 @@
+{
+ "about": "A help page full of form names and years is not a dataset.",
+ "pages": [
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/myProfile/profileDetail",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "ASHOK KUMAR SEN Individual",
+    "Profile",
+    "Name",
+    "ASHOK KUMAR SEN",
+    "PAN",
+    "ABCPD1234E"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000007.0,
+   "session": "golden"
+  },
+  {
+   "portal": "Income Tax",
+   "url": "https://eportal.incometax.gov.in/iec/foservices/#/help/itr-forms",
+   "title": "",
+   "source": "uia",
+   "lines": [
+    "Which ITR form should I file?",
+    "ITR-1 (SAHAJ) is for salaried individuals",
+    "ITR-2 for capital gains",
+    "ITR-4 (SUGAM) for presumptive income",
+    "The due date for A.Y. 2026-27 is 31 July 2026",
+    "ITR-3 for business income"
+   ],
+   "today": "2026-09-22",
+   "ts": 1800000014.0,
+   "session": "golden"
+  }
+ ],
+ "expect": {
+  "rows": [],
+  "held": 0
+ }
+}

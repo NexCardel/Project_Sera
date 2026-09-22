@@ -45,10 +45,6 @@ project_sera/
 |       |-- vsdc_token_tracker.py # Gemini token and cost usage tracking engine
 |       |-- vsdc_session_logger.py # Diagnostic capture logger writing to user profile
 |       `-- vsdc_worker.py     # Background QThread polling & frame processing worker
-|-- native_host/               # Native Messaging bridge for browser extension
-|   |-- com.amanassociates.sera.json
-|   |-- host.bat
-|   `-- host.py
 |-- sera_extension/            # Browser extension companion
 |   |-- background.js          # Active tab tracker & IPC relay
 |   |-- tracker.js             # Passive DOM observer for ARN capture (Sera DOM Detector)
@@ -56,7 +52,7 @@ project_sera/
 |   |   |-- filing_detector.js # Filing detection & extension IPC forwarding
 |   |   `-- login.js
 |   |-- sdc/                   # Smart DOM Crosshairs (SDC) Subsystem
-|   |   |-- sdc_core.js        # Route listener, in-memory assembler, HTTP loopback dispatcher
+|   |   |-- sdc_core.js        # Route listener, in-memory assembler, hands captures to background.js
 |   |   |-- sdc_toast.js       # On-screen visual feedback toast
 |   |   `-- protocols/         # Portal crosshair definitions
 |   |       |-- itr_protocol.js
@@ -75,7 +71,8 @@ project_sera/
 |   `-- installer_setup.iss    # Inno Setup 7 Windows installer script
 |-- tests/
 |   |-- test_page_gst_submission.html # Standalone GST filing & modal simulation test harness
-|   |-- test_dump_injection.py    # Direct TCP 49152 payload injection test script
+|   |-- test_dump_injection.py    # Manual dev tool: sends a mock capture over the WebSocket bridge
+|   |-- test_ws_bridge.py         # App<->extension WebSocket bridge tests (origin trust, dispatch, reply routing)
 |   |-- test_cell_formatting.py
 |   |-- test_undo_redo_formatting.py
 |   |-- test_vsdc_assembler.py    # VSDC session assembly, filing types, & dataset sealing tests
@@ -86,7 +83,7 @@ project_sera/
 |   |-- test_vsdc_beeper.py       # PAN beeper unit tests
 |   `-- test_vsdc_gemini_enricher.py # Gemini AI structured compliance enricher tests
 `-- ui/
-    |-- extension_listener.py  # Local TCP socket server on port 49152 for extension events
+    |-- ws_bridge.py           # Local WebSocket server (48765-48768) for extension events
     |-- components/
     |   |-- toast.py           # SeraAlert notification widget
     |   `-- vsdc_hud_pill.py   # Floating ambient HUD Pill overlay widget
@@ -129,11 +126,7 @@ At runtime, the application stores data and session state in `%USERPROFILE%\Aman
 |-- sera.key             # Local vault keyfile for instant prompt-free auto-unlock
 |-- device_identity.txt  # Workstation identity label
 |-- gemini_token_stats.json # Gemini AI token usage & cost statistics
-|-- Vsdc_Captures\       # Local diagnostic captures (redirected to user profile)
-`-- native_host\         # Permanent Native Messaging host scripts
-    |-- com.amanassociates.sera.json
-    |-- host.bat
-    `-- host.py
+`-- Vsdc_Captures\       # Local diagnostic captures (redirected to user profile)
 ```
 
 Both `master.db` and `sera.salt` belong together and can be pushed across the local network using **Sera Sync** or synchronized using Syncthing.

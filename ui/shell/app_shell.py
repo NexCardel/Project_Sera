@@ -25,6 +25,13 @@ class AppShell(QWidget):
             QApplication.instance().installEventFilter(self)
         self._build_ui()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and self.isMinimized():
+            callback = getattr(self, "on_minimized", None)
+            if callable(callback):
+                callback()
+
     def closeEvent(self, event):
         """Intercept close button (X).
 
