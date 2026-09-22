@@ -9,6 +9,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -179,6 +180,116 @@ def test_send_first_reaches_only_one_socket(bridge):
 
 def test_send_first_with_nobody_connected(bridge):
     assert bridge.send_first({"type": "autofill"}) is False
+
+
+# ------------------------------------------------------------------ cross-thread safety
+# automation.py calls broadcast()/send_first() from plain threading.Thread workers (autofill
+# push, SCA arming, extension settings pushes - see _attempt_send/arm_sca/
+# update_extension_settings there), never from the Qt thread WSBridge and its QWebSockets live
+# on. A MagicMock socket doesn't have Qt thread affinity, so it can't reproduce the original bug
+# by itself (calling sendTextMessage() on a real QWebSocket from a foreign thread silently drops
+# the frame instead of raising - see ui/ws_bridge.py's _call_on_qt_thread); what these pin
+# instead is the contract that fixes it: the actual send always runs on the bridge's own Qt
+# thread, and the synchronous int/bool return value survives the trip, however many threads
+# call in concurrently.
+def test_broadcast_runs_the_actual_send_on_the_qt_thread_not_the_caller(bridge):
+    import threading
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    qt_thread = bridge.thread()
+
+    seen_threads = []
+    sock = MagicMock()
+    sock.sendTextMessage.side_effect = lambda *_a: seen_threads.append(QThread.currentThread())
+    bridge._sockets = [sock]
+
+    result = {}
+
+    def call_from_background_thread():
+        result["sent"] = bridge.broadcast({"type": "update_settings"})
+
+    caller = threading.Thread(target=call_from_background_thread)
+    caller.start()
+    app = QApplication.instance()
+    deadline = time.monotonic() + 5
+    while caller.is_alive() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    caller.join(timeout=0.5)
+
+    assert not caller.is_alive(), "broadcast() from a background thread never returned"
+    assert result.get("sent") == 1
+    assert seen_threads == [qt_thread], "the actual send did not run on the Qt/GUI thread"
+
+
+def test_send_first_runs_the_actual_send_on_the_qt_thread_not_the_caller(bridge):
+    import threading
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    qt_thread = bridge.thread()
+
+    seen_threads = []
+    sock = MagicMock()
+    sock.sendTextMessage.side_effect = lambda *_a: seen_threads.append(QThread.currentThread())
+    bridge._sockets = [sock]
+
+    result = {}
+
+    def call_from_background_thread():
+        result["ok"] = bridge.send_first({"type": "autofill"})
+
+    caller = threading.Thread(target=call_from_background_thread)
+    caller.start()
+    app = QApplication.instance()
+    deadline = time.monotonic() + 5
+    while caller.is_alive() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    caller.join(timeout=0.5)
+
+    assert not caller.is_alive(), "send_first() from a background thread never returned"
+    assert result.get("ok") is True
+    assert seen_threads == [qt_thread], "the actual send did not run on the Qt/GUI thread"
+
+
+def test_concurrent_background_broadcasts_each_get_their_own_result(bridge):
+    """Two automation.py workers can legitimately call broadcast() around the same time (e.g.
+    an SCA arm retry loop and an autofill push). Guards against a regression that shares one
+    result slot across calls (a race one caller's result could overwrite another's, or a stale
+    hand-off), which a single-threaded test can't exercise."""
+    import threading
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    a, b = MagicMock(), MagicMock()
+    bridge._sockets = [a, b]
+
+    results = {}
+
+    def call(name, payload):
+        results[name] = bridge.broadcast(payload)
+
+    callers = [
+        threading.Thread(target=call, args=(f"caller-{i}", {"type": "update_settings", "i": i}))
+        for i in range(5)
+    ]
+    for c in callers:
+        c.start()
+    app = QApplication.instance()
+    deadline = time.monotonic() + 5
+    while any(c.is_alive() for c in callers) and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    for c in callers:
+        c.join(timeout=0.5)
+
+    assert all(not c.is_alive() for c in callers)
+    assert results == {f"caller-{i}": 2 for i in range(5)}
 
 
 # ------------------------------------------------------------------ extension parity (carried over from
