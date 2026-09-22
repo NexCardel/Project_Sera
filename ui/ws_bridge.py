@@ -41,7 +41,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Qt, QThread
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
 
@@ -100,6 +100,26 @@ class WSBridge(QObject):
     sudr_capture_received = Signal(dict)  # SUDR canonical envelope
     extension_settings_updated_received = Signal(dict)
 
+    # automation.py calls broadcast()/send_first() from plain background threads (autofill
+    # push, SCA arming, settings updates - see _attempt_send/arm_sca/update_extension_settings
+    # there), but every QWebSocket in self._sockets has thread affinity to the Qt/GUI thread
+    # this WSBridge itself lives on. Calling sendTextMessage() on a QWebSocket from a foreign
+    # thread is a silent Qt thread-affinity violation: no exception is raised (so _send()'s
+    # try/except never fires and the call reports success), but the frame is never actually
+    # written to the wire - the extension never receives it.
+    #
+    # This signal marshals a zero-arg callable onto the Qt thread via a BlockingQueuedConnection,
+    # so broadcast()/send_first() below keep the exact synchronous int/bool return value every
+    # caller already depends on, whichever thread calls them from. It carries a callable rather
+    # than the payload/result directly because PySide6 round-trips a `list`/`dict`-typed signal
+    # argument through QVariant across a queued connection - the slot receives a COPY, so
+    # mutating it to hand a result back is silently lost (confirmed: appending to it in the slot
+    # never reaches the emitting thread's own list). A `object`-typed argument carrying a Python
+    # callable is passed by reference instead, so a closure capturing its own private result dict
+    # observes the mutation after emit() returns - and, being private per call, two concurrent
+    # callers from different threads never share (and can't race on) that dict.
+    _run_on_qt_thread = Signal(object)
+
     def __init__(self, parent=None):
         if not isinstance(parent, QObject):
             parent = None
@@ -114,18 +134,47 @@ class WSBridge(QObject):
         # sends carries one); the socket itself never goes into a message dict, so nothing here
         # risks being json.dumps()'d by a signal handler that logs/echoes the message it received.
         self._pending_replies: dict[str, QWebSocket] = {}
+        # Explicit BlockingQueuedConnection (not the default AutoConnection) so this is a queued
+        # hop even in the one case Qt's own thread-affinity check can't tell apart from "already
+        # on the Qt thread": a connection made before this object's thread affinity is what it
+        # will be at emit time. broadcast()/send_first() below never emit these when already on
+        # the Qt thread (that would deadlock a BlockingQueuedConnection), so this only ever
+        # blocks a background thread, never itself.
+        self._run_on_qt_thread.connect(lambda fn: fn(), Qt.ConnectionType.BlockingQueuedConnection)
 
     # ------------------------------------------------------------------ lifecycle
 
     def start(self, chrome_manifest_path: Optional[Path] = None):
-        if chrome_manifest_path is not None:
-            self._chrome_id = self._chrome_id_override() or _load_chrome_extension_id(chrome_manifest_path)
-            if self._chrome_id:
-                print(f"[WSBridge] Expecting Chrome/Edge origin chrome-extension://{self._chrome_id} "
-                      f"- compare against chrome://extensions if the extension can't connect.")
+        # Try override file first (admin escape hatch), then the provided path, then well-known
+        # fallback locations (APP_DIR and the source folder next to this module).
+        override_id = self._chrome_id_override()
+        if override_id:
+            self._chrome_id = override_id
+            print(f"[WSBridge] Chrome/Edge id from override file: {self._chrome_id}")
+        else:
+            # Build a list of candidate manifest paths to try in order
+            candidates: list[Optional[Path]] = [chrome_manifest_path]
+            try:
+                candidates.append(Path.home() / "AmanAssociates_Sera" / "sera_extension" / "manifest.json")
+            except Exception:
+                pass
+            try:
+                candidates.append(Path(__file__).resolve().parent.parent / "sera_extension" / "manifest.json")
+            except Exception:
+                pass
+
+            for candidate in candidates:
+                if candidate and candidate.exists():
+                    ext_id = _load_chrome_extension_id(candidate)
+                    if ext_id:
+                        self._chrome_id = ext_id
+                        print(f"[WSBridge] Expecting Chrome/Edge origin chrome-extension://{self._chrome_id} "
+                              f"- compare against chrome://extensions if the extension can't connect.")
+                        break
             else:
-                print(f"[WSBridge] Could not read a Chrome extension id from {chrome_manifest_path}; "
-                      f"Chrome/Edge connections will be refused until this is fixed.")
+                if not self._chrome_id:
+                    print(f"[WSBridge] Could not read a Chrome extension id from any manifest path; "
+                          f"Chrome/Edge connections will be refused until this is fixed.")
 
         self._server = QWebSocketServer("Sera Bridge", QWebSocketServer.SslMode.NonSecureMode, self)
         self._server.newConnection.connect(self._on_new_connection)
@@ -138,6 +187,7 @@ class WSBridge(QObject):
             print(f"[WSBridge] Could not bind any of {WS_PORTS} - extension bridge is offline.")
             return
         print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+
 
     def stop(self):
         for sock in list(self._sockets):
@@ -168,7 +218,7 @@ class WSBridge(QObject):
             return None
 
     def _origin_allowed(self, origin: str) -> bool:
-        origin = (origin or "").strip()
+        origin = (origin or "").strip().rstrip("/")
         if not origin:
             return False
         if self._chrome_id and origin == f"{CHROME_ORIGIN_PREFIX}{self._chrome_id}":
@@ -222,7 +272,10 @@ class WSBridge(QObject):
         for pending_id, pending_sock in list(self._pending_replies.items()):
             if pending_sock is sock:
                 del self._pending_replies[pending_id]
-        sock.deleteLater()
+        try:
+            sock.deleteLater()
+        except RuntimeError:
+            pass  # C++ object already deleted by Qt - harmless
 
     def _on_text_message(self, sock: QWebSocket, text: str):
         try:
@@ -298,22 +351,44 @@ class WSBridge(QObject):
             return True
         return False
 
+    def _call_on_qt_thread(self, fn):
+        """Runs fn() on the Qt thread and returns its result, whatever thread this is called
+        from. A no-op passthrough when already on the Qt thread (also avoids deadlocking the
+        BlockingQueuedConnection below, which blocks the CALLING thread until fn() has run -
+        emitting it from the Qt thread itself would mean that thread waiting on itself)."""
+        if QThread.currentThread() is self.thread():
+            return fn()
+        result = {}
+        self._run_on_qt_thread.emit(lambda: result.__setitem__("v", fn()))
+        return result["v"]
+
     def broadcast(self, payload: dict) -> int:
         """Sends to every connected browser (there can be more than one - Chrome and Firefox open
-        at once). Returns how many sockets it reached."""
-        sent = 0
-        for sock in list(self._sockets):
-            self._send(sock, payload)
-            sent += 1
-        return sent
+        at once). Returns how many sockets it reached.
+
+        Safe to call from any thread: automation.py's background workers (autofill push, SCA
+        arming, extension settings pushes) call this from plain threading.Thread instances, but
+        every QWebSocket in self._sockets belongs to the Qt thread - so the actual send is
+        marshalled there via _call_on_qt_thread if this isn't already that thread."""
+        def _do():
+            sent = 0
+            for sock in list(self._sockets):
+                self._send(sock, payload)
+                sent += 1
+            return sent
+        return self._call_on_qt_thread(_do)
 
     def send_first(self, payload: dict) -> bool:
         """Sends to one connected browser only - whichever connected first. Used for autofill,
-        where pushing the same command to every open browser would fill the same portal twice."""
-        if not self._sockets:
-            return False
-        self._send(self._sockets[0], payload)
-        return True
+        where pushing the same command to every open browser would fill the same portal twice.
+
+        Safe to call from any thread - see broadcast() above for why that matters."""
+        def _do():
+            if not self._sockets:
+                return False
+            self._send(self._sockets[0], payload)
+            return True
+        return self._call_on_qt_thread(_do)
 
     @property
     def connected_count(self) -> int:

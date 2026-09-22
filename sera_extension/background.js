@@ -98,6 +98,9 @@ function connectWS() {
     wsReconnectDelay = 1000;
     if (SERA_DEBUG) console.log(`Sera: WebSocket bridge connected on port ${port}`);
     if (SMTI_DEBUG) console.log(`[SMTI DEBUG] connectWS: OPEN on port ${port}`);
+    // Notify any callers awaiting connection
+    _wsOpenCallbacks.forEach(cb => { try { cb(); } catch (_) {} });
+    _wsOpenCallbacks.length = 0;
     syncSettingsFromDesktop();
   };
   socket.onmessage = (event) => {
@@ -126,6 +129,38 @@ function scheduleReconnect() {
   setTimeout(() => { if (!ws) connectWS(); }, wsReconnectDelay);
   wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX_MS);
 }
+
+// Callbacks waiting for the WebSocket to open
+const _wsOpenCallbacks = [];
+
+/**
+ * Resolves with true when the WebSocket is (or becomes) OPEN, or false after timeoutMs.
+ * Callers that need to send a message but may be running while the bridge is reconnecting
+ * should await this before sending - it prevents silent message loss during service-worker
+ * wake-up and port cycling.
+ */
+function waitForConnection(timeoutMs = 5000) {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(true);
+  ensureConnected();
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const idx = _wsOpenCallbacks.indexOf(cb);
+      if (idx !== -1) _wsOpenCallbacks.splice(idx, 1);
+      resolve(false);
+    }, timeoutMs);
+    const cb = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    _wsOpenCallbacks.push(cb);
+  });
+}
+
 
 function handleDesktopMessage(message) {
   if (SERA_DEBUG) console.log("Received from Sera desktop:", message);
@@ -188,9 +223,12 @@ function handleDesktopMessage(message) {
   }
 }
 
-function requestSettingsOverWS() {
+async function requestSettingsOverWS() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const connected = await waitForConnection(5000);
+    if (!connected) return null;
+  }
   return new Promise((resolve) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { resolve(null); return; }
     const id = _wsMessageId();
     try {
       ws.send(JSON.stringify({ type: 'request_settings', _id: id }));
@@ -202,6 +240,7 @@ function requestSettingsOverWS() {
     _pendingWsRequests.set(id, { resolve, timer });
   });
 }
+
 
 async function syncSettingsFromDesktop() {
   try {
@@ -256,8 +295,18 @@ async function syncSettingsFromDesktop() {
   }
 }
 
+// Only syncs settings when the socket is already open. While it is closed this must not call
+// syncSettingsFromDesktop(): that awaits waitForConnection(), which calls back into here, and
+// every step runs synchronously up to its first await - so it recursed until the stack
+// overflowed, leaving one queued on-open callback per level (~4,000). When the app's socket
+// then opened, each fired its own request_settings, and the app built thousands of settings
+// payloads back to back on its GUI thread (frozen window, high CPU). socket.onopen syncs once
+// the connection is actually up.
 function ensureConnected() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) connectWS();
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    connectWS();
+    return;
+  }
   syncSettingsFromDesktop();
 }
 
@@ -277,25 +326,25 @@ if (chrome.runtime && chrome.runtime.onInstalled) {
 // Sends one message over the bridge. With waitForAck=true, resolves only once the app has
 // confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
 // final SDC flush, which needs to know for certain before it clears its durable outbox.
-function sendToDesktop(msg, waitForAck = false) {
-  return new Promise((resolve) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      ensureConnected();
-      resolve(false);
-      return;
+// If the socket is not yet OPEN (e.g. service worker just woke up mid-reconnect), this waits
+// up to 5 s for the connection to establish rather than silently dropping the message.
+async function sendToDesktop(msg, waitForAck = false) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const connected = await waitForConnection(5000);
+    if (!connected) {
+      if (SMTI_DEBUG) console.warn('[SMTI DEBUG] sendToDesktop: gave up waiting for connection, dropping', msg.type);
+      return false;
     }
-    const id = _wsMessageId();
-    try {
-      ws.send(JSON.stringify({ ...msg, _id: id }));
-    } catch (e) {
-      if (SERA_DEBUG) console.warn("Sera background: WebSocket send failed:", e);
-      resolve(false);
-      return;
-    }
-    if (!waitForAck) {
-      resolve(true);
-      return;
-    }
+  }
+  const id = _wsMessageId();
+  try {
+    ws.send(JSON.stringify({ ...msg, _id: id }));
+  } catch (e) {
+    if (SERA_DEBUG) console.warn("Sera background: WebSocket send failed:", e);
+    return false;
+  }
+  if (!waitForAck) return true;
+  return new Promise(resolve => {
     const timer = setTimeout(() => {
       _pendingWsRequests.delete(id);
       resolve(false);
@@ -303,6 +352,7 @@ function sendToDesktop(msg, waitForAck = false) {
     _pendingWsRequests.set(id, { resolve, timer });
   });
 }
+
 
 // Reopen the last Manual Assist widget from the browser toolbar if clicked directly
 if (chrome.action && chrome.action.onClicked) {
@@ -809,35 +859,57 @@ function handleAutofillTab(message) {
       if (targetHostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
       return false;
     });
-    
+
     if (existing) {
       chrome.windows.update(existing.windowId, { focused: true }, () => {
         if (chrome.runtime.lastError) {}
         chrome.storage.local.set({ trackingTabId: existing.id });
+
+        // Check if the tab is already on the exact target URL and fully loaded –
+        // in that case onUpdated will never fire (no navigation happens), so we
+        // must inject immediately. Otherwise navigate then wait for 'complete'.
+        const alreadyOnUrl = existing.url &&
+          existing.url.split('#')[0].toLowerCase() === message.url.split('#')[0].toLowerCase();
+        if (alreadyOnUrl && existing.status === 'complete') {
+          injectFillScript(existing.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
+          return;
+        }
+
         chrome.tabs.update(existing.id, { url: message.url, active: true }, () => {
           if (chrome.runtime.lastError) {}
-          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-            if (tabId === existing.id && info.status === 'complete') {
+          let injected = false;
+          const listener = function(tabId, info) {
+            if (tabId === existing.id && info.status === 'complete' && !injected) {
+              injected = true;
               chrome.tabs.onUpdated.removeListener(listener);
               injectFillScript(existing.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
             }
-          });
+          };
+          chrome.tabs.onUpdated.addListener(listener);
+          // Safety cleanup – remove listener after 30s even if tab never reaches 'complete'
+          setTimeout(() => { try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {} }, 30000);
         });
       });
     } else {
       chrome.tabs.create({ url: message.url }, (newTab) => {
         if (chrome.runtime.lastError || !newTab) return;
         chrome.storage.local.set({ trackingTabId: newTab.id });
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-          if (tabId === newTab.id && info.status === 'complete') {
+        let injected = false;
+        const listener = function(tabId, info) {
+          if (tabId === newTab.id && info.status === 'complete' && !injected) {
+            injected = true;
             chrome.tabs.onUpdated.removeListener(listener);
             injectFillScript(newTab.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
           }
-        });
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        // Safety cleanup after 30s
+        setTimeout(() => { try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {} }, 30000);
       });
     }
 
   });
+
 }
 
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {

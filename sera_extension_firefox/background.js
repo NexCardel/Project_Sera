@@ -86,6 +86,9 @@ function connectWS() {
     wsConnecting = false;
     wsReconnectDelay = 1000;
     console.log(`Sera: WebSocket bridge connected on port ${port}`);
+    // Notify any callers awaiting connection
+    _wsOpenCallbacks.forEach(cb => { try { cb(); } catch (_) {} });
+    _wsOpenCallbacks.length = 0;
   };
   socket.onmessage = (event) => {
     let message;
@@ -105,6 +108,34 @@ function connectWS() {
 function scheduleReconnect() {
   setTimeout(() => { if (!ws) connectWS(); }, wsReconnectDelay);
   wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX_MS);
+}
+
+// Callbacks waiting for the WebSocket to open
+const _wsOpenCallbacks = [];
+
+/**
+ * Resolves with true when the WebSocket is (or becomes) OPEN, or false after timeoutMs.
+ */
+function waitForConnection(timeoutMs = 5000) {
+  if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(true);
+  ensureConnected();
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const idx = _wsOpenCallbacks.indexOf(cb);
+      if (idx !== -1) _wsOpenCallbacks.splice(idx, 1);
+      resolve(false);
+    }, timeoutMs);
+    const cb = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    _wsOpenCallbacks.push(cb);
+  });
 }
 
 function handleDesktopMessage(message) {
@@ -162,25 +193,21 @@ function ensureConnected() {
 // Sends one message over the bridge. With waitForAck=true, resolves only once the app has
 // confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
 // final SDC flush, which needs to know for certain before it clears its durable outbox.
-function sendToDesktop(msg, waitForAck = false) {
-  return new Promise((resolve) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      ensureConnected();
-      resolve(false);
-      return;
-    }
-    const id = _wsMessageId();
-    try {
-      ws.send(JSON.stringify({ ...msg, _id: id }));
-    } catch (e) {
-      console.warn("Sera background: WebSocket send failed:", e);
-      resolve(false);
-      return;
-    }
-    if (!waitForAck) {
-      resolve(true);
-      return;
-    }
+// Awaits the connection for up to 5s if the bridge is reconnecting.
+async function sendToDesktop(msg, waitForAck = false) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    const connected = await waitForConnection(5000);
+    if (!connected) return false;
+  }
+  const id = _wsMessageId();
+  try {
+    ws.send(JSON.stringify({ ...msg, _id: id }));
+  } catch (e) {
+    console.warn("Sera background: WebSocket send failed:", e);
+    return false;
+  }
+  if (!waitForAck) return true;
+  return new Promise(resolve => {
     const timer = setTimeout(() => {
       _pendingWsRequests.delete(id);
       resolve(false);
@@ -188,6 +215,7 @@ function sendToDesktop(msg, waitForAck = false) {
     _pendingWsRequests.set(id, { resolve, timer });
   });
 }
+
 
 // Reopen the last Manual Assist widget from the browser toolbar if clicked directly
 if (chrome.action && chrome.action.onClicked) {
