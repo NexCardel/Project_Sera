@@ -22,6 +22,7 @@ graph TD
         SYNC["sync_peer.py<br/><i>(LAN UDP/TCP Peer Sync)</i>"]:::core
         VER["version.py<br/><i>(GitHub Auto-Updater)</i>"]:::core
         CLIP_WATCH["clipboard_watch.py<br/><i>(SCA Ambient Listener)</i>"]:::core
+        MEMLOG["core/memlog.py<br/><i>(Memory Diagnostic Logger)</i>"]:::core
     end
 
     subgraph Shell & Layout
@@ -53,6 +54,17 @@ graph TD
         WS_BRIDGE["ui/ws_bridge.py<br/><i>(Local WebSocket Server, ports 48765-48768)</i>"]:::native
         SDC_CORE["sera_extension/sdc/sdc_core.js<br/><i>(SDC Route Gater & Assembler)</i>"]:::native
         SDC_PROTO["sera_extension/sdc/protocols/*<br/><i>(ITR & GST Crosshair Protocols)</i>"]:::native
+        SCA_COORD["sera_extension/sca/sca_coordinator.js<br/><i>(SCA Autofill Coordinator)</i>"]:::native
+    end
+
+    subgraph SGT Passive Global Tracker
+        SGT_SHADOW["core/sgt/sgt_shadow.py<br/><i>(Shadow Capture Worker & Lifecycle)</i>"]:::core
+        SGT_SPECS["core/sgt/sgt_specs.py<br/><i>(Safe JSON Spec Loader & Self-Tests)</i>"]:::core
+        SGT_RESOLVER["core/sgt/sgt_resolver.py<br/><i>(Proximity Resolver & Pattern Engine)</i>"]:::core
+        SGT_FIELDS["core/sgt/sgt_fields.json<br/><i>(Declarative Portal Rules)</i>"]:::core
+        SGT_HEALTH["core/sgt/sgt_health.py<br/><i>(Spec Telemetry & Drift Detection)</i>"]:::core
+        SGT_CORPUS["core/sgt/sgt_corpus.py<br/><i>(Page Corpus Recorder & Session Cache)</i>"]:::core
+        SGT_REPLAY["core/sgt/sgt_replay.py<br/><i>(Deterministic Replay & Diff Engine)</i>"]:::core
     end
 
     subgraph VSDC & VSDC-X Harvester
@@ -76,6 +88,7 @@ graph TD
     MAIN --> SYNC
     MAIN --> VER
     MAIN --> CLIP_WATCH
+    MAIN --> MEMLOG
     MAIN --> SHELL
     MAIN --> SEARCH
     MAIN --> DETAIL
@@ -83,6 +96,14 @@ graph TD
     MAIN --> TRACKER_DUMP
     MAIN --> WS_BRIDGE
     MAIN --> VSDC_WORKER
+    MAIN --> SGT_SHADOW
+
+    SGT_SHADOW --> SGT_SPECS
+    SGT_SHADOW --> SGT_RESOLVER
+    SGT_SPECS --> SGT_FIELDS
+    SGT_SHADOW --> SGT_HEALTH
+    SGT_SHADOW --> SGT_CORPUS
+    SGT_SHADOW --> DB
 
     VSDC_WORKER --> VSDC_ROUTER
     VSDC_ROUTER --> VSDC_UIA
@@ -198,15 +219,38 @@ graph LR
 
 ---
 
+### SGT Passive Global Tracking Layer
+
+```mermaid
+graph LR
+    sgt_shadow["core/sgt/sgt_shadow.py"] --> sgt_specs["core/sgt/sgt_specs.py"]
+    sgt_shadow["core/sgt/sgt_shadow.py"] --> sgt_resolver["core/sgt/sgt_resolver.py"]
+    sgt_shadow["core/sgt/sgt_shadow.py"] --> sgt_health["core/sgt/sgt_health.py"]
+    sgt_shadow["core/sgt/sgt_shadow.py"] --> sgt_corpus["core/sgt/sgt_corpus.py"]
+    sgt_specs["core/sgt/sgt_specs.py"] --> sgt_fields["core/sgt/sgt_fields.json"]
+    sgt_shadow["core/sgt/sgt_shadow.py"] --> database["database.py"]
+```
+
+---
+
 ## 3. Component Responsibility Reference
 
 | Module Path | Primary Class / Functions | Connected Dependencies | Responsibility |
 |---|---|---|---|
 | [`main.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/main.py) | `SeraApp`, `SyncSignalBridge` | `database`, `security`, `sync_peer`, `version`, `app_shell`, `windows/*` | Application entrypoint, vault initialization, Qt signal bridging, auto-updater trigger, window routing. |
+| [`core/memlog.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/memlog.py) | `log_memory_point`, `memory_snapshot` | `ctypes`, `kernel32` | Diagnostic memory logger recording working set (`ws`) and private commit (`priv`) across execution stages. |
 | [`database.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/database.py) | `SeraDatabase`, `DatabaseError` | `security` | SQLCipher database CRUD, master column layout (MCL), cell formatting, audit logging, backup/restore, Syncthing/peer conflict matching. |
 | [`security.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/security.py) | `derive_key_hex`, `load_salt`, `verify_pin` | Python standard crypto libraries | PBKDF2 key derivation, salt generation/loading, Argon2id PIN verification. |
 | [`sync_peer.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/sync_peer.py) | `SyncPeerService`, `PeerInfo` | `main` | Zero-configuration UDP LAN peer discovery (`BEACON_PORT 49156`) & TCP raw database/salt push (`SYNC_PORT 49157`). |
 | [`clipboard_watch.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/clipboard_watch.py) | `ClipboardWatchService` | `QClipboard`, `database` | SCA event-driven ambient clipboard watcher matching copied UIDs against memory index for zero-touch autofill. |
+| [`core/sgt/sgt_shadow.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_shadow.py) | `SgtShadowWorker`, `SgtSession` | `sgt_specs`, `sgt_resolver`, `sgt_health`, `sgt_corpus`, `database` | Passive SGT background worker, page change detector, slot assembler, crash-safe state snapshotter, and tracker writer. |
+| [`core/sgt/sgt_specs.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_specs.py) | `SpecStore`, `FieldSpec` | `sgt_fields.json`, `sgt_toolbox` | JSON spec loader running automated self-tests on startup and rejecting invalid or failing capture rules. |
+| [`core/sgt/sgt_resolver.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_resolver.py) | `resolve_page` | `sgt_specs`, `re` | Proximity scanner finding labels on clean page text lines, evaluating offsets, and applying validators & scoring. |
+| [`core/sgt/sgt_fields.json`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_fields.json) | Declarative Spec Config | `sgt_specs` | Configuration file containing declarative extraction rules, synonyms, regex patterns, and test fixtures for PAN, TAN, GSTIN, Ack, and status. |
+| [`core/sgt/sgt_health.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_health.py) | `SpecStats` | `json`, `pathlib` | Tracks daily page reads, OCR ratios, and spec hit frequencies; detects portal UI shifts or canvas transitions. |
+| [`core/sgt/sgt_corpus.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_corpus.py) | `record_page`, `load_pages` | `json`, `hashlib` | Records live portal text lines locally for safe offline replay and regression testing without storing credentials. |
+| [`core/sgt/sgt_replay.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/sgt/sgt_replay.py) | `replay`, `diff` | `sgt_specs`, `sgt_resolver` | Replays historical page sequences against updated specs, producing diffs and detecting regressions before deployment. |
+| [`tools/sgt_replay.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/tools/sgt_replay.py) | CLI Utility | `core/sgt/*` | Command-line tool for baseline generation, differential analysis, session inspection, and health auditing. |
 | [`core/vsdc/vsdc_uia_text.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_uia_text.py) | `read_page_text`, `is_available` | `comtypes`, `UIAutomationCore.dll` | VSDC-X direct UI Automation sensor reading exact text tree from Chromium accessibility nodes with ValuePattern support. |
 | [`core/vsdc/vsdc_router.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_router.py) | `VsdcRouter`, `_WindowSession` | `vsdc_crosshairs`, `vsdc_uia_text`, `vsdc_ocr`, `vsdc_regex`, `vsdc_assembler` | Windows UIA browser URL inspection, dual-pipeline sensor routing (UIA first, OCR fallback), and window-isolated session tracking. |
 | [`core/vsdc/vsdc_assembler.py`](file:///c:/Users/Nex/Downloads/Project%20Sera/APP/core/vsdc/vsdc_assembler.py) | `VsdcAssembler` | `database`, `vsdc_gemini_parser` | Multi-screen taxpayer session buffering, statutory filing type tracking, Ack validation, and dataset emission. |
@@ -274,4 +318,33 @@ Browser Window ──(UIA Address Bar)──> vsdc_worker.py ──> vsdc_router
                                   ▼                                                         ▼
                            VsdcHudPill (UI)                                        database.tracker_dump
                            (Pulse on capture; [VSDC-X] tag)                        (SQLite rawPayload.db)
+```
+
+### E. SGT Crosshair-Independent Passive Tracker Flow
+```
+Browser Window (Allowed Portal) ──> sgt_shadow.py (Change Gate)
+                                           │
+                   ┌───────────────────────┴───────────────────────┐
+                   ▼                                               ▼
+        Primary: vsdc_uia_text.py                      Fallback: vsdc_ocr.py
+        (Chromium UIA Lines)                           (DirectML OCR Lines)
+                   │                                               │
+                   └───────────────────────┬───────────────────────┘
+                                           ▼
+                                    sgt_resolver.py
+                     (Proximity Scan against sgt_fields.json)
+                                           │
+                   ┌───────────────────────┴───────────────────────┐
+                   ▼                                               ▼
+              Profile Slot                                   Dataset Slots
+             (PAN / Name / TAN)                         (Form / Period / Status / Ack)
+                   │                                               │
+                   └───────────────────────┬───────────────────────┘
+                                           ▼
+                                  SGT Shadow Assembler
+                             (State snapshot & validation)
+                                           │
+                                           ▼
+                                  database.tracker_dump
+                               (Orange tagged [SGT_shadow])
 ```

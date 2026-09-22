@@ -28,62 +28,97 @@ project_sera/
 |   |-- file-submission-tracker.md
 |   |-- tracker-status-matrix-and-storage.md
 |   |-- vsdc-x-engine-guide.md
+|   |-- sgt-blueprint.md           # SGT crosshair-independent passive tracker architectural blueprint
+|   |-- app-extension-communication-report.md # Architectural report on WebSocket vs Native Messaging
 |   |-- build-release.md
 |   `-- operations-sync.md
-|-- core/                      # Core OS-level subsystems
-|   `-- vsdc/                  # Visual Screen Data Capture (VSDC) optical & UI Automation engine
+|-- Mockups/                       # Architectural UI/UX wireframes & design specifications
+|   |-- 01-all-clients-search.md
+|   |-- 02-client-detail-panel.md
+|   |-- 03-audit-log.md
+|   |-- 04-sera-sync.md
+|   |-- 05-settings-general.md
+|   |-- 06-settings-columns.md
+|   |-- README.md
+|   `-- images/
+|-- core/                          # Core OS-level subsystems
+|   |-- memlog.py                  # In-memory and rolling file diagnostic memory logger (ws & priv metrics)
+|   |-- sgt/                       # Sera Global Tracker (SGT) crosshair-independent capture engine
+|   |   |-- sgt_shadow.py          # Shadow capture worker, change gating, and session state manager
+|   |   |-- sgt_specs.py           # Safe JSON spec loader with self-test verification
+|   |   |-- sgt_resolver.py        # Proximity-based label/value resolver and pattern matcher
+|   |   |-- sgt_fields.json        # Portal specs & field rules (PAN, TAN, GSTIN, Ack, Form, Status)
+|   |   |-- sgt_health.py          # Spec hit telemetry, OCR share tracker, and portal shift detector
+|   |   |-- sgt_corpus.py          # Page recording & session loader for offline validation
+|   |   |-- sgt_replay.py          # Deterministic replay engine & differential testing against baselines
+|   |   `-- sgt_toolbox.py         # Shared transform functions and semantic field validators
+|   `-- vsdc/                      # Visual Screen Data Capture (VSDC) optical & UI Automation engine
 |       |-- __init__.py
-|       |-- vsdc_router.py     # Windows UIA route gater & dual-sensor execution controller
-|       |-- vsdc_uia_text.py   # VSDC-X direct UI Automation Chromium accessibility exact-text reader
-|       |-- vsdc_assembler.py  # Multi-screen session assembler & completed dataset emitter
-|       |-- vsdc_crosshairs.py # Route-specific crosshairs (identity, forms, returns, submission)
-|       |-- vsdc_name_parser.py# Taxpayer name normalizer, ligature scrubber & legal name parser
-|       |-- vsdc_ocr.py        # Windows.Media.Ocr DirectML C++ engine wrapper
-|       |-- vsdc_regex.py      # Deterministic tax regex patterns, form headings, and statutory filing types
-|       |-- vsdc_beeper.py     # Zero-leakage local PAN audio beeper
-|       |-- vsdc_gemini_parser.py # Gemini Flash AI compliance parser with Privacy Guard
-|       |-- vsdc_token_tracker.py # Gemini token and cost usage tracking engine
+|       |-- vsdc_router.py         # Windows UIA route gater & dual-sensor execution controller
+|       |-- vsdc_uia_text.py       # VSDC-X direct UI Automation Chromium accessibility exact-text reader
+|       |-- vsdc_assembler.py      # Multi-screen session assembler & completed dataset emitter
+|       |-- vsdc_crosshairs.py     # Route-specific crosshairs (identity, forms, returns, submission)
+|       |-- vsdc_name_parser.py    # Taxpayer name normalizer, ligature scrubber & legal name parser
+|       |-- vsdc_ocr.py            # Windows.Media.Ocr DirectML C++ engine wrapper
+|       |-- vsdc_regex.py          # Deterministic tax regex patterns, form headings, and statutory filing types
+|       |-- vsdc_beeper.py         # Zero-leakage local PAN audio beeper
+|       |-- vsdc_gemini_parser.py  # Gemini Flash AI compliance parser with Privacy Guard
+|       |-- vsdc_token_tracker.py  # Gemini token and cost usage tracking engine
 |       |-- vsdc_session_logger.py # Diagnostic capture logger writing to user profile
-|       `-- vsdc_worker.py     # Background QThread polling & frame processing worker
-|-- sera_extension/            # Browser extension companion
-|   |-- background.js          # Active tab tracker & IPC relay
-|   |-- tracker.js             # Passive DOM observer for ARN capture (Sera DOM Detector)
+|       `-- vsdc_worker.py         # Background QThread polling & frame processing worker
+|-- sera_extension/                # Browser extension companion (Chromium & Firefox)
+|   |-- background.js              # Active tab tracker, IPC WebSocket client, & payload forwarder
+|   |-- tracker.js                 # Passive DOM observer for ARN capture (Sera DOM Detector)
 |   |-- content_scripts/
-|   |   |-- filing_detector.js # Filing detection & extension IPC forwarding
-|   |   `-- login.js
-|   |-- sdc/                   # Smart DOM Crosshairs (SDC) Subsystem
-|   |   |-- sdc_core.js        # Route listener, in-memory assembler, hands captures to background.js
-|   |   |-- sdc_toast.js       # On-screen visual feedback toast
-|   |   `-- protocols/         # Portal crosshair definitions
+|   |   |-- filing_detector.js     # Filing detection & extension IPC forwarding
+|   |   |-- login.js
+|   |   `-- sca_adapters.js        # Portal-specific autofill adapters
+|   |-- sca/                       # Sera Clipboard Assist (SCA) Subsystem
+|   |   `-- sca_coordinator.js     # Standalone coordinator for background autofill workflows
+|   |-- sdc/                       # Smart DOM Crosshairs (SDC) Subsystem
+|   |   |-- sdc_core.js            # Route listener, in-memory assembler, hands captures to background.js
+|   |   |-- sdc_toast.js           # On-screen visual feedback toast
+|   |   `-- protocols/             # Portal crosshair definitions
 |   |       |-- itr_protocol.js
 |   |       |-- gst_protocol.js
 |   |       |-- traces_protocol.js
 |   |       `-- mca_protocol.js
-|   `-- manifest.json          # Extension permissions & content script definitions
-|-- tools/                     # Diagnostic, probe, and gap testing utilities
-|   |-- vsdc_uia_probe.py      # Standalone Chromium accessibility tree dump tool
-|   |-- vsdc_console_watch.py  # Standalone CLI capture runner for live testing
-|   |-- vsdc_x_modal_test.py   # Modal dialog UIA traversal test script
-|   |-- vsdc_x_router_gap_test.py # GST routing gap simulation harness
+|   `-- manifest.json              # Extension permissions & content script definitions
+|-- tools/                         # Diagnostic, probe, and gap testing utilities
+|   |-- sgt_replay.py              # CLI tool for replaying SGT page recordings, diffing specs, and health inspection
+|   |-- vsdc_uia_probe.py          # Standalone Chromium accessibility tree dump tool
+|   |-- vsdc_console_watch.py      # Standalone CLI capture runner for live testing
+|   |-- vsdc_x_modal_test.py       # Modal dialog UIA traversal test script
+|   |-- vsdc_x_router_gap_test.py  # GST routing gap simulation harness
 |   `-- vsdc_x_itr_router_gap_test.py # ITR form heading, filing type, and gating test script
 |-- build_tools/
-|   |-- build_package.py       # PyInstaller bundle & CRX extension packer
-|   `-- installer_setup.iss    # Inno Setup 7 Windows installer script
+|   |-- build_package.py           # PyInstaller bundle & CRX extension packer
+|   |-- build_extension.py         # Signed Chrome/Edge CRX and Firefox XPI build utility
+|   `-- installer_setup.iss        # Inno Setup 7 Windows installer script
 |-- tests/
+|   |-- sgt_golden/                # Golden session JSON fixtures for deterministic SGT test assertions
 |   |-- test_page_gst_submission.html # Standalone GST filing & modal simulation test harness
-|   |-- test_dump_injection.py    # Manual dev tool: sends a mock capture over the WebSocket bridge
-|   |-- test_ws_bridge.py         # App<->extension WebSocket bridge tests (origin trust, dispatch, reply routing)
+|   |-- test_dump_injection.py     # Manual dev tool: sends a mock capture over the WebSocket bridge
+|   |-- test_ws_bridge.py          # App<->extension WebSocket bridge tests (origin trust, dispatch, reply routing)
+|   |-- test_sgt_reliability.py    # Noise, corruption, and OCR-degradation robustness tests
+|   |-- test_sgt_replay.py         # Golden dataset deterministic replay runner
+|   |-- test_sgt_resolver.py       # Label-value proximity and pattern extraction tests
+|   |-- test_sgt_shadow.py         # SGT shadow mode worker, session lifecycle, and recovery tests
+|   |-- test_sgt_tracker_rows.py   # SGT tracker row formatting and schema consistency tests
+|   |-- test_memory_tuning.py      # Process memory footprint benchmarks and leak assertions
+|   |-- test_startup_speed.py      # App startup timeline and stage benchmarks
+|   |-- test_tracker_refresh.py    # Live tracker UI table refresh & badge consistency tests
 |   |-- test_cell_formatting.py
 |   |-- test_undo_redo_formatting.py
-|   |-- test_vsdc_assembler.py    # VSDC session assembly, filing types, & dataset sealing tests
-|   |-- test_vsdc_crosshairs.py   # Crosshair trigger route & UIA/OCR consensus tests
-|   |-- test_vsdc_name.py         # Taxpayer legal name normalization tests
-|   |-- test_vsdc_regex.py        # Statutory regex, form headings & filing type tests
-|   |-- test_vsdc_hud_pill.py     # HUD pill pulse-on-capture & lifecycle tests
-|   |-- test_vsdc_beeper.py       # PAN beeper unit tests
+|   |-- test_vsdc_assembler.py     # VSDC session assembly, filing types, & dataset sealing tests
+|   |-- test_vsdc_crosshairs.py    # Crosshair trigger route & UIA/OCR consensus tests
+|   |-- test_vsdc_name.py          # Taxpayer legal name normalization tests
+|   |-- test_vsdc_regex.py         # Statutory regex, form headings & filing type tests
+|   |-- test_vsdc_hud_pill.py      # HUD pill pulse-on-capture & lifecycle tests
+|   |-- test_vsdc_beeper.py        # PAN beeper unit tests
 |   `-- test_vsdc_gemini_enricher.py # Gemini AI structured compliance enricher tests
 `-- ui/
-    |-- ws_bridge.py           # Local WebSocket server (48765-48768) for extension events
+    |-- ws_bridge.py               # Local WebSocket server (48765-48768) for extension events
     |-- components/
     |   |-- toast.py           # SeraAlert notification widget
     |   `-- vsdc_hud_pill.py   # Floating ambient HUD Pill overlay widget

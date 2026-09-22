@@ -179,10 +179,10 @@ background services.
   attempting the DB-index lookup. Cheap pre-filter, avoids hashing every
   clipboard event (including large copied blocks of text).
 
-### 3. Native bridge protocol extension
+### 3. WebSocket bridge protocol extension
 
-Extend the existing `automation.py` <-> `native_host/host.py` <-> extension
-channel (TCP 49153) with a new lightweight message type, distinct from the
+Extend the existing `automation.py` <-> `ui/ws_bridge.py` <-> extension
+channel (WebSocket ports 48765-48768) with a new lightweight message type, distinct from the
 existing Autofill trigger:
 
 ```json
@@ -284,8 +284,8 @@ design choice below exists to keep it at effectively-zero idle cost:
    already fire on those actions — no polling the DB either). For a firm
    with a few thousand clients this index is a few hundred KB at most.
 
-4. **Native bridge stays silent on the non-match path.** No socket write,
-   no TCP chatter, nothing crosses into `native_host` unless step 2 above
+4. **WebSocket bridge stays silent on the non-match path.** No socket write,
+   no chatter, nothing crosses into `ui/ws_bridge.py` unless step 2 above
    actually resolves to a real client. This means SCA adds zero IPC
    overhead for the 99%+ of clipboard events that aren't a UID.
 
