@@ -894,6 +894,57 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - Fixed #4: added `prune_outgoing_snapshots` in `sync_peer.py`, called on `SyncPeerService` startup (0s age) and in `push_to` (300s age). P0-4's `apply_pending_swap(app_dir)` can also call `prune_outgoing_snapshots(app_dir / "incoming" / "out", max_age_seconds=0.0)`.
   - For P0-4 (#6): When P0-4 changes the receiver to stage incoming DBs and write `pending_swap.json` instead of writing over open files in place, update receiver assertions in `test_push_to_streams_snapshot_and_cleans_up` accordingly.
 
+### P0-4 — Receiver stages, swaps at start-up — In review (Reviewed by Claude Opus 5.5) — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 814 passed / 10 failed; new tests: test_push_is_staged_not_live, test_apply_pending_swap, test_push_with_other_password_rejected, test_apply_pending_swap_backup_failure_preserves_live_db, test_apply_pending_swap_strict_incoming_and_no_wal_deletion, test_push_rejected_on_zero_byte_or_zero_table, test_push_rejected_when_busy, test_push_rejected_when_restart_pending
+- Deviations from spec:
+  - Addressed review findings (Claude Opus 5.5):
+    1. Blocking 1: `apply_pending_swap` rollback strictly tracks `had_live_db`/`swapped_db` and NEVER deletes/unlinks a pre-existing live DB or salt file if pre-sync backup fails (satisfies §0 rule 3).
+    2. Blocking 2: `apply_pending_swap` strictly resolves staged files within `incoming/` only, rejects path traversal (`..`, `/`, `\`), and if staged files are missing, fails safely without touching `app_path` or live WAL/SHM sidecars.
+    3. Blocking 3: `_handle_incoming_push` validates `db_size > 0` and `salt_size in (16, 32)` up-front, and SQLite verification requires `SELECT count(*) FROM sqlite_master` > 0.
+    4. Concurrency: `SyncPeerService` uses a non-blocking `_staging_lock` returning `{"status": "rejected", "reason": "BUSY"}` when another incoming transfer is in progress.
+    5. Windows restart locks: `_retry_file_op` wraps all file replacement, backup, and cleanup operations for up to 5 seconds to gracefully handle temporary file locks during process restart race; failed startup swaps are surfaced via `self.shell.show_alert` in `main.py`.
+    6. Backup of existing `master.db-wal` and `master.db-shm` added during pre-sync backups (and restored on rollback).
+    7. Worth-fixing 1: Rejection with `RESTART_PENDING` before sending `ready` if `pending_swap.json` already exists in `incoming/`, preventing any rejected incoming push from cancelling or corrupting an already-accepted staged swap.
+    8. Worth-fixing 2: Removal of existing live `-wal`/`-shm`/`-journal` sidecars moved BEFORE `os.replace` (with retry); fails and aborts before live DB is swapped if sidecars cannot be unlinked.
+    9. Worth-fixing 3: `pending_swap.json.failed` is unlinked after displaying the warning alert on startup so it does not repeat indefinitely.
+- Notes for later WPs:
+  - Staged pushes write `incoming/pending_swap.json` and stage strictly to `incoming/<db_name>` and `incoming/<salt_name>`.
+  - `apply_pending_swap(app_dir)` is called at `main.py` startup before database initialization. It rotates `pre-sync-<ts>` backups (keeping 5), atomically replaces live files with retry, removes SQLite WAL/SHM sidecars, and prunes leftover outgoing snapshots (`incoming/out/`).
+  - In-place file replacement (`safe_write_file`) has been deleted.
+  - `_on_live_sync_received` in `main.py` routes directly to `_on_sync_received()` requiring an application restart.
+  - `test_push_to_streams_snapshot_and_cleans_up` and `tests/test_sera_sync.py` were updated to initialize valid SQLCipher test databases and verify staging + `apply_pending_swap`.
+
+### P0-8 — `rawPayload.db` auto-heal is visible — In review — 2026-09-23
+- Model: Claude Haiku 4.5   Commit: uncommitted
+- Tests: 809 passed / 11 failed (11 pre-existing); new tests: test_raw_db_reset_is_reported
+- Deviations from spec: none
+- Notes for later WPs:
+  - `self.raw_db_was_reset` attribute is added to SeraDatabase; set to backup filename when auto-heal occurs.
+  - `self._master_db_failed` flag tracks whether master.db initialization failed; if true, rawPayload.db auto-heal is skipped.
+  - Audit log entry with action="raw_db_reset" is written (backup basename included in detail).
+  - Persistent UI alert shown after startup if rawPayload.db was reset (duration=0 means persistent).
+
+### P0-9a — Installer firewall rules (Private + Domain) — In review — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: test_installer_firewall_rules passed; full suite: 808 passed / 12 failed (11 pre-existing, 1 WIP P0-5)
+- Deviations from spec: Added pre-emptive `delete rule` in `[Run]` prior to `add rule` to prevent duplicate firewall rules on application upgrades; added `RunOnceId: "DelAmasSeraSyncRule"` to `[UninstallRun]` to avoid compiler warnings and preserve idempotency.
+- Notes for later WPs:
+  - The rule allows inbound traffic for the program executable `{app}\Amas_Sera.exe` on Private and Domain profiles as specified in §5 (whole-program scope rather than restricted to ports 49156–49159 mentioned in §4.3). If port restriction is desired by the owner, §4.3 and the rule can be aligned with specific TCP/UDP port parameters.
+
+
+### P0-5 — Start-up checks that sera.key opens the DB; prompts otherwise — In review — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 815 passed / 10 failed; new tests: test_wrong_saved_password_prompts
+- Deviations / additions:
+  - Error diagnostics & visual alert (Issue #2): `_verify_master_password()` and `_get_master_password()` track failure causes (`MISSING_SALT`, `DATABASE_LOCKED`, `WRONG_PASSWORD`, `CANCELLED`). `main.py` shows a user-facing `QMessageBox.critical` alert before `sys.exit(0)` when start-up cannot unlock an existing database ("wrong password, or the database file is damaged", missing salt, or database locked), eliminating silent application exits.
+  - Salt guard on existing database (Issue #3): In `main.py`, salt generation is guarded: if `master.db` exists but `sera.salt` is missing, a new random salt is never generated, avoiding overwriting/mismatching the salt on an existing database.
+- Notes for later WPs:
+  - `_verify_master_password(password)` verifies using a bare SQLCipher connection without instantiating `SeraDatabase` (`SELECT count(*) FROM sqlite_master`).
+  - When `master.db` is missing, `_get_master_password()` returns `""` immediately without touching `sera.key` or creating a database file; first-run creation moves to P0-6.
+  - `_prompt_master_password` accepts `prompt_text` parameter and defaults to `"Enter Master Password:"`.
+  - For P0-6: move salt generation strictly inside the "New office" branch; if `master.db` exists and `sera.salt` is missing, do not generate a salt and show an error.
+
 ---
 
 ## 10. Doc changelog
