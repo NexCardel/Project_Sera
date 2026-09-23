@@ -118,6 +118,11 @@ def ensure_permanent_extension() -> Path:
 
 class SeraApp:
     def __init__(self):
+        self._telemetry_lock = threading.Lock()
+        self._telemetry_timer = None
+        self._last_telemetry_time = 0.0
+        self._telemetry_delay = 60.0
+        
         # Keeps the extension folders on disk in a stable location (outside the temporary
         # PyInstaller extraction dir) so the browser has somewhere fixed to load them from.
         # Native messaging's registry registration used to happen here too; the bridge to the
@@ -1711,68 +1716,51 @@ class SeraApp:
             pass
 
     def _broadcast_live_update_to_peers(self):
-        """Called by Database write hook to broadcast mutations to LAN peers live and in parallel."""
+        """Called by Database write hook to broadcast mutations to LAN peers live."""
         if hasattr(self, "sync_service") and self.sync_service:
-            import threading
-            def push_peer(peer_info, count_ref):
-                try:
-                    ip = peer_info.get("ip")
-                    port = int(peer_info.get("sync_port", 49157))
-                    if ip:
-                        local_metrics = self.db.get_sync_metrics() if hasattr(self.db, "get_sync_metrics") else {}
-                        local_clients = local_metrics.get("client_count", 0)
-                        local_rev = local_metrics.get("sync_revision", 0)
-
-                        peer_clients = int(peer_info.get("client_count", 0))
-                        peer_rev = int(peer_info.get("sync_revision", 0))
-
-                        # PRE-FLIGHT GUARD: If local database has fewer clients or lower revision than peer,
-                        # NEVER push local database to peer. Instead, request peer to send their higher database to us!
-                        if local_clients < peer_clients or (local_clients == peer_clients and local_rev < peer_rev):
-                            print(f"[Pre-flight Guard] Skipping push to {peer_info.get('host')}: Local DB (clients={local_clients}, rev={local_rev}) < Peer DB (clients={peer_clients}, rev={peer_rev}). Requesting pull...")
-                            self.sync_service.request_pull_from(ip, port)
-                            return
-
-                        res = self.sync_service.push_to(ip, port, live_update=True)
-                        if "successfully" in str(res).lower() or "ok" in str(res).lower():
-                            count_ref[0] += 1
-                except Exception as e:
-                    print(f"[Live Auto-Sync] Push to {peer_info.get('host')} failed: {e}")
-
-            def bg_push_all():
+            import time
+                
+            def do_telemetry_broadcast(is_timer=False):
+                if is_timer:
+                    with self._telemetry_lock:
+                        self._telemetry_timer = None
+                        self._last_telemetry_time = time.monotonic()
                 try:
                     peers = self.sync_service.get_peers()
                     if not peers:
                         return
-                    count_ref = [0]
-                    threads = []
-                    for peer in peers:
-                        t = threading.Thread(target=push_peer, args=(peer, count_ref), daemon=True)
-                        t.start()
-                        threads.append(t)
-                    for t in threads:
-                        t.join(timeout=3.5)
-                    self.sync_bridge.sync_sent_signal.emit(count_ref[0], len(peers))
+                    
+                    try:
+                        recent_dumps = self.db.get_tracker_dumps(limit=50)
+                        if recent_dumps:
+                            self.sync_service.broadcast_tracker_dumps(recent_dumps, peers=peers)
+                    except Exception as ex:
+                        print(f"[SYNC] Broadcast tracker dumps failed: {ex}")
 
-                    # SSAL and Tracker Dumps: Stream append-only telemetry across active peers
-                    if hasattr(self, "sync_service") and self.sync_service:
-                        try:
-                            recent_dumps = self.db.get_tracker_dumps(limit=50)
-                            if recent_dumps:
-                                self.sync_service.broadcast_tracker_dumps(recent_dumps, peers=peers)
-                        except Exception as ex:
-                            print(f"[SYNC] Broadcast tracker dumps failed: {ex}")
-
-                        try:
-                            recent_logs = self.db.get_audit_logs(limit=100)
-                            if recent_logs:
-                                self.sync_service.broadcast_audit_logs(recent_logs, peers=peers)
-                        except Exception as ex:
-                            print(f"[SSAL] Broadcast audit logs failed: {ex}")
+                    try:
+                        recent_logs = self.db.get_audit_logs(limit=100)
+                        if recent_logs:
+                            self.sync_service.broadcast_audit_logs(recent_logs, peers=peers)
+                    except Exception as ex:
+                        print(f"[SSAL] Broadcast audit logs failed: {ex}")
                 except Exception as e:
                     print(f"[Live Auto-Sync] Broadcast exception: {e}")
 
-            threading.Thread(target=bg_push_all, daemon=True).start()
+            with self._telemetry_lock:
+                now = time.monotonic()
+                time_since_last = now - self._last_telemetry_time
+                if time_since_last >= self._telemetry_delay:
+                    # Fire immediately if it's been long enough
+                    if self._telemetry_timer is None:
+                        self._last_telemetry_time = now
+                        threading.Thread(target=do_telemetry_broadcast, kwargs={"is_timer": False}, daemon=True).start()
+                else:
+                    # Within the window, schedule at the end of the current window if not already scheduled
+                    if self._telemetry_timer is None:
+                        wait_time = self._telemetry_delay - time_since_last
+                        self._telemetry_timer = threading.Timer(wait_time, do_telemetry_broadcast, kwargs={"is_timer": True})
+                        self._telemetry_timer.daemon = True
+                        self._telemetry_timer.start()
 
     def _show_sca_diagnostics(self):
         from ui.dialogs.sca_diagnostics_dialog import ScaDiagnosticsDialog
