@@ -118,6 +118,21 @@ class SeraSyncDialog(QDialog):
         main_layout.addWidget(self.protocol_banner)
         self._update_inv_frames_ui()
 
+        # Public-network warning (P0-9b). Hidden unless the active network is Public.
+        self.network_warning_banner = QLabel()
+        self.network_warning_banner.setWordWrap(True)
+        self.network_warning_banner.setStyleSheet(
+            "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
+            "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
+        )
+        self.network_warning_banner.setText(
+            "⚠️ This PC's network is set to Public. Windows Firewall may block LAN sync discovery. "
+            "Fix: Windows Settings → Network → set this network to Private."
+        )
+        self.network_warning_banner.setVisible(False)
+        main_layout.addWidget(self.network_warning_banner)
+        self._update_network_warning()
+
         # Main Splitter (Left: Peer Table & Controls, Right: Live Activity Log Sidebar)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
@@ -314,6 +329,13 @@ class SeraSyncDialog(QDialog):
                 "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
             )
 
+    def _update_network_warning(self):
+        if not self.sync_service or not hasattr(self.sync_service, "get_network_category"):
+            self.network_warning_banner.setVisible(False)
+            return
+        result = self.sync_service.get_network_category()
+        self.network_warning_banner.setVisible(bool(result.get("is_public")))
+
     def _load_existing_activity(self):
         if self.sync_service and hasattr(self.sync_service, "get_activity_history"):
             history = self.sync_service.get_activity_history()
@@ -386,6 +408,7 @@ class SeraSyncDialog(QDialog):
         peers = self.sync_service.get_peers()
         self.status_label.setText(f"🟢 {len(peers)} device{'s' if len(peers) != 1 else ''} online")
         self._update_inv_frames_ui()
+        self._update_network_warning()
 
         # Preserve selection
         selected_key = None

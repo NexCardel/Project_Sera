@@ -33,6 +33,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Callable
 
+from sync_network_probe import NetworkCategoryMonitor
+
 
 BEACON_PORT = 49156
 SYNC_PORT = 49157
@@ -406,6 +408,13 @@ class SyncPeerService:
         self._udp_sock: Optional[socket.socket] = None
         self._tcp_server: Optional[socket.socket] = None
 
+        # P0-9b: Public-network warning. Polled at start() and every 10 minutes;
+        # the Sera Sync panel reads get_network_category() on its own refresh timer.
+        self._network_monitor = NetworkCategoryMonitor(
+            on_change=lambda result: self._on_network_category_changed(result)
+        )
+        self._last_known_public: Optional[bool] = None
+
         # Bootstrap quarantine: if local DB is empty on startup, block all outbound pushes
         # until we have received a pull from a higher-revision peer.
         local_metrics = self._get_local_metrics()
@@ -540,9 +549,13 @@ class SyncPeerService:
         self._start_beacon_sender()
         self._start_tcp_server()
         self._start_peer_reaper()
+        if self._network_monitor:
+            self._network_monitor.start()
 
     def stop(self):
         self._stop_event.set()
+        if self._network_monitor:
+            self._network_monitor.stop()
         for sock in (self._udp_sock, self._tcp_server):
             try:
                 if sock:
@@ -554,6 +567,24 @@ class SyncPeerService:
                 t.join(timeout=0.05)
             except Exception:
                 pass
+
+    def get_network_category(self) -> dict:
+        """Latest cached result from the network-category probe (P0-9b)."""
+        if self._network_monitor:
+            return self._network_monitor.last_result
+        return {"is_public": False, "categories": [], "method": "disabled", "error": None}
+
+    def _on_network_category_changed(self, result: dict):
+        was_public = self._last_known_public
+        is_public = bool(result.get("is_public"))
+        self._last_known_public = is_public
+        if is_public and was_public is not True:
+            self.log_activity(
+                "GUARD",
+                "Public network detected",
+                "Windows Firewall may block LAN sync discovery on this network. "
+                "Fix: Windows Settings > Network > set this network to Private.",
+            )
 
     def _spawn(self, target, name):
         t = threading.Thread(target=target, name=name, daemon=True)

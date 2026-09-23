@@ -470,6 +470,38 @@ class TestSeraSync(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_get_network_category_reflects_monitor(self):
+        service = SyncPeerService(
+            db_path=self.sender_db,
+            salt_path=self.sender_salt,
+            username="SenderUser",
+        )
+        self.assertFalse(service.get_network_category()["is_public"])
+
+        service._network_monitor.probe = lambda: {
+            "is_public": True, "categories": ["public"], "method": "fake", "error": None,
+        }
+        service._network_monitor.poll_once()
+        self.assertTrue(service.get_network_category()["is_public"])
+
+    def test_network_monitor_started_and_stopped_with_service(self):
+        service = SyncPeerService(
+            db_path=self.receiver_db,
+            salt_path=self.receiver_salt,
+            username="ReceiverUser",
+            sync_port=0,
+        )
+        service._network_monitor.probe = lambda: {
+            "is_public": False, "categories": ["private"], "method": "fake", "error": None,
+        }
+        service.start()
+        try:
+            self.assertIsNotNone(service._network_monitor._thread)
+            self.assertTrue(service._network_monitor._thread.is_alive())
+        finally:
+            service.stop()
+        self.assertFalse(service._network_monitor._thread.is_alive())
+
 
 if __name__ == "__main__":
     unittest.main()
