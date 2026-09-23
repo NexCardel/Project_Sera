@@ -377,6 +377,7 @@ class SyncPeerService:
         on_tracker_dump_received: Optional[Callable] = None,
         on_activity: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
+        on_join_approval_requested: Optional[Callable[[str, str, str], bool]] = None,
     ):
         self.db_path = db_path
         self.salt_path = salt_path
@@ -395,6 +396,7 @@ class SyncPeerService:
         self.on_tracker_dump_received = on_tracker_dump_received
         self.on_activity = on_activity
         self.on_error = on_error
+        self.on_join_approval_requested = on_join_approval_requested
 
         self._peers: dict[str, PeerInfo] = {}
         self._peers_lock = threading.Lock()
@@ -402,6 +404,8 @@ class SyncPeerService:
         self._activity_history: list[dict] = []
         self._activity_lock = threading.Lock()
         self._staging_lock = threading.Lock()
+        self._join_lock = threading.Lock()
+        self._join_in_progress = False
 
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -849,6 +853,113 @@ class SyncPeerService:
                     self.push_to(sender_ip, peer_port, live_update=True)
                 threading.Thread(target=fulfill_pull, daemon=True).start()
                 return
+
+            if action == "fetch_snapshot":
+                sender_code = str(header.get("code", "")).strip()
+                if not os.path.exists(self.db_path) or not os.path.exists(self.salt_path):
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": "NO_DATABASE"}).encode("utf-8"))
+                    return
+
+                with self._join_lock:
+                    if self._join_in_progress:
+                        print(f"[Join Guard] Rejected join request from {sender_host}: join request already in progress")
+                        _send_framed(conn, json.dumps({"status": "rejected", "reason": "BUSY"}).encode("utf-8"))
+                        return
+                    self._join_in_progress = True
+
+                try:
+                    if not self.on_join_approval_requested:
+                        print(f"[Join Guard] No approval callback registered for join request from {sender_host}")
+                        _send_framed(conn, json.dumps({"status": "rejected", "reason": "APPROVAL_UNAVAILABLE"}).encode("utf-8"))
+                        return
+
+                    # Wait for user approval with 120s timeout
+                    done_event = threading.Event()
+                    result_holder = [False]
+
+                    def _ask_approval():
+                        try:
+                            result_holder[0] = bool(self.on_join_approval_requested(sender_host, sender_username, sender_code))
+                        except Exception as ex:
+                            print(f"[Join Approval Error] {ex}")
+                            result_holder[0] = False
+                        finally:
+                            done_event.set()
+
+                    threading.Thread(target=_ask_approval, daemon=True).start()
+                    if not done_event.wait(timeout=120.0):
+                        print(f"[Join Guard] Join request from {sender_host} timed out (120s)")
+                        self.log_activity("JOIN", f"Join request from {sender_host} timed out (120s)", f"Code: {sender_code}")
+                        _send_framed(conn, json.dumps({"status": "rejected", "reason": "TIMEOUT"}).encode("utf-8"))
+                        return
+
+                    if not result_holder[0]:
+                        print(f"[Join Guard] Join request from {sender_host} rejected by user")
+                        self.log_activity("JOIN", f"Join request from {sender_host} denied by user", f"Code: {sender_code}")
+                        _send_framed(conn, json.dumps({"status": "rejected", "reason": "DENIED"}).encode("utf-8"))
+                        return
+
+                    # Approved: Create snapshot and stream snapshot + salt
+                    temp_dir = None
+                    snap_path = None
+                    try:
+                        if self.db is not None:
+                            from database import make_snapshot
+                            app_dir = Path(self.db_path).parent
+                            out_base = app_dir / "incoming" / "out"
+                            out_base.mkdir(parents=True, exist_ok=True)
+                            prune_outgoing_snapshots(out_base, max_age_seconds=300.0)
+                            temp_dir = tempfile.mkdtemp(dir=str(out_base), prefix="snap_")
+                            snap_path = os.path.join(temp_dir, "master.db")
+                            make_snapshot(self.db, snap_path)
+                            file_to_send = snap_path
+                        else:
+                            file_to_send = self.db_path
+
+                        with open(self.salt_path, "rb") as sf:
+                            salt_bytes = sf.read()
+
+                        db_size = os.path.getsize(file_to_send)
+                        salt_size = len(salt_bytes)
+
+                        # Send ready frame with payload sizes
+                        ready_frame = {
+                            "status": "ready",
+                            "db_size": db_size,
+                            "salt_size": salt_size,
+                        }
+                        _send_framed(conn, json.dumps(ready_frame).encode("utf-8"))
+
+                        # Stream snapshot in 1 MB chunks
+                        chunk_size = 1 << 20  # 1 MB
+                        with open(file_to_send, "rb") as f:
+                            while True:
+                                chunk = f.read(chunk_size)
+                                if not chunk:
+                                    break
+                                conn.sendall(chunk)
+
+                        # Stream salt bytes
+                        conn.sendall(salt_bytes)
+
+                        # Receive joiner confirmation frame
+                        try:
+                            conn.settimeout(15.0)
+                            _recv_framed(conn)
+                        except Exception:
+                            pass
+
+                        self.log_activity("JOIN", f"Approved and sent database snapshot to {sender_host} ({sender_username})", f"Code: {sender_code}")
+                    finally:
+                        if temp_dir and os.path.exists(temp_dir):
+                            try:
+                                shutil.rmtree(temp_dir, ignore_errors=True)
+                            except OSError:
+                                pass
+                    return
+                finally:
+                    with self._join_lock:
+                        self._join_in_progress = False
 
             if action != "push_database":
                 conn.close()
@@ -1432,4 +1543,356 @@ def _recv_exact(conn: socket.socket, n: int) -> bytes:
             raise OSError("connection closed while reading frame")
         buf.extend(chunk)
     return bytes(buf)
+
+
+# ---------------- First-Run (P0-6): Join Office / New Office Helpers ----------------
+
+def discover_lan_peers(
+    timeout_seconds: float = 10.0,
+    stop_event: Optional[threading.Event] = None,
+    on_peer_found: Optional[Callable[[dict], None]] = None,
+) -> list[dict]:
+    """
+    Listens for UDP beacons on BEACON_PORT for up to timeout_seconds without starting full sync service.
+    Returns list of discovered peer dicts: [{"host": ..., "username": ..., "ip": ..., "sync_port": ..., ...}].
+    """
+    peers: dict[str, dict] = {}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("", BEACON_PORT))
+    except Exception as e:
+        print(f"[discover_lan_peers] Could not bind to beacon port {BEACON_PORT}: {e}")
+        sock.close()
+        return []
+
+    sock.settimeout(0.5)
+    start_time = time.monotonic()
+    try:
+        while time.monotonic() - start_time < timeout_seconds:
+            if stop_event and stop_event.is_set():
+                break
+            try:
+                data, addr = sock.recvfrom(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+
+            try:
+                body = json.loads(data.decode("utf-8"))
+                if body.get("magic") != SERA_SYNC_MAGIC:
+                    continue
+                host = body.get("host")
+                if not host:
+                    continue
+                peer_info = {
+                    "host": host,
+                    "username": body.get("username", "Unknown"),
+                    "ip": addr[0],
+                    "sync_port": int(body.get("sync_port", SYNC_PORT)),
+                    "app_version": body.get("app_version", "Unknown"),
+                    "client_count": int(body.get("client_count", 0)),
+                }
+                if host not in peers:
+                    peers[host] = peer_info
+                    if on_peer_found:
+                        try:
+                            on_peer_found(peer_info)
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+    finally:
+        sock.close()
+
+    return list(peers.values())
+
+
+def join_office_fetch_snapshot(
+    peer_ip: str,
+    peer_port: int,
+    app_dir: str | Path,
+    host_name: str,
+    username: str,
+    code: str,
+    on_progress: Optional[Callable[[str], None]] = None,
+    timeout: float = 135.0,
+) -> tuple[bool, str, Optional[Path], Optional[Path]]:
+    """
+    Connects to an existing office workstation to request and fetch a database snapshot + salt.
+    Streams to incoming/ and leaves files staged until master password verification.
+    Returns (success, reason_or_message, staged_db_path, staged_salt_path).
+    """
+    app_path = Path(app_dir)
+    incoming_dir = app_path / "incoming"
+    incoming_dir.mkdir(parents=True, exist_ok=True)
+
+    stream_id = time.time_ns()
+    db_part = incoming_dir / f"master.db.join.{stream_id}.part"
+    salt_part = incoming_dir / f"sera.salt.join.{stream_id}.part"
+    staged_db = incoming_dir / "master.db"
+    staged_salt = incoming_dir / "sera.salt"
+
+    def _clean_parts():
+        for p in (db_part, salt_part):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                pass
+
+    try:
+        if on_progress:
+            on_progress(f"Connecting to {peer_ip}:{peer_port}...")
+
+        with socket.create_connection((peer_ip, peer_port), timeout=10.0) as sock:
+            sock.settimeout(timeout)
+
+            # Send fetch_snapshot request
+            header = {
+                "action": "fetch_snapshot",
+                "host": host_name,
+                "username": username,
+                "code": str(code).strip(),
+            }
+            _send_framed(sock, json.dumps(header).encode("utf-8"))
+
+            if on_progress:
+                on_progress("Waiting for approval on remote workstation (up to 120s)...")
+
+            # Receive ready / reject frame
+            resp_raw = _recv_framed(sock)
+            if not resp_raw:
+                return False, "Connection closed by remote peer without response", None, None
+            resp = json.loads(resp_raw.decode("utf-8"))
+
+            if resp.get("status") != "ready":
+                reason = resp.get("reason", "Request rejected by remote workstation")
+                return False, reason, None, None
+
+            db_size = int(resp.get("db_size", 0))
+            salt_size = int(resp.get("salt_size", 0))
+
+            if db_size <= 0 or salt_size not in (16, 32):
+                return False, f"Invalid payload sizes from server: db_size={db_size}, salt_size={salt_size}", None, None
+
+            if on_progress:
+                on_progress("Downloading office database...")
+
+            # 1. Stream incoming DB snapshot (1 MB chunks)
+            chunk_size = 1 << 20
+            bytes_left = db_size
+            with open(db_part, "wb") as f:
+                while bytes_left > 0:
+                    to_read = min(chunk_size, bytes_left)
+                    chunk = _recv_exact(sock, to_read)
+                    if not chunk:
+                        raise OSError(f"Connection lost during database transfer ({db_size - bytes_left}/{db_size} bytes)")
+                    f.write(chunk)
+                    bytes_left -= len(chunk)
+
+            # 2. Stream incoming salt
+            bytes_left = salt_size
+            with open(salt_part, "wb") as f:
+                while bytes_left > 0:
+                    to_read = min(chunk_size, bytes_left)
+                    chunk = _recv_exact(sock, to_read)
+                    if not chunk:
+                        raise OSError(f"Connection lost during salt transfer ({salt_size - bytes_left}/{salt_size} bytes)")
+                    f.write(chunk)
+                    bytes_left -= len(chunk)
+
+            # Atomic rename to staged files
+            os.replace(db_part, staged_db)
+            os.replace(salt_part, staged_salt)
+
+            # Send acknowledgement back
+            try:
+                _send_framed(sock, json.dumps({"status": "ok"}).encode("utf-8"))
+            except Exception:
+                pass
+
+            if on_progress:
+                on_progress("Database downloaded successfully. Ready for password verification.")
+
+            return True, "Snapshot fetched successfully", staged_db, staged_salt
+
+    except Exception as e:
+        _clean_parts()
+        return False, f"Network transfer failed: {e}", None, None
+
+
+def complete_join_office(
+    app_dir: str | Path,
+    staged_db: Path,
+    staged_salt: Path,
+    password: str,
+) -> tuple[bool, str]:
+    """
+    Verifies master password against staged DB and salt (PRAGMA cipher_integrity_check + table count).
+    If valid, installs files directly to app_dir, writes sera.key, and cleans up staging.
+    If invalid, deletes staging files and leaves app_dir untouched.
+    """
+    app_path = Path(app_dir)
+    staged_db = Path(staged_db)
+    staged_salt = Path(staged_salt)
+
+    def _cleanup_staged():
+        for p in (staged_db, staged_salt):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                pass
+
+    if not staged_db.exists() or not staged_salt.exists():
+        _cleanup_staged()
+        return False, "Staged database or salt file not found"
+
+    salt_bytes = staged_salt.read_bytes()
+    if len(salt_bytes) not in (16, 32):
+        _cleanup_staged()
+        return False, f"Invalid salt size ({len(salt_bytes)}) in staged files"
+
+    # Verify password against staged DB
+    try:
+        import security
+        hex_key = security.derive_key_hex(password, salt_bytes)
+        import sqlcipher3.dbapi2 as sqlite3
+        conn = sqlite3.connect(str(staged_db))
+        try:
+            conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+            table_count_row = conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+            table_count = table_count_row[0] if table_count_row else 0
+            integrity_rows = conn.execute("PRAGMA cipher_integrity_check;").fetchall()
+            if table_count <= 0 or integrity_rows:
+                _cleanup_staged()
+                return False, "PASSWORD_MISMATCH: Master password cannot decrypt the office database"
+        finally:
+            conn.close()
+    except Exception as ex:
+        _cleanup_staged()
+        return False, f"PASSWORD_MISMATCH: Verification failed: {ex}"
+
+    # Verified! Install files into app_dir
+    # ── Blocking #1: backup any existing files before overwriting ──────────────
+    import datetime as _dt
+    ts = _dt.datetime.now().strftime("%Y%m%d%H%M%S")
+
+    final_db = app_path / "master.db"
+    final_salt = app_path / security.SALT_FILE
+    final_key = app_path / "sera.key"
+
+    def _backup(path: Path) -> Optional[Path]:
+        """Rename *path* to path.bak-<ts> and return the backup path, or None."""
+        if not path.exists():
+            return None
+        bak = path.with_name(path.name + f".bak-{ts}")
+        path.rename(bak)
+        return bak
+
+    db_bak = salt_bak = key_bak = None
+    installed_db = installed_salt = installed_key = False
+    try:
+        db_bak   = _backup(final_db)
+        salt_bak = _backup(final_salt)
+        key_bak  = _backup(final_key)
+
+        os.replace(staged_db, final_db)
+        installed_db = True
+
+        os.replace(staged_salt, final_salt)
+        installed_salt = True
+
+        final_key.write_text(password, encoding="utf-8")
+        installed_key = True
+
+        return True, "Office database installed successfully"
+
+    except Exception as ex:
+        # ── Blocking #2: rollback any partially installed files ────────────────
+        def _restore(installed_flag: bool, current_path: Path, bak_path: Optional[Path]):
+            if installed_flag:
+                try:
+                    current_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if bak_path and bak_path.exists():
+                try:
+                    bak_path.rename(current_path)
+                except OSError:
+                    pass
+
+        _restore(installed_key,  final_key,  key_bak)
+        _restore(installed_salt, final_salt, salt_bak)
+        _restore(installed_db,   final_db,   db_bak)
+        _cleanup_staged()
+        return False, f"Failed to install verified database files: {ex}"
+
+
+def create_new_office(
+    app_dir: str | Path,
+    password: str,
+    password_confirm: str,
+) -> tuple[bool, str]:
+    """
+    Creates a brand-new office database and salt in app_dir.
+    Rules:
+      - Master password min 8 characters
+      - Passwords must match
+      - Default password 'admin123' refused
+      - Refuses if master.db already exists (§0 rule 3: no silent overwrite)
+      - Backs up existing sera.salt / sera.key to .bak-<ts> before overwriting
+      - Creates salt + DB, writes sera.key
+    """
+    pwd = password.strip()
+    pwd_conf = password_confirm.strip()
+
+    if len(pwd) < 8:
+        return False, "Master password must be at least 8 characters long."
+    if pwd != pwd_conf:
+        return False, "Passwords do not match. Please retype."
+    if pwd.lower() == "admin123":
+        return False, "Default password 'admin123' is not permitted for a new office. Choose a strong master password."
+
+    app_path = Path(app_dir)
+    app_path.mkdir(parents=True, exist_ok=True)
+    salt_path = app_path / "sera.salt"
+    db_path = app_path / "master.db"
+    key_path = app_path / "sera.key"
+
+    # §0 rule 3: refuse if master.db already exists – do not silently overwrite a live office
+    if db_path.exists():
+        return False, (
+            "An office database (master.db) already exists in this directory. "
+            "Remove or back it up manually before creating a new office."
+        )
+
+    # §0 rule 3: backup existing salt / key before overwriting
+    import datetime as _dt
+    ts = _dt.datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def _safe_backup(path: Path) -> None:
+        if path.exists():
+            bak = path.with_name(path.name + f".bak-{ts}")
+            path.rename(bak)
+
+    _safe_backup(salt_path)
+    _safe_backup(key_path)
+
+    try:
+        import security
+        security.generate_and_save_salt(str(salt_path))
+        salt = security.load_salt(str(salt_path))
+        hex_key = security.derive_key_hex(pwd, salt)
+
+        from database import SeraDatabase
+        db = SeraDatabase(str(db_path), hex_key, defer_startup_maintenance=True)
+        del db
+
+        key_path.write_text(pwd, encoding="utf-8")
+        return True, "Office created successfully"
+    except Exception as ex:
+        return False, f"Failed to create new office database: {ex}"
 

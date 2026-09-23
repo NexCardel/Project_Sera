@@ -55,6 +55,7 @@ class SyncSignalBridge(QObject):
     update_found_signal = Signal(dict)
     update_ready_signal = Signal(str, dict)
     maintenance_done_signal = Signal()
+    join_approval_signal = Signal(str, str, str, object)
 
 import security
 from database import SeraDatabase
@@ -161,6 +162,7 @@ class SeraApp:
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
+        self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self._pending_update_installer = None
         self._pending_update_info = None
         self._update_applied = False
@@ -199,18 +201,21 @@ class SeraApp:
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
         
-        # Salt initialization:
-        # Generate a salt ONLY when master.db does not exist (new office).
-        # If master.db already exists but sera.salt is missing, do NOT generate a new salt,
-        # as a random salt will never decrypt the existing database.
-        if not os.path.exists(self.salt_path):
-            if os.path.exists(self.db_path):
+        # First-run check (P0-6): When master.db does not exist in APP_DIR,
+        # prompt user to create a New Office or Join an existing office.
+        # Salt generation is moved inside the "New office" branch.
+        master_password = None
+        if not os.path.exists(self.db_path):
+            from ui.dialogs.first_run_dialog import FirstRunDialog
+            first_run_dlg = FirstRunDialog(APP_DIR, getattr(self, "actor_alias", "Admin"))
+            if first_run_dlg.exec() != QDialog.Accepted:
+                sys.exit(0)
+            master_password = first_run_dlg.master_password or self._get_master_password()
+        else:
+            if not os.path.exists(self.salt_path):
                 print(f"[SeraApp Error] Database exists at {self.db_path} but salt is missing at {self.salt_path}")
-            else:
-                security.generate_and_save_salt(self.salt_path)
-            
-        # Auto-unlock vault via stored keyfile or default credentials (no login prompt on launch)
-        master_password = self._get_master_password()
+            master_password = self._get_master_password()
+
         if not master_password:
             if os.path.exists(self.db_path):
                 self._show_startup_auth_error()
@@ -297,6 +302,7 @@ class SeraApp:
             on_peer_logs_received=self._on_peer_logs_received,
             on_tracker_dump_received=self._on_tracker_dump_received,
             on_error=lambda msg: print(f"[Sera Sync] {msg}"),
+            on_join_approval_requested=self._on_join_approval_requested,
         )
         self.sync_service.start()
         self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
@@ -1840,6 +1846,31 @@ class SeraApp:
     def _on_tracker_dump_received(self, sender_host: str, count: int):
         """Called from SyncPeerService background thread when tracker dumps are received."""
         self.sync_bridge.tracker_dump_received_signal.emit(sender_host, count)
+
+    def _on_join_approval_requested(self, host: str, username: str, code: str) -> bool:
+        """Called from SyncPeerService background thread when a join request arrives (P0-6)."""
+        event = threading.Event()
+        holder = [False]
+        self.sync_bridge.join_approval_signal.emit(host, username, code, (event, holder))
+        # Modal auto-times out in 120s; wait up to 122s
+        if not event.wait(timeout=122.0):
+            return False
+        return holder[0]
+
+    def _handle_join_approval_modal_main_thread(self, host: str, username: str, code: str, payload: tuple):
+        """Main thread GUI handler to show on-screen approval modal for incoming join request (P0-6)."""
+        event, holder = payload
+        try:
+            from ui.dialogs.first_run_dialog import JoinApprovalDialog
+            parent = getattr(self, "shell", None)
+            dlg = JoinApprovalDialog(host, username, code, timeout_seconds=120, parent=parent)
+            res = dlg.exec()
+            holder[0] = (res == QDialog.Accepted)
+        except Exception as e:
+            print(f"[SeraApp] Error showing join approval modal: {e}")
+            holder[0] = False
+        finally:
+            event.set()
 
     def _handle_tracker_dump_received_main_thread(self, sender_host: str, count: int):
         """Main thread GUI handler when peer tracker dumps are received."""

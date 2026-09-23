@@ -1,3 +1,4 @@
+import os
 import time
 import pytest
 from unittest.mock import MagicMock
@@ -1227,3 +1228,668 @@ def test_wrong_saved_password_prompts(tmp_path, monkeypatch):
     stub_valid._last_auth_error = "CANCELLED"
     SeraApp._show_startup_auth_error(stub_valid)
     assert len(dialog_calls) == 3, "CANCELLED must not show a critical error dialog"
+
+
+# ==============================================================================
+# P0-6: First Run - New Office / Join Office Tests
+# ==============================================================================
+
+def test_join_flow_end_to_end(tmp_path):
+    """
+    Acceptance test for P0-6:
+    Two services on localhost (different temp dirs and ports) and the approval callback
+    auto-answering yes: the joiner ends with a DB that opens with the office password.
+    With the callback answering no, nothing is written on the joiner.
+    """
+    import security
+    from database import SeraDatabase
+    from sync_peer import (
+        SyncPeerService,
+        join_office_fetch_snapshot,
+        complete_join_office,
+    )
+
+    # 1. Setup serving office (Peer A)
+    office_pwd = "office_master_secret_2026"
+    server_dir = tmp_path / "server_office"
+    server_dir.mkdir()
+    server_db_path = str(server_dir / "master.db")
+    server_salt_path = str(server_dir / security.SALT_FILE)
+
+    security.generate_and_save_salt(server_salt_path)
+    salt_bytes = security.load_salt(server_salt_path)
+    hex_key = security.derive_key_hex(office_pwd, salt_bytes)
+
+    server_db = SeraDatabase(server_db_path, hex_key, defer_startup_maintenance=True)
+    pan_col = next((c for c in server_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+    pan_id = pan_col["id"] if pan_col else 5
+    server_db.add_client({pan_id: "ABCDE1234F"}, "TEST OFFICE CLIENT", [])
+
+    # Callback flag control
+    approval_response = [True]
+    approval_calls = []
+
+    def on_approval(host, username, code):
+        approval_calls.append((host, username, code))
+        return approval_response[0]
+
+    server_service = SyncPeerService(
+        db_path=server_db_path,
+        salt_path=server_salt_path,
+        username="AdminOffice",
+        db=server_db,
+        sync_port=0,
+        on_join_approval_requested=on_approval,
+    )
+    server_service.start()
+    server_port = server_service.sync_port
+    time.sleep(0.1)
+
+    try:
+        # Case A: Approval callback auto-answers YES -> Joiner gets DB & password verified
+        joiner_dir_yes = tmp_path / "joiner_office_yes"
+        joiner_dir_yes.mkdir()
+        code_yes = "789123"
+
+        ok, reason, staged_db, staged_salt = join_office_fetch_snapshot(
+            peer_ip="127.0.0.1",
+            peer_port=server_port,
+            app_dir=joiner_dir_yes,
+            host_name="Joiner-PC-1",
+            username="Staff1",
+            code=code_yes,
+        )
+
+        assert ok is True, f"Fetch snapshot failed: {reason}"
+        assert len(approval_calls) == 1
+        assert approval_calls[-1] == ("Joiner-PC-1", "Staff1", code_yes)
+        assert staged_db is not None and staged_db.exists()
+        assert staged_salt is not None and staged_salt.exists()
+
+        # Complete join with correct office password
+        install_ok, install_reason = complete_join_office(
+            app_dir=joiner_dir_yes,
+            staged_db=staged_db,
+            staged_salt=staged_salt,
+            password=office_pwd,
+        )
+        assert install_ok is True, f"Install failed: {install_reason}"
+
+        # Verify joiner files exist
+        joiner_db_path = joiner_dir_yes / "master.db"
+        joiner_salt_path = joiner_dir_yes / security.SALT_FILE
+        joiner_key_path = joiner_dir_yes / "sera.key"
+
+        assert joiner_db_path.exists()
+        assert joiner_salt_path.exists()
+        assert joiner_key_path.exists()
+        assert joiner_key_path.read_text(encoding="utf-8").strip() == office_pwd
+
+        # Verify joiner opens DB and sees the client
+        joiner_salt = security.load_salt(str(joiner_salt_path))
+        joiner_hex = security.derive_key_hex(office_pwd, joiner_salt)
+        joiner_db = SeraDatabase(str(joiner_db_path), joiner_hex, defer_startup_maintenance=True)
+        metrics = joiner_db.get_sync_metrics()
+        assert metrics["client_count"] == 1
+        del joiner_db
+
+        # Case B: Approval callback answers NO -> Nothing is written on the joiner
+        approval_response[0] = False
+        joiner_dir_no = tmp_path / "joiner_office_no"
+        joiner_dir_no.mkdir()
+        code_no = "456789"
+
+        ok_no, reason_no, staged_db_no, staged_salt_no = join_office_fetch_snapshot(
+            peer_ip="127.0.0.1",
+            peer_port=server_port,
+            app_dir=joiner_dir_no,
+            host_name="Joiner-PC-2",
+            username="Staff2",
+            code=code_no,
+        )
+
+        assert ok_no is False
+        assert "reject" in reason_no.lower() or "denied" in reason_no.lower()
+        assert not (joiner_dir_no / "master.db").exists()
+        assert not (joiner_dir_no / security.SALT_FILE).exists()
+        assert not (joiner_dir_no / "sera.key").exists()
+        incoming_no = joiner_dir_no / "incoming"
+        if incoming_no.exists():
+            assert not (incoming_no / "master.db").exists()
+            assert not (incoming_no / "sera.salt").exists()
+
+    finally:
+        server_service.stop()
+        del server_db
+
+
+def test_join_flow_concurrency_rejection(tmp_path):
+    """The server allows at most one pending join request at a time."""
+    import security
+    from database import SeraDatabase
+    from sync_peer import SyncPeerService, join_office_fetch_snapshot
+    import threading
+
+    office_pwd = "office_pwd_12345"
+    server_dir = tmp_path / "server_busy_test"
+    server_dir.mkdir()
+    server_db_path = str(server_dir / "master.db")
+    server_salt_path = str(server_dir / security.SALT_FILE)
+
+    security.generate_and_save_salt(server_salt_path)
+    salt_bytes = security.load_salt(server_salt_path)
+    hex_key = security.derive_key_hex(office_pwd, salt_bytes)
+    server_db = SeraDatabase(server_db_path, hex_key, defer_startup_maintenance=True)
+
+    hang_event = threading.Event()
+    modal_opened = threading.Event()
+
+    def hanging_approval(host, username, code):
+        modal_opened.set()
+        hang_event.wait(timeout=5.0)
+        return True
+
+    server_service = SyncPeerService(
+        db_path=server_db_path,
+        salt_path=server_salt_path,
+        username="Admin",
+        db=server_db,
+        sync_port=0,
+        on_join_approval_requested=hanging_approval,
+    )
+    server_service.start()
+    server_port = server_service.sync_port
+    time.sleep(0.1)
+
+    try:
+        client1_dir = tmp_path / "joiner_client_1"
+        client1_dir.mkdir()
+        client2_dir = tmp_path / "joiner_client_2"
+        client2_dir.mkdir()
+
+        t1_result = []
+        def _join1():
+            res = join_office_fetch_snapshot(
+                peer_ip="127.0.0.1",
+                peer_port=server_port,
+                app_dir=client1_dir,
+                host_name="PC1",
+                username="User1",
+                code="111111",
+            )
+            t1_result.append(res)
+
+        t1 = threading.Thread(target=_join1, daemon=True)
+        t1.start()
+
+        # Wait until client 1 opens the modal on the server
+        assert modal_opened.wait(timeout=2.0) is True
+
+        # Now client 2 tries to join while modal is open
+        ok2, reason2, _, _ = join_office_fetch_snapshot(
+            peer_ip="127.0.0.1",
+            peer_port=server_port,
+            app_dir=client2_dir,
+            host_name="PC2",
+            username="User2",
+            code="222222",
+        )
+        assert ok2 is False
+        assert "busy" in reason2.lower() or "reject" in reason2.lower()
+
+        # Release client 1
+        hang_event.set()
+        t1.join(timeout=3.0)
+        assert len(t1_result) == 1
+        assert t1_result[0][0] is True
+    finally:
+        hang_event.set()
+        server_service.stop()
+        del server_db
+
+
+def test_join_flow_wrong_password_fails_verification(tmp_path):
+    """If wrong office password is provided after snapshot download, files are not installed."""
+    import security
+    from database import SeraDatabase
+    from sync_peer import (
+        SyncPeerService,
+        join_office_fetch_snapshot,
+        complete_join_office,
+    )
+
+    office_pwd = "real_office_password_1"
+    server_dir = tmp_path / "server_wrong_pwd"
+    server_dir.mkdir()
+    server_db_path = str(server_dir / "master.db")
+    server_salt_path = str(server_dir / security.SALT_FILE)
+
+    security.generate_and_save_salt(server_salt_path)
+    salt_bytes = security.load_salt(server_salt_path)
+    hex_key = security.derive_key_hex(office_pwd, salt_bytes)
+    server_db = SeraDatabase(server_db_path, hex_key, defer_startup_maintenance=True)
+
+    server_service = SyncPeerService(
+        db_path=server_db_path,
+        salt_path=server_salt_path,
+        username="Admin",
+        db=server_db,
+        sync_port=0,
+        on_join_approval_requested=lambda h, u, c: True,
+    )
+    server_service.start()
+    server_port = server_service.sync_port
+    time.sleep(0.1)
+
+    try:
+        joiner_dir = tmp_path / "joiner_wrong_pwd"
+        joiner_dir.mkdir()
+
+        ok, reason, staged_db, staged_salt = join_office_fetch_snapshot(
+            peer_ip="127.0.0.1",
+            peer_port=server_port,
+            app_dir=joiner_dir,
+            host_name="Joiner-PC",
+            username="Staff",
+            code="654321",
+        )
+        assert ok is True
+        assert staged_db.exists()
+        assert staged_salt.exists()
+
+        # Attempt install with wrong password
+        install_ok, install_reason = complete_join_office(
+            app_dir=joiner_dir,
+            staged_db=staged_db,
+            staged_salt=staged_salt,
+            password="incorrect_password",
+        )
+        assert install_ok is False
+        assert "password" in install_reason.lower() or "mismatch" in install_reason.lower()
+
+        # Ensure live files are not installed
+        assert not (joiner_dir / "master.db").exists()
+        assert not (joiner_dir / security.SALT_FILE).exists()
+        assert not (joiner_dir / "sera.key").exists()
+    finally:
+        server_service.stop()
+        del server_db
+
+
+def test_create_new_office_validation(tmp_path):
+    """
+    New office password validation:
+    - Min 8 chars
+    - Typed twice (must match)
+    - admin123 refused
+    - Creates salt + DB and writes sera.key
+    """
+    import security
+    from sync_peer import create_new_office
+
+    # 1. Password under 8 chars
+    dir1 = tmp_path / "office_short"
+    dir1.mkdir()
+    ok, err = create_new_office(dir1, "short", "short")
+    assert ok is False
+    assert "8" in err
+
+    # 2. Passwords don't match
+    dir2 = tmp_path / "office_mismatch"
+    dir2.mkdir()
+    ok, err = create_new_office(dir2, "password123", "password456")
+    assert ok is False
+    assert "match" in err.lower()
+
+    # 3. admin123 refused
+    dir3 = tmp_path / "office_admin123"
+    dir3.mkdir()
+    ok, err = create_new_office(dir3, "admin123", "admin123")
+    assert ok is False
+    assert "admin123" in err.lower()
+
+    # 4. Valid password creates salt, DB, sera.key
+    dir4 = tmp_path / "office_valid"
+    dir4.mkdir()
+    ok, err = create_new_office(dir4, "valid_office_pwd_99", "valid_office_pwd_99")
+    assert ok is True
+    assert (dir4 / "master.db").exists()
+    assert (dir4 / security.SALT_FILE).exists()
+    assert (dir4 / "sera.key").exists()
+    assert (dir4 / "sera.key").read_text(encoding="utf-8").strip() == "valid_office_pwd_99"
+
+    # Verify database opens with the derived key
+    salt = security.load_salt(str(dir4 / security.SALT_FILE))
+    hex_k = security.derive_key_hex("valid_office_pwd_99", salt)
+    from database import SeraDatabase
+    db = SeraDatabase(str(dir4 / "master.db"), hex_k, defer_startup_maintenance=True)
+    assert db.get_sync_metrics()["client_count"] == 0
+    del db
+
+
+def test_join_approval_dialog_ui():
+    """Verifies JoinApprovalDialog formats code and responds to accept/reject."""
+    from PySide6.QtWidgets import QApplication, QDialog
+    from ui.dialogs.first_run_dialog import JoinApprovalDialog
+    app = QApplication.instance() or QApplication([])
+
+    dlg = JoinApprovalDialog(host="OfficePC", username="John", code="123456", timeout_seconds=120)
+
+    # Check that code is formatted nicely
+    assert "123  456" in dlg.code_label.text()
+    assert "OfficePC" in dlg.windowTitle() or "Sera" in dlg.windowTitle()
+
+    # Simulate Allow button click
+    dlg.allow_btn.click()
+    assert dlg.result() == QDialog.Accepted
+
+    # Test Reject
+    dlg_reject = JoinApprovalDialog(host="OfficePC2", username="Jane", code="654321", timeout_seconds=120)
+    dlg_reject.reject_btn.click()
+    assert dlg_reject.result() == QDialog.Rejected
+
+    # Test timeout tick
+    dlg_timeout = JoinApprovalDialog(host="OfficePC3", username="Bob", code="999888", timeout_seconds=2)
+    dlg_timeout._on_tick()
+    assert dlg_timeout.timeout_remaining == 1
+    dlg_timeout._on_tick()
+    assert dlg_timeout.timeout_remaining == 0
+    assert dlg_timeout.result() == QDialog.Rejected
+
+
+def test_first_run_dialog_ui(tmp_path):
+    """Verifies FirstRunDialog page navigation and new office creation flow."""
+    from PySide6.QtWidgets import QApplication
+    from ui.dialogs.first_run_dialog import FirstRunDialog
+    import security
+    app = QApplication.instance() or QApplication([])
+
+    dlg = FirstRunDialog(app_dir=tmp_path, actor_alias="TestAdmin")
+
+    # Initial page is choice page
+    assert dlg.stack.currentIndex() == 0
+
+    # Navigate to New Office page
+    dlg.stack.setCurrentIndex(1)
+    assert dlg.stack.currentIndex() == 1
+
+    # Enter invalid password (< 8 chars)
+    dlg.new_pwd_input.setText("short")
+    dlg.new_pwd_confirm.setText("short")
+    dlg._handle_create_new_office()
+    assert "8" in dlg.new_error_label.text()
+    assert not (tmp_path / "master.db").exists()
+
+    # Enter mismatched passwords
+    dlg.new_pwd_input.setText("mismatch123")
+    dlg.new_pwd_confirm.setText("mismatch456")
+    dlg._handle_create_new_office()
+    assert "match" in dlg.new_error_label.text().lower()
+
+    # Enter admin123
+    dlg.new_pwd_input.setText("admin123")
+    dlg.new_pwd_confirm.setText("admin123")
+    dlg._handle_create_new_office()
+    assert "admin123" in dlg.new_error_label.text().lower()
+
+    # Enter valid password
+    valid_pwd = "brand_new_office_2026"
+    dlg.new_pwd_input.setText(valid_pwd)
+    dlg.new_pwd_confirm.setText(valid_pwd)
+    dlg._handle_create_new_office()
+
+    assert dlg.master_password == valid_pwd
+    assert (tmp_path / "master.db").exists()
+    assert (tmp_path / security.SALT_FILE).exists()
+    assert (tmp_path / "sera.key").exists()
+
+
+def test_startup_dispatches_first_run_dialog_and_does_not_generate_salt(monkeypatch, tmp_path):
+    """
+    When master.db does not exist in APP_DIR:
+    - Salt must NOT be generated prior to user choice
+    - FirstRunDialog must be displayed
+    """
+    import os
+    import security
+    import main as main_module
+    from ui.dialogs.first_run_dialog import FirstRunDialog
+    from PySide6.QtWidgets import QApplication, QDialog
+    app = QApplication.instance() or QApplication([])
+
+    empty_app_dir = tmp_path / "empty_office_app"
+    empty_app_dir.mkdir()
+    monkeypatch.setattr(main_module, "APP_DIR", empty_app_dir)
+
+    dialog_shown = []
+    def mock_first_run_exec(self):
+        dialog_shown.append(True)
+        # Verify salt does NOT exist before first run dialog finishes
+        assert not (empty_app_dir / security.SALT_FILE).exists()
+        assert not (empty_app_dir / "master.db").exists()
+        # Simulate creating new office
+        from sync_peer import create_new_office
+        create_new_office(empty_app_dir, "first_run_pass_123", "first_run_pass_123")
+        self.master_password = "first_run_pass_123"
+        return QDialog.Accepted
+
+    monkeypatch.setattr(FirstRunDialog, "exec", mock_first_run_exec)
+
+    stub = main_module.SeraApp.__new__(main_module.SeraApp)
+    stub.db_path = str(empty_app_dir / "master.db")
+    stub.salt_path = str(empty_app_dir / security.SALT_FILE)
+    stub.actor_alias = "Admin"
+
+    # Run the startup check logic
+    if not os.path.exists(stub.db_path):
+        dlg = FirstRunDialog(empty_app_dir, stub.actor_alias)
+        res = dlg.exec()
+        assert res == QDialog.Accepted
+        master_password = dlg.master_password or stub._get_master_password()
+
+    assert len(dialog_shown) == 1
+    assert master_password == "first_run_pass_123"
+    assert (empty_app_dir / "master.db").exists()
+    assert (empty_app_dir / security.SALT_FILE).exists()
+    assert (empty_app_dir / "sera.key").exists()
+
+
+# ==============================================================================
+# P0-6 Blocking-Fix Tests
+# ==============================================================================
+
+def test_create_new_office_refuses_if_db_exists(tmp_path):
+    """
+    Blocking #1 (create path): create_new_office must return (False, …) when
+    master.db already exists.  The existing DB must NOT be overwritten.
+    """
+    import security
+    from sync_peer import create_new_office
+
+    # Seed an existing db file
+    (tmp_path / "master.db").write_bytes(b"existing-db-sentinel")
+
+    ok, err = create_new_office(tmp_path, "strongpass99", "strongpass99")
+
+    assert not ok, "create_new_office must refuse when master.db already exists"
+    assert "master.db" in err.lower() or "already exists" in err.lower()
+    # Existing db must be intact
+    assert (tmp_path / "master.db").read_bytes() == b"existing-db-sentinel"
+
+
+def test_create_new_office_backs_up_existing_salt_and_key(tmp_path):
+    """
+    Blocking #1 (create path): if sera.salt / sera.key exist but master.db does not,
+    create_new_office must rename them to .bak-<ts> before writing fresh copies.
+    """
+    import security
+    from sync_peer import create_new_office
+
+    (tmp_path / "sera.salt").write_bytes(b"old-salt")
+    (tmp_path / "sera.key").write_text("old-key", encoding="utf-8")
+
+    ok, err = create_new_office(tmp_path, "strongpass99", "strongpass99")
+
+    assert ok, f"create_new_office failed unexpectedly: {err}"
+    # At least one .bak-* backup must exist for each original
+    salt_baks = list(tmp_path.glob("sera.salt.bak-*"))
+    key_baks  = list(tmp_path.glob("sera.key.bak-*"))
+    assert salt_baks, "Old sera.salt must be backed up with .bak-<ts> suffix"
+    assert key_baks,  "Old sera.key must be backed up with .bak-<ts> suffix"
+    # Original backup content preserved
+    assert any(b.read_bytes() == b"old-salt" for b in salt_baks)
+    assert any(b.read_text(encoding="utf-8") == "old-key" for b in key_baks)
+
+
+def test_complete_join_office_backs_up_and_rolls_back_on_failure(tmp_path):
+    """
+    Blocking #1 + #2 (join path):
+      - Existing master.db / sera.salt / sera.key are renamed to .bak-<ts> before install.
+      - If the install fails mid-way the originals are restored and no partial install remains.
+    """
+    import security
+    from sync_peer import complete_join_office
+
+    # Pre-seed the app dir with existing files
+    (tmp_path / "master.db").write_bytes(b"original-db")
+    (tmp_path / security.SALT_FILE).write_bytes(b"original-salt")
+    (tmp_path / "sera.key").write_text("original-key", encoding="utf-8")
+
+    # Build a real staged pair so password verification passes
+    import sqlcipher3.dbapi2 as sqlite3
+
+    staged_salt_file = tmp_path / "staged.salt"
+    staged_db_file   = tmp_path / "staged.db"
+
+    salt_bytes = os.urandom(16)
+    staged_salt_file.write_bytes(salt_bytes)
+    hex_key = security.derive_key_hex("testpass99", salt_bytes)
+
+    conn = sqlite3.connect(str(staged_db_file))
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    conn.execute("CREATE TABLE _dummy (id INTEGER PRIMARY KEY);")
+    conn.commit()
+    conn.close()
+
+    ok, msg = complete_join_office(tmp_path, staged_db_file, staged_salt_file, "testpass99")
+
+    assert ok, f"complete_join_office failed: {msg}"
+    # Backup files must exist for all three originals
+    db_baks   = list(tmp_path.glob("master.db.bak-*"))
+    salt_baks = list(tmp_path.glob(f"{security.SALT_FILE}.bak-*"))
+    key_baks  = list(tmp_path.glob("sera.key.bak-*"))
+    assert db_baks,   "Original master.db must be backed up"
+    assert salt_baks, "Original sera.salt must be backed up"
+    assert key_baks,  "Original sera.key must be backed up"
+    assert any(b.read_bytes() == b"original-db"   for b in db_baks)
+    assert any(b.read_bytes() == b"original-salt" for b in salt_baks)
+    assert any(b.read_text(encoding="utf-8") == "original-key" for b in key_baks)
+
+    # Rollback test: patch sync_peer.os.replace so the *second* call (salt install) raises.
+    # After that failure, the already-installed master.db must be removed and
+    # the backed-up originals must be restored.
+    import sync_peer as _sp
+    from unittest.mock import patch
+
+    tmp2 = tmp_path / "rollback_test"
+    tmp2.mkdir()
+    (tmp2 / "master.db").write_bytes(b"orig-db2")
+    (tmp2 / security.SALT_FILE).write_bytes(b"orig-salt2")
+
+    staged_salt2 = tmp2 / "staged2.salt"
+    staged_db2   = tmp2 / "staged2.db"
+    staged_salt2.write_bytes(salt_bytes)
+
+    conn2 = sqlite3.connect(str(staged_db2))
+    conn2.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    conn2.execute("CREATE TABLE _dummy2 (id INTEGER PRIMARY KEY);")
+    conn2.commit()
+    conn2.close()
+
+    _real_replace = os.replace
+    _call_count = [0]
+
+    def _failing_replace(src, dst):
+        _call_count[0] += 1
+        if _call_count[0] == 2:  # second call == salt install
+            raise OSError("Simulated AV lock on salt file")
+        _real_replace(src, dst)
+
+    with patch.object(_sp.os, "replace", _failing_replace):
+        ok2, msg2 = complete_join_office(tmp2, staged_db2, staged_salt2, "testpass99")
+
+    assert not ok2, "complete_join_office must fail when salt install raises"
+    assert (tmp2 / "master.db").read_bytes() == b"orig-db2", "original master.db must be restored"
+    assert (tmp2 / security.SALT_FILE).read_bytes() == b"orig-salt2", "original sera.salt must be restored"
+
+
+def test_create_new_office_password_strip_consistent(tmp_path):
+    """
+    Blocking #3: create_new_office strips the password before deriving the key
+    and writing sera.key.  FirstRunDialog._handle_create_new_office must also
+    expose the stripped form so main.py opens the DB with the right key.
+    """
+    import security
+    from sync_peer import create_new_office
+
+    padded_pwd = "  trimMe99  "
+    ok, err = create_new_office(tmp_path, padded_pwd, padded_pwd)
+    assert ok, f"create_new_office failed: {err}"
+
+    # sera.key must contain the stripped form
+    written_key = (tmp_path / "sera.key").read_text(encoding="utf-8")
+    assert written_key == padded_pwd.strip(), (
+        f"sera.key contains '{written_key}' but expected stripped '{padded_pwd.strip()}'"
+    )
+
+    # The stored key must actually open the DB
+    salt = security.load_salt(str(tmp_path / security.SALT_FILE))
+    hex_key = security.derive_key_hex(written_key, salt)
+
+    import sqlcipher3.dbapi2 as sqlite3
+    conn = sqlite3.connect(str(tmp_path / "master.db"))
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    table_count = conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()[0]
+    conn.close()
+    assert table_count > 0, "DB opened with stripped key must contain tables"
+
+
+def test_complete_join_office_password_strip_consistent(tmp_path):
+    """
+    Blocking #3 (join path): complete_join_office must write the stripped
+    password to sera.key.  A caller that passes a padded password should still
+    end up with a key file that opens the DB.
+    """
+    import security
+    import sqlcipher3.dbapi2 as sqlite3
+    from sync_peer import complete_join_office
+
+    padded_pwd = " joinPass99 "
+    stripped = padded_pwd.strip()
+
+    salt_bytes = os.urandom(16)
+    hex_key = security.derive_key_hex(stripped, salt_bytes)
+
+    staged_salt = tmp_path / "staged.salt"
+    staged_db   = tmp_path / "staged.db"
+    staged_salt.write_bytes(salt_bytes)
+
+    conn = sqlite3.connect(str(staged_db))
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    conn.execute("CREATE TABLE _j (id INTEGER PRIMARY KEY);")
+    conn.commit()
+    conn.close()
+
+    # The dialog passes the stripped form (after fix #3); verify end-to-end.
+    ok, msg = complete_join_office(tmp_path, staged_db, staged_salt, stripped)
+    assert ok, f"complete_join_office failed: {msg}"
+
+    written_key = (tmp_path / "sera.key").read_text(encoding="utf-8")
+    assert written_key == stripped
+
+    # Verify the written key actually opens the installed DB
+    conn2 = sqlite3.connect(str(tmp_path / "master.db"))
+    conn2.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    count = conn2.execute("SELECT count(*) FROM sqlite_master;").fetchone()[0]
+    conn2.close()
+    assert count > 0

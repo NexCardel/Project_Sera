@@ -971,6 +971,22 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Not addressed (logged, not fixed): possible false positives from virtual adapters (VirtualBox/Hyper-V "Unidentified network" often reports as Public) — `is_public` is still "any connected network is Public", per spec's wording ("the active network" isn't well-defined when several are connected). Left as a known limitation for the owner to weigh in on rather than guessing at adapter-filtering heuristics.
 - Tests: full suite re-run: 839 passed / 10 failed, 2 skipped (270s) — all 10 failures match the pre-existing list (dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5). `test_sync_hotfix.py::test_join_flow_end_to_end`, which failed once in the earlier full-suite run, passed this time — confirms it was flaky/order-dependent, not a regression from this WP.
 
+### P0-6 — First-run "New office / Join office" + legacy join with on-screen approval — Done — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: 874a685
+- Tests: 844 passed / 10 failed (10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests (33 total in test_sync_hotfix.py): original 7 P0-6 tests + 5 blocking-fix tests: test_create_new_office_refuses_if_db_exists, test_create_new_office_backs_up_existing_salt_and_key, test_complete_join_office_backs_up_and_rolls_back_on_failure, test_create_new_office_password_strip_consistent, test_complete_join_office_password_strip_consistent.
+- Deviations from spec:
+  - §5 P0-6 step 5 ("ignore fetch_snapshot while the modal is open"): implemented as a lock-and-flag guard (_join_lock / _join_in_progress) rather than filtering TCP actions at the server loop level. Functionally equivalent: concurrent requests get BUSY rejection. 
+  - actor_alias passed to FirstRunDialog is always "Admin" at first-run dispatch time (actor_alias resolved later in __init__). Joiner sends OS hostname as the workstation name via socket.gethostname(), which is sufficient for approval dialog context.
+- Blocking fixes applied (post-initial-review):
+  1. Backup-before-overwrite: create_new_office now refuses if master.db exists; backs up existing sera.salt / sera.key to .bak-<ts> before overwriting. complete_join_office backs up all three target files before any install step.
+  2. Rollback on partial install: complete_join_office tracks which files were installed; on exception after any step, restores backed-up originals and removes any partially-installed file. Pattern mirrors the existing apply_pending_swap flow.
+  3. Password strip consistency: FirstRunDialog._handle_create_new_office now stores pwd.strip() (matching what create_new_office writes to sera.key). _handle_verify_and_install strips before both passing to complete_join_office and storing in self.master_password.
+- Notes for later WPs:
+  - When `master.db` does not exist in `APP_DIR`, `FirstRunDialog` provides mode selection ("New Office" and "Join Office").
+  - New office validation enforces >= 8 characters, password confirmation match, and refuses "admin123"; creates salt, initializes DB, and writes `sera.key`.
+  - Joining an office uses `discover_lan_peers` for 10s beacon listening, sends `fetch_snapshot` outbound with a 6-digit random code, waits for serving PC on-screen approval (up to 120s auto-reject), stages snapshot and salt to `incoming/`, verifies office password via cipher integrity and table count before installing, and writes `sera.key` without requiring app restart.
+  - Serving PC shows `JoinApprovalDialog` via `on_join_approval_requested` callback, enforcing at most one pending join request and rejecting concurrent requests with `BUSY`.
+
 ---
 
 ## 10. Doc changelog

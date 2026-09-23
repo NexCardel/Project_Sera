@@ -70,6 +70,7 @@ seraRawPayload*.txt
 Raw_Payload_Dump/
 Vsdc_Captures/
 *.xlsx
+!docs/sera-sync-v3-agents.xlsx
 .obsidian/
 backups/
 *.csv
