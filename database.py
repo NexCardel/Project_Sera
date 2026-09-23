@@ -2664,10 +2664,10 @@ class SeraDatabase:
 
         try:
             with self._connect() as conn:
-                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_deleted = 0")
+                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_archived = 0")
                 client_count = cur.fetchone()[0]
 
-                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_deleted = 1")
+                cur = conn.execute("SELECT COUNT(*) FROM clients WHERE is_archived = 1")
                 archived_count = cur.fetchone()[0]
 
                 cur = conn.execute("SELECT COUNT(*), MAX(ts) FROM audit_log")
@@ -2708,7 +2708,8 @@ class SeraDatabase:
             self._sync_metrics_cache = res
             self._sync_metrics_cache_ts = now
             return res
-        except Exception:
+        except Exception as e:
+            print(f"[database] get_sync_metrics failed: {e}")
             return {
                 "client_count": 0,
                 "archived_count": 0,

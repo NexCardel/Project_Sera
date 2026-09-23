@@ -874,10 +874,16 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 (Agents append entries here using the template in §8.3. Newest at the bottom.)
 
 ### P0-1 — Stop the whole-DB broadcast after every edit — Done — 2026-09-23
-- Model: Gemini 3.1 Pro   Commit: d1387cc
+- Model: Gemini 3.1 Pro   Commit: df7a850
 - Tests: 798 passed / 10 failed; new tests: test_write_does_not_push_database
 - Deviations from spec: none
 - Notes for later WPs: sync_sent_signal, _handle_sync_sent_main_thread, and sidebar.notify_sync_sent are now unused and can be cleaned up in a later WP.
+
+### P0-2 — Fix get_sync_metrics — Done — 2026-09-23
+- Model: Gemini 3.8 Flash   Commit: 302e32c
+- Tests: 799 passed / 10 failed; new tests: test_sync_metrics_counts_clients
+- Deviations from spec: none
+- Notes for later WPs: none
 
 ---
 

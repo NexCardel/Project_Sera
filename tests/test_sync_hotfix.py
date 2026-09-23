@@ -90,3 +90,33 @@ def test_write_does_not_push_database():
     # Check that no two sends are closer than the window (with small slack)
     for i in range(1, len(call_times)):
         assert call_times[i] - call_times[i-1] >= DummyApp._telemetry_delay - 0.05
+
+
+def test_sync_metrics_counts_clients(tmp_path):
+    import security
+    from database import SeraDatabase
+
+    db_path = str(tmp_path / "test_master.db")
+    salt_path = str(tmp_path / "test.salt")
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    hex_key = security.derive_key_hex("testpass123", salt)
+
+    db = SeraDatabase(db_path, hex_key, defer_startup_maintenance=True)
+    pan_col = next((c for c in db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+    pan_id = pan_col["id"] if pan_col else 5
+
+    c1 = db.add_client({pan_id: "AAAAA0001A"}, "active 1", [])
+    c2 = db.add_client({pan_id: "AAAAA0002A"}, "active 2", [])
+    c3 = db.add_client({pan_id: "AAAAA0003A"}, "archived 1", [])
+    db.archive_client(c3)
+
+    # Invalidate cache if needed
+    if hasattr(db, "_sync_metrics_cache_ts"):
+        db._sync_metrics_cache_ts = 0.0
+
+    metrics = db.get_sync_metrics()
+    assert metrics["client_count"] == 2
+    assert metrics["archived_count"] == 1
+    assert metrics["sync_revision"] > 0
+
