@@ -892,3 +892,230 @@ def test_push_rejected_when_restart_pending(tmp_path):
         receiver_service.stop()
 
 
+def test_raw_db_reset_is_reported(tmp_path):
+    import os
+    import glob
+    import security
+    import sqlcipher3.dbapi2 as sqlite3
+    from database import SeraDatabase
+
+    db_path = str(tmp_path / "master.db")
+    raw_db_path = str(tmp_path / "rawPayload.db")
+    salt_path = str(tmp_path / "sera.salt")
+    password = "testpass123"
+
+    # Create salt and master.db
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    hex_key = security.derive_key_hex(password, salt)
+
+    db = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+
+    # Verify rawPayload.db was created and accessible
+    assert os.path.exists(raw_db_path)
+    assert os.path.getsize(raw_db_path) > 0
+
+    # Now corrupt the rawPayload.db by truncating it
+    with open(raw_db_path, "wb") as f:
+        f.write(b"CORRUPTED_DATA_NOT_A_REAL_DB")
+
+    # Close the first db instance to avoid locking issues
+    del db
+
+    # Now create a new SeraDatabase instance - it should auto-heal
+    db2 = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+
+    # 1. Check that raw_db_was_reset was set
+    assert hasattr(db2, "raw_db_was_reset"), "SeraDatabase should have raw_db_was_reset attribute"
+    assert db2.raw_db_was_reset is not None, "raw_db_was_reset should be set when auto-heal happens"
+    backup_name = db2.raw_db_was_reset
+
+    # 2. Verify backup file exists and contains the corrupted data
+    assert os.path.exists(backup_name), f"Backup file {backup_name} should exist"
+    with open(backup_name, "rb") as f:
+        backup_content = f.read()
+    assert backup_content == b"CORRUPTED_DATA_NOT_A_REAL_DB", "Backup should contain the corrupted data"
+
+    # 3. Verify rawPayload.db is now a valid database
+    try:
+        conn = sqlite3.connect(raw_db_path)
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+        count = conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()[0]
+        conn.close()
+    except Exception as e:
+        raise AssertionError(f"rawPayload.db should be a valid database after auto-heal: {e}")
+
+    # 4. Verify audit log entry was written
+    with db2._connect() as conn:
+        rows = conn.execute(
+            "SELECT action, detail FROM audit_log WHERE action = 'raw_db_reset' ORDER BY id DESC LIMIT 1"
+        ).fetchall()
+
+    assert len(rows) > 0, "An audit log entry with action='raw_db_reset' should exist"
+    action, detail = rows[0]
+    assert action == "raw_db_reset"
+    backup_basename = os.path.basename(backup_name)
+    assert backup_basename in detail, f"Audit detail should mention the backup name: {detail}"
+
+
+def test_wrong_saved_password_prompts(tmp_path, monkeypatch):
+    import os
+    import security
+    from database import SeraDatabase
+    from main import SeraApp
+
+    # 1. Part A: A missing DB -> no DB file created by _get_master_password
+    missing_db_dir = tmp_path / "missing_db_env"
+    missing_db_dir.mkdir()
+    monkeypatch.setattr("main.APP_DIR", missing_db_dir)
+
+    class StubApp:
+        _verify_master_password = SeraApp._verify_master_password
+
+        def __init__(self, folder):
+            self.db_path = str(folder / "master.db")
+            self.salt_path = str(folder / security.SALT_FILE)
+            self.prompt_calls = []
+
+        def _prompt_master_password(self, prompt_text="Enter Master Password:"):
+            self.prompt_calls.append(prompt_text)
+            return "some_pass"
+
+    stub_missing = StubApp(missing_db_dir)
+    res_missing = SeraApp._get_master_password(stub_missing)
+
+    assert not (missing_db_dir / "master.db").exists(), "A missing DB must NOT be created by _get_master_password"
+    assert res_missing == "", "_get_master_password should return empty string when DB is missing"
+    assert len(stub_missing.prompt_calls) == 0, "No prompt should be shown when DB is missing"
+
+    # 2. Part B: A wrong sera.key plus a correct prompt answer -> returns the right password and rewrites sera.key
+    valid_db_dir = tmp_path / "valid_db_env"
+    valid_db_dir.mkdir()
+    monkeypatch.setattr("main.APP_DIR", valid_db_dir)
+
+    correct_password = "correct_office_pass_123"
+    wrong_password = "wrong_saved_password_456"
+
+    salt_path = str(valid_db_dir / security.SALT_FILE)
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    hex_key = security.derive_key_hex(correct_password, salt)
+
+    db_path = str(valid_db_dir / "master.db")
+    db = SeraDatabase(db_path, hex_key, defer_startup_maintenance=True)
+    del db  # close connection
+
+    # Write wrong password to sera.key
+    key_file = valid_db_dir / "sera.key"
+    key_file.write_text(wrong_password, encoding="utf-8")
+
+    stub_valid = StubApp(valid_db_dir)
+    stub_valid._prompt_master_password = lambda prompt_text="": (
+        stub_valid.prompt_calls.append(prompt_text) or correct_password
+    )
+
+    res_valid = SeraApp._get_master_password(stub_valid)
+
+    assert res_valid == correct_password, "Should return the correct password"
+    assert key_file.read_text(encoding="utf-8").strip() == correct_password, "sera.key should be rewritten with correct password"
+    assert len(stub_valid.prompt_calls) == 1, "Prompt should have been shown once"
+    expected_prompt_text = "This PC's saved password doesn't open the office database. Enter the office master password."
+    assert expected_prompt_text in stub_valid.prompt_calls[0], f"Prompt text should match spec: {stub_valid.prompt_calls[0]}"
+
+    # 3. Part C: Correct saved password in sera.key -> opens DB without prompt
+    stub_correct = StubApp(valid_db_dir)
+    res_correct = SeraApp._get_master_password(stub_correct)
+    assert res_correct == correct_password
+    assert len(stub_correct.prompt_calls) == 0, "Should not prompt when saved password is valid"
+
+    # 4. Part D: Prompt gives wrong password up to 3 tries, then returns empty and does NOT rewrite sera.key
+    key_file.write_text("another_wrong_pass", encoding="utf-8")
+    stub_fail = StubApp(valid_db_dir)
+    stub_fail._prompt_master_password = lambda prompt_text="": (
+        stub_fail.prompt_calls.append(prompt_text) or "still_wrong_pass"
+    )
+    res_fail = SeraApp._get_master_password(stub_fail)
+    assert res_fail == "", "Should return empty string after 3 failed attempts"
+    assert len(stub_fail.prompt_calls) == 3, f"Should attempt prompt up to 3 times, got {len(stub_fail.prompt_calls)}"
+    assert key_file.read_text(encoding="utf-8").strip() == "another_wrong_pass", "sera.key must not be overwritten with failing password"
+
+    # 5. Part E: Prompt cancelled on first try -> returns empty immediately without 3 prompts
+    key_file.write_text("another_wrong_pass", encoding="utf-8")
+    stub_cancel = StubApp(valid_db_dir)
+    stub_cancel._prompt_master_password = lambda prompt_text="": (
+        stub_cancel.prompt_calls.append(prompt_text) or ""
+    )
+    res_cancel = SeraApp._get_master_password(stub_cancel)
+    assert res_cancel == ""
+    assert len(stub_cancel.prompt_calls) == 1, "Should exit immediately on cancel without looping"
+
+    # 6. Part F: Default password admin123 tried when master.db exists and sera.key does not
+    default_db_dir = tmp_path / "default_db_env"
+    default_db_dir.mkdir()
+    default_salt_path = str(default_db_dir / security.SALT_FILE)
+    security.generate_and_save_salt(default_salt_path)
+    default_salt = security.load_salt(default_salt_path)
+    default_hex = security.derive_key_hex("admin123", default_salt)
+    default_db_path = str(default_db_dir / "master.db")
+    default_db = SeraDatabase(default_db_path, default_hex, defer_startup_maintenance=True)
+    del default_db
+
+    stub_default = StubApp(default_db_dir)
+    res_default = SeraApp._get_master_password(stub_default)
+    assert res_default == "admin123", "admin123 should be tried and accepted for existing DB"
+    assert len(stub_default.prompt_calls) == 0, "No prompt needed when admin123 opens DB"
+    assert (default_db_dir / "sera.key").read_text(encoding="utf-8").strip() == "admin123", "sera.key should be saved with admin123"
+
+    # 7. Part G: master.db exists but sera.salt is missing -> MISSING_SALT, no prompts
+    missing_salt_dir = tmp_path / "missing_salt_env"
+    missing_salt_dir.mkdir()
+    (missing_salt_dir / "master.db").write_bytes(b"EXISTING_DB_BYTES")
+    (missing_salt_dir / "sera.key").write_text("some_key", encoding="utf-8")
+    stub_missing_salt = StubApp(missing_salt_dir)
+    res_missing_salt = SeraApp._get_master_password(stub_missing_salt)
+    assert res_missing_salt == ""
+    assert getattr(stub_missing_salt, "_last_auth_error", None) == "MISSING_SALT"
+    assert len(stub_missing_salt.prompt_calls) == 0, "Must not prompt when salt is missing"
+
+    # 8. Part H: Database locked -> sets DATABASE_LOCKED and halts without 3 prompts
+    locked_db_dir = tmp_path / "locked_db_env"
+    locked_db_dir.mkdir()
+    locked_salt_path = str(locked_db_dir / security.SALT_FILE)
+    security.generate_and_save_salt(locked_salt_path)
+    (locked_db_dir / "master.db").write_bytes(b"LOCKED_DB_BYTES")
+    (locked_db_dir / "sera.key").write_text("saved_pass", encoding="utf-8")
+    stub_locked = StubApp(locked_db_dir)
+
+    import sqlcipher3.dbapi2 as sqlite3
+    def failing_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+
+    res_locked = SeraApp._get_master_password(stub_locked)
+    assert res_locked == ""
+    assert getattr(stub_locked, "_last_auth_error", None) == "DATABASE_LOCKED"
+    assert len(stub_locked.prompt_calls) == 0, "Must not repeatedly prompt for password when DB is locked"
+
+    # 9. Part I: _show_startup_auth_error shows QMessageBox.critical for errors and suppresses on cancel
+    dialog_calls = []
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, "critical", lambda parent, title, msg: dialog_calls.append((title, msg)))
+
+    stub_valid._last_auth_error = "MISSING_SALT"
+    SeraApp._show_startup_auth_error(stub_valid)
+    assert len(dialog_calls) == 1
+    assert "Missing Salt" in dialog_calls[-1][0]
+
+    stub_valid._last_auth_error = "DATABASE_LOCKED"
+    SeraApp._show_startup_auth_error(stub_valid)
+    assert len(dialog_calls) == 2
+    assert "Database Locked" in dialog_calls[-1][0]
+
+    stub_valid._last_auth_error = "WRONG_PASSWORD"
+    SeraApp._show_startup_auth_error(stub_valid)
+    assert len(dialog_calls) == 3
+    assert "Authentication Failed" in dialog_calls[-1][0]
+
+    stub_valid._last_auth_error = "CANCELLED"
+    SeraApp._show_startup_auth_error(stub_valid)
+    assert len(dialog_calls) == 3, "CANCELLED must not show a critical error dialog"

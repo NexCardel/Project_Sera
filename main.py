@@ -185,7 +185,7 @@ class SeraApp:
             self.app.setWindowIcon(self.app_icon)
         else:
             self.app_icon = None
-        
+
         # Apply any pending staged sync database swap before opening database
         self._pending_swap_error = None
         from sync_peer import apply_pending_swap
@@ -199,13 +199,21 @@ class SeraApp:
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
         
-        # Salt initialization
+        # Salt initialization:
+        # Generate a salt ONLY when master.db does not exist (new office).
+        # If master.db already exists but sera.salt is missing, do NOT generate a new salt,
+        # as a random salt will never decrypt the existing database.
         if not os.path.exists(self.salt_path):
-            security.generate_and_save_salt(self.salt_path)
+            if os.path.exists(self.db_path):
+                print(f"[SeraApp Error] Database exists at {self.db_path} but salt is missing at {self.salt_path}")
+            else:
+                security.generate_and_save_salt(self.salt_path)
             
         # Auto-unlock vault via stored keyfile or default credentials (no login prompt on launch)
         master_password = self._get_master_password()
         if not master_password:
+            if os.path.exists(self.db_path):
+                self._show_startup_auth_error()
             sys.exit(0)
             
         from ui.dialogs.loading_dialog import StartupLoadingDialog
@@ -309,6 +317,16 @@ class SeraApp:
         self._build_ui()
         loading_dlg.close()
         memory_mark("start-up: main window built")
+
+        # Show alert if tracker database was reset during startup
+        if self.db.raw_db_was_reset:
+            if self.db.raw_db_was_reset == "reset_without_backup":
+                msg = "Tracker database could not be opened with this office's key and was reset (no backup created)."
+            else:
+                import os
+                backup_basename = os.path.basename(self.db.raw_db_was_reset)
+                msg = f"Tracker database could not be opened with this office's key and was reset. Backup: {backup_basename}"
+            self.shell.show_alert(msg, level="warning", duration=0)
 
         # Show alert if a staged sync database swap failed during startup
         failed_swap_marker = APP_DIR / "incoming" / "pending_swap.json.failed"
@@ -1109,48 +1127,178 @@ class SeraApp:
         except Exception as e:
             print(f"[main._handle_sudr_capture Error] {e}")
 
-    def _get_master_password(self) -> str:
-        key_file = APP_DIR / "sera.key"
-        if key_file.exists():
+    def _verify_master_password(self, password: str) -> bool:
+        if not password:
+            self._last_auth_error = "EMPTY_PASSWORD"
+            return False
+        db_path = getattr(self, "db_path", str(APP_DIR / "master.db"))
+        if not os.path.exists(db_path):
+            self._last_auth_error = "MISSING_DB"
+            return False
+        salt_path = getattr(self, "salt_path", str(Path(db_path).parent / security.SALT_FILE))
+        if not os.path.exists(salt_path):
+            self._last_auth_error = "MISSING_SALT"
+            return False
+        try:
+            salt = security.load_salt(salt_path)
+            hex_key = security.derive_key_hex(password, salt)
+            import sqlcipher3.dbapi2 as sqlite3
+            conn = None
             try:
-                pwd = key_file.read_text(encoding="utf-8").strip()
-                if pwd:
-                    return pwd
+                conn = sqlite3.connect(db_path)
+                conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+                conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+                self._last_auth_error = None
+                return True
+            except sqlite3.OperationalError as op_err:
+                err_str = str(op_err).lower()
+                if "locked" in err_str or "busy" in err_str:
+                    self._last_auth_error = "DATABASE_LOCKED"
+                else:
+                    self._last_auth_error = "WRONG_PASSWORD"
+                return False
+            except Exception:
+                self._last_auth_error = "WRONG_PASSWORD"
+                return False
+            finally:
+                if conn:
+                    conn.close()
+        except Exception as e:
+            err_str = str(e).lower()
+            if "locked" in err_str or "busy" in err_str:
+                self._last_auth_error = "DATABASE_LOCKED"
+            else:
+                self._last_auth_error = "AUTH_ERROR"
+            return False
+
+    def _get_master_password(self) -> str:
+        db_path = getattr(self, "db_path", str(APP_DIR / "master.db"))
+        app_dir = Path(db_path).parent
+        key_file = app_dir / "sera.key"
+        self._last_auth_error = None
+
+        # Check existence first: never create a DB as a side effect of the check.
+        # If master.db does not exist, first-run DB creation moves to P0-6.
+        if not os.path.exists(db_path):
+            self._last_auth_error = "MISSING_DB"
+            return ""
+
+        salt_path = getattr(self, "salt_path", str(app_dir / security.SALT_FILE))
+        if not os.path.exists(salt_path):
+            self._last_auth_error = "MISSING_SALT"
+            return ""
+
+        prompt_saved_fail_text = (
+            "This PC's saved password doesn't open the office database. "
+            "Enter the office master password."
+        )
+
+        # 1. If sera.key exists, test it
+        if key_file.exists():
+            saved_pwd = ""
+            try:
+                saved_pwd = key_file.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-        
-        # Default password check
+
+            if saved_pwd and self._verify_master_password(saved_pwd):
+                return saved_pwd
+
+            if self._last_auth_error == "DATABASE_LOCKED":
+                return ""
+
+            # If it fails, show the prompt, up to 3 tries, with the specified text.
+            # Save to sera.key only after a password opens the DB.
+            for _ in range(3):
+                pwd = self._prompt_master_password(prompt_saved_fail_text)
+                if not pwd:
+                    self._last_auth_error = "CANCELLED"
+                    return ""
+                if self._verify_master_password(pwd):
+                    try:
+                        key_file.write_text(pwd, encoding="utf-8")
+                    except Exception:
+                        pass
+                    return pwd
+                if self._last_auth_error == "DATABASE_LOCKED":
+                    return ""
+            self._last_auth_error = "WRONG_PASSWORD"
+            return ""
+
+        # 2. When sera.key does not exist, default password check (only when master.db already exists)
         default_pwd = "admin123"
-        try:
-            salt = security.load_salt(self.salt_path)
-            hex_key = security.derive_key_hex(default_pwd, salt)
-            # Verify if default password unlocks database
-            test_db = SeraDatabase(self.db_path, hex_key)
+        if self._verify_master_password(default_pwd):
             try:
                 key_file.write_text(default_pwd, encoding="utf-8")
             except Exception:
                 pass
             return default_pwd
-        except Exception:
-            pass
 
-        # Fallback: Prompt once if custom password was set, then remember it
-        pwd = self._prompt_master_password()
-        if pwd:
-            try:
-                key_file.write_text(pwd, encoding="utf-8")
-            except Exception:
-                pass
-        return pwd
+        if self._last_auth_error == "DATABASE_LOCKED":
+            return ""
 
-    def _prompt_master_password(self) -> str:
+        # Fallback: Prompt if custom password was set without a saved sera.key
+        prompt_text = "Enter Master Password:"
+        for _ in range(3):
+            pwd = self._prompt_master_password(prompt_text)
+            if not pwd:
+                self._last_auth_error = "CANCELLED"
+                return ""
+            if self._verify_master_password(pwd):
+                try:
+                    key_file.write_text(pwd, encoding="utf-8")
+                except Exception:
+                    pass
+                return pwd
+            if self._last_auth_error == "DATABASE_LOCKED":
+                return ""
+        self._last_auth_error = "WRONG_PASSWORD"
+        return ""
+
+    def _prompt_master_password(self, prompt_text: str = "Enter Master Password:") -> str:
         from PySide6.QtWidgets import QInputDialog, QLineEdit
         password, ok = QInputDialog.getText(
             None, "Aman Associates — Login",
-            "Enter Master Password:", QLineEdit.Password
+            prompt_text, QLineEdit.Password
         )
 
         return password if ok and password else ""
+
+    def _show_startup_auth_error(self):
+        from PySide6.QtWidgets import QMessageBox
+        err = getattr(self, "_last_auth_error", None)
+        if err == "MISSING_SALT":
+            title = "Aman Associates — Missing Salt"
+            msg = (
+                f"The office database salt ({security.SALT_FILE}) is missing.\n\n"
+                f"Location: {getattr(self, 'salt_path', security.SALT_FILE)}\n\n"
+                "The database cannot be opened without its original salt file. "
+                "Please restore sera.salt from a backup or previous installation."
+            )
+        elif err == "DATABASE_LOCKED":
+            title = "Aman Associates — Database Locked"
+            msg = (
+                "The office database is currently locked by another process.\n\n"
+                "Please check if another instance of Sera is already running "
+                "or if another application has master.db open."
+            )
+        elif err == "CANCELLED":
+            return
+        elif err == "WRONG_PASSWORD":
+            title = "Aman Associates — Authentication Failed"
+            msg = (
+                "Could not open the office database.\n\n"
+                "Wrong password, or the database file is damaged. "
+                "The maximum number of attempts (3) was exceeded."
+            )
+        else:
+            title = "Aman Associates — Database Error"
+            msg = (
+                "Could not unlock the office database. "
+                "Wrong password, or the database file is damaged."
+            )
+
+        QMessageBox.critical(None, title, msg)
 
     def _ensure_user_identity(self) -> tuple[str, str]:
         """Get or create a simple username for this workstation (non-intrusive).
