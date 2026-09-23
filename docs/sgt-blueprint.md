@@ -586,3 +586,143 @@ Every false capture this project has hit so far — `"Search Box Input Field"` r
 a PAN's letters read as a name, a revised-return wizard's old ack read as a fresh submission —
 happened while looking at *mapped* pages only. SGT looks at every page, so the exposure multiplies.
 That is the reason the validation rules are not optional extras.
+
+
+---
+
+## 12. Enhancement roadmap — a more flexible, smarter SGT (proposed 2026-09-23)
+
+**Status:** proposed, nothing built. Two decisions are still the user's (see "Open decisions").
+Every phase keeps the existing rules: config not code, strictly passive (never click or type
+into a portal), global fixes rather than page-shaped ones, "dataset" not "return", the 4-level
+submit ladder, and every change passes `tests/test_sgt_replay.py` plus a `tools/sgt_replay.py diff`
+on the recorded corpus.
+
+### What limits SGT today (checked in the code)
+
+1. **The probe flattens the page.** `vsdc_uia_text.read_page_text` turns the UIA tree (or OCR) into
+   a list of strings; the only structure kept is `Selected:` lines. Which line is a label, which
+   cell sits in which table row/column, what is a heading, and where anything is on screen are all
+   thrown away, so every spec rebuilds structure with a regex (`after_label`, `nearest_above`,
+   record blocks split by `start`). That pushes specs towards one pattern per page — the VSDC-X
+   shape this design rejected.
+2. **Everything is polled.** A success toast shown for about a second can fall between two 350 ms
+   ticks, or be skipped by the change gate if the screenshot hash barely moves.
+3. **The page is the only source.** The strongest evidence of a filing — the ITR-V /
+   acknowledgement PDF the user downloads — and the fact that SCA just filled a given client's
+   credentials are both ignored.
+4. **Nothing proposes new specs.** The corpus and replay show where SGT fails, but every new
+   datapoint is a hand-written regex with hand-written examples.
+
+### The phases
+
+**A — Read structure, not just lines.**
+- The probe emits *nodes*: text, control type, bounding box, table row/column, heading level,
+  selected state. UIA already exposes these (Table/Grid patterns, bounding rectangles); OCR
+  returns boxes, so rows and columns can be rebuilt from geometry. The resolver keeps a `lines`
+  view, so every existing spec runs unchanged.
+- **Header-keyed table specs:** `{"form": ["Return Type","Form"], "period": ["AY","Return Period",
+  "Tax Period"], "status": ["Status"], "arn": ["Ack No","ARN"]}`. The ITR filed-returns list, the
+  GST returns calendar and a future TRACES table become one mechanism plus config.
+- **Label → value harvesting by layout** on every page ("PAN:" and whatever sits to its right or
+  just below). Specs map label *synonyms* to fields; a new portal wording is one more synonym,
+  not a new pattern.
+
+**B — More sources, still fully passive.**
+- **B1 UIA events:** subscribe to live-region-changed and notification events (what screen readers
+  use for toasts). Catches a success message shown for under a second; structure-changed events
+  can replace some screenshot polling.
+- **B2 Downloads watcher:** portal documents (ITR-V, acknowledgement PDF, GST ARN receipt) become a
+  third line source beside page and OCR, feeding the same resolver. Strongest single evidence for
+  Submitted / Verified, with no clicking.
+- **B3 SCA identity head start:** when SCA fills client X's credentials and a portal session starts,
+  the session begins as *probably client X*; the PAN on the page confirms or contradicts it. Only
+  the client id may cross over — never anything the SCA v2 rules keep secret.
+
+**C — Checks per value *type*, not per datapoint (toolbox only).**
+- GSTIN mod-36 check digit (hard pass/fail); GSTIN characters 3–12 are the PAN; PAN 4th letter =
+  entity type (P individual, F firm, C company, H HUF…), 5th letter = first letter of the name or
+  surname. These catch OCR misreads and wrong-client reads with no per-datapoint spec.
+- Position-aware OCR correction before validating (PAN `AAAAA9999A`: an O in a digit slot is 0, a 1
+  in a letter slot is I), then the checksum.
+- **Evidence that builds up:** a value's confidence grows with the number of pages and sources
+  (UIA, OCR, file) that show it and drops on contradiction; the tracker can show it, and status
+  promotion can require a minimum amount of evidence. The 2026-09-22 rule stands: one sighting of
+  a PAN/GSTIN still attributes at once.
+
+**D — SGT proposes its own specs; the user approves each one.**
+- **Miner** over the recorded corpus: recurring label → value pairs no spec captures, ranked by
+  frequency and value type, drafted as specs whose examples come from the corpus, pre-checked by
+  self-test and replay diff.
+- **Teach by pointing** in an "SGT lab" screen: click a value on a recorded page, name the field;
+  SGT infers label and type, finds every other occurrence, shows the replay diff, and writes to the
+  override `sgt_fields.json` only on Accept.
+- **Masked LLM drafting:** page *shapes* go to Gemini with letters replaced by `A` and digits by `9`,
+  so it never sees taxpayer data. Offline authoring only — live capture stays deterministic. *(Note: no thanks bro)*
+
+**E — Portal packs.** One JSON per portal: hostnames, login/logout keywords, identity field types,
+jargon → ladder mapping, label synonyms, table-header vocabulary. TAN / form 140 stay pure config;
+TRACES becomes a pack plus A's OCR geometry whenever it is brought into scope.
+
+### Order, cost and model per phase
+
+Token figures are rough estimates made 2026-09-23. "Processed" is dominated by context re-sent on
+every tool call; starting each phase in a **fresh session** (from this document and the memory
+notes) should roughly halve it.
+
+| Order | Phase | Model | Why this model | Tool calls | Processed | Written |
+|---|---|---|---|---|---|---|
+| 1 | **C** type checks, OCR correction, evidence | **Sonnet 5** | Well-specified algorithms (checksums, templates) plus tests; little design risk | 25–40 | ~1.5–2.5M | ~30–50k |
+| 2 | **A** page model, header-keyed tables, label→value | **Opus 5.5** for the node model, resolver and loader; **Sonnet 5** for migrating specs and golden tests | Foundation every later phase builds on; must keep all existing specs and replay results unchanged | 100–150 | ~10–15M | ~100–150k |
+| 3 | **B1** UIA events for toasts | **Opus 5.5** | COM event handlers on the UIA worker thread, interaction with the hung-worker replacement, verification in real Edge | 40–60 | ~3–5M | ~40–60k |
+| 4 | **B2** Downloads watcher + PDF text | **Sonnet 5** | A contained new source feeding the existing resolver | 30–40 | ~2–3M | ~30–40k |
+| 5 | **B3** SCA identity head start | **Opus 5.5** | Crosses the SCA v2 security boundary; needs a careful review, not much code | 20–30 | ~1.5–2M | ~15–25k |
+| 6 | **E** portal packs | **Sonnet 5** | Mostly restructuring JSON and the loader behind existing tests | 40–60 | ~3–5M | ~30–50k |
+| 7 | **D** miner, SGT lab, masked LLM drafting | **Opus 5.5** for the miner and the masking rules; **Sonnet 5** for the SGT lab screen | Masking is a privacy guarantee; the UI is routine | 100–150 | ~10–15M | ~100–150k |
+| any | Replay diffs, health checks, test triage, doc sweeps | **Haiku 4.5** | Running `tools/sgt_replay.py` and summarising results needs no design judgement | small | small | small |
+| | **Total** | | | | **~30–50M** | **~0.4–0.55M** |
+
+Suggested stopping point: build C, look at its accuracy gain on the corpus, then decide on A.
+D depends on A (the miner is far easier over nodes than over lines), so it goes last.
+
+### Model per step — rules for the agent doing the work
+
+Phases 2 and 7 use two models, so they are split into steps with a **hard stop** between them.
+
+**Rules:**
+- **Check the model first.** Before starting a step, check the model you are running as against
+  the table. If it doesn't match, do no work on that step: tell the user which model the step
+  needs and stop.
+- **Stop at every STOP.** When a step marked STOP is finished, stop. Report what was built, what
+  was tested, and which step and model come next. Do not go on to the next step, even if it looks
+  small or obvious, and even if the user's earlier instruction was to "do phase 2" or "do phase 7".
+  The user switches the model and starts the next step themselves, ideally in a fresh session.
+- **Leave a hand-off note.** Put it in the "Hand-off notes" list below this table, so the next step
+  can start from this document without the previous session's history.
+- **Haiku 4.5 row:** it is not a phase. Any step may hand routine runs to it; it never needs a stop.
+
+| Order | Step | Model | Why | Stop after? |
+|---|---|---|---|---|
+| 1 | **C**: GSTIN checksum, PAN cross-checks, OCR slot correction, confidence that builds up across pages | **Sonnet 5** | Well-defined algorithms plus tests, with little design risk | **STOP** — user judges the accuracy gain on the corpus before approving A |
+| 2a | **A, design and core**: node model from the probe (text, type, box, table cell, selected), resolver and spec loader changes, header-keyed table specs, label→value by layout, `lines` view kept for old specs | **Opus 5.5** | Everything later builds on it, and all existing specs and replay results must stay unchanged | **STOP** — hand off to Sonnet 5 |
+| 2b | **A, migration**: move existing record specs to header-keyed tables where it helps, new golden scenarios, test updates, replay diff clean | **Sonnet 5** | Mechanical work against the design 2a fixed | **STOP** |
+| 3 | **B1**: catch success messages that flash on screen for under a second (UIA live-region / notification events) | **Opus 5.5** | Tricky Windows event handling alongside the existing UIA worker, and it has to be checked in real Edge | **STOP** |
+| 4 | **B2**: watch the Downloads folder for ITR-V and acknowledgement PDFs (only if the user puts it in scope) | **Sonnet 5** | A contained new source feeding the existing resolver | **STOP** |
+| 5 | **B3**: use the SCA password fill as a first guess at which client this session is (only if the user puts it in scope) | **Opus 5.5** | Touches the SCA v2 security rules, so it needs careful review more than code | **STOP** |
+| 6 | **E**: one config file per portal (portal packs) | **Sonnet 5** | Mostly reorganising JSON and the loader, with existing tests to catch breakage | **STOP** |
+| 7a | **D, logic**: corpus miner, spec drafting, masked-LLM drafting and its masking rules | **Opus 5.5** | The masking is a privacy guarantee: no taxpayer value may reach the LLM | **STOP** — hand off to Sonnet 5 |
+| 7b | **D, screen**: the "SGT lab" screen (teach by pointing, draft review, replay diff view, Accept writes the override file) | **Sonnet 5** | Routine UI on top of 7a's logic | **STOP** |
+| any | Running replay comparisons, health checks, triaging test results, tidying docs | **Haiku 4.5** | Needs no design judgement | no stop needed |
+
+### Hand-off notes
+
+One entry per finished step: date, step, what was built, what's left, and anything the next
+step's model must know.
+
+- *(none yet)*
+
+### Open decisions (the user's)
+
+- **Scope of B2 and B3:** both read something outside the browser window (the Downloads folder;
+  the SCA fill event). Do they fit how SGT should be scoped, or does SGT stay page-only?
+- **Start order:** C first (cheap, quick accuracy win) as proposed, or A first.

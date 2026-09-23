@@ -570,7 +570,8 @@ class TestHud:
         r = self.rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         r.see(FILED_URL, filed_page(), shade=100)
-        cap = [h for h in r.hud if h[0] in ("capture", "submit")]
+        cap = [h for h in r.hud if h[0] in ("capture", "submit") and "Dataset" not in h[1]
+               and "Client details" not in h[1]]
         assert len(cap) == 1
         event_type, title, subtitle, ctx = cap[0]
         assert "ARN: 123456789150925" in subtitle and "ASHOK KUMAR SEN" in subtitle

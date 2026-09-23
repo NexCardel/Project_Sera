@@ -87,6 +87,10 @@ MISSES_TO_CLEAR = 2             # reads in a row a piece must be missing from it
 MISSING_CLEAR_SEC = 5.0         # ...and for at least this long
 TIMELINE_CAP = 200
 CURRENT_RECORD = "current_dataset"  # the record name a dataset built across pages is written under
+# How the pill names the client datapoints it has just captured.
+PROFILE_LABELS = {"name": "name", "first_name": "first name", "middle_name": "middle name",
+                  "last_name": "last name", "pan": "PAN", "gstin": "GSTIN", "dob": "date of birth",
+                  "email": "email", "phone": "phone", "tan": "TAN", "address": "address"}
 # Fields a dataset may name that say WHOSE it is: checked against the session's client, never
 # stored as dataset fields.
 _CLIENT_KEYS = ("pan", "gstin")
@@ -246,6 +250,7 @@ class SgtShadow:
         self._echo = echo
         self._sessions: Dict[int, _Session] = {}
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
+        self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
         if self._state_path is not None:
             self._recover()
@@ -683,9 +688,7 @@ class SgtShadow:
             self._sighted(s, fld, url)
         if fld in ("pan", "gstin", "name"):
             self._queue_all(s)                  # rows written before the client was known get their identity
-        if fld in ("pan", "gstin"):             # the moment the client is known
-            name = (s.profile.get("name") or {}).get("value", "")
-            self._hud(s, "identity", "Client identified", f"{name} • {fld.upper()}: {value}".strip(" •"))
+        self._new_profile.append(fld)           # the pill announces the page's datapoints together
 
     def _sighted(self, s: _Session, fld: str, url: str) -> None:
         """A page showing the client's PAN/GSTIN. The first one attributes the session's rows
@@ -747,7 +750,31 @@ class SgtShadow:
             return "pan"
         return None
 
+    def _announce_profile(self, s: _Session, before_identity: bool) -> None:
+        """One pill event for the client datapoints this page gave us - the pill used to appear
+        only for the PAN/GSTIN, so capturing a name, date of birth, e-mail or phone looked like
+        nothing had happened (reported 2026-09-23). Never one pop per field."""
+        fields = [f for f in dict.fromkeys(self._new_profile) if f in s.profile]
+        self._new_profile = []
+        if not fields:
+            return
+        known = self._client_pan(s) or (s.profile.get("gstin") or {}).get("value")
+        named = [PROFILE_LABELS.get(f, f.replace("_", " ")) for f in fields]
+        shown = ", ".join(named[:3]) + (f" +{len(named) - 3} more" if len(named) > 3 else "")
+        who = self._who(s)
+        if before_identity and known:               # this page is the one that identified them
+            ident = next((f for f in fields if f in _CLIENT_KEYS), None)
+            detail = f"{ident.upper()}: {s.profile[ident]['value']}" if ident else shown
+            lead = "" if (ident and who == s.profile[ident]["value"]) else who   # no name yet: just the id
+            self._hud(s, "identity", "Client identified", f"{lead} • {detail}".strip(" •"))
+            rest = [n for f, n in zip(fields, named) if f not in _CLIENT_KEYS]
+            if not rest:
+                return
+            shown = ", ".join(rest[:3]) + (f" +{len(rest) - 3} more" if len(rest) > 3 else "")
+        self._hud(s, "capture", "Client details captured", f"{who} • {shown}".strip(" •"))
+
     def _absorb(self, s: _Session, res: PageResult, url: str, source: str, registry: Any = None) -> None:
+        had_client = bool(self._client_pan(s) or (s.profile.get("gstin") or {}).get("value"))
         for fld, hit in res.profile.items():
             self._offer_profile(s, fld, hit.value, hit.spec, hit.confidence, url, source, registry)
         # Datapoints built from parts (first + middle + last name): offered like any other
@@ -757,6 +784,7 @@ class SgtShadow:
             held = {k: v["value"] for k, v in s.profile.items()}
             for fld, value in compose_values(held, prules.compose).items():
                 self._offer_profile(s, fld, value, f"compose:{fld}", 92, url, source, registry)
+        self._announce_profile(s, before_identity=not had_client)
         rules = registry.current_rules if registry is not None else None
         for ds in res.datasets:
             self._merge(s, ds, url, source, rules)

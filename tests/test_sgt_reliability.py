@@ -200,3 +200,39 @@ def test_the_page_recording_switch_defaults_on():
     from core.vsdc.vsdc_engines import read_sgt_record_pages
     assert read_sgt_record_pages(lambda k, d=None: d) is True
     assert read_sgt_record_pages(lambda k, d=None: "0") is False
+
+
+# ── The pill must show what SGT captured about the client (reported 2026-09-23) ──
+class TestProfileOnTheHudPill:
+    PROFILE = ["Profile", "Name", "ASHOK KUMAR SEN", "PAN", "ABCPD1234E", "Date of Birth", "12-Mar-1980",
+               "Email", "a.sen@example.com"]
+
+    def hud(self, r):
+        return [(a[0], a[1], a[2]) for a in r.notified]
+
+    def test_profile_datapoints_raise_one_pill_event_naming_them(self, tmp_path):
+        r = Rig(tmp_path, state=False)
+        r.see(PROFILE, self.PROFILE)
+        events = self.hud(r)
+        assert [e[1] for e in events] == ["Client identified", "Client details captured"]
+        assert "PAN: ABCPD1234E" in events[0][2]
+        assert "name" in events[1][2] and "date of birth" in events[1][2] and "email" in events[1][2]
+        assert "PAN" not in events[1][2]                     # already said by the identity event
+
+    def test_datapoints_without_an_identity_still_show(self, tmp_path):
+        r = Rig(tmp_path, state=False)
+        r.see(PROFILE, ["Profile", "Name", "ASHOK KUMAR SEN", "Date of Birth", "12-Mar-1980"])
+        assert [e[1] for e in self.hud(r)] == ["Client details captured"]
+
+    def test_the_same_page_again_says_nothing_new(self, tmp_path):
+        r = Rig(tmp_path, state=False)
+        r.see(PROFILE, self.PROFILE)
+        before = len(r.notified)
+        r.see(PROFILE, self.PROFILE)
+        r.see(CONTACT, self.PROFILE)
+        assert len(r.notified) == before                      # nothing new was captured
+
+    def test_the_identity_line_is_not_the_pan_twice(self, tmp_path):
+        r = Rig(tmp_path, state=False)
+        r.see(PROFILE, ["PAN", "ABCPD1234E", "Secure Access Message", "Password"])
+        assert self.hud(r)[0][2].startswith("PAN: ABCPD1234E")
