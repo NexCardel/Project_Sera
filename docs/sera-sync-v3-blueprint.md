@@ -885,6 +885,15 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Deviations from spec: none
 - Notes for later WPs: none
 
+### P0-3 — Consistent snapshot on the sending side — Done — 2026-09-23
+- Model: Gemini 3.8 Flash   Commit: c51ac91
+- Tests: 804 passed / 10 failed; new tests: test_snapshot_includes_wal_changes, test_push_to_streams_snapshot_and_cleans_up, test_recv_exact_uses_bytearray, test_make_snapshot_raises_if_dest_exists, test_prune_outgoing_snapshots
+- Deviations from spec: `push_to` falls back to sending `self.db_path` when `self.db` is `None` (preserves compatibility with existing tests until P4-1); `make_snapshot` accepts either a `SeraDatabase` instance or a `(db_path, hex_key)` tuple.
+- Notes for later WPs:
+  - Fixed #2: `make_snapshot(db, dest_path)` raises `FileExistsError` if `dest_path` already exists (prevents silent file overwrite during future backup/migration use).
+  - Fixed #4: added `prune_outgoing_snapshots` in `sync_peer.py`, called on `SyncPeerService` startup (0s age) and in `push_to` (300s age). P0-4's `apply_pending_swap(app_dir)` can also call `prune_outgoing_snapshots(app_dir / "incoming" / "out", max_age_seconds=0.0)`.
+  - For P0-4 (#6): When P0-4 changes the receiver to stage incoming DBs and write `pending_swap.json` instead of writing over open files in place, update receiver assertions in `test_push_to_streams_snapshot_and_cleans_up` accordingly.
+
 ---
 
 ## 10. Doc changelog

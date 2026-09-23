@@ -2720,6 +2720,10 @@ class SeraDatabase:
                 "sync_revision": 0,
             }
 
+    def make_snapshot(self, dest_path: str) -> str:
+        """Creates a consistent snapshot of this database at dest_path using sqlcipher_export."""
+        return make_snapshot(self, dest_path)
+
     def get_audit_logs(
         self,
         client_id: int = None,
@@ -4972,4 +4976,48 @@ class PeerAuditLogManager:
             ]
         finally:
             conn.close()
+
+
+def make_snapshot(db, dest_path: str) -> str:
+    """
+    Creates a consistent snapshot of the database at dest_path using sqlcipher_export('snap').
+    Copies PRAGMA user_version to the snapshot.
+    Escapes dest_path (single quotes doubled).
+    """
+    if hasattr(db, "db_path") and hasattr(db, "hex_key"):
+        db_path = db.db_path
+        hex_key = db.hex_key
+    elif isinstance(db, (list, tuple)) and len(db) >= 2:
+        db_path, hex_key = db[0], db[1]
+    else:
+        raise ValueError("db must be a SeraDatabase instance or (db_path, hex_key) tuple")
+
+    dest_path = os.path.abspath(str(dest_path))
+    dest_dir = os.path.dirname(dest_path)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+    if os.path.exists(dest_path):
+        raise FileExistsError(f"Snapshot destination already exists: {dest_path}")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+        uv_res = conn.execute("PRAGMA user_version;").fetchone()
+        user_version = int(uv_res[0]) if uv_res and uv_res[0] is not None else 0
+
+        escaped_dest = dest_path.replace("'", "''")
+        conn.execute(f"ATTACH DATABASE '{escaped_dest}' AS snap KEY \"x'{hex_key}'\";")
+        try:
+            conn.execute("SELECT sqlcipher_export('snap');")
+            conn.execute(f"PRAGMA snap.user_version = {user_version};")
+        finally:
+            try:
+                conn.execute("DETACH DATABASE snap;")
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+    return dest_path
+
 

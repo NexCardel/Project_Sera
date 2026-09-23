@@ -29,6 +29,7 @@ import time
 import shutil
 import datetime
 import glob
+import tempfile
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -59,6 +60,32 @@ def prune_pre_sync_backups(directory: str, max_keep: int = 5):
                         pass
     except Exception as e:
         print(f"[Sera Sync] Backup rotation notice: {e}")
+
+
+def prune_outgoing_snapshots(directory: str | Path, max_age_seconds: float = 300.0):
+    """
+    Cleans up leftover snap_* temporary directories in incoming/out/ caused by prior crashes
+    or aborted transfers. If max_age_seconds is 0.0, purges all snap_* directories regardless of age.
+    """
+    try:
+        out_dir = Path(directory)
+        if not out_dir.exists():
+            return
+        now = time.time()
+        for p in out_dir.glob("snap_*"):
+            if p.is_dir():
+                try:
+                    if max_age_seconds <= 0.0:
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        mtime = p.stat().st_mtime
+                        if now - mtime >= max_age_seconds:
+                            shutil.rmtree(p, ignore_errors=True)
+                except OSError:
+                    pass
+    except Exception as e:
+        print(f"[Sera Sync] Stale snapshot cleanup notice: {e}")
+
 
 # Fixed app-level magic bytes for beacon validation (not password-derived)
 SERA_SYNC_MAGIC = "sera-sync-v2"
@@ -184,6 +211,13 @@ class SyncPeerService:
         self._is_bootstrapping: bool = (local_metrics.get("client_count", 0) == 0)
         self._bootstrap_pull_done: bool = False
         self._bootstrap_pull_attempted_peers: set[str] = set()
+
+        # Clean up any leftover snap_* temporary folders from prior crashed runs
+        try:
+            out_base = Path(self.db_path).parent / "incoming" / "out"
+            prune_outgoing_snapshots(out_base, max_age_seconds=0.0)
+        except Exception:
+            pass
 
     def set_inv_frames(self, enabled: bool):
         self.inv_frames = bool(enabled)
@@ -743,8 +777,6 @@ class SyncPeerService:
         if not os.path.exists(self.salt_path):
             raise FileNotFoundError("Local sera.salt not found")
 
-        with open(self.db_path, "rb") as f:
-            db_bytes = f.read()
         with open(self.salt_path, "rb") as f:
             salt_bytes = f.read()
 
@@ -753,8 +785,26 @@ class SyncPeerService:
         local_sync_rev = metrics.get("sync_revision", 0)
         local_client_cnt = metrics.get("client_count", 0)
 
-        # Connect to peer
+        temp_dir = None
+        snap_path = None
         try:
+            if self.db is not None:
+                from database import make_snapshot
+                app_dir = Path(self.db_path).parent
+                out_base = app_dir / "incoming" / "out"
+                out_base.mkdir(parents=True, exist_ok=True)
+                prune_outgoing_snapshots(out_base, max_age_seconds=300.0)
+                temp_dir = tempfile.mkdtemp(dir=str(out_base), prefix="snap_")
+                snap_path = os.path.join(temp_dir, "master.db")
+                make_snapshot(self.db, snap_path)
+                file_to_send = snap_path
+            else:
+                file_to_send = self.db_path
+
+            db_size = os.path.getsize(file_to_send)
+            salt_size = len(salt_bytes)
+
+            # Connect to peer
             with socket.create_connection((peer_ip, peer_port), timeout=SOCK_TIMEOUT_SEC) as conn:
                 # Send header (raw_db_size is always 0 because tracker dumps sync incrementally)
                 header = {
@@ -762,8 +812,8 @@ class SyncPeerService:
                     "username": self.username,
                     "host": self.host_name,
                     "sync_port": self.sync_port,
-                    "db_size": len(db_bytes),
-                    "salt_size": len(salt_bytes),
+                    "db_size": db_size,
+                    "salt_size": salt_size,
                     "raw_db_size": 0,
                     "live_update": live_update,
                     "force_override": force_override,
@@ -799,8 +849,15 @@ class SyncPeerService:
                         threading.Thread(target=_do_instructed_pull, daemon=True).start()
                     return f"Sync skipped: {reason}"
 
-                # Send database + salt
-                conn.sendall(db_bytes)
+                # Send database + salt (stream database in 1 MB chunks)
+                chunk_size = 1 << 20  # 1 MB
+                with open(file_to_send, "rb") as f:
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        conn.sendall(chunk)
+
                 conn.sendall(salt_bytes)
 
                 # Wait for confirmation
@@ -819,6 +876,17 @@ class SyncPeerService:
 
         except OSError as e:
             return f"Could not connect to peer: {e}"
+        finally:
+            if snap_path and os.path.exists(snap_path):
+                try:
+                    os.remove(snap_path)
+                except OSError:
+                    pass
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except OSError:
+                    pass
 
     def push_audit_logs_to_host(self, host_ip: str, logs: list[dict], host_port: int = SYNC_PORT) -> bool:
         """
@@ -1025,10 +1093,11 @@ def _recv_framed(conn: socket.socket) -> bytes:
 
 
 def _recv_exact(conn: socket.socket, n: int) -> bytes:
-    buf = b""
+    buf = bytearray()
     while len(buf) < n:
         chunk = conn.recv(min(n - len(buf), 1 << 20))  # 1 MB chunks
         if not chunk:
             raise OSError("connection closed while reading frame")
-        buf += chunk
-    return buf
+        buf.extend(chunk)
+    return bytes(buf)
+
