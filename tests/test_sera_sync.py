@@ -14,15 +14,30 @@ class TestSeraSync(unittest.TestCase):
         self.receiver_db = os.path.join(self.temp_dir, "receiver_master.db")
         self.receiver_salt = os.path.join(self.temp_dir, "receiver_sera.salt")
 
-        with open(self.sender_db, "wb") as f:
-            f.write(b"SENDER_DATABASE_CONTENT_HEADER_12345")
-        with open(self.sender_salt, "wb") as f:
-            f.write(b"SENDER_SALT_BYTES_67890")
+        import security
+        import sqlcipher3.dbapi2 as sqlite3
+        from pathlib import Path
+        self.password = "admin123"
+        (Path(self.temp_dir) / "sera.key").write_text(self.password, encoding="utf-8")
 
-        with open(self.receiver_db, "wb") as f:
-            f.write(b"OLD_RECEIVER_DATABASE_CONTENT")
-        with open(self.receiver_salt, "wb") as f:
-            f.write(b"OLD_RECEIVER_SALT_BYTES")
+        security.generate_and_save_salt(self.sender_salt)
+        security.generate_and_save_salt(self.receiver_salt)
+        sender_key = security.derive_key_hex(self.password, security.load_salt(self.sender_salt))
+        receiver_key = security.derive_key_hex(self.password, security.load_salt(self.receiver_salt))
+
+        s_conn = sqlite3.connect(self.sender_db)
+        s_conn.execute(f"PRAGMA key = \"x'{sender_key}'\";")
+        s_conn.execute("CREATE TABLE test_data (id INT, val TEXT);")
+        s_conn.execute("INSERT INTO test_data VALUES (1, 'sender_content');")
+        s_conn.commit()
+        s_conn.close()
+
+        r_conn = sqlite3.connect(self.receiver_db)
+        r_conn.execute(f"PRAGMA key = \"x'{receiver_key}'\";")
+        r_conn.execute("CREATE TABLE test_data (id INT, val TEXT);")
+        r_conn.execute("INSERT INTO test_data VALUES (1, 'receiver_content');")
+        r_conn.commit()
+        r_conn.close()
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -85,21 +100,30 @@ class TestSeraSync(unittest.TestCase):
 
             time.sleep(0.5)
 
-            # Check receiver database was overwritten with sender content
-            with open(self.receiver_db, "rb") as f:
-                rec_db_data = f.read()
-            self.assertEqual(rec_db_data, b"SENDER_DATABASE_CONTENT_HEADER_12345")
+            # Check that push was staged and restart notification triggered
+            from sync_peer import apply_pending_swap
+            import security
+            import sqlcipher3.dbapi2 as sqlite3
+            pending_json = os.path.join(self.temp_dir, "incoming", "pending_swap.json")
+            self.assertTrue(os.path.exists(pending_json))
+            self.assertTrue(len(sync_received_flag) > 0)
 
-            with open(self.receiver_salt, "rb") as f:
-                rec_salt_data = f.read()
-            self.assertEqual(rec_salt_data, b"SENDER_SALT_BYTES_67890")
+            # Apply pending swap at startup
+            swapped = apply_pending_swap(self.temp_dir)
+            self.assertTrue(swapped)
+
+            # Check receiver database now contains swapped sender content
+            sender_salt_bytes = security.load_salt(self.receiver_salt)
+            swapped_key = security.derive_key_hex(self.password, sender_salt_bytes)
+            conn = sqlite3.connect(self.receiver_db)
+            conn.execute(f"PRAGMA key = \"x'{swapped_key}'\";")
+            val = conn.execute("SELECT val FROM test_data;").fetchone()[0]
+            conn.close()
+            self.assertEqual(val, "sender_content")
 
             # Check pre-sync backup safety snapshot was generated
             backups = [f for f in os.listdir(self.temp_dir) if "pre-sync" in f]
             self.assertGreaterEqual(len(backups), 1)
-
-            # Check restart signal was triggered
-            self.assertTrue(len(sync_received_flag) > 0)
 
         finally:
             receiver_service.stop()
@@ -131,9 +155,15 @@ class TestSeraSync(unittest.TestCase):
             time.sleep(0.3)
 
             # Check receiver database was NOT overwritten
-            with open(self.receiver_db, "rb") as f:
-                rec_db_data = f.read()
-            self.assertEqual(rec_db_data, b"OLD_RECEIVER_DATABASE_CONTENT")
+            import security
+            import sqlcipher3.dbapi2 as sqlite3
+            receiver_salt_bytes = security.load_salt(self.receiver_salt)
+            key = security.derive_key_hex(self.password, receiver_salt_bytes)
+            conn = sqlite3.connect(self.receiver_db)
+            conn.execute(f"PRAGMA key = \"x'{key}'\";")
+            val = conn.execute("SELECT val FROM test_data;").fetchone()[0]
+            conn.close()
+            self.assertEqual(val, "receiver_content")
             self.assertEqual(len(sync_received_flag), 0)
 
         finally:
@@ -141,14 +171,14 @@ class TestSeraSync(unittest.TestCase):
 
     def test_inv_frames_node_can_push_to_normal_node(self):
         """A node with inv_frames = True can push database updates to normal nodes."""
-        live_sync_flag = []
+        sync_received_flag = []
         receiver_service = SyncPeerService(
             db_path=self.receiver_db,
             salt_path=self.receiver_salt,
             username="NormalFollower",
             sync_port=0,
             inv_frames=False,
-            on_live_sync_received=lambda u, h: live_sync_flag.append((u, h)),
+            on_sync_received=lambda: sync_received_flag.append(True),
         )
         receiver_service.start()
 
@@ -166,10 +196,25 @@ class TestSeraSync(unittest.TestCase):
 
             time.sleep(0.4)
 
-            with open(self.receiver_db, "rb") as f:
-                rec_db_data = f.read()
-            self.assertEqual(rec_db_data, b"SENDER_DATABASE_CONTENT_HEADER_12345")
-            self.assertEqual(len(live_sync_flag), 1)
+            # Live updates are staged (never replacing live file mid-run)
+            from sync_peer import apply_pending_swap
+            import security
+            import sqlcipher3.dbapi2 as sqlite3
+            pending_json = os.path.join(self.temp_dir, "incoming", "pending_swap.json")
+            self.assertTrue(os.path.exists(pending_json))
+            self.assertTrue(len(sync_received_flag) >= 1)
+
+            # Apply pending swap at restart
+            swapped = apply_pending_swap(self.temp_dir)
+            self.assertTrue(swapped)
+
+            sender_salt_bytes = security.load_salt(self.receiver_salt)
+            swapped_key = security.derive_key_hex(self.password, sender_salt_bytes)
+            conn = sqlite3.connect(self.receiver_db)
+            conn.execute(f"PRAGMA key = \"x'{swapped_key}'\";")
+            val = conn.execute("SELECT val FROM test_data;").fetchone()[0]
+            conn.close()
+            self.assertEqual(val, "sender_content")
 
         finally:
             receiver_service.stop()
@@ -297,9 +342,19 @@ class TestSeraSync(unittest.TestCase):
             self.assertIn("successfully", res.lower())
             time.sleep(0.3)
 
+            from sync_peer import apply_pending_swap
+            import security
+            import sqlcipher3.dbapi2 as sqlite3
+            self.assertTrue(apply_pending_swap(self.temp_dir))
+
             # Check that master.db was updated
-            with open(self.receiver_db, "rb") as f:
-                self.assertEqual(f.read(), b"SENDER_DATABASE_CONTENT_HEADER_12345")
+            sender_salt_bytes = security.load_salt(self.receiver_salt)
+            swapped_key = security.derive_key_hex(self.password, sender_salt_bytes)
+            conn = sqlite3.connect(self.receiver_db)
+            conn.execute(f"PRAGMA key = \"x'{swapped_key}'\";")
+            val = conn.execute("SELECT val FROM test_data;").fetchone()[0]
+            conn.close()
+            self.assertEqual(val, "sender_content")
 
             # Check that local rawPayload.db was NOT overwritten
             with open(receiver_raw, "rb") as f:

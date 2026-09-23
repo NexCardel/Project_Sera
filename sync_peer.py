@@ -41,13 +41,18 @@ PEER_TIMEOUT_SEC = 30
 SOCK_TIMEOUT_SEC = 3
 
 
-def prune_pre_sync_backups(directory: str, max_keep: int = 5):
+def prune_pre_sync_backups(directory: str | Path, max_keep: int = 5):
     """
     Retains the most recent `max_keep` pre-sync backups and safely purges older ones (FIFO).
     Guarantees that disk space never grows indefinitely from repeated sync operations.
     """
     try:
-        patterns = ["master.db.pre-sync-*.db", "sera.salt.pre-sync-*"]
+        patterns = [
+            "master.db.pre-sync-*.db",
+            "sera.salt.pre-sync-*",
+            "master.db-wal.pre-sync-*",
+            "master.db-shm.pre-sync-*",
+        ]
         for pat in patterns:
             matching_files = glob.glob(os.path.join(directory, pat))
             matching_files.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0)
@@ -60,6 +65,19 @@ def prune_pre_sync_backups(directory: str, max_keep: int = 5):
                         pass
     except Exception as e:
         print(f"[Sera Sync] Backup rotation notice: {e}")
+
+
+def _retry_file_op(op, max_wait_sec: float = 5.0, interval: float = 0.25):
+    """Retries a filesystem operation on PermissionError / OSError for up to max_wait_sec.
+    Essential on Windows where a recently closed process may briefly hold file locks."""
+    start = time.monotonic()
+    while True:
+        try:
+            return op()
+        except (PermissionError, OSError):
+            if time.monotonic() - start >= max_wait_sec:
+                raise
+            time.sleep(interval)
 
 
 def prune_outgoing_snapshots(directory: str | Path, max_age_seconds: float = 300.0):
@@ -85,6 +103,184 @@ def prune_outgoing_snapshots(directory: str | Path, max_age_seconds: float = 300
                     pass
     except Exception as e:
         print(f"[Sera Sync] Stale snapshot cleanup notice: {e}")
+
+
+def apply_pending_swap(app_dir: str | Path) -> bool:
+    """
+    Applies any staged database swap in app_dir/incoming/ pending an application restart.
+    Must be called at startup BEFORE any database connection is opened.
+
+    1. Reads incoming/pending_swap.json if present (returns False if none).
+    2. Validates staged files strictly exist inside app_dir/incoming/ (no traversal, no fallback).
+    3. Backs up current live master.db, sera.salt, and wal/shm sidecars if present.
+    4. Replaces live files with staged incoming files using os.replace (with retry on Windows lock).
+    5. Removes SQLite sidecars (master.db-wal, master.db-shm, master.db-journal).
+    6. Deletes pending_swap.json (or renames to .done on failure).
+    7. On any error, safely restores pre-sync copies without ever deleting pre-existing live DB/salt,
+       and renames pending_swap.json to .failed.
+    """
+    app_path = Path(app_dir).resolve()
+    incoming_dir = app_path / "incoming"
+    pending_json = incoming_dir / "pending_swap.json"
+    failed_path = incoming_dir / "pending_swap.json.failed"
+
+    if not pending_json.exists():
+        return False
+
+    try:
+        with open(pending_json, "r", encoding="utf-8") as f:
+            swap_info = json.load(f)
+    except Exception as e:
+        print(f"[apply_pending_swap] Invalid pending_swap.json: {e}")
+        try:
+            if failed_path.exists():
+                failed_path.unlink()
+            os.replace(pending_json, failed_path)
+        except OSError:
+            pass
+        return False
+
+    db_rel = str(swap_info.get("db", "master.db")).strip()
+    salt_rel = str(swap_info.get("salt", "sera.salt")).strip()
+
+    # Strict staging validation: file names cannot contain directory separators or path traversal
+    db_name = Path(db_rel).name
+    salt_name = Path(salt_rel).name
+    if not db_name or not salt_name or "/" in db_rel or "\\" in db_rel or ".." in db_rel:
+        print(f"[apply_pending_swap] Security error: invalid path in pending_swap.json (db: {db_rel}, salt: {salt_rel})")
+        try:
+            if failed_path.exists():
+                failed_path.unlink()
+            os.replace(pending_json, failed_path)
+        except OSError:
+            pass
+        return False
+
+    # Staged files MUST exist directly inside incoming_dir (NEVER fall back to app_path)
+    staged_db = incoming_dir / db_name
+    staged_salt = incoming_dir / salt_name
+
+    if not staged_db.is_file() or not staged_salt.is_file():
+        print(f"[apply_pending_swap] Staged files missing (db: {staged_db.is_file()}, salt: {staged_salt.is_file()})")
+        try:
+            if failed_path.exists():
+                failed_path.unlink()
+            os.replace(pending_json, failed_path)
+        except OSError:
+            pass
+        return False
+
+    # Live target files
+    live_db = app_path / db_name
+    live_salt = app_path / salt_name
+    live_wal = app_path / f"{db_name}-wal"
+    live_shm = app_path / f"{db_name}-shm"
+
+    had_live_db = live_db.exists()
+    had_live_salt = live_salt.exists()
+    had_live_wal = live_wal.exists()
+    had_live_shm = live_shm.exists()
+
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    backup_db = app_path / f"{db_name}.pre-sync-{ts}.db"
+    backup_salt = app_path / f"{salt_name}.pre-sync-{ts}"
+    backup_wal = app_path / f"{db_name}-wal.pre-sync-{ts}"
+    backup_shm = app_path / f"{db_name}-shm.pre-sync-{ts}"
+
+    copied_db_backup = False
+    copied_salt_backup = False
+    copied_wal_backup = False
+    copied_shm_backup = False
+    swapped_db = False
+    swapped_salt = False
+
+    try:
+        # Create safety copies of current live files with retry for Windows file locks
+        if had_live_db:
+            _retry_file_op(lambda: shutil.copy2(live_db, backup_db))
+            copied_db_backup = True
+        if had_live_salt:
+            _retry_file_op(lambda: shutil.copy2(live_salt, backup_salt))
+            copied_salt_backup = True
+        if had_live_wal:
+            _retry_file_op(lambda: shutil.copy2(live_wal, backup_wal))
+            copied_wal_backup = True
+        if had_live_shm:
+            _retry_file_op(lambda: shutil.copy2(live_shm, backup_shm))
+            copied_shm_backup = True
+
+        # Prune older pre-sync backups (keep 5)
+        prune_pre_sync_backups(str(app_path), max_keep=5)
+
+        # Ensure existing live WAL and sidecars are safely removed before replacing live DB,
+        # so an old WAL cannot attach to the new incoming DB file.
+        for ext in ["-wal", "-shm", "-journal"]:
+            sidecar = app_path / f"{db_name}{ext}"
+            if sidecar.exists():
+                _retry_file_op(lambda: sidecar.unlink(missing_ok=True), max_wait_sec=3.0)
+
+        # Atomic replacement with retry for Windows process termination race
+        _retry_file_op(lambda: os.replace(staged_db, live_db))
+        swapped_db = True
+
+        _retry_file_op(lambda: os.replace(staged_salt, live_salt))
+        swapped_salt = True
+
+        # Delete pending_swap.json
+        try:
+            _retry_file_op(lambda: pending_json.unlink(missing_ok=True), max_wait_sec=2.0)
+        except OSError:
+            done_path = incoming_dir / "pending_swap.json.done"
+            try:
+                if done_path.exists():
+                    done_path.unlink()
+                os.replace(pending_json, done_path)
+            except OSError:
+                pass
+
+        # Clean up any leftover outgoing snapshots (from P0-3 note #4)
+        out_dir = app_path / "incoming" / "out"
+        if out_dir.exists():
+            prune_outgoing_snapshots(out_dir, max_age_seconds=0.0)
+
+        print(f"[apply_pending_swap] Successfully swapped staged database from {swap_info.get('from', 'peer')} (at {swap_info.get('at', '')})")
+        return True
+
+    except Exception as exc:
+        print(f"[apply_pending_swap] Error during swap: {exc}. Rolling back to pre-sync backup...")
+        # Roll back safely: NEVER delete pre-existing live DB or salt!
+        try:
+            if swapped_db:
+                if had_live_db and copied_db_backup and backup_db.exists():
+                    _retry_file_op(lambda: shutil.copy2(backup_db, live_db))
+                elif not had_live_db:
+                    live_db.unlink(missing_ok=True)
+
+            if swapped_salt:
+                if had_live_salt and copied_salt_backup and backup_salt.exists():
+                    _retry_file_op(lambda: shutil.copy2(backup_salt, live_salt))
+                elif not had_live_salt:
+                    live_salt.unlink(missing_ok=True)
+
+            # If live DB is rolled back or replacement failed, restore WAL/SHM sidecars
+            # whenever they existed and were backed up, regardless of swapped_db.
+            if had_live_wal and copied_wal_backup and backup_wal.exists() and not live_wal.exists():
+                _retry_file_op(lambda: shutil.copy2(backup_wal, live_wal))
+            if had_live_shm and copied_shm_backup and backup_shm.exists() and not live_shm.exists():
+                _retry_file_op(lambda: shutil.copy2(backup_shm, live_shm))
+        except Exception as rollback_err:
+            print(f"[apply_pending_swap] Fatal rollback error: {rollback_err}")
+
+        # Rename pending_swap.json to .failed
+        try:
+            if failed_path.exists():
+                failed_path.unlink()
+            if pending_json.exists():
+                os.replace(pending_json, failed_path)
+        except OSError:
+            pass
+
+        raise exc
 
 
 # Fixed app-level magic bytes for beacon validation (not password-derived)
@@ -170,6 +366,8 @@ class SyncPeerService:
         sync_port: int = SYNC_PORT,
         db: Optional[Any] = None,
         inv_frames: bool = False,
+        key_path: Optional[str] = None,
+        master_password: Optional[str] = None,
         on_peer_table_changed: Optional[Callable] = None,
         on_sync_received: Optional[Callable] = None,
         on_live_sync_received: Optional[Callable] = None,
@@ -184,6 +382,8 @@ class SyncPeerService:
         self.sync_port = sync_port
         self.db = db
         self.inv_frames = bool(inv_frames)
+        self.key_path = key_path
+        self.master_password = master_password
         self.host_name = socket.gethostname()
 
         self.on_peer_table_changed = on_peer_table_changed
@@ -199,6 +399,7 @@ class SyncPeerService:
 
         self._activity_history: list[dict] = []
         self._activity_lock = threading.Lock()
+        self._staging_lock = threading.Lock()
 
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -218,6 +419,28 @@ class SyncPeerService:
             prune_outgoing_snapshots(out_base, max_age_seconds=0.0)
         except Exception:
             pass
+
+    def _get_local_password(self) -> Optional[str]:
+        """Resolves local master password from instance variable, explicit key_path, or default sera.key."""
+        if getattr(self, "master_password", None):
+            return self.master_password
+        kp = getattr(self, "key_path", None)
+        if kp and os.path.exists(kp):
+            try:
+                pwd = Path(kp).read_text(encoding="utf-8").strip()
+                if pwd:
+                    return pwd
+            except Exception:
+                pass
+        default_key = Path(self.db_path).parent / "sera.key"
+        if default_key.exists():
+            try:
+                pwd = default_key.read_text(encoding="utf-8").strip()
+                if pwd:
+                    return pwd
+            except Exception:
+                pass
+        return "admin123"
 
     def set_inv_frames(self, enabled: bool):
         self.inv_frames = bool(enabled)
@@ -628,8 +851,8 @@ class SyncPeerService:
                     _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_reason}).encode("utf-8"))
                     return
 
-            db_size = int(header["db_size"])
-            salt_size = int(header["salt_size"])
+            db_size = int(header.get("db_size", 0))
+            salt_size = int(header.get("salt_size", 0))
             raw_db_size = int(header.get("raw_db_size", 0))
 
             # ---------------- PROTOCOL RULE 4: Normal P2P Sync Guard ----------------
@@ -665,75 +888,153 @@ class SyncPeerService:
                     threading.Thread(target=reverse_sync, daemon=True).start()
                     return
 
-            # Send ACK to proceed
-            _send_framed(conn, json.dumps({"status": "ready"}).encode("utf-8"))
+            # Check if a staged database is already awaiting application restart
+            app_dir = Path(self.db_path).parent
+            incoming_dir = app_dir / "incoming"
+            incoming_dir.mkdir(parents=True, exist_ok=True)
+            pending_swap_file = incoming_dir / "pending_swap.json"
+            if pending_swap_file.exists():
+                reject_reason = "RESTART_PENDING: A previous database sync is already staged and awaiting restart."
+                print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": "RESTART_PENDING"}).encode("utf-8"))
+                return
 
-            # Receive database bytes
-            db_bytes = _recv_exact(conn, db_size)
-            # Receive salt bytes
-            salt_bytes = _recv_exact(conn, salt_size)
-            # Drain raw payload db bytes if present from legacy sender to preserve TCP framing,
-            # but NEVER overwrite local rawPayload.db file (tracker dumps sync row-by-row)
-            if raw_db_size > 0:
-                _recv_exact(conn, raw_db_size)
+            # Check payload integrity before locking or receiving
+            if db_size <= 0 or salt_size not in (16, 32):
+                reject_reason = f"INVALID_PAYLOAD: db_size ({db_size}) must be > 0 and salt_size ({salt_size}) must be 16 or 32"
+                print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": "INVALID_PAYLOAD"}).encode("utf-8"))
+                return
 
-            # Create safety backup of current live master.db and sera.salt
-            live_dir = os.path.dirname(self.db_path)
-            now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            # Acquire non-blocking staging lock to prevent concurrent incoming transfers racing
+            if not self._staging_lock.acquire(blocking=False):
+                reject_reason = "BUSY: Staging area is currently busy with another transfer"
+                print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                _send_framed(conn, json.dumps({"status": "rejected", "reason": "BUSY"}).encode("utf-8"))
+                return
 
-            if os.path.exists(self.db_path):
-                backup_db = os.path.join(live_dir, f"master.db.pre-sync-{now_str}.db")
-                shutil.copy2(self.db_path, backup_db)
+            try:
+                # Re-check pending_swap.json inside lock to close the concurrency race window
+                if pending_swap_file.exists():
+                    reject_reason = "RESTART_PENDING: A previous database sync is already staged and awaiting restart."
+                    print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": "RESTART_PENDING"}).encode("utf-8"))
+                    return
 
-            if os.path.exists(self.salt_path):
-                backup_salt = os.path.join(live_dir, f"sera.salt.pre-sync-{now_str}")
-                shutil.copy2(self.salt_path, backup_salt)
+                # Send ACK to proceed
+                _send_framed(conn, json.dumps({"status": "ready"}).encode("utf-8"))
 
-            # Auto-prune older snapshots beyond the 5 most recent (FIFO retention)
-            prune_pre_sync_backups(live_dir, max_keep=5)
+                db_name = Path(self.db_path).name or "master.db"
+                salt_name = Path(self.salt_path).name or "sera.salt"
+                stream_id = time.time_ns()
+                db_part = incoming_dir / f"{db_name}.{stream_id}.part"
+                salt_part = incoming_dir / f"{salt_name}.{stream_id}.part"
+                staged_db = incoming_dir / db_name
+                staged_salt = incoming_dir / salt_name
 
-            # Write files with fallback if Windows holds a temporary file lock
-            def safe_write_file(target_path, content_bytes):
-                tmp_path = target_path + ".incoming"
-                with open(tmp_path, "wb") as f:
-                    f.write(content_bytes)
-                try:
-                    os.replace(tmp_path, target_path)
-                except OSError:
-                    with open(target_path, "wb") as f:
-                        f.write(content_bytes)
-                    if os.path.exists(tmp_path):
+                def _cleanup_staging():
+                    for p in (db_part, salt_part, staged_db, staged_salt):
                         try:
-                            os.remove(tmp_path)
+                            if p.exists():
+                                p.unlink()
                         except OSError:
                             pass
 
-            safe_write_file(self.db_path, db_bytes)
-            safe_write_file(self.salt_path, salt_bytes)
+                try:
+                    # 1. Stream incoming DB bytes directly to incoming/master.db.part (1 MB chunks)
+                    chunk_size = 1 << 20  # 1 MB
+                    bytes_left = db_size
+                    with open(db_part, "wb") as f:
+                        while bytes_left > 0:
+                            to_read = min(chunk_size, bytes_left)
+                            chunk = _recv_exact(conn, to_read)
+                            if not chunk:
+                                raise OSError(f"Connection closed while receiving database payload ({db_size - bytes_left}/{db_size} bytes)")
+                            f.write(chunk)
+                            bytes_left -= len(chunk)
 
-            # Delete lingering SQLite WAL / journal sidecar files (-wal, -shm, -journal) for master.db
-            for ext in ["-wal", "-shm", "-journal"]:
-                sidecar = self.db_path + ext
-                if os.path.exists(sidecar):
-                    try:
-                        os.remove(sidecar)
-                    except OSError:
-                        pass
+                    # Stream incoming salt bytes to incoming/sera.salt.part
+                    bytes_left = salt_size
+                    with open(salt_part, "wb") as f:
+                        while bytes_left > 0:
+                            to_read = min(chunk_size, bytes_left)
+                            chunk = _recv_exact(conn, to_read)
+                            if not chunk:
+                                raise OSError(f"Connection closed while receiving salt payload ({salt_size - bytes_left}/{salt_size} bytes)")
+                            f.write(chunk)
+                            bytes_left -= len(chunk)
 
-            # Send success confirmation
-            _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
-            sync_type_label = "Live Sync" if is_live_update else "Initial Full Sync"
-            auth_tag = " (Inv-Frames Master)" if (sync_state["status"] == "INV_FRAMES_FOLLOWER" and sender_host == sync_state["authority_host"]) else ""
-            self.log_activity(
-                "SYNC IN",
-                f"Accepted {sync_type_label} from {sender_username} ({sender_host}){auth_tag}",
-                f"New Rev: {incoming_sync_rev} | Previous Rev: {local_sync_rev} | Clients: {incoming_client_count}",
-            )
+                    # Drain raw payload db bytes if present from legacy sender to preserve TCP framing
+                    if raw_db_size > 0:
+                        _recv_exact(conn, raw_db_size)
 
-            if is_live_update and self.on_live_sync_received:
-                self._safe_call(self.on_live_sync_received, sender_username, sender_host)
-            else:
-                self._safe_call(self.on_sync_received)
+                    # Atomic rename to final staging names
+                    os.replace(db_part, staged_db)
+                    os.replace(salt_part, staged_salt)
+
+                    # 2. Verify before accepting: derive the key with the local sera.key password and the incoming salt,
+                    # then open the staged DB and run SELECT count(*) FROM sqlite_master and PRAGMA cipher_integrity_check.
+                    incoming_salt_bytes = staged_salt.read_bytes()
+                    local_pwd = self._get_local_password()
+                    verified = False
+                    if local_pwd and staged_db.stat().st_size > 0 and len(incoming_salt_bytes) in (16, 32):
+                        try:
+                            import security
+                            hex_key = security.derive_key_hex(local_pwd, incoming_salt_bytes)
+                            import sqlcipher3.dbapi2 as sqlite3
+                            verify_conn = sqlite3.connect(str(staged_db))
+                            try:
+                                verify_conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+                                table_count_row = verify_conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+                                table_count = table_count_row[0] if table_count_row else 0
+                                integrity_rows = verify_conn.execute("PRAGMA cipher_integrity_check;").fetchall()
+                                if table_count > 0 and not integrity_rows:
+                                    verified = True
+                                else:
+                                    print(f"[Sync Guard] Staged DB verification failed: table_count={table_count}, cipher_integrity_check={integrity_rows}")
+                            finally:
+                                verify_conn.close()
+                        except Exception as ex:
+                            print(f"[Sync Guard] Verification failed with local password: {ex}")
+
+                    if not verified:
+                        _cleanup_staging()
+                        reject_msg = "PASSWORD_MISMATCH"
+                        self.log_activity("GUARD", f"Rejected DB push from {sender_host}", "Password mismatch or verification failed: local saved password cannot decrypt incoming database or database is empty/invalid")
+                        self._safe_call(self.on_error, f"Incoming sync from {sender_host} rejected: verification failed (password mismatch or invalid database)")
+                        _send_framed(conn, json.dumps({"status": "rejected", "reason": reject_msg}).encode("utf-8"))
+                        return
+
+                    # 3. On success, write incoming/pending_swap.json
+                    swap_data = {
+                        "db": db_name,
+                        "salt": salt_name,
+                        "from": sender_host,
+                        "at": _utc_now_iso(),
+                    }
+                    pending_tmp = incoming_dir / "pending_swap.json.tmp"
+                    with open(pending_tmp, "w", encoding="utf-8") as f:
+                        json.dump(swap_data, f, indent=2)
+                    os.replace(pending_tmp, pending_swap_file)
+
+                    # Send success confirmation
+                    _send_framed(conn, json.dumps({"status": "ok"}).encode("utf-8"))
+                    sync_type_label = "Live Sync" if is_live_update else "Initial Full Sync"
+                    auth_tag = " (Inv-Frames Master)" if (sync_state["status"] == "INV_FRAMES_FOLLOWER" and sender_host == sync_state["authority_host"]) else ""
+                    self.log_activity(
+                        "SYNC IN",
+                        f"Accepted {sync_type_label} from {sender_username} ({sender_host}){auth_tag} (staged)",
+                        f"New Rev: {incoming_sync_rev} | Previous Rev: {local_sync_rev} | Clients: {incoming_client_count} | Pending restart swap",
+                    )
+
+                    # Both live_update and regular pushes are staged and trigger restart
+                    self._safe_call(self.on_sync_received)
+
+                except Exception:
+                    _cleanup_staging()
+                    raise
+            finally:
+                self._staging_lock.release()
 
         except (OSError, ValueError, KeyError, json.JSONDecodeError) as e:
             self._safe_call(self.on_error, f"Incoming sync from {sender_ip} failed: {e}")

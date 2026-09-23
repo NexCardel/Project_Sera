@@ -186,6 +186,15 @@ class SeraApp:
         else:
             self.app_icon = None
         
+        # Apply any pending staged sync database swap before opening database
+        self._pending_swap_error = None
+        from sync_peer import apply_pending_swap
+        try:
+            apply_pending_swap(APP_DIR)
+        except Exception as e:
+            self._pending_swap_error = str(e)
+            print(f"[SeraApp] Failed to apply pending sync swap: {e}")
+
         self.db_path = str(APP_DIR / "master.db")
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
@@ -300,6 +309,25 @@ class SeraApp:
         self._build_ui()
         loading_dlg.close()
         memory_mark("start-up: main window built")
+
+        # Show alert if a staged sync database swap failed during startup
+        failed_swap_marker = APP_DIR / "incoming" / "pending_swap.json.failed"
+        if self._pending_swap_error:
+            self.shell.show_alert(
+                f"Sync Database Swap Failed: {self._pending_swap_error}. Rolled back to previous database.",
+                level="error",
+                duration=10000,
+            )
+        elif failed_swap_marker.exists():
+            self.shell.show_alert(
+                "A pending sync database swap could not be applied. Rolled back to previous database.",
+                level="warning",
+                duration=8000,
+            )
+            try:
+                failed_swap_marker.unlink(missing_ok=True)
+            except OSError:
+                pass
 
         # Start the WebSocket bridge to the extension (ui/ws_bridge.py). Only the Sera extension's
         # own background page may connect - see that module for how the origin is checked.
@@ -1646,9 +1674,10 @@ class SeraApp:
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
         self.sync_bridge.sync_received_signal.emit()
 
-    def _on_live_sync_received(self, sender_username: str, sender_host: str):
-        """Called from SyncPeerService background thread on live data auto-sync."""
-        self.sync_bridge.live_sync_received_signal.emit(sender_username, sender_host)
+    def _on_live_sync_received(self, sender_username: str = "", sender_host: str = ""):
+        """Called from SyncPeerService background thread. Under v3 (P0-4), live in-place replacement
+        is retired; incoming databases are staged and require application restart to swap."""
+        self._on_sync_received()
 
     def _on_peer_logs_received(self, sender_host: str):
         """Called from SyncPeerService background thread when SSAL logs are received."""

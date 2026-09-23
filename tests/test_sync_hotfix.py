@@ -207,6 +207,7 @@ def test_push_to_streams_snapshot_and_cleans_up(tmp_path):
 
     receiver_db_path = str(receiver_dir / "master.db")
     receiver_salt_path = str(receiver_dir / "sera.salt")
+    (receiver_dir / "sera.key").write_text("testpass123", encoding="utf-8")
 
     sync_received_flag = []
     receiver_service = SyncPeerService(
@@ -236,6 +237,14 @@ def test_push_to_streams_snapshot_and_cleans_up(tmp_path):
             assert remaining_files == []
 
         time.sleep(0.5)
+
+        # Receiver push was staged (pending_swap.json exists, restart triggered)
+        assert (receiver_dir / "incoming" / "pending_swap.json").exists()
+        assert len(sync_received_flag) >= 1
+
+        # Swap is applied at startup via apply_pending_swap
+        from sync_peer import apply_pending_swap
+        assert apply_pending_swap(receiver_dir) is True
 
         # Receiver DB opens with the same hex_key and has the client
         rec_conn = sqlite3.connect(receiver_db_path)
@@ -335,5 +344,551 @@ def test_prune_outgoing_snapshots(tmp_path):
     prune_outgoing_snapshots(out_dir, max_age_seconds=0.0)
     assert not fresh_dir.exists()
 
+
+def test_push_is_staged_not_live(tmp_path):
+    import json
+    import time
+    import security
+    from database import SeraDatabase
+    from sync_peer import SyncPeerService
+
+    sender_dir = tmp_path / "sender"
+    receiver_dir = tmp_path / "receiver"
+    sender_dir.mkdir()
+    receiver_dir.mkdir()
+
+    password = "office_password_123"
+
+    # Sender DB & Salt
+    sender_salt_path = str(sender_dir / "sera.salt")
+    security.generate_and_save_salt(sender_salt_path)
+    sender_salt = security.load_salt(sender_salt_path)
+    sender_hex = security.derive_key_hex(password, sender_salt)
+    sender_db_path = str(sender_dir / "master.db")
+    sender_db = SeraDatabase(sender_db_path, sender_hex, defer_startup_maintenance=True)
+    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+    pan_id = pan_col["id"] if pan_col else 5
+    sender_db.add_client({pan_id: "AAAAA1111A"}, "Sender Client", [])
+
+    # Receiver DB, Salt & sera.key
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    receiver_salt = security.load_salt(receiver_salt_path)
+    receiver_hex = security.derive_key_hex(password, receiver_salt)
+    receiver_db_path = str(receiver_dir / "master.db")
+    receiver_db = SeraDatabase(receiver_db_path, receiver_hex, defer_startup_maintenance=True)
+    receiver_db.add_client({pan_id: "BBBBB2222B"}, "Receiver Client", [])
+
+    # Save password in receiver's sera.key
+    (receiver_dir / "sera.key").write_text(password, encoding="utf-8")
+
+    # Record initial receiver live master.db bytes
+    initial_receiver_db_bytes = (receiver_dir / "master.db").read_bytes()
+    initial_receiver_salt_bytes = (receiver_dir / "sera.salt").read_bytes()
+
+    restart_called = []
+    receiver_service = SyncPeerService(
+        db_path=receiver_db_path,
+        salt_path=receiver_salt_path,
+        username="ReceiverUser",
+        sync_port=0,
+        on_sync_received=lambda: restart_called.append(True),
+    )
+    receiver_service.start()
+
+    try:
+        sender_service = SyncPeerService(
+            db_path=sender_db_path,
+            salt_path=sender_salt_path,
+            username="SenderUser",
+            db=sender_db,
+        )
+
+        port = receiver_service._tcp_server.getsockname()[1]
+        res = sender_service.push_to("127.0.0.1", port, force_override=True)
+        assert "successfully" in res.lower()
+
+        time.sleep(0.5)
+
+        # 1. Live master.db bytes are completely unchanged
+        assert (receiver_dir / "master.db").read_bytes() == initial_receiver_db_bytes
+        assert (receiver_dir / "sera.salt").read_bytes() == initial_receiver_salt_bytes
+
+        # 2. pending_swap.json exists in incoming/
+        pending_swap = receiver_dir / "incoming" / "pending_swap.json"
+        assert pending_swap.exists()
+        swap_info = json.loads(pending_swap.read_text(encoding="utf-8"))
+        assert "db" in swap_info
+        assert "salt" in swap_info
+        assert swap_info["from"] == sender_service.host_name
+        assert "at" in swap_info
+
+        # 3. Staged DB and salt exist in incoming/
+        staged_db = receiver_dir / "incoming" / "master.db"
+        staged_salt = receiver_dir / "incoming" / "sera.salt"
+        assert staged_db.exists()
+        assert staged_salt.exists()
+        assert not (receiver_dir / "incoming" / "master.db.part").exists()
+        assert not (receiver_dir / "incoming" / "sera.salt.part").exists()
+
+        # 4. Restart notification callback was called
+        assert len(restart_called) >= 1
+    finally:
+        receiver_service.stop()
+
+
+def test_apply_pending_swap(tmp_path):
+    import json
+    from sync_peer import apply_pending_swap
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    incoming_dir = app_dir / "incoming"
+    incoming_dir.mkdir()
+
+    # Create original live files
+    live_db = app_dir / "master.db"
+    live_salt = app_dir / "sera.salt"
+    live_db.write_bytes(b"ORIGINAL_LIVE_DATABASE_BYTES")
+    live_salt.write_bytes(b"ORIGINAL_LIVE_SALT_BYTES")
+
+    # Create dummy WAL and SHM files
+    wal_file = app_dir / "master.db-wal"
+    shm_file = app_dir / "master.db-shm"
+    wal_file.write_bytes(b"DUMMY_WAL_DATA")
+    shm_file.write_bytes(b"DUMMY_SHM_DATA")
+    assert wal_file.exists()
+    assert shm_file.exists()
+
+    # Create staged incoming files
+    staged_db = incoming_dir / "master.db"
+    staged_salt = incoming_dir / "sera.salt"
+    staged_db.write_bytes(b"NEW_STAGED_DATABASE_BYTES")
+    staged_salt.write_bytes(b"NEW_STAGED_SALT_BYTES")
+
+    pending_swap = incoming_dir / "pending_swap.json"
+    pending_swap.write_text(json.dumps({
+        "db": "master.db",
+        "salt": "sera.salt",
+        "from": "RemoteHost",
+        "at": "2026-09-23T18:00:00Z"
+    }), encoding="utf-8")
+
+    # Run apply_pending_swap
+    applied = apply_pending_swap(app_dir)
+    assert applied is True
+
+    # 1. Live files have swapped content
+    assert live_db.read_bytes() == b"NEW_STAGED_DATABASE_BYTES"
+    assert live_salt.read_bytes() == b"NEW_STAGED_SALT_BYTES"
+
+    # 2. Staged files no longer in incoming/ (they were moved into live)
+    assert not staged_db.exists()
+    assert not staged_salt.exists()
+
+    # 3. pending_swap.json was deleted
+    assert not pending_swap.exists()
+
+    # 4. Backups exist with original content
+    backup_dbs = list(app_dir.glob("master.db.pre-sync-*.db"))
+    assert len(backup_dbs) >= 1
+    assert backup_dbs[0].read_bytes() == b"ORIGINAL_LIVE_DATABASE_BYTES"
+
+    backup_salts = list(app_dir.glob("sera.salt.pre-sync-*"))
+    assert len(backup_salts) >= 1
+    assert backup_salts[0].read_bytes() == b"ORIGINAL_LIVE_SALT_BYTES"
+
+    # 5. WAL and SHM files are removed
+    assert not wal_file.exists()
+    assert not shm_file.exists()
+
+
+def test_push_with_other_password_rejected(tmp_path):
+    import time
+    import security
+    from database import SeraDatabase
+    from sync_peer import SyncPeerService
+
+    sender_dir = tmp_path / "sender"
+    receiver_dir = tmp_path / "receiver"
+    sender_dir.mkdir()
+    receiver_dir.mkdir()
+
+    sender_password = "sender_secret_password"
+    receiver_password = "receiver_different_password"
+
+    # Sender DB & Salt with sender_password
+    sender_salt_path = str(sender_dir / "sera.salt")
+    security.generate_and_save_salt(sender_salt_path)
+    sender_salt = security.load_salt(sender_salt_path)
+    sender_hex = security.derive_key_hex(sender_password, sender_salt)
+    sender_db_path = str(sender_dir / "master.db")
+    sender_db = SeraDatabase(sender_db_path, sender_hex, defer_startup_maintenance=True)
+    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+    pan_id = pan_col["id"] if pan_col else 5
+    sender_db.add_client({pan_id: "CCCCC5555C"}, "Sender Client", [])
+
+    # Receiver DB & Salt with receiver_password
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    receiver_salt = security.load_salt(receiver_salt_path)
+    receiver_hex = security.derive_key_hex(receiver_password, receiver_salt)
+    receiver_db_path = str(receiver_dir / "master.db")
+    receiver_db = SeraDatabase(receiver_db_path, receiver_hex, defer_startup_maintenance=True)
+
+    # Save receiver_password in sera.key
+    (receiver_dir / "sera.key").write_text(receiver_password, encoding="utf-8")
+
+    receiver_errors = []
+    receiver_service = SyncPeerService(
+        db_path=receiver_db_path,
+        salt_path=receiver_salt_path,
+        username="ReceiverUser",
+        sync_port=0,
+        on_error=lambda msg: receiver_errors.append(msg),
+    )
+    receiver_service.start()
+
+    try:
+        sender_service = SyncPeerService(
+            db_path=sender_db_path,
+            salt_path=sender_salt_path,
+            username="SenderUser",
+            db=sender_db,
+        )
+
+        port = receiver_service._tcp_server.getsockname()[1]
+        res = sender_service.push_to("127.0.0.1", port, force_override=True)
+
+        # Sender gets failure with reason PASSWORD_MISMATCH
+        assert "password_mismatch" in res.lower()
+
+        time.sleep(0.5)
+
+        # Receiver staging files are completely deleted/cleaned up
+        incoming_dir = receiver_dir / "incoming"
+        if incoming_dir.exists():
+            assert not (incoming_dir / "master.db").exists()
+            assert not (incoming_dir / "sera.salt").exists()
+            assert not (incoming_dir / "master.db.part").exists()
+            assert not (incoming_dir / "sera.salt.part").exists()
+            assert not (incoming_dir / "pending_swap.json").exists()
+
+        # Receiver error callback was notified
+        assert any("password mismatch" in str(err).lower() for err in receiver_errors)
+    finally:
+        receiver_service.stop()
+
+
+def test_apply_pending_swap_backup_failure_preserves_live_db(tmp_path, monkeypatch):
+    """Blocking 1 regression: A failed backup copy must never delete the live DB or salt."""
+    import shutil
+    import json
+    from sync_peer import apply_pending_swap
+
+    live_db = tmp_path / "master.db"
+    live_salt = tmp_path / "sera.salt"
+    live_db.write_bytes(b"LIVE_DB_ORIGINAL_BYTES")
+    live_salt.write_bytes(b"LIVE_SALT_ORIGINAL_BYTES")
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "master.db").write_bytes(b"STAGED_NEW_DB_BYTES")
+    (incoming_dir / "sera.salt").write_bytes(b"STAGED_NEW_SALT_BYTES")
+    pending_json = incoming_dir / "pending_swap.json"
+    pending_json.write_text(json.dumps({"db": "master.db", "salt": "sera.salt"}), encoding="utf-8")
+
+    # Simulate disk full / permission error during backup copy
+    orig_copy2 = shutil.copy2
+    def failing_copy2(src, dst):
+        if "pre-sync" in str(dst):
+            raise OSError("Disk full during pre-sync backup")
+        return orig_copy2(src, dst)
+
+    monkeypatch.setattr(shutil, "copy2", failing_copy2)
+
+    import pytest
+    with pytest.raises(OSError, match="Disk full"):
+        apply_pending_swap(tmp_path)
+
+    # Live DB and salt must be intact and NOT unlinked
+    assert live_db.exists(), "Live DB must NOT be deleted when backup fails"
+    assert live_db.read_bytes() == b"LIVE_DB_ORIGINAL_BYTES"
+    assert live_salt.exists(), "Live salt must NOT be deleted when backup fails"
+    assert live_salt.read_bytes() == b"LIVE_SALT_ORIGINAL_BYTES"
+    # pending_swap.json must be renamed to .failed
+    assert (incoming_dir / "pending_swap.json.failed").exists()
+
+
+def test_apply_pending_swap_strict_incoming_and_no_wal_deletion(tmp_path):
+    """Blocking 2 regression: Path traversal or missing staged files must not fall back to app_path or delete live WAL."""
+    import json
+    from sync_peer import apply_pending_swap
+
+    live_db = tmp_path / "master.db"
+    live_wal = tmp_path / "master.db-wal"
+    live_shm = tmp_path / "master.db-shm"
+    live_salt = tmp_path / "sera.salt"
+    live_db.write_bytes(b"LIVE_DB_CONTENT")
+    live_wal.write_bytes(b"LIVE_WAL_CONTENT")
+    live_shm.write_bytes(b"LIVE_SHM_CONTENT")
+    live_salt.write_bytes(b"LIVE_SALT_CONTENT")
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    pending_json = incoming_dir / "pending_swap.json"
+
+    # Subtest A: Traversal attack in pending_swap.json
+    pending_json.write_text(json.dumps({"db": "../master.db", "salt": "sera.salt"}), encoding="utf-8")
+    assert apply_pending_swap(tmp_path) is False
+    assert live_db.exists()
+    assert live_wal.exists()
+    assert live_shm.exists()
+    assert (incoming_dir / "pending_swap.json.failed").exists()
+    (incoming_dir / "pending_swap.json.failed").unlink()
+
+    # Subtest B: Staged files missing from incoming/
+    pending_json.write_text(json.dumps({"db": "master.db", "salt": "sera.salt"}), encoding="utf-8")
+    assert apply_pending_swap(tmp_path) is False
+    # Crucial: Live files and WAL/SHM must still exist, not replaced with themselves or sidecars unlinked
+    assert live_db.read_bytes() == b"LIVE_DB_CONTENT"
+    assert live_wal.read_bytes() == b"LIVE_WAL_CONTENT"
+    assert live_shm.read_bytes() == b"LIVE_SHM_CONTENT"
+    assert (incoming_dir / "pending_swap.json.failed").exists()
+
+
+def test_apply_pending_swap_db_replace_failure_restores_wal_and_shm(tmp_path, monkeypatch):
+    """Review regression: A failed os.replace on live DB must restore live WAL and SHM sidecars."""
+    import os
+    import json
+    import pytest
+    from sync_peer import apply_pending_swap
+
+    live_db = tmp_path / "master.db"
+    live_wal = tmp_path / "master.db-wal"
+    live_shm = tmp_path / "master.db-shm"
+    live_salt = tmp_path / "sera.salt"
+    live_db.write_bytes(b"LIVE_DB_ORIGINAL_BYTES")
+    live_wal.write_bytes(b"LIVE_WAL_ORIGINAL_BYTES")
+    live_shm.write_bytes(b"LIVE_SHM_ORIGINAL_BYTES")
+    live_salt.write_bytes(b"LIVE_SALT_ORIGINAL_BYTES")
+
+    incoming_dir = tmp_path / "incoming"
+    incoming_dir.mkdir()
+    (incoming_dir / "master.db").write_bytes(b"STAGED_NEW_DB_BYTES")
+    (incoming_dir / "sera.salt").write_bytes(b"STAGED_NEW_SALT_BYTES")
+    pending_json = incoming_dir / "pending_swap.json"
+    pending_json.write_text(json.dumps({"db": "master.db", "salt": "sera.salt"}), encoding="utf-8")
+
+    # Simulate antivirus lock failing os.replace on the live DB
+    orig_replace = os.replace
+    def failing_replace(src, dst):
+        if str(dst).endswith("master.db"):
+            raise PermissionError("Access denied by antivirus lock")
+        return orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    with pytest.raises(PermissionError, match="antivirus lock"):
+        apply_pending_swap(tmp_path)
+
+    # 1. Live DB and salt must be untouched
+    assert live_db.exists()
+    assert live_db.read_bytes() == b"LIVE_DB_ORIGINAL_BYTES"
+    assert live_salt.exists()
+    assert live_salt.read_bytes() == b"LIVE_SALT_ORIGINAL_BYTES"
+
+    # 2. Live WAL and SHM MUST be restored from pre-sync backup and still exist!
+    assert live_wal.exists(), "Live WAL must be restored when DB replacement fails"
+    assert live_wal.read_bytes() == b"LIVE_WAL_ORIGINAL_BYTES"
+    assert live_shm.exists(), "Live SHM must be restored when DB replacement fails"
+    assert live_shm.read_bytes() == b"LIVE_SHM_ORIGINAL_BYTES"
+
+    # 3. pending_swap.json was renamed to .failed
+    assert (incoming_dir / "pending_swap.json.failed").exists()
+
+
+def test_push_rejected_on_zero_byte_or_zero_table(tmp_path):
+    """Blocking 3 regression: 0-byte payload or 0-table database must be rejected by receiver."""
+    import socket
+    import json
+    import security
+    import sqlcipher3.dbapi2 as sqlite3
+    from sync_peer import SyncPeerService, _send_framed, _recv_framed
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    (receiver_dir / "sera.key").write_text("receiver_pass_123", encoding="utf-8")
+
+    receiver_errors = []
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="ReceiverUser",
+        sync_port=0,
+        on_error=lambda msg: receiver_errors.append(msg),
+    )
+    receiver_service.start()
+
+    try:
+        port = receiver_service._tcp_server.getsockname()[1]
+
+        # Case 1: Send header with db_size = 0
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", port))
+        header = {
+            "action": "push_database",
+            "host": "TestSender",
+            "db_size": 0,
+            "salt_size": 16,
+            "client_count": 1,
+            "sync_revision": 1,
+        }
+        _send_framed(sock, json.dumps(header).encode("utf-8"))
+        resp = json.loads(_recv_framed(sock).decode("utf-8"))
+        sock.close()
+        assert resp.get("status") == "rejected"
+        assert resp.get("reason") == "INVALID_PAYLOAD"
+
+        # Case 2: Send encrypted DB that has 0 tables in sqlite_master
+        sender_dir = tmp_path / "sender"
+        sender_dir.mkdir()
+        sender_salt_path = str(sender_dir / "sera.salt")
+        security.generate_and_save_salt(sender_salt_path)
+        salt_bytes = security.load_salt(sender_salt_path)
+        hex_key = security.derive_key_hex("receiver_pass_123", salt_bytes)
+
+        zero_table_db = sender_dir / "zero_table.db"
+        conn = sqlite3.connect(str(zero_table_db))
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+        # Empty DB, create no tables
+        conn.execute("VACUUM;")
+        conn.close()
+
+        sender_service = SyncPeerService(
+            db_path=str(zero_table_db),
+            salt_path=sender_salt_path,
+            username="SenderZeroTable",
+        )
+        res = sender_service.push_to("127.0.0.1", port, force_override=True)
+        assert "password_mismatch" in res.lower()
+
+        # Receiver staging area must be cleaned up
+        incoming_dir = receiver_dir / "incoming"
+        if incoming_dir.exists():
+            assert not (incoming_dir / "master.db").exists()
+            assert not (incoming_dir / "pending_swap.json").exists()
+    finally:
+        receiver_service.stop()
+
+
+def test_push_rejected_when_busy(tmp_path):
+    """Should Fix 1 regression: Staging lock rejects concurrent transfers with BUSY."""
+    import security
+    from sync_peer import SyncPeerService
+    from database import SeraDatabase
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    (receiver_dir / "sera.key").write_text("common_pass_123", encoding="utf-8")
+
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="ReceiverUser",
+        sync_port=0,
+    )
+    receiver_service.start()
+
+    try:
+        sender_dir = tmp_path / "sender"
+        sender_dir.mkdir()
+        sender_salt_path = str(sender_dir / "sera.salt")
+        security.generate_and_save_salt(sender_salt_path)
+        salt_bytes = security.load_salt(sender_salt_path)
+        hex_key = security.derive_key_hex("common_pass_123", salt_bytes)
+        sender_db_path = str(sender_dir / "master.db")
+        sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
+
+        sender_service = SyncPeerService(
+            db_path=sender_db_path,
+            salt_path=sender_salt_path,
+            username="SenderUser",
+            db=sender_db,
+        )
+
+        port = receiver_service._tcp_server.getsockname()[1]
+
+        # Hold the staging lock on receiver to simulate an ongoing transfer
+        assert receiver_service._staging_lock.acquire(blocking=False) is True
+        try:
+            res = sender_service.push_to("127.0.0.1", port, force_override=True)
+            assert "busy" in res.lower(), f"Expected busy in response, got {res}"
+        finally:
+            receiver_service._staging_lock.release()
+    finally:
+        receiver_service.stop()
+
+
+def test_push_rejected_when_restart_pending(tmp_path):
+    """Worth fixing 1 regression: Incoming push is rejected when pending_swap.json already exists."""
+    import json
+    import security
+    from sync_peer import SyncPeerService
+    from database import SeraDatabase
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    incoming_dir = receiver_dir / "incoming"
+    incoming_dir.mkdir()
+
+    # Pre-existing accepted swap
+    (incoming_dir / "master.db").write_bytes(b"STAGED_A_DB")
+    (incoming_dir / "sera.salt").write_bytes(b"STAGED_A_SALT")
+    pending_json = incoming_dir / "pending_swap.json"
+    pending_json.write_text(json.dumps({"db": "master.db", "salt": "sera.salt", "from": "PC_A"}), encoding="utf-8")
+
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    (receiver_dir / "sera.key").write_text("common_pass_123", encoding="utf-8")
+
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="ReceiverUser",
+        sync_port=0,
+    )
+    receiver_service.start()
+
+    try:
+        sender_dir = tmp_path / "sender"
+        sender_dir.mkdir()
+        sender_salt_path = str(sender_dir / "sera.salt")
+        security.generate_and_save_salt(sender_salt_path)
+        salt_bytes = security.load_salt(sender_salt_path)
+        hex_key = security.derive_key_hex("common_pass_123", salt_bytes)
+        sender_db_path = str(sender_dir / "master.db")
+        sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
+
+        sender_service = SyncPeerService(
+            db_path=sender_db_path,
+            salt_path=sender_salt_path,
+            username="SenderUser",
+            db=sender_db,
+        )
+
+        port = receiver_service._tcp_server.getsockname()[1]
+        res = sender_service.push_to("127.0.0.1", port, force_override=True)
+        assert "restart_pending" in res.lower(), f"Expected restart_pending in response, got {res}"
+
+        # Crucial: Pre-existing accepted staged files and pending_swap.json are untouched!
+        assert (incoming_dir / "master.db").read_bytes() == b"STAGED_A_DB"
+        assert (incoming_dir / "pending_swap.json").exists()
+    finally:
+        receiver_service.stop()
 
 
