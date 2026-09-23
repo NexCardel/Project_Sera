@@ -89,12 +89,15 @@ class SeraAlert(QFrame):
             
         self.show()
         self.raise_()
-        
+
         self.anim.setStartValue(self.opacity_effect.opacity())
         self.anim.setEndValue(1.0)
         self.anim.start()
-        
-        self.timer.start(duration_ms)
+
+        # Only start auto-hide timer if duration > 0 (duration <= 0 means persistent)
+        self.timer.stop()
+        if duration_ms > 0:
+            self.timer.start(duration_ms)
 
     def show_message(self, message: str, duration_ms: int = 3000, level: str = "info"):
         self.show_alert(message, level=level, duration_ms=duration_ms)

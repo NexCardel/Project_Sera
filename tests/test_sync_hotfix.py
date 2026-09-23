@@ -893,8 +893,8 @@ def test_push_rejected_when_restart_pending(tmp_path):
 
 
 def test_raw_db_reset_is_reported(tmp_path):
+    """Test that rawPayload.db reset is reported when backup succeeds."""
     import os
-    import glob
     import security
     import sqlcipher3.dbapi2 as sqlite3
     from database import SeraDatabase
@@ -904,58 +904,166 @@ def test_raw_db_reset_is_reported(tmp_path):
     salt_path = str(tmp_path / "sera.salt")
     password = "testpass123"
 
-    # Create salt and master.db
     security.generate_and_save_salt(salt_path)
     salt = security.load_salt(salt_path)
     hex_key = security.derive_key_hex(password, salt)
 
     db = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
-
-    # Verify rawPayload.db was created and accessible
     assert os.path.exists(raw_db_path)
-    assert os.path.getsize(raw_db_path) > 0
 
-    # Now corrupt the rawPayload.db by truncating it
+    # Corrupt rawPayload.db
     with open(raw_db_path, "wb") as f:
-        f.write(b"CORRUPTED_DATA_NOT_A_REAL_DB")
-
-    # Close the first db instance to avoid locking issues
+        f.write(b"CORRUPTED_DATA")
     del db
 
-    # Now create a new SeraDatabase instance - it should auto-heal
+    # Auto-heal should create a backup
     db2 = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
 
-    # 1. Check that raw_db_was_reset was set
-    assert hasattr(db2, "raw_db_was_reset"), "SeraDatabase should have raw_db_was_reset attribute"
-    assert db2.raw_db_was_reset is not None, "raw_db_was_reset should be set when auto-heal happens"
-    backup_name = db2.raw_db_was_reset
+    # Should have backup set to an actual file (not "reset_without_backup")
+    assert db2.raw_db_was_reset is not None
+    assert db2.raw_db_was_reset != "reset_without_backup"
+    assert os.path.exists(db2.raw_db_was_reset)
+    assert os.path.getsize(db2.raw_db_was_reset) > 0
 
-    # 2. Verify backup file exists and contains the corrupted data
-    assert os.path.exists(backup_name), f"Backup file {backup_name} should exist"
-    with open(backup_name, "rb") as f:
-        backup_content = f.read()
-    assert backup_content == b"CORRUPTED_DATA_NOT_A_REAL_DB", "Backup should contain the corrupted data"
+    # Backup should contain corrupted data
+    with open(db2.raw_db_was_reset, "rb") as f:
+        assert b"CORRUPTED_DATA" in f.read()
 
-    # 3. Verify rawPayload.db is now a valid database
-    try:
-        conn = sqlite3.connect(raw_db_path)
-        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-        count = conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()[0]
-        conn.close()
-    except Exception as e:
-        raise AssertionError(f"rawPayload.db should be a valid database after auto-heal: {e}")
+    # New DB should be valid
+    conn = sqlite3.connect(raw_db_path)
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    conn.execute("SELECT count(*) FROM sqlite_master;")
+    conn.close()
 
-    # 4. Verify audit log entry was written
+    # Audit log should record backup
     with db2._connect() as conn:
         rows = conn.execute(
             "SELECT action, detail FROM audit_log WHERE action = 'raw_db_reset' ORDER BY id DESC LIMIT 1"
         ).fetchall()
 
-    assert len(rows) > 0, "An audit log entry with action='raw_db_reset' should exist"
+    assert len(rows) > 0
     action, detail = rows[0]
     assert action == "raw_db_reset"
-    backup_basename = os.path.basename(backup_name)
-    assert backup_basename in detail, f"Audit detail should mention the backup name: {detail}"
+    assert os.path.basename(db2.raw_db_was_reset) in detail
+
+
+def test_raw_db_reset_without_backup(tmp_path):
+    """Test that rawPayload.db reset is reported even when no backup exists."""
+    import os
+    import security
+    import sqlcipher3.dbapi2 as sqlite3
+    from database import SeraDatabase
+
+    db_path = str(tmp_path / "master.db")
+    raw_db_path = str(tmp_path / "rawPayload.db")
+    salt_path = str(tmp_path / "sera.salt")
+    password = "testpass123"
+
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    hex_key = security.derive_key_hex(password, salt)
+
+    db = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+    del db
+
+    # Create 0-byte rawPayload.db (no backup can be made from empty file)
+    with open(raw_db_path, "wb") as f:
+        pass  # Write nothing, creating a 0-byte file
+    assert os.path.getsize(raw_db_path) == 0
+
+    # Auto-heal should recreate without a backup
+    db2 = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+
+    # Should indicate reset without backup
+    assert db2.raw_db_was_reset == "reset_without_backup"
+
+    # New DB should be recreated and valid
+    assert os.path.exists(raw_db_path)
+    assert os.path.getsize(raw_db_path) > 0
+    conn = sqlite3.connect(raw_db_path)
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    conn.execute("SELECT count(*) FROM sqlite_master;")
+    conn.close()
+
+    # Audit log should record the reset
+    with db2._connect() as conn:
+        rows = conn.execute(
+            "SELECT action, detail FROM audit_log WHERE action = 'raw_db_reset' ORDER BY id DESC LIMIT 1"
+        ).fetchall()
+
+    assert len(rows) > 0
+    action, detail = rows[0]
+    assert action == "raw_db_reset"
+    assert "no backup" in detail.lower()
+
+
+def _raw_reset_env(tmp_path):
+    import security
+    from database import SeraDatabase
+
+    db_path = str(tmp_path / "master.db")
+    raw_db_path = str(tmp_path / "rawPayload.db")
+    salt_path = str(tmp_path / "sera.salt")
+    security.generate_and_save_salt(salt_path)
+    hex_key = security.derive_key_hex("testpass123", security.load_salt(salt_path))
+    db = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+    del db
+    return db_path, raw_db_path, hex_key
+
+
+def test_raw_db_reset_backs_up_sidecars(tmp_path):
+    """-wal/-shm next to an un-decryptable rawPayload.db are backed up, not just deleted."""
+    import os
+    from database import SeraDatabase
+
+    db_path, raw_db_path, hex_key = _raw_reset_env(tmp_path)
+    db2 = SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+    # Called directly: a fake -wal with an invalid header would be discarded by SQLite's
+    # own open probe before the heal runs.
+    with open(raw_db_path, "wb") as f:
+        f.write(b"CORRUPTED_DATA")
+    with open(raw_db_path + "-wal", "wb") as f:
+        f.write(b"WAL_PAGES")
+
+    assert db2._auto_heal_raw_db() is True
+
+    assert not os.path.exists(raw_db_path + "-wal")
+    backup = db2.raw_db_was_reset
+    assert backup and backup != "reset_without_backup"
+    with open(backup + "-wal", "rb") as f:
+        assert f.read() == b"WAL_PAGES"
+
+
+def test_raw_db_left_alone_when_backup_impossible(tmp_path, monkeypatch):
+    """If neither copy nor move works, the file stays, nothing is reported as reset and start-up
+    stops with a clear error (blueprint §0 rule 3)."""
+    import os
+    import shutil
+    import pytest
+    import database
+    from database import SeraDatabase
+
+    db_path, raw_db_path, hex_key = _raw_reset_env(tmp_path)
+    with open(raw_db_path, "wb") as f:
+        f.write(b"CORRUPTED_DATA")
+
+    def _fail(*a, **k):
+        raise OSError("simulated")
+    monkeypatch.setattr(shutil, "copy2", _fail)
+    monkeypatch.setattr(database.os, "replace", _fail)
+
+    with pytest.raises(RuntimeError, match="left untouched"):
+        SeraDatabase(db_path, hex_key, raw_db_path=raw_db_path, defer_startup_maintenance=True)
+
+    monkeypatch.undo()
+    with open(raw_db_path, "rb") as f:
+        assert f.read() == b"CORRUPTED_DATA"
+    import sqlcipher3.dbapi2 as sqlite3
+    conn = sqlite3.connect(db_path)
+    conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+    rows = conn.execute("SELECT count(*) FROM audit_log WHERE action = 'raw_db_reset'").fetchone()[0]
+    conn.close()
+    assert rows == 0
 
 
 def test_wrong_saved_password_prompts(tmp_path, monkeypatch):

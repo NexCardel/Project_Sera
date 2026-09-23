@@ -66,7 +66,13 @@ class SeraDatabase:
         # on the db, not the other way around). Left as a no-op until then
         # so every call site stays safe regardless of init order.
         self._sync_revision_hook = None
-        self._init_schema()
+        self.raw_db_was_reset = None
+        self._master_db_failed = False
+        try:
+            self._init_schema()
+        except Exception:
+            self._master_db_failed = True
+            raise
         self._init_raw_schema()
         self._migrate_tracker_dump_to_raw_payload_db()
         if not defer_startup_maintenance:
@@ -508,36 +514,66 @@ class SeraDatabase:
             print(f"[database] _migrate_tracker_dump_nullable notice: {e}")
 
     def _auto_heal_raw_db(self):
-        """Safely backs up un-decryptable rawPayload.db and re-initializes a fresh database matching the current vault key."""
-        try:
-            if os.path.exists(self.raw_db_path) and os.path.getsize(self.raw_db_path) > 0:
-                import datetime, shutil
-                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_name = f"{self.raw_db_path}.key_mismatch_{now_str}.bak"
-                try:
-                    shutil.copy2(self.raw_db_path, backup_name)
-                    print(f"[database] Backed up un-decryptable rawPayload.db to {backup_name}")
-                except Exception:
-                    pass
+        """Backs up an un-decryptable rawPayload.db (and its -wal/-shm/-journal sidecars) and lets
+        _init_raw_schema recreate it with the active vault key. Nothing is removed unless every
+        non-empty file was first copied or moved to a *.bak file (blueprint §0 rule 3).
+        Returns True if the old files are out of the way, False if they were left untouched."""
+        import datetime, shutil
+        now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{self.raw_db_path}.key_mismatch_{now_str}.bak"
+        suffixes = ["", "-wal", "-shm", "-journal"]
+        # Only files with content are worth keeping; empty ones are removed without a backup.
+        to_keep = [s for s in suffixes
+                   if os.path.exists(self.raw_db_path + s) and os.path.getsize(self.raw_db_path + s) > 0]
 
-            for p in [self.raw_db_path, f"{self.raw_db_path}-wal", f"{self.raw_db_path}-shm", f"{self.raw_db_path}-journal"]:
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
-            print("[database] Auto-recovery: Re-initializing fresh rawPayload.db with active vault key.")
-        except Exception as err:
-            print(f"[database] Error during _auto_heal_raw_db: {err}")
+        backed_up = []
+        try:
+            for s in to_keep:
+                shutil.copy2(self.raw_db_path + s, backup_name + s)
+                if os.path.getsize(backup_name + s) != os.path.getsize(self.raw_db_path + s):
+                    raise OSError(f"backup of rawPayload.db{s} is incomplete")
+                backed_up.append(s)
+        except Exception as copy_err:
+            print(f"[database] Backup copy failed: {copy_err}. Trying to move the files instead.")
+            try:
+                for s in to_keep:
+                    if s not in backed_up:
+                        os.replace(self.raw_db_path + s, backup_name + s)
+            except Exception as move_err:
+                print(f"[database] Could not back up rawPayload.db ({move_err}). Leaving it untouched.")
+                return False
+
+        for s in suffixes:
+            p = self.raw_db_path + s
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception as e:
+                    print(f"[database] Could not remove rawPayload.db{s}: {e}")
+                    return False
+        print("[database] Auto-recovery: Re-initializing fresh rawPayload.db with active vault key.")
+
+        # Record what happened. No backup means the main file was empty: nothing to keep.
+        has_backup = "" in to_keep
+        self.raw_db_was_reset = backup_name if has_backup else "reset_without_backup"
+        if not self._master_db_failed:
+            try:
+                if has_backup:
+                    detail = f"Tracker database was reset. Backup: {os.path.basename(backup_name)}"
+                else:
+                    detail = "Tracker database was reset (no backup created)"
+                self.log_action("System", "raw_db_reset", detail=detail)
+            except Exception as e:
+                print(f"[database] Could not write raw_db_reset audit entry: {e}")
+        return True
 
     def _init_raw_schema(self):
         """Initializes tables and indexes inside rawPayload.db with auto-healing recovery."""
-        # 1. Check for 0-byte dummy or corrupted file
+        # 1. A 0-byte dummy file is reset (and reported) too.
         if os.path.exists(self.raw_db_path) and os.path.getsize(self.raw_db_path) == 0:
-            try:
-                os.remove(self.raw_db_path)
-            except Exception:
-                pass
+            if not self._master_db_failed:
+                print(f"[database] rawPayload.db is 0 bytes. Performing automatic recovery...")
+                self._auto_heal_raw_db()
 
         # 2. Test decryption. If key mismatch occurs (e.g. after transporting salt to a secondary PC),
         # auto-heal so staff is never locked out with 'Could not open rawPayload.db with provided key'.
@@ -547,8 +583,16 @@ class SeraDatabase:
         except Exception as e:
             err_msg = str(e).lower()
             if "key" in err_msg or "not a database" in err_msg or "encrypted" in err_msg or "codec" in err_msg:
-                print(f"[database] rawPayload.db key mismatch: {e}. Performing automatic recovery...")
-                self._auto_heal_raw_db()
+                # Skip auto-heal if master.db itself failed to open
+                if self._master_db_failed:
+                    print(f"[database] rawPayload.db key mismatch, but master.db failed to open. Skipping auto-heal.")
+                else:
+                    print(f"[database] rawPayload.db key mismatch: {e}. Performing automatic recovery...")
+                    if not self._auto_heal_raw_db():
+                        raise RuntimeError(
+                            f"rawPayload.db could not be opened with this office's key and could not be "
+                            f"backed up, so it was left untouched: {self.raw_db_path}"
+                        ) from e
 
         with self._connect_raw() as conn:
             conn.execute("""

@@ -318,34 +318,40 @@ class SeraApp:
         loading_dlg.close()
         memory_mark("start-up: main window built")
 
-        # Show alert if tracker database was reset during startup
+        # Start-up alerts share one toast widget, so collect them and show them together:
+        # otherwise a later alert would replace the persistent tracker-reset one.
+        startup_alerts = []  # (level, message, duration_ms; 0 = stays until dismissed)
         if self.db.raw_db_was_reset:
             if self.db.raw_db_was_reset == "reset_without_backup":
                 msg = "Tracker database could not be opened with this office's key and was reset (no backup created)."
             else:
-                import os
-                backup_basename = os.path.basename(self.db.raw_db_was_reset)
-                msg = f"Tracker database could not be opened with this office's key and was reset. Backup: {backup_basename}"
-            self.shell.show_alert(msg, level="warning", duration=0)
+                msg = ("Tracker database could not be opened with this office's key and was reset. "
+                       f"Backup: {os.path.basename(self.db.raw_db_was_reset)}")
+            startup_alerts.append(("warning", msg, 0))
 
         # Show alert if a staged sync database swap failed during startup
         failed_swap_marker = APP_DIR / "incoming" / "pending_swap.json.failed"
         if self._pending_swap_error:
-            self.shell.show_alert(
+            startup_alerts.append((
+                "error",
                 f"Sync Database Swap Failed: {self._pending_swap_error}. Rolled back to previous database.",
-                level="error",
-                duration=10000,
-            )
+                10000,
+            ))
         elif failed_swap_marker.exists():
-            self.shell.show_alert(
+            startup_alerts.append((
+                "warning",
                 "A pending sync database swap could not be applied. Rolled back to previous database.",
-                level="warning",
-                duration=8000,
-            )
+                8000,
+            ))
             try:
                 failed_swap_marker.unlink(missing_ok=True)
             except OSError:
                 pass
+
+        if startup_alerts:
+            level = "error" if any(a[0] == "error" for a in startup_alerts) else "warning"
+            duration = 0 if any(a[2] == 0 for a in startup_alerts) else max(a[2] for a in startup_alerts)
+            self.shell.show_alert("\n".join(a[1] for a in startup_alerts), level=level, duration=duration)
 
         # Start the WebSocket bridge to the extension (ui/ws_bridge.py). Only the Sera extension's
         # own background page may connect - see that module for how the origin is checked.

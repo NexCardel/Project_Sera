@@ -895,8 +895,8 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - For P0-4 (#6): When P0-4 changes the receiver to stage incoming DBs and write `pending_swap.json` instead of writing over open files in place, update receiver assertions in `test_push_to_streams_snapshot_and_cleans_up` accordingly.
 
 ### P0-4 — Receiver stages, swaps at start-up — In review (Reviewed by Claude Opus 5.5) — 2026-09-24
-- Model: Gemini 3.8 Flash   Commit: uncommitted
-- Tests: 814 passed / 10 failed; new tests: test_push_is_staged_not_live, test_apply_pending_swap, test_push_with_other_password_rejected, test_apply_pending_swap_backup_failure_preserves_live_db, test_apply_pending_swap_strict_incoming_and_no_wal_deletion, test_push_rejected_on_zero_byte_or_zero_table, test_push_rejected_when_busy, test_push_rejected_when_restart_pending
+- Model: Gemini 3.8 Flash   Commit: 89c9aa3
+- Tests: 814 passed / 10 failed; new tests: test_push_is_staged_not_live, test_apply_pending_swap, test_push_with_other_password_rejected, test_apply_pending_swap_backup_failure_preserves_live_db, test_apply_pending_swap_strict_incoming_and_no_wal_deletion, test_apply_pending_swap_db_replace_failure_restores_wal_and_shm, test_push_rejected_on_zero_byte_or_zero_table, test_push_rejected_when_busy, test_push_rejected_when_restart_pending
 - Deviations from spec:
   - Addressed review findings (Claude Opus 5.5):
     1. Blocking 1: `apply_pending_swap` rollback strictly tracks `had_live_db`/`swapped_db` and NEVER deletes/unlinks a pre-existing live DB or salt file if pre-sync backup fails (satisfies §0 rule 3).
@@ -905,9 +905,10 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
     4. Concurrency: `SyncPeerService` uses a non-blocking `_staging_lock` returning `{"status": "rejected", "reason": "BUSY"}` when another incoming transfer is in progress.
     5. Windows restart locks: `_retry_file_op` wraps all file replacement, backup, and cleanup operations for up to 5 seconds to gracefully handle temporary file locks during process restart race; failed startup swaps are surfaced via `self.shell.show_alert` in `main.py`.
     6. Backup of existing `master.db-wal` and `master.db-shm` added during pre-sync backups (and restored on rollback).
-    7. Worth-fixing 1: Rejection with `RESTART_PENDING` before sending `ready` if `pending_swap.json` already exists in `incoming/`, preventing any rejected incoming push from cancelling or corrupting an already-accepted staged swap.
+    7. Worth-fixing 1: Rejection with `RESTART_PENDING` before sending `ready` and re-checked inside `_staging_lock` if `pending_swap.json` already exists in `incoming/`, preventing any rejected incoming push from cancelling or corrupting an already-accepted staged swap.
     8. Worth-fixing 2: Removal of existing live `-wal`/`-shm`/`-journal` sidecars moved BEFORE `os.replace` (with retry); fails and aborts before live DB is swapped if sidecars cannot be unlinked.
     9. Worth-fixing 3: `pending_swap.json.failed` is unlinked after displaying the warning alert on startup so it does not repeat indefinitely.
+    10. Must-fix (post-review): `apply_pending_swap` rollback restores `live_wal` and `live_shm` from pre-sync backup whenever they existed and were backed up, regardless of `swapped_db`, preventing lost un-checkpointed WAL data if `os.replace` on the live database fails (tested via `test_apply_pending_swap_db_replace_failure_restores_wal_and_shm`).
 - Notes for later WPs:
   - Staged pushes write `incoming/pending_swap.json` and stage strictly to `incoming/<db_name>` and `incoming/<salt_name>`.
   - `apply_pending_swap(app_dir)` is called at `main.py` startup before database initialization. It rotates `pre-sync-<ts>` backups (keeping 5), atomically replaces live files with retry, removes SQLite WAL/SHM sidecars, and prunes leftover outgoing snapshots (`incoming/out/`).
@@ -915,15 +916,19 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - `_on_live_sync_received` in `main.py` routes directly to `_on_sync_received()` requiring an application restart.
   - `test_push_to_streams_snapshot_and_cleans_up` and `tests/test_sera_sync.py` were updated to initialize valid SQLCipher test databases and verify staging + `apply_pending_swap`.
 
-### P0-8 — `rawPayload.db` auto-heal is visible — In review — 2026-09-23
-- Model: Claude Haiku 4.5   Commit: uncommitted
-- Tests: 809 passed / 11 failed (11 pre-existing); new tests: test_raw_db_reset_is_reported
-- Deviations from spec: none
+### P0-8 — `rawPayload.db` auto-heal is visible — Reviewed — 2026-09-24
+- Model: Claude Haiku 4.5; review fixes by Claude Opus 5.5 (reviewer)   Commit: see git log ("P0-8")
+- Tests: 819 passed / 10 failed (the same 10 fail on HEAD without this change: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher); new tests: test_raw_db_reset_is_reported, test_raw_db_reset_without_backup, test_raw_db_reset_backs_up_sidecars, test_raw_db_left_alone_when_backup_impossible
+- Deviations / additions:
+  - `raw_db_was_reset` is the backup path, or the string `"reset_without_backup"` when the main file was empty (0 bytes: nothing to keep).
+  - `-wal`/`-shm`/`-journal` with content are backed up next to the main backup (`<backup>-wal` …), not just deleted.
+  - Copy fails → the files are moved to the `.bak` names instead. Both fail → nothing is removed, nothing is reported or audited as reset, and `_init_raw_schema` raises `RuntimeError` naming the file (start-up stops rather than losing data, §0 rule 3).
+  - "Skip auto-heal if master.db failed" is effectively guaranteed by `_init_schema` re-raising; the `_master_db_failed` checks are defensive.
+  - Toast: `duration <= 0` means the alert stays until dismissed (`ui/components/toast.py`).
+  - Start-up alerts (tracker reset, failed sync swap) are combined into one toast so a later one no longer replaces the persistent reset alert.
+  - The first part of the `main.py` alert landed in the P0-5 commit `487d6bf`; this WP's commit reworks it.
 - Notes for later WPs:
-  - `self.raw_db_was_reset` attribute is added to SeraDatabase; set to backup filename when auto-heal occurs.
-  - `self._master_db_failed` flag tracks whether master.db initialization failed; if true, rawPayload.db auto-heal is skipped.
-  - Audit log entry with action="raw_db_reset" is written (backup basename included in detail).
-  - Persistent UI alert shown after startup if rawPayload.db was reset (duration=0 means persistent).
+  - P1-5 ("in office mode, never auto-heal") supersedes this path for migrated PCs; legacy-mode PCs keep the behaviour above until they migrate.
 
 ### P0-9a — Installer firewall rules (Private + Domain) — In review — 2026-09-24
 - Model: Gemini 3.8 Flash   Commit: uncommitted
@@ -933,8 +938,8 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - The rule allows inbound traffic for the program executable `{app}\Amas_Sera.exe` on Private and Domain profiles as specified in §5 (whole-program scope rather than restricted to ports 49156–49159 mentioned in §4.3). If port restriction is desired by the owner, §4.3 and the rule can be aligned with specific TCP/UDP port parameters.
 
 
-### P0-5 — Start-up checks that sera.key opens the DB; prompts otherwise — In review — 2026-09-24
-- Model: Gemini 3.8 Flash   Commit: uncommitted
+### P0-5 — Start-up checks that sera.key opens the DB; prompts otherwise — Done — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: 487d6bf
 - Tests: 815 passed / 10 failed; new tests: test_wrong_saved_password_prompts
 - Deviations / additions:
   - Error diagnostics & visual alert (Issue #2): `_verify_master_password()` and `_get_master_password()` track failure causes (`MISSING_SALT`, `DATABASE_LOCKED`, `WRONG_PASSWORD`, `CANCELLED`). `main.py` shows a user-facing `QMessageBox.critical` alert before `sys.exit(0)` when start-up cannot unlock an existing database ("wrong password, or the database file is damaged", missing salt, or database locked), eliminating silent application exits.
