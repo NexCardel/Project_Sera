@@ -27,7 +27,7 @@ P2-7,Done,Claude Sonnet 5,Claude Opus 5.5,d8af4c1,"2026-09-25: UI: Join wizard, 
 P2-8,Done,Claude Opus 5.5,Claude Opus 5.5,35a9afd,"2026-09-24: New sync_rejoin.py + rejoin wizard/salvage dialog, main.py hook, Rejoin button, P2-6 sidecar abort; 35 new tests pass; full suite 1214 passed / 26 failed (10 pre-existing, 6 P3-0 expected, 10 from P2-7's unfinished dialog + its icon)",2026-09-25 00:03
 P3-0,Done,Gemini 3.8 Flash,Claude Opus 5.5,be84d98,"2026-09-24: Review round 3 fixes: write() routes via SeraDatabase._connect for sealer hooks, dynamic time in (b), (d) conflict row on n0 only, (e) partitioned single batch & vector freeze check, stringified FK translation in digest; 7 harness passed, 6 convergence failed as expected, 1185 passed in full suite",2026-09-24 21:50
 P3-1,Done,Claude Sonnet 5,Claude Opus 5.5,882d054,"2026-09-24: Round 2: client_raw_containers reverted to local (whole-row lww would have caused certain data loss via re_resolve_all_tracker_dumps' DELETE+rebuild under P3-3/P3-4 tombstone rules). New pending_creation client_container_notes TableSpec added for staff notes, lww, table itself not yet built (flagged for P3-2). 22 new schema tests + 2 database tests pass; full suite at baseline.",2026-09-24 21:37
-P3-2,In review,Gemini 3.8 Flash,Claude Opus 5.5,,"2026-09-25: B1 fixed, all should-fix items addressed, fresh INI seeding harmonized; 104 passed / 0 failed",2026-09-25 00:51
+P3-2,Done,Gemini 3.8 Flash,Claude Opus 5.5,067828b,"2026-09-25: B1 fixed, all should-fix items addressed, fresh INI seeding harmonized; 104 passed / 0 failed",2026-09-25 00:53
 P3-3,Not started,,,,,
 P3-4,Not started,,,,,
 P3-5,Not started,,,,,
