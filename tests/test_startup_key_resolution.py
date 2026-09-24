@@ -264,8 +264,15 @@ def test_startup_office_mode_with_key_unavailable_recovers_dek(tmp_path, monkeyp
     assert (tmp_path / "keys" / "office_key.recovery").exists()
 
     app = StubSeraApp(tmp_path)
-    # Monkeypatch prompt to supply correct recovery password
-    app._prompt_master_password = lambda prompt_text="": recovery_password
+    class MockRecoveryDlg:
+        def __init__(self, app_dir, parent=None):
+            self.recovered_dek = sera_keys.recover_dek(app_dir, recovery_password)
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+            return QDialog.Accepted
+
+    monkeypatch.setattr("ui.dialogs.office_recovery_dialog.OfficeRecoveryDialog", MockRecoveryDlg)
 
     key_mode, key_id, hex_key = app._resolve_encryption_key()
 

@@ -241,6 +241,16 @@ class SeraSyncDialog(QDialog):
         )
         btn_row.addWidget(self.btn_office_key)
 
+        self.btn_export_kit = QPushButton("  Export recovery kit")
+        kit_icon = _safe_icon("mdi.file-key-outline", color="#FFFFFF")
+        if kit_icon:
+            self.btn_export_kit.setIcon(kit_icon)
+        self.btn_export_kit.clicked.connect(self._on_export_recovery_kit)
+        self.btn_export_kit.setVisible(
+            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
+        )
+        btn_row.addWidget(self.btn_export_kit)
+
         left_layout.addLayout(btn_row)
 
         splitter.addWidget(left_widget)
@@ -314,6 +324,16 @@ class SeraSyncDialog(QDialog):
             pass
         import version
         version.restart_app()
+
+    def _on_export_recovery_kit(self):
+        if not self.sync_service:
+            return
+        from pathlib import Path
+        from ui.dialogs.change_master_password_dialog import export_recovery_kit_flow
+        app_dir = getattr(self.sync_service, "app_dir", None)
+        if not app_dir:
+            app_dir = Path(getattr(self.sync_service, "db_path", "")).parent
+        export_recovery_kit_flow(self, app_dir)
 
     def _on_toggle_inv_frames(self):
         if not self.sync_service:

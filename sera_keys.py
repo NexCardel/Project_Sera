@@ -35,6 +35,13 @@ KEYS_DIRNAME = "keys"
 OFFICE_FILE = "office.json"
 DEK_DPAPI_FILE = "office_key.dpapi"
 DEK_RECOVERY_FILE = "office_key.recovery"
+ADMIN_KEY_DPAPI_FILE = "admin_key.dpapi"
+ADMIN_KEY_RECOVERY_FILE = "admin_key.recovery"
+
+RECOVERY_KIT_FORMAT = "sera-recovery-kit-v1"
+
+DEFAULT_MASTER_PASSWORD = "admin123"
+MIN_MASTER_PASSWORD_LEN = 8
 
 OFFICE_FORMAT = 1
 WRAP_FORMAT = 1
@@ -258,6 +265,17 @@ def unwrap_with_password(blob: dict, password: str, aad: bytes) -> bytes:
         raise WrongPassword("wrong password, or the recovery data is damaged") from None
 
 
+def _unwrap_with_lenient_password(blob: dict, password: str, aad: bytes) -> bytes:
+    """Unwrap blob trying exact password first, then stripped password as fallback."""
+    try:
+        return unwrap_with_password(blob, password, aad)
+    except WrongPassword:
+        stripped = password.strip() if isinstance(password, str) else ""
+        if stripped and stripped != password:
+            return unwrap_with_password(blob, stripped, aad)
+        raise
+
+
 # ---------------------------------------------------------------- files
 
 def keys_dir(app_dir) -> Path:
@@ -412,8 +430,233 @@ def recover_dek(app_dir, password: str) -> bytes:
         blob = json.loads(raw)
     except ValueError:
         raise KeyFileInvalid("%s is not valid JSON" % path) from None
-    dek = unwrap_with_password(blob, password, recovery_aad(office.office_id))
+    dek = _unwrap_with_lenient_password(blob, password, recovery_aad(office.office_id))
     if len(dek) != DEK_LEN or not hmac.compare_digest(key_id(dek), office.key_id):
         raise KeyFileInvalid("%s does not match the key id in %s" % (path, OFFICE_FILE))
-    _replace_key_file(keys_dir(app_dir) / DEK_DPAPI_FILE, dpapi_protect(dek, ENTROPY_OFFICE_KEY))
+    try:
+        _replace_key_file(keys_dir(app_dir) / DEK_DPAPI_FILE, dpapi_protect(dek, ENTROPY_OFFICE_KEY))
+    except OSError:
+        pass
+    return dek
+
+
+# ---------------------------------------------------------------- password validation & change
+
+def validate_master_password(password: str | None) -> str | None:
+    """Error text, or None if ``password`` is acceptable as the office master password."""
+    if not isinstance(password, str) or len(password.strip()) < MIN_MASTER_PASSWORD_LEN:
+        return "The master password must be at least %d characters long." % MIN_MASTER_PASSWORD_LEN
+    if password.strip().lower() == DEFAULT_MASTER_PASSWORD:
+        return "The default password 'admin123' can't be the office master password."
+    return None
+
+
+def change_master_password(app_dir, old_password: str, new_password: str) -> None:
+    """Verify old_password via unwrap_with_password, re-wrap DEK (and admin key if present).
+
+    The database is not touched (§5 P1-6).
+    """
+    new_password = (new_password or "").strip()
+    office = load_office(app_dir)
+    if office is None:
+        raise KeyUnavailable("no office key on this PC (keys/%s missing)" % OFFICE_FILE)
+
+    err = validate_master_password(new_password)
+    if err:
+        raise ValueError(err)
+
+    kdir = keys_dir(app_dir)
+    recovery_path = kdir / DEK_RECOVERY_FILE
+    if not recovery_path.exists():
+        raise KeyUnavailable("%s not found" % recovery_path)
+    try:
+        blob = json.loads(recovery_path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise KeyFileInvalid("%s is not valid JSON" % recovery_path) from None
+
+    # 1. Verify old password and unwrap DEK
+    dek = _unwrap_with_lenient_password(blob, old_password, recovery_aad(office.office_id))
+    if len(dek) != DEK_LEN or not hmac.compare_digest(key_id(dek), office.key_id):
+        raise KeyFileInvalid("%s does not match the key id in %s" % (recovery_path, OFFICE_FILE))
+
+    # 2. If admin_key.recovery exists, re-wrap it with new password
+    admin_path = kdir / ADMIN_KEY_RECOVERY_FILE
+    new_admin_blob = None
+    if admin_path.exists():
+        try:
+            admin_blob = json.loads(admin_path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise KeyFileInvalid("%s is not valid JSON" % admin_path) from None
+        admin_secret = _unwrap_with_lenient_password(admin_blob, old_password, admin_aad(office.office_id))
+        new_admin_blob = wrap_with_password(admin_secret, new_password, admin_aad(office.office_id))
+
+    # 3. Re-wrap DEK with new password
+    new_recovery_blob = wrap_with_password(dek, new_password, recovery_aad(office.office_id))
+
+    # 4. Save new recovery blobs (old files copied to *.bak-<ts> first per rule 3 / owner decision)
+    _replace_key_file(recovery_path, (json.dumps(new_recovery_blob, indent=2) + "\n").encode("utf-8"))
+    if new_admin_blob is not None:
+        _replace_key_file(admin_path, (json.dumps(new_admin_blob, indent=2) + "\n").encode("utf-8"))
+
+
+# ---------------------------------------------------------------- recovery kit export / restore
+
+def export_recovery_kit(app_dir, password: str, dest_path: str | Path) -> Path:
+    """Exports office.json + office_key.recovery (+ admin_key.recovery after P2-2)
+
+    into one .serakit JSON file chosen by the user. Master password is required to create it.
+    """
+    office = load_office(app_dir)
+    if office is None:
+        raise KeyUnavailable("no office key on this PC (keys/%s missing)" % OFFICE_FILE)
+
+    kdir = keys_dir(app_dir)
+    recovery_path = kdir / DEK_RECOVERY_FILE
+    if not recovery_path.exists():
+        raise KeyUnavailable("%s not found" % recovery_path)
+    try:
+        blob = json.loads(recovery_path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise KeyFileInvalid("%s is not valid JSON" % recovery_path) from None
+
+    # Verify password against recovery blob
+    dek = _unwrap_with_lenient_password(blob, password, recovery_aad(office.office_id))
+    if len(dek) != DEK_LEN or not hmac.compare_digest(key_id(dek), office.key_id):
+        raise KeyFileInvalid("%s does not match the key id in %s" % (recovery_path, OFFICE_FILE))
+
+    admin_blob = None
+    admin_path = kdir / ADMIN_KEY_RECOVERY_FILE
+    if admin_path.exists():
+        try:
+            admin_blob = json.loads(admin_path.read_text(encoding="utf-8"))
+        except ValueError:
+            raise KeyFileInvalid("%s is not valid JSON" % admin_path) from None
+
+    office_data = {
+        "format": OFFICE_FORMAT,
+        "office_id": office.office_id,
+        "office_name": office.office_name,
+        "key_id": office.key_id,
+        "admin_pubkey": office.admin_pubkey,
+        "device_id": office.device_id,
+        "created_at": office.created_at,
+    }
+
+    kit_data = {
+        "format": RECOVERY_KIT_FORMAT,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "office": office_data,
+        "office_key_recovery": blob,
+        "admin_key_recovery": admin_blob,
+    }
+
+    dest = Path(dest_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = (json.dumps(kit_data, indent=2) + "\n").encode("utf-8")
+    atomic_write(dest, payload)
+    return dest
+
+
+def inspect_recovery_kit(kit_path: str | Path) -> dict:
+    """Read and validate a .serakit recovery file, returning metadata dict."""
+    path = Path(kit_path)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise KeyUnavailable("%s not found" % path) from None
+    except OSError as e:
+        raise KeyFileInvalid("%s can't be read: %s" % (path, e)) from None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise KeyFileInvalid("%s is not valid JSON" % path) from None
+
+    if not isinstance(data, dict) or data.get("format") != RECOVERY_KIT_FORMAT:
+        raise KeyFileInvalid("%s is not a valid Sera recovery kit" % path)
+
+    office = data.get("office")
+    if not isinstance(office, dict) or not office.get("office_id") or not office.get("key_id"):
+        raise KeyFileInvalid("%s: missing or invalid office information" % path)
+
+    if not isinstance(data.get("office_key_recovery"), dict):
+        raise KeyFileInvalid("%s: missing office_key_recovery" % path)
+
+    return {
+        "office_id": office["office_id"],
+        "office_name": office.get("office_name", ""),
+        "key_id": office["key_id"],
+        "created_at": data.get("created_at", ""),
+        "has_admin_key": isinstance(data.get("admin_key_recovery"), dict),
+    }
+
+
+def restore_recovery_kit(app_dir, kit_path: str | Path, password: str) -> bytes:
+    """Unpack a .serakit recovery file, verify password, restore key files, and return DEK."""
+    path = Path(kit_path)
+    inspect_recovery_kit(path)
+    raw = path.read_text(encoding="utf-8")
+    data = json.loads(raw)
+
+    office_dict = data["office"]
+    office_id = office_dict["office_id"]
+    recovery_blob = data["office_key_recovery"]
+
+    # Reject foreign office kits if an office already exists on this PC
+    existing_office = load_office(app_dir)
+    if existing_office is not None:
+        if not hmac.compare_digest(existing_office.office_id, office_dict["office_id"]) or \
+           not hmac.compare_digest(existing_office.key_id, office_dict["key_id"]):
+            raise KeyFileInvalid(
+                "recovery kit belongs to a different office (%s, key_id=%s) than this PC (%s, key_id=%s)"
+                % (
+                    office_dict.get("office_name") or office_dict["office_id"],
+                    office_dict["key_id"][:8],
+                    existing_office.office_name or existing_office.office_id,
+                    existing_office.key_id[:8],
+                )
+            )
+
+    # Verify password against office_key_recovery
+    dek = _unwrap_with_lenient_password(recovery_blob, password, recovery_aad(office_id))
+    if len(dek) != DEK_LEN or not hmac.compare_digest(key_id(dek), office_dict["key_id"]):
+        raise KeyFileInvalid("recovery kit DEK does not match office key_id")
+
+    admin_blob = data.get("admin_key_recovery")
+    if isinstance(admin_blob, dict):
+        # Verify it unwraps too
+        try:
+            _unwrap_with_lenient_password(admin_blob, password, admin_aad(office_id))
+        except WrongPassword:
+            raise
+        except Exception as e:
+            raise KeyFileInvalid("admin recovery key in kit failed verification: %s" % e) from e
+
+    kdir = keys_dir(app_dir)
+    kdir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Save office.json (backs up existing if different)
+    info = OfficeInfo(
+        office_id=office_dict["office_id"],
+        office_name=office_dict.get("office_name", ""),
+        key_id=office_dict["key_id"],
+        admin_pubkey=office_dict.get("admin_pubkey"),
+        device_id=office_dict.get("device_id"),
+        created_at=office_dict.get("created_at") or "",
+        format=office_dict.get("format", OFFICE_FORMAT),
+    )
+    save_office(app_dir, info)
+
+    # 2. Save office_key.recovery (backs up existing if different)
+    _replace_key_file(kdir / DEK_RECOVERY_FILE, (json.dumps(recovery_blob, indent=2) + "\n").encode("utf-8"))
+
+    # 3. Save admin_key.recovery if present
+    if isinstance(admin_blob, dict):
+        _replace_key_file(kdir / ADMIN_KEY_RECOVERY_FILE, (json.dumps(admin_blob, indent=2) + "\n").encode("utf-8"))
+
+    # 4. Restore DPAPI if possible
+    try:
+        _replace_key_file(kdir / DEK_DPAPI_FILE, dpapi_protect(dek, ENTROPY_OFFICE_KEY))
+    except OSError:
+        pass
+
     return dek

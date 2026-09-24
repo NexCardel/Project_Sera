@@ -205,6 +205,10 @@ class SeraApp:
         self._run_pending_office_key_migration()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
+        # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
+        if self.key_mode == "office" and not os.path.exists(self.db_path):
+            self._handle_missing_office_db(self.app_dir, self.db_path, hex_key)
+
         from ui.dialogs.loading_dialog import StartupLoadingDialog
         loading_dlg = StartupLoadingDialog()
         
@@ -1206,6 +1210,102 @@ class SeraApp:
             "if Windows can't, and to add other PCs to the office."
         )
 
+        self._offer_export_recovery_kit(app_dir, details)
+
+    def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
+        """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""
+        from PySide6.QtWidgets import QMessageBox
+        from ui.dialogs.change_master_password_dialog import export_recovery_kit_flow
+
+        reply = QMessageBox.question(
+            None,
+            "Aman Associates — Export Recovery Kit",
+            "Would you like to export a recovery kit to USB now? (Recommended)\n\n"
+            "The recovery kit contains encrypted key files to restore access if Windows credentials change.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            pwd = details.get("new_password") or details.get("legacy_password")
+            export_recovery_kit_flow(None, app_dir, password=pwd, office_name=details.get("office_name"))
+
+    def _handle_missing_office_db(self, app_dir: Path, db_path: str, hex_key: str) -> None:
+        """Office mode requires an existing database; prevent silent initialization of empty DB (P1-6)."""
+        from PySide6.QtWidgets import QMessageBox, QFileDialog
+        import shutil
+        import sqlcipher3.dbapi2 as sqlite3
+
+        reply = QMessageBox.critical(
+            None,
+            "Aman Associates — Office Database Missing",
+            f"The office database was not found at:\n{db_path}\n\n"
+            "To prevent data loss, Sera will not initialize a blank database in an existing office.\n\n"
+            "Would you like to select a database backup file to restore?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            backup_dir = str(Path(app_dir) / "backups")
+            backup_file, _ = QFileDialog.getOpenFileName(
+                None, "Select Master Database Backup",
+                backup_dir if os.path.exists(backup_dir) else str(app_dir),
+                "Database Files (*.db *.bak*);;All Files (*.*)",
+            )
+            if backup_file and os.path.exists(backup_file):
+                import tempfile
+                try:
+                    # Test against a temporary copy so user's backup is never modified or checkpointed by SQLite
+                    with tempfile.TemporaryDirectory() as td:
+                        temp_db = Path(td) / "probe.db"
+                        shutil.copy2(backup_file, temp_db)
+                        for ext in ("-wal", "-shm"):
+                            s = Path(str(backup_file) + ext)
+                            if s.exists():
+                                shutil.copy2(s, str(temp_db) + ext)
+
+                        conn = sqlite3.connect(str(temp_db))
+                        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+                        res = conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+                        qc = conn.execute("PRAGMA quick_check;").fetchone()
+                        conn.close()
+
+                        if not (res and res[0] >= 0 and qc and qc[0] == "ok"):
+                            raise ValueError(f"Integrity check failed: {qc[0] if qc else 'unknown error'}")
+
+                    # Restore database and any accompanying sidecars
+                    shutil.copy2(backup_file, db_path)
+                    for ext in ("-wal", "-shm"):
+                        src_sidecar = Path(str(backup_file) + ext)
+                        dst_sidecar = Path(str(db_path) + ext)
+                        if src_sidecar.exists():
+                            shutil.copy2(src_sidecar, dst_sidecar)
+                        elif dst_sidecar.exists():
+                            # Retain timestamped backup of leftover sidecar per §0 rule 3
+                            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+                            dst_sidecar.rename(dst_sidecar.with_name(f"{dst_sidecar.name}.bak-{ts}"))
+
+                    QMessageBox.information(
+                        None, "Database Restored",
+                        f"Database successfully restored from:\n{backup_file}\n\nStarting Sera...",
+                    )
+                    return
+                except Exception as e:
+                    QMessageBox.critical(
+                        None, "Restore Failed",
+                        f"The selected backup could not be opened with this office key:\n\n{e}",
+                    )
+            else:
+                QMessageBox.information(
+                    None, "Restore Cancelled",
+                    "No database backup was selected. Sera cannot start without the office database.",
+                )
+        else:
+            QMessageBox.information(
+                None, "Startup Cancelled",
+                "Database restore was cancelled. Sera cannot start without the office database.",
+            )
+        sys.exit(0)
+
     def _ask_office_key_migration_details(self, app_dir) -> dict | None:
         import sync_migrate
         from ui.dialogs.office_key_migration_dialog import OfficeKeyMigrationDialog
@@ -1318,55 +1418,16 @@ class SeraApp:
         return self.key_mode, self.key_id, hex_key
 
     def _recover_office_dek(self, app_dir: Path | str | None = None) -> bytes | None:
-        """Prompts for office master password up to 5 times to recover DEK when DPAPI fails (P1-6)."""
+        """Prompts for office master password or recovery kit restore when DPAPI fails (P1-6)."""
         import sera_keys
         if not app_dir:
             app_dir = getattr(self, "app_dir", None) or Path(getattr(self, "db_path", str(APP_DIR / "master.db"))).parent
         app_dir = Path(app_dir)
 
-        prompt_text = "This Windows account can't unlock Sera. Enter the office master password."
-        for attempt in range(5):
-            pwd = self._prompt_master_password(prompt_text)
-            if not pwd:
-                return None
-            try:
-                dek = sera_keys.recover_dek(app_dir, pwd)
-                return dek
-            except sera_keys.WrongPassword:
-                rem = 4 - attempt
-                if rem > 0:
-                    prompt_text = (
-                        f"Wrong password. ({rem} attempts remaining)\n\n"
-                        "This Windows account can't unlock Sera. Enter the office master password."
-                    )
-                else:
-                    from PySide6.QtWidgets import QMessageBox
-                    QMessageBox.critical(
-                        None, "Aman Associates — Key Recovery Failed",
-                        "Could not recover office key.\nThe maximum number of attempts (5) was exceeded."
-                    )
-                    return None
-            except sera_keys.KeyUnavailable as kue:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Recovery Error",
-                    f"Recovery file not found or unavailable:\n\n{kue}"
-                )
-                return None
-            except sera_keys.KeyFileInvalid as kfe:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Recovery Error",
-                    f"The recovery data is invalid or damaged:\n\n{kfe}"
-                )
-                return None
-            except Exception as e:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Recovery Error",
-                    f"Failed to recover office key: {e}"
-                )
-                return None
+        from ui.dialogs.office_recovery_dialog import OfficeRecoveryDialog
+        dlg = OfficeRecoveryDialog(app_dir, parent=None)
+        if dlg.exec() == QDialog.Accepted:
+            return dlg.recovered_dek
         return None
 
     def _verify_master_password(self, password: str) -> bool:

@@ -1209,6 +1209,35 @@ class UnifiedSettingsDialog(QDialog):
             "Replace the live database with a previous backup. The app will restart. Use with caution.",
             restore_btn, danger=True))
 
+        import sera_keys
+        from pathlib import Path
+        db_path = getattr(self.db, "db_path", None)
+        app_dir = Path(db_path).parent if db_path else None
+        try:
+            office_info = sera_keys.load_office(app_dir) if app_dir else None
+        except sera_keys.SeraKeysError:
+            office_info = None
+
+        if office_info is not None:
+            lay.addWidget(_divider())
+            lay.addWidget(_page_header("Office Recovery Kit & Security",
+                "Export a secure recovery kit to USB or update the office master password."))
+
+            export_kit_btn = QPushButton("Export Recovery Kit \u2192")
+            export_kit_btn.setProperty("class", "primary")
+            export_kit_btn.setIcon(_icon("mdi.file-key-outline", color="#ffffff"))
+            export_kit_btn.clicked.connect(lambda: self._on_export_recovery_kit(app_dir))
+            lay.addWidget(_setting_row("Export Recovery Kit (.serakit)",
+                "Export encrypted office credentials to a USB drive for disaster recovery.",
+                export_kit_btn))
+
+            change_pw_btn = QPushButton("Change Password \u2192")
+            change_pw_btn.setIcon(_icon("mdi.lock-reset", color=_TEXT_PRI))
+            change_pw_btn.clicked.connect(lambda: self._on_change_master_password(app_dir))
+            lay.addWidget(_setting_row("Change Office Master Password",
+                "Update the master password used to recover office credentials without modifying client data.",
+                change_pw_btn))
+
         lay.addStretch()
         return _wrap_scroll(w)
 
@@ -1710,3 +1739,12 @@ class UnifiedSettingsDialog(QDialog):
                 self, "Purge Complete",
                 f"\u2705  Deleted {results['deleted']} duplicate client(s) "
                 f"across {results['groups']} group(s).")
+
+    def _on_export_recovery_kit(self, app_dir):
+        from ui.dialogs.change_master_password_dialog import export_recovery_kit_flow
+        export_recovery_kit_flow(self, app_dir)
+
+    def _on_change_master_password(self, app_dir):
+        from ui.dialogs.change_master_password_dialog import ChangeMasterPasswordDialog
+        dlg = ChangeMasterPasswordDialog(app_dir, parent=self)
+        dlg.exec()

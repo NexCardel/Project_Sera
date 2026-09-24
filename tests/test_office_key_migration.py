@@ -383,10 +383,15 @@ def test_startup_runs_requested_migration_then_office_mode(legacy_office, monkey
         def _show_office_key_migration_message(self, level, title, text):
             self.notices.append((level, title))
 
+        def _offer_export_recovery_kit(self, app_dir, details):
+            self.recovery_kit_offered = True
+
     stub = Stub()
+    stub.recovery_kit_offered = False
     stub._run_pending_office_key_migration()
     assert sync_migrate.read_migrate_request(app) is None
     assert stub.notices and stub.notices[-1][0] == "info"
+    assert stub.recovery_kit_offered is True
 
     mode, kid, hex_key = stub._resolve_encryption_key()
     assert mode == "office"
