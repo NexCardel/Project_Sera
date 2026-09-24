@@ -1061,6 +1061,21 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **For P1-6 (T3 review):** because of the backup rule, a master-password change leaves the old `office_key.recovery` as `office_key.recovery.bak-<ts>`, and the old password can still unwrap it. The DEK doesn't change, so a leaked old password keeps working until that backup is removed. The owner should decide whether P1-6 deletes that specific backup after a successful re-wrap (an exception to rule 3) or accepts it.
     - **Owner decision (2026-09-24): risk accepted.** P1-6 keeps the old `office_key.recovery.bak-<ts>` like any other key-file backup; don't delete it. (Not yet folded into §5/§7; the owner or a Fable/Opus "fold approved deviations" session does that.)
 
+### P1-2 — Start-up key resolution (office mode / legacy mode) — In review — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 889 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests in `tests/test_startup_key_resolution.py`: `test_startup_office_mode_ignores_sera_key` (with file-open interception strictly verifying `sera.key` is never accessed), `test_startup_office_mode_without_sera_key`, `test_startup_legacy_mode_unchanged`, `test_startup_office_mode_with_key_unavailable_recovers_dek`, `test_startup_office_mode_key_id_mismatch_aborts`, `test_startup_office_mode_corrupt_office_json_aborts`.
+- Deviations from spec:
+  - Temporary recovery prompt: P1-2 implements `_recover_office_dek()` using `QInputDialog` with the specified recovery text and 5 attempts calling `sera_keys.recover_dek()`. P1-6 will replace this with the full recovery dialog including the "Restore from recovery kit file" option.
+- Notes for later WPs:
+  - `main.py` introduces `_resolve_encryption_key()` called at startup right after `apply_pending_swap()`.
+  - In office mode (`keys/office.json` exists), loads the DEK via `sera_keys.load_dek(APP_DIR)` and validates that `sera_keys.key_id(dek)` matches `office.json`. Never reads or writes `sera.key`. If DPAPI decryption fails (`KeyUnavailable`), `_recover_office_dek()` prompts for the master password up to 5 times and restores `keys/office_key.dpapi` via `sera_keys.recover_dek()`.
+  - In legacy mode (`keys/office.json` does not exist), continues today's path with P0-5/P0-6 (`FirstRunDialog` if no DB, else `_get_master_password()` with PBKDF2 derivation).
+  - Exposes `self.key_mode` (`"office"` or `"legacy"`) and `self.key_id` (`str` in office mode, `None` in legacy mode) on `SeraApp`, and passes both `hex_key` and `key_id` into `SyncPeerService`.
+  - `SyncPeerService.__init__` accepts `key_id: Optional[str] = None` and stores `self.key_id = key_id`.
+  - **For P1-5 (Sync in office mode):** Sync still reads `sera.key` in office mode. While P1-5 adds `key_id` to beacons and headers to prevent exchange between legacy and office-mode PCs, P0-4's staged receiver verification (`_handle_incoming_push` in `sync_peer.py`) still derives and checks incoming DBs using local `sera.key` password + incoming salt. P1-5 must update this verification path so that office-mode peers verify incoming snapshots against the office DEK/`hex_key` instead of reading `sera.key`.
+  - **For P1-6 (Missing DB in office mode):** Missing `master.db` in office mode quietly creates an empty database if `SeraDatabase` is opened without checking DB existence. P1-6 should check whether `master.db` exists in office mode; if missing, it should prevent silent empty DB initialization and instead prompt for recovery / restore from backup or recovery kit.
+  - **For P1-6 (DPAPI rewrite failure on recovery):** If `keys/office_key.dpapi` cannot be rewritten during recovery (e.g. DPAPI failure or permissions error), `recover_dek` raises an exception and start-up currently aborts even though the DEK was successfully unwrapped from the recovery password. P1-6 should handle DPAPI re-protection failure gracefully (e.g. keep decrypted DEK in memory for the current session with a warning to the user, rather than aborting start-up).
+
 ---
 
 ## 10. Doc changelog

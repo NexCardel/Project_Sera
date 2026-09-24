@@ -200,27 +200,10 @@ class SeraApp:
         self.db_path = str(APP_DIR / "master.db")
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
+        self.app_dir = APP_DIR
         
-        # First-run check (P0-6): When master.db does not exist in APP_DIR,
-        # prompt user to create a New Office or Join an existing office.
-        # Salt generation is moved inside the "New office" branch.
-        master_password = None
-        if not os.path.exists(self.db_path):
-            from ui.dialogs.first_run_dialog import FirstRunDialog
-            first_run_dlg = FirstRunDialog(APP_DIR, getattr(self, "actor_alias", "Admin"))
-            if first_run_dlg.exec() != QDialog.Accepted:
-                sys.exit(0)
-            master_password = first_run_dlg.master_password or self._get_master_password()
-        else:
-            if not os.path.exists(self.salt_path):
-                print(f"[SeraApp Error] Database exists at {self.db_path} but salt is missing at {self.salt_path}")
-            master_password = self._get_master_password()
+        self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
-        if not master_password:
-            if os.path.exists(self.db_path):
-                self._show_startup_auth_error()
-            sys.exit(0)
-            
         from ui.dialogs.loading_dialog import StartupLoadingDialog
         loading_dlg = StartupLoadingDialog()
         
@@ -239,9 +222,10 @@ class SeraApp:
         memory_mark("  vault: loading dialog shown")
 
         try:
-            loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
-            salt = security.load_salt(self.salt_path)
-            hex_key = security.derive_key_hex(master_password, salt)
+            if self.key_mode == "office":
+                loading_dlg.set_status("Unlocking vault with office data key...")
+            else:
+                loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
             self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
@@ -297,6 +281,7 @@ class SeraApp:
             username=self.actor_alias,
             db=self.db,
             hex_key=hex_key,
+            key_id=self.key_id,
             inv_frames=inv_frames_enabled,
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,
@@ -1139,6 +1124,152 @@ class SeraApp:
             print(f"[main._handle_sudr_capture] {portal} :: {event_type} ({status}) capture_id={msg.get('capture_id')}")
         except Exception as e:
             print(f"[main._handle_sudr_capture Error] {e}")
+
+    def _resolve_encryption_key(self) -> tuple[str, str | None, str]:
+        """
+        Resolves the database encryption key according to blueprint §5 P1-2:
+        Order:
+          1. apply_pending_swap (P0-4) - executed before this call.
+          2. If keys/office.json exists -> office mode:
+             dek = load_dek(). On KeyUnavailable, show the recovery dialog (P1-6).
+             hex_key = dek_hex(dek).
+             Check key_id against office.json.
+             Never read or write sera.key in this mode.
+          3. Else -> legacy mode: today's path with P0-5.
+        Expose self.key_mode ('office'/'legacy') and return (key_mode, key_id, hex_key).
+        """
+        app_dir = getattr(self, "app_dir", None)
+        if not app_dir:
+            db_path = getattr(self, "db_path", str(APP_DIR / "master.db"))
+            app_dir = Path(db_path).parent
+
+        import sera_keys
+        office_path = sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE
+
+        if office_path.exists():
+            # Office Mode
+            self.key_mode = "office"
+            try:
+                office_info = sera_keys.load_office(app_dir)
+            except sera_keys.KeyFileInvalid as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Office Configuration Error",
+                    f"The office configuration file is invalid or corrupted:\n\n{e}\n\n"
+                    "Please restore keys/office.json or contact your office administrator."
+                )
+                sys.exit(0)
+
+            if office_info is None:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Office Configuration Error",
+                    "The office configuration file could not be loaded.\n\n"
+                    "Please contact your office administrator."
+                )
+                sys.exit(0)
+
+            try:
+                dek = sera_keys.load_dek(app_dir)
+            except sera_keys.KeyUnavailable:
+                dek = self._recover_office_dek(app_dir)
+                if not dek:
+                    sys.exit(0)
+
+            import hmac
+            computed_key_id = sera_keys.key_id(dek)
+            if not hmac.compare_digest(computed_key_id, office_info.key_id):
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Office Key Mismatch",
+                    "The loaded office data key does not match the office configuration in office.json.\n\n"
+                    "Startup aborted to prevent database damage."
+                )
+                sys.exit(0)
+
+            self.key_id = computed_key_id
+            hex_key = sera_keys.dek_hex(dek)
+            return self.key_mode, self.key_id, hex_key
+
+        # Legacy Mode
+        self.key_mode = "legacy"
+        self.key_id = None
+
+        master_password = None
+        db_path = getattr(self, "db_path", str(app_dir / "master.db"))
+        salt_path = getattr(self, "salt_path", str(app_dir / security.SALT_FILE))
+
+        if not os.path.exists(db_path):
+            from ui.dialogs.first_run_dialog import FirstRunDialog
+            first_run_dlg = FirstRunDialog(app_dir, getattr(self, "actor_alias", "Admin"))
+            if first_run_dlg.exec() != QDialog.Accepted:
+                sys.exit(0)
+            master_password = first_run_dlg.master_password or self._get_master_password()
+        else:
+            if not os.path.exists(salt_path):
+                print(f"[SeraApp Error] Database exists at {db_path} but salt is missing at {salt_path}")
+            master_password = self._get_master_password()
+
+        if not master_password:
+            if os.path.exists(db_path):
+                self._show_startup_auth_error()
+            sys.exit(0)
+
+        salt = security.load_salt(salt_path)
+        hex_key = security.derive_key_hex(master_password, salt)
+        return self.key_mode, self.key_id, hex_key
+
+    def _recover_office_dek(self, app_dir: Path | str | None = None) -> bytes | None:
+        """Prompts for office master password up to 5 times to recover DEK when DPAPI fails (P1-6)."""
+        import sera_keys
+        if not app_dir:
+            app_dir = getattr(self, "app_dir", None) or Path(getattr(self, "db_path", str(APP_DIR / "master.db"))).parent
+        app_dir = Path(app_dir)
+
+        prompt_text = "This Windows account can't unlock Sera. Enter the office master password."
+        for attempt in range(5):
+            pwd = self._prompt_master_password(prompt_text)
+            if not pwd:
+                return None
+            try:
+                dek = sera_keys.recover_dek(app_dir, pwd)
+                return dek
+            except sera_keys.WrongPassword:
+                rem = 4 - attempt
+                if rem > 0:
+                    prompt_text = (
+                        f"Wrong password. ({rem} attempts remaining)\n\n"
+                        "This Windows account can't unlock Sera. Enter the office master password."
+                    )
+                else:
+                    from PySide6.QtWidgets import QMessageBox
+                    QMessageBox.critical(
+                        None, "Aman Associates — Key Recovery Failed",
+                        "Could not recover office key.\nThe maximum number of attempts (5) was exceeded."
+                    )
+                    return None
+            except sera_keys.KeyUnavailable as kue:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Recovery Error",
+                    f"Recovery file not found or unavailable:\n\n{kue}"
+                )
+                return None
+            except sera_keys.KeyFileInvalid as kfe:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Recovery Error",
+                    f"The recovery data is invalid or damaged:\n\n{kfe}"
+                )
+                return None
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    None, "Aman Associates — Recovery Error",
+                    f"Failed to recover office key: {e}"
+                )
+                return None
+        return None
 
     def _verify_master_password(self, password: str) -> bool:
         if not password:

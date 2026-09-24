@@ -475,6 +475,7 @@ class SyncPeerService:
         db: Optional[Any] = None,
         inv_frames: bool = False,
         hex_key: Optional[str] = None,
+        key_id: Optional[str] = None,
         key_path: Optional[str] = None,
         master_password: Optional[str] = None,
         on_peer_table_changed: Optional[Callable] = None,
@@ -498,6 +499,7 @@ class SyncPeerService:
         self.db = db
         self.inv_frames = bool(inv_frames)
         self.hex_key = hex_key
+        self.key_id = key_id
         self.key_path = key_path
         self.master_password = master_password
         self.host_name = host_name or socket.gethostname()
