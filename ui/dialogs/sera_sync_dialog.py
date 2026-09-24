@@ -1,3 +1,5 @@
+import json
+import threading
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -9,6 +11,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QAbstractItemView,
     QMessageBox,
+    QInputDialog,
+    QMenu,
     QHeaderView,
     QSplitter,
     QListWidget,
@@ -126,8 +130,8 @@ class SeraSyncDialog(QDialog):
             "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
         )
         self.network_warning_banner.setText(
-            "⚠️ This PC's network is set to Public. Windows Firewall may block LAN sync discovery. "
-            "Fix: Windows Settings → Network → set this network to Private."
+            "⚠️ This PC's network is set to Public. Sera Sync is reachable by other devices on it. "
+            "For security, set it to Private: Windows Settings → Network → set this network to Private."
         )
         self.network_warning_banner.setVisible(False)
         main_layout.addWidget(self.network_warning_banner)
@@ -171,6 +175,8 @@ class SeraSyncDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         left_layout.addWidget(self.table)
 
         # Left Action Buttons
@@ -207,6 +213,20 @@ class SeraSyncDialog(QDialog):
             self.btn_refresh.setIcon(icon)
         self.btn_refresh.clicked.connect(self._refresh_peers)
         btn_row.addWidget(self.btn_refresh)
+
+        self.btn_add_ip = QPushButton("  Add PC by IP")
+        icon = _safe_icon("mdi.plus-network", color="#FFFFFF")
+        if icon:
+            self.btn_add_ip.setIcon(icon)
+        self.btn_add_ip.clicked.connect(self._on_add_pc_by_ip)
+        btn_row.addWidget(self.btn_add_ip)
+
+        self.btn_remove_ip = QPushButton("  Remove PC by IP")
+        icon = _safe_icon("mdi.minus-network", color="#FFFFFF")
+        if icon:
+            self.btn_remove_ip.setIcon(icon)
+        self.btn_remove_ip.clicked.connect(self._on_remove_pc_by_ip)
+        btn_row.addWidget(self.btn_remove_ip)
 
         btn_row.addStretch()
         left_layout.addLayout(btn_row)
@@ -640,6 +660,238 @@ class SeraSyncDialog(QDialog):
             self.btn_sync_all.setEnabled(True)
             self.btn_sync_all.setText("  Sync To All Devices")
             self._refresh_peers()
+
+    def _on_add_pc_by_ip(self):
+        """
+        P0-10: 'Add PC by IP' in the Sera Sync dialog stores addresses in the setting
+        'sync_manual_peers' (JSON list). It is office-wide like every setting (D7).
+        """
+        import ipaddress
+
+        text, ok = QInputDialog.getText(
+            self,
+            "Add PC by IP",
+            "Enter workstation IP address (e.g. 192.168.1.50):",
+        )
+        if not ok or not text:
+            return
+        addr = text.strip()
+        if not addr:
+            return
+
+        # Validate IP and optional port (1-65535)
+        if ":" in addr:
+            parts = addr.rsplit(":", 1)
+            ip_part = parts[0].strip()
+            port_part = parts[1].strip()
+            if not port_part.isdigit() or not (1 <= int(port_part) <= 65535):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Port",
+                    f"Port '{port_part}' is invalid.\nPort must be a number between 1 and 65535.",
+                )
+                return
+        else:
+            ip_part = addr
+
+        try:
+            ipaddress.IPv4Address(ip_part)
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                "Invalid IP Address",
+                f"'{ip_part}' is not a valid IPv4 address.\nPlease enter a valid IPv4 address.",
+            )
+            return
+
+        # Load existing manual peers list
+        existing = self._get_manual_peers_list()
+
+        if addr in existing:
+            QMessageBox.information(
+                self,
+                "Already Added",
+                f"Workstation address '{addr}' is already in the manual peer list.",
+            )
+            return
+
+        existing.append(addr)
+        if self.db and hasattr(self.db, "set_setting"):
+            try:
+                self.db.set_setting("sync_manual_peers", json.dumps(existing))
+            except Exception as e:
+                print(f"[SeraSyncDialog] Failed to save sync_manual_peers: {e}")
+
+        if self.sync_service:
+            if hasattr(self.sync_service, "add_manual_peer"):
+                self.sync_service.add_manual_peer(addr)
+            if hasattr(self.sync_service, "send_manual_beacons"):
+                threading.Thread(target=self.sync_service.send_manual_beacons, daemon=True).start()
+            if hasattr(self.sync_service, "log_activity"):
+                self.sync_service.log_activity("NETWORK", f"Added manual PC: {addr}", "Probing via unicast beacon")
+
+        QMessageBox.information(
+            self,
+            "Workstation Added",
+            f"Address '{addr}' added to office manual peer list.\nSera Sync will probe this workstation periodically.",
+        )
+
+    def _get_manual_peers_list(self) -> list[str]:
+        """Loads and returns the list of configured manual peer addresses."""
+        existing = []
+        if self.db and hasattr(self.db, "get_setting"):
+            try:
+                raw = self.db.get_setting("sync_manual_peers", "[]")
+                if raw:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, list):
+                        existing = [str(x).strip() for x in loaded if str(x).strip()]
+            except Exception:
+                existing = []
+        elif self.sync_service and hasattr(self.sync_service, "get_manual_peers"):
+            existing = self.sync_service.get_manual_peers()
+        return existing
+
+    def _remove_manual_peer_address(self, addr: str):
+        """Removes a manual peer address from DB, sync_service, and UI."""
+        addr = str(addr).strip()
+        if not addr:
+            return
+
+        # 1. Update DB setting (exact entry only; see SyncPeerService.remove_manual_peer)
+        if self.db and hasattr(self.db, "get_setting") and hasattr(self.db, "set_setting"):
+            try:
+                raw = self.db.get_setting("sync_manual_peers", "[]")
+                if raw:
+                    loaded = json.loads(raw)
+                    if isinstance(loaded, list):
+                        new_peers = [str(x).strip() for x in loaded if str(x).strip() != addr]
+                        self.db.set_setting("sync_manual_peers", json.dumps(new_peers))
+            except Exception as e:
+                print(f"[SeraSyncDialog] Failed to remove manual peer from settings: {e}")
+
+        # 2. Update service
+        if self.sync_service:
+            if hasattr(self.sync_service, "remove_manual_peer"):
+                self.sync_service.remove_manual_peer(addr)
+            if hasattr(self.sync_service, "log_activity"):
+                self.sync_service.log_activity("NETWORK", f"Removed manual PC: {addr}", "Removed from office manual peer list")
+
+        # 3. Refresh table
+        self._refresh_peers()
+
+    def _on_remove_pc_by_ip(self):
+        """
+        Removes a workstation address from the office-wide setting 'sync_manual_peers'.
+        """
+        existing = self._get_manual_peers_list()
+        if not existing:
+            QMessageBox.information(
+                self,
+                "Remove PC by IP",
+                "No manual workstation addresses are currently configured.",
+            )
+            return
+
+        # Determine default selection based on current table selection
+        default_idx = 0
+        sel_row = self.table.currentRow()
+        if sel_row >= 0:
+            ip_item = self.table.item(sel_row, 2)
+            if ip_item:
+                selected_ip = ip_item.text().strip()
+                for idx, entry in enumerate(existing):
+                    entry_ip = entry.split(":")[0].strip() if ":" in entry else entry
+                    if entry == selected_ip or entry_ip == selected_ip:
+                        default_idx = idx
+                        break
+
+        item, ok = QInputDialog.getItem(
+            self,
+            "Remove PC by IP",
+            "Select workstation address to remove:",
+            existing,
+            default_idx,
+            False,
+        )
+        if not ok or not item:
+            return
+
+        addr = item.strip()
+        reply = QMessageBox.question(
+            self,
+            "Confirm Removal",
+            f"Remove workstation address '{addr}' from office manual peer list?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._remove_manual_peer_address(addr)
+
+        QMessageBox.information(
+            self,
+            "Workstation Removed",
+            f"Address '{addr}' removed from the manual peer list.\n"
+            "Sera Sync will stop contacting this address from this PC. The PC may still appear "
+            "if it is found by broadcast or still lists this PC. Other PCs keep the address "
+            "until they next receive this database.",
+        )
+
+    def _on_table_context_menu(self, pos):
+        """Provides right-click context menu options on the peer table."""
+        item = self.table.itemAt(pos)
+        if not item:
+            return
+        row = item.row()
+        ip_item = self.table.item(row, 2)
+        if not ip_item:
+            return
+        peer_ip = ip_item.text().strip()
+        host_item = self.table.item(row, 1)
+        peer_host = host_item.text().strip() if host_item else peer_ip
+
+        menu = QMenu(self)
+
+        # Check if this peer is in manual peers
+        manual_peers = self._get_manual_peers_list()
+        matching_addr = None
+        for m in manual_peers:
+            m_ip = m.split(":")[0].strip() if ":" in m else m
+            if m == peer_ip or m_ip == peer_ip:
+                matching_addr = m
+                break
+
+        if matching_addr:
+            icon = _safe_icon("mdi.minus-network", color="#FF5252")
+            act_remove = menu.addAction(f"Remove '{matching_addr}' from Manual Peers")
+            if icon:
+                act_remove.setIcon(icon)
+
+            chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+            if chosen == act_remove:
+                reply = QMessageBox.question(
+                    self,
+                    "Confirm Removal",
+                    f"Remove workstation '{peer_host}' ({matching_addr}) from office manual peer list?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply == QMessageBox.Yes:
+                    self._remove_manual_peer_address(matching_addr)
+                    QMessageBox.information(
+                        self,
+                        "Workstation Removed",
+                        f"Address '{matching_addr}' removed from the manual peer list.\n"
+                        "Sera Sync will stop contacting this address from this PC. The PC may still appear "
+                        "if it is found by broadcast or still lists this PC. Other PCs keep the address "
+                        "until they next receive this database.",
+                    )
+        else:
+            act_info = menu.addAction(f"Discovered via LAN broadcast ({peer_ip})")
+            act_info.setEnabled(False)
+            menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def closeEvent(self, event):
         self._refresh_timer.stop()

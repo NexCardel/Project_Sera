@@ -40,6 +40,7 @@ from sync_network_probe import NetworkCategoryMonitor
 BEACON_PORT = 49156
 SYNC_PORT = 49157
 BEACON_INTERVAL_SEC = 5
+MANUAL_PEER_INTERVAL_SEC = 10.0
 PEER_TIMEOUT_SEC = 30
 SOCK_TIMEOUT_SEC = 3
 
@@ -52,6 +53,96 @@ AUTH_TS_TOLERANCE_SEC = 120
 # fetch_snapshot (P0-6 join) has no shared key yet: it is protected by the on-screen
 # approval + one-time join code instead, so it is exempt from mac authentication.
 AUTH_EXEMPT_ACTIONS = {"fetch_snapshot"}
+
+
+def _get_directed_broadcast_addresses() -> set[str]:
+    """
+    Computes directed broadcast addresses for all active IPv4 adapters (ip | ~netmask)
+    using ifaddr. Skips loopback (127.*) and link-local (169.254.*) addresses.
+    Lazy-imports ifaddr and ipaddress (§0 rule 6).
+    """
+    bcast_addrs: set[str] = set()
+    try:
+        import ifaddr
+        import ipaddress
+        for adapter in ifaddr.get_adapters():
+            for ip_info in adapter.ips:
+                if not getattr(ip_info, "is_IPv4", False):
+                    continue
+                ip_str = ip_info.ip
+                if not isinstance(ip_str, str):
+                    continue
+                if ip_str.startswith("127.") or ip_str.startswith("169.254."):
+                    continue
+                prefix = getattr(ip_info, "network_prefix", None)
+                if prefix is None or not (0 <= prefix < 31):
+                    continue
+                try:
+                    net = ipaddress.IPv4Network(f"{ip_str}/{prefix}", strict=False)
+                    bcast = str(net.broadcast_address)
+                    if bcast and not bcast.startswith("127.") and not bcast.startswith("169.254."):
+                        bcast_addrs.add(bcast)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return bcast_addrs
+
+
+_OWN_IPS_CACHE: set[str] = set()
+_OWN_IPS_CACHE_TIME: float = 0.0
+
+
+def _get_own_ips(force_refresh: bool = False) -> set[str]:
+    """
+    Returns the set of local IPv4 addresses on all active adapters and hostnames.
+    Cached for 15 seconds to avoid expensive socket.gethostbyname_ex lookups on every cycle.
+    Lazy-imports ifaddr (§0 rule 6).
+    """
+    global _OWN_IPS_CACHE, _OWN_IPS_CACHE_TIME
+    now = time.monotonic()
+    if not force_refresh and _OWN_IPS_CACHE and (now - _OWN_IPS_CACHE_TIME < 15.0):
+        return set(_OWN_IPS_CACHE)
+
+    ips: set[str] = set()
+    try:
+        import ifaddr
+        for adapter in ifaddr.get_adapters():
+            for ip_info in adapter.ips:
+                if getattr(ip_info, "is_IPv4", False) and isinstance(ip_info.ip, str):
+                    ips.add(ip_info.ip)
+    except Exception:
+        pass
+    try:
+        for host in (socket.gethostname(), "localhost"):
+            try:
+                for addr in socket.gethostbyname_ex(host)[2]:
+                    ips.add(addr)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    ips.add("127.0.0.1")
+    _OWN_IPS_CACHE = set(ips)
+    _OWN_IPS_CACHE_TIME = now
+    return ips
+
+
+def _parse_peer_address(addr: str, default_port: int = BEACON_PORT) -> tuple[str, int]:
+    """Parses 'ip' or 'ip:port' into (ip, port). Ensures port is 1-65535, falling back to default_port."""
+    addr = str(addr).strip()
+    def_port = default_port if (1 <= default_port <= 65535) else BEACON_PORT
+    if ":" in addr:
+        parts = addr.rsplit(":", 1)
+        try:
+            port = int(parts[1].strip())
+            if 1 <= port <= 65535:
+                return parts[0].strip(), port
+        except (ValueError, TypeError):
+            pass
+        return parts[0].strip(), def_port
+    return addr, def_port
+
 
 
 def canonical_json(obj) -> bytes:
@@ -340,7 +431,7 @@ class PeerInfo:
         self.timeline_count = int(timeline_count)
 
     def key(self) -> str:
-        return f"{self.host}:{self.ip}"
+        return self.host
 
     def as_dict(self) -> dict:
         return {
@@ -394,6 +485,11 @@ class SyncPeerService:
         on_activity: Optional[Callable] = None,
         on_error: Optional[Callable] = None,
         on_join_approval_requested: Optional[Callable[[str, str, str], bool]] = None,
+        host_name: Optional[str] = None,
+        enable_broadcast: bool = True,
+        beacon_port: int = BEACON_PORT,
+        bind_host: str = "",
+        manual_peers: Optional[list[str]] = None,
     ):
         self.db_path = db_path
         self.salt_path = salt_path
@@ -404,7 +500,12 @@ class SyncPeerService:
         self.hex_key = hex_key
         self.key_path = key_path
         self.master_password = master_password
-        self.host_name = socket.gethostname()
+        self.host_name = host_name or socket.gethostname()
+        self.enable_broadcast = bool(enable_broadcast)
+        self.beacon_port = int(beacon_port)
+        self.bind_host = str(bind_host) if bind_host else ""
+        self._manual_peers: list[str] = [str(p).strip() for p in (manual_peers or []) if str(p).strip()]
+        self._unicast_reply_cooldown: dict[str, float] = {}
 
         self.on_peer_table_changed = on_peer_table_changed
         self.on_sync_received = on_sync_received
@@ -568,6 +669,7 @@ class SyncPeerService:
         self._stop_event.clear()
         self._start_udp_listener()
         self._start_beacon_sender()
+        self._start_manual_peer_sender()
         self._start_tcp_server()
         self._start_peer_reaper()
         if self._network_monitor:
@@ -603,8 +705,8 @@ class SyncPeerService:
             self.log_activity(
                 "GUARD",
                 "Public network detected",
-                "Windows Firewall may block LAN sync discovery on this network. "
-                "Fix: Windows Settings > Network > set this network to Private.",
+                "Sera Sync is reachable by other devices on this network. "
+                "For security: Windows Settings > Network > set this network to Private.",
             )
 
     def _spawn(self, target, name):
@@ -613,9 +715,173 @@ class SyncPeerService:
         self._threads.append(t)
         return t
 
+    # ---------------- Manual peers & Unicast beacons (P0-10) ----------------
+
+    def get_manual_peers(self) -> list[str]:
+        """
+        Returns the combined list of manual peer addresses:
+        read from the office-wide setting 'sync_manual_peers' (JSON list) in DB,
+        plus any in-memory manual peers.
+        """
+        combined = []
+        seen = set()
+        if self.db and hasattr(self.db, "get_setting"):
+            try:
+                raw = self.db.get_setting("sync_manual_peers", "[]")
+                if raw:
+                    peers = json.loads(raw)
+                    if isinstance(peers, list):
+                        for p in peers:
+                            s = str(p).strip()
+                            if s and s not in seen:
+                                seen.add(s)
+                                combined.append(s)
+            except Exception:
+                pass
+        with self._peers_lock:
+            for p in self._manual_peers:
+                s = str(p).strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    combined.append(s)
+        return combined
+
+    def add_manual_peer(self, peer: str):
+        """Adds a manual peer address in memory."""
+        p = str(peer).strip()
+        if not p:
+            return
+        with self._peers_lock:
+            if p not in self._manual_peers:
+                self._manual_peers.append(p)
+
+    def set_manual_peers(self, peers: list[str]):
+        """Sets the in-memory manual peer list."""
+        with self._peers_lock:
+            self._manual_peers = [str(p).strip() for p in peers if str(p).strip()]
+
+    def remove_manual_peer(self, peer: str):
+        """
+        Removes a manual peer address in memory, from the office-wide setting
+        'sync_manual_peers' (JSON list) in DB, and from active peers.
+        """
+        p = str(peer).strip()
+        if not p:
+            return
+        # Only the exact entry is removed: removing "ip:port" must not also drop a
+        # separate plain "ip" entry (or the other way round).
+        ip_only, _ = _parse_peer_address(p, default_port=self.beacon_port)
+        with self._peers_lock:
+            self._manual_peers = [x for x in self._manual_peers if str(x).strip() != p]
+            to_remove = [
+                k for k, v in self._peers.items()
+                if getattr(v, "ip", getattr(v, "ip_address", None)) == ip_only
+            ]
+            for k in to_remove:
+                del self._peers[k]
+
+        if self.db and hasattr(self.db, "get_setting") and hasattr(self.db, "set_setting"):
+            try:
+                raw = self.db.get_setting("sync_manual_peers", "[]")
+                if raw:
+                    peers = json.loads(raw)
+                    if isinstance(peers, list):
+                        new_peers = [str(x).strip() for x in peers if str(x).strip() != p]
+                        self.db.set_setting("sync_manual_peers", json.dumps(new_peers))
+            except Exception as e:
+                print(f"[SyncPeerService] Failed to remove manual peer from settings: {e}")
+
+        if to_remove:
+            self._safe_call(self.on_peer_table_changed, self._peer_list())
+
+    def is_own_address(self, target_ip: str, target_port: int, own_ips: Optional[set[str]] = None) -> bool:
+        """Checks if (target_ip, target_port) corresponds to this instance's own address."""
+        if self.bind_host and self.bind_host not in ("0.0.0.0", ""):
+            return (target_ip == self.bind_host or (target_ip == "127.0.0.1" and self.bind_host == "127.0.0.1")) and target_port == self.beacon_port
+        if target_port != self.beacon_port:
+            return False
+        if own_ips is None:
+            own_ips = _get_own_ips()
+        return target_ip in own_ips
+
+    def send_manual_beacons(self, sock: Optional[socket.socket] = None):
+        """
+        Sends unicast discovery beacons to each peer in the manual peer list,
+        skipping local addresses. Receivers respond with a unicast beacon back.
+        """
+        peers = self.get_manual_peers()
+        if not peers:
+            return
+
+        payload = self._beacon_payload(request_reply=True)
+        close_sock = False
+        if sock is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            close_sock = True
+
+        try:
+            own_ips = _get_own_ips()
+            for peer_str in peers:
+                try:
+                    target_ip, target_port = _parse_peer_address(peer_str, default_port=self.beacon_port)
+                    if self.is_own_address(target_ip, target_port, own_ips=own_ips):
+                        continue
+                    sock.sendto(payload, (target_ip, target_port))
+                except Exception as e:
+                    # Catch OverflowError, OSError, ValueError, etc. per peer so one malformed
+                    # peer entry cannot abort sending to the remaining peers.
+                    winerr = getattr(e, "winerror", None)
+                    if winerr != 10065 and getattr(e, "errno", None) != 10065 and "10065" not in str(e):
+                        self._safe_call(self.on_error, f"Manual beacon send to {peer_str} failed: {e}")
+        finally:
+            if close_sock:
+                sock.close()
+
+    def _start_manual_peer_sender(self):
+        def loop():
+            # Wait briefly after startup so listeners are ready
+            if self._stop_event.wait(0.2):
+                return
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                while not self._stop_event.is_set():
+                    try:
+                        self.send_manual_beacons(sock)
+                    except Exception:
+                        pass
+                    self._stop_event.wait(MANUAL_PEER_INTERVAL_SEC)
+            finally:
+                sock.close()
+        self._spawn(loop, "sync-manual-peer-sender")
+
+    def _send_unicast_beacon_reply(self, ip: str, port: int):
+        # Validate port and enforce rate limit (max 1 reply per 5s per IP)
+        if not (1 <= port <= 65535):
+            return
+        now = time.monotonic()
+        with self._peers_lock:
+            last_reply = self._unicast_reply_cooldown.get(ip, 0.0)
+            if now - last_reply < 5.0:
+                return
+            self._unicast_reply_cooldown[ip] = now
+            if len(self._unicast_reply_cooldown) > 200:
+                cutoff = now - 30.0
+                self._unicast_reply_cooldown = {k: v for k, v in self._unicast_reply_cooldown.items() if v > cutoff}
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            payload = self._beacon_payload(request_reply=False)
+            sock.sendto(payload, (ip, port))
+            sock.close()
+        except Exception:
+            pass
+
     # ---------------- UDP beacon (send + listen) ----------------
 
-    def _beacon_payload(self) -> bytes:
+    def _beacon_payload(self, request_reply: bool = False) -> bytes:
         db_mtime_str = ""
         db_mtime_ts = 0.0
         try:
@@ -640,6 +906,8 @@ class SyncPeerService:
             "username": self.username,
             "host": self.host_name,
             "sync_port": self.sync_port,
+            "beacon_port": self.beacon_port,
+            "request_reply": bool(request_reply),
             "app_version": app_ver,
             "db_mtime": db_mtime_str,
             "db_mtime_ts": db_mtime_ts,
@@ -658,14 +926,21 @@ class SyncPeerService:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             while not self._stop_event.is_set():
-                try:
-                    payload = self._beacon_payload()
-                    sock.sendto(payload, ("255.255.255.255", BEACON_PORT))
-                except OSError as e:
-                    # Suppress transient network unreachable error (WinError 10065) when adapter is temporarily offline
-                    winerr = getattr(e, "winerror", None)
-                    if winerr != 10065 and getattr(e, "errno", None) != 10065 and "10065" not in str(e):
-                        self._safe_call(self.on_error, f"Beacon send failed: {e}")
+                if self.enable_broadcast:
+                    targets = {"255.255.255.255"}
+                    try:
+                        targets.update(_get_directed_broadcast_addresses())
+                    except Exception:
+                        pass
+                    payload = self._beacon_payload(request_reply=False)
+                    for target in targets:
+                        try:
+                            sock.sendto(payload, (target, self.beacon_port))
+                        except OSError as e:
+                            # Suppress transient network unreachable error (WinError 10065) when adapter is temporarily offline
+                            winerr = getattr(e, "winerror", None)
+                            if winerr != 10065 and getattr(e, "errno", None) != 10065 and "10065" not in str(e):
+                                self._safe_call(self.on_error, f"Beacon send to {target} failed: {e}")
                 self._stop_event.wait(BEACON_INTERVAL_SEC)
             sock.close()
         self._spawn(loop, "sync-beacon-sender")
@@ -673,7 +948,8 @@ class SyncPeerService:
     def _start_udp_listener(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("", BEACON_PORT))
+        bind_ip = self.bind_host if self.bind_host else ""
+        sock.bind((bind_ip, self.beacon_port))
         sock.settimeout(1.0)
         self._udp_sock = sock
 
@@ -685,7 +961,10 @@ class SyncPeerService:
                     continue
                 except OSError:
                     break
-                self._handle_beacon(data, addr[0])
+                try:
+                    self._handle_beacon(data, addr[0])
+                except Exception:
+                    pass
         self._spawn(loop, "sync-beacon-listener")
 
     def _handle_beacon(self, data: bytes, ip: str):
@@ -698,17 +977,33 @@ class SyncPeerService:
         except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError):
             return
 
-        inv_frames = bool(body.get("inv_frames", False))
-        sync_rev = int(body.get("sync_revision", 0))
-        client_cnt = int(body.get("client_count", 0))
-        tracker_cnt = int(body.get("tracker_count", 0))
-        timeline_cnt = int(body.get("timeline_count", 0))
+        # P0-10: Safely parse and validate numeric fields
+        try:
+            inv_frames = bool(body.get("inv_frames", False))
+            sync_rev = int(body.get("sync_revision", 0))
+            client_cnt = int(body.get("client_count", 0))
+            tracker_cnt = int(body.get("tracker_count", 0))
+            timeline_cnt = int(body.get("timeline_count", 0))
+            sync_port = int(body.get("sync_port", SYNC_PORT))
+            if not (1 <= sync_port <= 65535):
+                sync_port = SYNC_PORT
+        except (ValueError, TypeError):
+            return
+
+        # P0-10: Answer unicast beacons with a unicast beacon reply (rate-limited and port-validated)
+        if body.get("request_reply"):
+            try:
+                sender_beacon_port = int(body.get("beacon_port", self.beacon_port))
+                if 1 <= sender_beacon_port <= 65535:
+                    self._send_unicast_beacon_reply(ip, sender_beacon_port)
+            except (ValueError, TypeError):
+                pass
 
         peer = PeerInfo(
             username=body.get("username", "Unknown"),
             host=body["host"],
             ip=ip,
-            sync_port=int(body.get("sync_port", SYNC_PORT)),
+            sync_port=sync_port,
             app_version=body.get("app_version", "Unknown"),
             db_mtime=body.get("db_mtime", ""),
             last_seen=time.time(),
@@ -730,10 +1025,13 @@ class SyncPeerService:
             inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
             tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
             self.log_activity("BEACON", f"Discovered {peer.username} ({peer.host}){inv_tag}", f"Rev Score: {sync_rev} | Clients: {client_cnt}{tracker_info}")
-        elif prev_peer.sync_revision != sync_rev or prev_peer.inv_frames != inv_frames:
-            inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
-            tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
-            self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}{tracker_info}")
+        else:
+            if prev_peer.ip != ip:
+                self.log_activity("NETWORK", f"Peer {peer.host} changed IP", f"{prev_peer.ip} → {ip}")
+            if prev_peer.sync_revision != sync_rev or prev_peer.inv_frames != inv_frames:
+                inv_tag = " [🛡️ INV-FRAMES]" if inv_frames else ""
+                tracker_info = f" | Tracker: {tracker_cnt}" if tracker_cnt > 0 else ""
+                self.log_activity("REVISION", f"Node {peer.host} updated{inv_tag}", f"Rev Score: {sync_rev} (was {prev_peer.sync_revision}) | Clients: {client_cnt}{tracker_info}")
 
         # ---- BOOTSTRAP AUTO-PULL ----
         # If this node is bootstrapping (empty DB) and we discover a peer with data,
@@ -741,7 +1039,7 @@ class SyncPeerService:
         if self._is_bootstrapping and not self._bootstrap_pull_done:
             if client_cnt > 0 and ip not in self._bootstrap_pull_attempted_peers:
                 self._bootstrap_pull_attempted_peers.add(ip)
-                peer_port = int(body.get("sync_port", SYNC_PORT))
+                peer_port = sync_port
                 self.log_activity(
                     "PULL",
                     f"Bootstrap: Requesting data from {peer.host} (we are empty, they have {client_cnt} clients)",

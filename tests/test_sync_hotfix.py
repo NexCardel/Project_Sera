@@ -2115,3 +2115,697 @@ def test_stale_timestamp_rejected(tmp_path):
         assert resp.get("reason") == "STALE_TIMESTAMP"
     finally:
         receiver_service.stop()
+
+
+# ---------------- P0-10: Discovery via directed broadcast, Add PC by IP, Host-keyed peers ----------------
+
+def test_peer_ip_change_updates_entry(tmp_path):
+    """
+    Acceptance test for P0-10:
+    1. PeerInfo.key() returns self.host (not host:ip).
+    2. An IP change from the same host updates the existing entry instead of adding a ghost.
+    """
+    import json
+    from sync_peer import SyncPeerService, PeerInfo, SERA_SYNC_MAGIC
+
+    peer_info = PeerInfo(
+        username="StaffMember",
+        host="WORKSTATION-A",
+        ip="192.168.1.50",
+        sync_port=49157,
+    )
+    # PeerInfo.key() must return the hostname
+    assert peer_info.key() == "WORKSTATION-A", f"Expected 'WORKSTATION-A', got '{peer_info.key()}'"
+
+    service_dir = tmp_path / "service_p010"
+    service_dir.mkdir()
+    service = SyncPeerService(
+        db_path=str(service_dir / "master.db"),
+        salt_path=str(service_dir / "sera.salt"),
+        username="LocalUser",
+        host_name="LOCAL-HOST",
+        sync_port=0,
+        enable_broadcast=False,
+    )
+
+    # First beacon from WORKSTATION-A at 192.168.1.50
+    beacon_body_1 = {
+        "magic": SERA_SYNC_MAGIC,
+        "username": "StaffMember",
+        "host": "WORKSTATION-A",
+        "sync_port": 49157,
+        "sync_revision": 10,
+        "client_count": 5,
+    }
+    service._handle_beacon(json.dumps(beacon_body_1).encode("utf-8"), "192.168.1.50")
+
+    peers = service.get_peers()
+    assert len(peers) == 1
+    assert peers[0]["host"] == "WORKSTATION-A"
+    assert peers[0]["ip"] == "192.168.1.50"
+    assert peers[0]["sync_revision"] == 10
+
+    # Second beacon from SAME WORKSTATION-A, but its IP changed to 192.168.1.75 (e.g. DHCP renewal)
+    beacon_body_2 = {
+        "magic": SERA_SYNC_MAGIC,
+        "username": "StaffMember",
+        "host": "WORKSTATION-A",
+        "sync_port": 49157,
+        "sync_revision": 12,
+        "client_count": 6,
+    }
+    service._handle_beacon(json.dumps(beacon_body_2).encode("utf-8"), "192.168.1.75")
+
+    # Entry must be updated in-place: still exactly 1 peer, no ghost with the old IP
+    peers_after = service.get_peers()
+    assert len(peers_after) == 1, f"Expected 1 peer after IP change, got {len(peers_after)}"
+    assert peers_after[0]["host"] == "WORKSTATION-A"
+    assert peers_after[0]["ip"] == "192.168.1.75"
+    assert peers_after[0]["sync_revision"] == 12
+    assert peers_after[0]["client_count"] == 6
+
+
+def test_manual_peer_unicast_beacon(tmp_path):
+    """
+    Acceptance test for P0-10:
+    Two services on localhost, broadcast disabled by a flag (enable_broadcast=False),
+    discovery via the manual list (sync_manual_peers / manual_peers):
+    - Service A sends a unicast beacon to Service B.
+    - Service B receives the unicast beacon, records Service A, and answers with a unicast beacon back.
+    - Service A receives the reply and records Service B.
+    - Both services discover each other without broadcast.
+    """
+    import socket
+    from sync_peer import SyncPeerService
+
+    dir_a = tmp_path / "service_a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "service_b"
+    dir_b.mkdir()
+
+    # Find two free UDP ports for beacon testing
+    def _find_free_udp_port():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    port_b = _find_free_udp_port()
+    port_a = _find_free_udp_port()
+    while port_a == port_b:
+        port_a = _find_free_udp_port()
+
+    # Service B: broadcast disabled, no manual peers configured
+    service_b = SyncPeerService(
+        db_path=str(dir_b / "master.db"),
+        salt_path=str(dir_b / "sera.salt"),
+        username="UserB",
+        host_name="HOST-BETA",
+        sync_port=0,
+        beacon_port=port_b,
+        enable_broadcast=False,
+    )
+
+    # Service A: broadcast disabled, configured with Service B's address in manual_peers
+    service_a = SyncPeerService(
+        db_path=str(dir_a / "master.db"),
+        salt_path=str(dir_a / "sera.salt"),
+        username="UserA",
+        host_name="HOST-ALPHA",
+        sync_port=0,
+        beacon_port=port_a,
+        enable_broadcast=False,
+        manual_peers=[f"127.0.0.1:{port_b}"],
+    )
+
+    service_b.start()
+    service_a.start()
+
+    try:
+        # Service A sends unicast beacon to manual peers
+        service_a.send_manual_beacons()
+
+        # Wait up to 3 seconds for exchange to complete
+        start = time.monotonic()
+        discovered_a = False
+        discovered_b = False
+        while time.monotonic() - start < 3.0:
+            peers_on_b = [p["host"] for p in service_b.get_peers()]
+            peers_on_a = [p["host"] for p in service_a.get_peers()]
+            if "HOST-ALPHA" in peers_on_b:
+                discovered_a = True
+            if "HOST-BETA" in peers_on_a:
+                discovered_b = True
+            if discovered_a and discovered_b:
+                break
+            time.sleep(0.1)
+
+        assert discovered_a, f"Service B failed to discover HOST-ALPHA via unicast beacon. Peers on B: {service_b.get_peers()}"
+        assert discovered_b, f"Service A failed to discover HOST-BETA via unicast reply. Peers on A: {service_a.get_peers()}"
+
+    finally:
+        service_a.stop()
+        service_b.stop()
+
+
+def test_directed_broadcast_addresses_skips_loopback_and_link_local():
+    """
+    P0-10: Directed broadcast calculation using ifaddr:
+    - Calculates ip | ~netmask for IPv4 adapters.
+    - Skips 127.* (loopback) and 169.254.* (APIPA link-local).
+    """
+    from unittest.mock import patch, MagicMock
+    from sync_peer import _get_directed_broadcast_addresses
+
+    # Mock ifaddr.get_adapters() with various interfaces
+    class MockIP:
+        def __init__(self, ip, prefix, is_ipv4=True):
+            self.ip = ip
+            self.network_prefix = prefix
+            self.is_IPv4 = is_ipv4
+            self.is_IPv6 = not is_ipv4
+
+    class MockAdapter:
+        def __init__(self, name, ips):
+            self.name = name
+            self.ips = ips
+
+    mock_adapters = [
+        MockAdapter("eth0", [
+            MockIP("192.168.1.100", 24),     # Valid LAN -> 192.168.1.255
+            MockIP("fe80::1", 64, is_ipv4=False),  # IPv6 -> skip
+        ]),
+        MockAdapter("wlan0", [
+            MockIP("10.0.5.20", 16),          # Valid Wi-Fi -> 10.0.255.255
+        ]),
+        MockAdapter("lo", [
+            MockIP("127.0.0.1", 8),           # Loopback -> skip
+        ]),
+        MockAdapter("auto_ip", [
+            MockIP("169.254.12.34", 16),       # Link-local APIPA -> skip
+        ]),
+    ]
+
+    with patch("ifaddr.get_adapters", return_value=mock_adapters):
+        addrs = _get_directed_broadcast_addresses()
+        assert "192.168.1.255" in addrs
+        assert "10.0.255.255" in addrs
+        # Must not contain loopback or link-local
+        for addr in addrs:
+            assert not addr.startswith("127.")
+            assert not addr.startswith("169.254.")
+
+
+def test_sync_manual_peers_setting_and_skips_own_address(tmp_path):
+    """
+    P0-10:
+    1. sync_manual_peers setting in database is read by get_manual_peers().
+    2. PC skips its own address when sending manual beacons.
+    """
+    import json
+    from unittest.mock import patch, MagicMock
+    from sync_peer import SyncPeerService
+
+    dir_p = tmp_path / "sync_peers_db_test"
+    dir_p.mkdir()
+
+    class MockDB:
+        def __init__(self):
+            self.settings = {
+                "sync_manual_peers": json.dumps(["192.168.1.50", "192.168.2.99"])
+            }
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+        def set_setting(self, key, val):
+            self.settings[key] = val
+
+    mock_db = MockDB()
+    service = SyncPeerService(
+        db_path=str(dir_p / "master.db"),
+        salt_path=str(dir_p / "sera.salt"),
+        username="LocalUser",
+        db=mock_db,
+        enable_broadcast=False,
+    )
+
+    peers = service.get_manual_peers()
+    assert "192.168.1.50" in peers
+    assert "192.168.2.99" in peers
+
+    # If 192.168.1.50 is this machine's own IP, it must be recognized as own address
+    with patch("sync_peer._get_own_ips", return_value={"192.168.1.50", "127.0.0.1"}):
+        assert service.is_own_address("192.168.1.50", service.beacon_port) is True
+        assert service.is_own_address("192.168.2.99", service.beacon_port) is False
+
+        # Sending manual beacons should only send to 192.168.2.99, skipping 192.168.1.50
+        mock_sock = MagicMock()
+        service.send_manual_beacons(sock=mock_sock)
+        sent_destinations = [call[0][1] for call in mock_sock.sendto.call_args_list]
+        assert ("192.168.2.99", service.beacon_port) in sent_destinations
+        assert ("192.168.1.50", service.beacon_port) not in sent_destinations
+
+
+def test_sera_sync_dialog_add_pc_by_ip_validates_and_stores():
+    """
+    P0-10: 'Add PC by IP' dialog logic:
+    - Prompts user, validates IPv4 address.
+    - Saves valid IP to DB setting sync_manual_peers (JSON list).
+    - Notifies sync_service and sends unicast beacon.
+    """
+    import json
+    from unittest.mock import patch, MagicMock
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    mock_sync_service = MagicMock()
+    mock_sync_service.get_sync_state.return_value = {"status": "NORMAL"}
+    mock_sync_service.get_peers.return_value = []
+    mock_sync_service.get_activity_history.return_value = []
+    mock_sync_service.get_network_category.return_value = {"is_public": False}
+    mock_sync_service.inv_frames = False
+
+    class MockDB:
+        def __init__(self):
+            self.settings = {}
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+        def set_setting(self, key, val):
+            self.settings[key] = val
+
+    mock_db = MockDB()
+    dialog = SeraSyncDialog(sync_service=mock_sync_service, db=mock_db)
+
+    # 1. Invalid IP entry -> warning shown, nothing added
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("not-an-ip", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+        dialog._on_add_pc_by_ip()
+        assert mock_warn.called
+        assert "sync_manual_peers" not in mock_db.settings
+
+    # 2. Valid IP entry -> stored in DB as JSON list, added to sync_service
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.5.120", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        dialog._on_add_pc_by_ip()
+        assert mock_info.called
+        assert "sync_manual_peers" in mock_db.settings
+        saved_list = json.loads(mock_db.settings["sync_manual_peers"])
+        assert "192.168.5.120" in saved_list
+        mock_sync_service.add_manual_peer.assert_called_with("192.168.5.120")
+
+    # 3. Duplicate IP entry -> informative message, not added twice
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.5.120", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        dialog._on_add_pc_by_ip()
+        saved_list = json.loads(mock_db.settings["sync_manual_peers"])
+        assert saved_list.count("192.168.5.120") == 1
+
+    # 4. Out-of-range port entry (e.g. :70000) -> warning shown, not saved
+    with patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("192.168.1.5:70000", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.warning") as mock_warn:
+        dialog._on_add_pc_by_ip()
+        assert mock_warn.called
+        saved_list = json.loads(mock_db.settings["sync_manual_peers"])
+        assert "192.168.1.5:70000" not in saved_list
+
+    dialog.close()
+
+
+def test_manual_beacon_bad_port_isolation(tmp_path):
+    """
+    P0-10 review fix:
+    A malformed or out-of-range port (e.g. 70000) must not cause an unhandled exception
+    that skips subsequent peers in send_manual_beacons.
+    """
+    import socket
+    from sync_peer import SyncPeerService
+
+    dir_a = tmp_path / "service_bad_port_a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "service_bad_port_b"
+    dir_b.mkdir()
+
+    def _find_free_udp_port():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return port
+
+    port_b = _find_free_udp_port()
+    port_a = _find_free_udp_port()
+    while port_a == port_b:
+        port_a = _find_free_udp_port()
+
+    service_b = SyncPeerService(
+        db_path=str(dir_b / "master.db"),
+        salt_path=str(dir_b / "sera.salt"),
+        username="UserB",
+        host_name="HOST-VALID-TARGET",
+        sync_port=0,
+        beacon_port=port_b,
+        enable_broadcast=False,
+    )
+
+    # First entry has an invalid port, second entry is the valid target
+    service_a = SyncPeerService(
+        db_path=str(dir_a / "master.db"),
+        salt_path=str(dir_a / "sera.salt"),
+        username="UserA",
+        host_name="HOST-SENDER",
+        sync_port=0,
+        beacon_port=port_a,
+        enable_broadcast=False,
+        manual_peers=["127.0.0.1:70000", f"127.0.0.1:{port_b}"],
+    )
+
+    service_b.start()
+    service_a.start()
+
+    try:
+        service_a.send_manual_beacons()
+
+        start = time.monotonic()
+        discovered = False
+        while time.monotonic() - start < 3.0:
+            peers_on_b = [p["host"] for p in service_b.get_peers()]
+            if "HOST-SENDER" in peers_on_b:
+                discovered = True
+                break
+            time.sleep(0.1)
+
+        assert discovered, "Target service failed to discover sender because bad port aborted the loop"
+    finally:
+        service_a.stop()
+        service_b.stop()
+
+
+def test_malformed_beacon_does_not_crash_listener(tmp_path):
+    """
+    P0-10 review fix:
+    Malformed numeric fields (non-numeric beacon_port, sync_revision, etc.)
+    must not crash the UDP listener thread.
+    """
+    import socket
+    import json
+    from sync_peer import SyncPeerService, SERA_SYNC_MAGIC
+
+    svc_dir = tmp_path / "malformed_beacon_svc"
+    svc_dir.mkdir()
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("", 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    service = SyncPeerService(
+        db_path=str(svc_dir / "master.db"),
+        salt_path=str(svc_dir / "sera.salt"),
+        username="ListenerUser",
+        host_name="LISTENER-HOST",
+        sync_port=0,
+        beacon_port=port,
+        enable_broadcast=False,
+    )
+    service.start()
+
+    try:
+        # Send a malformed beacon with non-numeric beacon_port and string sync_revision
+        malformed_body = {
+            "magic": SERA_SYNC_MAGIC,
+            "username": "Attacker",
+            "host": "MALFORMED-PC",
+            "sync_port": "not-a-number",
+            "beacon_port": "bad-port",
+            "sync_revision": "invalid",
+            "request_reply": True,
+        }
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(json.dumps(malformed_body).encode("utf-8"), ("127.0.0.1", port))
+        sock.close()
+
+        time.sleep(0.2)
+
+        # Now send a valid beacon
+        valid_body = {
+            "magic": SERA_SYNC_MAGIC,
+            "username": "ValidUser",
+            "host": "VALID-PC",
+            "sync_port": 49157,
+            "sync_revision": 5,
+            "client_count": 2,
+        }
+        sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock2.sendto(json.dumps(valid_body).encode("utf-8"), ("127.0.0.1", port))
+        sock2.close()
+
+        start = time.monotonic()
+        discovered = False
+        while time.monotonic() - start < 2.0:
+            peers = [p["host"] for p in service.get_peers()]
+            if "VALID-PC" in peers:
+                discovered = True
+                break
+            time.sleep(0.05)
+
+        assert discovered, "Listener thread crashed on malformed beacon and could not process valid beacon"
+    finally:
+        service.stop()
+
+
+def test_unicast_beacon_reply_rate_limit(tmp_path):
+    """
+    P0-10 review fix:
+    Unicast beacon replies must be rate-limited (cooldown per IP) to prevent reflection abuse.
+    """
+    import socket
+    import json
+    from sync_peer import SyncPeerService, SERA_SYNC_MAGIC
+
+    svc_dir = tmp_path / "rate_limit_svc"
+    svc_dir.mkdir()
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind(("", 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    service = SyncPeerService(
+        db_path=str(svc_dir / "master.db"),
+        salt_path=str(svc_dir / "sera.salt"),
+        username="RateLimitedUser",
+        host_name="RL-HOST",
+        sync_port=0,
+        beacon_port=port,
+        enable_broadcast=False,
+    )
+    service.start()
+
+    # Create a listener to receive the unicast replies
+    receiver_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    receiver_sock.bind(("127.0.0.1", 0))
+    receiver_sock.settimeout(0.5)
+    reply_port = receiver_sock.getsockname()[1]
+
+    try:
+        req = {
+            "magic": SERA_SYNC_MAGIC,
+            "username": "Probe",
+            "host": "PROBE-PC",
+            "beacon_port": reply_port,
+            "request_reply": True,
+        }
+        data = json.dumps(req).encode("utf-8")
+
+        # Send 5 rapid requests from 127.0.0.1
+        sender_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for _ in range(5):
+            sender_sock.sendto(data, ("127.0.0.1", port))
+        sender_sock.close()
+
+        # Count how many replies come back
+        replies_received = 0
+        start = time.monotonic()
+        while time.monotonic() - start < 1.0:
+            try:
+                receiver_sock.recvfrom(2048)
+                replies_received += 1
+            except socket.timeout:
+                break
+
+        # Must only get 1 reply (remaining 4 dropped due to 5s cooldown per IP)
+        assert replies_received == 1, f"Expected 1 rate-limited reply, got {replies_received}"
+    finally:
+        receiver_sock.close()
+        service.stop()
+
+
+def test_sync_peer_service_remove_manual_peer(tmp_path):
+    """
+    Test that SyncPeerService.remove_manual_peer removes an address from memory,
+    DB settings, and active peers.
+    """
+    import json
+    from sync_peer import SyncPeerService, PeerInfo
+
+    class MockDB:
+        def __init__(self):
+            self.settings = {"sync_manual_peers": json.dumps(["192.168.1.10", "192.168.1.20"])}
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+        def set_setting(self, key, val):
+            self.settings[key] = val
+
+    salt_file = tmp_path / "salt.bin"
+    salt_file.write_bytes(b"0" * 32)
+    db = MockDB()
+    srv = SyncPeerService(
+        db_path=str(tmp_path / "test.db"),
+        salt_path=str(salt_file),
+        username="tester",
+        db=db,
+        enable_broadcast=False,
+    )
+    try:
+        srv.add_manual_peer("192.168.1.30")
+        assert "192.168.1.10" in srv.get_manual_peers()
+        assert "192.168.1.30" in srv.get_manual_peers()
+
+        # Add a peer to _peers with matching IP
+        srv._peers["TEST-HOST"] = PeerInfo(
+            username="test",
+            host="TEST-HOST",
+            ip="192.168.1.10",
+            sync_port=50001,
+            last_seen=time.time(),
+        )
+        assert any(p["host"] == "TEST-HOST" for p in srv.get_peers())
+
+        # Remove 192.168.1.10
+        srv.remove_manual_peer("192.168.1.10")
+        assert "192.168.1.10" not in srv.get_manual_peers()
+        assert "192.168.1.10" not in json.loads(db.settings["sync_manual_peers"])
+        assert not any(p["host"] == "TEST-HOST" for p in srv.get_peers())
+        assert "TEST-HOST" not in srv._peers
+        assert "192.168.1.30" in srv.get_manual_peers()
+    finally:
+        srv.stop()
+
+
+def test_sera_sync_dialog_remove_pc_by_ip():
+    """
+    Test that SeraSyncDialog allows removing configured manual peer IPs.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication.instance() or QApplication([])
+
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    mock_sync_service = MagicMock()
+    mock_sync_service.get_sync_state.return_value = {"status": "NORMAL"}
+    mock_sync_service.get_peers.return_value = []
+    mock_sync_service.get_activity_history.return_value = []
+    mock_sync_service.get_network_category.return_value = {"is_public": False}
+    mock_sync_service.inv_frames = False
+    mock_sync_service.get_manual_peers.return_value = []
+
+    class MockDB:
+        def __init__(self):
+            self.settings = {}
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+        def set_setting(self, key, val):
+            self.settings[key] = val
+
+    mock_db = MockDB()
+    dialog = SeraSyncDialog(sync_service=mock_sync_service, db=mock_db)
+
+    # 1. No manual IPs configured -> informative message shown
+    with patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        dialog._on_remove_pc_by_ip()
+        assert mock_info.called
+        assert "No manual" in mock_info.call_args[0][2]
+
+    # Populate manual peers
+    mock_db.settings["sync_manual_peers"] = json.dumps(["192.168.1.50", "10.0.0.99"])
+
+    # 2. User cancels selection dialog -> nothing removed
+    with patch("PySide6.QtWidgets.QInputDialog.getItem", return_value=("192.168.1.50", False)):
+        dialog._on_remove_pc_by_ip()
+        saved = json.loads(mock_db.settings["sync_manual_peers"])
+        assert "192.168.1.50" in saved
+
+    # 3. User selects item but cancels confirmation -> nothing removed
+    with patch("PySide6.QtWidgets.QInputDialog.getItem", return_value=("192.168.1.50", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.No):
+        dialog._on_remove_pc_by_ip()
+        saved = json.loads(mock_db.settings["sync_manual_peers"])
+        assert "192.168.1.50" in saved
+
+    # 4. User selects item and confirms -> removed from DB and service
+    with patch("PySide6.QtWidgets.QInputDialog.getItem", return_value=("192.168.1.50", True)), \
+         patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
+         patch("PySide6.QtWidgets.QMessageBox.information") as mock_info:
+        dialog._on_remove_pc_by_ip()
+        assert mock_info.called
+        saved = json.loads(mock_db.settings["sync_manual_peers"])
+        assert "192.168.1.50" not in saved
+        assert "10.0.0.99" in saved
+        mock_sync_service.remove_manual_peer.assert_called_with("192.168.1.50")
+
+    dialog.close()
+
+
+def test_sera_sync_dialog_table_context_menu_remove():
+    """
+    Test that right-clicking a manual peer row provides a context menu option to remove it.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidgetItem
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    app = QApplication.instance() or QApplication([])
+
+    mock_sync_service = MagicMock()
+    mock_sync_service.get_sync_state.return_value = {"status": "NORMAL"}
+    mock_sync_service.get_peers.return_value = []
+    mock_sync_service.get_activity_history.return_value = []
+    mock_sync_service.get_network_category.return_value = {"is_public": False}
+    mock_sync_service.inv_frames = False
+    mock_sync_service.get_manual_peers.return_value = ["192.168.1.50"]
+
+    class MockDB:
+        def __init__(self):
+            self.settings = {"sync_manual_peers": json.dumps(["192.168.1.50"])}
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+        def set_setting(self, key, val):
+            self.settings[key] = val
+
+    mock_db = MockDB()
+    dialog = SeraSyncDialog(sync_service=mock_sync_service, db=mock_db)
+
+    # Insert a row into table for 192.168.1.50
+    dialog.table.setRowCount(1)
+    dialog.table.setItem(0, 1, QTableWidgetItem("REMOTE-PC"))
+    dialog.table.setItem(0, 2, QTableWidgetItem("192.168.1.50"))
+
+    # Context menu triggers menu exec
+    with patch("ui.dialogs.sera_sync_dialog.QMenu") as mock_menu_cls:
+        mock_instance = MagicMock()
+        mock_instance.exec.return_value = None
+        mock_menu_cls.return_value = mock_instance
+        dialog._on_table_context_menu(dialog.table.visualItemRect(dialog.table.item(0, 1)).center())
+        assert mock_instance.addAction.called
+
+    dialog.close()
+
+
+

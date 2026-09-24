@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design approved 2026-09-23. Nothing implemented yet. Doc version **1.3** (changelog in §10). |
+| **Status** | Design approved 2026-09-23. Nothing implemented yet. Doc version **1.4** (changelog in §10). |
 | **Agent table** | `docs/sera-sync-v3-agents.xlsx`: which model may do which WP, and status tracking. Agents update it only through `tools/sync_v3_tracker.py` (§8). |
 | **Owner** | Nex |
 | **Baseline** | commit `4963ab8` (line numbers below refer to this commit) |
@@ -92,7 +92,7 @@ Evidence on the owner's PC: on 2026-08-29 there were five full-DB overwrites in 
 | P0-6 | 0 | First-run "New office / Join office" + legacy join with on-screen approval | T2 | P0-3, P0-4, P0-5 | T3 |
 | P0-7 | 0 | Authenticate legacy sync messages (HMAC) | T2 | P0-6 | **T3** |
 | P0-8 | 0 | `rawPayload.db` auto-heal: visible alert + audit entry | T1 | – | – |
-| P0-9a | 0 | Installer firewall rules (Private + Domain) | T1 | – | – |
+| P0-9a | 0 | Installer firewall rules (Private + Domain + Public, v1.4) | T1 | – | – |
 | P0-9b | 0 | In-app warning when the network profile is Public | T2 | – | – |
 | P0-10 | 0 | Per-adapter broadcast, "Add PC by IP", peers keyed by host | T2 | – | – |
 | P0-11 | 0 | Docs: `operations-sync.md` update | T1 | P0-1…P0-10 | – |
@@ -176,7 +176,7 @@ Evidence on the owner's PC: on 2026-08-29 there were five full-DB overwrites in 
 | 49158 | TCP | Pairing listener (open only while "Add workstation" is open) | 2+ |
 | 49159 | TCP | v3 sync over mutual TLS | 2+ |
 
-The installer opens 49156–49159 for the app executable on Private and Domain profiles (P0-9a).
+The installer opens 49156–49159 for the app executable on Private, Domain and Public profiles (P0-9a; Public added by owner decision in v1.4).
 
 ### 4.4 Replicating changes, not files (Phase 3)
 
@@ -314,8 +314,9 @@ Every WP ends with "Accept". Those are the tests/checks that must pass. New test
 - **File:** `build_tools/installer_setup.iss` (`[Run]` section at line 69, and add `[UninstallRun]`).
 - **Add:**
   ```
-  Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Amas Sera Sync"" dir=in action=allow program=""{app}\Amas_Sera.exe"" enable=yes profile=private,domain"; Flags: runhidden
+  Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Amas Sera Sync"" dir=in action=allow program=""{app}\Amas_Sera.exe"" enable=yes profile=private,domain,public"; Flags: runhidden
   ```
+  (v1.4, owner decision 2026-09-24: `public` added so sync also works on PCs whose network Windows classifies as Public. The P0-9b warning stays.)
   Uninstall: `delete rule name="Amas Sera Sync"`. Check the exe name against `[Setup]`/`[Files]` in the same file.
 - **Accept:** manual check by the owner on a test PC. `netsh advfirewall firewall show rule name="Amas Sera Sync"` lists the rule.
 
@@ -1007,9 +1008,31 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - What changed instead (no weakening of authentication; `_verify_header`'s `reason` values and the four P0-7 acceptance tests are unchanged):
   - `_handle_incoming_push`: when a rejection is `UNAUTHENTICATED` **and** the header has no `mac` at all (as opposed to a `mac` that's present but wrong), that's the specific signature of a pre-P0-7 sender. The activity-log detail and console print now say so ("`<host>` may still be on a build from before this release and cannot authenticate — upgrade it to the current version."), and the rejection reply carries an additional, non-authoritative `hint` field alongside the unchanged `reason`.
   - `push_to`: if the peer's rejection carries a `hint`, it's folded into the activity-log entry and the returned message, so the *pushing* PC's own operator sees the same explanation.
-  - §6 (rollout runbook) step 1 and §7 (risks) now say explicitly that this release must reach every PC before push/pull is relied on again, and why a version-agnostic fallback isn't the fix (Phase 3's `HELLO`/`schema_version` check in P3-5 is the real, safe answer for the long term).
+  - §6 (rollout runbook) step 1 and §7 (risks) now say explicitly that this release must reach every PC before push/pull is relied on again, and why a version-agnostic fallback isn't the fix (Phase 3's HELLO/schema_version check in P3-5 is the real, safe answer for the long term).
 - Tests: full suite re-run after this change: 848 passed / 10 failed / 2 skipped, same 10 pre-existing failures as before. `test_unauthenticated_push_rejected` / `test_unauthenticated_pull_rejected` still pass unmodified (they only assert on `reason`, not `hint`).
 - Notes for later WPs: `hint` is advisory text for logs/toasts only — never branch protocol logic on its presence, only on `reason` (P3-5's own version-mismatch handling is unrelated code, not an extension of this field).
+
+### P0-10 — Discovery that reaches Wi-Fi and other subnets — Done (Reviewed by Claude Opus 5.5) — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 859 passed / 10 failed / 2 skipped (10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests: test_peer_ip_change_updates_entry, test_manual_peer_unicast_beacon, test_directed_broadcast_addresses_skips_loopback_and_link_local, test_sync_manual_peers_setting_and_skips_own_address, test_sera_sync_dialog_add_pc_by_ip_validates_and_stores, test_manual_beacon_bad_port_isolation, test_malformed_beacon_does_not_crash_listener, test_unicast_beacon_reply_rate_limit, test_sync_peer_service_remove_manual_peer, test_sera_sync_dialog_remove_pc_by_ip, test_sera_sync_dialog_table_context_menu_remove
+- Deviations from spec:
+  - `MANUAL_PEER_INTERVAL_SEC` set to 10s (instead of 30s) to prevent manual peers from flapping/timing out against `PEER_TIMEOUT_SEC = 30s` (addresses review finding #1).
+  - Dialog input and `_parse_peer_address` accept an optional `:port` (1–65535) alongside IP addresses to support testing and non-standard port environments.
+  - Added per-IP rate-limiting (5s cooldown) and port validation (1-65535) on unicast beacon replies to prevent amplification/reflection abuse.
+- Review fixes applied:
+  1. Blocking 1 (peer flapping): Shortened manual beacon poll interval to 10s so peers are refreshed well ahead of the 30s reaper timeout.
+  2. Blocking 2 (port error isolation): Validated port range (1–65535) in both dialog and `_parse_peer_address`; wrapped send loop in per-peer exception handling so invalid ports/addresses never abort sending to subsequent peers.
+  3. Non-blocking (listener crash): Protected UDP listener loop and numeric conversions against malformed beacon payloads.
+  4. Non-blocking (unicast reflection): Added rate limit (5s per IP) and port validation on reply path.
+  5. Non-blocking (performance): Cached `_get_own_ips()` for 15s to eliminate redundant DNS/adapter queries on every peer send cycle.
+- Notes for later WPs:
+  - `PeerInfo.key()` now returns `self.host` (host name), so peer IP updates modify the existing entry without creating duplicate/ghost records. Cloned Windows images with identical hostnames will collapse into one row switching between IPs (note for P0-11 and P2-5).
+  - Beacon sender broadcasts to `255.255.255.255` and directed broadcasts derived lazily via `ifaddr` (skipping loopback and link-local).
+  - Manual peer discovery sends unicast beacons every 10s to addresses configured in office-wide setting `sync_manual_peers` (skipping own address), and recipients answer with a unicast beacon reply.
+  - SeraSyncDialog includes "Add PC by IP" button with Google Material icon (`mdi.plus-network`) which validates IPv4 addresses and stores them in `sync_manual_peers`.
+  - Added pure-Python `ifaddr>=0.2.0` dependency to `requirements.txt`.
+- Addition beyond the spec (reviewed by Claude Opus 5.5, 2026-09-24): **removing manual addresses.** A "Remove PC by IP" button and a right-click "Remove … from Manual Peers" on peer rows. `SyncPeerService.remove_manual_peer` removes only the exact entry (removing `ip:port` leaves a separate plain `ip` entry, and vice versa), drops peers with that IP from the table and notifies the panel. Tests: `test_sync_peer_service_remove_manual_peer`, `test_sera_sync_dialog_remove_pc_by_ip`, `test_sera_sync_dialog_table_context_menu_remove`.
+  - **For P0-11 (operations doc):** in Phase 0 `sync_manual_peers` only reaches other PCs through a whole-DB push, so removing an address affects this PC only; other PCs keep contacting it, and a later push from a PC that still has it puts it back. A removed PC can also stay visible if it's found by broadcast or still lists this PC (this PC still answers its beacons).
 
 ---
 
@@ -1019,3 +1042,4 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - **1.1** (2026-09-23): owner answers. SUDR ignored (D10). All settings office-wide (D7). Per-PC letter tokens (D8). Restore propagates to all PCs (D9, P4-3 split into P4-3a/b). Gemini allowed on T1/T2. Agent workflow (§8), progress log (§9), agent table xlsx.
 - **1.2** (2026-09-23): any PC in admin mode can change settings; `app_settings` is plain `lww`, not admin-signed (D3, D7, P2-2, P3-1 updated). Staff roster stays admin-PC-signed.
 - **1.3** (2026-09-23): agents update the xlsx only through `tools/sync_v3_tracker.py` (rule 14; §8.1–§8.4 prompts updated). Two phase checks added for the settings / staff rules.
+- **1.4** (2026-09-24): owner decision: the P0-9a firewall rule also covers the **Public** profile (`profile=private,domain,public`), so sync isn't silently blocked on PCs whose network is classified Public. Accepted risk: until Phase 2's mutual TLS, the legacy sync ports (HMAC-authenticated since P0-7) are also reachable on untrusted Public networks (hotel/café Wi-Fi). The P0-9b Public-network warning and its activity-log entry stay; only their wording changed, from "Windows Firewall may block LAN sync discovery" to a security note ("Sera Sync is reachable by other devices on this network … set it to Private"). `tests/test_installer_firewall.py` updated to the new rule.
