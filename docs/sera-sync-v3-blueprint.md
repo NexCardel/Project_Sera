@@ -1042,6 +1042,25 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - `docs/operations-sync.md` is updated to describe all Phase 0 architectural changes: multi-adapter broadcast, hostname-keyed peers, "Add PC by IP" manual discovery (`sync_manual_peers`), Public-network security warnings and firewall scope, the first-run Join flow with 6-digit verification code and on-screen approval, WAL snapshotting with `sqlcipher_export`, startup database staging/swapping (`apply_pending_swap`), HMAC authentication, prohibition of Syncthing/external file synchronizers on live active databases (with legacy conflict file recovery preserved in Admin Restore), and explicit notation that `inv_frames` whole-DB authority is transitional and stays only until Sera Sync v3.
   - Completes Phase 0 work packages (P0-1 through P0-11).
 
+### P1-1 — `sera_keys.py`: DPAPI, office.json, key id, recovery blob — Done — 2026-09-24
+- Model: Claude Opus 5.5   Commit: uncommitted
+- Tests: full suite 883 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5). New `tests/test_sera_keys.py`, 24 tests: all 8 Accept items (DPAPI round trip, wrong entropy, password wrap round trip, `WrongPassword`, tampered ciphertext, wrong AAD, `key_id` 32 hex, `atomic_write` no `.tmp`) plus tampered DPAPI blob, tampered KDF params, malformed blob, fresh salt/nonce, office.json round trip/format/backup, store/load/recover DEK, key-id mismatch on recover, `atomic_write` failure path, no PySide6 import.
+- Deviations from spec (all additions; the listed signatures are unchanged):
+  - **Key files are never overwritten without a backup.** `store_dek`, `save_office` and `recover_dek` copy an existing file that differs to `<name>.bak-<YYYYmmdd_HHMMSS>` before `atomic_write` (§0 rule 3). Identical content is not rewritten.
+  - Extra exception `KeyFileInvalid` (subclass of `SeraKeysError` and `ValueError`) for malformed/unknown-format `office.json` or recovery data, and for a recovered DEK whose `key_id` doesn't match `office.json`. `WrongPassword` and `KeyUnavailable` are as specified; all three derive from `SeraKeysError`.
+  - `unwrap_with_password` validates the blob before running Argon2: `format`/`kdf`, `t` 1–16, `m_kib` 8 MiB–1 GiB, `p` 1–16, salt 16 B, nonce 12 B. A tampered blob can't make a PC allocate gigabytes. Tampering with in-range params still fails at the GCM tag (they change the KEK).
+  - `recover_dek` checks the unwrapped DEK's `key_id` against `office.json` before re-storing `.dpapi`.
+  - `store_dek` computes both the recovery blob and the DPAPI blob before writing either, so a DPAPI failure writes nothing.
+  - `atomic_write` uses a unique temp name (`mkstemp` in the same folder), retries `os.replace` for up to 2 s on `PermissionError` (Windows AV/indexer locks), and removes the temp file on any failure.
+  - DPAPI: `ctypes.WinDLL(..., use_last_error=True)` with explicit `argtypes`/`restype` (the sketch's bare `windll` calls truncate pointers on 64-bit); decrypted output buffer is zeroed before `LocalFree`. On non-Windows, `dpapi_*` raise `OSError`.
+- Notes for later WPs:
+  - Public helpers besides the §5 list: `ENTROPY_OFFICE_KEY` / `ENTROPY_DEVICE_KEY` / `ENTROPY_ADMIN_KEY`, `recovery_aad(office_id)`, `admin_aad(office_id)` (P2-2), `keys_dir(app_dir)`, `OfficeInfo.new_office_id()` (uuid4). File-name constants: `OFFICE_FILE`, `DEK_DPAPI_FILE`, `DEK_RECOVERY_FILE`.
+  - `OfficeInfo` is a dataclass: `office_id, office_name, key_id, admin_pubkey=None, device_id=None, created_at=<now UTC iso>, format=1`. `load_office` returns `None` only when the file is missing, and raises `KeyFileInvalid` if it's damaged. P1-2 should treat that as "stop and show the error", not as legacy mode.
+  - `load_dek` raises `KeyUnavailable` for a missing file, an unreadable file, or DPAPI failure. It doesn't check `key_id`; P1-2 does that against `office.json`, as specified.
+  - `argon2` and `cryptography` are imported lazily inside the functions, so `import sera_keys` stays cheap for P1-2's start-up path. One unlock (Argon2id t=3, 64 MiB, p=4) takes about 0.1–0.3 s.
+  - **For P1-6 (T3 review):** because of the backup rule, a master-password change leaves the old `office_key.recovery` as `office_key.recovery.bak-<ts>`, and the old password can still unwrap it. The DEK doesn't change, so a leaked old password keeps working until that backup is removed. The owner should decide whether P1-6 deletes that specific backup after a successful re-wrap (an exception to rule 3) or accepts it.
+    - **Owner decision (2026-09-24): risk accepted.** P1-6 keeps the old `office_key.recovery.bak-<ts>` like any other key-file backup; don't delete it. (Not yet folded into §5/§7; the owner or a Fable/Opus "fold approved deviations" session does that.)
+
 ---
 
 ## 10. Doc changelog
