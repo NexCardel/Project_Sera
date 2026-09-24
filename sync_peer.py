@@ -24,6 +24,7 @@ import json
 import socket
 import struct
 import hashlib
+import hmac
 import threading
 import time
 import shutil
@@ -31,7 +32,7 @@ import datetime
 import glob
 import tempfile
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 
 from sync_network_probe import NetworkCategoryMonitor
 
@@ -41,6 +42,20 @@ SYNC_PORT = 49157
 BEACON_INTERVAL_SEC = 5
 PEER_TIMEOUT_SEC = 30
 SOCK_TIMEOUT_SEC = 3
+
+# ---------------- P0-7: HMAC authentication for legacy sync messages ----------------
+# auth_key = HMAC-SHA256(hex_key_bytes, SERA_SYNC_AUTH_INFO); mac = HMAC-SHA256(auth_key, canonical_json(header w/o mac)).
+# hex_key is the same SQLCipher key every PC in the office derives from the shared master
+# password (+ its local sera.salt), so a valid mac proves the sender knows the office password.
+SERA_SYNC_AUTH_INFO = b"sera-sync-auth-v1"
+AUTH_TS_TOLERANCE_SEC = 120
+# fetch_snapshot (P0-6 join) has no shared key yet: it is protected by the on-screen
+# approval + one-time join code instead, so it is exempt from mac authentication.
+AUTH_EXEMPT_ACTIONS = {"fetch_snapshot"}
+
+
+def canonical_json(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def prune_pre_sync_backups(directory: str | Path, max_keep: int = 5):
@@ -368,6 +383,7 @@ class SyncPeerService:
         sync_port: int = SYNC_PORT,
         db: Optional[Any] = None,
         inv_frames: bool = False,
+        hex_key: Optional[str] = None,
         key_path: Optional[str] = None,
         master_password: Optional[str] = None,
         on_peer_table_changed: Optional[Callable] = None,
@@ -385,6 +401,7 @@ class SyncPeerService:
         self.sync_port = sync_port
         self.db = db
         self.inv_frames = bool(inv_frames)
+        self.hex_key = hex_key
         self.key_path = key_path
         self.master_password = master_password
         self.host_name = socket.gethostname()
@@ -796,6 +813,34 @@ class SyncPeerService:
             action = header.get("action")
             sender_host = header.get("host", sender_ip)
             sender_username = header.get("username", "Unknown")
+
+            # P0-7: authenticate every message except fetch_snapshot (protected by the
+            # on-screen join approval instead). This closes F9: request_database_pull /
+            # push_database no longer act on an unauthenticated sender's say-so.
+            auth_reject_reason = self._verify_header(header)
+            if auth_reject_reason:
+                # A completely absent mac (as opposed to one present but wrong) is what a
+                # pre-P0-7 build sends, since it has never heard of signing headers - it is
+                # the ordinary rollout case, not necessarily an attack. Surface that as a
+                # hint (not the protocol `reason`, which callers/tests key off) so whoever
+                # is watching the Sera Sync panel during a staggered upgrade knows to check
+                # versions rather than suspect foul play. See docs/sera-sync-v3-blueprint.md
+                # §6/§7: this release must reach every PC before push/pull is relied on again.
+                looks_outdated = auth_reject_reason == "UNAUTHENTICATED" and not header.get("mac")
+                hint = (
+                    f"{sender_host} may still be on a build from before this release "
+                    "and cannot authenticate - upgrade it to the current version."
+                    if looks_outdated else None
+                )
+                detail = f"{auth_reject_reason} ({hint})" if hint else auth_reject_reason
+                print(f"[Sync Guard] Rejected {action!r} from {sender_host}: {detail}")
+                self.log_activity("GUARD", f"Rejected unauthenticated {action} from {sender_host}", detail)
+                reject_payload = {"status": "rejected", "reason": auth_reject_reason}
+                if hint:
+                    reject_payload["hint"] = hint
+                _send_framed(conn, json.dumps(reject_payload).encode("utf-8"))
+                return
+
             is_live_update = bool(header.get("live_update", False))
             force_override = bool(header.get("force_override", False))
             incoming_client_count = int(header.get("client_count", 0))
@@ -1266,14 +1311,15 @@ class SyncPeerService:
                     "db_mtime": local_mtime,
                     "inv_frames": self.inv_frames,
                 }
-                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
 
                 # Wait for ACK
                 ack_raw = _recv_framed(conn)
                 ack = json.loads(ack_raw.decode("utf-8"))
                 if ack.get("status") != "ready":
                     reason = ack.get("reason", "Peer rejected sync request")
-                    self.log_activity("PUSH", f"Sync rejected by {peer_ip}:{peer_port}", reason)
+                    detail = f"{reason} ({ack['hint']})" if ack.get("hint") else reason
+                    self.log_activity("PUSH", f"Sync rejected by {peer_ip}:{peer_port}", detail)
                     # If peer told us to pull from them (e.g. we are a bootstrapping empty node),
                     # honor that immediately — they have more data than us.
                     if ack.get("pull_request_from_you"):
@@ -1290,7 +1336,7 @@ class SyncPeerService:
                                 self._bootstrap_pull_done = True
                                 self._is_bootstrapping = False
                         threading.Thread(target=_do_instructed_pull, daemon=True).start()
-                    return f"Sync skipped: {reason}"
+                    return f"Sync skipped: {detail}"
 
                 # Send database + salt (stream database in 1 MB chunks)
                 chunk_size = 1 << 20  # 1 MB
@@ -1345,7 +1391,7 @@ class SyncPeerService:
                     "host": self.host_name,
                     "logs": logs,
                 }
-                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                 result_raw = _recv_framed(conn)
                 if result_raw:
                     result = json.loads(result_raw.decode("utf-8"))
@@ -1368,7 +1414,7 @@ class SyncPeerService:
                     "host": self.host_name,
                     "dumps": dumps,
                 }
-                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                 result_raw = _recv_framed(conn)
                 if result_raw:
                     result = json.loads(result_raw.decode("utf-8"))
@@ -1406,7 +1452,7 @@ class SyncPeerService:
                         "host": self.host_name,
                         "dumps": dumps,
                     }
-                    _send_framed(conn, json.dumps(header).encode("utf-8"))
+                    _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                     result_raw = _recv_framed(conn)
                     if result_raw:
                         result = json.loads(result_raw.decode("utf-8"))
@@ -1459,7 +1505,7 @@ class SyncPeerService:
                         "host": self.host_name,
                         "logs": logs,
                     }
-                    _send_framed(conn, json.dumps(header).encode("utf-8"))
+                    _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                     result_raw = _recv_framed(conn)
                     if result_raw:
                         result = json.loads(result_raw.decode("utf-8"))
@@ -1507,7 +1553,7 @@ class SyncPeerService:
                     "host": self.host_name,
                     "sync_port": self.sync_port,
                 }
-                _send_framed(conn, json.dumps(header).encode("utf-8"))
+                _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                 resp_raw = _recv_framed(conn)
                 resp = json.loads(resp_raw.decode("utf-8"))
                 return resp.get("status") == "ok"
@@ -1521,6 +1567,53 @@ class SyncPeerService:
                 cb(*args)
             except Exception:
                 pass
+
+    # ---------------- P0-7: header authentication ----------------
+
+    def _auth_key(self) -> Optional[bytes]:
+        """HMAC key derived from this PC's hex_key. None means this instance has no
+        office/office-password key configured, so authentication is not enforced
+        (legacy/test construction; real app instances always pass hex_key)."""
+        if not self.hex_key:
+            return None
+        try:
+            key_bytes = bytes.fromhex(self.hex_key)
+        except (ValueError, TypeError):
+            return None
+        return hmac.new(key_bytes, SERA_SYNC_AUTH_INFO, hashlib.sha256).digest()
+
+    def _sign_header(self, header: dict) -> dict:
+        """Returns a copy of header with `ts` (and `mac`, if we have a key) added."""
+        signed = dict(header)
+        signed["ts"] = int(time.time())
+        auth_key = self._auth_key()
+        if auth_key is not None:
+            signed["mac"] = hmac.new(auth_key, canonical_json(signed), hashlib.sha256).hexdigest()
+        return signed
+
+    def _verify_header(self, header: dict) -> Optional[str]:
+        """Returns None if `header` is authenticated (or auth isn't enforced here),
+        else a short rejection reason."""
+        if header.get("action") in AUTH_EXEMPT_ACTIONS:
+            return None
+        auth_key = self._auth_key()
+        if auth_key is None:
+            return None
+        mac = header.get("mac")
+        ts = header.get("ts")
+        if not mac or ts is None:
+            return "UNAUTHENTICATED"
+        try:
+            ts = int(ts)
+        except (TypeError, ValueError):
+            return "UNAUTHENTICATED"
+        if abs(time.time() - ts) > AUTH_TS_TOLERANCE_SEC:
+            return "STALE_TIMESTAMP"
+        without_mac = {k: v for k, v in header.items() if k != "mac"}
+        expected = hmac.new(auth_key, canonical_json(without_mac), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, str(mac)):
+            return "UNAUTHENTICATED"
+        return None
 
 
 # ---------------- length-prefixed framing over TCP ----------------

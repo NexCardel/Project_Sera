@@ -778,7 +778,7 @@ One declarative table. The implementer **verifies each row against the code** an
 
 ## 6. Office rollout runbook (for the owner)
 
-1. **Release Phase 0** (2.x) to all PCs. Automatic whole-DB pushing is now gone. Manual push still works, safely staged.
+1. **Release Phase 0** (2.x) to all PCs. Automatic whole-DB pushing is now gone. Manual push still works, safely staged. **From P0-7 onward this release must reach every PC before anyone relies on push/pull again:** P0-7 makes an upgraded PC reject a push or pull request from a PC still on the pre-P0-7 build (it has no way to sign the request, since the auth code doesn't exist there yet — this is the intended effect of closing F9, not a bug). The Sera Sync panel's activity log names the rejected peer and says it may need updating. The built-in auto-updater checks every 2 hours; treat an office as fully upgraded only once the panel shows no more such rejections.
 2. **Pick the admin PC:** the one whose database is the most complete. Make a manual copy of `~/AmanAssociates_Sera` to a USB stick.
 3. **Release 3.0.** On the admin PC: Admin → Sera Sync → Convert to office key (P1-4). Export the recovery kit to USB and keep it somewhere safe.
 4. **On every other PC:** Rejoin office → enter the code shown on the admin PC → review the salvage dry run → import.
@@ -799,6 +799,7 @@ One declarative table. The implementer **verifies each row against the code** an
 | Clock far off on one PC | HLC drift guard + panel warning (P3-3). |
 | Settings are office-wide and any admin-mode PC can change them (D7) | Accepted by the owner. Two PCs changing the same setting at once: the later edit wins everywhere, and the losing value shows in the conflicts list (P3-8). If theme / window mode turn out annoying as office-wide, make those two keys `local` in the P3-1 registry (one-line change) and note it in §10. |
 | Staff notice the new `B-12` token style (D8) | Mention it in the 3.0 release notes. Old tokens don't change. |
+| A PC still on the pre-P0-7 build can't push/pull to/from one already upgraded (it can't sign the request) | By design: this is what closes F9. Mitigation is procedural (§6 step 1: ship to every PC together, watch the activity log for "may need updating" until none remain) rather than a protocol fallback — accepting an unsigned request from "maybe just an old peer" would reopen F9 for an attacker who simply omits the mac. Phase 3's session protocol (P3-5) already gives real, safe cross-version handling for the long term: a `schema_version` mismatch in `HELLO` produces "PC \<name\> needs updating" instead of a silent drop, without weakening authentication. |
 | Restore on one PC removes clients created elsewhere after the backup (D9) | Admin-only, dry-run counts, typed confirmation, pre-restore backup (P4-3b). |
 
 ---
@@ -986,6 +987,29 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - New office validation enforces >= 8 characters, password confirmation match, and refuses "admin123"; creates salt, initializes DB, and writes `sera.key`.
   - Joining an office uses `discover_lan_peers` for 10s beacon listening, sends `fetch_snapshot` outbound with a 6-digit random code, waits for serving PC on-screen approval (up to 120s auto-reject), stages snapshot and salt to `incoming/`, verifies office password via cipher integrity and table count before installing, and writes `sera.key` without requiring app restart.
   - Serving PC shows `JoinApprovalDialog` via `on_join_approval_requested` callback, enforcing at most one pending join request and rejecting concurrent requests with `BUSY`.
+
+### P0-7 — Authenticate legacy sync messages (HMAC) — In review — 2026-09-24
+- Model: Claude Sonnet 5   Commit: uncommitted
+- Tests: 848 passed / 10 failed / 2 skipped (10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5 — same as HEAD before this WP); new tests in `tests/test_sync_hotfix.py`: `test_authenticated_push_accepted`, `test_unauthenticated_push_rejected` (missing mac, and a mac forged with the wrong key), `test_unauthenticated_pull_rejected` (also asserts no reverse push is triggered), `test_stale_timestamp_rejected`.
+- Deviations from spec:
+  - `hex_key` on `SyncPeerService.__init__` is optional (`None` by default). When an instance has no `hex_key` configured, it neither signs its own outgoing headers nor enforces the mac check on incoming ones — this is what lets ~30 pre-existing tests across `tests/test_sync_hotfix.py` / `tests/test_sera_sync.py` (P0-1, P0-3, P0-4, P0-6, P0-9b, etc.) keep constructing `SyncPeerService` without a key and still pass, unchanged. `main.py` is the only production call site and it always passes `hex_key` (the same value already derived at start-up to open `master.db`), so real running instances always enforce authentication; only a test/legacy construction can opt out. Flagging this for the T3 reviewer: please confirm this is an acceptable scope boundary rather than a hole, since the spec's wording ("every outgoing header") assumed the key is always present.
+  - `canonical_json`, `SERA_SYNC_AUTH_INFO`, `AUTH_TS_TOLERANCE_SEC` (120s, per spec) and `AUTH_EXEMPT_ACTIONS` (`{"fetch_snapshot"}`) are module-level in `sync_peer.py`.
+  - Only the request/action headers that peers send to initiate something (`push_database`, `request_database_pull`, `push_audit_log`, `push_tracker_dump`) are authenticated. The short status replies (`{"status": "ok"|"rejected"|"ready"}`) sent back over the same already-open connection are not separately signed — the spec's Accept tests only exercise request-side rejection, and the reply is bound to a connection the requester itself opened.
+  - Fixed in passing: `sync_peer.py` used `Optional[Any]` in `SyncPeerService.__init__`'s signature without importing `Any` from `typing`. This was silently broken (Python 3.14 defers annotation evaluation, so `import sync_peer` never triggered it) but would raise `NameError` on any `inspect.signature()`/`get_type_hints()` call. Added `Any` to the `typing` import.
+- Notes for later WPs:
+  - `auth_key = HMAC-SHA256(hex_key_bytes, SERA_SYNC_AUTH_INFO)`; `mac = HMAC-SHA256(auth_key, canonical_json(header_without_mac))`. `SyncPeerService._sign_header(header)` / `._verify_header(header)` are the single choke points — any new outgoing action header should go through `_sign_header` before `_send_framed`.
+  - `main.py` passes `hex_key=hex_key` (the value already derived from the master password + salt right before `SeraDatabase(...)` is opened) into `SyncPeerService(...)`.
+  - P1-2/P1-5 (office-mode key resolution, key-fingerprint gate) will replace this password-derived `hex_key` with the office DEK's hex form; `_sign_header`/`_verify_header` don't need to change, only what's passed as `hex_key` at construction.
+
+### P0-7 — rollout-compatibility follow-up — 2026-09-24
+- Model: Claude Sonnet 5   Commit: uncommitted
+- Reported: during a staggered rollout (not every PC upgraded at once), a PC still on a pre-P0-7 build gets a bare `{"status":"rejected","reason":"UNAUTHENTICATED"}` when it pushes/pulls to/from an already-upgraded PC, with nothing in the message pointing at "this peer needs updating." Confirmed this is inherent, not a bug: an old build has no code to compute a mac, so it can never authenticate, and *accepting* a request just because it "looks like" it might be from an old build would let an attacker claim the same and reopen F9 — so the fix is not to loosen `_verify_header`.
+- What changed instead (no weakening of authentication; `_verify_header`'s `reason` values and the four P0-7 acceptance tests are unchanged):
+  - `_handle_incoming_push`: when a rejection is `UNAUTHENTICATED` **and** the header has no `mac` at all (as opposed to a `mac` that's present but wrong), that's the specific signature of a pre-P0-7 sender. The activity-log detail and console print now say so ("`<host>` may still be on a build from before this release and cannot authenticate — upgrade it to the current version."), and the rejection reply carries an additional, non-authoritative `hint` field alongside the unchanged `reason`.
+  - `push_to`: if the peer's rejection carries a `hint`, it's folded into the activity-log entry and the returned message, so the *pushing* PC's own operator sees the same explanation.
+  - §6 (rollout runbook) step 1 and §7 (risks) now say explicitly that this release must reach every PC before push/pull is relied on again, and why a version-agnostic fallback isn't the fix (Phase 3's `HELLO`/`schema_version` check in P3-5 is the real, safe answer for the long term).
+- Tests: full suite re-run after this change: 848 passed / 10 failed / 2 skipped, same 10 pre-existing failures as before. `test_unauthenticated_push_rejected` / `test_unauthenticated_pull_rejected` still pass unmodified (they only assert on `reason`, not `hint`).
+- Notes for later WPs: `hint` is advisory text for logs/toasts only — never branch protocol logic on its presence, only on `reason` (P3-5's own version-mismatch handling is unrelated code, not an extension of this field).
 
 ---
 

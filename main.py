@@ -296,6 +296,7 @@ class SeraApp:
             salt_path=self.salt_path,
             username=self.actor_alias,
             db=self.db,
+            hex_key=hex_key,
             inv_frames=inv_frames_enabled,
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,

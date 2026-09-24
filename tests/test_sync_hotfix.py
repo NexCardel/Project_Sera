@@ -1893,3 +1893,225 @@ def test_complete_join_office_password_strip_consistent(tmp_path):
     count = conn2.execute("SELECT count(*) FROM sqlite_master;").fetchone()[0]
     conn2.close()
     assert count > 0
+
+
+# ---------------- P0-7: authenticate legacy sync messages (HMAC) ----------------
+
+def test_authenticated_push_accepted(tmp_path):
+    """A push_database sent by a peer configured with the same hex_key as the receiver
+    is authenticated and proceeds exactly as an unauthenticated push did before P0-7."""
+    import security
+    from database import SeraDatabase
+    from sync_peer import SyncPeerService
+
+    sender_dir = tmp_path / "sender"
+    receiver_dir = tmp_path / "receiver"
+    sender_dir.mkdir()
+    receiver_dir.mkdir()
+
+    salt_path = str(sender_dir / "sera.salt")
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    hex_key = security.derive_key_hex("testpass123", salt)
+
+    sender_db_path = str(sender_dir / "master.db")
+    sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
+    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
+    pan_id = pan_col["id"] if pan_col else 5
+    sender_db.add_client({pan_id: "AUTHK0001A"}, "Auth Test Client", [])
+
+    receiver_db_path = str(receiver_dir / "master.db")
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    (receiver_dir / "sera.key").write_text("testpass123", encoding="utf-8")
+
+    receiver_service = SyncPeerService(
+        db_path=receiver_db_path,
+        salt_path=receiver_salt_path,
+        username="Receiver",
+        sync_port=0,
+        hex_key=hex_key,
+    )
+    receiver_service.start()
+
+    try:
+        sender_service = SyncPeerService(
+            db_path=sender_db_path,
+            salt_path=salt_path,
+            username="Sender",
+            db=sender_db,
+            hex_key=hex_key,
+        )
+
+        port = receiver_service._tcp_server.getsockname()[1]
+        res = sender_service.push_to("127.0.0.1", port, force_override=True)
+        assert "successfully" in res.lower(), f"Expected success, got: {res}"
+        assert (receiver_dir / "incoming" / "pending_swap.json").exists()
+    finally:
+        receiver_service.stop()
+
+
+def test_unauthenticated_push_rejected(tmp_path):
+    """Once a receiver is configured with an office key, a push_database header with no
+    mac (or a mac signed with the wrong key) is rejected before anything is staged."""
+    import socket
+    import json
+    import hmac
+    import hashlib
+    import time as _time
+    import security
+    from sync_peer import SyncPeerService, _send_framed, _recv_framed, canonical_json, SERA_SYNC_AUTH_INFO
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    salt_bytes = security.load_salt(receiver_salt_path)
+    hex_key = security.derive_key_hex("office_pass_1", salt_bytes)
+
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="Receiver",
+        sync_port=0,
+        hex_key=hex_key,
+    )
+    receiver_service.start()
+
+    try:
+        port = receiver_service._tcp_server.getsockname()[1]
+
+        # Case 1: no ts/mac at all.
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", port))
+        header = {
+            "action": "push_database",
+            "host": "Attacker-PC",
+            "db_size": 100,
+            "salt_size": 16,
+            "client_count": 5,
+            "sync_revision": 5,
+        }
+        _send_framed(sock, json.dumps(header).encode("utf-8"))
+        resp = json.loads(_recv_framed(sock).decode("utf-8"))
+        sock.close()
+        assert resp.get("status") == "rejected"
+        assert resp.get("reason") == "UNAUTHENTICATED"
+        assert not (receiver_dir / "incoming" / "pending_swap.json").exists()
+
+        # Case 2: mac present but signed with the wrong key (forged).
+        wrong_hex_key = security.derive_key_hex("wrong_pass", salt_bytes)
+        wrong_auth_key = hmac.new(bytes.fromhex(wrong_hex_key), SERA_SYNC_AUTH_INFO, hashlib.sha256).digest()
+        forged = dict(header)
+        forged["ts"] = int(_time.time())
+        forged["mac"] = hmac.new(wrong_auth_key, canonical_json(forged), hashlib.sha256).hexdigest()
+
+        sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock2.connect(("127.0.0.1", port))
+        _send_framed(sock2, json.dumps(forged).encode("utf-8"))
+        resp2 = json.loads(_recv_framed(sock2).decode("utf-8"))
+        sock2.close()
+        assert resp2.get("status") == "rejected"
+        assert resp2.get("reason") == "UNAUTHENTICATED"
+    finally:
+        receiver_service.stop()
+
+
+def test_unauthenticated_pull_rejected(tmp_path):
+    """request_database_pull with no mac is rejected and never reaches the code that
+    would push our database back to the requester (F9)."""
+    import socket
+    import json
+    import security
+    from sync_peer import SyncPeerService, _send_framed, _recv_framed
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    salt_bytes = security.load_salt(receiver_salt_path)
+    hex_key = security.derive_key_hex("office_pass_2", salt_bytes)
+
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="Receiver",
+        sync_port=0,
+        hex_key=hex_key,
+    )
+    receiver_service.start()
+
+    push_calls = []
+    orig_push_to = receiver_service.push_to
+    def _tracking_push_to(*a, **kw):
+        push_calls.append((a, kw))
+        return orig_push_to(*a, **kw)
+    receiver_service.push_to = _tracking_push_to
+
+    try:
+        port = receiver_service._tcp_server.getsockname()[1]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", port))
+        header = {
+            "action": "request_database_pull",
+            "host": "Attacker-PC",
+            "sync_port": 0,
+        }
+        _send_framed(sock, json.dumps(header).encode("utf-8"))
+        resp = json.loads(_recv_framed(sock).decode("utf-8"))
+        sock.close()
+        assert resp.get("status") == "rejected"
+        assert resp.get("reason") == "UNAUTHENTICATED"
+
+        time.sleep(0.3)
+        assert push_calls == [], "An unauthenticated pull request must not trigger a reverse push"
+    finally:
+        receiver_service.stop()
+
+
+def test_stale_timestamp_rejected(tmp_path):
+    """A correctly-signed header whose ts is outside the 120s tolerance is rejected,
+    even though the mac itself is valid (replay protection)."""
+    import socket
+    import json
+    import hmac
+    import hashlib
+    import security
+    from sync_peer import SyncPeerService, _send_framed, _recv_framed, canonical_json, SERA_SYNC_AUTH_INFO
+
+    receiver_dir = tmp_path / "receiver"
+    receiver_dir.mkdir()
+    receiver_salt_path = str(receiver_dir / "sera.salt")
+    security.generate_and_save_salt(receiver_salt_path)
+    salt_bytes = security.load_salt(receiver_salt_path)
+    hex_key = security.derive_key_hex("office_pass_3", salt_bytes)
+
+    receiver_service = SyncPeerService(
+        db_path=str(receiver_dir / "master.db"),
+        salt_path=receiver_salt_path,
+        username="Receiver",
+        sync_port=0,
+        hex_key=hex_key,
+    )
+    receiver_service.start()
+
+    try:
+        port = receiver_service._tcp_server.getsockname()[1]
+
+        auth_key = hmac.new(bytes.fromhex(hex_key), SERA_SYNC_AUTH_INFO, hashlib.sha256).digest()
+        header = {
+            "action": "request_database_pull",
+            "host": "Stale-PC",
+            "sync_port": 0,
+            "ts": int(time.time()) - 300,  # 5 minutes old: outside AUTH_TS_TOLERANCE_SEC (120s)
+        }
+        header["mac"] = hmac.new(auth_key, canonical_json(header), hashlib.sha256).hexdigest()
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", port))
+        _send_framed(sock, json.dumps(header).encode("utf-8"))
+        resp = json.loads(_recv_framed(sock).decode("utf-8"))
+        sock.close()
+        assert resp.get("status") == "rejected"
+        assert resp.get("reason") == "STALE_TIMESTAMP"
+    finally:
+        receiver_service.stop()
