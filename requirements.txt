@@ -23,6 +23,7 @@ ifaddr>=0.2.0
 # --- Security / Key Derivation ---
 argon2-cffi>=23.1      # Admin PIN hashing (Argon2id)
 cryptography>=43.0     # PBKDF2 key derivation for the DB encryption key
+spake2>=0.9            # Sera Sync v3 pairing with a 6-digit code (pure Python, imported lazily)
 
 # --- VSDC visual capture (OS-level screen + accessibility reads) ---
 # Without these the app still installs and launches, but VSDC captures nothing:
