@@ -18,8 +18,8 @@ P1-4,Done,Claude Opus 5.5,Claude Opus 5.5,c6bcc11,2026-09-24: Review round 2: li
 P1-5,Done,Gemini 3.8 Flash,Claude Opus 5.5,1960b19,"2026-09-24: Review fixes: zero-salt framing, legacy fetch_snapshot gated, salt backup; 937 passed / 10 failed",2026-09-24 14:46
 P1-6,Done,Gemini 3.8 Flash,Claude Opus 5.5,79149ab,"2026-09-24: Review blockers A and B resolved: settings backup page fixed, exact whitespace preserved with lenient fallback, full suite clean",2026-09-24 16:49
 P2-1,Done,Claude Sonnet 5,Claude Opus 5.5,292da21,"2026-09-24: Review-fix round 2: fixed race where load_device_identity could rename another writer's in-progress key/passphrase files; load_device_identity now read-only, cleanup moved into ensure_device_identity under the lock. Also split lock acquire-timeout from stale-steal threshold. 986 passed / 10 pre-existing failed / 2 skipped.",2026-09-24 17:07
-P2-2,In review,Claude Opus 5.5,Claude Opus 5.5,,"2026-09-24: Review fixes: revoke is final + letter/cert immutable in store_record; readers always verify; claim_admin check inside tx, refuses caller tx; 63 tests; suite 1049 passed / 10 pre-existing failed / 2 skipped",2026-09-24 17:50
-P2-3,In progress,Claude Opus 5.5,,,,2026-09-24 17:43
+P2-2,Done,Claude Opus 5.5,Claude Opus 5.5,0820ee8,"2026-09-24: Review fixes: revoke is final + letter/cert immutable in store_record; readers always verify; claim_admin check inside tx, refuses caller tx; 63 tests; suite 1049 passed / 10 pre-existing failed / 2 skipped",2026-09-24 17:54
+P2-3,In review,Claude Opus 5.5,Claude Opus 5.5,,"2026-09-24: Review fixes: session slots only after member check + pending-handshake caps, recv(wait=), sink/RecursionError/empty-chunk fixes; 32 transport tests; full suite 1081 passed / 10 pre-existing failures",2026-09-24 18:10
 P2-4,Not started,,,,,
 P2-5,Not started,,,,,
 P2-6,Not started,,,,,

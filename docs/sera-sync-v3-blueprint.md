@@ -1207,6 +1207,51 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - All functions take a DB-API connection. If the caller already has a transaction open they join it (the caller commits); otherwise they use `BEGIN IMMEDIATE` … `COMMIT`.
   - `office.json.device_id` is still not filled in (P2-1 note). P2-4 sends office.json to joiners, so whoever fills it in must not send the admin's own value.
 
+### P2-3 — Mutual-TLS transport + framing — Done — 2026-09-24
+- Model: Claude Opus 5.5   Commit: uncommitted
+- Tests: full suite 1075 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5). New `tests/test_sync_transport.py`, 26 tests, all on 127.0.0.1 with real P2-1 identities. Accept: `test_two_members_connect`, `test_non_member_refused_by_server`, `test_non_member_refused_by_client`, `test_revoked_member_refused_after_context_rebuild`, `test_oversized_frame_refused_by_receiver`, `test_slow_peer_times_out`. Also: context settings, client refuses a member it didn't mean to reach (`WrongPeer`), a cert **issued by a member's key** is refused on both sides, client refuses a revoked server, `MemberSet.from_db` skips revoked and tampered rows, sender-side oversize (nothing sent, session still usable), oversized chunk header, malformed frames (x4), dripping peer (per-frame deadline), session deadline, a silent TCP client doesn't block a member and frees its slot, 5th session gets `busy`, 3 MB file streamed in chunks with matching sha256, more file bytes than announced refused, no PySide6 / heavy top-level imports.
+- **OpenSSL check (§7 risk): passed.** Python 3.14.6 / OpenSSL 3.5.7 accepts the P2-1 self-signed CA-flag certs as both server and client certs with `CERT_REQUIRED` + `cadata`. No verification was loosened.
+- Files: new `sync_transport.py`, new `tests/test_sync_transport.py`.
+- Deviations from spec / additions (for the T3 review):
+  1. **The fingerprint check is load-bearing, not a formality.** Member certs are CA certs, so a leaf signed by a member's key verifies in TLS. Tested: only the fingerprint check refuses it. Keep that check in any refactor.
+  2. **Own cert** goes into `cadata` (as §5 says) but is accepted as a peer only if it is also in the active member list.
+  3. **No TLS 1.3 session tickets** on the server (`num_tickets = 0`). A resumed session skips the certificate check, so a revoked device could otherwise resume.
+  4. **`update_members` also closes sessions that are already open** with devices no longer in the set. Membership is re-checked when a session is registered, so a revoke that lands during a handshake still wins.
+  5. **`busy`**: the frame is sent only after the TLS handshake and member check, in a worker thread (never in the accept loop), so non-members learn nothing. Busy-refusers are capped at `max_sessions`; beyond that the connection is closed without a frame.
+  6. **Timeouts:** "30 s per frame" means the whole frame must arrive within 30 s (a deadline, so a peer dripping one byte every 29 s still times out), not 30 s between reads. A chunk's raw bytes get their own 30 s. `send_file` uses 1 MB chunks so this holds on slow Wi-Fi. The TLS handshake also has 30 s. Everything is capped by the 10-min session deadline.
+  7. **Frame rules:** a frame must be a JSON object with a string `"t"`. `chunk` and `busy` are reserved (`send` refuses them). A chunk's `n` is also capped at 16 MB. Oversize is refused before anything is sent.
+  8. **Port binding:** `SO_EXCLUSIVEADDRUSE` on Windows, so another process can't bind 49159 alongside Sera.
+  9. **`recv_file`** creates the file with `"xb"` (never overwrites, §0 rule 3) and removes only its own partial file on failure.
+- Notes for later WPs:
+  - Public API: `MemberSet(members=[(device_id, cert_pem)], own_cert_pem)` / `.from_records(records, own)` / `.from_db(conn, admin_pubkey, own)` (uses `sync_admin.list_members(include_revoked=False)`); `SyncTransport(sync_identity.load_cert_chain_args(app_dir), members, frame_timeout=30, session_deadline=600)` with `.connect(host, port, expected_device_id) -> Session`, `.serve(handler, host="0.0.0.0", port=49159, max_sessions=4, on_reject=None) -> SyncServer` (`.address`, `.active_sessions`, `.stop()`), `.update_members(members)`, `.contexts`. `Session`: `send(dict)`, `recv() -> dict`, `send_chunk(bytes)`, `read_chunk(sink)` (after `recv` returned a chunk header), `send_file(path) -> (size, sha256)`, `recv_file(path, size) -> sha256`, `close()`, `peer_device_id`, `peer_address`. Errors: `TransportError` ⊃ `NotAMember`, `WrongPeer`, `FrameTooLarge`, `FrameTimeout`, `SessionDeadline`, `ProtocolError`, `ConnectionClosed`, `Busy`.
+  - **TLS 1.3 detail:** when a *server* refuses a client's cert, the client's `connect()` usually succeeds and the failure shows up on the first `recv()`/`send()` as `ConnectionClosed`. Callers (P2-5 diagnostics, P3-5) should treat "closed right after connect" as a possible refusal.
+  - `handler(session)` runs in a worker thread and the session is closed when it returns. Any `TransportError` from `recv` has already closed the session.
+  - Whoever stores new member records (P2-4, P3) must call `transport.update_members(MemberSet.from_db(...))` afterwards.
+  - Not wired into `main.py`/`sync_peer.py` yet: nothing listens on 49159 until P2-5/P2-6/P3-5 start a server.
+
+### P2-3 — review fixes — 2026-09-24
+- Model: Claude Opus 5.5 (review by Claude Opus 5.5)   Commit: uncommitted
+- Fixed all findings from the review:
+  1. **Slot exhaustion by devices that never finish the TLS handshake (should-fix).** A connection used to take one of the 4 session slots when it was accepted. Now it only takes one after `_verify_peer` succeeds, so a device without a member certificate can no longer hold a slot. Connections that haven't finished the handshake are capped separately: `MAX_PENDING_HANDSHAKES = 16` in total, `MAX_PENDING_PER_ADDRESS = 4` per source IP. Connections over either cap are closed straight away. They also get a shorter timeout (`HANDSHAKE_TIMEOUT_SECONDS = 10`, new `handshake_timeout` argument). The old separate `busy` refusers are gone. A verified member that finds all 4 slots full gets `busy` from its own worker thread. `SyncServer.active_sessions` now counts only verified sessions; the new `pending_handshakes` counts connections still in the handshake. **Residual risk:** an attacker using 4 or more LAN addresses can still fill the 16 pending slots for up to 10 s at a time, but members' session slots stay free.
+  2. **Deeply nested JSON.** `recv()` now also catches `RecursionError` → `ProtocolError`, and closes the session.
+  3. **Sink write failure.** `read_chunk` closes the session if `sink.write` raises (the rest of the chunk is unread, so the stream would be out of step), then re-raises the original error. `recv_file` still removes its partial file.
+  4. **Time spent waiting for a reply.** New `recv(wait=seconds)` sets how long to wait for a frame to *start*. Once it starts, the whole frame must still arrive within the frame timeout, and everything stays capped by the session deadline. **P2-6:** the joiner should use `recv(wait=...)` for the manifest, because the export can take more than 30 s.
+  5. **Small gaps.**
+     - `connect()` raises `ValueError` if `expected_device_id` is missing or empty.
+     - `recv_file` refuses zero-length chunks (`ProtocolError`), so a member can't stall it with them.
+  6. **Heading "Done" vs tracker "In review".** I kept the heading because the §8.3 template allows only Done/Partial/Blocked there (it records the work, not the review). The tracker is the source of truth for review status.
+- Tests: 6 new or changed in `tests/test_sync_transport.py` (now 32):
+  - `test_idle_tcp_flood_does_not_take_session_slots`: 30 raw TCP connections from 127.0.0.2; all 4 member slots still work and the 5th member gets `busy`.
+  - `test_recv_wait_allows_a_slow_start_but_not_a_slow_frame`.
+  - `test_connect_requires_expected_device_id`.
+  - `test_sink_failure_closes_session`.
+  - `test_recv_file_refuses_empty_chunks`.
+  - A `deeply-nested` case added to the malformed-frame test.
+  - `test_silent_tcp_client…` now uses `handshake_timeout` and also checks `pending_handshakes`.
+
+  Full suite: 1081 passed / 10 failed / 2 skipped (same 10 pre-existing).
+- Deviations from spec: the per-address and total pending-handshake caps and the 10 s handshake timeout are additions. §5 only sets the 4-session limit.
+
 ### P2-2 — review fixes — 2026-09-24
 - Model: Claude Opus 5.5 (review by Claude Opus 5.5)   Commit: uncommitted
 - Fixed from the review:
