@@ -12,12 +12,21 @@ talks to Qt (blueprint §0 rule 7 — no PySide6 import in any sync_*.py module)
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Optional
 
 MASTER_DB = "master"
 RAW_DB = "raw"
+
+# Fixed namespace UUID for deterministic seed row gids (blueprint §5, WP P3-2)
+SERA_NS = uuid.UUID("3e5c9f56-6a4a-4a27-814d-3d4d3d789012")
+
+
+def seed_gid(table: str, natural_key: str) -> str:
+    """Deterministic gid for default/seed rows (blueprint §5, WP P3-2)."""
+    return uuid.uuid5(SERA_NS, f"seed:{table}:{natural_key}").hex
 
 # Merge modes, see blueprint §4.4.
 LWW = "lww"                # per column, highest (hlc, origin) wins
@@ -273,7 +282,9 @@ def get(name: str) -> TableSpec:
 def _live_table_names(conn: sqlite3.Connection) -> set:
     rows = conn.execute(
         "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        "WHERE type='table' AND NOT ("
+        "  name GLOB 'sqlite_*' OR name GLOB '_sync_*' OR name GLOB '_local_*'"
+        ")"
     ).fetchall()
     return {r[0] for r in rows}
 

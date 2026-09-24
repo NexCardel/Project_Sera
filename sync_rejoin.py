@@ -662,7 +662,7 @@ class _Salvage:
         for cid, sid in self.l.execute("SELECT client_id, service_id FROM client_services ORDER BY client_id, service_id"):
             self.l_client_services.setdefault(cid, []).append(sid)
 
-        client_cols = [c for c in _table_cols(self.l, "clients") if c != "id" and c in set(_table_cols(self.o, "clients"))]
+        client_cols = [c for c in _table_cols(self.l, "clients") if c not in ("id", "gid") and c in set(_table_cols(self.o, "clients"))]
         now = datetime.utcnow().isoformat()
 
         for cid, row in l_clients.items():
@@ -806,7 +806,7 @@ class _Salvage:
         seen = {tuple(r) for r in self.o.execute("SELECT ts, actor, action, detail FROM audit_log")}
         ocols = set(_table_cols(self.o, "audit_log"))
         lcols = _table_cols(self.l, "audit_log")
-        cols = [c for c in lcols if c != "id" and c in ocols]
+        cols = [c for c in lcols if c not in ("id", "gid") and c in ocols]
         for r in self.l.execute("SELECT %s FROM audit_log ORDER BY id" % ", ".join(f'"{c}"' for c in lcols)):
             row = dict(zip(lcols, r))
             t = (row.get("ts"), row.get("actor"), row.get("action"), row.get("detail"))
@@ -855,7 +855,7 @@ class _Salvage:
                 known.add(row["dataset_key"])
             known.add(_dataset_key(row, row.get("client_id")))
         lcols = _table_cols(self.lr, "tracker_dump")
-        cols = [c for c in lcols if c != "id" and c in set(ocols)]
+        cols = [c for c in lcols if c not in ("id", "gid") and c in set(ocols)]
         for r in self.lr.execute("SELECT %s FROM tracker_dump ORDER BY id" % ", ".join(f'"{c}"' for c in lcols)):
             row = dict(zip(lcols, r))
             ok, oid = self._client_ref(row.get("client_id"))

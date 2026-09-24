@@ -306,3 +306,50 @@ def load_cert_chain_args(app_dir):
     if identity is None:
         raise DeviceIdentityUnavailable("no device identity on this PC yet")
     return str(cert_path), str(key_path), identity.passphrase
+
+
+def load_device_id_cheap(app_dir) -> str | None:
+    """Read this PC's device_id cheaply without decrypting keys or importing cryptography.
+
+    Checks keys/office.json first, then extracts the subject CN from keys/device_cert.pem.
+    Returns None if no identity exists or neither file yields a device_id.
+    """
+    import base64
+    import re
+    # 1. Check office.json
+    try:
+        office = sera_keys.load_office(app_dir)
+        if office and office.device_id:
+            return office.device_id
+    except Exception:
+        pass
+
+    # 2. Check device_cert.pem directly
+    _, cert_path, _, _, _ = _paths(app_dir)
+    if not cert_path.exists():
+        return None
+
+    try:
+        raw_text = cert_path.read_text(encoding="ascii")
+        lines = [line.strip() for line in raw_text.splitlines() if line and not line.startswith("-----")]
+        der = base64.b64decode("".join(lines))
+        # Search for Common Name OID (2.5.4.3 = 06 03 55 04 03) followed by tag + len(32) + 32-hex device_id
+        m = re.search(rb"\x06\x03\x55\x04\x03[\x0c\x13\x16]\x20([0-9a-fA-F]{32})", der)
+        if m:
+            return m.group(1).decode("ascii").lower()
+    except Exception:
+        pass
+
+    # Fallback to cryptography parser if regex didn't match
+    try:
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        attrs = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        if attrs:
+            return str(attrs[0].value).lower()
+    except Exception:
+        pass
+
+    return None
+

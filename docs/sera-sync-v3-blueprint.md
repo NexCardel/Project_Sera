@@ -1428,6 +1428,24 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **P3-2 / whoever creates `client_container_notes`:** extend the salvage to import those notes (deviation 11).
   - Not exercised: two real PCs, a real click-through, Windows Firewall.
 
+### P3-2 — gid columns, back-fill, deterministic seed gids, _sync_* tables — Done — 2026-09-24
+- Model: Gemini 3.8 Flash (review by Claude Opus 5.5)   Commit: uncommitted
+- Tests: 14 tests in tests/test_sync_tables.py (all passed): test_no_pyside6_import, test_sera_ns_and_seed_gid_deterministic, test_seeded_rows_have_identical_gids_on_two_fresh_dbs, test_migration_runs_twice_without_error, test_every_replicated_row_has_a_unique_gid, test_unique_gid_index_enforces_uniqueness, test_trigger_generates_random_gid_when_omitted, test_trigger_preserves_explicit_gid, test_sync_tables_created_in_both_databases, test_stream_id_and_device_id_in_sync_meta, test_non_gid_replicated_tables_do_not_have_gid, test_backfill_duplicate_labels_and_names_does_not_crash, test_load_device_id_cheap, test_fresh_db_seeded_from_ini_with_duplicate_label_succeeds. Full targeted suites (test_sync_tables, test_sync_schema, test_sync_rejoin, test_sync_identity): 106 passed.
+- Deviations from spec:
+  - **Lowest-id deterministic backfill (review B1 fix):** If an existing database has duplicate labels in `mcl_columns` or duplicate names in `services`/`staff_users`, assigning `seed_gid` to all matching rows violated the `ux_<t>_gid` unique index and aborted start-up. `ensure_gid_columns` now assigns `seed_gid` strictly to the lowest-id matching row (and only if `seed_gid` is not already used in the table); all subsequent duplicate rows remain unassigned and receive fresh random gids during the random back-fill step. The unique index `ux_<t>_gid` is created after backfilling.
+  - **Extra seed paths:** Seed gids are also wired into `database.py`'s `_seed_from_ini`, `load_ini_defaults`, and `assign_or_get_alias`, with checks against already-taken gids so duplicate entries in custom `settings.ini` files do not crash database creation.
+  - **Salvage gid exclusion:** In `sync_rejoin.py`, `gid` is excluded from the copied column list for `clients`, `audit_log`, and `tracker_dump` so destination triggers `_gid_ai_<t>` assign fresh local gids on salvage insert without colliding on pre-existing gids.
+  - **Cheap device ID loading:** `sync_identity.load_device_id_cheap(app_dir)` added to extract `device_id` from `office.json` or directly from `keys/device_cert.pem` (via DER/ASN.1 regex without DPAPI decryption or heavy cryptography), ensuring startup in `database.py` remains fast and side-effect free.
+  - **Table name filter:** `_live_table_names` in `sync_schema.py` uses `GLOB` instead of `LIKE` so `_` is not treated as a single-character wildcard.
+- Notes for later WPs:
+  - New module `sync_tables.py` (no PySide6 import) exports: `ensure_gid_columns(conn, db_name)`, `ensure_sync_tables(conn, db_name, device_id=None)`, `ensure_sync_infrastructure(conn, db_name, device_id=None)`, `stream_id_for(device_id, db_name)`, `set_sync_device_id(conn, db_name, device_id)`, `SYNC_TABLE_NAMES`, `STAFF_SEED_NAMES`, `DEFAULT_MCL_LABELS`, `DEFAULT_SERVICE_NAMES`.
+  - Replicated tables with row_key `gid` (`clients`, `mcl_columns`, `services`, `audit_log`, `staff_users` in `master.db`, and `tracker_dump` in `rawPayload.db`) have `gid TEXT` column, unique index `ux_<tbl>_gid`, and trigger `_gid_ai_<tbl>` to assign `lower(hex(randomblob(16)))` when `NEW.gid IS NULL`.
+  - Both `master.db` and `rawPayload.db` have all 11 `_sync_*` tables created during schema initialization.
+  - `client_container_notes` table creation remains deferred (flagged `pending_creation=True` in P3-1 registry; not created in P3-2).
+  - Design note for owner / P3-4: `clients` currently replicates by `gid`. Merging clients by PAN is open for decision (PAN is not a column on `clients`, but stored in `client_values`).
+  - Device ID wiring: `set_sync_device_id` is exposed on `database.py` and initializes `_sync_meta` when identity is present; live wiring on pairing completion is ready for P3-3.
+  - For P3-3: Capture triggers can now target `_sync_pending`, and sealer can read/write `_sync_changes`, `_sync_clock`, `_sync_tombstones`, and `_sync_meta`.
+
 ### P2-7 — UI: Join wizard, Add workstation, Members, Remove, Hand over admin — Done — 2026-09-25
 - Model: Claude Sonnet 5 (review by Claude Opus 5.5)   Commit: d8af4c1
 - Tests: new `tests/test_sync_office.py` (12) and `tests/test_sync_office_ui.py` (8, including two that emit signals from a real background thread and pump the Qt event loop to prove cross-thread delivery, not just call the slot directly), plus 5 new `hand_over_admin` tests in `tests/test_sync_admin.py`. Full suite: 1279 passed / 16 failed / 3 skipped (the 10 documented pre-existing failures + the 6 P3-0 convergence tests expected to fail until P3-3..P3-5 land); nothing else.

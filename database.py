@@ -79,6 +79,12 @@ class SeraDatabase:
         self.raw_db_was_reset = None
         self._master_db_failed = False
         try:
+            import sync_identity
+            db_dir = os.path.dirname(os.path.abspath(db_path))
+            self._device_id = sync_identity.load_device_id_cheap(db_dir)
+        except Exception:
+            self._device_id = None
+        try:
             self._init_schema()
         except Exception:
             self._master_db_failed = True
@@ -373,6 +379,17 @@ class SeraDatabase:
         propagate to other machines (see log_action, which fires this for
         every mutating action already going through the audit trail)."""
         self._sync_revision_hook = fn
+
+    def get_sync_device_id(self) -> Optional[str]:
+        return self._device_id
+
+    def set_sync_device_id(self, device_id: str):
+        self._device_id = device_id
+        import sync_tables
+        with self._connect() as conn:
+            sync_tables.set_sync_device_id(conn, "master", device_id)
+        with self._connect_raw() as conn:
+            sync_tables.set_sync_device_id(conn, "raw", device_id)
 
     def _bump_sync_revision_if_configured(self):
         if hasattr(self, "_sync_metrics_cache"):
@@ -739,6 +756,9 @@ class SeraDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_created ON tracker_dump(created_at DESC);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_start ON sdc_session_timelines(start_time DESC);")
 
+            import sync_tables
+            sync_tables.ensure_sync_infrastructure(conn, "raw", device_id=self._device_id)
+
     def _migrate_tracker_dump_to_raw_payload_db(self):
         """One-time migration: moves any historical tracker_dump rows from master.db to rawPayload.db, then drops tracker_dump in master.db."""
         try:
@@ -890,16 +910,21 @@ class SeraDatabase:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS staff_users (
                     id   INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE
+                    name TEXT NOT NULL UNIQUE,
+                    gid  TEXT
                 );
             """)
             self._ensure_column(conn, "staff_users", "alias", "TEXT")
+            self._ensure_column(conn, "staff_users", "gid", "TEXT")
 
             # Seed default 6 canonical staff slots if fresh
             cur = conn.execute("SELECT COUNT(*) FROM staff_users")
             if cur.fetchone()[0] == 0:
+                import sync_schema
                 for i in range(1, 7):
-                    conn.execute("INSERT INTO staff_users (name, alias) VALUES (?, ?)", (f"User {i}", None))
+                    sname = f"User {i}"
+                    sgid = sync_schema.seed_gid("staff_users", sname)
+                    conn.execute("INSERT INTO staff_users (name, alias, gid) VALUES (?, ?, ?)", (sname, None, sgid))
 
 
             # DRS removal migration. FST now uses tracker_dump/raw-payload
@@ -963,6 +988,9 @@ class SeraDatabase:
                        OR (LOWER(label) LIKE '%pan%' AND LOWER(label) NOT LIKE '%pass%')
                 """)
 
+            import sync_tables
+            sync_tables.ensure_sync_infrastructure(conn, "master", device_id=self._device_id)
+
         self.load_ini_defaults()
         # re_resolve_all_tracker_dumps() used to run here, on every open: ~3 s of the app's
         # start-up spent before the window appeared (measured 2026-09-22). It is part of
@@ -995,6 +1023,11 @@ class SeraDatabase:
             if "MCL_Columns" not in config:
                 return False
 
+            import sync_schema
+            import sync_tables
+            self._ensure_column(conn, "mcl_columns", "gid", "TEXT")
+            self._ensure_column(conn, "services", "gid", "TEXT")
+
             col_ids_map = {}
             for _, line in config["MCL_Columns"].items():
                 parts = [p.strip() for p in line.split("|")]
@@ -1011,9 +1044,12 @@ class SeraDatabase:
                             kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
                         else:
                             kwargs[k] = v
+                sgid = sync_schema.seed_gid("mcl_columns", lbl)
+                if conn.execute("SELECT 1 FROM mcl_columns WHERE gid = ?", (sgid,)).fetchone():
+                    sgid = None
                 cur = conn.execute(
-                    """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search, gid)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         lbl,
                         kwargs.get("field_type", "text"),
@@ -1023,6 +1059,7 @@ class SeraDatabase:
                         kwargs.get("show_in_search", 1),
                         kwargs.get("allow_quick_copy", 1),
                         kwargs.get("admin_show_in_search", 1),
+                        sgid,
                     )
                 )
                 col_ids_map[lbl] = cur.lastrowid
@@ -1044,9 +1081,12 @@ class SeraDatabase:
                     u_id = col_ids_map.get(u_col) if u_col else None
                     p_id = col_ids_map.get(p_col) if p_col else None
                     s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                    sgid = sync_schema.seed_gid("services", name)
+                    if conn.execute("SELECT 1 FROM services WHERE gid = ?", (sgid,)).fetchone():
+                        sgid = None
                     conn.execute(
-                        """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order, gid)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             name,
                             kwargs.get("login_link", ""),
@@ -1057,6 +1097,7 @@ class SeraDatabase:
                             kwargs.get("mode", "extension"),
                             kwargs.get("flow", "double"),
                             s_order,
+                            sgid,
                         )
                     )
             return True
@@ -1065,6 +1106,9 @@ class SeraDatabase:
 
     def _seed_default_data(self, conn):
         """Seeds default MCL columns and Services for fresh database installations."""
+        import sync_schema
+        self._ensure_column(conn, "mcl_columns", "gid", "TEXT")
+        self._ensure_column(conn, "services", "gid", "TEXT")
         default_cols = [
             ("No.", "text", 0, 1),
             ("NAME OF COMPANY", "text", 1, 2),
@@ -1081,9 +1125,9 @@ class SeraDatabase:
         col_ids = {}
         for label, ftype, is_id, s_order in default_cols:
             cur = conn.execute(
-                """INSERT INTO mcl_columns (label, field_type, is_identity, sort_order, show_in_search, allow_quick_copy)
-                   VALUES (?, ?, ?, ?, 1, 1)""",
-                (label, ftype, is_id, s_order)
+                """INSERT INTO mcl_columns (label, field_type, is_identity, sort_order, show_in_search, allow_quick_copy, gid)
+                   VALUES (?, ?, ?, ?, 1, 1, ?)""",
+                (label, ftype, is_id, s_order, sync_schema.seed_gid("mcl_columns", label))
             )
             col_ids[label] = cur.lastrowid
 
@@ -1094,9 +1138,9 @@ class SeraDatabase:
         ]
         for name, link, u_id, p_id, u_sel, p_sel, s_order in def_svcs:
             conn.execute(
-                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (name, link, u_id, p_id, u_sel, p_sel, s_order)
+                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, sort_order, gid)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (name, link, u_id, p_id, u_sel, p_sel, s_order, sync_schema.seed_gid("services", name))
             )
 
 
@@ -1263,9 +1307,12 @@ class SeraDatabase:
                                         kwargs[k] = int(v) if v.isdigit() else (1 if v.lower() == "true" else 0)
                                     else:
                                         kwargs[k] = v
+                            sgid = sync_schema.seed_gid("mcl_columns", lbl)
+                            if conn.execute("SELECT 1 FROM mcl_columns WHERE gid = ?", (sgid,)).fetchone():
+                                sgid = None
                             conn.execute(
-                                """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                """INSERT INTO mcl_columns (label, field_type, is_identity, is_internal_pk, sort_order, show_in_search, allow_quick_copy, admin_show_in_search, gid)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     lbl,
                                     kwargs.get("field_type", "text"),
@@ -1275,6 +1322,7 @@ class SeraDatabase:
                                     kwargs.get("show_in_search", 1),
                                     kwargs.get("allow_quick_copy", 1),
                                     kwargs.get("admin_show_in_search", 1),
+                                    sgid,
                                 )
                             )
 
@@ -1302,9 +1350,12 @@ class SeraDatabase:
                             u_id = lbl_to_id.get(u_col) if u_col else None
                             p_id = lbl_to_id.get(p_col) if p_col else None
                             s_order = int(kwargs.get("sort_order", "1")) if kwargs.get("sort_order", "").isdigit() else 1
+                            sgid = sync_schema.seed_gid("services", name)
+                            if conn.execute("SELECT 1 FROM services WHERE gid = ?", (sgid,)).fetchone():
+                                sgid = None
                             conn.execute(
-                                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                """INSERT OR IGNORE INTO services (name, login_page_link, userid_column_id, password_column_id, username_selector, password_selector, automation_mode, extension_flow, sort_order, gid)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                 (
                                     name,
                                     kwargs.get("login_link", ""),
@@ -1315,6 +1366,7 @@ class SeraDatabase:
                                     kwargs.get("mode", "extension"),
                                     kwargs.get("flow", "double"),
                                     s_order,
+                                    sgid,
                                 )
                             )
 
@@ -1400,7 +1452,9 @@ class SeraDatabase:
             cur = conn.execute("SELECT COUNT(*) FROM staff_users")
             if cur.fetchone()[0] == 0:
                 for i in range(1, 7):
-                    conn.execute("INSERT INTO staff_users (name, alias) VALUES (?, ?)", (f"User {i}", None))
+                    sname = f"User {i}"
+                    sgid = sync_schema.seed_gid("staff_users", sname)
+                    conn.execute("INSERT INTO staff_users (name, alias, gid) VALUES (?, ?, ?)", (sname, None, sgid))
 
             rows = conn.execute("SELECT id, name, alias FROM staff_users ORDER BY id").fetchall()
             

@@ -164,8 +164,8 @@ def test_harness_raw_db_digest_and_helpers(tmp_path):
         def write_tracker(node):
             with node.open_raw_db() as rconn:
                 rconn.execute(
-                    "INSERT INTO tracker_dump (portal, arn_number, created_at, status) "
-                    "VALUES ('IncomeTax', 'ARN98765432', '2026-09-24T12:00:00Z', 'submitted')"
+                    "INSERT INTO tracker_dump (portal, arn_number, created_at, status, gid) "
+                    "VALUES ('IncomeTax', 'ARN98765432', '2026-09-24T12:00:00Z', 'submitted', '11112222333344445555666677778888')"
                 )
 
         n0.write(write_tracker)
