@@ -201,7 +201,8 @@ class SeraApp:
         self.salt_path = str(APP_DIR / security.SALT_FILE)
         self.identity_path = APP_DIR / "device_identity.txt"
         self.app_dir = APP_DIR
-        
+
+        self._run_pending_office_key_migration()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         from ui.dialogs.loading_dialog import StartupLoadingDialog
@@ -1124,6 +1125,103 @@ class SeraApp:
             print(f"[main._handle_sudr_capture] {portal} :: {event_type} ({status}) capture_id={msg.get('capture_id')}")
         except Exception as e:
             print(f"[main._handle_sudr_capture Error] {e}")
+
+    def _run_pending_office_key_migration(self) -> None:
+        """P1-4: finish an interrupted office-key conversion, then run a requested one.
+
+        Runs before any database is opened. On success, _resolve_encryption_key finds
+        keys/office.json and continues in office mode; on failure the PC stays legacy.
+        """
+        import sync_migrate
+        app_dir = Path(self.app_dir)
+        title = "Aman Associates — Convert to Office Key"
+
+        try:
+            outcome = sync_migrate.resume_interrupted_migration(app_dir)
+        except sync_migrate.MigrationError as e:
+            self._show_office_key_migration_message(
+                "critical", title,
+                f"An earlier office-key conversion was interrupted and can't be finished automatically:\n\n{e}\n\n"
+                "Sera will close so nothing is damaged. Contact the office administrator."
+            )
+            sys.exit(1)
+        if outcome == "completed":
+            self._show_office_key_migration_message(
+                "info", title, "An interrupted office-key conversion has been completed.")
+        elif outcome == "rolled_back":
+            self._show_office_key_migration_message(
+                "warning", title,
+                "An interrupted office-key conversion was undone. This PC still uses its old password key.")
+
+        if sync_migrate.read_migrate_request(app_dir) is None:
+            return
+        # Consume the request first, so a failure or crash can never loop on every start.
+        sync_migrate.clear_migrate_request(app_dir)
+        import sera_keys
+        if (sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE).exists():
+            self._show_office_key_migration_message("info", title, "This PC already uses an office key.")
+            return
+
+        details = self._ask_office_key_migration_details(app_dir)
+        if not details:
+            return
+
+        from PySide6.QtWidgets import QApplication
+        busy = QApplication.instance() is not None
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = sync_migrate.migrate_to_office_key(
+                app_dir, details["legacy_password"], details["office_name"],
+                new_password=details.get("new_password"),
+            )
+        except sync_migrate.RowCountMismatch as e:
+            self._show_office_key_migration_message(
+                "critical", title,
+                "The conversion was stopped: the converted database did not contain the same rows "
+                f"as the original.\n\n{e}\n\nNothing was changed. This PC keeps its old password key. "
+                "Please report this to the owner before trying again."
+            )
+            return
+        except sync_migrate.MigrationRollbackFailed as e:
+            self._show_office_key_migration_message(
+                "critical", title, f"The conversion failed and could not be undone automatically:\n\n{e}")
+            sys.exit(1)
+        except Exception as e:
+            self._show_office_key_migration_message(
+                "warning", title,
+                f"The conversion failed and nothing was changed:\n\n{e}\n\n"
+                "Sera will continue with the old password key."
+            )
+            return
+        finally:
+            if busy:
+                QApplication.restoreOverrideCursor()
+
+        self._show_office_key_migration_message(
+            "info", title,
+            f"This PC now uses the office key for \"{details['office_name']}\".\n\n"
+            f"The old files were kept in:\n{result.backup_dir}\n\n"
+            "Keep the office master password safe: it is needed to unlock Sera on this PC "
+            "if Windows can't, and to add other PCs to the office."
+        )
+
+    def _ask_office_key_migration_details(self, app_dir) -> dict | None:
+        import sync_migrate
+        from ui.dialogs.office_key_migration_dialog import OfficeKeyMigrationDialog
+        dlg = OfficeKeyMigrationDialog(lambda pwd: sync_migrate.check_legacy_password(app_dir, pwd))
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return dlg.details
+
+    def _show_office_key_migration_message(self, level: str, title: str, text: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+        if level == "critical":
+            QMessageBox.critical(None, title, text)
+        elif level == "warning":
+            QMessageBox.warning(None, title, text)
+        else:
+            QMessageBox.information(None, title, text)
 
     def _resolve_encryption_key(self) -> tuple[str, str | None, str]:
         """
