@@ -272,6 +272,83 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         self.db.delete_srpf_container(pan)
         self.assertEqual(len(self.db.get_srpf_containers()), 0)
 
+    def test_re_resolve_preserves_container_notes_and_screenshot(self):
+        """re_resolve_all_tracker_dumps() does a full DELETE + rebuild of
+        client_raw_containers from tracker_dump. notes/screenshot_path are
+        user-entered, not derived from tracker_dump, so they must survive
+        that rebuild instead of being silently wiped."""
+        pan = "AEYPH5467G"
+        self.db.insert_tracker_dump(
+            client_id=None,
+            portal="Income Tax Portal",
+            arn_number="1234567890",
+            period_label="AY 2026-27",
+            capture_method="Extension_Capture",
+            raw_payload_json=json.dumps({"entityNum": pan, "legalName": "Azad Hossain"})
+        )
+        container = self.db.get_client_raw_container(identity_key=pan)
+        identity_key = container["identity_key"]
+
+        saved = self.db.save_srpf_container_media(identity_key, "Called client, awaiting docs", "C:/shots/x.png")
+        self.assertTrue(saved)
+        self.assertEqual(self.db.get_srpf_container_media(identity_key), {
+            "notes": "Called client, awaiting docs", "screenshot_path": "C:/shots/x.png",
+        })
+
+        self.db.re_resolve_all_tracker_dumps()
+
+        self.assertEqual(self.db.get_srpf_container_media(identity_key), {
+            "notes": "Called client, awaiting docs", "screenshot_path": "C:/shots/x.png",
+        })
+        # The rebuilt container itself is still intact, not just the media fields.
+        rebuilt = self.db.get_client_raw_container(identity_key=identity_key)
+        self.assertIsNotNone(rebuilt)
+        self.assertEqual(rebuilt["pan"], pan)
+
+    def test_re_resolve_logs_when_a_note_cannot_be_carried_over(self):
+        """Known limitation (documented in sync_schema.py's client_raw_containers
+        TableSpec, not fixed by this WP): if a container's identity_key changes
+        between two rebuilds (e.g. an unassigned capture gets matched to a client
+        after the client is registered), the notes-preservation fix has no way to
+        know which new row inherited the old one, so the note is dropped. This
+        must be logged, not silent."""
+        pan = "AEYPH5467G"
+        self.db.insert_tracker_dump(
+            client_id=None,
+            portal="Income Tax Portal",
+            arn_number="9988776655",
+            period_label="AY 2026-27",
+            capture_method="Extension_Capture",
+            raw_payload_json=json.dumps({"entityNum": pan, "legalName": "Azad Hossain"})
+        )
+        container = self.db.get_client_raw_container(identity_key=pan)
+        old_identity_key = container["identity_key"]
+        self.assertTrue(self.db.save_srpf_container_media(old_identity_key, "note before match", ""))
+
+        # Registering a client with this PAN changes resolution: on the next
+        # rebuild the container's key moves from the raw PAN to "CLI-00001".
+        mcl_cols = self.db.get_mcl_columns()
+        pan_col = next(c for c in mcl_cols if "PAN" in c["label"].upper())
+        c_vals = {c["id"]: "TestVal" for c in mcl_cols if c.get("is_internal_pk")}
+        c_vals[pan_col["id"]] = pan
+        self.db.add_client(c_vals, notes="Azad Hossain", service_ids=[])
+
+        import io
+        import sys
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            self.db.re_resolve_all_tracker_dumps()
+        finally:
+            sys.stdout = old_stdout
+
+        self.assertIn(old_identity_key, captured.getvalue())
+        self.assertIn("could not be carried over", captured.getvalue())
+        # The note is gone (this is the documented limitation, not the fix under test).
+        self.assertEqual(self.db.get_srpf_container_media(old_identity_key),
+                          {"notes": "", "screenshot_path": ""})
+
     def test_proximity_resolution_prevents_false_client_attribution(self):
         """
         Verifies that when a wizard submission has empty PAN in its root payload,

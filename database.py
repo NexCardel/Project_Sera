@@ -4441,6 +4441,16 @@ class SeraDatabase:
 
         # 3. Update tracker_dump and rebuild client_raw_containers cleanly
         with self._connect_raw() as r_conn:
+            # notes/screenshot_path are user-entered, not derived from tracker_dump,
+            # so the DELETE below must not lose them (they're re-applied by identity_key
+            # once the rebuild is done).
+            preserved_notes = {
+                row[0]: (row[1], row[2])
+                for row in r_conn.execute(
+                    "SELECT identity_key, notes, screenshot_path FROM client_raw_containers "
+                    "WHERE notes IS NOT NULL OR screenshot_path IS NOT NULL"
+                ).fetchall()
+            }
             r_conn.execute("DELETE FROM client_raw_containers")
             for d in resolved_dumps:
                 cands = d["effective_candidates"]
@@ -4482,6 +4492,21 @@ class SeraDatabase:
                         "created_at": d["created_at"]
                     }
                 )
+
+            for identity_key, (notes, screenshot_path) in preserved_notes.items():
+                cur = r_conn.execute(
+                    "UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?",
+                    (notes, screenshot_path, identity_key)
+                )
+                if cur.rowcount == 0:
+                    # The identity_key this note was filed under no longer exists after
+                    # the rebuild (e.g. the underlying dumps re-resolved to a client, so
+                    # the container moved from an unassigned key to "CLI-00005"). There's
+                    # no reliable way to know which new row inherited it, so it's dropped;
+                    # this is logged rather than silent so support can trace a lost note.
+                    print(f"[database] re_resolve_all_tracker_dumps: notes/screenshot for "
+                          f"identity_key={identity_key!r} could not be carried over (no "
+                          f"container has that key after the rebuild); the note was lost.")
 
         self.sync_fst_reports()
         return updated_count
