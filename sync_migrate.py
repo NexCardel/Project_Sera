@@ -10,7 +10,8 @@ All or nothing (blueprint §5 P1-4):
      into ``backups/pre-office-key-<ts>/``
   3. ``sqlcipher_export`` each DB into ``incoming/migrate/<name>`` keyed with a new DEK
   4. verify each new file (opens, cipher_integrity_check, quick_check, per-table counts)
-  5. ``store_dek`` + ``save_office`` (office.json is written last: it is the office-mode switch)
+  5. ``store_dek`` + office admin key (P2-2) + ``save_office`` (office.json is written last:
+     it is the office-mode switch)
   6. ``os.replace`` the new DBs over the old ones; move sera.key / sera.salt into the backup
 
 A marker file (``incoming/migrate_state.json``) is written before step 5 so a crash
@@ -44,7 +45,8 @@ BACKUP_PREFIX = "pre-office-key-"
 PREEXISTING_KEYS_DIR = "keys-preexisting"
 REPLACED_SIDECARS_DIR = "replaced-sidecars"
 SIDECARS = ("-wal", "-shm", "-journal")
-KEY_FILES = (sera_keys.OFFICE_FILE, sera_keys.DEK_DPAPI_FILE, sera_keys.DEK_RECOVERY_FILE)
+KEY_FILES = (sera_keys.OFFICE_FILE, sera_keys.DEK_DPAPI_FILE, sera_keys.DEK_RECOVERY_FILE,
+             sera_keys.ADMIN_KEY_DPAPI_FILE, sera_keys.ADMIN_KEY_RECOVERY_FILE)
 DEFAULT_PASSWORD = "admin123"
 MIN_PASSWORD_LEN = 8
 MAX_OFFICE_NAME_LEN = 100
@@ -582,7 +584,12 @@ def migrate_to_office_key(app_dir, legacy_password: str, office_name: str,
         sera_keys.store_dek(app, dek, recovery_password, office_id)
         if sera_keys.load_dek(app) != dek:
             raise MigrationError("the stored office key could not be read back")
-        sera_keys.save_office(app, sera_keys.OfficeInfo(office_id=office_id, office_name=office_name, key_id=kid))
+        # P2-2: this PC created the office, so it gets the office admin key.
+        import sync_admin
+        admin_pubkey = sync_admin.write_admin_key_files(app, sync_admin.generate_admin_key(),
+                                                        recovery_password, office_id)
+        sera_keys.save_office(app, sera_keys.OfficeInfo(office_id=office_id, office_name=office_name, key_id=kid,
+                                                        admin_pubkey=admin_pubkey))
     except BaseException:
         _rollback_prepare(app, backup_dir, moved_aside)
         raise
