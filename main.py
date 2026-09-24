@@ -203,6 +203,7 @@ class SeraApp:
         self.app_dir = APP_DIR
 
         self._run_pending_office_key_migration()
+        self._run_pending_rejoin()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -1236,6 +1237,25 @@ class SeraApp:
         )
 
         self._offer_export_recovery_kit(app_dir, details)
+
+    def _run_pending_rejoin(self) -> None:
+        """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
+
+        Runs before any database is opened. Cheap when there is nothing to do.
+        """
+        import sync_rejoin
+        app_dir = Path(self.app_dir)
+        requested = sync_rejoin.read_rejoin_request(app_dir) is not None
+        if not requested and not sync_rejoin.state_path(app_dir).exists():
+            return
+        # Consume the request first, so a failure or crash can never loop on every start.
+        sync_rejoin.clear_rejoin_request(app_dir)
+        from ui.dialogs.rejoin_office_dialog import run_pending_rejoin
+        result = run_pending_rejoin(app_dir, requested=requested)
+        if result == "exit":
+            sys.exit(1)
+        if result == "quit":
+            sys.exit(0)
 
     def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
         """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""

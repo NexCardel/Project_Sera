@@ -285,21 +285,33 @@ def _verify_downloaded_db(db_path: Path, dek_hex: str) -> None:
 
 
 def _backup_db_and_sidecars(db_path: Path, ts: str) -> None:
-    """Rename existing db and any -wal/-shm/-journal sidecars to *.bak-<ts> (§0 rule 3)."""
-    if db_path.exists():
-        backup_target = db_path.with_name(f"{db_path.name}.bak-{ts}")
-        if backup_target.exists():
-            backup_target = db_path.with_name(f"{db_path.name}.bak-{ts}_{time.time_ns() % 1000000}")
-        os.replace(db_path, backup_target)
-        _log.info("Backed up existing database %s to %s", db_path.name, backup_target.name)
-    for ext in ("-wal", "-shm", "-journal"):
-        sc = Path(f"{db_path}{ext}")
-        if sc.exists():
-            sc_bak = db_path.with_name(f"{db_path.name}{ext}.bak-{ts}")
-            try:
-                os.replace(sc, sc_bak)
-            except OSError:
-                pass
+    """Rename existing db and any -wal/-shm/-journal sidecars to *.bak-<ts> (§0 rule 3).
+
+    Sidecars go first. If one can't be moved, the ones already moved go back and SnapshotError
+    is raised before the DB is touched: an old WAL next to the new DB would corrupt it (P2-8).
+    """
+    moved = []
+    targets = [Path(f"{db_path}{ext}") for ext in ("-wal", "-shm", "-journal")] + [db_path]
+    for src in targets:
+        if not src.exists():
+            continue
+        bak = src.with_name(f"{src.name}.bak-{ts}")
+        if bak.exists():
+            bak = src.with_name(f"{src.name}.bak-{ts}_{time.time_ns() % 1000000}")
+        try:
+            os.replace(src, bak)
+        except OSError as exc:
+            # Put back what was already moved, so a DB is never left without its WAL (or vice versa).
+            for done_src, done_bak in reversed(moved):
+                try:
+                    os.replace(done_bak, done_src)
+                except OSError:
+                    _log.error("Could not move %s back to %s", done_bak.name, done_src.name)
+            raise SnapshotError(f"{src.name} is in use and can't be set aside, so the snapshot was not "
+                                f"installed: {exc}") from None
+        moved.append((src, bak))
+    if moved and moved[-1][0] == db_path:
+        _log.info("Backed up existing database %s to %s", db_path.name, moved[-1][1].name)
 
 
 def _install_downloaded_files(app_dir: Path, files: list[tuple[Path, str]]) -> list[str]:

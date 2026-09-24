@@ -241,6 +241,17 @@ class SeraSyncDialog(QDialog):
         )
         btn_row.addWidget(self.btn_office_key)
 
+        self.btn_rejoin = QPushButton("  Rejoin office")
+        rejoin_icon = _safe_icon("mdi.database-import", color="#FFFFFF")
+        if rejoin_icon:
+            self.btn_rejoin.setIcon(rejoin_icon)
+        self.btn_rejoin.clicked.connect(self._on_rejoin_office)
+        # P2-8: every legacy-mode PC except the admin PC rejoins instead of converting.
+        self.btn_rejoin.setVisible(
+            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is None
+        )
+        btn_row.addWidget(self.btn_rejoin)
+
         self.btn_export_kit = QPushButton("  Export recovery kit")
         kit_icon = _safe_icon("mdi.file-key-outline", color="#FFFFFF")
         if kit_icon:
@@ -317,6 +328,34 @@ class SeraSyncDialog(QDialog):
             sync_migrate.write_migrate_request(Path(self.sync_service.db_path).parent, requested_by=self.actor)
         except OSError as e:
             QMessageBox.warning(self, "Convert to Office Key", f"Could not schedule the conversion: {e}")
+            return
+        try:
+            self.sync_service.stop()
+        except Exception:
+            pass
+        import version
+        version.restart_app()
+
+    def _on_rejoin_office(self):
+        if not self.sync_service:
+            return
+        reply = QMessageBox.question(
+            self, "Rejoin Office",
+            "Rejoin the office on this PC?\n\n"
+            "Sera will restart, pair with the admin PC (ask there for a code under \"Add workstation\") "
+            "and download the office database. This PC's current files are kept in a \"legacy\" folder, "
+            "and Sera then offers to import what only this PC has.\n\n"
+            "Don't do this on the admin PC.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        from pathlib import Path
+        import sync_rejoin
+        try:
+            sync_rejoin.write_rejoin_request(Path(self.sync_service.db_path).parent, requested_by=self.actor)
+        except OSError as e:
+            QMessageBox.warning(self, "Rejoin Office", f"Could not schedule the rejoin: {e}")
             return
         try:
             self.sync_service.stop()
