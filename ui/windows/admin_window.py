@@ -1548,9 +1548,14 @@ class AdminWindow(QWidget):
             QMessageBox.warning(self, "Sera Sync", "Sync service is not running. Please restart the app.")
             return
         from ui.dialogs.sera_sync_dialog import SeraSyncDialog
-        dlg = SeraSyncDialog(self._sync_service, db=self.db, actor=self.actor, parent=self)
+        dlg = SeraSyncDialog(self._sync_service, db=self.db, actor=self.actor, parent=self,
+                             discovery_service=getattr(self, "_discovery_service", None))
         dlg.exec()
 
     def set_sync_service(self, sync_service):
         """Inject the SyncPeerService instance for Sera Sync dialog access."""
         self._sync_service = sync_service
+
+    def set_discovery_service(self, discovery_service):
+        """Inject the Sera Sync v3 DiscoveryService (P2-5/P2-7), office mode only; may be None."""
+        self._discovery_service = discovery_service

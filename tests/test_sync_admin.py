@@ -721,6 +721,66 @@ def test_claim_admin_on_current_admin_restores_lost_dpapi_key(admin_office):
     assert sync_admin.public_key_b64(sync_admin.load_admin_key(app)) == pub
 
 
+# ------------------------------------------------------------------ hand_over_admin (P2-7)
+
+@windows_only
+def test_hand_over_admin_signs_new_office_admin_and_swaps_roles(admin_office):
+    app, conn, a_dev, pub = (admin_office[k] for k in ("app", "conn", "device_id", "pubkey"))
+    b_cert, b_dev = _new_cert_pem()
+    sync_admin.add_member(app, conn, a_dev, b_cert, "PC B")
+
+    new_oa = sync_admin.hand_over_admin(app, conn, a_dev, b_dev)
+
+    assert new_oa["device_id"] == b_dev
+    assert sync_admin.get_office_admin(conn, admin_pubkey=pub) == new_oa
+    assert sync_admin.get_member(conn, b_dev, pub)["role"] == "admin"
+    assert sync_admin.get_member(conn, a_dev, pub)["role"] == "member"
+    # The old admin PC still holds the private key file until it reconciles (P2-7 calls this
+    # right after hand-over, same as claim_admin's hand-over path).
+    assert (sera_keys.keys_dir(app) / sera_keys.ADMIN_KEY_DPAPI_FILE).exists()
+    assert sync_admin.reconcile_admin_key(app, conn, a_dev) is True
+    assert not (sera_keys.keys_dir(app) / sera_keys.ADMIN_KEY_DPAPI_FILE).exists()
+
+    # And it can no longer sign.
+    cert, _ = _new_cert_pem()
+    with pytest.raises(NotAdmin):
+        sync_admin.add_member(app, conn, a_dev, cert, "PC X")
+
+
+@windows_only
+def test_hand_over_admin_to_self_refused(admin_office):
+    app, conn, a_dev = admin_office["app"], admin_office["conn"], admin_office["device_id"]
+    with pytest.raises(MembershipError):
+        sync_admin.hand_over_admin(app, conn, a_dev, a_dev)
+
+
+@windows_only
+def test_hand_over_admin_to_non_member_refused(admin_office):
+    app, conn, a_dev, pub = (admin_office[k] for k in ("app", "conn", "device_id", "pubkey"))
+    before = sync_admin.get_office_admin(conn, pub)
+    with pytest.raises(MembershipError):
+        sync_admin.hand_over_admin(app, conn, a_dev, "e" * 32)
+    assert sync_admin.get_office_admin(conn, pub) == before
+
+
+@windows_only
+def test_hand_over_admin_to_revoked_member_refused(admin_office):
+    app, conn, a_dev, pub = (admin_office[k] for k in ("app", "conn", "device_id", "pubkey"))
+    b_cert, b_dev = _new_cert_pem()
+    sync_admin.add_member(app, conn, a_dev, b_cert, "PC B")
+    sync_admin.revoke_member(app, conn, a_dev, b_dev)
+    with pytest.raises(MembershipError):
+        sync_admin.hand_over_admin(app, conn, a_dev, b_dev)
+
+
+@windows_only
+def test_hand_over_admin_by_non_admin_pc_refused(admin_office):
+    app, conn = admin_office["app"], admin_office["conn"]
+    b_cert, b_dev = _new_cert_pem()
+    with pytest.raises(NotAdmin):
+        sync_admin.hand_over_admin(app, conn, "f" * 32, b_dev)
+
+
 # ------------------------------------------------------------------ P1-4 migration creates the admin key
 
 @windows_only

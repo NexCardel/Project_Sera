@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QWidget,
     QSizePolicy,
+    QLineEdit,
 )
 from PySide6.QtGui import QColor, QFont
 
@@ -46,12 +47,20 @@ class SeraSyncDialog(QDialog):
     """
     sync_pushed = Signal(str)  # emitted with peer hostname after successful push
     activity_signal = Signal(str, str, str)  # (timestamp, category, message)
+    # AddWorkstationSession's on_joined/on_closed run on PairingWindow's background thread
+    # (P2-4). QTimer.singleShot(0, fn) called from a non-GUI thread creates the timer on
+    # that thread, which has no Qt event loop, so it never fires -- these signals are true
+    # queued cross-thread delivery (Qt detects sender/receiver are on different threads).
+    workstation_joined_signal = Signal(dict)
+    workstation_closed_signal = Signal(str)
 
-    def __init__(self, sync_service, db=None, actor="System", parent=None):
+    def __init__(self, sync_service, db=None, actor="System", parent=None, discovery_service=None):
         super().__init__(parent)
         self.sync_service = sync_service
         self.db = db
         self.actor = actor
+        self.discovery_service = discovery_service
+        self._add_workstation_session = None  # sync_office.AddWorkstationSession while "Add workstation" is open
         self.setWindowTitle("Sera Sync — LAN Database Sync & Live Activity")
         self.resize(1080, 620)
         self.setMinimumSize(920, 500)
@@ -64,6 +73,11 @@ class SeraSyncDialog(QDialog):
         self.activity_signal.connect(self._on_activity_received)
         if self.sync_service:
             self.sync_service.on_activity = lambda ts, cat, msg: self.activity_signal.emit(ts, cat, msg)
+
+        # Add workstation (P2-7): PairingWindow calls on_joined/on_closed from its own worker
+        # thread; these connections queue safely onto this dialog's (GUI) thread.
+        self.workstation_joined_signal.connect(lambda record: self._refresh_members())
+        self.workstation_closed_signal.connect(self._on_add_workstation_closed)
 
         # Auto-refresh peer table every 3 seconds
         self._refresh_timer = QTimer(self)
@@ -264,6 +278,75 @@ class SeraSyncDialog(QDialog):
 
         left_layout.addLayout(btn_row)
 
+        # Office Members panel (P2-7): members, Add workstation, Remove, Hand over/Become admin,
+        # network warnings. Office mode only (legacy-mode PCs have no admin key / member records).
+        self.members_group = QGroupBox("Office Members")
+        self.members_group.setStyleSheet(
+            "QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
+        members_layout = QVBoxLayout(self.members_group)
+        members_layout.setContentsMargins(12, 14, 12, 12)
+        members_layout.setSpacing(8)
+
+        self.members_network_warning = QLabel("")
+        self.members_network_warning.setWordWrap(True)
+        self.members_network_warning.setStyleSheet(
+            "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
+            "padding: 6px 12px; border-radius: 6px; font-size: 11px; }"
+        )
+        self.members_network_warning.setVisible(False)
+        members_layout.addWidget(self.members_network_warning)
+
+        self.members_table = QTableWidget(0, 5)
+        self.members_table.setHorizontalHeaderLabels(
+            ["Name", "Online", "Role", "Last Successful Sync (this PC)", "This PC"])
+        self.members_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.members_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.members_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.members_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.members_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.members_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.members_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.members_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.members_table.setMaximumHeight(140)
+        members_layout.addWidget(self.members_table)
+
+        members_btn_row = QHBoxLayout()
+        self.btn_add_workstation = QPushButton("  Add workstation")
+        icon = _safe_icon("mdi.laptop", color="#FFFFFF")
+        if icon:
+            self.btn_add_workstation.setIcon(icon)
+        self.btn_add_workstation.clicked.connect(self._on_add_workstation)
+        members_btn_row.addWidget(self.btn_add_workstation)
+
+        self.btn_remove_member = QPushButton("  Remove")
+        icon = _safe_icon("mdi.account-remove", color="#FFFFFF")
+        if icon:
+            self.btn_remove_member.setIcon(icon)
+        self.btn_remove_member.clicked.connect(self._on_remove_member)
+        members_btn_row.addWidget(self.btn_remove_member)
+
+        self.btn_hand_over_admin = QPushButton("  Hand over admin")
+        icon = _safe_icon("mdi.account-arrow-right", color="#FFFFFF")
+        if icon:
+            self.btn_hand_over_admin.setIcon(icon)
+        self.btn_hand_over_admin.clicked.connect(self._on_hand_over_admin)
+        members_btn_row.addWidget(self.btn_hand_over_admin)
+
+        self.btn_become_admin = QPushButton("  Become admin")
+        icon = _safe_icon("mdi.shield-account", color="#FFFFFF")
+        if icon:
+            self.btn_become_admin.setIcon(icon)
+        self.btn_become_admin.clicked.connect(self._on_become_admin)
+        members_btn_row.addWidget(self.btn_become_admin)
+        members_btn_row.addStretch()
+        members_layout.addLayout(members_btn_row)
+
+        left_layout.addWidget(self.members_group)
+        # Office mode only: key_id is set once office.json exists (legacy PCs have none).
+        self.members_group.setVisible(
+            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
+        )
+
         splitter.addWidget(left_widget)
 
         # Right Widget (Activity Log Sidebar)
@@ -373,6 +456,268 @@ class SeraSyncDialog(QDialog):
         if not app_dir:
             app_dir = Path(getattr(self.sync_service, "db_path", "")).parent
         export_recovery_kit_flow(self, app_dir)
+
+    # ------------------------------------------------------------------
+    # Office Members panel (P2-7): members, Add workstation, Remove, Hand
+    # over/Become admin, network warnings.
+    # ------------------------------------------------------------------
+
+    def _app_dir(self):
+        from pathlib import Path
+        app_dir = getattr(self.sync_service, "app_dir", None)
+        if not app_dir:
+            app_dir = Path(getattr(self.sync_service, "db_path", "")).parent
+        return Path(app_dir)
+
+    def _own_identity(self):
+        """Returns ``(device_id, cert_pem)`` for this PC, or ``(None, None)`` if unavailable."""
+        import sync_identity
+        identity = sync_identity.load_device_identity(self._app_dir())
+        if identity is None:
+            return None, None
+        cert_pem = identity.cert_pem.decode("ascii") if isinstance(identity.cert_pem, bytes) else identity.cert_pem
+        return identity.device_id, cert_pem
+
+    def _office_admin_pubkey(self):
+        import sera_keys
+        office = sera_keys.load_office(self._app_dir())
+        return office.admin_pubkey if office else None
+
+    def _open_db_conn(self):
+        """A plain DB-API connection to master.db (for code that calls ``.close()`` itself,
+        e.g. ``PairingWindow``/``sync_admin`` -- ``SeraDatabase._connect()`` is a context
+        manager, not a connection, so it can't be handed to those as an ``open_db`` factory)."""
+        import sqlcipher3.dbapi2 as sqlite3
+        conn = sqlite3.connect(self.db.db_path)
+        conn.execute("PRAGMA key = \"x'%s'\";" % self.db.hex_key)
+        return conn
+
+    def _refresh_members(self):
+        if not getattr(self, "members_group", None) or not self.members_group.isVisible() or self.db is None:
+            return
+        try:
+            import sync_admin
+            import sync_discovery
+            admin_pubkey = self._office_admin_pubkey()
+            if not admin_pubkey:
+                return
+            own_device_id, _ = self._own_identity()
+            with self.db._connect() as conn:
+                members = sync_admin.list_members(conn, admin_pubkey, include_revoked=False)
+                office_admin = sync_admin.get_office_admin(conn, admin_pubkey)
+                sync_discovery.ensure_address_book_table(conn)
+                warnings = sync_discovery.get_unreachable_member_warnings(conn, members)
+                last_ok = {}
+                for m in members:
+                    addrs = sync_discovery.get_known_addresses(conn, m.get("device_id"))
+                    stamps = [a["local_ok_at"] for a in addrs if a.get("local_ok_at")]
+                    last_ok[m.get("device_id")] = max(stamps) if stamps else None
+        except Exception as exc:
+            print(f"[Sera Sync] could not refresh members: {exc}")
+            return
+
+        admin_device_id = office_admin["device_id"] if office_admin else None
+        self._members_cache = members
+        self.members_table.setUpdatesEnabled(False)
+        self.members_table.setRowCount(len(members))
+        for row, m in enumerate(members):
+            dev_id = m.get("device_id")
+            name_item = QTableWidgetItem(m.get("name", ""))
+            name_item.setData(Qt.UserRole, dev_id)
+            self.members_table.setItem(row, 0, name_item)
+            self.members_table.setItem(row, 1, QTableWidgetItem(self._online_status(dev_id, own_device_id)))
+            role = "Admin" if dev_id == admin_device_id else "Member"
+            self.members_table.setItem(row, 2, QTableWidgetItem(role))
+            self.members_table.setItem(row, 3, QTableWidgetItem(last_ok.get(dev_id) or "never"))
+            self.members_table.setItem(row, 4, QTableWidgetItem("This PC" if dev_id == own_device_id else ""))
+        self.members_table.setUpdatesEnabled(True)
+
+        if warnings:
+            self.members_network_warning.setText("\n".join(warnings.values()))
+            self.members_network_warning.setVisible(True)
+        else:
+            self.members_network_warning.setVisible(False)
+
+        is_admin = own_device_id is not None and own_device_id == admin_device_id
+        self.btn_add_workstation.setEnabled(is_admin and self._add_workstation_session is None)
+        self.btn_remove_member.setEnabled(is_admin)
+        self.btn_hand_over_admin.setEnabled(is_admin)
+        self.btn_become_admin.setEnabled(not is_admin)
+
+    def _online_status(self, device_id: str, own_device_id: str | None) -> str:
+        """Best-effort presence from beacon sightings (P2-5): a fresh beacon (<=30s, 3x the
+        10s beacon interval) means the PC is up and on the LAN. There is no live session to
+        check yet (P3-5); this is not a connectivity guarantee, just recency of the last beacon."""
+        if device_id == own_device_id:
+            return "Online (this PC)"
+        if self.discovery_service is None:
+            return "Unknown"
+        try:
+            sighting = self.discovery_service.get_beacon_sighting(device_id, max_age_seconds=30.0)
+        except Exception:
+            return "Unknown"
+        return "Online" if sighting else "Offline"
+
+    def _selected_member(self):
+        """Returns the selected row's member dict from ``_members_cache``, or ``None``."""
+        rows = self.members_table.selectionModel().selectedRows() if self.members_table.selectionModel() else []
+        if not rows:
+            return None
+        idx = rows[0].row()
+        cache = getattr(self, "_members_cache", [])
+        return cache[idx] if 0 <= idx < len(cache) else None
+
+    def _on_add_workstation(self):
+        if self._add_workstation_session is not None:
+            QMessageBox.information(self, "Add Workstation", "A pairing window is already open.")
+            return
+        own_device_id, own_cert_pem = self._own_identity()
+        if own_device_id is None:
+            QMessageBox.warning(self, "Add Workstation", "This PC's device identity could not be read.")
+            return
+
+        import sync_office
+        session = sync_office.AddWorkstationSession(
+            self._app_dir(), self._open_db_conn, own_device_id, own_cert_pem,
+            on_joined=lambda record: self.workstation_joined_signal.emit(record),
+            on_closed=lambda reason: self.workstation_closed_signal.emit(reason),
+        )
+        try:
+            session.start()
+        except Exception as exc:
+            QMessageBox.warning(self, "Add Workstation", f"Could not open the pairing window: {exc}")
+            return
+        self._add_workstation_session = session
+        self.btn_add_workstation.setEnabled(False)
+        if self.discovery_service is not None:
+            try:
+                import sera_keys
+                office = sera_keys.load_office(self._app_dir())
+                self.discovery_service.set_pairing(True, office.office_name if office else "", session.window.port)
+            except Exception:
+                pass
+
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Add Workstation")
+        dlg.setIcon(QMessageBox.Information)
+        dlg.setText(
+            f"Code for the new PC: {session.window.display_code}\n\n"
+            "Enter it in \"Join an Existing Office\" on the new PC. This window closes itself "
+            "after the PC joins, 3 wrong tries, or 5 minutes."
+        )
+        dlg.setStandardButtons(QMessageBox.Cancel)
+        dlg.setDefaultButton(QMessageBox.Cancel)
+
+        def _poll():
+            if not session.window.is_open:
+                dlg.accept()
+                return
+            stalls = session.window.stalled_connections
+            blocked = [ip for ip, n in stalls.items() if n >= 3]
+            if blocked:
+                dlg.setText(dlg.text().split("\n\n")[0] + "\n\n"
+                           f"Note: {', '.join(blocked)} keeps connecting without trying a code; "
+                           "it may be blocking pairing.")
+        poll_timer = QTimer(dlg)
+        poll_timer.timeout.connect(_poll)
+        poll_timer.start(1000)
+        result = dlg.exec()
+        poll_timer.stop()
+        if result == QMessageBox.Cancel and session.window.is_open:
+            session.close("cancelled")
+
+    def _on_add_workstation_closed(self, reason: str):
+        self._add_workstation_session = None
+        if self.discovery_service is not None:
+            try:
+                self.discovery_service.set_pairing(False)
+            except Exception:
+                pass
+        self._refresh_members()
+        if reason == "too_many_attempts":
+            self.shell_alert_or_status("Add workstation: closed after 3 wrong codes.")
+        elif reason == "expired":
+            self.shell_alert_or_status("Add workstation: the 5-minute window expired.")
+
+    def shell_alert_or_status(self, message: str):
+        # Best-effort: this dialog has no toast of its own; the activity log is close enough.
+        from datetime import datetime
+        self._add_log_item(datetime.now().strftime("%H:%M:%S"), "OFFICE", message)
+
+    def _on_remove_member(self):
+        member = self._selected_member()
+        if member is None:
+            QMessageBox.information(self, "Remove", "Select a workstation to remove first.")
+            return
+        own_device_id, _ = self._own_identity()
+        if member.get("device_id") == own_device_id:
+            QMessageBox.warning(self, "Remove", "The admin PC can't remove itself; hand over admin first.")
+            return
+        reply = QMessageBox.question(
+            self, "Remove Workstation",
+            f"Remove \"{member.get('name')}\" from the office?\n\n"
+            "It will no longer be able to sync. This can't be undone from here.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            import sync_admin
+            with self.db._connect() as conn:
+                sync_admin.revoke_member(self._app_dir(), conn, own_device_id, member.get("device_id"))
+        except Exception as exc:
+            QMessageBox.warning(self, "Remove", f"Could not remove the workstation: {exc}")
+            return
+        self._refresh_members()
+
+    def _on_hand_over_admin(self):
+        member = self._selected_member()
+        if member is None:
+            QMessageBox.information(self, "Hand Over Admin", "Select the workstation to make admin.")
+            return
+        own_device_id, _ = self._own_identity()
+        if member.get("device_id") == own_device_id:
+            QMessageBox.information(self, "Hand Over Admin", "This PC is already the office admin.")
+            return
+        reply = QMessageBox.question(
+            self, "Hand Over Admin",
+            f"Make \"{member.get('name')}\" the office admin PC?\n\n"
+            "This PC stops being able to add or remove workstations immediately. Until "
+            f"\"{member.get('name')}\" also runs \"Become admin\" there with the office master "
+            "password, no PC can add or remove workstations -- there is no automatic "
+            "notification yet (that needs Phase 3's sync). Do that on the other PC right "
+            "after confirming here.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            import sync_admin
+            with self.db._connect() as conn:
+                sync_admin.hand_over_admin(self._app_dir(), conn, own_device_id, member.get("device_id"))
+                sync_admin.reconcile_admin_key(self._app_dir(), conn, own_device_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Hand Over Admin", f"Could not hand over admin: {exc}")
+            return
+        self._refresh_members()
+
+    def _on_become_admin(self):
+        pwd, ok = QInputDialog.getText(
+            self, "Become Admin", "Office master password:", QLineEdit.Password)
+        if not ok or not pwd:
+            return
+        own_device_id, _ = self._own_identity()
+        if own_device_id is None:
+            QMessageBox.warning(self, "Become Admin", "This PC's device identity could not be read.")
+            return
+        try:
+            import sync_admin
+            with self.db._connect() as conn:
+                sync_admin.claim_admin(self._app_dir(), conn, pwd, own_device_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Become Admin", f"Could not become admin: {exc}")
+            return
+        self._refresh_members()
 
     def _on_toggle_inv_frames(self):
         if not self.sync_service:
@@ -527,6 +872,7 @@ class SeraSyncDialog(QDialog):
         self.status_label.setText(f"🟢 {len(peers)} device{'s' if len(peers) != 1 else ''} online")
         self._update_inv_frames_ui()
         self._update_network_warning()
+        self._refresh_members()
 
         # Preserve selection
         selected_key = None

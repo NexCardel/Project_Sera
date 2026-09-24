@@ -324,6 +324,38 @@ class SeraApp:
         self.sync_service.start()
         self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
 
+        # Sera Sync v3 LAN discovery (P2-5/P2-7), office mode only. Shares the beacon socket
+        # with the legacy (v2) listener above via on_v3_beacon (P2-5's design) instead of
+        # binding port 49156 a second time. Feeds Members / "Add workstation" in the Sera
+        # Sync panel (P2-7); Phase 3's session protocol (P3-5) will use it too.
+        self.discovery_service = None
+        if self.key_mode == "office":
+            try:
+                import sync_discovery
+                import sync_identity
+                own_identity = sync_identity.load_device_identity(self.app_dir)
+                if own_identity is not None:
+                    def _open_v3_discovery_db(_db_path=self.db_path, _hex_key=hex_key):
+                        # DiscoveryService closes what open_db() returns itself; SeraDatabase's
+                        # own _connect() is a context manager, not a plain connection, so a
+                        # separate one is opened here (same PRAGMAs main.py already uses to
+                        # open master.db elsewhere).
+                        import sqlcipher3.dbapi2 as _sqlite3
+                        _conn = _sqlite3.connect(_db_path)
+                        _conn.execute("PRAGMA key = \"x'%s'\";" % _hex_key)
+                        return _conn
+                    self.discovery_service = sync_discovery.DiscoveryService(
+                        open_db=_open_v3_discovery_db,
+                        office_tag=sync_discovery.compute_office_tag(bytes.fromhex(hex_key)),
+                        device_id=own_identity.device_id,
+                        device_name=self.actor_alias,
+                        listen=False,
+                    )
+                    self.sync_service.on_v3_beacon = self.discovery_service.handle_datagram
+                    self.discovery_service.start()
+            except Exception as exc:
+                print(f"[Sera Sync] v3 discovery service failed to start: {exc}")
+
         # Asynchronous background auto-updater (non-blocking, silent)
         loading_dlg.set_status("Initializing Background Auto-Updater...")
         import version
@@ -1447,6 +1479,15 @@ class SeraApp:
             first_run_dlg = FirstRunDialog(app_dir, getattr(self, "actor_alias", "Admin"))
             if first_run_dlg.exec() != QDialog.Accepted:
                 sys.exit(0)
+            if getattr(first_run_dlg, "office_mode", False):
+                # P2-7: "New Office" / "Join Office" (pairing) wrote keys/office.json and
+                # (for New Office) master.db directly -- re-resolve from scratch so this now
+                # takes the office-mode branch above instead of deriving a legacy password key
+                # from sera.salt, which can't open an office-key-encrypted database. A Join
+                # whose pairing succeeded but whose snapshot download didn't still leaves
+                # office.json without master.db; the office-mode branch's pending-join check
+                # in __init__ (has_pending_join) picks that up on this same call.
+                return self._resolve_encryption_key()
             master_password = first_run_dlg.master_password or self._get_master_password()
         else:
             if not os.path.exists(salt_path):
@@ -1784,6 +1825,7 @@ class SeraApp:
 
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
+        self.admin_win.set_discovery_service(getattr(self, "discovery_service", None))
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
         self.shell.on_minimized_to_tray = self._on_window_put_away
@@ -2029,6 +2071,11 @@ class SeraApp:
         if hasattr(self, "sync_service") and self.sync_service:
             try:
                 self.sync_service.stop()
+            except Exception:
+                pass
+        if getattr(self, "discovery_service", None):
+            try:
+                self.discovery_service.stop()
             except Exception:
                 pass
         if not self._update_applied and getattr(self, "_pending_update_installer", None):
@@ -2331,6 +2378,11 @@ class SeraApp:
         if hasattr(self, "sync_service") and self.sync_service:
             try:
                 self.sync_service.stop()
+            except Exception:
+                pass
+        if getattr(self, "discovery_service", None):
+            try:
+                self.discovery_service.stop()
             except Exception:
                 pass
 

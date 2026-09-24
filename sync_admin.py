@@ -656,6 +656,36 @@ def claim_admin(app_dir, conn, password: str, device_id: str) -> dict:
     return result
 
 
+def hand_over_admin(app_dir, conn, admin_device_id: str, target_device_id: str) -> dict:
+    """Current admin PC signs an office_admin record naming another active member as admin.
+
+    Unlike ``claim_admin`` (which needs the master password because the caller doesn't yet
+    hold the admin key), this runs on the PC that already holds it: no password needed. The
+    old admin PC keeps its local ``admin_key.dpapi`` until it notices the hand-over (P2-7
+    calls ``reconcile_admin_key`` right after this); ``admin_key.recovery`` already sits on
+    every member, so the new admin PC still uses "Become admin" once to fetch its own copy.
+    """
+    key, pub = _require_named_admin(app_dir, conn, admin_device_id)
+    if target_device_id == admin_device_id:
+        raise MembershipError("this PC is already the office admin")
+    with _transaction(conn):
+        target = get_member(conn, target_device_id, admin_pubkey=pub)
+        if target is None or target["revoked_at"] is not None:
+            raise MembershipError("that PC is not an active member of the office")
+        current = get_office_admin(conn, admin_pubkey=pub)
+        rev = max(current["rev"] if current else 0, _stored_rev(conn, OFFICE_ADMIN_ROW)) + 1
+        result = sign_record({"type": RECORD_OFFICE_ADMIN, "device_id": target_device_id,
+                              "since": _now_iso(), "rev": rev}, key)
+        store_record(conn, result, pub)
+        # office_admin is authoritative; the member roles follow it for display (P2-7's Members list).
+        if target["role"] != ROLE_ADMIN:
+            store_record(conn, sign_record(dict(_body(target), role=ROLE_ADMIN, rev=target["rev"] + 1), key), pub)
+        me = get_member(conn, admin_device_id, admin_pubkey=pub)
+        if me is not None and me["role"] == ROLE_ADMIN:
+            store_record(conn, sign_record(dict(_body(me), role=ROLE_MEMBER, rev=me["rev"] + 1), key), pub)
+    return result
+
+
 def reconcile_admin_key(app_dir, conn, device_id: str) -> bool:
     """If the current office_admin record names another PC, delete this PC's ``admin_key.dpapi``.
 

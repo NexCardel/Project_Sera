@@ -452,9 +452,9 @@ def download_snapshot(
 
             received = 0
             ok = False
-            with open(target_path, "xb") as f_out:
-                sink = _Sink(f_out)
-                try:
+            try:
+                with open(target_path, "xb") as f_out:
+                    sink = _Sink(f_out)
                     while received < size:
                         chunk_frame = session.recv()
                         if chunk_frame.get("t") != sync_transport.FRAME_CHUNK:
@@ -468,12 +468,15 @@ def download_snapshot(
                         if on_progress:
                             on_progress(fname, received, size)
                     ok = True
-                finally:
-                    if not ok:
-                        try:
-                            target_path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
+            finally:
+                # The file must be closed (the ``with`` above has exited) before unlinking it,
+                # or the delete fails silently on Windows (harmless today: the next attempt
+                # deletes it before writing, but leaves a stale partial file until then).
+                if not ok:
+                    try:
+                        target_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
             actual_sha = sink.h.hexdigest()
             if actual_sha != expected_sha:
