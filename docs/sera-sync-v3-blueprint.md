@@ -1123,8 +1123,8 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Tests: 2 new (`test_rollforward_refuses_when_a_live_db_is_missing`, `test_crash_during_swap_rollback_is_finished_as_rollback`); file total 28. Full suite: 936 passed / 10 failed / 2 skipped (same 10 pre-existing).
 - Deviations from spec: none beyond the P1-4 entry above.
 
-### P1-5 — Key-fingerprint gate everywhere — In review (Reviewed by Claude Opus 5.5) — 2026-09-24
-- Model: Gemini 3.8 Flash   Commit: uncommitted
+### P1-5 — Key-fingerprint gate everywhere — Done (Reviewed by Claude Opus 5.5) — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: 1960b19
 - Tests: 937 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); 8 tests in `tests/test_key_fingerprint.py`: `test_key_id_mismatch_rejected`, `test_auto_heal_disabled_in_office_mode`, `test_key_id_in_beacons_and_headers`, `test_bootstrap_autopull_skips_mismatched_key_id`, `test_dialog_shows_different_office_key`, `test_office_refuses_legacy_fetch_snapshot`, `test_office_push_sends_zero_salt_and_swap_does_not_install_salt`, `test_apply_pending_swap_preserves_stray_salt_as_stale_backup`.
 - Deviations / additions from spec:
   - **Zero-salt in office mode**: in office mode (`self.key_id` set), `push_to` sends `salt_size = 0` and sends no salt bytes; `_handle_incoming_push` verifies `salt_size == 0` and writes `pending_swap.json` with no salt key. `apply_pending_swap` was updated so that when `salt` is absent, it swaps only `master.db` and leaves salt untouched (never creates or installs a fake `sera.salt`). Per §0 rule 3, any stray staged salt files in `incoming/` are preserved by renaming to timestamped `.stale-<ts>` copies rather than being unlinked.

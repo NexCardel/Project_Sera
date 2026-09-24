@@ -15,7 +15,7 @@ P1-1,Done,Claude Opus 5.5,Claude Opus 5.5,773eea7,"2026-09-24: New sera_keys.py 
 P1-2,Done,Gemini 3.8 Flash,Claude Opus 5.5,7808f87,"2026-09-24: Start-up key resolution (office mode DEK vs legacy PBKDF2), 889 passed / 10 pre-existing failed",
 P1-3,Done,Claude Sonnet 5,,bb80c15,2026-09-24: Parsers try sera_keys office DEK (data dir then code dir) before legacy sera.key/salt. Full suite 891 passed / 10 pre-existing failed.,
 P1-4,Done,Claude Opus 5.5,Claude Opus 5.5,c6bcc11,2026-09-24: Review round 2: live-DB check refuses missing/empty file; step-6 rollback crash resumes as rollback (phase rolling_back); 28 tests; suite 936 passed / 10 pre-existing failures,2026-09-24 14:39
-P1-5,In review,Gemini 3.8 Flash,Claude Opus 5.5,,"2026-09-24: Review fixes: zero-salt framing, legacy fetch_snapshot gated, salt backup; 937 passed / 10 failed",2026-09-24 14:42
+P1-5,Done,Gemini 3.8 Flash,Claude Opus 5.5,1960b19,"2026-09-24: Review fixes: zero-salt framing, legacy fetch_snapshot gated, salt backup; 937 passed / 10 failed",2026-09-24 14:46
 P1-6,In progress,Gemini 3.8 Flash,,,,2026-09-24 14:37
 P2-1,Not started,,,,,
 P2-2,Not started,,,,,
