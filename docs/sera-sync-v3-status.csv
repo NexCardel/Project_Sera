@@ -22,11 +22,11 @@ P2-2,Done,Claude Opus 5.5,Claude Opus 5.5,0820ee8,"2026-09-24: Review fixes: rev
 P2-3,Done,Claude Opus 5.5,Claude Opus 5.5,75e98e0,"2026-09-24: Review fixes: session slots only after member check + pending-handshake caps, recv(wait=), sink/RecursionError/empty-chunk fixes; 32 transport tests; full suite 1081 passed / 10 pre-existing failures",2026-09-24 18:14
 P2-4,Done,Claude Opus 5.5,Claude Opus 5.5,d2627e2,"2026-09-24: Review fixes: no second join in the join/close gap (close before freeing slot; close ends any session), stall warning, _install order; 38 pairing tests pass; full suite 1143 passed / 10 pre-existing failures",2026-09-24 18:59
 P2-5,Done,Gemini 3.8 Flash,Claude Opus 5.5,31dc65f,"2026-09-24: Review fixes & refinements: listen=False mode, ephemeral unicast reply, sightings capping (500), open_db warning, gossip IP validation; 28 tests pass",2026-09-24 19:16
-P2-6,In review,Gemini 3.8 Flash,Claude Opus 5.5,,"2026-09-24: Snapshot mTLS service, export, verification, and atomic joiner install; 8 tests passed",2026-09-24 21:31
+P2-6,Done,Gemini 3.8 Flash,Claude Opus 5.5,e15c420,"2026-09-24: Snapshot mTLS service, export, verification, and atomic joiner install; 8 tests passed",2026-09-24 21:39
 P2-7,Not started,,,,,
 P2-8,Not started,,,,,
 P3-0,In review,Gemini 3.8 Flash,,,"2026-09-24: Review round 2 fixes applied (shared baseline via node 0 sync, clock control, SQLite abort trigger mid-batch, member propagation errors, digest FK & row-key error handling, escaped delimiters); 7 harness passed, 6 convergence failed on assertion as expected, 1185 passed in full suite",2026-09-24 20:42
-P3-1,In review,Claude Sonnet 5,Claude Opus 5.5,,"2026-09-24: Round 2: client_raw_containers reverted to local (whole-row lww would have caused certain data loss via re_resolve_all_tracker_dumps' DELETE+rebuild under P3-3/P3-4 tombstone rules). New pending_creation client_container_notes TableSpec added for staff notes, lww, table itself not yet built (flagged for P3-2). 22 new schema tests + 2 database tests pass; full suite at baseline.",2026-09-24 21:33
+P3-1,Done,Claude Sonnet 5,Claude Opus 5.5,882d054,"2026-09-24: Round 2: client_raw_containers reverted to local (whole-row lww would have caused certain data loss via re_resolve_all_tracker_dumps' DELETE+rebuild under P3-3/P3-4 tombstone rules). New pending_creation client_container_notes TableSpec added for staff notes, lww, table itself not yet built (flagged for P3-2). 22 new schema tests + 2 database tests pass; full suite at baseline.",2026-09-24 21:37
 P3-2,Not started,,,,,
 P3-3,Not started,,,,,
 P3-4,Not started,,,,,

@@ -1336,8 +1336,8 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Tests: `tests/test_sync_pairing.py` now has 38 tests (5 new). `test_no_second_session_between_join_and_close[right]` and `test_close_ends_a_running_session_whatever_the_reason` both **failed on the unfixed code** (the second PC paired, getting letter C), and pass now. Also new: `[wrong]` variant, `test_repeated_stalls_from_one_address_are_warned_about`, `test_install_writes_database_after_key_files_and_checks_it`; `test_connection_without_a_guess_is_not_counted` also checks `stalled_connections`. The file passed 3 runs in a row. Full suite: 1143 passed / 10 failed / 2 skipped (same 10 pre-existing).
 - Deviations from spec: none beyond the P2-4 entry above.
 
-### P2-6 — Snapshot service and joiner install — In review — 2026-09-24
-- Model: Gemini 3.8 Flash (review by Claude Opus 5.5)   Commit: bf8a330
+### P2-6 — Snapshot service and joiner install — Done — 2026-09-24
+- Model: Gemini 3.8 Flash (review by Claude Opus 5.5)   Commit: e15c420
 - Review fixes (B1 & should-fix):
   1. **B1: Target database and sidecar backups (§0 rule 3):** `_install_downloaded_files` now backs up existing target DBs and their `-wal`, `-shm`, `-journal` sidecars to `*.bak-<YYYYmmdd_HHMMSS>` prior to `os.replace` rather than silently overwriting/unlinking.
   2. **Orphan local rawPayload.db set aside:** If local `rawPayload.db` exists but the snapshot does not carry one (e.g. admin has no rawPayload.db), local `rawPayload.db` and sidecars are backed up and set aside as `*.bak-<ts>` so office mode startup does not fail with key mismatch.
