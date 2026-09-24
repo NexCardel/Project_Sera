@@ -545,6 +545,7 @@ class SyncPeerService:
         self.on_activity = on_activity
         self.on_error = on_error
         self.on_join_approval_requested = on_join_approval_requested
+        self.on_v3_beacon: Optional[Callable[[bytes, str], None]] = None
 
         self._peers: dict[str, PeerInfo] = {}
         self._peers_lock = threading.Lock()
@@ -1002,6 +1003,13 @@ class SyncPeerService:
     def _handle_beacon(self, data: bytes, ip: str):
         try:
             body = json.loads(data.decode("utf-8"))
+            if body.get("magic") == "sera-sync-v3":
+                if getattr(self, "on_v3_beacon", None):
+                    try:
+                        self.on_v3_beacon(data, ip)
+                    except Exception:
+                        pass
+                return
             if body.get("magic") != SERA_SYNC_MAGIC:
                 return
             if body.get("host") == self.host_name:

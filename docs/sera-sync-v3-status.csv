@@ -20,9 +20,9 @@ P1-6,Done,Gemini 3.8 Flash,Claude Opus 5.5,79149ab,"2026-09-24: Review blockers 
 P2-1,Done,Claude Sonnet 5,Claude Opus 5.5,292da21,"2026-09-24: Review-fix round 2: fixed race where load_device_identity could rename another writer's in-progress key/passphrase files; load_device_identity now read-only, cleanup moved into ensure_device_identity under the lock. Also split lock acquire-timeout from stale-steal threshold. 986 passed / 10 pre-existing failed / 2 skipped.",2026-09-24 17:07
 P2-2,Done,Claude Opus 5.5,Claude Opus 5.5,0820ee8,"2026-09-24: Review fixes: revoke is final + letter/cert immutable in store_record; readers always verify; claim_admin check inside tx, refuses caller tx; 63 tests; suite 1049 passed / 10 pre-existing failed / 2 skipped",2026-09-24 17:54
 P2-3,Done,Claude Opus 5.5,Claude Opus 5.5,75e98e0,"2026-09-24: Review fixes: session slots only after member check + pending-handshake caps, recv(wait=), sink/RecursionError/empty-chunk fixes; 32 transport tests; full suite 1081 passed / 10 pre-existing failures",2026-09-24 18:14
-P2-4,In review,Claude Opus 5.5,Claude Opus 5.5,,"2026-09-24: Review fixes: no second join in the join/close gap (close before freeing slot; close ends any session), stall warning, _install order; 38 pairing tests pass; full suite 1143 passed / 10 pre-existing failures",2026-09-24 18:51
-P2-5,Not started,,,,,
-P2-6,Not started,,,,,
+P2-4,Done,Claude Opus 5.5,Claude Opus 5.5,d2627e2,"2026-09-24: Review fixes: no second join in the join/close gap (close before freeing slot; close ends any session), stall warning, _install order; 38 pairing tests pass; full suite 1143 passed / 10 pre-existing failures",2026-09-24 18:59
+P2-5,In review,Gemini 3.8 Flash,Claude Opus 5.5,,"2026-09-24: Review fixes & refinements: listen=False mode, ephemeral unicast reply, sightings capping (500), open_db warning, gossip IP validation; 28 tests pass",2026-09-24 19:14
+P2-6,In progress,Gemini 3.8 Flash,,,,2026-09-24 19:10
 P2-7,Not started,,,,,
 P2-8,Not started,,,,,
 P3-0,Not started,,,,,

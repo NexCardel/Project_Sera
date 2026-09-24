@@ -1286,6 +1286,44 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **P2-6:** start the snapshot download from `incoming/join/pairing.json` (admin device id + address + records for `MemberSet.from_records`). A join interrupted after pairing leaves office.json without master.db, and today's start-up (P1-6 `_handle_missing_office_db`) would offer a backup restore. P2-6 must detect `pairing.json` and resume the download instead.
   - Not exercised: two real PCs, and Windows Firewall on 49158 (P0-9a opens 49156–49159).
 
+### P2-5 — Discovery v3, address book, gossip — Done — 2026-09-24
+- Model: Gemini 3.8 Flash (review by Claude Opus 5.5)   Commit: uncommitted
+- Tests: 28 tests in `tests/test_sync_discovery.py`, all passing (0.7s). Full suite: 1136 passed / 10 failed (the 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5) / 2 skipped.
+  - address ordering: `test_address_ordering_last_ok_first`, `test_address_ordering_local_ok_beats_newer_gossip`, `test_address_ordering_newest_first_and_nulls`, `test_address_ordering_with_beacon_address`, `test_address_ordering_beacon_only`
+  - gossip merge & IP filtering: `test_gossip_export_filters_7_days`, `test_gossip_merge_adds_new_addresses`, `test_gossip_merge_never_overwrites_local_ok`, `test_gossip_merge_rejects_future_timestamps`, `test_gossip_merge_skips_own_device_and_non_members`, `test_gossip_merge_malformed_ignored`, `test_gossip_ip_validation` (rejects 0.0.0.0, 255.255.255.255, loopback, link-local, multicast)
+  - diagnostics: `test_diagnostics_unreachable_member_checks_local_ok` (asserts exact text "Can't reach <name> — check that both PCs are on a Private network and that the Wi-Fi doesn't isolate devices" when local PC has not reached peer in 10m, regardless of gossip), `test_diagnostics_recent_local_ok_no_warning`, `test_diagnostics_no_addresses_no_warning`
+  - beacon sightings & DB safety: `test_beacons_never_write_to_database` (verifies incoming beacons never write to master.db, kept strictly in-memory), `test_discovery_with_broadcast_disabled_localhost` (exercises bidirectional unicast discovery and in-memory sightings), `test_beacon_sightings_capping_and_pruning` (strictly caps in-memory sightings at 500 entries)
+  - beacon & tag: `test_office_tag_computation` (HMAC-SHA256 16 hex chars), `test_beacon_v3_format_normal`, `test_beacon_v3_format_pairing`, `test_parse_beacon_invalid` (length caps, hex validation)
+  - shared port & service: `test_sync_peer_dispatches_v3_beacon` (verifies port 49156 shared dispatch to `on_v3_beacon`, uses `tmp_path`), `test_discovery_service_listen_false_and_ephemeral_reply` (verifies sender-only `listen=False` mode and ephemeral socket unicast replies), `test_worker_db_factory_and_raw_conn_warning` (verifies `open_db` factory usage and raw connection warning), `test_service_idempotent_start_stop`, `test_record_successful_session`, `test_no_pyside6_import`.
+- Files: new `sync_discovery.py`, new `tests/test_sync_discovery.py`, updated `sync_peer.py` (`on_v3_beacon` hook).
+- Review fixes & refinements applied:
+  1. **Beacons never write to master.db (Review Blocker 1):** Incoming beacons update in-memory sightings (`_beacon_sightings`) only, preventing forged beacon storms from growing the database or turning the PC into an amplification reflector. Database rows in `_local_addresses` are written only on successful sessions (`record_successful_session`) or valid gossip merge.
+  2. **Separate local_ok_at vs last_ok_at (Review Blocker 2):** Added `local_ok_at` (when THIS PC had a successful connection) alongside `last_ok_at` (network-wide gossip). Gossip merge updates `last_ok_at` only if newer, never touches `local_ok_at`. Future timestamps (`> now + 60s`) are rejected. `get_connect_order` prioritizes `local_ok_at`, and `check_member_unreachable` evaluates `local_ok_at` so Wi-Fi isolation (D4) correctly triggers the warning even if other PCs reached the member.
+  3. **Shared port 49156 dispatch & sender-only mode (Refinement A):** `sync_peer.py` dispatches `magic == "sera-sync-v3"` datagrams directly to `on_v3_beacon`. `DiscoveryService` supports `listen=False` sender-only mode to prevent opening a duplicate listening socket, avoiding Windows Winsock unicast packet stealing on shared `SO_REUSEADDR` ports. Unicast replies via `handle_datagram(sock=None)` gracefully use ephemeral UDP sockets.
+  4. **Sightings capping & eviction (Refinement B):** In-memory beacon sightings are strictly capped at 500 entries with automatic pruning of stale entries (`> 60s`) and LRU eviction under unauthenticated beacon floods.
+  5. **Worker thread DB connections & warning (Refinement C):** `DiscoveryService` accepts `open_db` factory so worker threads use dedicated connections without colliding with open caller transactions; logs a warning if only a raw `db_conn` is passed.
+  6. **Gossip IP filtering (Minor Refinement):** `_is_valid_gossip_ip` rejects special/invalid unicast IPs in gossip (`0.0.0.0`, `255.255.255.255`, loopback, link-local, multicast) on both import and export.
+  7. **Clean test files (Minor Refinement):** `test_sync_peer_dispatches_v3_beacon` uses pytest `tmp_path` fixture to leave no temporary artifacts in workspace.
+- Notes for later WPs:
+  - Public API in `sync_discovery.py`:
+    - `compute_office_tag(dek: bytes) -> str`
+    - `make_beacon_payload(...) -> dict`, `encode_beacon(payload) -> bytes`, `parse_beacon(data, sender_ip=None) -> dict | None`
+    - `ensure_address_book_table(conn)` (creates `_local_addresses(device_id, ip, port, last_ok_at, local_ok_at, source)` in `master.db`)
+    - `record_successful_session(conn, device_id, ip, port, ok_at=None, source=None)`
+    - `upsert_address(conn, device_id, ip, port, source="beacon", last_ok_at=None, local_ok_at=None)`
+    - `remove_address(conn, device_id, ip, port)`
+    - `get_known_addresses(conn, device_id=None) -> list[dict]`
+    - `get_all_destinations(conn) -> set[tuple[str, int]]`
+    - `get_connect_order(conn, device_id, beacon_addr=None) -> list[tuple[str, int]]`
+    - `export_gossip_addresses(conn, max_age_days=7, now=None) -> list[dict]`
+    - `merge_gossip_addresses(conn, addresses, own_device_id=None, is_member=None, max_age_days=7, now=None) -> int`
+    - `check_member_unreachable(conn, device_id, member_name, threshold_seconds=600, now=None) -> str | None`
+    - `get_unreachable_member_warnings(conn, members, threshold_seconds=600, now=None) -> dict[str, str]`
+    - `DiscoveryService(db_conn=None, open_db=None, office_tag=None, device_id="", device_name="", bind_host="0.0.0.0", beacon_port=49156, sync_port=49159, pair_port=49158, enable_broadcast=True, manual_destinations=None, is_member=None, on_peer_discovered=None, on_pairing_beacon=None, listen=True)` with `.start()`, `.stop()`, `.send_beacons_now()`, `.set_pairing(...)`, `.handle_datagram(data, sender_ip, sock=None)`, `.get_beacon_sighting(device_id)`.
+  - For P2-6: Snapshot export drops `_local_*` tables (`_local_addresses` dropped automatically).
+  - For P2-7: Network warnings in panel can call `get_unreachable_member_warnings(conn, members)`. When integrating with legacy sync, set `listen=False` on `DiscoveryService` and hook `sync_peer.on_v3_beacon = discovery_svc.handle_datagram`.
+  - For P3-5: The session HELLO payload includes `addresses = export_gossip_addresses(conn, max_age_days=7)`, receiving HELLO calls `merge_gossip_addresses(conn, peer_addresses, own_device_id=own_dev, is_member=...)`. Outgoing session connect loop calls `get_connect_order(conn, device_id, beacon_addr=discovery.get_beacon_sighting(device_id))` to determine attempt order.
+
 ### P2-4 — review fixes — 2026-09-24
 - Model: Claude Opus 5.5 (review by Claude Opus 5.5)   Commit: uncommitted
 - Fixed from the review:
