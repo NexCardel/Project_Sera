@@ -78,6 +78,8 @@ class SeraDatabase:
         self._sync_revision_hook = None
         self.raw_db_was_reset = None
         self._master_db_failed = False
+        self._sync_mode = "off"  # read from _sync_meta in _init_schema
+        self._seal_timer = None
         try:
             import sync_identity
             db_dir = os.path.dirname(os.path.abspath(db_path))
@@ -412,6 +414,7 @@ class SeraDatabase:
     @contextmanager
     def _connect(self):
         conn = sqlite3.connect(self.db_path)
+        depth = self._enter_connection()
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
             conn.execute("PRAGMA foreign_keys = ON;")
@@ -424,6 +427,7 @@ class SeraDatabase:
             conn.commit()
             if conn.total_changes:
                 self._note_write()
+                self._mark_seal_needed("master")
         except sqlite3.IntegrityError as e:
             conn.rollback()
             raise e
@@ -441,6 +445,9 @@ class SeraDatabase:
             raise
         finally:
             conn.close()
+            self._leave_connection()
+        if depth == 0:
+            self._seal_after_commit()
 
     def _generation_key(self) -> str:
         return os.path.normcase(os.path.abspath(self.db_path))
@@ -460,6 +467,7 @@ class SeraDatabase:
     def _connect_raw(self):
         """Dedicated connection for rawPayload.db."""
         conn = sqlite3.connect(self.raw_db_path)
+        depth = self._enter_connection()
         try:
             conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
             conn.execute("PRAGMA foreign_keys = ON;")
@@ -469,6 +477,8 @@ class SeraDatabase:
             conn.execute("PRAGMA temp_store = MEMORY;")
             yield conn
             conn.commit()
+            if conn.total_changes:
+                self._mark_seal_needed("raw")
         except sqlite3.IntegrityError as e:
             conn.rollback()
             raise e
@@ -483,6 +493,104 @@ class SeraDatabase:
             raise
         finally:
             conn.close()
+            self._leave_connection()
+        if depth == 0:
+            self._seal_after_commit()
+
+    # ─── Sera Sync v3 change capture (P3-3) ───────────────────────────────────
+    # The capture triggers fill _sync_pending; the sealer (sync_capture.seal) turns it into
+    # _sync_changes. It runs when the outermost _connect/_connect_raw of a thread has committed
+    # a change (an inner seal would wait on the outer connection's write lock), and every 5 s
+    # from SealTimer for writes made by other processes. Only in sync mode shadow/live.
+
+    def _enter_connection(self) -> int:
+        depth = getattr(self._local, "conn_depth", 0)
+        self._local.conn_depth = depth + 1
+        return depth
+
+    def _leave_connection(self) -> None:
+        self._local.conn_depth = max(0, getattr(self._local, "conn_depth", 1) - 1)
+
+    def _mark_seal_needed(self, which: str) -> None:
+        if getattr(self, "_sync_mode", "off") in ("shadow", "live"):
+            dirty = getattr(self._local, "seal_dirty", None)
+            if dirty is None:
+                dirty = self._local.seal_dirty = set()
+            dirty.add(which)
+
+    def _seal_after_commit(self) -> None:
+        dirty = getattr(self._local, "seal_dirty", None)
+        if not dirty:
+            return
+        which = [w for w in ("master", "raw") if w in dirty]
+        dirty.clear()
+        try:
+            self.seal_pending(which, timeout=0.25)
+        except Exception as e:
+            # Never break the caller's committed write; the timer seal retries.
+            print(f"[database] Sync seal after commit deferred: {e}")
+
+    def get_sync_mode(self) -> str:
+        return getattr(self, "_sync_mode", "off")
+
+    def set_sync_mode(self, mode: str) -> None:
+        """Writes _sync_meta.mode ('off' | 'shadow' | 'live') in both databases."""
+        if mode not in ("off", "shadow", "live"):
+            raise ValueError(f"unknown sync mode {mode!r}")
+        if mode != "off":
+            # Without a device id the sealer can't number changes, and pending rows would pile up.
+            for opener in (self._connect, self._connect_raw):
+                with opener() as conn:
+                    row = conn.execute("SELECT value FROM _sync_meta WHERE key = 'device_id'").fetchone()
+                if not (row and row[0]):
+                    raise ValueError(f"sync mode {mode!r} needs this PC's device id (pair it first)")
+        for opener in (self._connect, self._connect_raw):
+            with opener() as conn:
+                conn.execute(
+                    "INSERT INTO _sync_meta(key, value) VALUES ('mode', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (mode,))
+        self._sync_mode = mode
+
+    def _admin_signer(self):
+        """The office admin private key if this PC holds it, else None (P3-3 admin_lww sealing)."""
+        try:
+            import sync_admin
+            return sync_admin.load_admin_key(os.path.dirname(os.path.abspath(self.db_path)))
+        except Exception:
+            return None
+
+    def seal_pending(self, which=("master", "raw"), timeout: float = 5.0) -> dict:
+        """Seals pending captured changes of master.db and/or rawPayload.db (master first, so
+        a tracker row's client is sealed before it). Returns {"master"|"raw": SealResult}."""
+        if self.get_sync_mode() not in ("shadow", "live"):
+            return {}
+        import sync_capture
+        results = {}
+        seq_state = sync_capture.seq_state_path(self.db_path)
+        if "master" in which:
+            results["master"] = sync_capture.seal(self.db_path, self.hex_key, "master",
+                                                  get_signer=self._admin_signer, timeout=timeout,
+                                                  seq_state=seq_state)
+        if "raw" in which:
+            results["raw"] = sync_capture.seal(self.raw_db_path, self.hex_key, "raw",
+                                               master_path=self.db_path,
+                                               get_signer=self._admin_signer, timeout=timeout,
+                                               seq_state=seq_state)
+        return results
+
+    def start_seal_timer(self, interval: float = None) -> None:
+        """Seals every 5 s (writes by DOM_Parser/SDC_Parser and other processes). Idempotent."""
+        if self._seal_timer is not None:
+            return
+        import sync_capture
+        self._seal_timer = sync_capture.SealTimer(
+            self.seal_pending, interval or sync_capture.SEAL_TIMER_SECONDS)
+        self._seal_timer.start()
+
+    def stop_seal_timer(self) -> None:
+        timer, self._seal_timer = self._seal_timer, None
+        if timer is not None:
+            timer.stop()
 
     def close(self):
         pass
@@ -758,6 +866,15 @@ class SeraDatabase:
 
             import sync_tables
             sync_tables.ensure_sync_infrastructure(conn, "raw", device_id=self._device_id)
+            # rawPayload.db follows master.db's sync mode (P3-3 review): an auto-healed
+            # (P0-8) or replaced rawPayload.db starts in 'off' and would stop capturing.
+            if not self._master_db_failed:
+                raw_mode = conn.execute("SELECT value FROM _sync_meta WHERE key = 'mode'").fetchone()
+                if ((raw_mode[0] if raw_mode else None) or "off") != self._sync_mode:
+                    conn.execute(
+                        "INSERT INTO _sync_meta(key, value) VALUES ('mode', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (self._sync_mode,))
+                    print(f"[database] rawPayload.db sync mode set to master.db's: {self._sync_mode}")
 
     def _migrate_tracker_dump_to_raw_payload_db(self):
         """One-time migration: moves any historical tracker_dump rows from master.db to rawPayload.db, then drops tracker_dump in master.db."""
@@ -990,6 +1107,8 @@ class SeraDatabase:
 
             import sync_tables
             sync_tables.ensure_sync_infrastructure(conn, "master", device_id=self._device_id)
+            mode_row = conn.execute("SELECT value FROM _sync_meta WHERE key = 'mode'").fetchone()
+            self._sync_mode = (mode_row[0] if mode_row else None) or "off"
 
         self.load_ini_defaults()
         # re_resolve_all_tracker_dumps() used to run here, on every open: ~3 s of the app's

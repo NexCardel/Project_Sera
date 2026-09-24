@@ -261,6 +261,10 @@ class SeraApp:
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
             self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
             memory_mark("  vault: database opened")
+            # Sera Sync v3 (P3-3): seals captured changes every 5 s, incl. writes by the parsers.
+            # A no-op while the sync mode is 'off'.
+            self.db.start_seal_timer()
+            self.app.aboutToQuit.connect(self.db.stop_seal_timer)
 
             # Ensure FST, SDC, SCA, and tracker settings are initialized
             if self.db.get_setting("sdc_enabled") is None:

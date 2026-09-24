@@ -308,7 +308,10 @@ def ensure_sync_tables(conn: sqlite3.Connection, db_name: str, device_id: Option
 
 
 def ensure_sync_infrastructure(conn: sqlite3.Connection, db_name: str, device_id: Optional[str] = None) -> list[str]:
-    """Runs full sync infrastructure initialization (gid columns + triggers + sync tables)."""
+    """Runs full sync infrastructure initialization (gid columns + triggers + sync tables +
+    P3-3 capture triggers)."""
     processed = ensure_gid_columns(conn, db_name)
     ensure_sync_tables(conn, db_name, device_id=device_id)
+    import sync_capture
+    sync_capture.ensure_capture_triggers(conn, db_name)
     return processed
