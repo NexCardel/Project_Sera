@@ -95,6 +95,8 @@ def _clean_exported_db(db_path: Path, dek_hex: str) -> None:
             elif table in LOCAL_MODE_TABLES:
                 conn.execute(f'DELETE FROM "{table}";')
         conn.commit()
+        # Purge deleted rows and tables from freelists so no IP or local history remains
+        conn.execute("VACUUM;")
     finally:
         conn.close()
 
@@ -282,19 +284,46 @@ def _verify_downloaded_db(db_path: Path, dek_hex: str) -> None:
         conn.close()
 
 
+def _backup_db_and_sidecars(db_path: Path, ts: str) -> None:
+    """Rename existing db and any -wal/-shm/-journal sidecars to *.bak-<ts> (§0 rule 3)."""
+    if db_path.exists():
+        backup_target = db_path.with_name(f"{db_path.name}.bak-{ts}")
+        if backup_target.exists():
+            backup_target = db_path.with_name(f"{db_path.name}.bak-{ts}_{time.time_ns() % 1000000}")
+        os.replace(db_path, backup_target)
+        _log.info("Backed up existing database %s to %s", db_path.name, backup_target.name)
+    for ext in ("-wal", "-shm", "-journal"):
+        sc = Path(f"{db_path}{ext}")
+        if sc.exists():
+            sc_bak = db_path.with_name(f"{db_path.name}{ext}.bak-{ts}")
+            try:
+                os.replace(sc, sc_bak)
+            except OSError:
+                pass
+
+
 def _install_downloaded_files(app_dir: Path, files: list[tuple[Path, str]]) -> list[str]:
-    """Atomic installation into app_dir using os.replace, cleaning sidecars and pairing.json."""
+    """Atomic installation into app_dir using os.replace with backups, installing master.db last."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    installed_names = {filename for _, filename in files}
+
+    # If rawPayload.db exists locally but is not part of this snapshot, set it aside
+    # so an old-key rawPayload.db doesn't break office mode startup (§0 rule 3).
+    if RAW_DB_NAME not in installed_names:
+        local_raw = app_dir / RAW_DB_NAME
+        if local_raw.exists():
+            _backup_db_and_sidecars(local_raw, ts)
+
+    # Install order: install non-master DBs first, master.db LAST.
+    # has_pending_join checks for master.db existence; installing master.db last ensures
+    # a crash mid-install leaves has_pending_join() True so start-up resumes properly.
+    files_sorted = sorted(files, key=lambda pair: 1 if pair[1] == MASTER_DB_NAME else 0)
+
     installed = []
-    for src_path, filename in files:
+    for src_path, filename in files_sorted:
         dest_path = app_dir / filename
-        # Clean any stale sidecars in app_dir
-        for ext in ("-wal", "-shm", "-journal"):
-            sc = Path(f"{dest_path}{ext}")
-            if sc.exists():
-                try:
-                    sc.unlink(missing_ok=True)
-                except OSError:
-                    pass
+        _backup_db_and_sidecars(dest_path, ts)
         os.replace(src_path, dest_path)
         installed.append(filename)
 
@@ -375,7 +404,7 @@ def download_snapshot(
         if not isinstance(files_meta, list) or not files_meta:
             raise SnapshotVerificationError("Snapshot manifest contains no database files")
 
-        # Download each file
+        # Download each file with per-chunk progress reporting
         for f in files_meta:
             if not isinstance(f, dict):
                 raise SnapshotError("Invalid file entry in snapshot manifest")
@@ -400,7 +429,41 @@ def download_snapshot(
             if on_progress:
                 on_progress(fname, 0, size)
 
-            actual_sha = session.recv_file(target_path, size)
+            class _Sink:
+                def __init__(self, f_out):
+                    self.f_out = f_out
+                    self.h = hashlib.sha256()
+
+                def write(self, data):
+                    self.f_out.write(data)
+                    self.h.update(data)
+
+            received = 0
+            ok = False
+            with open(target_path, "xb") as f_out:
+                sink = _Sink(f_out)
+                try:
+                    while received < size:
+                        chunk_frame = session.recv()
+                        if chunk_frame.get("t") != sync_transport.FRAME_CHUNK:
+                            raise SnapshotError(f"Expected chunk frame, got {chunk_frame.get('t')!r}")
+                        n = chunk_frame.get("n", 0)
+                        if n > size - received:
+                            raise SnapshotError("More file data than announced")
+                        if n == 0:
+                            raise SnapshotError("Empty chunk in file transfer")
+                        received += session.read_chunk(sink)
+                        if on_progress:
+                            on_progress(fname, received, size)
+                    ok = True
+                finally:
+                    if not ok:
+                        try:
+                            target_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+            actual_sha = sink.h.hexdigest()
             if actual_sha != expected_sha:
                 try:
                     target_path.unlink(missing_ok=True)
@@ -409,9 +472,6 @@ def download_snapshot(
                 raise SnapshotVerificationError(
                     f"SHA-256 mismatch for {fname}: got {actual_sha}, expected {expected_sha}"
                 )
-
-            if on_progress:
-                on_progress(fname, size, size)
 
             downloaded_files.append((target_path, fname))
 
@@ -432,7 +492,7 @@ def download_snapshot(
                     pass
             raise
 
-    # Install into app_dir via os.replace
+    # Install into app_dir via os.replace with automatic backup of pre-existing DBs
     installed = _install_downloaded_files(app_dir, downloaded_files)
     _log.info("Installed snapshot databases: %s", ", ".join(installed))
     return installed
@@ -445,11 +505,16 @@ def resume_join_snapshot(
     timeout: float = SNAPSHOT_TIMEOUT_SECONDS,
     on_progress: Callable[[str, int, int], None] | None = None,
 ) -> list[str]:
-    """Resume an interrupted join by reading pairing.json and downloading the snapshot."""
+    """Resume an interrupted join by reading pairing.json, validating records, and downloading the snapshot."""
+    import sync_admin
     app_dir = Path(app_dir)
     join_state_file = app_dir / "incoming" / JOIN_DIRNAME / PAIRING_STATE_FILE
     if not join_state_file.exists():
         raise SnapshotError(f"No pending join state found at {join_state_file}")
+
+    office = sera_keys.load_office(app_dir)
+    if office is None:
+        raise SnapshotError("Office information (office.json) is missing on this workstation")
 
     try:
         state = json.loads(join_state_file.read_text(encoding="utf-8"))
@@ -463,11 +528,20 @@ def resume_join_snapshot(
     if not admin_device_id or not admin_address or not isinstance(records, list):
         raise SnapshotError("Pairing state file is missing required admin or member records")
 
+    # Re-verify member records against office.admin_pubkey before using
+    verified_records = []
+    for r in records:
+        try:
+            rec = sync_admin.verify_record(r, office.admin_pubkey)
+            verified_records.append(rec)
+        except Exception as exc:
+            raise SnapshotVerificationError(f"A member record in pairing.json failed verification: {exc}") from None
+
     return download_snapshot(
         app_dir,
         admin_address,
         admin_device_id,
-        records,
+        verified_records,
         port=port,
         timeout=timeout,
         on_progress=on_progress,

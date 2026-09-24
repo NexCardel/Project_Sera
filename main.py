@@ -209,10 +209,28 @@ class SeraApp:
         if self.key_mode == "office" and not os.path.exists(self.db_path):
             import sync_snapshot
             if sync_snapshot.has_pending_join(self.app_dir):
-                try:
-                    sync_snapshot.resume_join_snapshot(self.app_dir)
-                except Exception as exc:
-                    print(f"[-] Could not resume interrupted join snapshot: {exc}")
+                from PySide6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    None,
+                    "Aman Associates — Resume Office Join",
+                    "An office join was in progress but interrupted before the database snapshot could be downloaded.\n\n"
+                    "Would you like to connect to the admin PC now and complete the join?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply == QMessageBox.Yes:
+                    try:
+                        sync_snapshot.resume_join_snapshot(self.app_dir)
+                    except Exception as exc:
+                        QMessageBox.critical(
+                            None,
+                            "Office Join Failed",
+                            f"Could not complete office join: {exc}\n\n"
+                            "Please check that the admin PC is online and running Sera, then restart the application to retry.",
+                        )
+                        sys.exit(1)
+                else:
+                    sys.exit(0)
             if not os.path.exists(self.db_path):
                 self._handle_missing_office_db(self.app_dir, self.db_path, hex_key)
 

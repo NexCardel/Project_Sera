@@ -581,3 +581,104 @@ def test_empty_files_in_manifest_rejected(tmp_path, admin):
             download_snapshot(joiner_dir, "127.0.0.1", admin.device_id, join_res.records, port=srv.address[1], timeout=10.0)
     finally:
         srv.stop()
+
+
+def test_existing_database_and_sidecars_backed_up(tmp_path, admin):
+    """B1 requirement: Pre-existing databases and sidecars must be renamed to *.bak-<ts> (§0 rule 3)."""
+    p_win = admin.window()
+    joiner_dir = tmp_path / "joiner_backup_pc"
+    joiner_dir.mkdir(parents=True, exist_ok=True)
+    join_res = sync_pairing.join_office(joiner_dir, "127.0.0.1", p_win.code, "Workstation B1", port=p_win.port)
+    p_win.close()
+
+    # Pre-create a previous master.db and sidecars on joiner (e.g. from an earlier diverged install)
+    old_master = joiner_dir / "master.db"
+    old_master.write_bytes(b"OLD PREEXISTING MASTER DATA")
+    old_wal = joiner_dir / "master.db-wal"
+    old_wal.write_bytes(b"OLD WAL DATA")
+    old_shm = joiner_dir / "master.db-shm"
+    old_shm.write_bytes(b"OLD SHM DATA")
+
+    sync_srv = admin.start_sync_server()
+    download_snapshot(joiner_dir, "127.0.0.1", admin.device_id, join_res.records, port=sync_srv.address[1], timeout=30.0)
+
+    # Verify new master.db is in place
+    assert (joiner_dir / "master.db").stat().st_size > 0
+    assert (joiner_dir / "master.db").read_bytes() != b"OLD PREEXISTING MASTER DATA"
+
+    # Verify backup files were created (§0 rule 3)
+    baks = list(joiner_dir.glob("master.db.bak-*"))
+    assert len(baks) >= 1
+    assert baks[0].read_bytes() == b"OLD PREEXISTING MASTER DATA"
+
+    wal_baks = list(joiner_dir.glob("master.db-wal.bak-*"))
+    assert len(wal_baks) >= 1
+    assert wal_baks[0].read_bytes() == b"OLD WAL DATA"
+
+    shm_baks = list(joiner_dir.glob("master.db-shm.bak-*"))
+    assert len(shm_baks) >= 1
+    assert shm_baks[0].read_bytes() == b"OLD SHM DATA"
+
+
+def test_unreplaced_local_raw_payload_db_set_aside(tmp_path, admin):
+    """B1 requirement: If local rawPayload.db exists but snapshot has none, back it up and set it aside."""
+    p_win = admin.window()
+    joiner_dir = tmp_path / "joiner_orphan_raw_pc"
+    joiner_dir.mkdir(parents=True, exist_ok=True)
+    join_res = sync_pairing.join_office(joiner_dir, "127.0.0.1", p_win.code, "Workstation Orphan Raw", port=p_win.port)
+    p_win.close()
+
+    # Pre-create an old local rawPayload.db (e.g. encrypted with old password)
+    old_raw = joiner_dir / "rawPayload.db"
+    old_raw.write_bytes(b"OLD ENCRYPTED RAW CONTENT")
+
+    # Custom server that exports only master.db
+    member_recs = [r for r in join_res.records if "cert_pem" in r]
+    admin_members = sync_transport.MemberSet.from_records(member_recs, own_cert_pem=admin.identity.cert_pem)
+    transport = sync_transport.SyncTransport(admin.cert_chain, admin_members)
+
+    def master_only_handler(session):
+        session.recv()
+        with sync_snapshot.temp_snapshot_export(admin.app, admin.dek) as (manifest, files):
+            # Send only master.db
+            single_manifest = dict(manifest)
+            single_manifest["files"] = [f for f in manifest["files"] if f["name"] == "master.db"]
+            session.send(single_manifest)
+            for f in files:
+                if f.name == "master.db":
+                    session.send_file(f)
+
+    srv = transport.serve(master_only_handler, host="127.0.0.1", port=0)
+    try:
+        download_snapshot(joiner_dir, "127.0.0.1", admin.device_id, join_res.records, port=srv.address[1], timeout=30.0)
+        # Verify local rawPayload.db is gone from active location so office startup doesn't choke on it
+        assert not (joiner_dir / "rawPayload.db").exists()
+        # But backed up (§0 rule 3)
+        raw_baks = list(joiner_dir.glob("rawPayload.db.bak-*"))
+        assert len(raw_baks) >= 1
+        assert raw_baks[0].read_bytes() == b"OLD ENCRYPTED RAW CONTENT"
+    finally:
+        srv.stop()
+
+
+def test_progress_callback_receives_updates(tmp_path, admin):
+    """Verify on_progress callback receives chunk-level progress updates."""
+    p_win = admin.window()
+    joiner_dir = tmp_path / "joiner_prog_pc"
+    joiner_dir.mkdir(parents=True, exist_ok=True)
+    join_res = sync_pairing.join_office(joiner_dir, "127.0.0.1", p_win.code, "Workstation Prog", port=p_win.port)
+    p_win.close()
+
+    progress_events = []
+    def on_prog(fname, received, total):
+        progress_events.append((fname, received, total))
+
+    sync_srv = admin.start_sync_server()
+    download_snapshot(joiner_dir, "127.0.0.1", admin.device_id, join_res.records, port=sync_srv.address[1], timeout=30.0, on_progress=on_prog)
+
+    assert len(progress_events) >= 2
+    # Check that final event for each file reports 100%
+    master_events = [e for e in progress_events if e[0] == "master.db"]
+    assert master_events[0][1] == 0
+    assert master_events[-1][1] == master_events[-1][2]
+
