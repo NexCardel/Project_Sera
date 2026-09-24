@@ -28,7 +28,7 @@ def test_installer_firewall_rules():
         or f'program=""{{app}}\\{exe_name}""' in run_part
     )
     assert 'enable=yes' in run_part
-    assert 'profile=private,domain' in run_part
+    assert 'profile=private,domain,public' in run_part
     assert 'Flags: runhidden' in run_part
 
     # Verify [UninstallRun] section exists and contains firewall delete rule and RunOnceId

@@ -1013,7 +1013,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Notes for later WPs: `hint` is advisory text for logs/toasts only — never branch protocol logic on its presence, only on `reason` (P3-5's own version-mismatch handling is unrelated code, not an extension of this field).
 
 ### P0-10 — Discovery that reaches Wi-Fi and other subnets — Done (Reviewed by Claude Opus 5.5) — 2026-09-24
-- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Model: Gemini 3.8 Flash   Commit: 66feefe
 - Tests: 859 passed / 10 failed / 2 skipped (10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests: test_peer_ip_change_updates_entry, test_manual_peer_unicast_beacon, test_directed_broadcast_addresses_skips_loopback_and_link_local, test_sync_manual_peers_setting_and_skips_own_address, test_sera_sync_dialog_add_pc_by_ip_validates_and_stores, test_manual_beacon_bad_port_isolation, test_malformed_beacon_does_not_crash_listener, test_unicast_beacon_reply_rate_limit, test_sync_peer_service_remove_manual_peer, test_sera_sync_dialog_remove_pc_by_ip, test_sera_sync_dialog_table_context_menu_remove
 - Deviations from spec:
   - `MANUAL_PEER_INTERVAL_SEC` set to 10s (instead of 30s) to prevent manual peers from flapping/timing out against `PEER_TIMEOUT_SEC = 30s` (addresses review finding #1).
@@ -1033,6 +1033,14 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - Added pure-Python `ifaddr>=0.2.0` dependency to `requirements.txt`.
 - Addition beyond the spec (reviewed by Claude Opus 5.5, 2026-09-24): **removing manual addresses.** A "Remove PC by IP" button and a right-click "Remove … from Manual Peers" on peer rows. `SyncPeerService.remove_manual_peer` removes only the exact entry (removing `ip:port` leaves a separate plain `ip` entry, and vice versa), drops peers with that IP from the table and notifies the panel. Tests: `test_sync_peer_service_remove_manual_peer`, `test_sera_sync_dialog_remove_pc_by_ip`, `test_sera_sync_dialog_table_context_menu_remove`.
   - **For P0-11 (operations doc):** in Phase 0 `sync_manual_peers` only reaches other PCs through a whole-DB push, so removing an address affects this PC only; other PCs keep contacting it, and a later push from a PC that still has it puts it back. A removed PC can also stay visible if it's found by broadcast or still lists this PC (this PC still answers its beacons).
+
+### P0-11 — Docs: operations-sync.md update — Done — 2026-09-24
+- Model: Gemini 3.7 Flash   Commit: df695f8
+- Tests: full suite: 859 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5)
+- Deviations from spec: none
+- Notes for later WPs:
+  - `docs/operations-sync.md` is updated to describe all Phase 0 architectural changes: multi-adapter broadcast, hostname-keyed peers, "Add PC by IP" manual discovery (`sync_manual_peers`), Public-network security warnings and firewall scope, the first-run Join flow with 6-digit verification code and on-screen approval, WAL snapshotting with `sqlcipher_export`, startup database staging/swapping (`apply_pending_swap`), HMAC authentication, prohibition of Syncthing/external file synchronizers on live active databases (with legacy conflict file recovery preserved in Admin Restore), and explicit notation that `inv_frames` whole-DB authority is transitional and stays only until Sera Sync v3.
+  - Completes Phase 0 work packages (P0-1 through P0-11).
 
 ---
 
