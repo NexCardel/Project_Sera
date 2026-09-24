@@ -1140,8 +1140,8 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - Empty bootstrapping node checks `peer.key_id == self.key_id` before initiating auto-pull.
   - `SeraSyncDialog` displays `"different office key — rejoin needed"` in Column 7 (warning color) and disables/warns on push attempts when `peer.key_id != local.key_id`.
 
-### P1-6 — Recovery, recovery kit, password change — In review — 2026-09-24
-- Model: Gemini 3.8 Flash   Commit: uncommitted
+### P1-6 — Recovery, recovery kit, password change — Done — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: 79149ab
 - Tests: full suite: 980 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5). 33 tests in `tests/test_office_recovery.py`: validate_master_password, change_master_password (success, with admin key, wrong old password, invalid new password, preserves old recovery as backup, missing office), export_recovery_kit (success, with admin key, wrong password, missing office), inspect_recovery_kit, restore_recovery_kit (success to fresh dir, wrong password, rejects foreign office kit, backs up existing files on same office), recover_dek DPAPI failure handling, AST check verifying no PySide6 import in sera_keys.py, plus UI dialog and main startup tests (OfficeRecoveryDialog unlock/attempts/restore-kit, ChangeMasterPasswordDialog, export_recovery_kit_flow, missing office DB prompt, missing office DB restore with sqlcipher3 + sidecars, missing office DB wrong key rejection, missing office DB unencrypted rejection, missing office DB cancel, exact password whitespace preservation, lenient stripped password fallback, and UnifiedSettingsDialog Backup page in office vs legacy mode).
 - Deviations from spec / additions & review resolutions:
   - Addressed all review findings:
