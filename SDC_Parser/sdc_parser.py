@@ -23,8 +23,23 @@ except ImportError:
     sys.exit(1)
 
 def get_db_hex_key():
+    """Derives the SQLCipher key: office key via sera_keys if this PC has one,
+    else the legacy sera.key / default password + sera.salt derivation."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.abspath(os.path.join(base_dir, ".."))
+    data_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
+
+    for key_dir in (data_dir, app_dir):
+        try:
+            if app_dir not in sys.path:
+                sys.path.insert(0, app_dir)
+            import sera_keys
+            office = sera_keys.load_office(key_dir)
+            if office is not None:
+                dek = sera_keys.load_dek(key_dir)
+                return sera_keys.dek_hex(dek)
+        except Exception:
+            pass
 
     salt_candidates = [
         os.path.join(app_dir, "sera.salt"),
