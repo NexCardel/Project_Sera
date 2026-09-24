@@ -207,7 +207,14 @@ class SeraApp:
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
         if self.key_mode == "office" and not os.path.exists(self.db_path):
-            self._handle_missing_office_db(self.app_dir, self.db_path, hex_key)
+            import sync_snapshot
+            if sync_snapshot.has_pending_join(self.app_dir):
+                try:
+                    sync_snapshot.resume_join_snapshot(self.app_dir)
+                except Exception as exc:
+                    print(f"[-] Could not resume interrupted join snapshot: {exc}")
+            if not os.path.exists(self.db_path):
+                self._handle_missing_office_db(self.app_dir, self.db_path, hex_key)
 
         from ui.dialogs.loading_dialog import StartupLoadingDialog
         loading_dlg = StartupLoadingDialog()

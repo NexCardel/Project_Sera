@@ -1336,7 +1336,33 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Tests: `tests/test_sync_pairing.py` now has 38 tests (5 new). `test_no_second_session_between_join_and_close[right]` and `test_close_ends_a_running_session_whatever_the_reason` both **failed on the unfixed code** (the second PC paired, getting letter C), and pass now. Also new: `[wrong]` variant, `test_repeated_stalls_from_one_address_are_warned_about`, `test_install_writes_database_after_key_files_and_checks_it`; `test_connection_without_a_guess_is_not_counted` also checks `stalled_connections`. The file passed 3 runs in a row. Full suite: 1143 passed / 10 failed / 2 skipped (same 10 pre-existing).
 - Deviations from spec: none beyond the P2-4 entry above.
 
+### P2-6 — Snapshot service and joiner install — Done — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 8 passed in `tests/test_sync_snapshot.py` (including acceptance tests `test_join_snapshot_end_to_end` and `test_corrupt_snapshot_rejected`). 195 passed in sync test suite. Full suite: 1173 passed / 17 failed (10 pre-existing documented failures: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5 + 6 unmerged Phase 3 convergence test failures + 1 transient socket timeout in transport test under heavy suite load; passes when run individually) / 3 skipped.
+- Deviations from spec: none.
+- Notes for later WPs:
+  - `sync_snapshot.py` implements:
+    - `handle_snapshot_session(session, app_dir)`: server handler for incoming mTLS connections requesting `{"t": "snapshot"}`. Exports DBs in `BEGIN IMMEDIATE`, drops `_local_*` tables, clears rows of local-mode tables (`client_activity_stats`, `client_recent_activity`), keeps all `app_settings` rows (D7), and streams manifest + chunked database files.
+    - `download_snapshot(app_dir, host, admin_device_id, records, port=49159, timeout=60.0, connect_timeout=10.0, on_progress=None) -> list[str]`: joins mTLS session to admin PC, downloads snapshot files to `incoming/join/`, checks SHA-256, verifies `key_id`/`office_id` match `office.json`, tests SQLCipher decryption with DEK, verifies empty `cipher_integrity_check` and `quick_check` "ok", and installs with `os.replace`. Cleans up `pairing.json`. Supports `on_progress(filename, bytes_transferred, total_bytes)` callback for UI progress bar in P2-7.
+    - `has_pending_join(app_dir) -> bool`: returns True if `incoming/join/pairing.json` exists without `master.db`.
+    - `resume_join_snapshot(app_dir, port=49159, timeout=60.0, on_progress=None) -> list[str]`: reads `incoming/join/pairing.json` and resumes the snapshot download.
+    - `make_office_snapshot(app_dir, dest_dir)` / `temp_snapshot_export(app_dir, dek)`: utilities for export.
+  - For P2-7 UI: In "Join office" wizard, after `join_office(...)` returns `JoinResult`, call `download_snapshot(app_dir, res.admin_address, res.admin_device_id, res.records, on_progress=...)` to show the download progress bar before completing setup.
+
+### P3-0 — Multi-node test harness + convergence tests — In review — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: `tests/test_sync_harness.py` 7 passed; `tests/test_sync_convergence.py` 6 failed, 1 skipped (tests (a)-(f) fail as expected before P3-3 starts, serving as definition of done for P3-3..P3-5). Full test suite run completed with no regressions against baseline (10 pre-existing documented failures).
+- Files: new `tests/sync_harness.py`, `tests/test_sync_harness.py`, `tests/test_sync_convergence.py`.
+- Deviations from spec: none.
+- Notes for later WPs:
+  - `tests/sync_harness.py` exports `SyncHarness`, `HarnessNode`, and `digest(node_or_db)`.
+  - Bootstraps admin Node 0 and pairs joiner nodes 1..N-1 through real `PairingWindow` and `join_office` (P2-4).
+  - Schema details observed: `clients` does not have a `pan` column (PAN is stored via EAV in `client_values` with `column_id=1`); `client_values` has PK `(client_id, column_id)` without `updated_at`; `app_settings` has PK `key` without `updated_at`.
+  - `SyncHarness.digest(node_or_db)` computes a deterministic SHA-256 hash over replicated tables in `master.db` and `rawPayload.db`, excluding local `id` primary keys and translating foreign keys to `gid` when present (per P3-7).
+  - Tests (a)–(f) in `tests/test_sync_convergence.py` will pass once P3-3..P3-5 sync and replication loops are implemented.
+
 ---
+
 
 
 ## 10. Doc changelog
