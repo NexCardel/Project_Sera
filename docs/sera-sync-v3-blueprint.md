@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | Design approved 2026-09-23. Nothing implemented yet. Doc version **1.4** (changelog in §10). |
-| **Agent table** | `docs/sera-sync-v3-agents.xlsx`: which model may do which WP, and status tracking. Agents update it only through `tools/sync_v3_tracker.py` (§8). |
+| **Status** | Design approved 2026-09-23. Nothing implemented yet. Doc version **1.5** (changelog in §10). |
+| **Agent table** | `docs/sera-sync-v3-agents.xlsx`: a read-only viewer showing which model may do which WP, and the status. Status lives in `docs/sera-sync-v3-status.csv` / `-checks.csv`, which agents update only through `tools/sync_v3_tracker.py` (§8). |
 | **Owner** | Nex |
 | **Baseline** | commit `4963ab8` (line numbers below refer to this commit) |
 | **Replaces** | the design in `sync_peer.py` ("Sera Sync v2") and `docs/operations-sync.md` §1–2 |
@@ -28,7 +28,7 @@ This document is written so a work package (WP) can be handed to an implementing
 11. **When a T3 step in a WP says "stop and ask", do exactly that.**
 12. **Client privacy:** logs, test fixtures, reports and chat output may show only PAN, client name, status, ARNs/reference codes, form types, periods and timestamps. Never print or copy email addresses, phone numbers, bank details, addresses or passwords (same rule as `GEMINI.md`). Test data is invented, never copied from a real DB.
 13. **Keep the doc in step with the code:** see §8.3. You record progress and deviations; you don't rewrite the spec yourself.
-14. **Update the tracker spreadsheet only with `tools/sync_v3_tracker.py`**, never by editing the xlsx directly. If the tool says `REFUSED`, don't work around it: report the message to the owner.
+14. **Record progress only with `tools/sync_v3_tracker.py`.** Never edit the status CSVs, `docs/sera-sync-v3-plan.json` or the xlsx by hand. Commit the status CSVs with each WP. Don't commit `docs/sera-sync-v3-agents.xlsx` unless it was rebuilt with `tools/build_sync_v3_tracker.py`. If the tool says `REFUSED`, don't work around it: report the message to the owner.
 
 ### Intelligence tiers used in this document
 
@@ -809,7 +809,7 @@ One declarative table. The implementer **verifies each row against the code** an
 
 ### 8.1 Starting a session for one WP
 - One WP per chat session. Always start a **fresh** session; don't continue an old one.
-- **Close the xlsx in Excel first.** The tool can't save while Excel has it open.
+- The xlsx can stay open in Excel. Agents write the status CSVs, never the workbook. Press **Data → Refresh All** (Ctrl+Alt+F5) to see new status; it also refreshes on open and every minute.
 - Open the session in the project folder `C:\Users\Nex\Downloads\Project Sera\APP`. Pick a model the agent table allows for that WP's tier (`docs/sera-sync-v3-agents.xlsx`: the **Work Packages** columns "Recommended Claude" / "Gemini allowed", or the **Models** sheet). The tool refuses a model that isn't allowed.
 - Paste this prompt, changing only `<WP-ID>` and `<MODEL NAME>`:
 
@@ -841,12 +841,13 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
    If it prints REFUSED, tell me why and don't work around it.
    ```
    The tool refuses Done without a commit, or without a review when one was needed.
-5. You don't edit the xlsx yourself. To see progress, open it in Excel (close it again before the next session), or ask any agent to run `venv\Scripts\python tools\sync_v3_tracker.py show`.
+5. You don't edit anything yourself. To see progress, refresh the xlsx in Excel, or ask any agent to run `venv\Scripts\python tools\sync_v3_tracker.py show`.
 
 ### 8.3 Keeping the doc in step with the code
 - **Two records, two jobs.**
   - §9 holds the *story*: what changed, deviations, notes for later WPs. Agents write it in this markdown file.
-  - The xlsx holds the *status*: Status, Model used, Reviewed by, Commit. Only `tools/sync_v3_tracker.py` writes it.
+  - `docs/sera-sync-v3-status.csv` holds the *status*: Status, Model used, Reviewed by, Commit. Only `tools/sync_v3_tracker.py` writes it; the xlsx just displays it.
+  - If the §3 table changes (a WP added, split, or its dependencies changed), whoever folds the change in also runs `venv\Scripts\python tools\build_sync_v3_tracker.py` with the xlsx closed. That regenerates `sera-sync-v3-plan.json` and the viewer, and keeps all recorded progress.
 
   Neither is copied into the other.
 - **Agents only append to §9.** Every §9 entry uses this template:
@@ -864,7 +865,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 1. All WPs of the phase show **Done** in the xlsx, and the review-marked ones have been reviewed.
 2. Run the full test suite once more in a fresh session: "Run the full test suite and report failures only."
 3. Do a hands-on check on two real PCs, or on one PC plus a spare laptop, using the phase's rows on the xlsx **Phase Checks** sheet.
-   - Record each result in Excel yourself, or tell an agent, for example: "run `venv\Scripts\python tools\sync_v3_tracker.py check 3 --result Pass --notes "spare laptop"`".
+   - Record each result by telling an agent (typing into Excel doesn't stick: the next refresh overwrites it), for example: "run `venv\Scripts\python tools\sync_v3_tracker.py check 3 --result Pass --notes "spare laptop"`".
    - `venv\Scripts\python tools\sync_v3_tracker.py checks` lists the check numbers.
 4. Release (you, not the agent; see §0 rule 5 and the release process). Then roll out as described in §6.
 5. Only then start the first WP of the next phase.
@@ -1122,7 +1123,25 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - Tests: 2 new (`test_rollforward_refuses_when_a_live_db_is_missing`, `test_crash_during_swap_rollback_is_finished_as_rollback`); file total 28. Full suite: 936 passed / 10 failed / 2 skipped (same 10 pre-existing).
 - Deviations from spec: none beyond the P1-4 entry above.
 
+### P1-5 — Key-fingerprint gate everywhere — In review (Reviewed by Claude Opus 5.5) — 2026-09-24
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Tests: 937 passed / 10 failed / 2 skipped (same 10 pre-existing: dom_page_replace, gst_dom_tracker, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); 8 tests in `tests/test_key_fingerprint.py`: `test_key_id_mismatch_rejected`, `test_auto_heal_disabled_in_office_mode`, `test_key_id_in_beacons_and_headers`, `test_bootstrap_autopull_skips_mismatched_key_id`, `test_dialog_shows_different_office_key`, `test_office_refuses_legacy_fetch_snapshot`, `test_office_push_sends_zero_salt_and_swap_does_not_install_salt`, `test_apply_pending_swap_preserves_stray_salt_as_stale_backup`.
+- Deviations / additions from spec:
+  - **Zero-salt in office mode**: in office mode (`self.key_id` set), `push_to` sends `salt_size = 0` and sends no salt bytes; `_handle_incoming_push` verifies `salt_size == 0` and writes `pending_swap.json` with no salt key. `apply_pending_swap` was updated so that when `salt` is absent, it swaps only `master.db` and leaves salt untouched (never creates or installs a fake `sera.salt`). Per §0 rule 3, any stray staged salt files in `incoming/` are preserved by renaming to timestamped `.stale-<ts>` copies rather than being unlinked.
+  - **Office mode rejects `fetch_snapshot`**: an office-mode PC (`self.key_id is not None`) immediately rejects legacy join `fetch_snapshot` requests with `{"status": "rejected", "reason": "KEY_ID_MISMATCH", "hint": "different office key — rejoin needed"}` rather than falling through to on-screen approval.
+  - **`SeraDatabase` auto-mode fallback**: `SeraDatabase.__init__` accepts `key_mode` or auto-detects via `keys/office.json`. If `office.json` is damaged or unreadable, it defaults to `"office"` mode as the safe choice.
+  - **Key check before signature check**: `_handle_incoming_push` verifies `key_id` match prior to `_verify_header` so callers receive the explicit `KEY_ID_MISMATCH` reason rather than generic `UNAUTHENTICATED`.
+  - **"Sync All" filtering**: `SeraSyncDialog._on_sync_all_clicked` filters peers to only those sharing the local `key_id`, blocking accidental bulk overwrites to legacy or foreign office PCs.
+- Notes for later WPs:
+  - Legacy UDP beacons and signed push/pull message headers include `key_id: self.key_id` when running in office mode.
+  - Push and pull requests are rejected with `{"status": "rejected", "reason": "KEY_ID_MISMATCH", "hint": "different office key — rejoin needed"}` if the sender and receiver key_id do not match (including legacy vs office, office vs legacy, or different office keys).
+  - In office mode, `make_snapshot` encrypts with the office DEK; receiver verification in `_handle_incoming_push` uses `self.hex_key` directly without reading `sera.key`.
+  - `SeraDatabase` checks `_is_office_mode()` in `_auto_heal_raw_db` and raises `RuntimeError` naming the file instead of wiping or recreating `rawPayload.db`, including when `rawPayload.db` is 0 bytes.
+  - Empty bootstrapping node checks `peer.key_id == self.key_id` before initiating auto-pull.
+  - `SeraSyncDialog` displays `"different office key — rejoin needed"` in Column 7 (warning color) and disables/warns on push attempts when `peer.key_id != local.key_id`.
+
 ---
+
 
 ## 10. Doc changelog
 
@@ -1131,3 +1150,4 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - **1.2** (2026-09-23): any PC in admin mode can change settings; `app_settings` is plain `lww`, not admin-signed (D3, D7, P2-2, P3-1 updated). Staff roster stays admin-PC-signed.
 - **1.3** (2026-09-23): agents update the xlsx only through `tools/sync_v3_tracker.py` (rule 14; §8.1–§8.4 prompts updated). Two phase checks added for the settings / staff rules.
 - **1.4** (2026-09-24): owner decision: the P0-9a firewall rule also covers the **Public** profile (`profile=private,domain,public`), so sync isn't silently blocked on PCs whose network is classified Public. Accepted risk: until Phase 2's mutual TLS, the legacy sync ports (HMAC-authenticated since P0-7) are also reachable on untrusted Public networks (hotel/café Wi-Fi). The P0-9b Public-network warning and its activity-log entry stay; only their wording changed, from "Windows Firewall may block LAN sync discovery" to a security note ("Sera Sync is reachable by other devices on this network … set it to Private"). `tests/test_installer_firewall.py` updated to the new rule.
+- **1.5** (2026-09-24): status moved out of the xlsx into `docs/sera-sync-v3-status.csv` / `-checks.csv` (written by `tools/sync_v3_tracker.py`, same commands). The xlsx is now a read-only viewer that pulls the CSVs in with Power Query, so it can stay open while agents work (refreshes on open, every minute, or Ctrl+Alt+F5). New `tools/build_sync_v3_tracker.py` regenerates `sera-sync-v3-plan.json` + the viewer from §3 and keeps progress. Rule 14 and §8 updated. "Ready?" now only says Ready for WPs not yet started.

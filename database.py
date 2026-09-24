@@ -50,9 +50,19 @@ _WRITE_GENERATION_LOCK = threading.Lock()
 
 
 class SeraDatabase:
-    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False):
+    def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False, key_mode: str = None):
         self.db_path = db_path
         self.hex_key = hex_key
+        if key_mode:
+            self.key_mode = key_mode
+        else:
+            db_dir = os.path.dirname(os.path.abspath(db_path))
+            try:
+                import sera_keys
+                self.key_mode = "office" if sera_keys.load_office(db_dir) is not None else "legacy"
+            except Exception:
+                self.key_mode = "office" if os.path.exists(os.path.join(db_dir, "keys", "office.json")) else "legacy"
+
         if raw_db_path:
             self.raw_db_path = raw_db_path
         else:
@@ -513,11 +523,18 @@ class SeraDatabase:
         except Exception as e:
             print(f"[database] _migrate_tracker_dump_nullable notice: {e}")
 
+    def _is_office_mode(self) -> bool:
+        return getattr(self, "key_mode", "legacy") == "office"
+
     def _auto_heal_raw_db(self):
         """Backs up an un-decryptable rawPayload.db (and its -wal/-shm/-journal sidecars) and lets
         _init_raw_schema recreate it with the active vault key. Nothing is removed unless every
         non-empty file was first copied or moved to a *.bak file (blueprint §0 rule 3).
         Returns True if the old files are out of the way, False if they were left untouched."""
+        if self._is_office_mode():
+            raise RuntimeError(
+                f"rawPayload.db could not be opened with this office's key (auto-heal is disabled in office mode): {self.raw_db_path}"
+            )
         import datetime, shutil
         now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"{self.raw_db_path}.key_mismatch_{now_str}.bak"
@@ -572,6 +589,10 @@ class SeraDatabase:
         # 1. A 0-byte dummy file is reset (and reported) too.
         if os.path.exists(self.raw_db_path) and os.path.getsize(self.raw_db_path) == 0:
             if not self._master_db_failed:
+                if self._is_office_mode():
+                    raise RuntimeError(
+                        f"rawPayload.db is 0 bytes and auto-heal is disabled in office mode: {self.raw_db_path}"
+                    )
                 print(f"[database] rawPayload.db is 0 bytes. Performing automatic recovery...")
                 self._auto_heal_raw_db()
 
@@ -587,6 +608,10 @@ class SeraDatabase:
                 if self._master_db_failed:
                     print(f"[database] rawPayload.db key mismatch, but master.db failed to open. Skipping auto-heal.")
                 else:
+                    if self._is_office_mode():
+                        raise RuntimeError(
+                            f"rawPayload.db could not be opened with this office's key (auto-heal is disabled in office mode): {self.raw_db_path}"
+                        ) from e
                     print(f"[database] rawPayload.db key mismatch: {e}. Performing automatic recovery...")
                     if not self._auto_heal_raw_db():
                         raise RuntimeError(

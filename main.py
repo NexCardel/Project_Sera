@@ -229,7 +229,7 @@ class SeraApp:
                 loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
-            self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True)
+            self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
             memory_mark("  vault: database opened")
 
             # Ensure FST, SDC, SCA, and tracker settings are initialized

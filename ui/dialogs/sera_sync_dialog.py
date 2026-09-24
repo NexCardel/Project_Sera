@@ -531,7 +531,12 @@ class SeraSyncDialog(QDialog):
 
             # 7: Status
             item7 = self.table.item(r_idx, 7) or QTableWidgetItem()
-            if peer.get("inv_frames", False):
+            local_key_id = getattr(self.sync_service, "key_id", None)
+            peer_key_id = peer.get("key_id")
+            if local_key_id != peer_key_id:
+                item7.setText("different office key — rejoin needed")
+                item7.setForeground(QColor("#FFA657"))
+            elif peer.get("inv_frames", False):
                 item7.setText("🛡️ Inv-Frames")
                 item7.setForeground(QColor("#F2C94C"))
             else:
@@ -569,6 +574,16 @@ class SeraSyncDialog(QDialog):
         peer_port = peer_data.get("sync_port", 49157)
         peer_username = peer_data.get("username", "Unknown")
         peer_inv = peer_data.get("inv_frames", False)
+
+        local_key_id = getattr(self.sync_service, "key_id", None)
+        peer_key_id = peer_data.get("key_id")
+        if local_key_id != peer_key_id:
+            QMessageBox.warning(
+                self, "Different Office Key",
+                f"Workstation {peer_username} ({peer_host}) has a different office key — rejoin needed.\n\n"
+                f"Database exchange between this workstation and {peer_host} is blocked."
+            )
+            return
 
         if peer_inv:
             QMessageBox.warning(
@@ -642,10 +657,20 @@ class SeraSyncDialog(QDialog):
             )
             return
 
-        peer_names = ", ".join([f"{p.get('username')} ({p.get('host')})" for p in peers])
+        local_key_id = getattr(self.sync_service, "key_id", None)
+        valid_peers = [p for p in peers if p.get("key_id") == local_key_id]
+        if not valid_peers:
+            QMessageBox.warning(
+                self, "Sync Blocked",
+                "No online workstations share this office's key.\n\n"
+                "Workstations with different office keys or in legacy mode require a rejoin."
+            )
+            return
+
+        peer_names = ", ".join([f"{p.get('username')} ({p.get('host')})" for p in valid_peers])
         confirm = QMessageBox.warning(
             self, "Confirm Bulk Database Sync",
-            f"You are about to push your database to ALL {len(peers)} online device(s):\n\n"
+            f"You are about to push your database to ALL {len(valid_peers)} compatible online device(s):\n\n"
             f"  Target Devices: {peer_names}\n\n"
             f"This will OVERWRITE their databases with your current database.\n"
             f"Target devices will auto-restart with your database.\n\n"
@@ -660,11 +685,11 @@ class SeraSyncDialog(QDialog):
         self.btn_sync_all.setText("  Syncing All...")
 
         try:
-            results = self.sync_service.push_to_all(peers)
+            results = self.sync_service.push_to_all(valid_peers)
             successes = []
             failures = []
 
-            for peer in peers:
+            for peer in valid_peers:
                 host = peer.get("host", "Unknown")
                 user = peer.get("username", "Unknown")
                 res = results.get(host, "No response")

@@ -249,13 +249,13 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
         return False
 
     db_rel = str(swap_info.get("db", "master.db")).strip()
-    salt_rel = str(swap_info.get("salt", "sera.salt")).strip()
+    salt_val = swap_info.get("salt")
+    salt_rel = str(salt_val).strip() if salt_val is not None else None
 
     # Strict staging validation: file names cannot contain directory separators or path traversal
     db_name = Path(db_rel).name
-    salt_name = Path(salt_rel).name
-    if not db_name or not salt_name or "/" in db_rel or "\\" in db_rel or ".." in db_rel:
-        print(f"[apply_pending_swap] Security error: invalid path in pending_swap.json (db: {db_rel}, salt: {salt_rel})")
+    if not db_name or "/" in db_rel or "\\" in db_rel or ".." in db_rel:
+        print(f"[apply_pending_swap] Security error: invalid db path in pending_swap.json ({db_rel})")
         try:
             if failed_path.exists():
                 failed_path.unlink()
@@ -264,12 +264,26 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
             pass
         return False
 
+    has_salt = bool(salt_rel)
+    salt_name = None
+    if has_salt:
+        salt_name = Path(salt_rel).name
+        if not salt_name or "/" in salt_rel or "\\" in salt_rel or ".." in salt_rel:
+            print(f"[apply_pending_swap] Security error: invalid salt path in pending_swap.json ({salt_rel})")
+            try:
+                if failed_path.exists():
+                    failed_path.unlink()
+                os.replace(pending_json, failed_path)
+            except OSError:
+                pass
+            return False
+
     # Staged files MUST exist directly inside incoming_dir (NEVER fall back to app_path)
     staged_db = incoming_dir / db_name
-    staged_salt = incoming_dir / salt_name
+    staged_salt = incoming_dir / salt_name if has_salt else None
 
-    if not staged_db.is_file() or not staged_salt.is_file():
-        print(f"[apply_pending_swap] Staged files missing (db: {staged_db.is_file()}, salt: {staged_salt.is_file()})")
+    if not staged_db.is_file() or (has_salt and not staged_salt.is_file()):
+        print(f"[apply_pending_swap] Staged files missing (db: {staged_db.is_file()}, salt: {staged_salt.is_file() if has_salt else 'skipped'})")
         try:
             if failed_path.exists():
                 failed_path.unlink()
@@ -280,18 +294,18 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
 
     # Live target files
     live_db = app_path / db_name
-    live_salt = app_path / salt_name
+    live_salt = app_path / salt_name if has_salt else None
     live_wal = app_path / f"{db_name}-wal"
     live_shm = app_path / f"{db_name}-shm"
 
     had_live_db = live_db.exists()
-    had_live_salt = live_salt.exists()
+    had_live_salt = live_salt.exists() if has_salt else False
     had_live_wal = live_wal.exists()
     had_live_shm = live_shm.exists()
 
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     backup_db = app_path / f"{db_name}.pre-sync-{ts}.db"
-    backup_salt = app_path / f"{salt_name}.pre-sync-{ts}"
+    backup_salt = app_path / f"{salt_name}.pre-sync-{ts}" if has_salt else None
     backup_wal = app_path / f"{db_name}-wal.pre-sync-{ts}"
     backup_shm = app_path / f"{db_name}-shm.pre-sync-{ts}"
 
@@ -307,7 +321,7 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
         if had_live_db:
             _retry_file_op(lambda: shutil.copy2(live_db, backup_db))
             copied_db_backup = True
-        if had_live_salt:
+        if has_salt and had_live_salt:
             _retry_file_op(lambda: shutil.copy2(live_salt, backup_salt))
             copied_salt_backup = True
         if had_live_wal:
@@ -331,8 +345,19 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
         _retry_file_op(lambda: os.replace(staged_db, live_db))
         swapped_db = True
 
-        _retry_file_op(lambda: os.replace(staged_salt, live_salt))
-        swapped_salt = True
+        if has_salt and staged_salt:
+            _retry_file_op(lambda: os.replace(staged_salt, live_salt))
+            swapped_salt = True
+        else:
+            # §0 rule 3: never delete a key or salt file. If any staged salt remains in incoming/,
+            # rename it to a timestamped stale backup rather than unlinking.
+            for stray in incoming_dir.glob("sera.salt*"):
+                try:
+                    if stray.is_file() and ".stale-" not in stray.name:
+                        stale_name = incoming_dir / f"{stray.name}.stale-{ts}"
+                        _retry_file_op(lambda: os.replace(stray, stale_name))
+                except OSError:
+                    pass
 
         # Delete pending_swap.json
         try:
@@ -364,10 +389,10 @@ def apply_pending_swap(app_dir: str | Path) -> bool:
                 elif not had_live_db:
                     live_db.unlink(missing_ok=True)
 
-            if swapped_salt:
+            if swapped_salt and has_salt:
                 if had_live_salt and copied_salt_backup and backup_salt.exists():
                     _retry_file_op(lambda: shutil.copy2(backup_salt, live_salt))
-                elif not had_live_salt:
+                elif not had_live_salt and live_salt:
                     live_salt.unlink(missing_ok=True)
 
             # If live DB is rolled back or replacement failed, restore WAL/SHM sidecars
@@ -400,7 +425,7 @@ def _utc_now_iso() -> str:
 
 
 class PeerInfo:
-    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count", "tracker_count", "timeline_count")
+    __slots__ = ("username", "host", "ip", "sync_port", "app_version", "db_mtime", "last_seen", "inv_frames", "sync_revision", "client_count", "tracker_count", "timeline_count", "key_id")
 
     def __init__(
         self,
@@ -416,6 +441,7 @@ class PeerInfo:
         client_count=0,
         tracker_count=0,
         timeline_count=0,
+        key_id=None,
     ):
         self.username = username
         self.host = host
@@ -429,6 +455,7 @@ class PeerInfo:
         self.client_count = int(client_count)
         self.tracker_count = int(tracker_count)
         self.timeline_count = int(timeline_count)
+        self.key_id = str(key_id).strip() if key_id else None
 
     def key(self) -> str:
         return self.host
@@ -447,6 +474,7 @@ class PeerInfo:
             "client_count": self.client_count,
             "tracker_count": self.tracker_count,
             "timeline_count": self.timeline_count,
+            "key_id": self.key_id,
         }
 
 
@@ -920,6 +948,8 @@ class SyncPeerService:
             "latest_timestamp": metrics.get("latest_timestamp", ""),
             "inv_frames": self.inv_frames,
         }
+        if self.key_id:
+            body["key_id"] = self.key_id
         return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
     def _start_beacon_sender(self):
@@ -1001,6 +1031,9 @@ class SyncPeerService:
             except (ValueError, TypeError):
                 pass
 
+        raw_key_id = body.get("key_id")
+        peer_key_id = str(raw_key_id).strip() if raw_key_id else None
+
         peer = PeerInfo(
             username=body.get("username", "Unknown"),
             host=body["host"],
@@ -1014,6 +1047,7 @@ class SyncPeerService:
             client_count=client_cnt,
             tracker_count=tracker_cnt,
             timeline_count=timeline_cnt,
+            key_id=peer_key_id,
         )
 
         pk = peer.key()
@@ -1038,8 +1072,9 @@ class SyncPeerService:
         # ---- BOOTSTRAP AUTO-PULL ----
         # If this node is bootstrapping (empty DB) and we discover a peer with data,
         # immediately request a pull from them instead of waiting for user action.
+        # P1-5: Never auto-pull from a peer with mismatched key_id.
         if self._is_bootstrapping and not self._bootstrap_pull_done:
-            if client_cnt > 0 and ip not in self._bootstrap_pull_attempted_peers:
+            if client_cnt > 0 and peer.key_id == self.key_id and ip not in self._bootstrap_pull_attempted_peers:
                 self._bootstrap_pull_attempted_peers.add(ip)
                 peer_port = sync_port
                 self.log_activity(
@@ -1113,6 +1148,18 @@ class SyncPeerService:
             action = header.get("action")
             sender_host = header.get("host", sender_ip)
             sender_username = header.get("username", "Unknown")
+
+            # P1-5: Key-fingerprint gate: legacy PC (no key_id) and office-mode PC
+            # never exchange databases; peers with different office keys never exchange.
+            incoming_key_id = header.get("key_id")
+            if action in ("push_database", "request_database_pull", "fetch_snapshot"):
+                if self.key_id != incoming_key_id or (action == "fetch_snapshot" and self.key_id is not None):
+                    detail = "different office key — rejoin needed"
+                    print(f"[Sync Guard] Rejected {action!r} from {sender_host}: KEY_ID_MISMATCH ({detail})")
+                    self.log_activity("GUARD", f"Rejected {action} from {sender_host}", f"KEY_ID_MISMATCH: {detail}")
+                    reject_payload = {"status": "rejected", "reason": "KEY_ID_MISMATCH", "hint": detail}
+                    _send_framed(conn, json.dumps(reject_payload).encode("utf-8"))
+                    return
 
             # P0-7: authenticate every message except fetch_snapshot (protected by the
             # on-screen join approval instead). This closes F9: request_database_pull /
@@ -1387,11 +1434,18 @@ class SyncPeerService:
                 return
 
             # Check payload integrity before locking or receiving
-            if db_size <= 0 or salt_size not in (16, 32):
-                reject_reason = f"INVALID_PAYLOAD: db_size ({db_size}) must be > 0 and salt_size ({salt_size}) must be 16 or 32"
-                print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
-                _send_framed(conn, json.dumps({"status": "rejected", "reason": "INVALID_PAYLOAD"}).encode("utf-8"))
-                return
+            if self.key_id:
+                if db_size <= 0 or salt_size != 0:
+                    reject_reason = f"INVALID_PAYLOAD: db_size ({db_size}) must be > 0 and salt_size ({salt_size}) must be 0 in office mode"
+                    print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": "INVALID_PAYLOAD"}).encode("utf-8"))
+                    return
+            else:
+                if db_size <= 0 or salt_size not in (16, 32):
+                    reject_reason = f"INVALID_PAYLOAD: db_size ({db_size}) must be > 0 and salt_size ({salt_size}) must be 16 or 32"
+                    print(f"[Sync Guard] Rejected database push from {sender_host}: {reject_reason}")
+                    _send_framed(conn, json.dumps({"status": "rejected", "reason": "INVALID_PAYLOAD"}).encode("utf-8"))
+                    return
 
             # Acquire non-blocking staging lock to prevent concurrent incoming transfers racing
             if not self._staging_lock.acquire(blocking=False):
@@ -1441,15 +1495,16 @@ class SyncPeerService:
                             bytes_left -= len(chunk)
 
                     # Stream incoming salt bytes to incoming/sera.salt.part
-                    bytes_left = salt_size
-                    with open(salt_part, "wb") as f:
-                        while bytes_left > 0:
-                            to_read = min(chunk_size, bytes_left)
-                            chunk = _recv_exact(conn, to_read)
-                            if not chunk:
-                                raise OSError(f"Connection closed while receiving salt payload ({salt_size - bytes_left}/{salt_size} bytes)")
-                            f.write(chunk)
-                            bytes_left -= len(chunk)
+                    if salt_size > 0:
+                        bytes_left = salt_size
+                        with open(salt_part, "wb") as f:
+                            while bytes_left > 0:
+                                to_read = min(chunk_size, bytes_left)
+                                chunk = _recv_exact(conn, to_read)
+                                if not chunk:
+                                    raise OSError(f"Connection closed while receiving salt payload ({salt_size - bytes_left}/{salt_size} bytes)")
+                                f.write(chunk)
+                                bytes_left -= len(chunk)
 
                     # Drain raw payload db bytes if present from legacy sender to preserve TCP framing
                     if raw_db_size > 0:
@@ -1457,32 +1512,54 @@ class SyncPeerService:
 
                     # Atomic rename to final staging names
                     os.replace(db_part, staged_db)
-                    os.replace(salt_part, staged_salt)
+                    if not self.key_id and salt_part.exists():
+                        os.replace(salt_part, staged_salt)
 
-                    # 2. Verify before accepting: derive the key with the local sera.key password and the incoming salt,
-                    # then open the staged DB and run SELECT count(*) FROM sqlite_master and PRAGMA cipher_integrity_check.
-                    incoming_salt_bytes = staged_salt.read_bytes()
-                    local_pwd = self._get_local_password()
+                    # 2. Verify before accepting:
                     verified = False
-                    if local_pwd and staged_db.stat().st_size > 0 and len(incoming_salt_bytes) in (16, 32):
-                        try:
-                            import security
-                            hex_key = security.derive_key_hex(local_pwd, incoming_salt_bytes)
-                            import sqlcipher3.dbapi2 as sqlite3
-                            verify_conn = sqlite3.connect(str(staged_db))
+                    if self.key_id and self.hex_key:
+                        # Office mode: verify directly with the office DEK (hex_key) without reading sera.key
+                        if staged_db.stat().st_size > 0:
                             try:
-                                verify_conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-                                table_count_row = verify_conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
-                                table_count = table_count_row[0] if table_count_row else 0
-                                integrity_rows = verify_conn.execute("PRAGMA cipher_integrity_check;").fetchall()
-                                if table_count > 0 and not integrity_rows:
-                                    verified = True
-                                else:
-                                    print(f"[Sync Guard] Staged DB verification failed: table_count={table_count}, cipher_integrity_check={integrity_rows}")
-                            finally:
-                                verify_conn.close()
-                        except Exception as ex:
-                            print(f"[Sync Guard] Verification failed with local password: {ex}")
+                                import sqlcipher3.dbapi2 as sqlite3
+                                verify_conn = sqlite3.connect(str(staged_db))
+                                try:
+                                    verify_conn.execute(f"PRAGMA key = \"x'{self.hex_key}'\";")
+                                    table_count_row = verify_conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+                                    table_count = table_count_row[0] if table_count_row else 0
+                                    integrity_rows = verify_conn.execute("PRAGMA cipher_integrity_check;").fetchall()
+                                    if table_count > 0 and not integrity_rows:
+                                        verified = True
+                                    else:
+                                        print(f"[Sync Guard] Office staged DB verification failed: table_count={table_count}, cipher_integrity_check={integrity_rows}")
+                                finally:
+                                    verify_conn.close()
+                            except Exception as ex:
+                                print(f"[Sync Guard] Office verification failed with office DEK: {ex}")
+                    else:
+                        # Legacy mode: derive the key with the local sera.key password and the incoming salt,
+                        # then open the staged DB and run SELECT count(*) FROM sqlite_master and PRAGMA cipher_integrity_check.
+                        incoming_salt_bytes = staged_salt.read_bytes()
+                        local_pwd = self._get_local_password()
+                        if local_pwd and staged_db.stat().st_size > 0 and len(incoming_salt_bytes) in (16, 32):
+                            try:
+                                import security
+                                hex_key = security.derive_key_hex(local_pwd, incoming_salt_bytes)
+                                import sqlcipher3.dbapi2 as sqlite3
+                                verify_conn = sqlite3.connect(str(staged_db))
+                                try:
+                                    verify_conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
+                                    table_count_row = verify_conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
+                                    table_count = table_count_row[0] if table_count_row else 0
+                                    integrity_rows = verify_conn.execute("PRAGMA cipher_integrity_check;").fetchall()
+                                    if table_count > 0 and not integrity_rows:
+                                        verified = True
+                                    else:
+                                        print(f"[Sync Guard] Staged DB verification failed: table_count={table_count}, cipher_integrity_check={integrity_rows}")
+                                finally:
+                                    verify_conn.close()
+                            except Exception as ex:
+                                print(f"[Sync Guard] Verification failed with local password: {ex}")
 
                     if not verified:
                         _cleanup_staging()
@@ -1495,10 +1572,11 @@ class SyncPeerService:
                     # 3. On success, write incoming/pending_swap.json
                     swap_data = {
                         "db": db_name,
-                        "salt": salt_name,
                         "from": sender_host,
                         "at": _utc_now_iso(),
                     }
+                    if not self.key_id:
+                        swap_data["salt"] = salt_name
                     pending_tmp = incoming_dir / "pending_swap.json.tmp"
                     with open(pending_tmp, "w", encoding="utf-8") as f:
                         json.dump(swap_data, f, indent=2)
@@ -1562,11 +1640,13 @@ class SyncPeerService:
         # Read local files
         if not os.path.exists(self.db_path):
             raise FileNotFoundError("Local master.db not found")
-        if not os.path.exists(self.salt_path):
-            raise FileNotFoundError("Local sera.salt not found")
-
-        with open(self.salt_path, "rb") as f:
-            salt_bytes = f.read()
+        if self.key_id:
+            salt_bytes = b""
+        else:
+            if not os.path.exists(self.salt_path):
+                raise FileNotFoundError("Local sera.salt not found")
+            with open(self.salt_path, "rb") as f:
+                salt_bytes = f.read()
 
         local_mtime = os.path.getmtime(self.db_path) if os.path.exists(self.db_path) else 0.0
         metrics = self._get_local_metrics()
@@ -1611,6 +1691,8 @@ class SyncPeerService:
                     "db_mtime": local_mtime,
                     "inv_frames": self.inv_frames,
                 }
+                if self.key_id:
+                    header["key_id"] = self.key_id
                 _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
 
                 # Wait for ACK
@@ -1647,7 +1729,8 @@ class SyncPeerService:
                             break
                         conn.sendall(chunk)
 
-                conn.sendall(salt_bytes)
+                if salt_bytes:
+                    conn.sendall(salt_bytes)
 
                 # Wait for confirmation
                 result_raw = _recv_framed(conn)
@@ -1853,6 +1936,8 @@ class SyncPeerService:
                     "host": self.host_name,
                     "sync_port": self.sync_port,
                 }
+                if self.key_id:
+                    header["key_id"] = self.key_id
                 _send_framed(conn, json.dumps(self._sign_header(header)).encode("utf-8"))
                 resp_raw = _recv_framed(conn)
                 resp = json.loads(resp_raw.decode("utf-8"))
@@ -1886,6 +1971,10 @@ class SyncPeerService:
         """Returns a copy of header with `ts` (and `mac`, if we have a key) added."""
         signed = dict(header)
         signed["ts"] = int(time.time())
+        if self.key_id is not None:
+            signed["key_id"] = self.key_id
+        elif "key_id" in signed and signed["key_id"] is None:
+            del signed["key_id"]
         auth_key = self._auth_key()
         if auth_key is not None:
             signed["mac"] = hmac.new(auth_key, canonical_json(signed), hashlib.sha256).hexdigest()
@@ -1979,6 +2068,7 @@ def discover_lan_peers(
                 host = body.get("host")
                 if not host:
                     continue
+                raw_kid = body.get("key_id")
                 peer_info = {
                     "host": host,
                     "username": body.get("username", "Unknown"),
@@ -1986,6 +2076,7 @@ def discover_lan_peers(
                     "sync_port": int(body.get("sync_port", SYNC_PORT)),
                     "app_version": body.get("app_version", "Unknown"),
                     "client_count": int(body.get("client_count", 0)),
+                    "key_id": str(raw_kid).strip() if raw_kid else None,
                 }
                 if host not in peers:
                     peers[host] = peer_info
@@ -2062,6 +2153,9 @@ def join_office_fetch_snapshot(
 
             if resp.get("status") != "ready":
                 reason = resp.get("reason", "Request rejected by remote workstation")
+                hint = resp.get("hint")
+                if hint:
+                    reason = f"{reason} ({hint})"
                 return False, reason, None, None
 
             db_size = int(resp.get("db_size", 0))

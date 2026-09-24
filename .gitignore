@@ -74,6 +74,10 @@ Vsdc_Captures/
 .obsidian/
 backups/
 *.csv
+# Sera Sync v3 tracker status (task status only, no client data)
+!docs/sera-sync-v3-status.csv
+!docs/sera-sync-v3-checks.csv
+docs/.sera-sync-v3-tracker.lock
 *.tmp
 ~*
 scratch/

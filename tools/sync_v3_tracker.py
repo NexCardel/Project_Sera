@@ -1,10 +1,17 @@
 """
 tools/sync_v3_tracker.py
 ------------------------
-Updates docs/sera-sync-v3-agents.xlsx so agents working on the Sera Sync v3
-blueprint never edit the spreadsheet by hand. Only the yellow input columns are
-written; every formula is left alone.
+Records Sera Sync v3 progress. Agents use this instead of editing anything by hand.
 
+Status lives in two small text files that the viewer workbook
+(docs/sera-sync-v3-agents.xlsx) reads with Power Query, so the workbook can stay
+open in Excel while agents work:
+
+  docs/sera-sync-v3-status.csv   one row per WP
+  docs/sera-sync-v3-checks.csv   one row per hands-on phase check
+  docs/sera-sync-v3-plan.json    fixed data (tiers, dependencies, models); built by tools/build_sync_v3_tracker.py
+
+  venv\\Scripts\\python tools\\sync_v3_tracker.py show
   venv\\Scripts\\python tools\\sync_v3_tracker.py show P0-1
   venv\\Scripts\\python tools\\sync_v3_tracker.py set P0-1 --status "In progress" --model "Claude Haiku 4.5"
   venv\\Scripts\\python tools\\sync_v3_tracker.py set P0-1 --status "In review" --notes "debounce 60 s"
@@ -19,220 +26,219 @@ or marking Done without a commit or without the required review.
 """
 
 import argparse
+import csv
 import datetime
+import io
+import json
+import os
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DEFAULT_FILE = REPO / "docs" / "sera-sync-v3-agents.xlsx"
+DEFAULT_DOCS = REPO / "docs"
 STATUSES = ["Not started", "In progress", "In review", "Done", "Blocked"]
 RESULTS = ["Not run", "Pass", "Fail"]
-HEADER_ROW = 4
+STATUS_FIELDS = ["WP", "Status", "Model used", "Reviewed by", "Commit", "Notes", "Updated"]
+CHECK_FIELDS = ["Check", "Result", "Date", "Notes"]
 
 
 class TrackerError(Exception):
     pass
 
 
-def _headers(ws, row=HEADER_ROW) -> dict:
-    return {ws.cell(row=row, column=c).value: c for c in range(1, ws.max_column + 1)
-            if ws.cell(row=row, column=c).value}
+class Tracker:
+    def __init__(self, docs: Path):
+        self.docs = docs
+        self.plan_path = docs / "sera-sync-v3-plan.json"
+        self.status_path = docs / "sera-sync-v3-status.csv"
+        self.checks_path = docs / "sera-sync-v3-checks.csv"
+        if not self.plan_path.exists():
+            raise TrackerError(f"{self.plan_path.name} not found. Run tools/build_sync_v3_tracker.py first.")
+        self.plan = json.loads(self.plan_path.read_text(encoding="utf-8"))
+        self.wps = {w["wp"]: w for w in self.plan["wps"]}
+        self.models = {m["name"]: m for m in self.plan["models"]}
+        self.checks = {c["n"]: c for c in self.plan["phase_checks"]}
 
+    # ---------------- files
 
-def _wp_rows(ws, cols) -> dict:
-    rows = {}
-    for r in range(HEADER_ROW + 1, ws.max_row + 1):
-        wp = ws.cell(row=r, column=cols["WP"]).value
+    def _read_csv(self, path: Path) -> list[dict]:
+        if not path.exists():
+            return []
+        for attempt in range(20):
+            try:
+                with open(path, encoding="utf-8", newline="") as f:
+                    return list(csv.DictReader(f))
+            except PermissionError:
+                time.sleep(0.25)
+        raise TrackerError(f"{path.name} stayed locked for 5 s. Try again.")
+
+    def _write_csv(self, path: Path, fields: list, rows: list[dict]):
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=fields, lineterminator="\r\n", extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") or "" for k in fields})
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(buf.getvalue())
+            f.flush()
+            os.fsync(f.fileno())
+        # Excel's periodic refresh may be reading the file for a moment; retry instead of failing
+        for attempt in range(20):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                time.sleep(0.25)
+        raise TrackerError(f"Couldn't replace {path.name} (locked for 5 s). Try again.")
+
+    def _lock(self):
+        lock = self.docs / ".sera-sync-v3-tracker.lock"
+        deadline = time.time() + 10
+        while True:
+            try:
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                return lock
+            except FileExistsError:
+                if time.time() - lock.stat().st_mtime > 60:   # left behind by a crashed run
+                    try:
+                        os.remove(lock)
+                    except OSError:
+                        pass
+                    continue
+                if time.time() > deadline:
+                    raise TrackerError("Another tracker update is running. Try again in a few seconds.")
+                time.sleep(0.2)
+
+    def status_rows(self) -> dict:
+        rows = {r["WP"]: r for r in self._read_csv(self.status_path) if r.get("WP")}
+        for wp in self.wps:
+            rows.setdefault(wp, {"WP": wp, "Status": "Not started"})
+            if not rows[wp].get("Status"):
+                rows[wp]["Status"] = "Not started"
+        return rows
+
+    def unfinished_deps(self, wp: str, rows: dict) -> list:
+        return [d for d in self.wps[wp]["deps"] if rows.get(d, {}).get("Status") != "Done"]
+
+    # ---------------- commands
+
+    def show(self, wp: str | None):
+        rows = self.status_rows()
         if wp:
-            rows[str(wp)] = r
-    return rows
-
-
-def _model_matrix(wb) -> dict:
-    ms = wb["Models"]
-    cols = _headers(ms)
-    out = {}
-    for r in range(HEADER_ROW + 1, ms.max_row + 1):
-        name = ms.cell(row=r, column=cols["Model"]).value
-        t1 = ms.cell(row=r, column=cols["T1"]).value
-        if not name or t1 not in ("Yes", "No", "Caution"):
-            break
-        out[name] = {
-            "T1": t1,
-            "T2": ms.cell(row=r, column=cols["T2"]).value,
-            "T3": ms.cell(row=r, column=cols["T3"]).value,
-            "review": ms.cell(row=r, column=cols["Can review T3 work"]).value,
-        }
-    return out
-
-
-def _check_writable(path: Path):
-    lock = path.with_name("~$" + path.name)
-    if lock.exists():
-        raise TrackerError(f"{path.name} is open in Excel. Close it and run the command again.")
-
-
-def _load(path: Path):
-    from openpyxl import load_workbook
-    if not path.exists():
-        raise TrackerError(f"Tracker not found: {path}")
-    return load_workbook(path)
-
-
-def _save(wb, path: Path):
-    _check_writable(path)
-    try:
-        wb.save(path)
-    except PermissionError:
-        raise TrackerError(f"{path.name} is locked (probably open in Excel). Close it and run the command again.")
-
-
-def show(path: Path, wp: str | None):
-    wb = _load(path)
-    ws = wb["Work Packages"]
-    cols = _headers(ws)
-    rows = _wp_rows(ws, cols)
-    wanted = [wp] if wp else list(rows)
-    fields = ["WP", "Phase", "Tier", "What", "Depends on", "Review before merge", "Status",
-              "Model used", "Reviewed by", "Commit", "Notes"]
-    for w in wanted:
-        if w not in rows:
-            raise TrackerError(f"Unknown WP {w!r}. Valid: {', '.join(rows)}")
-        r = rows[w]
-        vals = {f: ws.cell(row=r, column=cols[f]).value for f in fields}
-        unfinished = _unfinished_deps(ws, cols, rows, r)
-        if wp:
-            for f in fields:
-                print(f"{f:>20}: {vals[f] if vals[f] is not None else ''}")
-            print(f"{'Unfinished deps':>20}: {', '.join(unfinished) if unfinished else 'none'}")
-        else:
-            state = vals["Status"] or "Not started"
-            if state == "Not started" and not unfinished:
+            if wp not in self.wps:
+                raise TrackerError(f"Unknown WP {wp!r}. Valid: {', '.join(self.wps)}")
+            w, r = self.wps[wp], rows[wp]
+            info = [("WP", wp), ("Phase", w["phase"]), ("Tier", w["tier"]), ("What", w["what"]),
+                    ("Depends on", ", ".join(w["deps"]) or "none"), ("Review before merge", w["review"]),
+                    ("Status", r.get("Status")), ("Model used", r.get("Model used")),
+                    ("Reviewed by", r.get("Reviewed by")), ("Commit", r.get("Commit")),
+                    ("Notes", r.get("Notes")), ("Updated", r.get("Updated")),
+                    ("Unfinished deps", ", ".join(self.unfinished_deps(wp, rows)) or "none")]
+            for k, v in info:
+                print(f"{k:>20}: {v if v is not None else ''}")
+            return
+        for wp, w in self.wps.items():
+            state = rows[wp]["Status"]
+            if state == "Not started" and not self.unfinished_deps(wp, rows):
                 state += " (ready)"
-            print(f"{w:<7} {vals['Tier']:<3} {state:<24} {vals['What']}")
+            print(f"{wp:<7} {w['tier']:<3} {state:<24} {w['what']}")
 
+    def set(self, wp, status=None, model=None, reviewed_by=None, commit=None, notes=None, append_notes=False):
+        if wp not in self.wps:
+            raise TrackerError(f"Unknown WP {wp!r}. Valid: {', '.join(self.wps)}")
+        if status is not None and status not in STATUSES:
+            raise TrackerError(f"Status must be one of: {', '.join(STATUSES)}")
+        for label, name in (("--model", model), ("--reviewed-by", reviewed_by)):
+            if name is not None and name not in self.models:
+                raise TrackerError(f"{label}: unknown model {name!r}. Use a name from the Models sheet: "
+                                   f"{', '.join(self.models)}")
+        tier = self.wps[wp]["tier"]
+        messages = []
+        if model is not None:
+            allowed = self.models[model][tier]
+            if allowed == "No":
+                raise TrackerError(f"{model} is not allowed for {tier} work ({wp}). See the Models sheet.")
+            if allowed == "Caution":
+                messages.append(f"NOTE: {model} on {tier} needs a Fable 5.1 / Opus 5.5 review before merge.")
+        if reviewed_by is not None and self.models[reviewed_by]["review"] != "Yes":
+            raise TrackerError(f"{reviewed_by} can't be the reviewer. Reviews need Claude Fable 5.1 or Opus 5.5.")
 
-def _unfinished_deps(ws, cols, rows, r) -> list:
-    deps = ws.cell(row=r, column=cols["Depends on"]).value or ""
-    out = []
-    for d in [x.strip() for x in str(deps).split(",") if x.strip()]:
-        if d not in rows:
-            out.append(f"{d}(unknown)")
-        elif ws.cell(row=rows[d], column=cols["Status"]).value != "Done":
-            out.append(d)
-    return out
+        lock = self._lock()
+        try:
+            rows = self.status_rows()
+            row = rows[wp]
+            if status in ("In progress", "In review", "Done"):
+                unfinished = self.unfinished_deps(wp, rows)
+                if unfinished:
+                    raise TrackerError(f"{wp} depends on work that isn't Done yet: {', '.join(unfinished)}")
+            if status == "Done":
+                if not (commit or row.get("Commit")):
+                    raise TrackerError("Can't mark Done without a commit hash (--commit).")
+                used = model or row.get("Model used")
+                if not used:
+                    raise TrackerError("Can't mark Done without the model that did the work (--model).")
+                needs_review = self.wps[wp]["review_required"] or (
+                    used in self.models and self.models[used][tier] == "Caution")
+                if needs_review and not (reviewed_by or row.get("Reviewed by")):
+                    raise TrackerError(f"{wp} needs a Fable 5.1 / Opus 5.5 review before Done (--reviewed-by).")
 
+            for field, value in (("Status", status), ("Model used", model), ("Reviewed by", reviewed_by),
+                                 ("Commit", commit)):
+                if value is not None:
+                    row[field] = value
+            if notes is not None:
+                entry = f"{datetime.date.today().isoformat()}: {notes}"
+                row["Notes"] = f"{row['Notes']}\n{entry}" if (append_notes and row.get("Notes")) else entry
+            row["Updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            self._write_csv(self.status_path, STATUS_FIELDS, [rows[w] for w in self.wps])
+        finally:
+            os.remove(lock)
+        for m in messages:
+            print(m)
+        print(f"Updated {wp}. (Excel: Data → Refresh All to see it.)")
 
-def set_wp(path: Path, wp: str, status=None, model=None, reviewed_by=None, commit=None,
-           notes=None, append_notes=False):
-    wb = _load(path)
-    ws = wb["Work Packages"]
-    cols = _headers(ws)
-    rows = _wp_rows(ws, cols)
-    if wp not in rows:
-        raise TrackerError(f"Unknown WP {wp!r}. Valid: {', '.join(rows)}")
-    r = rows[wp]
-    tier = ws.cell(row=r, column=cols["Tier"]).value
-    models = _model_matrix(wb)
-    messages = []
+    def list_checks(self):
+        results = {int(r["Check"]): r for r in self._read_csv(self.checks_path) if r.get("Check")}
+        for n, c in self.checks.items():
+            res = results.get(n, {}).get("Result") or "Not run"
+            print(f"{n:>3}  phase {c['phase']}  [{res}]  {c['check']}")
 
-    if status is not None and status not in STATUSES:
-        raise TrackerError(f"Status must be one of: {', '.join(STATUSES)}")
-
-    for label, name in (("--model", model), ("--reviewed-by", reviewed_by)):
-        if name is not None and name not in models:
-            raise TrackerError(f"{label}: unknown model {name!r}. Use a name from the Models sheet: "
-                               f"{', '.join(models)}")
-
-    if model is not None:
-        allowed = models[model][tier]
-        if allowed == "No":
-            raise TrackerError(f"{model} is not allowed for {tier} work ({wp}). See the Models sheet.")
-        if allowed == "Caution":
-            messages.append(f"NOTE: {model} on {tier} needs a Fable 5.1 / Opus 5.5 review before merge.")
-
-    if reviewed_by is not None and models[reviewed_by]["review"] != "Yes":
-        raise TrackerError(f"{reviewed_by} can't be the reviewer. Reviews need Claude Fable 5.1 or Opus 5.5.")
-
-    if status in ("In progress", "In review", "Done"):
-        unfinished = _unfinished_deps(ws, cols, rows, r)
-        if unfinished:
-            raise TrackerError(f"{wp} depends on work that isn't Done yet: {', '.join(unfinished)}")
-
-    if status == "Done":
-        final_commit = commit if commit is not None else ws.cell(row=r, column=cols["Commit"]).value
-        if not final_commit:
-            raise TrackerError("Can't mark Done without a commit hash (--commit).")
-        used = model if model is not None else ws.cell(row=r, column=cols["Model used"]).value
-        if not used:
-            raise TrackerError("Can't mark Done without the model that did the work (--model).")
-        needs_review = str(ws.cell(row=r, column=cols["Review before merge"]).value or "").startswith("Yes")
-        if used in models and models[used][tier] == "Caution":
-            needs_review = True
-        reviewer = reviewed_by if reviewed_by is not None else ws.cell(row=r, column=cols["Reviewed by"]).value
-        if needs_review and not reviewer:
-            raise TrackerError(f"{wp} needs a Fable 5.1 / Opus 5.5 review before Done (--reviewed-by).")
-
-    updates = {"Status": status, "Model used": model, "Reviewed by": reviewed_by, "Commit": commit}
-    for field, value in updates.items():
-        if value is not None:
-            ws.cell(row=r, column=cols[field]).value = value
-    if notes is not None:
-        stamp = datetime.date.today().isoformat()
-        cell = ws.cell(row=r, column=cols["Notes"])
-        new = f"{stamp}: {notes}"
-        cell.value = f"{cell.value}\n{new}" if (append_notes and cell.value) else new
-
-    _save(wb, path)
-    for m in messages:
-        print(m)
-    print(f"Updated {wp}.")
-
-
-def list_checks(path: Path):
-    wb = _load(path)
-    pc = wb["Phase Checks"]
-    cols = _headers(pc, row=3)
-    for r in range(4, pc.max_row + 1):
-        chk = pc.cell(row=r, column=cols["Check"]).value
-        if chk:
-            n = r - 3
-            print(f"{n:>3}  phase {pc.cell(row=r, column=cols['Phase']).value}  "
-                  f"[{pc.cell(row=r, column=cols['Result']).value}]  {chk}")
-
-
-def set_check(path: Path, number: int, result: str, notes=None):
-    if result not in RESULTS:
-        raise TrackerError(f"--result must be one of: {', '.join(RESULTS)}")
-    wb = _load(path)
-    pc = wb["Phase Checks"]
-    cols = _headers(pc, row=3)
-    r = number + 3
-    if number < 1 or not pc.cell(row=r, column=cols["Check"]).value:
-        raise TrackerError(f"No phase check number {number}. Run 'checks' to list them.")
-    pc.cell(row=r, column=cols["Result"]).value = result
-    pc.cell(row=r, column=cols["Date"]).value = datetime.date.today().isoformat()
-    if notes is not None:
-        pc.cell(row=r, column=cols["Notes"]).value = notes
-    _save(wb, path)
-    print(f"Updated check {number}.")
+    def check(self, number: int, result: str, notes=None):
+        if result not in RESULTS:
+            raise TrackerError(f"--result must be one of: {', '.join(RESULTS)}")
+        if number not in self.checks:
+            raise TrackerError(f"No phase check number {number}. Run 'checks' to list them.")
+        lock = self._lock()
+        try:
+            rows = {int(r["Check"]): r for r in self._read_csv(self.checks_path) if r.get("Check")}
+            row = rows.setdefault(number, {"Check": number})
+            row["Result"] = result
+            row["Date"] = datetime.date.today().isoformat()
+            if notes is not None:
+                row["Notes"] = notes
+            ordered = [rows.get(n, {"Check": n, "Result": "Not run"}) for n in self.checks]
+            self._write_csv(self.checks_path, CHECK_FIELDS, ordered)
+        finally:
+            os.remove(lock)
+        print(f"Updated check {number}.")
 
 
 def main(argv=None) -> int:
-    # The sheets contain characters like "→" that the default Windows console code page can't print
+    # The plan contains characters like "→" that the default Windows console code page can't print
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
-    ap = argparse.ArgumentParser(description="Update the Sera Sync v3 agent tracker spreadsheet.")
-    ap.add_argument("--file", type=Path, default=DEFAULT_FILE, help=argparse.SUPPRESS)
+    ap = argparse.ArgumentParser(description="Record Sera Sync v3 progress.")
+    ap.add_argument("--docs", type=Path, default=DEFAULT_DOCS, help=argparse.SUPPRESS)
     sub = ap.add_subparsers(dest="cmd", required=True)
-
     p_show = sub.add_parser("show", help="show all WPs, or one WP in detail")
     p_show.add_argument("wp", nargs="?")
-
-    p_set = sub.add_parser("set", help="update a WP's yellow columns")
+    p_set = sub.add_parser("set", help="update a WP")
     p_set.add_argument("wp")
     p_set.add_argument("--status", choices=STATUSES)
     p_set.add_argument("--model")
@@ -240,23 +246,22 @@ def main(argv=None) -> int:
     p_set.add_argument("--commit")
     p_set.add_argument("--notes")
     p_set.add_argument("--append-notes", action="store_true", help="add to existing notes instead of replacing")
-
     sub.add_parser("checks", help="list the hands-on phase checks")
     p_chk = sub.add_parser("check", help="record the result of a phase check")
     p_chk.add_argument("number", type=int)
     p_chk.add_argument("--result", required=True, choices=RESULTS)
     p_chk.add_argument("--notes")
-
     a = ap.parse_args(argv)
     try:
+        t = Tracker(a.docs)
         if a.cmd == "show":
-            show(a.file, a.wp)
+            t.show(a.wp)
         elif a.cmd == "set":
-            set_wp(a.file, a.wp, a.status, a.model, a.reviewed_by, a.commit, a.notes, a.append_notes)
+            t.set(a.wp, a.status, a.model, a.reviewed_by, a.commit, a.notes, a.append_notes)
         elif a.cmd == "checks":
-            list_checks(a.file)
+            t.list_checks()
         elif a.cmd == "check":
-            set_check(a.file, a.number, a.result, a.notes)
+            t.check(a.number, a.result, a.notes)
     except TrackerError as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
