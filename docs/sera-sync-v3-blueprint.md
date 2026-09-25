@@ -1654,6 +1654,108 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **P4-4:** override `compaction_floors()`; the receiver of `need_snapshot` must first send its own unsent changes (§5 P4-4), then download a snapshot. Today it just reports.
   - Membership changes learned in a session call `transport.update_members(...)` and `sync_admin.reconcile_admin_key(...)` (P2-2/P2-3 notes).
 
+### P3-7 — Shadow mode: capture check, replica convergence, digests — Done — 2026-09-25
+- Model: Claude Sonnet 5   Commit: uncommitted
+- Tests: new `tests/test_sync_shadow.py`, 15 tests, all pass, including the Accept test
+  `test_capture_check_fails_when_a_trigger_is_dropped` (drops every capture trigger for
+  `clients`, inserts a row, and the capture check's replay-vs-live digest mismatches). Also:
+  `enable_shadow_mode` creates the baseline + replica and switches mode; re-enabling backs up
+  an existing replica/baseline instead of overwriting it (§0 rule 3); a local write is mirrored
+  into the replica via the seal listener and the replica's digest then equals the live DB's;
+  mirroring is a no-op outside mode shadow; a 2-node harness where the joiner is in shadow mode
+  shows a remote change lands in its replica and never its live DB, and the session still
+  converges (`run_until_quiet`) instead of resending forever; `_accepts()` only goes true once
+  `shadow_apply` exists; digest changes when data changes; `capture_check` with no baseline
+  reports not-ok; a normal capture check passes and logs `capture_check OK`;
+  `convergence_check` agrees/disagrees on matching/differing digests; `run_shadow_checks` runs
+  both checks when peer digests are given; no PySide6 import (AST scan).
+  Also reran `tests/test_sync_transport.py`, `tests/test_sync_office.py`,
+  `tests/test_sync_office_ui.py` (52 passed — the `Session.peek_type` / `AddWorkstationSession`
+  `transport=` changes), `tests/test_sync_engine.py` + `tests/test_sync_convergence.py` +
+  `tests/test_sync_maintenance.py` + `tests/test_sync_apply.py` + `tests/test_sync_capture.py`
+  (188 passed / 1 skipped), and `tests/test_key_fingerprint.py` + `tests/test_office_key_migration.py`
+  + `tests/test_sync_rejoin.py` (88 passed — `SeraSyncDialog`'s new `sync_engine=` kwarg).
+  Full suite: 1534 passed / 11 failed / 3 skipped (855s) — the same 11 pre-existing failures
+  every recent WP has reported (dom_page_replace, gst_dom_tracker, purge_duplicates,
+  raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5). Zero new failures.
+- Files: new `sync_shadow.py`, new `tests/test_sync_shadow.py`; `sync_transport.py`
+  (`Session.peek_type`, a small push-back buffer on `recv()`); `sync_office.py`
+  (`AddWorkstationSession(..., transport=)` reuses an already-serving `SyncTransport` instead
+  of binding a second server; new `dispatch_session(session, app_dir, engine)`); `main.py`
+  (builds the transport/engine/replica wiring in office mode, wires the seal listener and
+  `discovery_service.on_poke`, starts/stops the engine); `ui/windows/admin_window.py`
+  (`set_sync_engine`); `ui/dialogs/sera_sync_dialog.py` (`sync_engine=` passed through to
+  `AddWorkstationSession`).
+- Deviations from spec (for the T3 review):
+  1. **Own-vectors gap found while testing shadow mode, fixed:** `SyncEngine.own_vectors()` and
+     forwarding both read from the *live* DB's `_sync_changes`/`_sync_vector`. Applying a remote
+     change only to the replica (as specified) never advances those, so the sender resent the
+     same change every round forever (reproduced in `test_shadow_apply_writes_to_the_replica_never_the_live_db`
+     before the fix — it timed out). `make_shadow_apply` now also calls
+     `sync_shadow._record_receipt_in_live`: it writes the same change rows into the *live* DB's
+     `_sync_changes` (so a live-mode PC further down the chain still gets them forwarded) and
+     advances the live DB's `_sync_vector` (the P3-4 "highest contiguous seq" rule), but never
+     touches the live DB's replicated table data. This is not in §5 P3-7's text; it is required
+     for the session protocol (P3-5) to work at all with a shadow-mode peer, so `capture_check`
+     was designed around it from the start (it replays *all* of a DB's `_sync_changes`, own and
+     forwarded, not just this device's own stream — see its docstring).
+  2. **`capture_check` baseline:** the spec says "baseline snapshot + this PC's own changes
+     replayed". Read literally that can't converge on the live digest once any remote change has
+     ever been merged in (the live DB then holds data that never appeared on this device's own
+     stream). Implemented instead: baseline + *everything this DB's `_sync_changes` ever
+     recorded* (own edits and, per deviation 1, forwarded copies of remote ones) replayed into a
+     scratch copy. A write that bypasses the triggers is still caught the same way (it is absent
+     from `_sync_changes` either way); the Accept test covers exactly that case.
+  3. **Convergence check has no network leg.** There is no P3-5 wire frame to ask a peer for its
+     replica digest, so `convergence_check(own_device_id, own_digest, peer_digests)` takes
+     already-collected digests rather than fetching them itself. `run_shadow_checks` and the
+     module docstring flag this; P3-8's panel (or a small new frame) needs to supply
+     `peer_digests` for a real cross-PC check. Logged either way to `logs/sync_shadow.log`.
+  4. **Digest engine duplicated, not shared, with `tests/sync_harness.py`.** That file is a P3-0
+     file the notes ask not to change without the owner's OK (§0 rule 4), so `sync_shadow.py`
+     has its own `digest_from_conns`/`_encode_value`/`_translate_fk` (identical algorithm, same
+     `sync_schema` registry) instead of the harness importing it. If the two ever disagree,
+     trust `sync_shadow.py` (that's the one production checks use).
+  5. **Port-clash wiring done in full** (§5 P3-5 notes said "must do"): `Session.peek_type`
+     lets one permanent server on 49159 route `{"t":"snapshot"}` to
+     `sync_snapshot.handle_snapshot_session` and everything else to `engine.handle_session`
+     without either handler changing (`sync_office.dispatch_session`).
+     `AddWorkstationSession(..., transport=)` reuses that server; `main.py` → `admin_window.py`
+     → `SeraSyncDialog` now carry the engine down to "Add workstation" the same way
+     `discovery_service` already did.
+  6. **`enable_shadow_mode` has no UI trigger yet.** No earlier WP built a "turn on shadow mode"
+     action (the owner runbook in §6 describes it as a rollout step, and P3-8/P3-9 own the
+     panel). `main.py` wires the engine/replica machinery unconditionally in office mode (idle
+     until something calls `enable_shadow_mode`, exactly as P3-5's own design already does for
+     mode `off`); the callable itself is ready for P3-8's button or an operator script.
+- Notes for later WPs:
+  - `sync_shadow` public API: `enable_shadow_mode(db, app_dir)`, `replica_paths(app_dir)`,
+    `baseline_paths(app_dir)`, `mirror_own_changes_to_replica(db, app_dir)` (call from
+    `db.set_seal_listener`), `make_shadow_apply(db, app_dir)` (pass to `SyncEngine(shadow_apply=)`),
+    `digest_from_conns`, `digest_of_files`, `digest_of_live(db)`, `digest_of_replica(app_dir, hex_key)`,
+    `capture_check(db, app_dir) -> CaptureCheckResult(ok, live_digest, replay_digest, detail)`,
+    `convergence_check(own_device_id, own_digest, peer_digests) -> ConvergenceCheckResult`,
+    `run_shadow_checks(db, app_dir, own_device_id=, peer_digests=) -> dict`. All logged to
+    `logs/sync_shadow.log`.
+  - **P3-8:** wire a "shadow check results" panel section to `sync_shadow.run_shadow_checks`
+    (on demand) and a periodic timer (spec says every 30 min); it needs a way to collect peer
+    replica digests for `peer_digests` (deviation 3) — the simplest fix is one more P3-5 frame
+    (e.g. `digest_request`/`digest_reply`) rather than a whole new protocol.
+  - **P3-9 (go-live):** the staged swap installs `shadow/replica_master.db` /
+    `shadow/replica_raw.db` as the live DBs — `sync_shadow.replica_paths(app_dir)` gives the
+    source paths, and P0-4's `apply_pending_swap` mechanism is the intended installer (same
+    backup-then-`os.replace` pattern, just a different source).
+  - `main.py`'s wiring builds one `SyncTransport`/`SyncEngine` per process in office mode and
+    keeps it in `self.sync_engine` / `self.sync_transport`; a start-up failure there is caught
+    and printed, leaving both `None` (matches the existing discovery-service failure pattern
+    right above it) rather than crashing start-up.
+  - Two other, unrelated uncommitted changes were already in the tree when this WP started
+    (P4-3a's `sync_backup.py`, since committed as `8f4d9c1`, and what looks like early P3-8
+    panel work in `sync_panel.py` / `tests/test_sync_panel.py` / `tests/test_sync_engine_ui.py` /
+    `tests/test_sync_status_panel_ui.py`, still uncommitted). Neither was touched by this WP;
+    the `on_sync_engine_event` / `engine_synced_signal` wiring that P4-3a's session added to
+    `main.py` ahead of this one is reused as this WP's `SyncEngine(on_event=...)` callback.
+
 ### P4-3a — Scheduled local backups (daily, keep 14) — Done — 2026-09-25
 - Model: Gemini 3.8 Flash   Commit: 8f4d9c1
 - Tests: 9 passed in tests/test_sync_backup.py; 80 passed in sync test suite; full suite 1467 passed / 11 failed / 3 skipped (the same 11 pre-existing failures in broad UI/parser suite: dom_page_replace, gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests: test_export_database_creates_consistent_standalone_db, test_create_backup_exports_both_dbs, test_create_backup_handles_missing_raw_payload, test_prune_daily_backups_keeps_14, test_should_run_daily_backup_schedule, test_check_and_run_daily_backup_flow, test_backup_before_restore_migration_golive, test_retire_pre_sync_backups, test_scheduler_lifecycle
@@ -1666,6 +1768,17 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
     - `backup_before_restore(app_dir)` (for P4-3b), `backup_before_migration(app_dir)` (P1-4), and `backup_before_golive(app_dir)` (P3-9).
     - `retire_pre_sync_backups(app_dir)` moves legacy `master.db.pre-sync-*` files into `backups/legacy-pre-sync/` so the app directory stays clean.
     - `DailyBackupScheduler` background thread and `check_and_run_daily_backup` triggered at first idle after 13:00.
+
+### P3-8 — UI refresh by table + Sera Sync panel status — Done — 2026-09-25
+- Model: Claude Sonnet 5   Commit: uncommitted
+- Tests: 43 new tests, all pass (tests/test_sync_panel.py 16, tests/test_sync_engine_ui.py 16, tests/test_sync_status_panel_ui.py 11); full suite 1534 passed / 11 failed / 3 skipped (the same pre-existing 11: dom_page_replace, gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5).
+- Deviations from spec: none. Written while P3-7 (app wiring + shadow mode) was still in progress in the same working tree; landed cleanly against it -- `main.py`'s `on_event=self.on_sync_engine_event` and `SeraSyncDialog(..., sync_engine=...)` (both added by P3-7) are exactly the hooks this WP expected per the P3-5 note, so no rework was needed on either side.
+- Notes for later WPs:
+  - **Qt signal + throttle** (`main.py`): `SyncSignalBridge.engine_synced_signal = Signal(list)`. `SeraApp.on_sync_engine_event(kind, info)` is the `on_event` callback SyncEngine's public API expects; on `kind == "synced"` it calls `_queue_synced_tables(info["tables"])`, which coalesces touched-table sets (`_synced_tables_pending`, a lock) and emits at most once per second (`_synced_tables_last_emit`, a `threading.Timer` for the trailing edge, `_flush_synced_tables[_locked]`). `_handle_engine_synced_main_thread(tables)` is the Qt-connected handler: looks each table up in the class dict `SeraApp._SYNC_TABLE_REFRESH` (table -> window attr names), refreshes only the matching windows (`dashboard_win`, `search_win`, `admin_win`, `tracker_dump_win`, `detail_win` if visible and showing a client), and calls `sidebar.notify_sync_received("", "")` for the pill -- no `shell.show_alert`. Extend `_SYNC_TABLE_REFRESH` when a window starts showing data from a table not yet listed (currently missing a mapping: `audit_log` -- no dedicated UI reads it today).
+  - **`sync_panel.py`** (new, no PySide6, SS0 rule 7): pure DB-reading/writing helpers behind the panel -- `parked_count`, `own_vector`, `peer_vector`, `pending_outgoing(own, peer)`, `list_conflicts`, `dismiss_conflict` ("Keep"), `use_discarded_value` ("Use discarded value": a plain `UPDATE` via `sync_schema.REGISTRY[tbl].row_key`, validated against `PRAGMA table_info` before building SQL, so the P3-3 capture trigger picks it up like a hand-typed edit -- no special sync-only write path), `shadow_check_summary(app_dir, tail_lines)` (tails `logs/sync_shadow.log`, empty list if it doesn't exist yet).
+  - **`ui/dialogs/sera_sync_dialog.py`**: new `sync_status_group` under the Members panel (same office-mode-only visibility condition, computed directly rather than via `members_group.isVisible()` -- that reads False before the dialog is ever shown, a timing trap worth remembering for any future "mirror this other group's visibility" code here). `_refresh_sync_status()` (wired into the existing 3 s `_refresh_timer` alongside `_refresh_peers`) shows a one-line pending-outgoing/parked summary, populates `conflicts_table` (tagged per-row with `db: "master"|"raw"` in `_conflicts_cache` since both DB files have their own autoincrement `_sync_conflicts.id`), and tails the shadow log. `btn_conflict_keep` / `btn_conflict_use_discarded` call `_selected_conflict()` + the matching `sync_panel` function on the right DB file.
+  - `_online_status` now prefers `self.sync_engine.peer_status()[dev]["online"]` (a session actually completed in the last minute) per the P3-5 note, falling back to beacon recency when there's no engine yet or no session history for that peer (legacy mode, or this PC hasn't dialled it since start-up).
+  - Not exercised: a real applied batch flowing from `SyncEngine._finish` through to a visible window refresh end-to-end (P3-0/convergence tests apply changes directly, not through the app); real two-PC shadow-check log content in the panel (P3-7's shadow checks weren't running yet on the machine this was written on).
 
 ## 10. Doc changelog
 

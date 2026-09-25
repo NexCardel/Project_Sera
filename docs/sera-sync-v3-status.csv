@@ -32,8 +32,8 @@ P3-3,Done,Claude Opus 5.5,Claude Opus 5.5,f34baaa,2026-09-25: Review fixes + own
 P3-4,Done,Claude Opus 5.5,Claude Opus 5.5,48c2335,"2026-09-25: New sync_apply.py apply engine (LWW, tombstones incl. newer re-create for natural keys, parking, admin sigs, natural-key + PAN merge sent as merge changes) + review fixes; 58 tests pass (2 fail only with uncommitted P3-6 resequence in tree); full suite 1421/16 known",2026-09-25 15:22
 P3-5,Done,Claude Opus 5.5,Claude Opus 5.5,3fd8004,"2026-09-25: New sync_engine.py (HELLO/members/CHANGES+ACK/BYE, forwarding, poke, 20s scheduler) + harness wiring; P3-0 (a)-(f) pass; 29 new tests; full suite 1467 pass / 11 pre-existing fail",2026-09-25 17:46
 P3-6,Done,Gemini 3.8 Flash,Claude Opus 5.5,27bfc64,"2026-09-25: Opus review fixes: gated apply resequence, hardened acceptance test; 295 sync tests pass, full suite 1432/17/3",2026-09-25 16:16
-P3-7,In progress,Claude Sonnet 5,,,,2026-09-25 17:55
-P3-8,In progress,Claude Sonnet 5,,,,2026-09-25 17:59
+P3-7,In review,Claude Sonnet 5,,,"2026-09-25: 2026-09-25: new sync_shadow.py (replica+baseline snapshot, own/remote change mirroring, digest engine, capture_check, convergence_check) + Session.peek_type/dispatch_session port-clash fix + main.py engine wiring; 15 new tests incl. Accept (dropped trigger fails capture check); full suite 1534 passed / 11 pre-existing failed / 3 skipped",2026-09-25 18:34
+P3-8,In review,Claude Sonnet 5,,,2026-09-25: 2026-09-25: Qt signal + 1/s throttle for table-split UI refresh (main.py); new sync_panel.py (pending/parked/conflicts/shadow) + Sync Status panel in SeraSyncDialog; Members Online prefers peer_status(). 43 new tests pass; full suite 1534/11/3 (11 pre-existing).,2026-09-25 18:32
 P3-9,Not started,,,,,
 P4-1,Not started,,,,,
 P4-2,Not started,,,,,
