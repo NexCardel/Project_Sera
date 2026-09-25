@@ -266,6 +266,18 @@ class SeraApp:
             self.db.start_seal_timer()
             self.app.aboutToQuit.connect(self.db.stop_seal_timer)
 
+            # Sera Sync v3 (P4-3a): scheduled daily backup at first idle after 13:00 (keep 14)
+            # and retire legacy pre-sync backups
+            from sync_backup import DailyBackupScheduler, retire_pre_sync_backups
+            retire_pre_sync_backups(self.app_dir)
+            self._backup_scheduler = DailyBackupScheduler(
+                self.app_dir,
+                db=self.db,
+                is_idle_callback=lambda: not self._window_in_use(),
+            )
+            self._backup_scheduler.start()
+            self.app.aboutToQuit.connect(self._backup_scheduler.stop)
+
             # Ensure FST, SDC, SCA, and tracker settings are initialized
             if self.db.get_setting("sdc_enabled") is None:
                 self.db.set_setting("sdc_enabled", "1")
@@ -1993,6 +2005,8 @@ class SeraApp:
             return
         from core.memlog import trim_working_set
         trim_working_set(reason)
+        if getattr(self, "_backup_scheduler", None):
+            self._backup_scheduler.check_now()
 
     def _on_window_put_away(self):
         self._show_tray_minimized_hint()

@@ -1653,7 +1653,19 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **P3-8:** Members panel "Online" (P2-7 note) → `peer_status()[dev]["online"]` (a session completed in the last minute) instead of beacon recency. "PC <name> needs updating" from `needs_update` (`who == "peer"`), or "This PC needs updating" (`who == "this_pc"`). Stuck streams from `stalled_streams()`. UI refresh from the `synced` event's `tables`.
   - **P4-4:** override `compaction_floors()`; the receiver of `need_snapshot` must first send its own unsent changes (§5 P4-4), then download a snapshot. Today it just reports.
   - Membership changes learned in a session call `transport.update_members(...)` and `sync_admin.reconcile_admin_key(...)` (P2-2/P2-3 notes).
-  - Not exercised: two real PCs, Windows Firewall on 49156 (UDP pokes) / 49159, a long first sync over Wi-Fi (the 10-min session deadline cuts it; the next round resumes from the vectors).
+
+### P4-3a — Scheduled local backups (daily, keep 14) — Done — 2026-09-25
+- Model: Gemini 3.8 Flash   Commit: 6f84481
+- Tests: 9 passed in tests/test_sync_backup.py; 80 passed in sync test suite; full suite 1467 passed / 11 failed / 3 skipped (the same 11 pre-existing failures in broad UI/parser suite: dom_page_replace, gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests: test_export_database_creates_consistent_standalone_db, test_create_backup_exports_both_dbs, test_create_backup_handles_missing_raw_payload, test_prune_daily_backups_keeps_14, test_should_run_daily_backup_schedule, test_check_and_run_daily_backup_flow, test_backup_before_restore_migration_golive, test_retire_pre_sync_backups, test_scheduler_lifecycle
+- Deviations from spec: none
+- Notes for later WPs:
+  - New module `sync_backup.py` with zero PySide6 dependencies:
+    - `export_database(src, dest, hex_key)`: atomic snapshot using `sqlcipher_export('snap')` in `BEGIN IMMEDIATE;`.
+    - `create_backup(app_dir, dest_dir=None, prefix="manual-", reason="manual", hex_key=None, db=None)`: exports `master.db` and `rawPayload.db`, preserves legacy salt/key, writes `backup_manifest.json`.
+    - `backup_daily(app_dir, date_str=None, keep=14)`: creates `backups/daily-<date>/` and prunes older daily backups keeping 14 (FIFO).
+    - `backup_before_restore(app_dir)` (for P4-3b), `backup_before_migration(app_dir)` (P1-4), and `backup_before_golive(app_dir)` (P3-9).
+    - `retire_pre_sync_backups(app_dir)` moves legacy `master.db.pre-sync-*` files into `backups/legacy-pre-sync/` so the app directory stays clean.
+    - `DailyBackupScheduler` background thread and `check_and_run_daily_backup` triggered at first idle after 13:00.
 
 ## 10. Doc changelog
 

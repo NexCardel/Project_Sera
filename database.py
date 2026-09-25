@@ -3187,19 +3187,27 @@ class SeraDatabase:
     # ---------------- Backup & Restore ----------------
 
     def backup_to(self, dest_dir: str) -> str:
-        """Backs up master.db and sera.salt into a timestamped directory under dest_dir."""
+        """Backs up databases into a timestamped directory under dest_dir using sqlcipher_export."""
         now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
         target_folder = os.path.join(dest_dir, f"sera_backup_{now_str}")
-        os.makedirs(target_folder, exist_ok=True)
-
-        target_db = os.path.join(target_folder, "master.db")
-        shutil.copy2(self.db_path, target_db)
-
-        salt_path = os.path.join(os.path.dirname(self.db_path), security.SALT_FILE)
-        if os.path.exists(salt_path):
-            shutil.copy2(salt_path, os.path.join(target_folder, security.SALT_FILE))
-
-        return target_folder
+        try:
+            import sync_backup
+            sync_backup.create_backup(
+                os.path.dirname(self.db_path),
+                dest_dir=target_folder,
+                reason="manual_backup",
+                hex_key=self.hex_key,
+                db=self,
+            )
+            return target_folder
+        except Exception:
+            os.makedirs(target_folder, exist_ok=True)
+            target_db = os.path.join(target_folder, "master.db")
+            shutil.copy2(self.db_path, target_db)
+            salt_path = os.path.join(os.path.dirname(self.db_path), security.SALT_FILE)
+            if os.path.exists(salt_path):
+                shutil.copy2(salt_path, os.path.join(target_folder, security.SALT_FILE))
+            return target_folder
 
     def restore_from(self, target_path: str, master_password: str = None) -> str:
         """
