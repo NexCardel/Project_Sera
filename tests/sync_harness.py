@@ -121,10 +121,15 @@ def _translate_fk(col_name: str, val: Any, fk_gid_maps: dict[str, dict[int, str]
     if isinstance(val, int):
         if val in mapping:
             return f"gid:{mapping[val]}"
+        # A local id whose row no longer exists (e.g. audit_log.client_id after the client was
+        # deleted) is still a local id (P3-7: local ids are excluded). The sealer sends it as
+        # NULL (P3-3), so that's what it is on every other PC. (P3-4)
+        return "<NULL>"
     elif isinstance(val, str) and val.isdigit():
         int_val = int(val)
         if int_val in mapping:
             return f"gid:{mapping[int_val]}"
+        return "<NULL>"
     return None
 
 

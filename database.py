@@ -578,6 +578,41 @@ class SeraDatabase:
                                                seq_state=seq_state)
         return results
 
+    def _office_admin_pubkey(self):
+        try:
+            import sera_keys
+            office = sera_keys.load_office(os.path.dirname(os.path.abspath(self.db_path)))
+            return office.admin_pubkey if office else None
+        except Exception:
+            return None
+
+    def apply_changes(self, which: str, changes, admin_pubkey: str = None, now_ms: int = None):
+        """Applies remote changes to master.db ("master") or rawPayload.db ("raw") in one
+        transaction (sync_apply.apply_batch, P3-4). After master.db it finishes any
+        rawPayload.db re-pointing left by a client/service merge and retries rawPayload.db's
+        parked changes (their client may just have arrived). Returns sync_apply.ApplyResult."""
+        import sync_apply
+        import sync_capture
+        if which not in ("master", "raw"):
+            raise ValueError(f"unknown database {which!r}")
+        if admin_pubkey is None:
+            admin_pubkey = self._office_admin_pubkey()
+        kw = dict(admin_pubkey=admin_pubkey, get_signer=self._admin_signer,
+                  seq_state=sync_capture.seq_state_path(self.db_path), now_ms=now_ms)
+        if which == "master":
+            result = sync_apply.apply_batch(self.db_path, self.hex_key, "master", changes, **kw)
+            if result.applied or result.unparked or result.merges:
+                self._note_write()
+            sync_apply.run_raw_repoints(self.db_path, self.raw_db_path, self.hex_key)
+            raw = sync_apply.retry_parked(self.raw_db_path, self.hex_key, "raw",
+                                          master_path=self.db_path, **kw)
+            result.tables |= raw.tables
+            result.unparked += raw.unparked
+            return result
+        sync_apply.run_raw_repoints(self.db_path, self.raw_db_path, self.hex_key)
+        return sync_apply.apply_batch(self.raw_db_path, self.hex_key, "raw", changes,
+                                      master_path=self.db_path, **kw)
+
     def start_seal_timer(self, interval: float = None) -> None:
         """Seals every 5 s (writes by DOM_Parser/SDC_Parser and other processes). Idempotent."""
         if self._seal_timer is not None:

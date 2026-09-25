@@ -153,6 +153,16 @@ _process_hlc: dict[str, str] = {}
 _process_hlc_lock = threading.Lock()
 
 
+def note_observed(device_id: str, hlc: str) -> None:
+    """Raises this process's HLC floor to ``hlc`` after the apply engine (P3-4) observed a remote
+    change, so the other DB file's next local tick is later too."""
+    if not hlc:
+        return
+    with _process_hlc_lock:
+        if hlc > _process_hlc.get(device_id, ""):
+            _process_hlc[device_id] = hlc
+
+
 def _tick_shared(db_last: str, device_id: str, now_ms: Optional[int]) -> str:
     with _process_hlc_lock:
         last = max(db_last or "", _process_hlc.get(device_id, ""))

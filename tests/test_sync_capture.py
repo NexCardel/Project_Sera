@@ -382,6 +382,8 @@ NOT_CALLED = {
                                        "(urllib); its UPDATE of services is the same path as "
                                        "update_service, which is covered",
     "set_sync_mode": "writes only _sync_meta (not replicated); used by every test here",
+    "apply_changes": "P3-4: applies remote changes with applying=1, so by design nothing is "
+                     "captured (tests/test_sync_apply.py::test_changes_applied_are_not_captured)",
     "run_startup_maintenance": "also runs sync_fst_reports, which writes an .xlsx next to "
                                "DOM_Parser_1 (outside tmp_path). Its database steps are covered "
                                "one by one: re_resolve_all_tracker_dumps, "

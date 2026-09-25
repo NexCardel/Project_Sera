@@ -28,8 +28,8 @@ P2-8,Done,Claude Opus 5.5,Claude Opus 5.5,35a9afd,"2026-09-24: New sync_rejoin.p
 P3-0,Done,Gemini 3.8 Flash,Claude Opus 5.5,be84d98,"2026-09-24: Review round 3 fixes: write() routes via SeraDatabase._connect for sealer hooks, dynamic time in (b), (d) conflict row on n0 only, (e) partitioned single batch & vector freeze check, stringified FK translation in digest; 7 harness passed, 6 convergence failed as expected, 1185 passed in full suite",2026-09-24 21:50
 P3-1,Done,Claude Sonnet 5,Claude Opus 5.5,882d054,"2026-09-24: Round 2: client_raw_containers reverted to local (whole-row lww would have caused certain data loss via re_resolve_all_tracker_dumps' DELETE+rebuild under P3-3/P3-4 tombstone rules). New pending_creation client_container_notes TableSpec added for staff notes, lww, table itself not yet built (flagged for P3-2). 22 new schema tests + 2 database tests pass; full suite at baseline.",2026-09-24 21:37
 P3-2,Done,Gemini 3.8 Flash,Claude Opus 5.5,067828b,"2026-09-25: B1 fixed, all should-fix items addressed, fresh INI seeding harmonized; 104 passed / 0 failed",2026-09-25 00:53
-P3-3,In review,Claude Opus 5.5,Claude Opus 5.5,,2026-09-25: Review fixes + owner option A: per-stream seq high-water mark in keys/sync_seq.json (raised after commit; unreadable file stops sealing); 86 tests pass; full suite 1366/16 (known),2026-09-25 02:09
-P3-4,Not started,,,,,
+P3-3,Done,Claude Opus 5.5,Claude Opus 5.5,f34baaa,2026-09-25: Review fixes + owner option A: per-stream seq high-water mark in keys/sync_seq.json (raised after commit; unreadable file stops sealing); 86 tests pass; full suite 1366/16 (known),2026-09-25 02:12
+P3-4,In review,Claude Opus 5.5,Claude Opus 5.5,,"2026-09-25: New sync_apply.py apply engine (LWW, tombstones incl. newer re-create for natural keys, parking, admin sigs, natural-key + PAN merge sent as merge changes) + review fixes; 58 tests pass (2 fail only with uncommitted P3-6 resequence in tree); full suite 1421/16 known",2026-09-25 14:43
 P3-5,Not started,,,,,
 P3-6,Not started,,,,,
 P3-7,Not started,,,,,
