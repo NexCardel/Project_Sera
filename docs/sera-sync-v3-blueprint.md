@@ -1664,7 +1664,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - Membership changes learned in a session call `transport.update_members(...)` and `sync_admin.reconcile_admin_key(...)` (P2-2/P2-3 notes).
 
 ### P3-7 — Shadow mode: capture check, replica convergence, digests — Done — 2026-09-25
-- Model: Claude Sonnet 5   Commit: uncommitted
+- Model: Claude Sonnet 5   Commit: a897eb5
 - Tests: new `tests/test_sync_shadow.py`, 15 tests, all pass, including the Accept test
   `test_capture_check_fails_when_a_trigger_is_dropped` (drops every capture trigger for
   `clients`, inserts a row, and the capture check's replay-vs-live digest mismatches). Also:
@@ -1766,7 +1766,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
     `main.py` ahead of this one is reused as this WP's `SyncEngine(on_event=...)` callback.
 
 ### P3-7 — review fixes — 2026-09-25
-- Model: Claude Sonnet 5 (review by Claude Opus 5.5)   Commit: uncommitted
+- Model: Claude Sonnet 5 (review by Claude Opus 5.5)   Commit: a897eb5
 - Fixed blocking #1 ("The capture check fails on any PC that has received a change from
   another PC"): confirmed the reviewer's read was right and the original deviation-2 reasoning
   was wrong — in mode shadow a remote change never touches the live DB's replicated tables, so
@@ -1822,7 +1822,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
     - `DailyBackupScheduler` background thread and `check_and_run_daily_backup` triggered at first idle after 13:00.
 
 ### P3-8 — UI refresh by table + Sera Sync panel status — Done — 2026-09-25
-- Model: Claude Sonnet 5   Commit: uncommitted
+- Model: Claude Sonnet 5   Commit: a897eb5
 - Tests: 43 new tests, all pass (tests/test_sync_panel.py 16, tests/test_sync_engine_ui.py 16, tests/test_sync_status_panel_ui.py 11); full suite 1534 passed / 11 failed / 3 skipped (the same pre-existing 11: dom_page_replace, gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5).
 - Deviations from spec: none. Written while P3-7 (app wiring + shadow mode) was still in progress in the same working tree; landed cleanly against it -- `main.py`'s `on_event=self.on_sync_engine_event` and `SeraSyncDialog(..., sync_engine=...)` (both added by P3-7) are exactly the hooks this WP expected per the P3-5 note, so no rework was needed on either side.
 - Notes for later WPs:
