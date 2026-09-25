@@ -1655,7 +1655,7 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - Membership changes learned in a session call `transport.update_members(...)` and `sync_admin.reconcile_admin_key(...)` (P2-2/P2-3 notes).
 
 ### P4-3a — Scheduled local backups (daily, keep 14) — Done — 2026-09-25
-- Model: Gemini 3.8 Flash   Commit: 6f84481
+- Model: Gemini 3.8 Flash   Commit: 8f4d9c1
 - Tests: 9 passed in tests/test_sync_backup.py; 80 passed in sync test suite; full suite 1467 passed / 11 failed / 3 skipped (the same 11 pre-existing failures in broad UI/parser suite: dom_page_replace, gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper, vsdc_gemini_enricher x5); new tests: test_export_database_creates_consistent_standalone_db, test_create_backup_exports_both_dbs, test_create_backup_handles_missing_raw_payload, test_prune_daily_backups_keeps_14, test_should_run_daily_backup_schedule, test_check_and_run_daily_backup_flow, test_backup_before_restore_migration_golive, test_retire_pre_sync_backups, test_scheduler_lifecycle
 - Deviations from spec: none
 - Notes for later WPs:
