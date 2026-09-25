@@ -56,6 +56,8 @@ class SyncSignalBridge(QObject):
     update_ready_signal = Signal(str, dict)
     maintenance_done_signal = Signal()
     join_approval_signal = Signal(str, str, str, object)
+    # SyncEngine's "synced" event (P3-5/P3-8): sorted list of tables an applied batch touched.
+    engine_synced_signal = Signal(list)
 
 import security
 from database import SeraDatabase
@@ -118,6 +120,25 @@ def ensure_permanent_extension() -> Path:
         return APP_DIR / "sera_extension"
 
 class SeraApp:
+    # Table -> which windows to refresh when a live sync batch touches it (P3-8). Extend when
+    # a window starts showing sync-relevant data from a table not listed here.
+    _SYNC_TABLE_REFRESH = {
+        "clients": ("dashboard_win", "search_win", "detail_win"),
+        "client_values": ("dashboard_win", "search_win", "detail_win"),
+        "mcl_columns": ("dashboard_win", "search_win"),
+        "services": ("dashboard_win", "search_win", "detail_win"),
+        "client_services": ("dashboard_win", "search_win", "detail_win"),
+        "cell_formatting": ("dashboard_win",),
+        "client_activity_stats": ("dashboard_win", "detail_win"),
+        "client_recent_activity": ("dashboard_win", "detail_win"),
+        "client_raw_containers": ("detail_win",),
+        "client_container_notes": ("detail_win",),
+        "sdc_session_timelines": ("detail_win",),
+        "staff_users": ("admin_win",),
+        "app_settings": ("admin_win",),
+        "tracker_dump": ("tracker_dump_win",),
+    }
+
     def __init__(self):
         self._telemetry_lock = threading.Lock()
         self._telemetry_timer = None
@@ -163,6 +184,12 @@ class SeraApp:
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
+        self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
+        self._synced_tables_lock = threading.Lock()
+        self._synced_tables_pending = set()
+        self._synced_tables_last_emit = 0.0
+        self._synced_tables_flush_timer = None
+        self.app.aboutToQuit.connect(self._cancel_synced_tables_timer)
         self._pending_update_installer = None
         self._pending_update_info = None
         self._update_applied = False
@@ -371,6 +398,85 @@ class SeraApp:
                     self.discovery_service.start()
             except Exception as exc:
                 print(f"[Sera Sync] v3 discovery service failed to start: {exc}")
+
+        # Sera Sync v3 session engine (P3-5) + shadow mode (P3-7), office mode only. The engine
+        # runs in every sync mode: idle in "off" (still exchanges HELLO/membership so P2-2
+        # records spread before Phase 3 goes live); in "shadow" remote changes go to
+        # sync_shadow's replica, never the live DBs (local changes are mirrored there too, via
+        # the seal listener below). One permanent server on port 49159 serves both this and
+        # snapshot requests ("Add workstation", P2-6) -- sync_office.dispatch_session routes by
+        # the first frame so neither handler needs to change (P3-5 note: "Port clash").
+        self.sync_engine = None
+        self.sync_transport = None
+        self._sync_engine_server = None
+        if self.key_mode == "office" and self.discovery_service is not None and own_identity is not None:
+            try:
+                import sera_keys
+                import sync_engine
+                import sync_office
+                import sync_shadow
+                from sync_transport import MemberSet, SyncTransport
+
+                office = sera_keys.load_office(self.app_dir)
+                own_cert_pem = own_identity.cert_pem.decode("ascii")
+                with self.db._connect() as conn:
+                    members = MemberSet.from_db(conn, office.admin_pubkey, own_cert_pem)
+                cert_chain = sync_identity.load_cert_chain_args(self.app_dir)
+                self.sync_transport = SyncTransport(cert_chain, members)
+
+                self.sync_engine = sync_engine.SyncEngine(
+                    self.db, self.sync_transport,
+                    app_dir=self.app_dir,
+                    admin_pubkey=office.admin_pubkey,
+                    beacon_sighting=self.discovery_service.get_beacon_sighting,
+                    on_event=self.on_sync_engine_event,
+                    shadow_apply=sync_shadow.make_shadow_apply(self.db, self.app_dir),
+                    own_cert_pem=own_cert_pem,
+                )
+                self._sync_engine_server = self.sync_transport.serve(
+                    lambda session: sync_office.dispatch_session(session, self.app_dir, self.sync_engine),
+                    host="0.0.0.0",
+                )
+                self.discovery_service.on_poke = self.sync_engine.handle_poke
+
+                def _sync_seal_listener(results, _db=self.db, _app_dir=self.app_dir, _engine=self.sync_engine):
+                    # Own edits go to the shadow replica too (P3-7); a no-op outside mode shadow.
+                    sync_shadow.mirror_own_changes_to_replica(_db, _app_dir)
+                    _engine.notify_local_change()
+
+                self.db.set_seal_listener(_sync_seal_listener)
+                self.sync_engine.start()
+                self.app.aboutToQuit.connect(self.sync_engine.stop)
+                self.app.aboutToQuit.connect(self._sync_engine_server.stop)
+            except Exception as exc:
+                print(f"[Sera Sync] v3 sync engine failed to start: {exc}")
+                self.sync_engine = None
+                self.sync_transport = None
+
+        # Periodic shadow-mode checks (P3-8): sync_shadow.run_shadow_checks's own docstring
+        # says it's "called on demand (panel) and from a periodic timer once P3-8 wires one
+        # in" -- this is that timer. The panel's "Run now" button (sera_sync_dialog.py) calls
+        # the same function directly instead of going through this, since the dialog only
+        # holds the SyncEngine, not this SeraApp. Peer-digest collection for the convergence
+        # check isn't done (no wire protocol exists for it yet) -- only the capture check runs.
+        self._shadow_check_timer = None
+        if self.sync_engine is not None:
+            def _run_shadow_check_bg(_db=self.db, _app_dir=self.app_dir):
+                if _db.get_sync_mode() != "shadow":
+                    return
+                import sync_shadow
+                try:
+                    sync_shadow.run_shadow_checks(_db, _app_dir)
+                except Exception as exc:
+                    print(f"[Shadow Mode] periodic check failed: {exc}")
+
+            def _run_shadow_check_async():
+                threading.Thread(target=_run_shadow_check_bg, name="shadow-check", daemon=True).start()
+
+            self._shadow_check_timer = QTimer(self.app)
+            self._shadow_check_timer.timeout.connect(_run_shadow_check_async)
+            self._shadow_check_timer.start(30 * 60 * 1000)
+            _run_shadow_check_async()
 
         # Asynchronous background auto-updater (non-blocking, silent)
         loading_dlg.set_status("Initializing Background Auto-Updater...")
@@ -1842,6 +1948,7 @@ class SeraApp:
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
         self.admin_win.set_discovery_service(getattr(self, "discovery_service", None))
+        self.admin_win.set_sync_engine(getattr(self, "sync_engine", None))
 
         self.shell.setWindowTitle("Project Sera — Aman Associates")
         self.shell.on_minimized_to_tray = self._on_window_put_away
@@ -2310,6 +2417,86 @@ class SeraApp:
             ).start()
         except Exception as e:
             print(f"[Live Auto-Sync] Error refreshing UI: {e}")
+
+    # ------------------------------------------------------------------
+    # Sera Sync v3 engine events (P3-8). ``on_sync_engine_event`` is the ``on_event``
+    # callback SyncEngine's public API expects (P3-5 notes); P3-7 passes it in when the
+    # engine is wired into the app. It runs on the engine's background thread.
+    # ------------------------------------------------------------------
+
+    def on_sync_engine_event(self, kind: str, info: dict):
+        if kind == "synced":
+            # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
+            # for the UI to reload, and refreshing anyway would falsely tell the user a live
+            # sync happened (P3-8 review, item 5).
+            db = getattr(self, "db", None)
+            if db is not None and db.get_sync_mode() != "live":
+                return
+            self._queue_synced_tables(info.get("tables") or ())
+
+    def _queue_synced_tables(self, tables) -> None:
+        """Coalesces touched-table sets from applied sync batches and emits the Qt signal at
+        most once per second, so a burst of small sessions doesn't hammer the UI (P3-8)."""
+        if not tables:
+            return
+        import time
+        with self._synced_tables_lock:
+            self._synced_tables_pending.update(tables)
+            elapsed = time.monotonic() - self._synced_tables_last_emit
+            if elapsed >= 1.0:
+                self._flush_synced_tables_locked()
+            elif self._synced_tables_flush_timer is None:
+                self._synced_tables_flush_timer = threading.Timer(
+                    1.0 - elapsed, self._flush_synced_tables)
+                self._synced_tables_flush_timer.daemon = True
+                self._synced_tables_flush_timer.start()
+
+    def _flush_synced_tables(self) -> None:
+        with self._synced_tables_lock:
+            self._flush_synced_tables_locked()
+
+    def _cancel_synced_tables_timer(self) -> None:
+        """Stops the trailing-edge flush from firing after the app has started shutting down
+        (P3-8 review, minor)."""
+        with self._synced_tables_lock:
+            if self._synced_tables_flush_timer is not None:
+                self._synced_tables_flush_timer.cancel()
+                self._synced_tables_flush_timer = None
+
+    def _flush_synced_tables_locked(self) -> None:
+        if not self._synced_tables_pending:
+            self._synced_tables_flush_timer = None
+            return
+        import time
+        tables = sorted(self._synced_tables_pending)
+        self._synced_tables_pending = set()
+        self._synced_tables_last_emit = time.monotonic()
+        self._synced_tables_flush_timer = None
+        self.sync_bridge.engine_synced_signal.emit(tables)
+
+    def _handle_engine_synced_main_thread(self, tables):
+        """Main thread GUI handler for SyncEngine's ``synced`` event (P3-8): refreshes only
+        the windows relevant to the touched tables, split from the legacy refresh-everything
+        path above. No toast -- the sidebar pill alone shows a live sync happened."""
+        try:
+            targets = set()
+            for table in tables:
+                targets.update(self._SYNC_TABLE_REFRESH.get(table, ()))
+            if "dashboard_win" in targets and getattr(self, "dashboard_win", None):
+                self.dashboard_win.refresh()
+            if "search_win" in targets and getattr(self, "search_win", None):
+                self.search_win.refresh()
+            if "admin_win" in targets and getattr(self, "admin_win", None):
+                self.admin_win.refresh()
+            if "tracker_dump_win" in targets and getattr(self, "tracker_dump_win", None):
+                self.tracker_dump_win.load_data()
+            if "detail_win" in targets and getattr(self, "detail_win", None) and self.detail_win.isVisible():
+                if getattr(self.detail_win, "client_id", None):
+                    self.detail_win.load_client(self.detail_win.client_id)
+            if hasattr(self, "sidebar") and self.sidebar:
+                self.sidebar.notify_sync_received("", "")
+        except Exception as e:
+            print(f"[Sync Engine] Error refreshing UI for tables {tables}: {e}")
 
     def _handle_peer_logs_received_main_thread(self, sender_host: str):
         """Main thread GUI handler when Host PC receives peer audit logs."""

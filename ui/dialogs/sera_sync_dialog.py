@@ -53,13 +53,20 @@ class SeraSyncDialog(QDialog):
     # queued cross-thread delivery (Qt detects sender/receiver are on different threads).
     workstation_joined_signal = Signal(dict)
     workstation_closed_signal = Signal(str)
+    # sync_shadow.run_shadow_checks runs in a background thread (P3-8); this brings the "Run
+    # now" button + panel refresh back onto the GUI thread when it's done.
+    shadow_check_finished_signal = Signal()
 
-    def __init__(self, sync_service, db=None, actor="System", parent=None, discovery_service=None):
+    def __init__(self, sync_service, db=None, actor="System", parent=None, discovery_service=None,
+                 sync_engine=None):
         super().__init__(parent)
         self.sync_service = sync_service
         self.db = db
         self.actor = actor
         self.discovery_service = discovery_service
+        # The v3 sync engine (P3-5/P3-7); its .transport is already serving the permanent sync
+        # port, so "Add workstation" reuses it instead of binding a second server on it.
+        self.sync_engine = sync_engine
         self._add_workstation_session = None  # sync_office.AddWorkstationSession while "Add workstation" is open
         self.setWindowTitle("Sera Sync — LAN Database Sync & Live Activity")
         self.resize(1080, 620)
@@ -67,6 +74,7 @@ class SeraSyncDialog(QDialog):
 
         self._build_ui()
         self._refresh_peers()
+        self._refresh_sync_status()
         self._load_existing_activity()
 
         # Connect thread-safe activity signal
@@ -78,10 +86,12 @@ class SeraSyncDialog(QDialog):
         # thread; these connections queue safely onto this dialog's (GUI) thread.
         self.workstation_joined_signal.connect(lambda record: self._refresh_members())
         self.workstation_closed_signal.connect(self._on_add_workstation_closed)
+        self.shadow_check_finished_signal.connect(self._on_shadow_check_finished)
 
         # Auto-refresh peer table every 3 seconds
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_peers)
+        self._refresh_timer.timeout.connect(self._refresh_sync_status)
         self._refresh_timer.start(3000)
 
     def _build_ui(self):
@@ -347,6 +357,78 @@ class SeraSyncDialog(QDialog):
             self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
         )
 
+        # Sync Status panel (P3-8): pending outgoing count, parked changes, conflicts (with
+        # resolution actions) and the shadow-check summary. Office mode only, like Members.
+        self.sync_status_group = QGroupBox("Sync Status")
+        self.sync_status_group.setStyleSheet(
+            "QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
+        sync_status_layout = QVBoxLayout(self.sync_status_group)
+        sync_status_layout.setContentsMargins(12, 14, 12, 12)
+        sync_status_layout.setSpacing(8)
+
+        self.sync_status_summary_label = QLabel("Pending outgoing: 0   •   Parked: 0")
+        self.sync_status_summary_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
+        sync_status_layout.addWidget(self.sync_status_summary_label)
+
+        shadow_row = QHBoxLayout()
+        self.shadow_status_label = QLabel("Shadow checks: none logged yet")
+        self.shadow_status_label.setWordWrap(True)
+        self.shadow_status_label.setStyleSheet("font-size: 11px; color: #A0A0A0; font-family: Consolas, monospace;")
+        shadow_row.addWidget(self.shadow_status_label, 1)
+
+        self.btn_run_shadow_check = QPushButton("  Run now")
+        icon = _safe_icon("mdi.shield-check", color="#FFFFFF")
+        if icon:
+            self.btn_run_shadow_check.setIcon(icon)
+        self.btn_run_shadow_check.setToolTip("Run the shadow-mode capture check now (also runs every 30 minutes).")
+        self.btn_run_shadow_check.clicked.connect(self._on_run_shadow_check)
+        shadow_row.addWidget(self.btn_run_shadow_check)
+        sync_status_layout.addLayout(shadow_row)
+
+        conflicts_label = QLabel("Conflicts (field edits an older change lost to):")
+        conflicts_label.setStyleSheet("font-size: 11px; color: #B0B0B0;")
+        sync_status_layout.addWidget(conflicts_label)
+
+        self.conflicts_table = QTableWidget(0, 5)
+        self.conflicts_table.setHorizontalHeaderLabels(["Table", "Column", "Kept", "Discarded", "When"])
+        self.conflicts_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.conflicts_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.conflicts_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.conflicts_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.conflicts_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.conflicts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.conflicts_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.conflicts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.conflicts_table.setMaximumHeight(120)
+        sync_status_layout.addWidget(self.conflicts_table)
+
+        conflicts_btn_row = QHBoxLayout()
+        self.btn_conflict_keep = QPushButton("  Keep")
+        icon = _safe_icon("mdi.check", color="#FFFFFF")
+        if icon:
+            self.btn_conflict_keep.setIcon(icon)
+        self.btn_conflict_keep.setToolTip("Acknowledge the row already holds the value that won.")
+        self.btn_conflict_keep.clicked.connect(self._on_conflict_keep)
+        conflicts_btn_row.addWidget(self.btn_conflict_keep)
+
+        self.btn_conflict_use_discarded = QPushButton("  Use discarded value")
+        icon = _safe_icon("mdi.undo", color="#FFFFFF")
+        if icon:
+            self.btn_conflict_use_discarded.setIcon(icon)
+        self.btn_conflict_use_discarded.setToolTip("Write the discarded value back, as a normal edit.")
+        self.btn_conflict_use_discarded.clicked.connect(self._on_conflict_use_discarded)
+        conflicts_btn_row.addWidget(self.btn_conflict_use_discarded)
+        conflicts_btn_row.addStretch()
+        sync_status_layout.addLayout(conflicts_btn_row)
+
+        left_layout.addWidget(self.sync_status_group)
+        # Mirrors the Members panel's own condition, not members_group.isVisible() -- at this
+        # point in _build_ui() the dialog hasn't been shown yet, so isVisible() would read
+        # False regardless.
+        self.sync_status_group.setVisible(
+            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
+        )
+
         splitter.addWidget(left_widget)
 
         # Right Widget (Activity Log Sidebar)
@@ -496,12 +578,19 @@ class SeraSyncDialog(QDialog):
         if not getattr(self, "members_group", None) or not self.members_group.isVisible() or self.db is None:
             return
         try:
+            import datetime
             import sync_admin
             import sync_discovery
             admin_pubkey = self._office_admin_pubkey()
             if not admin_pubkey:
                 return
             own_device_id, _ = self._own_identity()
+            peer_status = {}
+            if self.sync_engine is not None:
+                try:
+                    peer_status = self.sync_engine.peer_status()
+                except Exception:
+                    peer_status = {}
             with self.db._connect() as conn:
                 members = sync_admin.list_members(conn, admin_pubkey, include_revoked=False)
                 office_admin = sync_admin.get_office_admin(conn, admin_pubkey)
@@ -509,9 +598,36 @@ class SeraSyncDialog(QDialog):
                 warnings = sync_discovery.get_unreachable_member_warnings(conn, members)
                 last_ok = {}
                 for m in members:
-                    addrs = sync_discovery.get_known_addresses(conn, m.get("device_id"))
+                    dev_id = m.get("device_id")
+                    # _local_addresses.local_ok_at is only updated by the side that dialled
+                    # (P3-5 deviation 9), so a peer that always dials us shows stale/"never"
+                    # there while peer_status()'s last_ok is current -- prefer it when we have
+                    # it (P3-8 review, item 6).
+                    engine_last_ok = peer_status.get(dev_id, {}).get("last_ok")
+                    if engine_last_ok:
+                        last_ok[dev_id] = datetime.datetime.fromtimestamp(engine_last_ok).isoformat(timespec="seconds")
+                        continue
+                    addrs = sync_discovery.get_known_addresses(conn, dev_id)
                     stamps = [a["local_ok_at"] for a in addrs if a.get("local_ok_at")]
-                    last_ok[m.get("device_id")] = max(stamps) if stamps else None
+                    last_ok[dev_id] = max(stamps) if stamps else None
+                # "PC <name> needs updating" / "This PC needs updating" (P3-5 note): the engine
+                # already tracks this per peer in peer_status()[dev]["needs_update"] (set the
+                # instant a session sees a schema mismatch, cleared on the next clean sync) --
+                # folded into the same banner as the unreachable-member warnings.
+                for m in members:
+                    dev_id = m.get("device_id")
+                    nu = peer_status.get(dev_id, {}).get("needs_update")
+                    if not nu:
+                        continue
+                    name = m.get("name") or dev_id
+                    if nu.get("who") == "this_pc":
+                        warnings[f"{dev_id}:needs_update"] = (
+                            f"This PC needs updating to sync with {name} (schema {nu.get('mine')} vs {nu.get('yours')})."
+                        )
+                    else:
+                        warnings[f"{dev_id}:needs_update"] = (
+                            f"PC {name} needs updating (schema {nu.get('yours')} vs this PC's {nu.get('mine')})."
+                        )
         except Exception as exc:
             print(f"[Sera Sync] could not refresh members: {exc}")
             return
@@ -545,11 +661,20 @@ class SeraSyncDialog(QDialog):
         self.btn_become_admin.setEnabled(not is_admin)
 
     def _online_status(self, device_id: str, own_device_id: str | None) -> str:
-        """Best-effort presence from beacon sightings (P2-5): a fresh beacon (<=30s, 3x the
-        10s beacon interval) means the PC is up and on the LAN. There is no live session to
-        check yet (P3-5); this is not a connectivity guarantee, just recency of the last beacon."""
+        """Presence for the Members panel. Once the engine is running (P3-7), "Online" means
+        a session with that PC actually completed in the last minute (P3-5's ``peer_status``,
+        per its P3-8 note) -- a real connectivity signal, not just a recent beacon. Falls back
+        to beacon recency (P2-5) when there is no engine yet or it has no session history for
+        that PC (e.g. legacy mode, or this PC hasn't dialled it since start-up)."""
         if device_id == own_device_id:
             return "Online (this PC)"
+        if self.sync_engine is not None:
+            try:
+                status = self.sync_engine.peer_status().get(device_id)
+            except Exception:
+                status = None
+            if status is not None:
+                return "Online" if status.get("online") else "Offline"
         if self.discovery_service is None:
             return "Unknown"
         try:
@@ -567,6 +692,133 @@ class SeraSyncDialog(QDialog):
         cache = getattr(self, "_members_cache", [])
         return cache[idx] if 0 <= idx < len(cache) else None
 
+    # ------------------------------------------------------------------
+    # Sync Status panel (P3-8): pending outgoing, parked, conflicts, shadow checks.
+    # ------------------------------------------------------------------
+
+    def _refresh_sync_status(self):
+        if not getattr(self, "sync_status_group", None) or not self.sync_status_group.isVisible() or self.db is None:
+            return
+        import sync_panel
+        try:
+            own_device_id, _ = self._own_identity()
+            members = getattr(self, "_members_cache", []) or []
+            with self.db._connect() as master_conn, self.db._connect_raw() as raw_conn:
+                own_master = sync_panel.own_vector(master_conn)
+                own_raw = sync_panel.own_vector(raw_conn)
+                parked = sync_panel.parked_count(master_conn) + sync_panel.parked_count(raw_conn)
+                conflicts = (
+                    [dict(c, db="master") for c in sync_panel.list_conflicts(master_conn)]
+                    + [dict(c, db="raw") for c in sync_panel.list_conflicts(raw_conn)]
+                )
+                conflicts.sort(key=lambda c: c.get("at") or "", reverse=True)
+                members_waiting, total_pending = 0, 0
+                for m in members:
+                    dev_id = m.get("device_id")
+                    if dev_id == own_device_id:
+                        continue
+                    n = (sync_panel.pending_outgoing(own_master, sync_panel.peer_vector(master_conn, dev_id))
+                         + sync_panel.pending_outgoing(own_raw, sync_panel.peer_vector(raw_conn, dev_id)))
+                    if n:
+                        members_waiting += 1
+                        total_pending += n
+        except Exception as exc:
+            print(f"[Sera Sync] could not refresh sync status: {exc}")
+            return
+
+        # Stuck streams (P3-5 note: "Stuck streams from stalled_streams()") -- polled, like
+        # peer_status(), rather than tracked from the "stalled" event.
+        stalled = 0
+        if self.sync_engine is not None:
+            try:
+                stalled = len(self.sync_engine.stalled_streams())
+            except Exception:
+                stalled = 0
+        summary = f"Pending outgoing: {total_pending} change(s) across {members_waiting} member(s)   •   Parked: {parked}"
+        if stalled:
+            summary += f"   •   Stalled: {stalled} stream(s)"
+        self.sync_status_summary_label.setText(summary)
+
+        self._conflicts_cache = conflicts
+        self.conflicts_table.setUpdatesEnabled(False)
+        self.conflicts_table.setRowCount(len(conflicts))
+        for row, c in enumerate(conflicts):
+            # Every conflict sync_apply.py writes today has kept=None (the delete that won
+            # left nothing) -- show that plainly instead of the literal text "None".
+            kept_text = "(deleted)" if c["kept"] is None else str(c["kept"])
+            self.conflicts_table.setItem(row, 0, QTableWidgetItem(c["table"]))
+            self.conflicts_table.setItem(row, 1, QTableWidgetItem(c["column"]))
+            self.conflicts_table.setItem(row, 2, QTableWidgetItem(kept_text))
+            self.conflicts_table.setItem(row, 3, QTableWidgetItem(str(c["discarded"])))
+            self.conflicts_table.setItem(row, 4, QTableWidgetItem(c["at"] or ""))
+        self.conflicts_table.setUpdatesEnabled(True)
+
+        lines = sync_panel.shadow_check_summary(self._app_dir())
+        self.shadow_status_label.setText("\n".join(lines) if lines else "Shadow checks: none logged yet")
+
+    def _selected_conflict(self):
+        """Returns the selected row's conflict dict from ``_conflicts_cache``, or ``None``."""
+        rows = self.conflicts_table.selectionModel().selectedRows() if self.conflicts_table.selectionModel() else []
+        if not rows:
+            return None
+        idx = rows[0].row()
+        cache = getattr(self, "_conflicts_cache", [])
+        return cache[idx] if 0 <= idx < len(cache) else None
+
+    def _conflict_db_connect(self, which: str):
+        return self.db._connect() if which == "master" else self.db._connect_raw()
+
+    def _on_conflict_keep(self):
+        conflict = self._selected_conflict()
+        if conflict is None or self.db is None:
+            return
+        import sync_panel
+        with self._conflict_db_connect(conflict["db"]) as conn:
+            sync_panel.dismiss_conflict(conn, conflict["id"])
+        self._refresh_sync_status()
+
+    def _on_conflict_use_discarded(self):
+        conflict = self._selected_conflict()
+        if conflict is None or self.db is None:
+            return
+        import sync_panel
+        with self._conflict_db_connect(conflict["db"]) as conn:
+            applied = sync_panel.use_discarded_value(conn, conflict["id"])
+        if not applied:
+            if conflict.get("reason") in sync_panel.DELETED_ROW_REASONS:
+                self.shell_alert_or_status(
+                    "That edit was discarded because the row was deleted on another PC -- "
+                    "it can't be restored from here yet."
+                )
+            else:
+                self.shell_alert_or_status("Could not apply the discarded value (the row may be gone).")
+        self._refresh_sync_status()
+
+    def _on_run_shadow_check(self):
+        """"Run now" (P3-8, on the "on demand from panel" trigger sync_shadow.run_shadow_checks
+        expects): runs the capture check in a background thread (it copies/replays a scratch
+        DB, not instant) and refreshes the panel when done."""
+        if self.db is None:
+            return
+        self.btn_run_shadow_check.setEnabled(False)
+        app_dir = self._app_dir()
+        db = self.db
+
+        def _run():
+            import sync_shadow
+            try:
+                sync_shadow.run_shadow_checks(db, app_dir)
+            except Exception as exc:
+                print(f"[Sera Sync] shadow check failed: {exc}")
+            finally:
+                self.shadow_check_finished_signal.emit()
+
+        threading.Thread(target=_run, name="shadow-check-on-demand", daemon=True).start()
+
+    def _on_shadow_check_finished(self):
+        self.btn_run_shadow_check.setEnabled(True)
+        self._refresh_sync_status()
+
     def _on_add_workstation(self):
         if self._add_workstation_session is not None:
             QMessageBox.information(self, "Add Workstation", "A pairing window is already open.")
@@ -581,6 +833,7 @@ class SeraSyncDialog(QDialog):
             self._app_dir(), self._open_db_conn, own_device_id, own_cert_pem,
             on_joined=lambda record: self.workstation_joined_signal.emit(record),
             on_closed=lambda reason: self.workstation_closed_signal.emit(reason),
+            transport=getattr(self.sync_engine, "transport", None),
         )
         try:
             session.start()

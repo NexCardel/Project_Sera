@@ -187,6 +187,7 @@ class Session:
         self._close_lock = threading.Lock()
         self._closed = False
         self._pending_chunk = None
+        self._pushed_back = None
 
     def __enter__(self):
         return self
@@ -310,6 +311,9 @@ class Session:
         the frame timeout. Always capped by the session deadline.
         Raises ``Busy`` when the server refused the session.
         """
+        if self._pushed_back is not None:
+            frame, self._pushed_back = self._pushed_back, None
+            return frame
         if self._pending_chunk is not None:
             raise ProtocolError("the previous chunk has not been read")
         if wait is None:
@@ -344,6 +348,16 @@ class Session:
                 raise self._fail(FrameTooLarge("peer announced a %d byte chunk" % n))
             self._pending_chunk = n
         return frame
+
+    def peek_type(self, wait: float | None = None) -> str:
+        """Reads the first frame, remembers it, and returns its ``"t"`` without consuming it --
+        the next ``recv()`` returns the same frame again. Lets one listening port serve two
+        protocols that each read their own first frame (blueprint §5 P3-7: the shared sync port
+        routes ``{"t":"snapshot"}`` to the snapshot handler, everything else to the sync engine).
+        Not for use once a chunk header has been read (there is no chunk to push back)."""
+        frame = self.recv(wait=wait)
+        self._pushed_back = frame
+        return frame["t"]
 
     def send_chunk(self, data) -> None:
         if len(data) > MAX_FRAME_BYTES:

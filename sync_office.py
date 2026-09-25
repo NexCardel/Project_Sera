@@ -118,6 +118,21 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     return office
 
 
+def dispatch_session(session, app_dir, engine) -> None:
+    """Routes one incoming session on the permanent sync port: a snapshot request
+    (``{"t": "snapshot"}``, P2-6) goes to ``sync_snapshot.handle_snapshot_session``; everything
+    else (``hello``, the P3-5 session protocol) goes to ``engine.handle_session`` (blueprint §5
+    P3-7 "Port clash": the sync engine's server and "Add workstation"'s used to both want
+    port 49159). Uses ``Session.peek_type`` so neither handler needs to change -- each still
+    reads its own first frame with ``recv()``."""
+    import sync_snapshot
+    t = session.peek_type()
+    if t == sync_snapshot.FRAME_SNAPSHOT:
+        sync_snapshot.handle_snapshot_session(session, app_dir)
+    else:
+        engine.handle_session(session)
+
+
 def join_office(app_dir, host: str, code, device_name: str, *,
                 port: int = sync_pairing.PAIRING_PORT,
                 sync_port: int = sync_transport.SYNC_PORT,
@@ -157,7 +172,14 @@ class AddWorkstationSession:
                 on_joined: Callable[[dict], None] | None = None,
                 on_closed: Callable[[str], None] | None = None,
                 sync_host: str = "0.0.0.0", sync_port: int = sync_transport.SYNC_PORT,
+                transport: SyncTransport | None = None,
                 **pairing_kwargs):
+        """``transport``: an already-serving ``SyncTransport`` to reuse instead of binding a new
+        port (blueprint §5 P3-7 "Port clash": once the sync engine's permanent server holds
+        ``sync_port``, a second bind on it fails). When given, its member set is rebuilt on join
+        and it is left running (not stopped) when this session closes -- it belongs to the
+        caller. The caller's server must route ``{"t":"snapshot"}`` frames to
+        ``sync_snapshot.handle_snapshot_session`` (``dispatch_session`` does this)."""
         self.app_dir = Path(app_dir)
         self._open_db = open_db
         self.admin_device_id = admin_device_id
@@ -166,6 +188,7 @@ class AddWorkstationSession:
         self._on_closed_cb = on_closed
         self._sync_host = sync_host
         self._sync_port = sync_port
+        self._external_transport = transport
         self._transport: SyncTransport | None = None
         self._server = None
         self._grace_timer: threading.Timer | None = None
@@ -177,8 +200,11 @@ class AddWorkstationSession:
 
     @property
     def sync_port(self) -> int | None:
-        """The bound snapshot-server port (useful when ``sync_port=0`` was requested)."""
-        return self._server.address[1] if self._server is not None else None
+        """The bound snapshot-server port (useful when ``sync_port=0`` was requested). With an
+        external ``transport``, that server's port was fixed by the caller."""
+        if self._server is not None:
+            return self._server.address[1]
+        return self._sync_port if self._external_transport is not None else None
 
     def _members(self) -> MemberSet:
         office = sera_keys.load_office(self.app_dir)
@@ -189,19 +215,23 @@ class AddWorkstationSession:
             conn.close()
 
     def start(self) -> None:
-        """Starts the snapshot server, then the pairing window. Raises whatever ``PairingWindow.start``
+        """Starts the snapshot server (unless an external ``transport`` was given, in which case
+        it is reused as is), then the pairing window. Raises whatever ``PairingWindow.start``
         raises (e.g. ``sync_admin.NotAdmin``) before anything is opened."""
-        cert_chain = sync_identity.load_cert_chain_args(self.app_dir)
-        self._transport = SyncTransport(cert_chain, self._members())
-        self._server = self._transport.serve(
-            lambda session: sync_snapshot.handle_snapshot_session(session, self.app_dir),
-            host=self._sync_host, port=self._sync_port,
-        )
+        if self._external_transport is not None:
+            self._transport = self._external_transport
+            self._transport.update_members(self._members())
+        else:
+            cert_chain = sync_identity.load_cert_chain_args(self.app_dir)
+            self._transport = SyncTransport(cert_chain, self._members())
+            self._server = self._transport.serve(
+                lambda session: sync_snapshot.handle_snapshot_session(session, self.app_dir),
+                host=self._sync_host, port=self._sync_port,
+            )
         try:
             self.window.start()
         except Exception:
-            self._server.stop()
-            self._server = None
+            self._stop_server()
             raise
 
     def _on_joined(self, record: dict) -> None:

@@ -1549,7 +1549,8 @@ class AdminWindow(QWidget):
             return
         from ui.dialogs.sera_sync_dialog import SeraSyncDialog
         dlg = SeraSyncDialog(self._sync_service, db=self.db, actor=self.actor, parent=self,
-                             discovery_service=getattr(self, "_discovery_service", None))
+                             discovery_service=getattr(self, "_discovery_service", None),
+                             sync_engine=getattr(self, "_sync_engine", None))
         dlg.exec()
 
     def set_sync_service(self, sync_service):
@@ -1559,3 +1560,9 @@ class AdminWindow(QWidget):
     def set_discovery_service(self, discovery_service):
         """Inject the Sera Sync v3 DiscoveryService (P2-5/P2-7), office mode only; may be None."""
         self._discovery_service = discovery_service
+
+    def set_sync_engine(self, sync_engine):
+        """Inject the Sera Sync v3 SyncEngine (P3-5/P3-7), office mode only; may be None. Its
+        ``.transport`` is already serving the permanent sync port, so "Add workstation" reuses
+        it instead of trying to bind a second server on the same port (P3-7 "Port clash")."""
+        self._sync_engine = sync_engine
