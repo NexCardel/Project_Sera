@@ -31,7 +31,7 @@ P3-2,Done,Gemini 3.8 Flash,Claude Opus 5.5,067828b,"2026-09-25: B1 fixed, all sh
 P3-3,Done,Claude Opus 5.5,Claude Opus 5.5,f34baaa,2026-09-25: Review fixes + owner option A: per-stream seq high-water mark in keys/sync_seq.json (raised after commit; unreadable file stops sealing); 86 tests pass; full suite 1366/16 (known),2026-09-25 02:12
 P3-4,Done,Claude Opus 5.5,Claude Opus 5.5,48c2335,"2026-09-25: New sync_apply.py apply engine (LWW, tombstones incl. newer re-create for natural keys, parking, admin sigs, natural-key + PAN merge sent as merge changes) + review fixes; 58 tests pass (2 fail only with uncommitted P3-6 resequence in tree); full suite 1421/16 known",2026-09-25 15:22
 P3-5,Not started,,,,,
-P3-6,In review,Gemini 3.8 Flash,Claude Opus 5.5,,"2026-09-25: Opus review fixes: gated apply resequence, hardened acceptance test; 295 sync tests pass, full suite 1432/17/3",2026-09-25 16:01
+P3-6,Done,Gemini 3.8 Flash,Claude Opus 5.5,27bfc64,"2026-09-25: Opus review fixes: gated apply resequence, hardened acceptance test; 295 sync tests pass, full suite 1432/17/3",2026-09-25 16:16
 P3-7,Not started,,,,,
 P3-8,Not started,,,,,
 P3-9,Not started,,,,,
