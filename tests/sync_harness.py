@@ -23,6 +23,12 @@ admin at the time of the copy.  After all nodes pair, every node's DB is brought
 to date with the full member roster by copying _sync_members rows directly from the
 admin without individual signature re-verification via store_record, so that mutual-TLS
 handshakes succeed in all directions.
+
+P3-5: every node runs a ``sync_engine.SyncEngine`` in sync mode ``live`` (changes applied
+straight to the live DBs; shadow replicas are P3-7). ``run_until_quiet`` drives sync rounds
+(one session per connected pair) until a round moves nothing, since the engine's own 20 s
+scheduler is too slow for tests. ``node.engine.start()`` runs the real scheduler and pokes
+(UDP on the same port number as the node's TCP sync port).
 """
 
 from __future__ import annotations
@@ -342,6 +348,8 @@ class HarnessNode:
         self._db = None
         self.transport: SyncTransport | None = None
         self.server: SyncServer | None = None
+        self.engine = None  # sync_engine.SyncEngine (P3-5)
+        self.events: list[tuple[str, dict]] = []
         self.port: int = 0
         self._active_sessions: set[Session] = set()
         self._lock = threading.Lock()
@@ -447,20 +455,26 @@ class HarnessNode:
         with self._lock:
             self._active_sessions.add(session)
         try:
-            # Placeholder loop for sessions until the P3-5 engine is wired in.
-            while not session._closed:
-                try:
-                    frame = session.recv(wait=0.2)
-                    if frame.get("t") == "bye":
-                        break
-                except Exception:
-                    break
+            self.engine.handle_session(session)
         finally:
             with self._lock:
                 self._active_sessions.discard(session)
 
+    def sync_with(self, peer: "HarnessNode | int | str"):
+        """One P3-5 session from this node to ``peer`` (returns sync_engine.SessionResult)."""
+        return self.engine.sync_with(self.harness.get_node(peer).device_id)
+
     def close(self) -> None:
-        """Stops the transport server and closes active sessions."""
+        """Stops the sync engine and transport server and closes active sessions."""
+        if self.engine is not None:
+            try:
+                self.engine.stop()
+            except Exception:
+                pass
+            try:
+                self.db.set_seal_listener(None)
+            except Exception:
+                pass
         if self.server is not None:
             try:
                 self.server.stop()
@@ -503,6 +517,7 @@ class SyncHarness:
         self.master_password = master_password
         self.nodes: list[HarnessNode] = []
         self._partitions: set[frozenset[str]] = set()
+        self._round = 0
 
         self._init_cluster()
 
@@ -697,6 +712,27 @@ class SyncHarness:
             node.server = server
             node.port = server.address[1]
 
+            # P3-5: sessions are run by the sync engine. Sealing and applying need mode live
+            # (the harness replicates straight into the live DBs; shadow replicas are P3-7).
+            import sync_engine
+            with node.open_db() as conn:
+                row = conn.execute("SELECT value FROM _sync_meta WHERE key = 'device_id'").fetchone()
+            if not row or row[0] != node.device_id:
+                raise RuntimeError(f"{node.name}: master.db has the wrong device id for its stream")
+            node.db.set_sync_mode("live")
+            node.engine = sync_engine.SyncEngine(
+                node.db, transport,
+                app_dir=node.app_dir,
+                admin_pubkey=admin_pubkey,
+                own_cert_pem=node.cert_pem,
+                connect=lambda ip, port, dev, _n=node: _n.connect(dev),
+                # Pokes: UDP on the same port number as the node's TCP sync port.
+                poke_listen=("127.0.0.1", node.port),
+                poke_port_for=lambda dev, port: port,
+                on_event=lambda kind, info, _n=node: _n.events.append((kind, info)),
+            )
+            node.db.set_seal_listener(node.engine.notify_local_change)
+
         # Record all peer addresses in local address book.
         for node in self.nodes:
             with node.open_db() as conn:
@@ -773,34 +809,48 @@ class SyncHarness:
         """Calculates the database digest of a node."""
         return digest(self.get_node(node))
 
-    def run_until_quiet(self, timeout: float = 5.0, quiet_period: float = 0.05) -> None:
-        """Waits until all in-flight sync sessions across the cluster settle.
+    def run_sync_round(self) -> list:
+        """One P3-5 session for every pair of nodes that isn't partitioned (the initiator
+        alternates with the round). Returns the ``SessionResult`` list."""
+        results = []
+        for i, a in enumerate(self.nodes):
+            for b in self.nodes[i + 1:]:
+                if self.is_partitioned(a, b):
+                    continue
+                first, second = (a, b) if self._round % 2 == 0 else (b, a)
+                results.append(first.sync_with(second))
+        self._round += 1
+        return results
 
-        Raises ``TimeoutError`` if ``timeout`` seconds elapse before the cluster
-        goes quiet.  This ensures tests do not silently pass because the timeout
-        expired with sessions still open.
+    def run_until_quiet(self, timeout: float = 5.0, quiet_period: float = 0.05) -> None:
+        """Runs sync rounds (P3-5 sessions between all connected pairs) until one round moves
+        nothing and has no failed session, and no session is still open.
+
+        The engines' own scheduler (20 s rounds) is too slow for tests, so rounds are driven
+        from here. Raises ``TimeoutError`` if ``timeout`` seconds elapse first, so a test never
+        passes silently on an expired timeout.
         """
         deadline = time.monotonic() + timeout
-        last_busy = time.monotonic()
-
+        last = None
         while time.monotonic() < deadline:
-            busy = any(node._active_sessions for node in self.nodes)
-
-            if busy:
-                last_busy = time.monotonic()
-                time.sleep(0.02)
-            else:
-                if time.monotonic() - last_busy >= quiet_period:
-                    return
+            results = self.run_sync_round()
+            last = results
+            # Sessions that just ended leave the tracking sets a moment later (cleanup threads).
+            drain = min(deadline, time.monotonic() + 1.0)
+            while any(node._active_sessions for node in self.nodes) and time.monotonic() < drain:
                 time.sleep(0.01)
-
-        # Check one final time after deadline.
-        busy = any(node._active_sessions for node in self.nodes)
-        if busy:
-            counts = {n.name: len(n._active_sessions) for n in self.nodes if n._active_sessions}
-            raise TimeoutError(
-                f"run_until_quiet: cluster still has active sessions after {timeout}s: {counts}"
-            )
+            busy = any(node._active_sessions for node in self.nodes)
+            if not busy and all(r.ok and not r.moved and not r.members_exchanged for r in results):
+                return
+            if all(r.ok for r in results):
+                continue
+            time.sleep(quiet_period)
+        errors = {f"{r.device_id[:8]}": r.error for r in (last or []) if not r.ok}
+        counts = {n.name: len(n._active_sessions) for n in self.nodes if n._active_sessions}
+        raise TimeoutError(
+            f"run_until_quiet: cluster did not go quiet within {timeout}s "
+            f"(failed sessions: {errors}, open sessions: {counts})"
+        )
 
     def close(self) -> None:
         """Stops all servers and nodes, cleaning up resources."""

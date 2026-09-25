@@ -213,6 +213,10 @@ def ensure_sync_tables(conn: sqlite3.Connection, db_name: str, device_id: Option
             UNIQUE(origin, origin_seq)
         );
     """)
+    # P3-5: sessions send changes in (hlc, origin, origin_seq) order, a batch at a time.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_sync_changes_hlc ON _sync_changes(hlc, origin, origin_seq)"
+    )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS _sync_clock (

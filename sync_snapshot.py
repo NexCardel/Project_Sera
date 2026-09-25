@@ -441,44 +441,13 @@ def download_snapshot(
             if on_progress:
                 on_progress(fname, 0, size)
 
-            class _Sink:
-                def __init__(self, f_out):
-                    self.f_out = f_out
-                    self.h = hashlib.sha256()
-
-                def write(self, data):
-                    self.f_out.write(data)
-                    self.h.update(data)
-
-            received = 0
-            ok = False
+            # The chunk rules live in sync_transport (P3-5, from the P2-6 notes). recv_file
+            # removes its partial file on any failure.
+            progress = (lambda n, _f=fname, _s=size: on_progress(_f, n, _s)) if on_progress else None
             try:
-                with open(target_path, "xb") as f_out:
-                    sink = _Sink(f_out)
-                    while received < size:
-                        chunk_frame = session.recv()
-                        if chunk_frame.get("t") != sync_transport.FRAME_CHUNK:
-                            raise SnapshotError(f"Expected chunk frame, got {chunk_frame.get('t')!r}")
-                        n = chunk_frame.get("n", 0)
-                        if n > size - received:
-                            raise SnapshotError("More file data than announced")
-                        if n == 0:
-                            raise SnapshotError("Empty chunk in file transfer")
-                        received += session.read_chunk(sink)
-                        if on_progress:
-                            on_progress(fname, received, size)
-                    ok = True
-            finally:
-                # The file must be closed (the ``with`` above has exited) before unlinking it,
-                # or the delete fails silently on Windows (harmless today: the next attempt
-                # deletes it before writing, but leaves a stale partial file until then).
-                if not ok:
-                    try:
-                        target_path.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
-            actual_sha = sink.h.hexdigest()
+                actual_sha = session.recv_file(target_path, size, on_progress=progress)
+            except sync_transport.ProtocolError as exc:
+                raise SnapshotError(f"Bad file transfer for {fname}: {exc}") from None
             if actual_sha != expected_sha:
                 try:
                     target_path.unlink(missing_ok=True)

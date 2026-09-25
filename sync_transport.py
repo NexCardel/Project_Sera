@@ -389,10 +389,11 @@ class Session:
                 size += len(data)
         return size, h.hexdigest()
 
-    def recv_file(self, path, size: int) -> str:
+    def recv_file(self, path, size: int, on_progress=None) -> str:
         """Receive exactly ``size`` bytes of chunk frames into a new file. Returns its sha256 hex.
 
         ``path`` must not exist yet. On any failure the partial file is removed.
+        ``on_progress(received_bytes)`` is called after each chunk.
         """
         if type(size) is not int or size < 0:
             raise ProtocolError("bad file size")
@@ -417,6 +418,8 @@ class Session:
                     if frame["n"] == 0:
                         raise self._fail(ProtocolError("empty chunk in a file"))
                     received += self.read_chunk(_Sink)
+                    if on_progress is not None:
+                        on_progress(received)
                 ok = True
             finally:
                 if not ok:

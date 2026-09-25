@@ -570,9 +570,11 @@ def test_file_streams_in_chunks(nodes, servers, tmp_path):
     dest = tmp_path / "received.bin"
     result = {}
 
+    progress = []
+
     def receive(session):
         head = session.recv()
-        result["sha"] = session.recv_file(dest, head["size"])
+        result["sha"] = session.recv_file(dest, head["size"], on_progress=progress.append)
         session.send({"t": "ok"})
 
     ta = _transport(nodes, "a", "a", "b")
@@ -588,6 +590,8 @@ def test_file_streams_in_chunks(nodes, servers, tmp_path):
     assert size == src.stat().st_size
     assert sha == result["sha"] == hashlib.sha256(src.read_bytes()).hexdigest()
     assert dest.read_bytes() == src.read_bytes()
+    # on_progress (P3-5): after every chunk, with the bytes received so far.
+    assert len(progress) == 4 and progress == sorted(progress) and progress[-1] == size
 
 
 def test_sink_failure_closes_session(nodes, servers):

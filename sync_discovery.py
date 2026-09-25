@@ -797,6 +797,7 @@ class DiscoveryService:
         on_peer_discovered: Callable[[dict], None] | None = None,
         on_pairing_beacon: Callable[[dict], None] | None = None,
         listen: bool = True,
+        on_poke: Callable[[bytes, str], Any] | None = None,
     ):
         self.db_conn = db_conn
         self.open_db = open_db
@@ -811,6 +812,8 @@ class DiscoveryService:
         self.manual_destinations: list[tuple[str, int]] = list(manual_destinations or [])
         self.is_member = is_member
         self.listen = bool(listen)
+        # P3-5: sync pokes share the beacon port; they go to SyncEngine.handle_poke.
+        self.on_poke = on_poke
 
         self.on_peer_discovered = on_peer_discovered
         self.on_pairing_beacon = on_pairing_beacon
@@ -892,6 +895,13 @@ class DiscoveryService:
 
     def handle_datagram(self, data: bytes, sender_ip: str, sock: socket.socket | None = None):
         """Processes an incoming beacon datagram (from internal listener or external dispatcher)."""
+        if self.on_poke is not None and b'"poke"' in bytes(data[:512]):
+            # A v3 poke (P3-5) is not a beacon; SyncEngine.handle_poke validates it.
+            try:
+                self.on_poke(bytes(data), sender_ip)
+            except Exception:
+                logger.exception("sync poke handler failed")
+            return
         beacon = parse_beacon(data, sender_ip=sender_ip)
         if not beacon:
             return

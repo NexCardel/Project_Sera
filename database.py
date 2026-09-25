@@ -596,7 +596,18 @@ class SeraDatabase:
                                                master_path=self.db_path,
                                                get_signer=self._admin_signer, timeout=timeout,
                                                seq_state=seq_state)
+        listener = getattr(self, "_seal_listener", None)
+        if listener is not None and any(r.changes for r in results.values()):
+            try:
+                listener(results)
+            except Exception as e:
+                print(f"[database] Sync seal listener failed: {e}")
         return results
+
+    def set_seal_listener(self, fn) -> None:
+        """``fn(results)`` is called after a seal that produced changes (P3-5: the sync engine
+        pokes the other PCs). Runs on the sealing thread; must be quick. None removes it."""
+        self._seal_listener = fn
 
     def _office_admin_pubkey(self):
         try:
