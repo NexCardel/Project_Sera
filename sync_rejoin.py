@@ -571,11 +571,12 @@ def _pick(ids: list, rows: dict):
     return active[0] if len(active) == 1 else None
 
 
-def _dataset_key(row: dict, client_ref) -> str:
+def _dataset_key(row: dict, client_ref, client_gid: str = None) -> str:
     """Same identifier rules as database.py's start-up recompute of tracker_dump.dataset_key,
-    with the client reference already translated to the office's id."""
+    with the client reference already translated to the office's id or gid."""
     from database import SeraDatabase
-    cand_id = row.get("unassigned_identity") or (f"CLI_{client_ref}" if client_ref else "UNKNOWN")
+    cid_key = f"CLI_{client_gid}" if client_gid else (f"CLI_{client_ref}" if client_ref else "UNKNOWN")
+    cand_id = row.get("unassigned_identity") or cid_key
     cand_form = ""
     raw_json = row.get("raw_payload_json")
     if raw_json:
@@ -586,6 +587,11 @@ def _dataset_key(row: dict, client_ref) -> str:
             cand_form = cj.get("filing_type") or c_raw.get("filing_type") or ""
         except Exception:
             pass
+    dkey = row.get("dataset_key")
+    if not cand_form and dkey and dkey.count(":") >= 3:
+        parts = dkey.split(":")
+        if parts[2] and parts[2] != "FORM":
+            cand_form = parts[2]
     return SeraDatabase.compute_dataset_key(row.get("portal"), cand_id, cand_form, row.get("period_label"))
 
 
@@ -849,11 +855,15 @@ class _Salvage:
     def _tracker(self) -> None:
         ocols = _table_cols(self.orw, "tracker_dump")
         known = set()
+        ogid_map = {}
+        if "gid" in set(_table_cols(self.o, "clients")):
+            ogid_map = {r[0]: r[1] for r in self.o.execute("SELECT id, gid FROM clients WHERE gid IS NOT NULL")}
         for r in self.orw.execute("SELECT %s FROM tracker_dump" % ", ".join(f'"{c}"' for c in ocols)):
             row = dict(zip(ocols, r))
             if row.get("dataset_key"):
                 known.add(row["dataset_key"])
-            known.add(_dataset_key(row, row.get("client_id")))
+            cid = row.get("client_id")
+            known.add(_dataset_key(row, cid, ogid_map.get(cid)))
         lcols = _table_cols(self.lr, "tracker_dump")
         cols = [c for c in lcols if c not in ("id", "gid") and c in set(ocols)]
         for r in self.lr.execute("SELECT %s FROM tracker_dump ORDER BY id" % ", ".join(f'"{c}"' for c in lcols)):
@@ -862,7 +872,7 @@ class _Salvage:
             if not ok:
                 self.r.tracker_skipped_client += 1
                 continue
-            key = _dataset_key(row, oid)
+            key = _dataset_key(row, oid, ogid_map.get(oid))
             if key in known:
                 self.r.tracker_existing += 1
                 continue

@@ -68,9 +68,12 @@ class SeraDatabase:
         else:
             db_dir = os.path.dirname(os.path.abspath(db_path))
             self.raw_db_path = os.path.join(db_dir, "rawPayload.db")
+        self.app_dir = os.path.dirname(os.path.abspath(db_path))
 
         self._local = threading.local()
         self._last_reresolve_ts = 0.0  # Debounce timestamp for re_resolve_all_tracker_dumps
+        self._last_resequence_ts = 0.0  # Debounce timestamp for resequence_client_serial_numbers
+        self._resequence_pending = False  # Track debounced pending resequence for clients
         # Set externally by main.py once SyncPeerService exists, so this
         # module never has to import sync_peer.py directly (sync depends
         # on the db, not the other way around). Left as a no-op until then
@@ -82,8 +85,7 @@ class SeraDatabase:
         self._seal_timer = None
         try:
             import sync_identity
-            db_dir = os.path.dirname(os.path.abspath(db_path))
-            self._device_id = sync_identity.load_device_id_cheap(db_dir)
+            self._device_id = sync_identity.load_device_id_cheap(self.app_dir)
         except Exception:
             self._device_id = None
         try:
@@ -96,20 +98,42 @@ class SeraDatabase:
         if not defer_startup_maintenance:
             self.run_startup_maintenance()
 
+    def is_admin_pc(self, conn=None) -> bool:
+        """True if this PC is the office admin PC, or True in legacy mode (blueprint §5 P3-6)."""
+        import sync_admin
+        return sync_admin.is_admin_pc(self.app_dir, conn=conn, device_id=self._device_id)
+
+    def get_token_letter(self, conn=None) -> Optional[str]:
+        """Returns this PC's token letter (e.g. 'A', 'B') from its member record, or None in legacy mode."""
+        import sync_admin
+        return sync_admin.get_token_letter(self.app_dir, conn=conn, device_id=self._device_id)
+
     def run_startup_maintenance(self):
         """Runs background resequencing and FST report generation."""
-        try:
-            self.re_resolve_all_tracker_dumps()
-        except Exception as e:
-            print(f"[-] Startup tracker re-resolve skipped: {e}")
-        try:
-            self.resequence_client_serial_numbers()
-        except Exception as e:
-            print(f"[-] Startup serial resequence skipped: {e}")
-        try:
-            self._clean_ligature_noise_from_names()
-        except Exception as e:
-            print(f"[-] Startup ligature name cleanup skipped: {e}")
+        # Data-rewriting maintenance runs ONLY on the admin PC (blueprint §5 P3-6)
+        if self.is_admin_pc():
+            try:
+                self.re_resolve_all_tracker_dumps()
+            except Exception as e:
+                print(f"[-] Startup tracker re-resolve skipped: {e}")
+            try:
+                self.resequence_client_serial_numbers()
+            except Exception as e:
+                print(f"[-] Startup serial resequence skipped: {e}")
+            try:
+                self._clean_ligature_noise_from_names()
+            except Exception as e:
+                print(f"[-] Startup ligature name cleanup skipped: {e}")
+            try:
+                self.deduplicate_tracker_dumps()
+            except Exception as e:
+                print(f"[-] Startup tracker dump deduplication skipped: {e}")
+            try:
+                self.upgrade_all_placeholder_client_names()
+            except Exception as e:
+                print(f"[-] Startup placeholder client name upgrade skipped: {e}")
+
+        # Non-data rewriting tasks stay on all PCs
         try:
             self.sync_fst_reports()
         except Exception as e:
@@ -118,14 +142,6 @@ class SeraDatabase:
             self.optimize_storage()
         except Exception as e:
             print(f"[-] Startup storage optimization skipped: {e}")
-        try:
-            self.deduplicate_tracker_dumps()
-        except Exception as e:
-            print(f"[-] Startup tracker dump deduplication skipped: {e}")
-        try:
-            self.upgrade_all_placeholder_client_names()
-        except Exception as e:
-            print(f"[-] Startup placeholder client name upgrade skipped: {e}")
 
     # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
     _ICON_LIGATURE_RE = re.compile(
@@ -166,27 +182,31 @@ class SeraDatabase:
         total_fixed = 0
         try:
             with self._connect_raw() as conn:
-                # Fix tracker_dump
-                rows = conn.execute(
-                    "SELECT id, client_name FROM tracker_dump WHERE client_name IS NOT NULL AND client_name != ''"
-                ).fetchall()
-                for row_id, cname in rows:
-                    if self._ICON_LIGATURE_RE.search(cname or ''):
-                        fixed = self._clean_name_retrofix(cname)
-                        conn.execute("UPDATE tracker_dump SET client_name = ? WHERE id = ?", (fixed, row_id))
-                        print(f"[database] Ligature fix tracker_dump #{row_id}: {cname!r} -> {fixed!r}")
-                        total_fixed += 1
+                # Fix tracker_dump (if client_name column exists)
+                t_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+                if "client_name" in t_cols:
+                    rows = conn.execute(
+                        "SELECT id, client_name FROM tracker_dump WHERE client_name IS NOT NULL AND client_name != ''"
+                    ).fetchall()
+                    for row_id, cname in rows:
+                        if self._ICON_LIGATURE_RE.search(cname or ''):
+                            fixed = self._clean_name_retrofix(cname)
+                            conn.execute("UPDATE tracker_dump SET client_name = ? WHERE id = ?", (fixed, row_id))
+                            print(f"[database] Ligature fix tracker_dump #{row_id}: {cname!r} -> {fixed!r}")
+                            total_fixed += 1
 
                 # Fix sdc_session_timelines
-                rows = conn.execute(
-                    "SELECT session_id, client_name FROM sdc_session_timelines WHERE client_name IS NOT NULL AND client_name != ''"
-                ).fetchall()
-                for sid, cname in rows:
-                    if self._ICON_LIGATURE_RE.search(cname or ''):
-                        fixed = self._clean_name_retrofix(cname)
-                        conn.execute("UPDATE sdc_session_timelines SET client_name = ? WHERE session_id = ?", (fixed, sid))
-                        print(f"[database] Ligature fix sdc_timelines {sid}: {cname!r} -> {fixed!r}")
-                        total_fixed += 1
+                s_cols = {r[1] for r in conn.execute("PRAGMA table_info(sdc_session_timelines)").fetchall()}
+                if "client_name" in s_cols:
+                    rows = conn.execute(
+                        "SELECT session_id, client_name FROM sdc_session_timelines WHERE client_name IS NOT NULL AND client_name != ''"
+                    ).fetchall()
+                    for sid, cname in rows:
+                        if self._ICON_LIGATURE_RE.search(cname or ''):
+                            fixed = self._clean_name_retrofix(cname)
+                            conn.execute("UPDATE sdc_session_timelines SET client_name = ? WHERE session_id = ?", (fixed, sid))
+                            print(f"[database] Ligature fix sdc_timelines {sid}: {cname!r} -> {fixed!r}")
+                            total_fixed += 1
         except Exception as e:
             print(f"[database] _clean_ligature_noise_from_names notice: {e}")
         if total_fixed:
@@ -344,7 +364,7 @@ class SeraDatabase:
                         cur = r_conn.execute(
                             """SELECT raw_payload_json FROM tracker_dump
                                WHERE (unassigned_identity = ? OR client_id = ?)
-                               ORDER BY id DESC LIMIT 5""",
+                               ORDER BY created_at DESC, gid DESC LIMIT 5""",
                             (cpan, cid)
                         )
                         for (r_json,) in cur.fetchall():
@@ -608,6 +628,24 @@ class SeraDatabase:
                                           master_path=self.db_path, **kw)
             result.tables |= raw.tables
             result.unparked += raw.unparked
+
+            # Blueprint §5 P3-6: resequence on admin PC after an applied batch that inserted clients,
+            # debounced to at most once per 10 minutes.
+            inserted_clients = any(c.get("op") == "upsert" for c in changes if isinstance(c, dict) and c.get("tbl") == "clients") if isinstance(changes, list) else False
+            if (inserted_clients or self._resequence_pending) and self._is_office_mode():
+                import sync_admin
+                if sync_admin.has_admin_key(self.app_dir) and self.is_admin_pc():
+                    now_ts = time.time()
+                    if now_ts - self._last_resequence_ts >= 600.0:
+                        self._last_resequence_ts = now_ts
+                        self._resequence_pending = False
+                        try:
+                            self.resequence_client_serial_numbers()
+                        except Exception as e:
+                            print(f"[-] Debounced serial resequence skipped: {e}")
+                    elif inserted_clients:
+                        self._resequence_pending = True
+
             return result
         sync_apply.run_raw_repoints(self.db_path, self.raw_db_path, self.hex_key)
         return sync_apply.apply_batch(self.raw_db_path, self.hex_key, "raw", changes,
@@ -806,45 +844,73 @@ class SeraDatabase:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_unassigned_period ON tracker_dump(unassigned_identity, period_label);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_dataset_key ON tracker_dump(dataset_key);")
 
-            # Recompute canonical dataset_key and purge duplicate rows keeping the newest ID
+            # Recompute canonical dataset_key and purge duplicate rows (Admin PC only, blueprint §5 P3-6)
             try:
-                rows_to_update = conn.execute("SELECT id, portal, client_id, unassigned_identity, period_label, raw_payload_json FROM tracker_dump").fetchall()
-                for r_id, r_port, r_cid, r_unassigned, r_period, r_json in rows_to_update:
-                    cand_id = r_unassigned or (f"CLI_{r_cid}" if r_cid else "UNKNOWN")
-                    cand_form = ""
-                    if r_json:
-                        try:
-                            cj = json.loads(r_json)
-                            c_raw = cj.get("raw_payload") if isinstance(cj.get("raw_payload"), dict) else {}
-                            cand_id = cj.get("gstin") or cj.get("pan") or c_raw.get("gstin") or c_raw.get("pan") or cand_id
-                            cand_form = cj.get("filing_type") or c_raw.get("filing_type") or ""
-                        except Exception:
-                            pass
-                    d_key = self.compute_dataset_key(r_port, cand_id, cand_form, r_period)
-                    conn.execute("UPDATE tracker_dump SET dataset_key = ? WHERE id = ?", (d_key, r_id))
+                if self.is_admin_pc(conn=conn):
+                    cid_to_gid = {}
+                    try:
+                        with self._connect() as m_conn:
+                            m_cols = {r[1] for r in m_conn.execute("PRAGMA table_info(clients)").fetchall()}
+                            if "gid" in m_cols:
+                                cid_to_gid = dict(
+                                    m_conn.execute("SELECT id, gid FROM clients WHERE gid IS NOT NULL").fetchall()
+                                )
+                    except Exception:
+                        pass
 
-                # Purge duplicate entries, keeping strictly the highest/newest ID for each dataset_key
-                conn.execute("""
-                    DELETE FROM tracker_dump 
-                    WHERE id NOT IN (
-                        SELECT MAX(id) FROM tracker_dump GROUP BY dataset_key
-                    ) AND dataset_key IS NOT NULL AND dataset_key != '';
-                """)
+                    rows_to_update = conn.execute("SELECT id, portal, client_id, unassigned_identity, period_label, raw_payload_json, dataset_key FROM tracker_dump").fetchall()
+                    for r_id, r_port, r_cid, r_unassigned, r_period, r_json, r_dkey in rows_to_update:
+                        client_gid = cid_to_gid.get(r_cid) if r_cid else None
+                        cand_id = r_unassigned or (f"CLI_{client_gid}" if client_gid else (f"CLI_{r_cid}" if r_cid else "UNKNOWN"))
+                        cand_form = ""
+                        if r_json:
+                            try:
+                                cj = json.loads(r_json)
+                                c_raw = cj.get("raw_payload") if isinstance(cj.get("raw_payload"), dict) else {}
+                                cand_id = cj.get("gstin") or cj.get("pan") or c_raw.get("gstin") or c_raw.get("pan") or cand_id
+                                cand_form = cj.get("filing_type") or c_raw.get("filing_type") or ""
+                            except Exception:
+                                pass
+                        if not cand_form and r_dkey and r_dkey.count(":") >= 3:
+                            parts = r_dkey.split(":")
+                            if parts[2] and parts[2] != "FORM":
+                                cand_form = parts[2]
+                        d_key = self.compute_dataset_key(r_port, cand_id, cand_form, r_period)
+                        if d_key != r_dkey:
+                            conn.execute("UPDATE tracker_dump SET dataset_key = ? WHERE id = ?", (d_key, r_id))
 
-                # Purge legacy non-filing dummy rows (ITR landing page and profile views)
-                conn.execute("""
-                    DELETE FROM tracker_dump 
-                    WHERE capture_method = 'SDC_itr_landing' 
-                       OR portal LIKE '%Landing / e-File%' 
-                       OR portal LIKE '%Profile / Identity%'
-                       OR dataset_key LIKE '%:PROFILEIDENTITY:%'
-                       OR dataset_key LIKE '%:ITRLANDINGEFILE:%'
-                       OR period_label LIKE '%Due Date -%' 
-                       OR status = 'FY -' 
-                       OR portal LIKE '%Status -%'
-                       OR (period_label = 'Current Period' AND status = 'Initiated')
-                       OR raw_payload_json LIKE '%Indicates Mandatory Fields%';
-                """)
+                    t_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+                    order_sec = "gid DESC" if "gid" in t_cols else "id DESC"
+
+                    # Purge duplicate entries, keeping strictly the newest by (created_at DESC, gid DESC)
+                    conn.execute(f"""
+                        DELETE FROM tracker_dump 
+                        WHERE rowid NOT IN (
+                            SELECT rowid FROM (
+                                SELECT rowid, ROW_NUMBER() OVER (
+                                    PARTITION BY dataset_key
+                                    ORDER BY created_at DESC, {order_sec}, id DESC
+                                ) AS rn
+                                FROM tracker_dump
+                                WHERE dataset_key IS NOT NULL AND dataset_key != ''
+                            ) WHERE rn = 1
+                        ) AND dataset_key IS NOT NULL AND dataset_key != '';
+                    """)
+
+                    # Purge legacy non-filing dummy rows (ITR landing page and profile views)
+                    conn.execute("""
+                        DELETE FROM tracker_dump 
+                        WHERE capture_method = 'SDC_itr_landing' 
+                           OR portal LIKE '%Landing / e-File%' 
+                           OR portal LIKE '%Profile / Identity%'
+                           OR dataset_key LIKE '%:PROFILEIDENTITY:%'
+                           OR dataset_key LIKE '%:ITRLANDINGEFILE:%'
+                           OR period_label LIKE '%Due Date -%' 
+                           OR status = 'FY -' 
+                           OR portal LIKE '%Status -%'
+                           OR (period_label = 'Current Period' AND status = 'Initiated')
+                           OR raw_payload_json LIKE '%Indicates Mandatory Fields%';
+                    """)
             except Exception as e:
                 print(f"[database] startup deduplication notice: {e}")
 
@@ -2234,13 +2300,45 @@ class SeraDatabase:
                 (notes, now, now)
             )
             client_id = cur.lastrowid
-            token = str(client_id)
+            letter = self.get_token_letter(conn=conn)
+            if letter:
+                prefix = f"{letter}-"
+                rows = conn.execute(
+                    "SELECT client_id_token FROM clients WHERE client_id_token LIKE ? AND id != ?",
+                    (f"{prefix}%", client_id)
+                ).fetchall()
+                max_n = 0
+                for (tok,) in rows:
+                    if tok and tok.startswith(prefix):
+                        suffix = tok[len(prefix):]
+                        if suffix.isdigit():
+                            max_n = max(max_n, int(suffix))
+                token = f"{letter}-{max_n + 1}"
+            else:
+                token = str(client_id)
             conn.execute("UPDATE clients SET client_id_token=? WHERE id=?", (token, client_id))
 
             # Auto-assign serial number to ID column if present and not provided
             id_col = self.get_id_column()
+            if not id_col:
+                cols = self.get_mcl_columns()
+                for c in cols:
+                    lbl = c.get("label", "").strip().lower()
+                    if lbl in {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#", "numer", "number"}:
+                        id_col = c
+                        break
             if id_col and (id_col["id"] not in values or not str(values.get(id_col["id"], "")).strip()):
-                values[id_col["id"]] = str(client_id)
+                rows = conn.execute(
+                    "SELECT value FROM client_values WHERE column_id = ? AND client_id != ?",
+                    (id_col["id"], client_id)
+                ).fetchall()
+                max_serial = 0
+                for (v,) in rows:
+                    if v is not None:
+                        v_str = str(v).strip()
+                        if v_str.isdigit():
+                            max_serial = max(max_serial, int(v_str))
+                values[id_col["id"]] = str(max_serial + 1)
 
             for col_id, val in values.items():
                 if val is not None and val != "":
@@ -2728,7 +2826,9 @@ class SeraDatabase:
             return
 
         with self._connect() as conn:
-            clients = conn.execute("SELECT id FROM clients WHERE is_archived = 0 ORDER BY id ASC").fetchall()
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)").fetchall()}
+            order_sec = "gid ASC" if "gid" in cols else "id ASC"
+            clients = conn.execute(f"SELECT id FROM clients WHERE is_archived = 0 ORDER BY created_at ASC, {order_sec}, id ASC").fetchall()
             for idx, (cid,) in enumerate(clients, start=1):
                 conn.execute(
                     "INSERT INTO client_values (client_id, column_id, value) VALUES (?, ?, ?) "
@@ -2784,9 +2884,11 @@ class SeraDatabase:
                         "details": ["No identity columns defined — cannot detect duplicates."]}
 
             # 2. Build normalized identity fingerprint for every non-archived client
+            c_cols = {r[1] for r in conn.execute("PRAGMA table_info(clients)").fetchall()}
+            c_order_sec = "gid ASC" if "gid" in c_cols else "id ASC"
             client_ids = [
                 r[0] for r in conn.execute(
-                    "SELECT id FROM clients WHERE is_archived = 0 ORDER BY id"
+                    f"SELECT id FROM clients WHERE is_archived = 0 ORDER BY created_at ASC, {c_order_sec}, id ASC"
                 ).fetchall()
             ]
 
@@ -3793,10 +3895,13 @@ class SeraDatabase:
             from datetime import datetime, timezone
             t0 = datetime.fromisoformat(timestamp_str)
             with self._connect_raw() as r_conn:
+                t_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+                order_sec = "gid DESC" if "gid" in t_cols else "id DESC"
+
                 # 1. If session_id is provided, search specifically for it first
                 if session_id:
                     cur = r_conn.execute(
-                        "SELECT arn_number, unassigned_identity, raw_payload_json, created_at, client_id FROM tracker_dump WHERE raw_payload_json LIKE ? ORDER BY id DESC LIMIT 50",
+                        f"SELECT arn_number, unassigned_identity, raw_payload_json, created_at, client_id FROM tracker_dump WHERE raw_payload_json LIKE ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 50",
                         (f'%"{session_id}"%',)
                     )
                     for arn_num, unassigned_id, raw_json, c_at, cid in cur.fetchall():
@@ -3815,12 +3920,12 @@ class SeraDatabase:
                                 if row_m and row_m[0] and re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", str(row_m[0]).strip().upper()):
                                     return str(row_m[0]).strip().upper()
 
-                # 2. Fallback to time-based proximity matching (ordered by ID descending to get immediate last PAN)
+                # 2. Fallback to time-based proximity matching (ordered by (created_at, gid) descending)
                 cur = r_conn.execute(
-                    """SELECT arn_number, unassigned_identity, raw_payload_json, created_at, portal, client_id 
+                    f"""SELECT arn_number, unassigned_identity, raw_payload_json, created_at, portal, client_id 
                        FROM tracker_dump 
                        WHERE created_at IS NOT NULL 
-                       ORDER BY id DESC LIMIT 100"""
+                       ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 100"""
                 )
                 for arn_num, unassigned_id, raw_json, c_at, p_name, cid in cur.fetchall():
                     if not c_at or not p_name:
@@ -3960,14 +4065,18 @@ class SeraDatabase:
                 candidates = [prox_cand]
 
         valid_id = None
+        valid_gid = None
         unassigned_identity = None
 
         # 1. Authoritative Match: Resolve identity against master.db vault
         with self._connect() as m_conn:
+            m_cols = {r[1] for r in m_conn.execute("PRAGMA table_info(clients)").fetchall()}
+            has_gid = "gid" in m_cols
+            gid_col = ", c.gid" if has_gid else ""
             for cand in candidates:
                 cand_clean = cand.strip().upper()
                 row = m_conn.execute(
-                    """SELECT cv.client_id FROM client_values cv
+                    f"""SELECT cv.client_id{gid_col} FROM client_values cv
                        JOIN clients c ON c.id = cv.client_id
                        WHERE c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?
                        LIMIT 1""",
@@ -3975,24 +4084,30 @@ class SeraDatabase:
                 ).fetchone()
                 if row:
                     valid_id = row[0]
+                    if has_gid and len(row) > 1:
+                        valid_gid = row[1]
                     break
 
             if not valid_id:
                 if candidates:
                     unassigned_identity = candidates[0]
                 elif client_id:
+                    c_gid_col = ", gid" if has_gid else ""
                     row = m_conn.execute(
-                        "SELECT id FROM clients WHERE id = ? AND is_archived = 0", (client_id,)
+                        f"SELECT id{c_gid_col} FROM clients WHERE id = ? AND is_archived = 0", (client_id,)
                     ).fetchone()
                     if row:
                         valid_id = row[0]
+                        if has_gid and len(row) > 1:
+                            valid_gid = row[1]
                 if not valid_id and not unassigned_identity:
                     unassigned_identity = f"Pending_{arn_number}" if arn_number and arn_number != "N/A" else "Unassigned"
 
         # Resolve incoming dataset key components
         page_url_norm = None
         incoming_form = filing_type or ""
-        taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or (f"CLI_{valid_id}" if valid_id else None)
+        cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
+        taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
         if raw_payload_json:
             try:
@@ -4034,6 +4149,9 @@ class SeraDatabase:
         same_engine = ("capture_method LIKE 'SGT%'" if is_sgt
                        else "(capture_method IS NULL OR capture_method NOT LIKE 'SGT%')")
         with self._connect_raw() as r_conn:
+            td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+            order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
+
             # An unattributed capture (VSDC247 saw an ARN before it knew the client) is stored
             # as "Pending_<ARN>". When the SAME ARN arrives again with an identity it replaces
             # that placeholder - it must neither be dropped as a duplicate by the check below
@@ -4066,7 +4184,7 @@ class SeraDatabase:
             # Monotonicity Guard: A submitted status must NEVER demote back to 'Not Submitted'!
             if final_dataset_key and not final_dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                 ex_row = r_conn.execute(
-                    "SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY id DESC LIMIT 1",
+                    f"SELECT status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1",
                     (final_dataset_key,)
                 ).fetchone()
                 if ex_row:
@@ -4112,7 +4230,7 @@ class SeraDatabase:
                               AND status IS NOT NULL
                               AND ({' OR '.join(assessee_conds)})
                               AND {same_engine}
-                            ORDER BY id DESC LIMIT 1
+                            ORDER BY created_at DESC, {order_sec}, id DESC LIMIT 1
                         """
                         filed_row = r_conn.execute(chk_sql, assessee_params).fetchone()
                         if filed_row:
@@ -4150,7 +4268,7 @@ class SeraDatabase:
                     id_vals.append(unassigned_identity)
                 if id_clauses:
                     url_sql = (f"SELECT id, raw_payload_json FROM tracker_dump WHERE ({' OR '.join(id_clauses)}) "
-                               f"AND {same_engine} ORDER BY id DESC")
+                               f"AND {same_engine} ORDER BY created_at DESC, {order_sec}, id DESC")
                     cur = r_conn.execute(url_sql, id_vals)
                     for r_id, r_json in cur.fetchall():
                         if r_json:
@@ -4254,53 +4372,71 @@ class SeraDatabase:
         """
         deleted_count = 0
         with self._connect_raw() as r_conn:
-            # 1. Deduplicate by non-empty dataset_key (keep MAX id)
-            cur = r_conn.execute("""
+            cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+            order_sec = "gid DESC" if "gid" in cols else "id DESC"
+
+            # 1. Deduplicate by non-empty dataset_key (keep newest by created_at, gid)
+            cur = r_conn.execute(f"""
                 DELETE FROM tracker_dump
-                WHERE id NOT IN (
-                    SELECT MAX(id)
-                    FROM tracker_dump
-                    WHERE dataset_key IS NOT NULL AND dataset_key != '' AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT'
-                    GROUP BY dataset_key
+                WHERE rowid NOT IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, ROW_NUMBER() OVER (
+                            PARTITION BY dataset_key
+                            ORDER BY created_at DESC, {order_sec}, id DESC
+                        ) AS rn
+                        FROM tracker_dump
+                        WHERE dataset_key IS NOT NULL AND dataset_key != '' AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT'
+                    ) WHERE rn = 1
                 )
                 AND dataset_key IS NOT NULL AND dataset_key != '' AND dataset_key NOT LIKE '%:UNKNOWN:FORM:CURRENT'
             """)
             deleted_count += cur.rowcount
 
             # 2. Deduplicate exact duplicates by non-empty ARN
-            cur2 = r_conn.execute("""
+            cur2 = r_conn.execute(f"""
                 DELETE FROM tracker_dump
-                WHERE id NOT IN (
-                    SELECT MAX(id)
-                    FROM tracker_dump
-                    WHERE arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A'
-                    GROUP BY portal, arn_number
+                WHERE rowid NOT IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, ROW_NUMBER() OVER (
+                            PARTITION BY portal, arn_number
+                            ORDER BY created_at DESC, {order_sec}, id DESC
+                        ) AS rn
+                        FROM tracker_dump
+                        WHERE arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A'
+                    ) WHERE rn = 1
                 )
                 AND arn_number IS NOT NULL AND arn_number != '' AND arn_number != 'N/A'
             """)
             deleted_count += cur2.rowcount
 
             # 3. Deduplicate exact duplicate bursts by (captured_by, created_at)
-            cur3 = r_conn.execute("""
+            cur3 = r_conn.execute(f"""
                 DELETE FROM tracker_dump
-                WHERE id NOT IN (
-                    SELECT MAX(id)
-                    FROM tracker_dump
-                    GROUP BY captured_by, created_at
+                WHERE rowid NOT IN (
+                    SELECT rowid FROM (
+                        SELECT rowid, ROW_NUMBER() OVER (
+                            PARTITION BY captured_by, created_at
+                            ORDER BY created_at DESC, {order_sec}, id DESC
+                        ) AS rn
+                        FROM tracker_dump
+                    ) WHERE rn = 1
                 )
             """)
             deleted_count += cur3.rowcount
 
-            # 4. Deduplicate unsubmitted drafts: Keep only MAX(id) per (portal, period_label, client)
-            #    so switching forms during return drafting doesn't leave multiple unsubmitted rows
-            cur4 = r_conn.execute("""
+            # 4. Deduplicate unsubmitted drafts: Keep newest per (portal, period_label, client)
+            cur4 = r_conn.execute(f"""
                 DELETE FROM tracker_dump
                 WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
-                  AND id NOT IN (
-                      SELECT MAX(id)
-                      FROM tracker_dump
-                      WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
-                      GROUP BY portal, period_label, COALESCE(client_id, unassigned_identity)
+                  AND rowid NOT IN (
+                      SELECT rowid FROM (
+                          SELECT rowid, ROW_NUMBER() OVER (
+                              PARTITION BY portal, period_label, COALESCE(client_id, unassigned_identity)
+                              ORDER BY created_at DESC, {order_sec}, id DESC
+                          ) AS rn
+                          FROM tracker_dump
+                          WHERE (status = 'Not Submitted' OR status IS NULL OR status = '' OR status = 'Pending')
+                      ) WHERE rn = 1
                   )
             """)
             deleted_count += cur4.rowcount
@@ -4345,7 +4481,9 @@ class SeraDatabase:
                 # 1. Dataset Key Deduplication:
                 # If dataset_key is present and specific, replace older duplicates or skip if incoming is older
                 if dataset_key and not dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
-                    cur = r_conn.execute("SELECT id, created_at FROM tracker_dump WHERE dataset_key = ? ORDER BY id DESC", (dataset_key,))
+                    td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
+                    order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
+                    cur = r_conn.execute(f"SELECT id, created_at FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
                     existing = cur.fetchall()
                     if existing:
                         existing_newest_created = existing[0][1] or ""
@@ -4667,6 +4805,9 @@ class SeraDatabase:
                     if cand in identity_to_cid:
                         matched_id = identity_to_cid[cand]
                         break
+
+                if not matched_id and d.get("client_id") and d["client_id"] in all_clients:
+                    matched_id = d["client_id"]
 
                 new_cid = matched_id
                 new_unassigned = None if matched_id else (cands[0] if cands else d.get("unassigned_identity"))

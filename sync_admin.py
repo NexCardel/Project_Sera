@@ -25,9 +25,11 @@ import binascii
 import hashlib
 import hmac
 import json
+import os
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import sera_keys
 
@@ -706,3 +708,100 @@ def reconcile_admin_key(app_dir, conn, device_id: str) -> bool:
         return False
     path.unlink()
     return True
+
+
+def is_admin_pc(app_dir=None, conn=None, device_id: str | None = None) -> bool:
+    """True if this PC is the office admin PC, or True in legacy mode.
+
+    Rules (§5 P3-6, §4.2):
+    - In legacy mode (office.json missing or no admin_pubkey): True (single/standalone PC).
+    - In office mode: holds admin_key.dpapi AND, if the stored office_admin record is
+      present, that record names this PC's device_id.
+    """
+    if app_dir is None:
+        if conn is not None:
+            try:
+                row = conn.execute("PRAGMA database_list").fetchone()
+                if row and len(row) > 2 and row[2]:
+                    app_dir = Path(row[2]).resolve().parent
+            except Exception:
+                pass
+        if app_dir is None:
+            return False
+    else:
+        app_dir = Path(app_dir)
+
+    office_file = sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE
+    if not office_file.exists():
+        return True  # Legacy mode (no office.json)
+
+    try:
+        office = sera_keys.load_office(app_dir)
+    except Exception:
+        return False  # Corrupt or unreadable office config cannot be assumed admin
+
+    if office is None or not office.admin_pubkey:
+        return True  # Legacy mode (no office key yet)
+
+    if not has_admin_key(app_dir):
+        return False
+
+    if device_id is None:
+        import sync_identity
+        device_id = sync_identity.load_device_id_cheap(app_dir)
+
+    if conn is not None and device_id:
+        try:
+            admin_record = get_office_admin(conn, office.admin_pubkey)
+            if admin_record is not None:
+                return admin_record.get("device_id") == device_id
+        except Exception:
+            pass
+
+    return True
+
+
+def get_token_letter(app_dir=None, conn=None, device_id: str | None = None) -> str | None:
+    """Return this PC's token letter (e.g. 'A', 'B') from its member record, or None in legacy mode."""
+    if app_dir is None:
+        if conn is not None:
+            try:
+                row = conn.execute("PRAGMA database_list").fetchone()
+                if row and len(row) > 2 and row[2]:
+                    app_dir = Path(row[2]).resolve().parent
+            except Exception:
+                pass
+        if app_dir is None:
+            return None
+    else:
+        app_dir = Path(app_dir)
+
+    office_file = sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE
+    if not office_file.exists():
+        return None
+
+    try:
+        office = sera_keys.load_office(app_dir)
+    except Exception:
+        return None
+
+    if office is None or not office.admin_pubkey:
+        return None
+
+    if device_id is None:
+        import sync_identity
+        device_id = sync_identity.load_device_id_cheap(app_dir)
+
+    if not device_id:
+        return None
+
+    if conn is not None:
+        try:
+            ensure_members_table(conn)
+            rec = get_member(conn, device_id, office.admin_pubkey)
+            if rec and rec.get("token_letter"):
+                return rec["token_letter"]
+        except Exception:
+            pass
+
+    return None

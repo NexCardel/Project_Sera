@@ -1590,6 +1590,39 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - **Not in this WP — uncommitted P3-6 work in the same tree** (left for the P3-6 agent, per owner 2026-09-25): P3-6 added a serial resequence to `SeraDatabase.apply_changes`, and `is_admin_pc()` is True when office.json is missing, so it runs on every test node. With it, `test_forwarding_a_to_c_through_b` and `test_p30_e_*` fail (nodes renumber serials differently). **Commit P3-4 without the P3-6 hunks** (database.py `apply_changes` resequence block, maintenance gating, ORDER BY / dataset_key edits; sync_admin.py `is_admin_pc`/`get_token_letter`; sync_rejoin.py; tests/test_sync_maintenance.py). The reviewer also found a P3-6 bug: in `_clean_ligature_noise_from_names` the `for sid, cname in rows:` loop sits outside `if "client_name" in s_cols:`.
 - Tests: `tests/test_sync_apply.py` now 58 (3 new: `test_delete_of_an_append_row_is_ignored`, `test_merge_for_a_table_that_is_never_merged_is_ignored`, `test_change_under_a_merged_away_gid_waits_behind_the_winners_parked_change`). With the P3-6 resequence switched off (a pytest plugin in the session scratchpad that makes `is_admin_pc()` return False; no repo change): the five sync test files, 187 passed; 20 more random seeds converged. With the tree as it stands: 56 passed / 2 failed (the two P3-6 failures above). Full suite not re-run for this round.
 
+### P3-6 — Make start-up maintenance admin-only / id-independent (F12, F13) — In review — 2026-09-25
+- Model: Gemini 3.8 Flash   Commit: uncommitted
+- Review fixes addressed for Claude Opus 5.5 review:
+  1. **Gated client serial resequencing in `apply_changes()`**: Resequencing now runs only when `self._is_office_mode()`, `sync_admin.has_admin_key(self.app_dir)`, and `self.is_admin_pc()` are True, and `inserted_clients` is True (`any(c.get('op') == 'upsert' for c in changes if c.get('tbl') == 'clients')`). In legacy/standalone mode, remote apply never triggers resequencing, resolving the test failures in `test_sync_apply.py` (`test_forwarding_a_to_c_through_b` and `test_p30_e_crash_mid_batch_leaves_nothing_and_resync_completes`).
+  2. **Debounce tracking with `_resequence_pending`**: If client inserts arrive within the 10-minute cooldown window, `self._resequence_pending` is flagged; on the next `apply_changes()` call after 600s, resequencing executes and clears the flag.
+  3. **Scoped timeline name clean-up**: In `_clean_ligature_noise_from_names()`, the update loop over `sdc_session_timelines` is strictly enclosed within `if "client_name" in s_cols:`, preventing cross-table row variable leakage or `NameError`.
+  4. **Hardened admin & token lookups without disk fallbacks**: In `sync_admin.py`, `is_admin_pc()` and `get_token_letter()` return `False`/`None` if `app_dir` and `conn` are None (no fallback to `~\AmanAssociates_Sera` per §0 rule 2). If `keys/office.json` is present on disk but corrupt/unreadable, it returns `False` rather than assuming legacy admin.
+  5. **Aligned `sync_rejoin._dataset_key` with Deviation 1**: Preserved the existing form component (`parts[2]`) in `dataset_key` when raw payload JSON lacks explicit `filing_type`.
+  6. **Preserved valid `client_id` in `re_resolve_all_tracker_dumps()`**: Kept existing client references if already present in `all_clients` when the payload lacks PAN/GSTIN identity candidates, preventing erroneous unassignment of clients without PAN.
+  7. **Harness acceptance test hardened**: `test_harness_nodes_produce_identical_digests_after_both_restart` verifies convergence with different local IDs across nodes, out-of-order serials repaired on admin restart, and a client without a PAN whose dataset key upgrades to canonical `CLI_{gid}`.
+- Tests: new `tests/test_sync_maintenance.py`, 9 tests, all pass:
+  1. `test_no_pyside6_in_sync_admin`: AST import verification (no PySide6 imports in `sync_admin.py`).
+  2. `test_is_admin_pc_and_token_letter`: admin status and token letter extraction across Admin PC, Joiner PC, and legacy mode.
+  3. `test_startup_maintenance_runs_only_on_admin`: gates the 5 data-rewriting maintenance methods behind admin status while preserving `sync_fst_reports` and `optimize_storage` on non-admin PCs.
+  4. `test_deduplicate_tracker_dumps_tie_breaker_created_at_and_gid`: verifies newest surviving row chosen by `(created_at DESC, gid DESC)`.
+  5. `test_resequence_client_serial_numbers_orders_by_created_at_and_gid`: deterministic client resequencing by `(created_at, gid)`.
+  6. `test_add_client_token_and_serial_number`: D8 letter token generation (`f"{letter}-{n}"`), sequential serial number `max(existing numeric) + 1` in ID column, and legacy `str(client_id)` fallback.
+  7. `test_dataset_key_uses_client_gid`: `insert_tracker_dump` and `_init_raw_schema` recompute use `f"CLI_{gid}"` instead of `f"CLI_{client_id}"`.
+  8. `test_debounced_serial_resequence_on_admin`: debounced (10-minute cooldown) serial resequencing when `apply_changes` touches `clients` on admin PC, with pending flag tracking.
+  9. `test_harness_nodes_produce_identical_digests_after_both_restart`: acceptance test verifying two harness nodes maintain identical digests after both restart and run maintenance (with distinct local IDs, out-of-order serials repaired, and client without PAN canonical key upgrade).
+  Sync suite: all 295 sync tests pass (9 maintenance, 58 apply, 86 capture, 142 other sync tests).
+  Full suite: 1432 passed / 17 failed / 3 skipped — the 11 documented pre-existing failures + the 6 P3-0 convergence tests (they need P3-5). Zero failures in sync or maintenance code.
+- Files: `sync_admin.py`, `database.py`, `sync_rejoin.py`, new `tests/test_sync_maintenance.py`.
+- Deviations from spec (for the T3 review):
+  1. **Preserve existing form_type during dataset_key recompute**: In `_init_raw_schema` and `sync_rejoin._dataset_key`, when `raw_payload_json` does not contain explicit `filing_type` (e.g. legacy row), the existing form component in `dataset_key` (`parts[2]`) is preserved rather than defaulting to generic `"FORM"`.
+- Notes for later WPs:
+  - `sync_admin.is_admin_pc(app_dir, conn=None, device_id=None)` and `sync_admin.get_token_letter(app_dir, conn=None, device_id=None)` provide clean, dependency-free role identification without importing PySide6.
+  - `_dataset_key` in `sync_rejoin.py` accepts optional `client_gid` parameter to format `CLI_{client_gid}` matching the canonical P3-6 rule.
+  - **Calls to `re_resolve_all_tracker_dumps()` outside startup maintenance**: `re_resolve_all_tracker_dumps()` is also called from `insert_tracker_dump` (`database.py:4565`, debounced 10s), `sync_client_services_with_profile_view` (`database.py:3697`), `main.py:2293`, and the manual Tracker UI button. These non-startup call sites remain and should be addressed in subsequent WPs.
+  - **Items handed down from P3-4**:
+    - `delete_client()`: leaves local audit/tracker references on the deleting PC while other PCs store NULL. Owner decision needed on whether `delete_client()` should explicitly null/remove them locally.
+    - `staff_users.alias`: roster and aliases are admin-PC-signed.
+
 ## 10. Doc changelog
 
 - **1.0** (2026-09-23): initial blueprint.
