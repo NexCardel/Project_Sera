@@ -56,6 +56,9 @@ class SeraSyncDialog(QDialog):
     # sync_shadow.run_shadow_checks runs in a background thread (P3-8); this brings the "Run
     # now" button + panel refresh back onto the GUI thread when it's done.
     shadow_check_finished_signal = Signal()
+    # "Start shadow mode" on a non-admin PC (P3-7b) downloads the admin PC's replica in a
+    # background thread; (plan or None, error text) comes back on the GUI thread.
+    shadow_start_downloaded_signal = Signal(object, str)
 
     def __init__(self, sync_service, db=None, actor="System", parent=None, discovery_service=None,
                  sync_engine=None):
@@ -87,6 +90,7 @@ class SeraSyncDialog(QDialog):
         self.workstation_joined_signal.connect(lambda record: self._refresh_members())
         self.workstation_closed_signal.connect(self._on_add_workstation_closed)
         self.shadow_check_finished_signal.connect(self._on_shadow_check_finished)
+        self.shadow_start_downloaded_signal.connect(self._on_shadow_start_downloaded)
 
         # Auto-refresh peer table every 3 seconds
         self._refresh_timer = QTimer(self)
@@ -369,6 +373,29 @@ class SeraSyncDialog(QDialog):
         self.sync_status_summary_label = QLabel("Pending outgoing: 0   •   Parked: 0")
         self.sync_status_summary_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
         sync_status_layout.addWidget(self.sync_status_summary_label)
+
+
+        # Turning shadow mode on / resetting it (P3-7b). Admin mode (PIN) is asked for again.
+        shadow_mode_row = QHBoxLayout()
+        self.shadow_mode_label = QLabel("Shadow mode: off")
+        self.shadow_mode_label.setWordWrap(True)
+        self.shadow_mode_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
+        shadow_mode_row.addWidget(self.shadow_mode_label, 1)
+        self.btn_start_shadow = QPushButton("  Start shadow mode")
+        icon = _safe_icon("mdi.play-circle-outline", color="#FFFFFF")
+        if icon:
+            self.btn_start_shadow.setIcon(icon)
+        self.btn_start_shadow.setToolTip("Start the 7-day shadow week on this PC (admin PC first, then every other PC).")
+        self.btn_start_shadow.clicked.connect(self._on_start_shadow_mode)
+        shadow_mode_row.addWidget(self.btn_start_shadow)
+        self.btn_reset_shadow = QPushButton("  Reset shadow mode")
+        icon = _safe_icon("mdi.restore", color="#FFFFFF")
+        if icon:
+            self.btn_reset_shadow.setIcon(icon)
+        self.btn_reset_shadow.setToolTip("Set shadow mode off on this PC and set its shadow files aside (the week starts over).")
+        self.btn_reset_shadow.clicked.connect(self._on_reset_shadow_mode)
+        shadow_mode_row.addWidget(self.btn_reset_shadow)
+        sync_status_layout.addLayout(shadow_mode_row)
 
         shadow_row = QHBoxLayout()
         self.shadow_status_label = QLabel("Shadow checks: none logged yet")
@@ -755,6 +782,204 @@ class SeraSyncDialog(QDialog):
 
         lines = sync_panel.shadow_check_summary(self._app_dir())
         self.shadow_status_label.setText("\n".join(lines) if lines else "Shadow checks: none logged yet")
+        self._refresh_shadow_mode_row()
+
+    # ------------------------------------------------------------------
+    # Turning shadow mode on / reset (P3-7b).
+    # ------------------------------------------------------------------
+
+    def _refresh_shadow_mode_row(self):
+        import sync_shadow
+        try:
+            st = sync_shadow.shadow_status(self.db, self._app_dir())
+        except Exception as exc:
+            self.shadow_mode_label.setText(f"Shadow mode: status unavailable ({exc})")
+            self.btn_start_shadow.setEnabled(False)
+            self.btn_reset_shadow.setEnabled(False)
+            return
+        busy = getattr(self, "_shadow_start_busy", False)
+        if st["pending_start"]:
+            text = "Shadow mode: starts when Sera restarts"
+        elif st["mode"] == "shadow":
+            since = (st["started_at"] or "")[:10] or "unknown date"
+            day = st["day"]
+            if day is None:
+                text = f"Shadow mode: on (since {since})"
+            elif day <= sync_shadow.SHADOW_WEEK_DAYS:
+                text = f"Shadow mode: on since {since}, day {day} of {sync_shadow.SHADOW_WEEK_DAYS}"
+            else:
+                text = f"Shadow mode: on since {since}, day {day} (the 7-day week is complete; check the go-live criteria)"
+        elif st["mode"] == "live":
+            text = "Sync mode: live"
+        else:
+            text = "Shadow mode: off"
+        self.shadow_mode_label.setText(text)
+        self.btn_start_shadow.setEnabled(
+            not busy and st["mode"] == "off" and not st["replica"] and not st["pending_start"])
+        self.btn_reset_shadow.setEnabled(
+            not busy and st["mode"] != "live" and not st["pending_start"]
+            and (st["replica"] or st["started_at"] is not None))
+
+    def _confirm_admin_pin(self) -> bool:
+        """Starting and resetting shadow mode are admin-mode actions: ask for the PIN again."""
+        from PySide6.QtWidgets import QDialog as _QDialog
+        from ui.windows.admin_window import AdminPinDialog
+        return AdminPinDialog(self.db, self).exec() == _QDialog.Accepted
+
+    _SHADOW_WEEK_TEXT = (
+        "Shadow mode is a 7-day trial of the new Sera Sync. Every edit is recorded and exchanged "
+        "with the other PCs, but other PCs' changes go into a separate copy (the replica), never "
+        "into the data staff work with. Sera checks the copies every 30 minutes.\n\n"
+        "Going live needs 7 days in a row with: no capture-check mismatch, equal replicas on all "
+        "PCs within 2 minutes of quiet, and no parked change older than 1 hour.")
+
+    def _on_start_shadow_mode(self):
+        if self.db is None:
+            return
+        import sync_shadow
+        own_device_id, _ = self._own_identity()
+        try:
+            admin_id = sync_shadow.admin_device_id(self.db, self._app_dir())
+        except Exception:
+            admin_id = None
+        is_admin = own_device_id is not None and own_device_id == admin_id
+        if is_admin:
+            text = (self._SHADOW_WEEK_TEXT + "\n\nThis is the admin PC: start shadow mode here first. Its data "
+                    "is the starting point; then use \"Start shadow mode\" on every other PC.\n\nStart shadow mode now?")
+        else:
+            text = (self._SHADOW_WEEK_TEXT + "\n\nThis PC downloads the admin PC's data (shadow mode must "
+                    "already be on there) and uses it from the next restart. This PC's current database is "
+                    "kept in the shadow folder. What only this PC has is counted next, and after the restart "
+                    "Sera offers to import it.\n\nDownload the admin PC's data now?")
+        if QMessageBox.question(self, "Start Shadow Mode", text, QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+        if not self._confirm_admin_pin():
+            return
+        if is_admin:
+            try:
+                sync_shadow.start_shadow_mode(self.db, self._app_dir())
+            except Exception as exc:
+                QMessageBox.warning(self, "Start Shadow Mode", f"Shadow mode was not started: {exc}")
+                return
+            self.shell_alert_or_status("Shadow mode started on the admin PC (day 1 of 7).")
+            QMessageBox.information(self, "Start Shadow Mode",
+                                    "Shadow mode is on. Now use \"Start shadow mode\" on every other PC.")
+            self._refresh_sync_status()
+            return
+
+        if self.sync_engine is None:
+            QMessageBox.warning(self, "Start Shadow Mode", "Sera Sync isn't running on this PC. Restart Sera and try again.")
+            return
+        self._shadow_start_busy = True
+        self.btn_start_shadow.setEnabled(False)
+        self.btn_reset_shadow.setEnabled(False)
+        self.shell_alert_or_status("Downloading the admin PC's data for shadow mode...")
+        db, app_dir, engine = self.db, self._app_dir(), self.sync_engine
+
+        def _run():
+            plan, error = None, ""
+            try:
+                session = sync_shadow.open_admin_session(engine, db, app_dir)
+                try:
+                    plan = sync_shadow.request_shadow_start(db, app_dir, session)
+                finally:
+                    session.close()
+            except Exception as exc:
+                error = str(exc) or type(exc).__name__
+            # The dialog may have been closed meanwhile: then nobody can confirm, so the
+            # download is dropped (nothing was staged, nothing live changed).
+            delivered = False
+            if not getattr(self, "_closed", False):
+                try:
+                    self.shadow_start_downloaded_signal.emit(plan, error)
+                    delivered = True
+                except RuntimeError:
+                    pass
+            if not delivered and plan is not None:
+                sync_shadow.cancel_shadow_start(app_dir)
+
+        threading.Thread(target=_run, name="shadow-start-download", daemon=True).start()
+
+    @staticmethod
+    def _shadow_start_count_text(report) -> str:
+        r = report
+        pk = r.pk_label or "PAN"
+        lines = [
+            "Found only on this PC (not in the admin PC's data):",
+            f"  • {len(r.to_insert)} client(s)",
+            f"  • {len(r.conflicts)} client(s) with different values here",
+            f"  • {r.audit_new} audit log entries",
+            f"  • {r.tracker_new} tracker filing(s), {r.timelines_new} session timeline(s)",
+        ]
+        if r.no_pk:
+            lines.append(f"  • {len(r.no_pk)} client(s) without a {pk} (can't be imported)")
+        if r.ambiguous:
+            lines.append(f"  • {len(r.ambiguous)} client(s) sharing a {pk} (can't be imported)")
+        lines += [
+            "",
+            "These are not in the shadow copy. After the restart Sera offers to import them, and "
+            "the import then reaches every PC. If you don't import them, they stay only in this "
+            "PC's previous database (kept in the shadow folder).",
+            "",
+            "Restart Sera now and start shadow mode?",
+        ]
+        return "\n".join(lines)
+
+    def _on_shadow_start_downloaded(self, plan, error: str):
+        import sync_shadow
+        self._shadow_start_busy = False
+        if plan is None:
+            self.shell_alert_or_status(f"Shadow mode download failed: {error}")
+            QMessageBox.warning(self, "Start Shadow Mode", f"Could not get the admin PC's data: {error}")
+            self._refresh_sync_status()
+            return
+        reply = QMessageBox.question(self, "Start Shadow Mode", self._shadow_start_count_text(plan.report),
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            sync_shadow.cancel_shadow_start(self._app_dir())
+            self.shell_alert_or_status("Shadow mode start cancelled; nothing changed.")
+            self._refresh_sync_status()
+            return
+        try:
+            sync_shadow.stage_shadow_start(self._app_dir(), plan)
+        except Exception as exc:
+            sync_shadow.cancel_shadow_start(self._app_dir())
+            QMessageBox.warning(self, "Start Shadow Mode", f"Could not prepare the start: {exc}")
+            self._refresh_sync_status()
+            return
+        try:
+            if self.sync_service:
+                self.sync_service.stop()
+        except Exception:
+            pass
+        import version
+        version.restart_app()
+
+    def _on_reset_shadow_mode(self):
+        if self.db is None:
+            return
+        reply = QMessageBox.question(
+            self, "Reset Shadow Mode",
+            "Reset shadow mode on this PC?\n\n"
+            "Shadow mode goes off here and this PC's shadow copies are set aside (renamed, not "
+            "deleted). The 7-day week starts over when shadow mode is started again.\n\n"
+            "This PC can then start again from the admin PC's data; its own changes the admin PC "
+            "hasn't received yet are kept. The admin PC itself can't be reset once it has "
+            "received changes from other PCs (it is everyone's start point).",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
+        if not self._confirm_admin_pin():
+            return
+        import sync_shadow
+        try:
+            renamed = sync_shadow.reset_shadow_mode(self.db, self._app_dir())
+        except Exception as exc:
+            QMessageBox.warning(self, "Reset Shadow Mode", f"Shadow mode was not reset: {exc}")
+            return
+        self.shell_alert_or_status(f"Shadow mode reset ({len(renamed)} file(s) set aside).")
+        self._refresh_sync_status()
 
     def _selected_conflict(self):
         """Returns the selected row's conflict dict from ``_conflicts_cache``, or ``None``."""
@@ -1616,5 +1841,11 @@ class SeraSyncDialog(QDialog):
             menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def closeEvent(self, event):
+        self._closed = True
         self._refresh_timer.stop()
         super().closeEvent(event)
+
+    def done(self, result):
+        # exec() dialogs closed with Esc/Close go through done(), not always closeEvent().
+        self._closed = True
+        super().done(result)

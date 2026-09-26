@@ -94,6 +94,11 @@ def _clean_exported_db(db_path: Path, dek_hex: str) -> None:
                 conn.execute(f'DROP TABLE IF EXISTS "{table}";')
             elif table in LOCAL_MODE_TABLES:
                 conn.execute(f'DELETE FROM "{table}";')
+        # A snapshot always starts in sync mode "off" (P3-7b, owner decision 2026-09-26): a PC
+        # that joins while the office is in shadow mode has no replica yet, so it must not
+        # inherit "shadow"; it turns shadow mode on from the admin PC like the others.
+        if "_sync_meta" in tables:
+            conn.execute("UPDATE _sync_meta SET value = 'off' WHERE key = 'mode';")
         conn.commit()
         # Purge deleted rows and tables from freelists so no IP or local history remains
         conn.execute("VACUUM;")

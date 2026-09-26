@@ -231,6 +231,7 @@ class SeraApp:
 
         self._run_pending_office_key_migration()
         self._run_pending_rejoin()
+        self._run_pending_shadow_start()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -445,6 +446,12 @@ class SeraApp:
                     _engine.notify_local_change()
 
                 self.db.set_seal_listener(_sync_seal_listener)
+                if self.db.get_sync_mode() == "shadow":
+                    # Own changes sealed before the listener existed (e.g. a P3-7b salvage
+                    # import at start-up) reach the replica now, not only at the next edit.
+                    threading.Thread(
+                        target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
+                        name="shadow-mirror-catch-up", daemon=True).start()
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -1410,6 +1417,19 @@ class SeraApp:
             sys.exit(1)
         if result == "quit":
             sys.exit(0)
+
+    def _run_pending_shadow_start(self) -> None:
+        """P3-7b: install a staged "Start shadow mode" (the admin PC's replica becomes this PC's
+        databases), then offer to import what only this PC had.
+
+        Runs before any database is opened. Cheap when there is nothing to do.
+        """
+        import sync_shadow
+        app_dir = Path(self.app_dir)
+        if not sync_shadow.has_pending_shadow_start(app_dir) and sync_shadow.pending_shadow_salvage(app_dir) is None:
+            return
+        from ui.dialogs.shadow_start_dialog import run_pending_shadow_start
+        run_pending_shadow_start(app_dir)
 
     def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
         """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""

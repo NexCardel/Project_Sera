@@ -124,11 +124,16 @@ def dispatch_session(session, app_dir, engine) -> None:
     else (``hello``, the P3-5 session protocol) goes to ``engine.handle_session`` (blueprint §5
     P3-7 "Port clash": the sync engine's server and "Add workstation"'s used to both want
     port 49159). Uses ``Session.peek_type`` so neither handler needs to change -- each still
-    reads its own first frame with ``recv()``."""
+    reads its own first frame with ``recv()``. ``{"t": "shadow_snapshot"}`` (P3-7b: another
+    PC downloading the admin PC's shadow replica to turn shadow mode on) goes to
+    ``sync_shadow.handle_shadow_snapshot_session``."""
     import sync_snapshot
     t = session.peek_type()
     if t == sync_snapshot.FRAME_SNAPSHOT:
         sync_snapshot.handle_snapshot_session(session, app_dir)
+    elif t == "shadow_snapshot":
+        import sync_shadow
+        sync_shadow.handle_shadow_snapshot_session(session, engine.db, app_dir)
     else:
         engine.handle_session(session)
 

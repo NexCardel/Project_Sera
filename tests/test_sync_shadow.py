@@ -90,9 +90,12 @@ def test_enable_shadow_mode_creates_baseline_and_replica(cluster):
     assert baseline_master.read_bytes() == baseline_bytes_before
 
 
-def test_enable_shadow_mode_backs_up_an_existing_replica_instead_of_deleting_it(cluster):
-    """§0 rule 3: never delete a database; re-enabling shadow mode must rename any existing
-    replica/baseline aside, not overwrite or delete it."""
+def test_enable_shadow_mode_refuses_while_an_old_replica_exists(cluster):
+    """P3-7b (v1.8, owner-approved rewrite 2026-09-26 of the P3-7 test that expected this to
+    succeed): mode off and then shadow on again must be refused while an old replica exists,
+    and nothing may be touched. The §0 rule 3 part of the old test (old shadow files are
+    renamed to *.bak-<ts>, never deleted) now belongs to the admin-only "Reset shadow mode":
+    tests/test_sync_shadow_start.py::test_reset_renames_shadow_files_and_resets_the_week."""
     h = cluster(1)
     node = h.nodes[0]
     sync_shadow.enable_shadow_mode(node.db, node.app_dir)
@@ -100,13 +103,13 @@ def test_enable_shadow_mode_backs_up_an_existing_replica_instead_of_deleting_it(
     first_bytes = replica_master.read_bytes()
 
     node.db.set_sync_mode("off")
-    sync_shadow.enable_shadow_mode(node.db, node.app_dir)
+    with pytest.raises(sync_shadow.ShadowStartRefused):
+        sync_shadow.enable_shadow_mode(node.db, node.app_dir)
 
     shadow_dir = Path(node.app_dir) / sync_shadow.SHADOW_DIRNAME
-    backups = list(shadow_dir.glob("replica_master.db.bak-*"))
-    assert len(backups) == 1
-    assert backups[0].read_bytes() == first_bytes
-    assert replica_master.exists()
+    assert not list(shadow_dir.glob("replica_master.db.bak-*"))
+    assert replica_master.read_bytes() == first_bytes
+    assert node.db.get_sync_mode() == "off"
 
 
 # ---------------------------------------------------------------- own changes -> replica
