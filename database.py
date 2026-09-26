@@ -23,6 +23,7 @@ import glob
 from contextlib import contextmanager
 
 import security
+from core.dataset_key import compute_dataset_key as _compute_dataset_key
 
 DB_FILENAME = "master.db"
 
@@ -882,7 +883,15 @@ class SeraDatabase:
                     except Exception:
                         pass
 
-                    rows_to_update = conn.execute("SELECT id, portal, client_id, unassigned_identity, period_label, raw_payload_json, dataset_key FROM tracker_dump").fetchall()
+                    # Old shadow-mode SGT rows become live rows first (status-aware merge).
+                    self._convert_sgt_shadow_rows(conn)
+                    # SGT builds its own keys (core/dataset_key.py for live rows, its "SGT:"
+                    # namespace for shadow rows, a session-scoped identifier while the client is
+                    # unknown, "ARN_<n>" for a dataset known only by its ARN). Recomputing them
+                    # from the row would break SGT's supersede-by-key and, for shadow rows, fold
+                    # them into another engine's row in the purge below - so they are left alone.
+                    rows_to_update = conn.execute("SELECT id, portal, client_id, unassigned_identity, period_label, raw_payload_json, dataset_key FROM tracker_dump "
+                                                  "WHERE capture_method IS NULL OR capture_method NOT LIKE 'SGT%'").fetchall()
                     for r_id, r_port, r_cid, r_unassigned, r_period, r_json, r_dkey in rows_to_update:
                         client_gid = cid_to_gid.get(r_cid) if r_cid else None
                         cand_id = r_unassigned or (f"CLI_{client_gid}" if client_gid else (f"CLI_{r_cid}" if r_cid else "UNKNOWN"))
@@ -3989,97 +3998,88 @@ class SeraDatabase:
             pass
         return None
 
-    @staticmethod
-    def compute_dataset_key(portal: str, identifier: str, form_type: str, period_label: str) -> str:
-        """Generates a canonical, deterministic dataset key for instant O(1) deduplication & promotion:
-           Format: PORTAL:IDENTIFIER:FORM:PERIOD
-           e.g. GST:19BHPPM3529R1ZB:GSTR1:MAY_2026
-        """
-        p_str = str(portal or "").strip()
-        if re.search(r"gst", p_str, re.I):
-            p_canon = "GST"
-        elif re.search(r"itr|income", p_str, re.I):
-            p_canon = "ITR"
-        else:
-            p_canon = re.sub(r"[^A-Z0-9]", "", p_str.upper()) or "PORTAL"
-
-        id_str = re.sub(r"[^A-Z0-9]", "", str(identifier or "").strip().upper()) or "UNKNOWN"
-
-        f_str = str(form_type or "").strip()
-        if not f_str and "(" in p_str and ")" in p_str:
-            f_str = p_str.split("(")[-1].split(")")[0].strip()
-        if re.search(r"\bGSTR[-_ ]*1A\b", f_str, re.I):
-            f_canon = "GSTR1A"
-        elif re.search(r"\bGSTR[-_ ]*1(?:\s*/\s*IFF)?\b", f_str, re.I) or f_str.upper() == "IFF":
-            f_canon = "GSTR1"
-        elif re.search(r"\bGSTR[-_ ]*2A\b", f_str, re.I):
-            f_canon = "GSTR2A"
-        elif re.search(r"\bGSTR[-_ ]*2B\b", f_str, re.I):
-            f_canon = "GSTR2B"
-        elif re.search(r"\bGSTR[-_ ]*3B\b", f_str, re.I):
-            f_canon = "GSTR3B"
-        elif re.search(r"\bCMP[-_ ]*08\b", f_str, re.I):
-            f_canon = "CMP08"
-        elif re.search(r"\bGSTR[-_ ]*4\b", f_str, re.I):
-            f_canon = "GSTR4"
-        elif re.search(r"\bGSTR[-_ ]*9C\b", f_str, re.I):
-            f_canon = "GSTR9C"
-        elif re.search(r"\bGSTR[-_ ]*9\b", f_str, re.I):
-            f_canon = "GSTR9"
-        elif re.search(r"\bGSTR[-_ ]*7\b", f_str, re.I):
-            f_canon = "GSTR7"
-        elif re.search(r"\bGSTR[-_ ]*8\b", f_str, re.I):
-            f_canon = "GSTR8"
-        else:
-            m_itr = re.search(r"\bITR[-_ ]*([1-7])\b", f_str, re.I)
-            if m_itr:
-                f_canon = f"ITR{m_itr.group(1)}"
-            else:
-                f_canon = re.sub(r"[^A-Z0-9]", "", f_str.upper()) or "FORM"
-
-        # Canonical period: clean trailing text, status lines, due dates, newlines
-        per_str = str(period_label or "").strip()
-        per_clean = re.split(r"[\r\n]|(?:\b(?:Due date|Option|Filed|Pending|NA)\b)", per_str, flags=re.I)[0].strip()
-
-        # Assessment Year canonical normalization: (e.g. "AY 2026-27", "2026-27", "AY: 2026-27") -> AY_2026_27
-        m_ay = re.search(r"\b(?:AY|A\.Y\.)?\s*(20\d{2})[-_](\d{2})\b", per_clean, re.I)
-        if m_ay:
-            # GST labels commonly contain both the FY and tax period, such as
-            # "May (FY 2026-27)". Preserve both so months cannot overwrite one
-            # another under the same financial year.
-            m_tax_mon = re.search(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b", per_clean, re.I)
-            m_tax_qtr = re.search(r"\b(Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar|Q[1-4])\b", per_clean, re.I)
-            tax_period = m_tax_mon.group(1)[:3].upper() if m_tax_mon else (re.sub(r"[^A-Z0-9]+", "_", m_tax_qtr.group(1).upper()) if m_tax_qtr else "")
-            per_canon = f"AY_{m_ay.group(1)}_{m_ay.group(2)}{('_' + tax_period) if tax_period else ''}"
-        else:
-            # Month or quarter extraction with year
-            m_mon = re.search(r"\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b", per_clean, re.I)
-            m_qtr = re.search(r"\b(Apr[- ]*Jun|Jul[- ]*Sep|Oct[- ]*Dec|Jan[- ]*Mar|Q[1-4])\b", per_clean, re.I)
-            m_yr = re.search(r"\b(20\d{2})\b", per_str)
-
-            if m_qtr and m_yr:
-                q_clean = re.sub(r"[^A-Z0-9]+", "_", m_qtr.group(1).upper())
-                per_canon = f"{q_clean}_{m_yr.group(1)}"
-            elif m_mon and m_yr:
-                mon_3 = m_mon.group(1)[:3].upper()
-                per_canon = f"{mon_3}_{m_yr.group(1)}"
-            elif m_mon:
-                mon_3 = m_mon.group(1)[:3].upper()
-                per_canon = mon_3
-            else:
-                per_canon = re.sub(r"[^A-Z0-9]+", "_", per_clean.upper()).strip("_") or "CURRENT"
-
-        return f"{p_canon}:{id_str}:{f_canon}:{per_canon}"
+    # The canonical key lives in core/dataset_key.py so SGT (live) builds exactly the same one.
+    compute_dataset_key = staticmethod(_compute_dataset_key)
 
     def delete_sgt_rows_by_dataset_key(self, dataset_key: str) -> int:
-        """Removes SGT's own row(s) for a dataset key it has superseded. Refuses any key outside
-        SGT's "SGT:" namespace, so it can never delete another engine's rows."""
-        if not dataset_key or not str(dataset_key).startswith("SGT:"):
+        """Removes SGT's own row(s) for a dataset key it has superseded. Only rows SGT wrote
+        (capture method "SGT...") are touched, so another engine's row under the same key -
+        possible now that live SGT rows share the canonical keys - is never deleted."""
+        if not dataset_key:
             return 0
         with self._connect_raw() as r_conn:
             cur = r_conn.execute(
                 "DELETE FROM tracker_dump WHERE dataset_key = ? AND capture_method LIKE 'SGT%'", (dataset_key,))
             return cur.rowcount or 0
+
+    @staticmethod
+    def _convert_sgt_shadow_rows(conn) -> int:
+        """
+        SGT went live (2026-09-26): the rows it wrote in shadow mode become ordinary live rows.
+        Each takes the canonical key (core/dataset_key.py) and merges with whatever row already
+        holds that key - another engine's or another SGT row. The row with the higher submit
+        status wins (the newer one on a tie), and the winner keeps the loser's ARN if it has
+        none. Idempotent: once no "SGT_shadow" row is left it does nothing.
+        """
+        from core.vsdc.vsdc_assembler import get_status_rank
+        rows = conn.execute(
+            "SELECT id, portal, period_label, arn_number, status, raw_payload_json, created_at, dataset_key, unassigned_identity "
+            "FROM tracker_dump WHERE capture_method = 'SGT_shadow' ORDER BY created_at, id").fetchall()
+        converted = 0
+        for r_id, r_port, r_period, r_arn, r_status, r_json, r_created, r_key, r_unassigned in rows:
+            if conn.execute("SELECT 1 FROM tracker_dump WHERE id = ?", (r_id,)).fetchone() is None:
+                continue                        # lost a merge to an earlier row in this loop
+            try:
+                p = json.loads(r_json) if r_json else {}
+            except Exception:
+                p = {}
+            if not isinstance(p, dict):
+                p = {}
+            raw = p.get("raw_payload") if isinstance(p.get("raw_payload"), dict) else {}
+            ident = p.get("gstin") or p.get("pan")
+            if not ident:
+                # Written before the client was known: keep it apart per SGT session, as live does.
+                old = str(r_key or "").split(":")
+                ident = old[2] if len(old) >= 5 and old[0] == "SGT" else (r_unassigned or "UNKNOWN")
+            form = p.get("filing_type") or ""
+            period = r_period or ""
+            if not period and r_arn and r_arn != "N/A":
+                period = f"ARN {r_arn}"
+            key = _compute_dataset_key(r_port, ident, form, period)
+
+            winner = (r_id, r_status, r_arn, r_created)
+            losers = []
+            for o_id, o_status, o_arn, o_created in conn.execute(
+                    "SELECT id, status, arn_number, created_at FROM tracker_dump WHERE dataset_key = ? AND id != ?",
+                    (key, r_id)).fetchall():
+                challenger = (o_id, o_status, o_arn, o_created)
+                if (get_status_rank(o_status), str(o_created or "")) > (get_status_rank(winner[1]), str(winner[3] or "")):
+                    losers.append(winner)
+                    winner = challenger
+                else:
+                    losers.append(challenger)
+            arn = winner[2]
+            if not arn or arn == "N/A":
+                arn = next((l[2] for l in losers if l[2] and l[2] != "N/A"), arn)
+            for l in losers:
+                conn.execute("DELETE FROM tracker_dump WHERE id = ?", (l[0],))
+            if winner[0] == r_id:
+                p["capture_method"] = "SGT_live"
+                p["dataset_key"] = key
+                p.pop("supersedes_dataset_key", None)
+                if raw:
+                    raw["dataset_key"] = key
+                    if isinstance(raw.get("source"), dict):
+                        raw["source"]["mode"] = "live"
+                conn.execute(
+                    "UPDATE tracker_dump SET capture_method = 'SGT_live', dataset_key = ?, arn_number = ?, raw_payload_json = ? WHERE id = ?",
+                    (key, arn, json.dumps(p, ensure_ascii=False), r_id))
+            elif arn != winner[2]:
+                conn.execute("UPDATE tracker_dump SET arn_number = ? WHERE id = ?", (arn, winner[0]))
+            converted += 1
+        if converted:
+            print(f"[SGT] {converted} shadow-mode tracker row(s) converted to live rows")
+        return converted
 
     def insert_tracker_dump(self, client_id: int = None, service_id: int = None, portal: str = None,
                             period_label: str = None, arn_number: str = None,
@@ -4090,8 +4090,11 @@ class SeraDatabase:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         candidates = self._extract_identity_candidates_from_payload(arn_number=arn_number, pan=pan, raw_payload_json=raw_payload_json)
 
-        # If no identity found in wizard payload, attempt proximity resolution from same portal session
-        if not candidates and portal:
+        # If no identity found in wizard payload, attempt proximity resolution from same portal session.
+        # Never for SGT: a row it sends without a PAN is one whose client it has NOT identified,
+        # and "whoever was captured on this portal in the last 15 minutes" is how a filing lands
+        # on the previous client. SGT re-sends the row under its client once it reads the PAN.
+        if not candidates and portal and not str(capture_method or "").startswith("SGT"):
             prox_cand = self._resolve_session_proximity_candidate(portal, now, max_seconds=900, session_id=session_id)
             if prox_cand:
                 candidates = [prox_cand]
@@ -4173,13 +4176,18 @@ class SeraDatabase:
 
         # 2. Write capture to rawPayload.db and update SRPF container
         is_replaced = False
-        # SGT (the Sera Global Tracker, running beside the other engines) keeps its own rows. Every
-        # clean-up below - pending placeholders, burst duplicates, draft supersession - only ever
-        # looks at rows of the SAME side, so SGT can never replace, drop or purge another
-        # engine's capture and no other engine can remove an SGT row.
-        is_sgt = str(capture_method or "").startswith("SGT")
-        same_engine = ("capture_method LIKE 'SGT%'" if is_sgt
-                       else "(capture_method IS NULL OR capture_method NOT LIKE 'SGT%')")
+        # SGT in SHADOW mode keeps its own rows. Every clean-up below - pending placeholders,
+        # burst duplicates, draft supersession - only ever looks at rows of the SAME side, so a
+        # shadow row can never replace, drop or purge another engine's capture and no other
+        # engine can remove one. LIVE SGT rows (capture method "SGT_live", canonical keys) are
+        # an ordinary engine's rows and merge with everyone else's.
+        is_sgt_shadow = str(capture_method or "").startswith("SGT_shadow")
+        same_engine = ("capture_method LIKE 'SGT_shadow%'" if is_sgt_shadow
+                       else "(capture_method IS NULL OR capture_method NOT LIKE 'SGT_shadow%')")
+        # SGT re-sends a row only when that dataset really changed (e.g. its status climbed
+        # seconds after the ARN was read), under a stable key that already replaces the old
+        # row - the 10-second ARN burst guard would throw exactly that update away.
+        burst_guard = not str(capture_method or "").startswith("SGT")
         with self._connect_raw() as r_conn:
             td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
             order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
@@ -4199,7 +4207,7 @@ class SeraDatabase:
                 )
 
             # Deduplication Check (for immediate identical bursts within 10s)
-            if arn_number and arn_number != "N/A":
+            if burst_guard and arn_number and arn_number != "N/A":
                 cur = r_conn.execute(
                     f"SELECT id, client_id FROM tracker_dump WHERE arn_number = ? AND created_at >= ? AND {same_engine}",
                     (arn_number, (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)).isoformat())

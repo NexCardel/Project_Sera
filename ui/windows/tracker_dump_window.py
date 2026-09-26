@@ -346,7 +346,7 @@ def _portal_short(text: str) -> tuple[str, str]:
 
 
 def _method_short(method: str) -> str:
-    """'VSDC-X_itr_submitted' -> 'VSDC-X'; 'SGT_shadow' -> 'SGT shadow'. Full value in the tooltip."""
+    """'VSDC-X_itr_submitted' -> 'VSDC-X'; 'SGT_live' -> 'SGT live'. Full value in the tooltip."""
     method = str(method or "").strip()
     if not method:
         return "Unknown"
@@ -1765,8 +1765,9 @@ class TrackerDumpWindow(QWidget):
             "Hide SGT",
             "SGT Only"
         ])
-        self.cmb_source.setToolTip("SGT (Sera Global Tracker) rows are shadow captures shown beside the "
-                                   "other engines' rows for comparison. Hide them, or show only them.")
+        self.cmb_source.setToolTip("SGT (Sera Global Tracker) is the capture engine; its rows are tagged "
+                                   "\"SGT live\" (or \"SGT shadow\" while it runs beside the other engines "
+                                   "for comparison). Hide them, or show only them.")
         self.cmb_source.currentIndexChanged.connect(self._on_filter_changed)
 
         # Filter chips: "Status ▾" etc.; a chip that's switched on shows its value, e.g. "Client: Unregistered".
@@ -2199,7 +2200,7 @@ class TrackerDumpWindow(QWidget):
                     if delta_sec < 0 or delta_sec > 30 * 86400:
                         continue
 
-            # 5. Capture Source Filter (SGT shadow rows)
+            # 5. Capture Source Filter (SGT rows)
             if source_filter != "All Sources" and not _passes_source_filter(d, source_filter, is_grouped):
                 continue
 

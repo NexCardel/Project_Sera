@@ -26,6 +26,7 @@ from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MOD
 
 SGT_OFF = "off"
 SGT_SHADOW = "shadow"
+SGT_LIVE = "live"
 from .vsdc_assembler import VisualSessionAssembler, get_status_rank
 from .vsdc_regex import (
     repair_numeric_ack,
@@ -353,9 +354,9 @@ class VSDCRouter:
         self._vsdc_x_enabled: bool = True          # False: UI Automation is never read
         self._engines_off: bool = False            # all three off: the tick does nothing at all
 
-        # SGT - Sera Global Tracker (core/sgt). Only "shadow" exists so far: it builds the
-        # session it WOULD dispatch and logs it, saving nothing. Off unless Settings -> Tracker
-        # or SGT_MODE=shadow says otherwise.
+        # SGT - Sera Global Tracker (core/sgt). "live": the capture engine, its rows merge with
+        # the tracker's; "shadow": its rows kept apart, for comparison. Off until
+        # apply_engine_settings() (Settings -> Tracker) or SGT_MODE says otherwise.
         self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
         self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
         self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
@@ -365,10 +366,7 @@ class VSDCRouter:
     @staticmethod
     def _env_sgt_mode() -> Optional[str]:
         env = os.environ.get("SGT_MODE", "").strip().lower()
-        if env == "live":
-            print("[SGT] SGT_MODE=live is not built yet - running in shadow mode")
-            return SGT_SHADOW
-        return env if env in (SGT_OFF, SGT_SHADOW) else None
+        return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
                               sgt_record: bool = True) -> None:
@@ -387,16 +385,22 @@ class VSDCRouter:
         VSDC_UIA_ONLY / VSDC247_ONLY / VSDC247_MODE environment variables keep working as
         developer overrides on top of this.
 
-        SGT (off / shadow) is the fourth switch. Shadow never saves anything, so it can run
-        beside the others; SGT alone (the other three off) reads every in-scope page with no
-        crosshair routing, the same way VSDC247 works alone. SGT_MODE overrides it.
+        SGT (off / shadow / live) is the fourth switch. Live is the capture engine and normally
+        runs alone (the other three off): it reads every in-scope page with no crosshair
+        routing, the same way VSDC247 works alone. Shadow keeps its rows apart from the other
+        engines', so it can run beside them. SGT_MODE overrides it.
         """
-        sgt_mode = self._env_sgt_mode() or (SGT_SHADOW if str(sgt).strip().lower() in (SGT_SHADOW, "live") else SGT_OFF)
+        wanted = str(sgt).strip().lower()
+        sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
         self._sgt_record = bool(sgt_record)
         if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
             self._sgt._recorder.enabled = self._sgt_record
-        if sgt_mode == SGT_OFF and self._sgt is not None:
-            self._sgt.end_all("SGT switched off")
+        if sgt_mode != self._sgt_mode and self._sgt is not None:
+            # Open sessions end under the mode they were read in, so no dataset is keyed half
+            # one way and half the other.
+            self._sgt.end_all("SGT switched off" if sgt_mode == SGT_OFF else f"SGT switched to {sgt_mode}")
+            if sgt_mode != SGT_OFF:
+                self._sgt.set_mode(sgt_mode)
         self._sgt_mode = sgt_mode
         sgt_on = sgt_mode != SGT_OFF
         self._sgt_alone = sgt_on and not (vsdc or vsdc_x or vsdc247) and not self._env_247_only
@@ -416,17 +420,21 @@ class VSDCRouter:
               f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
               f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
 
-    def _run_sgt_shadow(self, hwnd: int, title: str = "") -> None:
-        """SGT beside the live pipeline: observes this page, returns nothing, saves nothing."""
+    def _run_sgt(self, hwnd: int, title: str = "") -> None:
+        """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
+        hands them out one per tick), never through this tick's result."""
         if self._sgt is None:
             from core.sgt.sgt_corpus import PageRecorder
             from core.sgt.sgt_health import SpecStats
             from core.sgt.sgt_shadow import SgtShadow, shadow_dir
             folder = shadow_dir()
-            # recorder: pages for replay; stats: portal-change watch; state: crash recovery
+            # recorder: pages for replay; stats: portal-change watch; state: crash recovery;
+            # alert: a live submission whose client never became known (phone, like VSDC247)
             self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt,
                                   recorder=PageRecorder(enabled=getattr(self, "_sgt_record", True)),
-                                  stats=SpecStats(folder), state_path=folder / "sessions_state.json")
+                                  stats=SpecStats(folder), state_path=folder / "sessions_state.json",
+                                  mode=self._sgt_mode,
+                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
                           frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
 
@@ -445,7 +453,8 @@ class VSDCRouter:
         lines are dropped immediately; all that is kept is the hostname, in a console line and
         one HUD prompt.
         """
-        if not self._vsdc_x_enabled or not is_government_registry_host(url):
+        # SGT reads UI Automation too, so the tripwire keeps watching while SGT runs alone.
+        if not (self._vsdc_x_enabled or self._sgt_mode != SGT_OFF) or not is_government_registry_host(url):
             return
         host = extract_host(url)
         state = self._tripwire_hosts.get(host)
@@ -971,10 +980,10 @@ class VSDCRouter:
                     result = self._run_vsdc247(hwnd)
                 else:
                     self._observe_247(hwnd)      # the crosshair pipeline handled this frame
-            # SGT shadow: after everything else, on the same scope-gated pages; it cannot
-            # change `result`.
-            if self._scope_ok_this_tick and self._sgt_mode == SGT_SHADOW:
-                self._run_sgt_shadow(hwnd, title)
+            # SGT: after everything else, on the same scope-gated pages; it cannot change
+            # `result` (its rows go out through its outbox, at the top of the next tick).
+            if self._scope_ok_this_tick and self._sgt_mode != SGT_OFF:
+                self._run_sgt(hwnd, title)
             if result:
                 self._remember_dispatch(result)
                 stamp_device_name(result)        # which PC captured it, inside the payload

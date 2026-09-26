@@ -805,8 +805,9 @@ class SeraApp:
         portal = msg.get("portal", "Portal")
         arn = msg.get("arn", "N/A")
         capture_method = msg.get("capture_method", "DOM_Tracker")
-        # SGT rows are shown on the HUD pill as SGT sees them (tagged "SGT (Shadow)"); a second
-        # toast / tray balloon for every SGT row would only double the noise.
+        # SGT rows are shown on the HUD pill as SGT sees them (tagged "SGT (Live)" / "SGT (Shadow)");
+        # SGT re-sends a row every time its dataset changes, so a toast / tray balloon per row
+        # would only double the noise.
         if str(capture_method).startswith("SGT"):
             return
         is_vsdc = "VSDC" in capture_method
@@ -2015,7 +2016,7 @@ class SeraApp:
         memory_mark("  window: tray + shown")
 
     def _apply_vsdc_engine_settings(self):
-        """Apply the Settings -> Tracker switches (VSDC, VSDC-X, VSDC 24/7) to the running worker.
+        """Apply the Settings -> Tracker switches (VSDC, VSDC-X, VSDC 24/7, SGT) to the running worker.
 
         Called once at startup and again every time the user saves settings, so a switch takes
         effect at once, without a restart. The worker thread only starts once at least one
@@ -2024,7 +2025,10 @@ class SeraApp:
         try:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
-            from core.vsdc.vsdc_engines import read_engine_flags, read_hud_enabled, read_sgt_mode, read_sgt_record_pages
+            from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
+                                                read_sgt_mode, read_sgt_record_pages)
+            # Once per office: SGT live becomes the capture engine, the other three go off.
+            apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
             if hud is not None:
                 hud.set_enabled(read_hud_enabled(self.db.get_setting))

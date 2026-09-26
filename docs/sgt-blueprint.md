@@ -1,8 +1,12 @@
 # Sera Global Tracker (SGT) — blueprint
 
-**Status:** shadow mode built and field-tested. Its returns go into the tracker dump as their own
-tagged rows (decided 2026-09-21: "mixed into the tracker, tagged"), beside the other engines'
-rows, plus the HUD pill and a local log. Live mode (SGT replacing an engine) is not built.
+**Status (2026-09-26): LIVE — SGT is the main capture engine.** Shadow testing is over (user,
+2026-09-26). SGT live runs alone: VSDC, VSDC-X and VSDC 24/7 are switched off. See §13. Shadow
+mode still exists (Settings → Tracker) for comparing SGT against the other engines.
+
+*Shadow mode, as first built:* its returns go into the tracker dump as their own tagged rows
+(decided 2026-09-21: "mixed into the tracker, tagged"), beside the other engines' rows, plus the
+HUD pill and a local log.
 
 **Tracker rows (2.10.1):** capture method `SGT_shadow`; dataset keys in an `SGT:` namespace
 (`SGT:ITR:<PAN>:<FORM>:<PERIOD>`, stable across sessions). Written as soon as a return can be
@@ -726,3 +730,55 @@ step's model must know.
 - **Scope of B2 and B3:** both read something outside the browser window (the Downloads folder;
   the SCA fill event). Do they fit how SGT should be scoped, or does SGT stay page-only?
 - **Start order:** C first (cheap, quick accuracy win) as proposed, or A first.
+
+---
+
+## 13. SGT live (built 2026-09-26)
+
+Decided by the user on 2026-09-26, before any §12 enhancement: shadow testing is over, SGT
+becomes the main capture engine. The four choices, all as recommended:
+
+1. **SGT alone.** VSDC, VSDC-X and VSDC 24/7 off. (The SDC browser extension is separate and
+   unaffected.)
+2. **Merge.** Live rows use the tracker's canonical key, so a filing another engine saved
+   earlier is the same row, updated in place; its status never moves down.
+3. **Live on every PC.** Settings are office-wide (synced), so a one-time switch-over does it.
+4. **Convert** the shadow rows already in the tracker.
+
+**What was built:**
+
+| Piece | Where |
+| :--- | :--- |
+| Mode `off / shadow / live`, default `live`; engine defaults all off | `core/vsdc/vsdc_engines.py`, Settings → Tracker |
+| One-time switch-over: `sgt_mode=live`, the other three off, marker `sgt_live_rollout_done` | `apply_sgt_live_rollout`, called from `main._apply_vsdc_engine_settings` |
+| Engine mode: capture method `SGT_live`, HUD tag "SGT (Live)", `raw_payload.source.mode` | `SgtShadow(mode=...)`, `set_mode()` (module name kept) |
+| Canonical key, shared with the database | `core/dataset_key.py`; `SgtShadow.live_key` |
+| Router: `SGT_MODE=live` accepted; changing mode ends open sessions first; the portal-address tripwire runs while SGT is on | `core/vsdc/vsdc_router.py` |
+| Client never identified → row written unassigned + phone alert, once per dataset | `SgtShadow._alert_unknown_client` → `AlertSender.notify_unattributed_submission` |
+| Shadow rows → live rows, status-aware merge, on the admin PC's start-up | `SeraDatabase._convert_sgt_shadow_rows` |
+
+**Keys in live mode.** `compute_dataset_key(portal, GSTIN or PAN, form, period)` — the same
+identifier order the database uses for any row. Until the client is known the identifier is
+`SGT<session>` (it can never be a real client's key); the row is superseded under the client's
+key once the PAN is read. A dataset known only by its ARN is keyed `...:FORM:ARN_<n>`.
+
+**Database rules that changed with it** (`insert_tracker_dump`):
+- The "same side only" isolation now applies to *shadow* rows only; live rows are an ordinary
+  engine's rows.
+- The 10-second ARN burst guard skips SGT rows: SGT re-sends a row only when it changed, and
+  the guard was dropping a status that climbed seconds after the ARN.
+- No proximity attribution for SGT rows: a row without a PAN is one whose client SGT has not
+  identified, and "whoever was captured on this portal in the last 15 minutes" put filings on the
+  previous client. (This affected shadow rows too.)
+- `delete_sgt_rows_by_dataset_key` accepts any key but only ever deletes rows SGT wrote.
+- The admin PC's start-up key rewrite skips SGT rows. It used to turn shadow rows' `SGT:` keys
+  into ordinary keys, and the purge after it folded them into other engines' rows.
+
+**Still true / not done:**
+- The toast / tray balloon stays off for SGT rows; the HUD pill is SGT's notifier.
+- The measured agreement with VSDC (§10a's go-live bar) was never run — the user judged the field
+  testing sufficient.
+- The folder stays `sgt_shadow/` (log, crash snapshot, spec stats) so recovery works across the
+  switch.
+
+Tests: `tests/test_sgt_live.py`.

@@ -516,7 +516,7 @@ class TestSessions:
         r.sgt.end_all("quit")
         p = r.events("session_end")[0]["payload"]
         assert p["client_known"] is False and p["datasets"]
-        assert any("VSDC247's client-unknown path" in m for m in r.echoes)
+        assert any("live mode would write these unattributed and alert" in m for m in r.echoes)
 
 
 class TestNeverDisturbs:
@@ -627,10 +627,11 @@ class TestHud:
 # ── The switch ───────────────────────────────────────────────────────────────────
 class TestSwitch:
     def test_reading_the_setting(self):
-        assert SGT_DEFAULT == "off"
-        assert read_sgt_mode(lambda k, d=None: d) == "off"
+        assert SGT_DEFAULT == "live"                                    # SGT live is the capture engine
+        assert read_sgt_mode(lambda k, d=None: d) == "live"
         assert read_sgt_mode(lambda k, d=None: "Shadow") == "shadow"
-        assert read_sgt_mode(lambda k, d=None: "live") == "off"        # not built yet
+        assert read_sgt_mode(lambda k, d=None: "off") == "off"
+        assert read_sgt_mode(lambda k, d=None: "garbage") == "live"
 
     @pytest.fixture
     def harness(self):

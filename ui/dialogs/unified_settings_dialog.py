@@ -1112,7 +1112,8 @@ class UnifiedSettingsDialog(QDialog):
         lay.setSpacing(0)
 
         lay.addWidget(_page_header("Tracker",
-            "Configure settings for VSDC, VSDC-X, and VSDC 24/7 background capture engines."))
+            "SGT (Sera Global Tracker) is the capture engine. VSDC, VSDC-X and VSDC 24/7 are the older "
+            "engines; they stay off unless you need one beside SGT."))
 
         lay.addWidget(_sub_header("Visual Sera DOM Crosshair (VSDC)"))
         self.vsdc_check = QCheckBox()
@@ -1131,19 +1132,21 @@ class UnifiedSettingsDialog(QDialog):
 
         lay.addWidget(_sub_header("SGT - Sera Global Tracker"))
         self.sgt_mode_combo = QComboBox()
+        self.sgt_mode_combo.addItem("Live (main capture engine)", "live")
+        self.sgt_mode_combo.addItem("Shadow (separate rows, for comparison)", "shadow")
         self.sgt_mode_combo.addItem("Off", "off")
-        self.sgt_mode_combo.addItem("Shadow (log only, saves nothing)", "shadow")
         lay.addWidget(_setting_row("SGT mode",
             "Reads every portal page and works out every datapoint from its field list, without crosshairs. "
-            "Shadow adds its captures to the tracker as separate rows tagged SGT (orange; the tracker's "
-            "Source filter hides or isolates them), shows them on the HUD pill tagged \"SGT (Shadow)\", and "
-            "keeps a detailed log on this PC (sgt_shadow folder). It never changes or removes another engine's "
-            "rows.", self.sgt_mode_combo))
+            "Live saves its captures as the tracker's rows (tagged SGT, orange): a filing another engine "
+            "already saved is updated in place, and its status never moves down. A submission whose client "
+            "was never identified is saved unassigned and raises the phone alert. Shadow keeps SGT's rows "
+            "separate from the other engines' instead, for comparison. Either way the HUD pill shows its "
+            "captures and a detailed log stays on this PC (sgt_shadow folder).", self.sgt_mode_combo))
         self.sgt_record_check = QCheckBox()
         lay.addWidget(_setting_row("Record pages for SGT testing",
             "While SGT is on, keeps the text of each portal page it reads on this PC (sgt_corpus folder, "
             "deleted after 30 days) so a change to SGT's field list can be replayed against real pages "
-            "before it goes live. The pages contain client details; they never leave this PC.",
+            "before it is used. The pages contain client details; they never leave this PC.",
             self.sgt_record_check))
 
         lay.addWidget(_sub_header("HUD Pill"))
@@ -1388,11 +1391,12 @@ class UnifiedSettingsDialog(QDialog):
 
 
         if hasattr(self, "vsdc_check"):
-            self.vsdc_check.setChecked(g("vsdc_enabled", "1") == "1")
-            self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "1") == "1")
+            # Same defaults as core/vsdc/vsdc_engines.py, so the page shows what runs.
+            self.vsdc_check.setChecked(g("vsdc_enabled", "0") == "1")
+            self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "0") == "1")
             self.vsdc247_check.setChecked(g("vsdc247_enabled", "0") == "1")
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
-            _set(self.sgt_mode_combo, g("sgt_mode", "off"))
+            _set(self.sgt_mode_combo, g("sgt_mode", "live"))
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
 
     #── Save settings ─────────────────────────────────────────────────────────
@@ -1481,7 +1485,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_x_enabled"] = b(self.vsdc_x_check)
                 bulk_settings["vsdc247_enabled"] = b(self.vsdc247_check)
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
-                bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "off"
+                bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "live"
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
 
             if hasattr(self.db, "set_settings_bulk"):

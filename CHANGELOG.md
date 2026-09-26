@@ -4,6 +4,22 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [Unreleased] - SGT live
+
+### Changed
+- **SGT is the main capture engine** (Settings → Tracker → SGT mode: Live / Shadow / Off; default Live).
+  - Live rows (`SGT_live`) take the tracker's canonical dataset keys (`core/dataset_key.py`, shared with the database), so a filing another engine saved earlier is updated in place and its status never moves down. HUD tag "SGT (Live)".
+  - One-time office-wide switch-over on the next start (`sgt_live_rollout_done`): SGT live, VSDC / VSDC-X / VSDC 24/7 off. New installs default to the same. A PC switched back by hand afterwards is left alone.
+  - Existing `SGT_shadow` rows are converted to live rows on the admin PC's start-up, merged with any row for the same filing (the higher status wins).
+  - A live submission whose client was never identified is written unassigned and raises the phone alert (VSDC 24/7's client-unknown path).
+  - The portal-address tripwire keeps running while SGT runs alone.
+
+### Fixed
+- The admin PC's start-up key rewrite no longer touches SGT rows. It turned shadow rows' `SGT:` keys into ordinary keys and the purge that follows folded them into other engines' rows.
+- An SGT row sent before its client is known is no longer attributed by time proximity to whoever was captured on the same portal in the last 15 minutes.
+- An SGT status that climbs within 10 seconds of its ARN (e.g. e-Verified right after submission) is no longer dropped by the ARN burst guard.
+---
+
 ## [2.10.0] - 2026-09-22
 
 ### Added
@@ -13,7 +29,7 @@ All notable changes to **Project Sera** are documented in this file.
   - Added native **TAN (Tax Deduction and Collection Account Number)** field specification with strict formatting pattern `(?<![A-Z0-9])([A-Z]{4}[0-9]{5}[A-Z])(?![A-Z0-9])`, label proximity window, and automated positive/negative test suites.
   - Implemented **SGT Shadow Mode**: Runs passively alongside VSDC/SDC without interference, writing isolated datasets tagged `SGT_shadow` into `tracker_dump` (`rawPayload.db`).
 - **SGT Health & Differential Replay Tooling**:
-  - `core/sgt/sgt_corpus.py`: Records live portal page text lines locally into `~/AmanAssociates_Sera/corpus/` for safe offline replay without persisting sensitive credentials.
+  - `core/sgt/sgt_corpus.py`: Records live portal page text lines locally into `~/AmanAssociates_Sera/sgt_corpus/` for safe offline replay without persisting sensitive credentials.
   - `core/sgt/sgt_health.py`: Computes daily telemetry metrics (`SpecStats`), tracks OCR jump ratios (canvas detection), and flags silent spec drift.
   - `core/sgt/sgt_replay.py` & `tools/sgt_replay.py`: CLI tool for replaying recorded sessions, establishing baselines, and diffing candidate spec changes before production rollout.
   - `tests/sgt_golden/`: Deterministic golden session fixtures and reliability test suite verifying recovery under heavy OCR noise, line drops, and shuffles.
