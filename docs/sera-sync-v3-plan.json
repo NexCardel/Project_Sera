@@ -424,11 +424,63 @@
    "review_required": false
   },
   {
+   "wp": "P3-7a",
+   "phase": 3,
+   "what": "Peer digest exchange for the shadow convergence check",
+   "tier": "T2",
+   "deps": [
+    "P3-7"
+   ],
+   "dep_note": "",
+   "review": "Yes – Fable 5.1 / Opus 5.5",
+   "review_required": true
+  },
+  {
+   "wp": "P3-7b",
+   "phase": 3,
+   "what": "Turn on shadow mode: panel action, common start point, re-enable guard",
+   "tier": "T3",
+   "deps": [
+    "P3-7"
+   ],
+   "dep_note": "",
+   "review": "Yes – Fable 5.1 / Opus 5.5",
+   "review_required": true
+  },
+  {
+   "wp": "P3-8a",
+   "phase": 3,
+   "what": "Shadow-week readiness: parked-change age, clock-ahead warning, seal timing",
+   "tier": "T2",
+   "deps": [
+    "P3-8"
+   ],
+   "dep_note": "",
+   "review": "No",
+   "review_required": false
+  },
+  {
+   "wp": "P3-8b",
+   "phase": 3,
+   "what": "Panel defect fixes (Run-now gate, conflict selection, stamps, late emit)",
+   "tier": "T2",
+   "deps": [
+    "P3-8"
+   ],
+   "dep_note": "",
+   "review": "No",
+   "review_required": false
+  },
+  {
    "wp": "P3-9",
    "phase": 3,
    "what": "Go live (install converged replica, switch mode)",
    "tier": "T2",
    "deps": [
+    "P3-7a",
+    "P3-7b",
+    "P3-8a",
+    "P3-8b",
     "P3-7"
    ],
    "dep_note": "Plus: P3-7 go-live criteria met (owner decides)",

@@ -544,11 +544,24 @@ class SeraDatabase:
             return
         which = [w for w in ("master", "raw") if w in dirty]
         dirty.clear()
+        t0 = time.perf_counter()
         try:
             self.seal_pending(which, timeout=0.25)
         except Exception as e:
             # Never break the caller's committed write; the timer seal retries.
             print(f"[database] Sync seal after commit deferred: {e}")
+        finally:
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            cb = getattr(self, "_seal_timing_callback", None)
+            if cb is not None:
+                try:
+                    cb(elapsed_ms)
+                except Exception:
+                    pass
+
+    def set_seal_timing_callback(self, fn) -> None:
+        """``fn(duration_ms)`` is called after an after-commit seal completes on the committing thread (P3-8a)."""
+        self._seal_timing_callback = fn
 
     def get_sync_mode(self) -> str:
         return getattr(self, "_sync_mode", "off")

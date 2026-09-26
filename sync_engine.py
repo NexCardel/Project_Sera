@@ -380,7 +380,8 @@ class SyncEngine:
 
     def _peer(self, device_id: str) -> dict:
         return self._peers.setdefault(device_id, {"last_ok": None, "last_attempt": None,
-                                                  "last_error": None, "needs_update": None})
+                                                  "last_error": None, "needs_update": None,
+                                                  "clock_ahead": None})
 
     def peer_status(self) -> dict:
         """``{device_id: {last_ok, last_attempt, last_error, needs_update, online}}``
@@ -390,6 +391,10 @@ class SyncEngine:
             out = {}
             for dev, st in self._peers.items():
                 d = dict(st)
+                ca = d.get("clock_ahead")
+                if ca and now - ca.get("seen_at", 0) > 3600.0:
+                    d["clock_ahead"] = None
+                    st["clock_ahead"] = None
                 d["online"] = bool(st["last_ok"] and now - st["last_ok"] <= ONLINE_SECONDS)
                 out[dev] = d
             return out
@@ -853,9 +858,19 @@ class SyncEngine:
             result.applied += len(items) - applied.skipped
             result.emitted += applied.emitted
             result.tables |= set(applied.tables)
-            for origin, ahead in applied.clock_ahead:
-                self._event("clock_ahead", origin=origin, device_id=origin.split(":")[0],
-                            name=self._member_name(origin.split(":")[0]), ahead_ms=ahead)
+            if applied.clock_ahead:
+                result.clock_ahead_seen = True
+                dev_ahead = {}
+                for origin, ahead in applied.clock_ahead:
+                    dev_id = origin.split(":")[0]
+                    if dev_id not in dev_ahead or ahead > dev_ahead[dev_id][1]:
+                        dev_ahead[dev_id] = (origin, ahead)
+                for dev_id, (origin, ahead) in dev_ahead.items():
+                    minutes = max(1, round(ahead / 60000))
+                    with self._lock:
+                        self._peer(dev_id)["clock_ahead"] = {"ahead_ms": ahead, "minutes": minutes, "seen_at": time.time()}
+                    self._event("clock_ahead", origin=origin, device_id=dev_id,
+                                name=self._member_name(dev_id), ahead_ms=ahead)
             if applied.parked:
                 self._event("parked", count=applied.parked)
             session.send({"t": F_ACK, "vectors": self.own_vectors()})

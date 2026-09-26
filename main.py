@@ -445,6 +445,10 @@ class SeraApp:
                     sync_shadow.mirror_own_changes_to_replica(_db, _app_dir)
                     _engine.notify_local_change()
 
+                def _seal_timing_cb(dur_ms, _db=self.db, _dir=self.app_dir):
+                    if _db.get_sync_mode() == "shadow":
+                        sync_shadow.record_seal_timing(dur_ms, _dir)
+
                 self.db.set_seal_listener(_sync_seal_listener)
                 if self.db.get_sync_mode() == "shadow":
                     # Own changes sealed before the listener existed (e.g. a P3-7b salvage
@@ -452,9 +456,11 @@ class SeraApp:
                     threading.Thread(
                         target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
                         name="shadow-mirror-catch-up", daemon=True).start()
+                self.db.set_seal_timing_callback(_seal_timing_cb)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
+                self.app.aboutToQuit.connect(lambda _dir=self.app_dir: sync_shadow.flush_seal_timing(_dir))
             except Exception as exc:
                 print(f"[Sera Sync] v3 sync engine failed to start: {exc}")
                 self.sync_engine = None
@@ -2453,6 +2459,22 @@ class SeraApp:
             if db is not None and db.get_sync_mode() != "live":
                 return
             self._queue_synced_tables(info.get("tables") or ())
+        elif kind == "clock_ahead":
+            name = info.get("name") or info.get("device_id") or "Peer"
+            ahead_ms = info.get("ahead_ms", 0)
+            minutes = max(1, round(ahead_ms / 60000))
+            dev_id = info.get("device_id") or name
+
+            if not hasattr(self, "_clock_ahead_last_logged") or self._clock_ahead_last_logged is None:
+                self._clock_ahead_last_logged = {}
+            import time
+            now = time.monotonic()
+            last = self._clock_ahead_last_logged.get(dev_id)
+            if last is None or (now - last[0] >= 3600.0 or last[1] != minutes):
+                self._clock_ahead_last_logged[dev_id] = (now, minutes)
+                msg = f"PC {name}'s clock is {minutes} minutes ahead"
+                if hasattr(self, "sync_service") and self.sync_service:
+                    self.sync_service.log_activity("GUARD", msg)
 
     def _queue_synced_tables(self, tables) -> None:
         """Coalesces touched-table sets from applied sync batches and emits the Qt signal at

@@ -316,11 +316,14 @@ def test_stalled_streams_absent_when_none(tmp_path):
 # ---------------------------------------------------------------- shadow check "Run now"
 
 def test_run_shadow_check_calls_run_shadow_checks_and_refreshes(tmp_path, monkeypatch):
+    """Same as the 30-minute timer in main.py: "Run now" only does anything in mode shadow
+    (P3-8b fix a)."""
     _app()
     import sync_shadow
     from ui.dialogs.sera_sync_dialog import SeraSyncDialog
 
     db = _office_db(tmp_path)
+    sync_shadow.enable_shadow_mode(db, tmp_path)
     svc = _office_sync_service(tmp_path)
     dlg = SeraSyncDialog(svc, db=db, actor="Tester")
     dlg.sync_status_group.isVisible = lambda: True
@@ -341,6 +344,44 @@ def test_run_shadow_check_calls_run_shadow_checks_and_refreshes(tmp_path, monkey
     assert _pump_until(lambda: len(refreshed) >= 1)
     assert dlg.btn_run_shadow_check.isEnabled() is True
     assert called["db"] is db
+
+
+def test_run_shadow_check_button_disabled_outside_shadow_mode(tmp_path):
+    """P3-8b fix (a): the button itself is disabled whenever the panel refreshes and the mode
+    isn't shadow (mode defaults to "off" here), mirroring the 30-minute timer's own mode check
+    in main.py."""
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    assert db.get_sync_mode() == "off"
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+
+    assert dlg.btn_run_shadow_check.isEnabled() is False
+
+
+def test_run_shadow_check_is_a_noop_outside_shadow_mode(tmp_path, monkeypatch):
+    """Clicking "Run now" while not in mode shadow (e.g. a stale click queued just as the mode
+    changed) must not call sync_shadow.run_shadow_checks at all (P3-8b fix a)."""
+    _app()
+    import sync_shadow
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+
+    called = []
+    monkeypatch.setattr(sync_shadow, "run_shadow_checks", lambda *a, **k: called.append(True))
+
+    dlg._on_run_shadow_check()
+    _app().processEvents()
+
+    assert called == []
 
 
 def test_no_selection_is_a_noop_for_both_buttons(tmp_path):
@@ -397,3 +438,119 @@ def test_online_status_without_engine_still_uses_beacon(tmp_path):
     dlg = SeraSyncDialog(svc, db=None, actor="Tester", discovery_service=discovery)
 
     assert dlg._online_status("dev-b", own_device_id="dev-a") == "Offline"
+
+
+# ---------------------------------------------------------------- P3-8a: Parked replica stats & warnings
+
+def test_summary_label_reads_from_replica_in_shadow_mode(tmp_path, monkeypatch):
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+    import sync_shadow
+    import sync_capture
+    import datetime
+
+    db = _office_db(tmp_path)
+    sync_shadow.enable_shadow_mode(db, tmp_path)
+    replica_master, _ = sync_shadow.replica_paths(tmp_path)
+
+    # Insert parked change into replica only, live DB has 0
+    conn = sync_capture._open(str(replica_master), db.hex_key, 5.0)
+    try:
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Freeze now at 2 hours later
+    fixed_now = datetime.datetime(2026, 9, 25, 2, 0, 0, tzinfo=datetime.timezone.utc)
+    import sync_panel
+    monkeypatch.setattr(sync_panel, "_now_utc", lambda: fixed_now)
+
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+
+    assert "Parked: 1 (oldest: 2h)" in dlg.sync_status_summary_label.text()
+
+
+def test_parked_warning_amber_above_1_hour_in_shadow_mode(tmp_path, monkeypatch):
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+    import sync_shadow
+    import sync_capture
+    import datetime
+
+    db = _office_db(tmp_path)
+    sync_shadow.enable_shadow_mode(db, tmp_path)
+    replica_master, _ = sync_shadow.replica_paths(tmp_path)
+
+    conn = sync_capture._open(str(replica_master), db.hex_key, 5.0)
+    try:
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Freeze now at 2 hours later
+    fixed_now = datetime.datetime(2026, 9, 25, 2, 0, 0, tzinfo=datetime.timezone.utc)
+    import sync_panel
+    monkeypatch.setattr(sync_panel, "_now_utc", lambda: fixed_now)
+
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+
+    assert not dlg.sync_status_warning_label.isHidden()
+    assert "1 hour" in dlg.sync_status_warning_label.text()
+
+
+def test_parked_warning_red_above_7_days(tmp_path, monkeypatch):
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+    import datetime
+
+    db = _office_db(tmp_path)
+    with db._connect() as conn:
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+
+    # Freeze now at 8 days later
+    fixed_now = datetime.datetime(2026, 10, 3, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    import sync_panel
+    monkeypatch.setattr(sync_panel, "_now_utc", lambda: fixed_now)
+
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+
+    assert not dlg.sync_status_warning_label.isHidden()
+    assert "7 days" in dlg.sync_status_warning_label.text()
+
+
+# ---------------------------------------------------------------- P3-8a: Clock-ahead warning in banner
+
+def test_members_network_warning_shows_clock_ahead(tmp_path):
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    svc = _office_sync_service(tmp_path)
+    engine = MagicMock()
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester", sync_engine=engine)
+    dlg.members_group.isVisible = lambda: True
+
+    own_device_id, _ = dlg._own_identity()
+    engine.peer_status.return_value = {
+        own_device_id: {"clock_ahead": {"ahead_ms": 180_000, "minutes": 3}, "online": True}
+    }
+    # Call refresh
+    dlg._refresh_members()
+
+    assert not dlg.members_network_warning.isHidden()
+    assert "clock is 3 minutes ahead" in dlg.members_network_warning.text()
+

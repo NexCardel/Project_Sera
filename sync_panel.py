@@ -9,8 +9,10 @@ calls these and does the Qt part.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
+from typing import Optional
 
 import sync_schema
 
@@ -23,9 +25,95 @@ import sync_schema
 DELETED_ROW_REASONS = frozenset({"edit discarded by delete", "edit after delete discarded"})
 
 
+def _now_utc() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _parse_iso(ts_str: str) -> datetime.datetime:
+    ts_str = ts_str.strip()
+    if ts_str.endswith("Z") or ts_str.endswith("z"):
+        ts_str = ts_str[:-1] + "+00:00"
+    dt = datetime.datetime.fromisoformat(ts_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
 def parked_count(conn) -> int:
     row = conn.execute("SELECT COUNT(*) FROM _sync_parked").fetchone()
     return int(row[0]) if row else 0
+
+
+def parked_stats(conn, now: Optional[datetime.datetime] = None) -> tuple[int, Optional[int]]:
+    """Returns ``(count, oldest_age_seconds)`` for ``_sync_parked`` in ``conn``.
+    If count is 0 or no timestamps exist, oldest_age_seconds is None.
+    """
+    count_row = conn.execute("SELECT COUNT(*) FROM _sync_parked").fetchone()
+    count = int(count_row[0]) if count_row else 0
+    if count == 0:
+        return 0, None
+
+    rows = conn.execute("SELECT first_at FROM _sync_parked WHERE first_at IS NOT NULL").fetchall()
+    if not rows:
+        return count, None
+
+    if now is None:
+        now = _now_utc()
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+
+    oldest_dt = None
+    for (fa,) in rows:
+        if not fa:
+            continue
+        try:
+            dt = _parse_iso(str(fa))
+            if oldest_dt is None or dt < oldest_dt:
+                oldest_dt = dt
+        except Exception:
+            continue
+
+    if oldest_dt is None:
+        return count, None
+
+    age_sec = max(0, int((now - oldest_dt).total_seconds()))
+    return count, age_sec
+
+
+def parked_summary(conns, now: Optional[datetime.datetime] = None) -> tuple[int, Optional[int]]:
+    """Aggregates parked stats across multiple DB connections (e.g. master + raw),
+    returning ``(total_count, oldest_age_seconds)``."""
+    total_count = 0
+    oldest_age = None
+    for conn in conns:
+        if conn is None:
+            continue
+        cnt, age = parked_stats(conn, now=now)
+        total_count += cnt
+        if age is not None:
+            if oldest_age is None or age > oldest_age:
+                oldest_age = age
+    return total_count, oldest_age
+
+
+def format_age(seconds: int | float | None) -> str:
+    """Formats age in seconds into human-readable duration (e.g. '0s', '45s', '1m', '1h', '2h', '1d', '7d')."""
+    if seconds is None or seconds < 0:
+        return "unknown"
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if hours < 24:
+        return f"{hours}h {rem_min}m" if rem_min else f"{hours}h"
+    days = hours // 24
+    rem_hr = hours % 24
+    return f"{days}d {rem_hr}h" if rem_hr else f"{days}d"
+
 
 
 def own_vector(conn) -> dict:

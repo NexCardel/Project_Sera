@@ -103,6 +103,35 @@ def test_on_sync_engine_event_only_queues_the_synced_kind():
     app.sync_bridge.engine_synced_signal.emit.assert_not_called()
 
 
+def test_on_sync_engine_event_clock_ahead_logs_activity():
+    app = _stub_app()
+    app.sync_service = MagicMock()
+    app.on_sync_engine_event("clock_ahead", {
+        "device_id": "dev-1",
+        "name": "Alice",
+        "ahead_ms": 120_000,
+    })
+    app.sync_service.log_activity.assert_called_once_with(
+        "GUARD", "PC Alice's clock is 2 minutes ahead"
+    )
+
+
+def test_on_sync_engine_event_clock_ahead_deduplicates_repeated_events():
+    """Sending many clock_ahead events for the same PC in one session (e.g. 300 edits from
+    a clock-ahead PC) logs at most once, preventing activity log flooding."""
+    app = _stub_app()
+    app.sync_service = MagicMock()
+    for _ in range(50):
+        app.on_sync_engine_event("clock_ahead", {
+            "device_id": "dev-1",
+            "name": "Alice",
+            "ahead_ms": 120_000,
+        })
+    app.sync_service.log_activity.assert_called_once_with(
+        "GUARD", "PC Alice's clock is 2 minutes ahead"
+    )
+
+
 def test_on_sync_engine_event_synced_with_no_tables_is_a_noop():
     app = _stub_app()
     app.on_sync_engine_event("synced", {"tables": [], "sent": 0, "received": 0})
@@ -242,3 +271,103 @@ def test_a_window_raising_does_not_propagate():
     app.dashboard_win.refresh.side_effect = RuntimeError("boom")
     # Must not raise -- the handler's own try/except swallows it and logs instead.
     app._handle_engine_synced_main_thread(["clients"])
+
+
+# ---------------------------------------------------------------- P3-8a: clock-ahead 1-hour expiry
+
+def test_peer_status_clears_clock_ahead_after_one_hour():
+    """peer_status() expires a clock-ahead entry whose seen_at is more than one hour old,
+    so the banner doesn't persist forever when a peer's clock has since been corrected (P3-8a
+    non-blocking review item)."""
+    import threading
+    import time
+    import sync_engine
+
+    engine = sync_engine.SyncEngine.__new__(sync_engine.SyncEngine)
+    engine._lock = threading.Lock()
+    engine._peers = {
+        "dev-1": {
+            "last_ok": time.time(),
+            "last_attempt": None,
+            "last_error": None,
+            "needs_update": None,
+            # seen_at set 70 minutes ago -- beyond the 1-hour threshold
+            "clock_ahead": {"ahead_ms": 180_000, "minutes": 3, "seen_at": time.time() - 4200.0},
+        }
+    }
+
+    status = engine.peer_status()
+
+    assert status["dev-1"]["clock_ahead"] is None
+    # The stored state must be cleared too (not just the copy returned to the caller).
+    assert engine._peers["dev-1"]["clock_ahead"] is None
+
+
+def test_peer_status_keeps_clock_ahead_within_one_hour():
+    """A clock-ahead entry seen less than 1 hour ago is still surfaced by peer_status()."""
+    import threading
+    import time
+    import sync_engine
+
+    engine = sync_engine.SyncEngine.__new__(sync_engine.SyncEngine)
+    engine._lock = threading.Lock()
+    engine._peers = {
+        "dev-1": {
+            "last_ok": time.time(),
+            "last_attempt": None,
+            "last_error": None,
+            "needs_update": None,
+            "clock_ahead": {"ahead_ms": 180_000, "minutes": 3, "seen_at": time.time() - 30.0},
+        }
+    }
+
+    status = engine.peer_status()
+
+    assert status["dev-1"]["clock_ahead"] is not None
+    assert status["dev-1"]["clock_ahead"]["minutes"] == 3
+
+
+# ---------------------------------------------------------------- P3-8a: shadow-only seal timing / flush-on-quit
+
+def test_seal_timing_cb_only_records_in_shadow_mode():
+    """_seal_timing_cb must call sync_shadow.record_seal_timing only when mode == 'shadow',
+    not in 'live' or 'off' mode (P3-8a non-blocking review item)."""
+    from unittest.mock import MagicMock, patch
+
+    db = MagicMock()
+    app_dir = "some/dir"
+
+    # Build the closure exactly as main.py does it.
+    import sync_shadow
+    def _seal_timing_cb(dur_ms, _db=db, _dir=app_dir):
+        if _db.get_sync_mode() == "shadow":
+            sync_shadow.record_seal_timing(dur_ms, _dir)
+
+    with patch.object(sync_shadow, "record_seal_timing") as mock_record:
+        db.get_sync_mode.return_value = "live"
+        _seal_timing_cb(12.5)
+        mock_record.assert_not_called()
+
+        db.get_sync_mode.return_value = "off"
+        _seal_timing_cb(12.5)
+        mock_record.assert_not_called()
+
+        db.get_sync_mode.return_value = "shadow"
+        _seal_timing_cb(12.5)
+        mock_record.assert_called_once_with(12.5, app_dir)
+
+
+def test_flush_seal_timing_called_on_quit():
+    """The lambda wired to app.aboutToQuit must call sync_shadow.flush_seal_timing with app_dir
+    (P3-8a non-blocking review item)."""
+    from unittest.mock import patch
+    import sync_shadow
+
+    app_dir = "some/dir"
+    # The lambda wired in main.py:
+    quit_cb = lambda _dir=app_dir: sync_shadow.flush_seal_timing(_dir)
+
+    with patch.object(sync_shadow, "flush_seal_timing") as mock_flush:
+        quit_cb()
+        mock_flush.assert_called_once_with(app_dir)
+

@@ -355,6 +355,66 @@ def test_run_shadow_checks_runs_convergence_when_peer_digests_given(cluster):
     assert out["convergence"].ok is True
 
 
+def test_run_shadow_checks_logs_parked_count_and_oldest_age(cluster):
+    h = cluster(1)
+    node = h.nodes[0]
+    sync_shadow.enable_shadow_mode(node.db, node.app_dir)
+    replica_master, _ = sync_shadow.replica_paths(node.app_dir)
+
+    # Insert a parked change directly into replica_master.db
+    conn = sync_capture._open(str(replica_master), node.hex_key, 5.0)
+    try:
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    sync_shadow.run_shadow_checks(node.db, node.app_dir)
+
+    log_path = Path(node.app_dir) / "logs" / sync_shadow.SHADOW_LOG_NAME
+    content = log_path.read_text(encoding="utf-8")
+    assert "parked_changes count=1" in content
+
+
+# ---------------------------------------------------------------- seal timing
+
+def test_seal_timing_logger_aggregates_and_rate_limits(tmp_path):
+    logger = sync_shadow.SealTimingLogger()
+    app_dir = tmp_path
+
+    # Record 3 measurements within the same minute
+    logger.record(10.0, app_dir=app_dir, now_fn=lambda: 1000.0)
+    logger.record(20.0, app_dir=app_dir, now_fn=lambda: 1010.0)
+    logger.record(30.0, app_dir=app_dir, now_fn=lambda: 1020.0)
+
+    log_path = app_dir / "logs" / sync_shadow.SHADOW_LOG_NAME
+    # Less than 60s elapsed -> no log line written yet
+    assert not log_path.exists()
+
+    # 4th measurement occurs at 1065.0 (> 60s since 1000.0)
+    logger.record(40.0, app_dir=app_dir, now_fn=lambda: 1065.0)
+    assert log_path.exists()
+    lines = [ln for ln in log_path.read_text(encoding="utf-8").splitlines() if "seal_timing" in ln]
+    assert len(lines) == 1
+    # 4 measurements: 10, 20, 30, 40 -> mean 25.0ms, max 40.0ms, count 4
+    assert "seal_timing count=4 mean=25.0ms max=40.0ms" in lines[0]
+
+
+def test_seal_timing_log_contains_no_row_contents(tmp_path):
+    logger = sync_shadow.SealTimingLogger()
+    app_dir = tmp_path
+    logger.record(15.5, app_dir=app_dir, now_fn=lambda: 1000.0)
+    logger.flush(app_dir=app_dir)
+
+    log_path = app_dir / "logs" / sync_shadow.SHADOW_LOG_NAME
+    content = log_path.read_text(encoding="utf-8")
+    assert "seal_timing count=1 mean=15.5ms max=15.5ms" in content
+    # Ensure no row or sensitive fields exist
+    for forbidden in ("pan", "name", "token", "clients", "SELECT", "INSERT"):
+        assert forbidden not in content
+
+
 # ---------------------------------------------------------------- hygiene
 
 def test_no_pyside6_in_sync_shadow():
@@ -366,3 +426,4 @@ def test_no_pyside6_in_sync_shadow():
                 assert "PySide6" not in alias.name
         elif isinstance(node, ast.ImportFrom):
             assert not (node.module and "PySide6" in node.module)
+

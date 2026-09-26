@@ -71,6 +71,7 @@ class SeraSyncDialog(QDialog):
         # port, so "Add workstation" reuses it instead of binding a second server on it.
         self.sync_engine = sync_engine
         self._add_workstation_session = None  # sync_office.AddWorkstationSession while "Add workstation" is open
+        self._shadow_check_running = False  # P3-8b: "Run now" only makes sense in mode shadow
         self.setWindowTitle("Sera Sync — LAN Database Sync & Live Activity")
         self.resize(1080, 620)
         self.setMinimumSize(920, 500)
@@ -374,6 +375,10 @@ class SeraSyncDialog(QDialog):
         self.sync_status_summary_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
         sync_status_layout.addWidget(self.sync_status_summary_label)
 
+        self.sync_status_warning_label = QLabel("")
+        self.sync_status_warning_label.setWordWrap(True)
+        self.sync_status_warning_label.setVisible(False)
+        sync_status_layout.addWidget(self.sync_status_warning_label)
 
         # Turning shadow mode on / resetting it (P3-7b). Admin mode (PIN) is asked for again.
         shadow_mode_row = QHBoxLayout()
@@ -632,7 +637,11 @@ class SeraSyncDialog(QDialog):
                     # it (P3-8 review, item 6).
                     engine_last_ok = peer_status.get(dev_id, {}).get("last_ok")
                     if engine_last_ok:
-                        last_ok[dev_id] = datetime.datetime.fromtimestamp(engine_last_ok).isoformat(timespec="seconds")
+                        # Same format as the address book's local_ok_at (UTC, "...Z") -- P3-8b
+                        # fix (c): the two sources used to mix a naive-local-time stamp here
+                        # with a UTC one below.
+                        last_ok[dev_id] = datetime.datetime.fromtimestamp(
+                            engine_last_ok, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                         continue
                     addrs = sync_discovery.get_known_addresses(conn, dev_id)
                     stamps = [a["local_ok_at"] for a in addrs if a.get("local_ok_at")]
@@ -644,17 +653,21 @@ class SeraSyncDialog(QDialog):
                 for m in members:
                     dev_id = m.get("device_id")
                     nu = peer_status.get(dev_id, {}).get("needs_update")
-                    if not nu:
-                        continue
-                    name = m.get("name") or dev_id
-                    if nu.get("who") == "this_pc":
-                        warnings[f"{dev_id}:needs_update"] = (
-                            f"This PC needs updating to sync with {name} (schema {nu.get('mine')} vs {nu.get('yours')})."
-                        )
-                    else:
-                        warnings[f"{dev_id}:needs_update"] = (
-                            f"PC {name} needs updating (schema {nu.get('yours')} vs this PC's {nu.get('mine')})."
-                        )
+                    if nu:
+                        name = m.get("name") or dev_id
+                        if nu.get("who") == "this_pc":
+                            warnings[f"{dev_id}:needs_update"] = (
+                                f"This PC needs updating to sync with {name} (schema {nu.get('mine')} vs {nu.get('yours')})."
+                            )
+                        else:
+                            warnings[f"{dev_id}:needs_update"] = (
+                                f"PC {name} needs updating (schema {nu.get('yours')} vs this PC's {nu.get('mine')})."
+                            )
+                    ca = peer_status.get(dev_id, {}).get("clock_ahead")
+                    if ca:
+                        name = m.get("name") or dev_id
+                        minutes = ca.get("minutes", max(1, round(ca.get("ahead_ms", 0) / 60000)))
+                        warnings[f"{dev_id}:clock_ahead"] = f"PC {name}'s clock is {minutes} minutes ahead"
         except Exception as exc:
             print(f"[Sera Sync] could not refresh members: {exc}")
             return
@@ -730,10 +743,10 @@ class SeraSyncDialog(QDialog):
         try:
             own_device_id, _ = self._own_identity()
             members = getattr(self, "_members_cache", []) or []
+            mode = self.db.get_sync_mode()
             with self.db._connect() as master_conn, self.db._connect_raw() as raw_conn:
                 own_master = sync_panel.own_vector(master_conn)
                 own_raw = sync_panel.own_vector(raw_conn)
-                parked = sync_panel.parked_count(master_conn) + sync_panel.parked_count(raw_conn)
                 conflicts = (
                     [dict(c, db="master") for c in sync_panel.list_conflicts(master_conn)]
                     + [dict(c, db="raw") for c in sync_panel.list_conflicts(raw_conn)]
@@ -749,9 +762,33 @@ class SeraSyncDialog(QDialog):
                     if n:
                         members_waiting += 1
                         total_pending += n
+
+            # Read parked stats from replica in shadow mode, or live DBs in live mode (P3-8a)
+            if mode == "shadow":
+                import sync_capture
+                import sync_shadow
+                replica_master, replica_raw = sync_shadow.replica_paths(self._app_dir())
+                rep_conns = []
+                if replica_master.exists():
+                    rep_conns.append(sync_capture._open(str(replica_master), self.db.hex_key, 5.0))
+                if replica_raw.exists():
+                    rep_conns.append(sync_capture._open(str(replica_raw), self.db.hex_key, 5.0))
+                try:
+                    parked, oldest_age = sync_panel.parked_summary(rep_conns)
+                finally:
+                    for rc in rep_conns:
+                        rc.close()
+            else:
+                with self.db._connect() as master_conn, self.db._connect_raw() as raw_conn:
+                    parked, oldest_age = sync_panel.parked_summary([master_conn, raw_conn])
         except Exception as exc:
             print(f"[Sera Sync] could not refresh sync status: {exc}")
             return
+
+        # P3-8b fix (a): "Run now" only makes sense in mode shadow (see _on_run_shadow_check).
+        # Left untouched while a check is already running so its own re-enable at the end wins.
+        if hasattr(self, "btn_run_shadow_check") and not self._shadow_check_running:
+            self.btn_run_shadow_check.setEnabled(mode == "shadow")
 
         # Stuck streams (P3-5 note: "Stuck streams from stalled_streams()") -- polled, like
         # peer_status(), rather than tracked from the "stalled" event.
@@ -761,14 +798,46 @@ class SeraSyncDialog(QDialog):
                 stalled = len(self.sync_engine.stalled_streams())
             except Exception:
                 stalled = 0
-        summary = f"Pending outgoing: {total_pending} change(s) across {members_waiting} member(s)   •   Parked: {parked}"
+
+        parked_str = f"{parked} (oldest: {sync_panel.format_age(oldest_age)})" if (parked > 0 and oldest_age is not None) else f"{parked}"
+        summary = f"Pending outgoing: {total_pending} change(s) across {members_waiting} member(s)   •   Parked: {parked_str}"
         if stalled:
             summary += f"   •   Stalled: {stalled} stream(s)"
         self.sync_status_summary_label.setText(summary)
 
+        # Parked age warning (P3-8a): amber > 1 hour in shadow mode, red > 7 days in any mode
+        if hasattr(self, "sync_status_warning_label"):
+            if oldest_age is not None and oldest_age >= 7 * 86400:
+                self.sync_status_warning_label.setText(
+                    f"Warning: Parked changes exist older than 7 days ({sync_panel.format_age(oldest_age)})."
+                )
+                self.sync_status_warning_label.setStyleSheet(
+                    "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
+                    "padding: 4px 8px; border-radius: 4px; font-size: 11px; }"
+                )
+                self.sync_status_warning_label.setVisible(True)
+            elif mode == "shadow" and oldest_age is not None and oldest_age >= 3600:
+                self.sync_status_warning_label.setText(
+                    f"Warning: Parked changes exist older than 1 hour in shadow mode ({sync_panel.format_age(oldest_age)})."
+                )
+                self.sync_status_warning_label.setStyleSheet(
+                    "QLabel { background-color: #332600; color: #FFD54F; border: 1px solid #FFA000; "
+                    "padding: 4px 8px; border-radius: 4px; font-size: 11px; }"
+                )
+                self.sync_status_warning_label.setVisible(True)
+            else:
+                self.sync_status_warning_label.setVisible(False)
+
+        # P3-8b fix (b): remember the selected conflict by (db, id), not row position -- the
+        # table is rebuilt from scratch every 3 seconds, so a plain row-index restore could
+        # re-select a different conflict if the list changed between selecting and clicking.
+        prev = self._selected_conflict()
+        prev_key = (prev["db"], prev["id"]) if prev is not None else None
+
         self._conflicts_cache = conflicts
         self.conflicts_table.setUpdatesEnabled(False)
         self.conflicts_table.setRowCount(len(conflicts))
+        restore_row = None
         for row, c in enumerate(conflicts):
             # Every conflict sync_apply.py writes today has kept=None (the delete that won
             # left nothing) -- show that plainly instead of the literal text "None".
@@ -778,7 +847,11 @@ class SeraSyncDialog(QDialog):
             self.conflicts_table.setItem(row, 2, QTableWidgetItem(kept_text))
             self.conflicts_table.setItem(row, 3, QTableWidgetItem(str(c["discarded"])))
             self.conflicts_table.setItem(row, 4, QTableWidgetItem(c["at"] or ""))
+            if prev_key is not None and (c["db"], c["id"]) == prev_key:
+                restore_row = row
         self.conflicts_table.setUpdatesEnabled(True)
+        if restore_row is not None:
+            self.conflicts_table.selectRow(restore_row)
 
         lines = sync_panel.shadow_check_summary(self._app_dir())
         self.shadow_status_label.setText("\n".join(lines) if lines else "Shadow checks: none logged yet")
@@ -1022,9 +1095,18 @@ class SeraSyncDialog(QDialog):
     def _on_run_shadow_check(self):
         """"Run now" (P3-8, on the "on demand from panel" trigger sync_shadow.run_shadow_checks
         expects): runs the capture check in a background thread (it copies/replays a scratch
-        DB, not instant) and refreshes the panel when done."""
-        if self.db is None:
+        DB, not instant) and refreshes the panel when done.
+
+        P3-8b fix (a): only meaningful in mode ``shadow``, same as the periodic 30-minute timer
+        (main.py's ``_run_shadow_check_bg`` already checks ``get_sync_mode() != "shadow"``) --
+        in mode ``off`` there's no baseline to compare against, and after go-live it would log
+        false capture-check mismatches. A no-op here rather than an error message: the button
+        is kept disabled outside mode shadow (see ``_refresh_sync_status``), so reaching this
+        with the wrong mode means a stale click queued before the panel caught up.
+        """
+        if self.db is None or self.db.get_sync_mode() != "shadow":
             return
+        self._shadow_check_running = True
         self.btn_run_shadow_check.setEnabled(False)
         app_dir = self._app_dir()
         db = self.db
@@ -1036,12 +1118,16 @@ class SeraSyncDialog(QDialog):
             except Exception as exc:
                 print(f"[Sera Sync] shadow check failed: {exc}")
             finally:
-                self.shadow_check_finished_signal.emit()
+                # P3-8b fix (d): don't emit on a dialog that has been closed meanwhile (same
+                # ``_closed`` flag P3-7b's download worker uses, set by closeEvent()/done()).
+                if not getattr(self, "_closed", False):
+                    self.shadow_check_finished_signal.emit()
 
         threading.Thread(target=_run, name="shadow-check-on-demand", daemon=True).start()
 
     def _on_shadow_check_finished(self):
-        self.btn_run_shadow_check.setEnabled(True)
+        self._shadow_check_running = False
+        self.btn_run_shadow_check.setEnabled(self.db is not None and self.db.get_sync_mode() == "shadow")
         self._refresh_sync_status()
 
     def _on_add_workstation(self):

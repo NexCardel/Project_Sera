@@ -38,11 +38,12 @@ def _insert_conflict(db, tbl, row_key, col, kept, discarded, reason="lww"):
         return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
-# ---------------------------------------------------------------- parked_count
+# ---------------------------------------------------------------- parked_count / stats / format_age
 
 def test_parked_count_zero_by_default(db):
     with db._connect() as conn:
         assert sync_panel.parked_count(conn) == 0
+        assert sync_panel.parked_stats(conn) == (0, None)
 
 
 def test_parked_count_counts_rows(db):
@@ -52,6 +53,48 @@ def test_parked_count_counts_rows(db):
         conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
                      "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:01', 0)")
         assert sync_panel.parked_count(conn) == 2
+
+
+def test_parked_stats_computes_oldest_age(db):
+    import datetime
+    now = datetime.datetime(2026, 9, 25, 2, 0, 0, tzinfo=datetime.timezone.utc)
+    with db._connect() as conn:
+        # oldest is 2026-09-25T00:00:00Z (2 hours = 7200s old)
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+        # newer is 2026-09-25T01:30:00Z (30 min = 1800s old)
+        conn.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                     "VALUES ('{}', 'parent_missing', '2026-09-25T01:30:00Z', 0)")
+        count, oldest_age = sync_panel.parked_stats(conn, now=now)
+        assert count == 2
+        assert oldest_age == 7200
+
+
+def test_parked_summary_combines_connections(db):
+    import datetime
+    now = datetime.datetime(2026, 9, 25, 2, 0, 0, tzinfo=datetime.timezone.utc)
+    with db._connect() as conn1, db._connect_raw() as conn2:
+        conn1.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                      "VALUES ('{}', 'parent_missing', '2026-09-25T01:00:00Z', 0)")
+        conn2.execute("INSERT INTO _sync_parked(change_json, reason, first_at, tries) "
+                      "VALUES ('{}', 'parent_missing', '2026-09-25T00:00:00Z', 0)")
+        count, oldest_age = sync_panel.parked_summary([conn1, conn2], now=now)
+        assert count == 2
+        assert oldest_age == 7200  # from conn2
+
+
+def test_format_age():
+    assert sync_panel.format_age(0) == "0s"
+    assert sync_panel.format_age(45) == "45s"
+    assert sync_panel.format_age(60) == "1m"
+    assert sync_panel.format_age(3599) == "59m"
+    assert sync_panel.format_age(3600) == "1h"
+    assert sync_panel.format_age(3660) == "1h 1m"
+    assert sync_panel.format_age(7200) == "2h"
+    assert sync_panel.format_age(86400) == "1d"
+    assert sync_panel.format_age(90000) == "1d 1h"
+    assert sync_panel.format_age(7 * 86400) == "7d"
+    assert sync_panel.format_age(None) == "unknown"
 
 
 # ---------------------------------------------------------------- vectors / pending_outgoing

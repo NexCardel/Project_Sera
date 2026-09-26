@@ -87,7 +87,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 _log = logging.getLogger("sera.sync.shadow")
 
@@ -738,7 +738,7 @@ def run_shadow_checks(db, app_dir=None, own_device_id: Optional[str] = None,
                        peer_digests: Optional[dict] = None) -> dict:
     """Runs the P3-7 checks and logs them. Called on demand (panel) and from a periodic timer
     once P3-8 wires one in. ``peer_digests`` (``{device_id: digest}``), when given, also runs
-    the convergence check."""
+    the convergence check. Logs parked count and oldest age with every check (P3-8a)."""
     app_dir = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
     out: dict = {"capture": capture_check(db, app_dir)}
     if peer_digests is not None:
@@ -750,7 +750,88 @@ def run_shadow_checks(db, app_dir=None, own_device_id: Optional[str] = None,
             out["convergence"] = convergence
             _log_check(app_dir, "convergence", convergence.ok, convergence.detail)
 
+    # P3-8a: Log parked count and oldest age with every shadow check
+    try:
+        import sync_capture
+        import sync_panel
+        conns = []
+        replica_master, replica_raw = replica_paths(app_dir)
+        if db.get_sync_mode() == "shadow" and replica_master.exists():
+            conns.append(sync_capture._open(str(replica_master), db.hex_key, 5.0))
+            if replica_raw.exists():
+                conns.append(sync_capture._open(str(replica_raw), db.hex_key, 5.0))
+        else:
+            conns.append(sync_capture._open(db.db_path, db.hex_key, 5.0))
+            if Path(db.raw_db_path).exists():
+                conns.append(sync_capture._open(db.raw_db_path, db.hex_key, 5.0))
+        try:
+            parked_cnt, oldest_age = sync_panel.parked_summary(conns)
+            if parked_cnt > 0 and oldest_age is not None:
+                _log_line(app_dir, f"parked_changes count={parked_cnt} oldest_age={oldest_age}s")
+            else:
+                _log_line(app_dir, f"parked_changes count={parked_cnt} oldest_age=none")
+        finally:
+            for c in conns:
+                c.close()
+    except Exception as exc:
+        _log.warning("could not log parked changes for shadow check: %s", exc)
+
     return out
+
+
+# ---------------------------------------------------------------- seal timing (P3-8a)
+
+class SealTimingLogger:
+    """Collects seal timing durations on the committing thread and logs at most one summary
+    line per minute (count, mean and max ms) to logs/sync_shadow.log (blueprint §5, WP P3-8a).
+    Thread-safe. Never logs row contents (§0 rule 12)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._count = 0
+        self._total_ms = 0.0
+        self._max_ms = 0.0
+        self._last_logged_at: Optional[float] = None
+
+    def record(self, duration_ms: float, app_dir=None, now_fn: Optional[Callable[[], float]] = None) -> None:
+        now = now_fn() if now_fn is not None else time.time()
+        with self._lock:
+            if self._last_logged_at is None:
+                self._last_logged_at = now
+            self._count += 1
+            self._total_ms += duration_ms
+            if duration_ms > self._max_ms:
+                self._max_ms = duration_ms
+            if now - self._last_logged_at >= 60.0:
+                self._flush_locked(app_dir, now)
+
+    def flush(self, app_dir=None, now_fn: Optional[Callable[[], float]] = None) -> None:
+        now = now_fn() if now_fn is not None else time.time()
+        with self._lock:
+            if self._count > 0:
+                self._flush_locked(app_dir, now)
+
+    def _flush_locked(self, app_dir, now: float) -> None:
+        if self._count > 0:
+            mean_ms = self._total_ms / self._count
+            _log_line(app_dir, f"seal_timing count={self._count} mean={mean_ms:.1f}ms max={self._max_ms:.1f}ms")
+            self._count = 0
+            self._total_ms = 0.0
+            self._max_ms = 0.0
+        self._last_logged_at = now
+
+
+_SEAL_TIMING_LOGGER = SealTimingLogger()
+
+
+def record_seal_timing(duration_ms: float, app_dir=None) -> None:
+    _SEAL_TIMING_LOGGER.record(duration_ms, app_dir=app_dir)
+
+
+def flush_seal_timing(app_dir=None) -> None:
+    _SEAL_TIMING_LOGGER.flush(app_dir=app_dir)
+
+
 
 
 # ================================================================ turning shadow mode on (P3-7b)
