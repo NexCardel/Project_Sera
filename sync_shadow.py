@@ -520,6 +520,38 @@ def digest_of_replica(app_dir, hex_key: str, timeout: float = 5.0) -> str:
     return digest_of_files(replica_master, hex_key, replica_raw, timeout)
 
 
+def replica_snapshot(app_dir, hex_key: str, timeout: float = 5.0) -> tuple[dict, str]:
+    """``({origin: max_seq}, digest)`` of this PC's shadow replica, read consistently: both
+    files are opened in one read transaction each, so the vectors and the row data the digest
+    hashes describe the same instant (blueprint §5 P3-7a: "each side reads its replica's
+    _sync_vector and computes digest_of_replica in one read transaction on the replica files").
+    The vectors are merged across both replica files, same as ``sync_engine.own_vectors()``.
+    Raises ``RuntimeError`` if there is no replica yet."""
+    import sync_capture
+    replica_master, replica_raw = replica_paths(app_dir)
+    if not replica_master.exists():
+        raise RuntimeError("no shadow replica yet (enable_shadow_mode was not run)")
+    m_conn = sync_capture._open(str(replica_master), hex_key, timeout)
+    try:
+        m_conn.execute("BEGIN")
+        r_conn = sync_capture._open(str(replica_raw), hex_key, timeout) if replica_raw.exists() else None
+        try:
+            if r_conn is not None:
+                r_conn.execute("BEGIN")
+            vectors = {o: int(s) for o, s in m_conn.execute("SELECT origin, max_seq FROM _sync_vector")}
+            if r_conn is not None:
+                vectors.update({o: int(s) for o, s in r_conn.execute("SELECT origin, max_seq FROM _sync_vector")})
+            digest = digest_from_conns(m_conn, r_conn)
+            return vectors, digest
+        finally:
+            m_conn.execute("ROLLBACK")
+            if r_conn is not None:
+                r_conn.execute("ROLLBACK")
+                r_conn.close()
+    finally:
+        m_conn.close()
+
+
 # ---------------------------------------------------------------- checks (blueprint §5 P3-7)
 
 @dataclass
@@ -603,6 +635,13 @@ def convergence_check(own_device_id: str, own_digest: str, peer_digests: dict) -
     ok = len(unique) <= 1
     detail = "" if ok else f"{len(unique)} distinct replica digests among {len(digests)} PC(s)"
     return ConvergenceCheckResult(ok, digests, detail)
+
+
+def log_peer_digest_check(app_dir, peer_name: str, status: str, detail: str = "") -> None:
+    """Logs a P3-7a peer digest-exchange result to ``logs/sync_shadow.log``. ``status`` is
+    ``"OK"``, ``"MISMATCH"`` or ``"skipped"``. Never logs row contents (§0 rule 12) -- the
+    caller passes only counts/seconds/reasons in ``detail``."""
+    _log_line(app_dir, f"peer_digest_check {status} (peer {peer_name})" + (f": {detail}" if detail else ""))
 
 
 def run_shadow_checks(db, app_dir=None, own_device_id: Optional[str] = None,

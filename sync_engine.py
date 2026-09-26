@@ -14,6 +14,8 @@ A session runs over a mutual-TLS ``sync_transport.Session`` (P2-3). Frames (``"t
   ack     {vectors}                  after each applied batch
   done    {}                         end of one side's changes
   need_snapshot {streams: [...]}     peer is below our compaction floor (P4-4; floor is 0 today)
+  digest_request {}                  shadow-mode replica convergence check (P3-7a)
+  digest_reply   {vectors, digest} | {busy: true}
 
 Order: both HELLO (initiator first) -> MEMBERS both ways if ``members_rev`` differs -> the
 initiator's CHANGES batches (each waits for an ACK), DONE -> the responder's, DONE -> BYE both
@@ -39,6 +41,28 @@ When both PCs dial each other at once, the one with the smaller device id keeps 
 A stream whose vector can't advance (this PC holds later changes of it, but not the next one,
 for ``STALL_SECONDS``) is reported by ``stalled_streams()`` and an ``on_event("stalled", ...)``,
 and nothing is skipped (owner decision 2026-09-25).
+
+Peer digest exchange (P3-7a, blueprint §7 "must be done before P3-9"): both HELLOs carry
+``digest: true``. When both this PC and the peer are in mode ``shadow`` (from HELLO's ``mode``)
+and both advertised ``digest: true``, the session **initiator** may send ``digest_request`` right
+before its final BYE, at most once per peer every ``DIGEST_MIN_INTERVAL_SECONDS``. The responder
+answers any ``digest_request`` it sees while waiting for the initiator's final BYE (so only the
+initiator decides whether to run it each session; since initiator alternates across rounds, both
+sides eventually get to run their own check -- a deliberate simplification over a fully symmetric
+double-request, avoiding a second layer of per-session negotiation). Each side computes its own
+replica's ``{origin: max_seq}`` vectors and digest in one read transaction
+(``sync_shadow.replica_snapshot``), off the session thread with a bounded wait so a slow
+computation replies ``busy`` instead of blocking the session past its timeouts. The requester
+compares the reply's vectors to its own (read the same way, after receiving the reply): only
+when they match exactly does it trust the digest comparison (``sync_shadow.convergence_check``)
+and log OK/MISMATCH; a mismatch in the vectors themselves (either a race between the two reads, or
+this round simply not leaving both PCs fully caught up with each other) is logged as "skipped:
+vectors differ", never as a digest mismatch. A malformed reply, or a replica read that didn't
+finish in time, is also logged as "skipped" with its own reason -- never silently dropped. At
+most one ``digest_request`` is answered (computed) per session; a peer sending more gets an
+immediate ``busy`` for each extra one. All logged to ``logs/sync_shadow.log`` (peer name,
+OK/MISMATCH/skipped, seconds since this PC's last own local seal -- not bumped by applying a
+remote batch), never change contents (§0 rule 12).
 
 No PySide6 (§0 rule 7). Never logs change contents.
 """
@@ -83,12 +107,15 @@ BAD_BATCH_BACKOFF_SECONDS = 300.0
 STALL_SECONDS = 600.0
 MAX_ADDRESSES_PER_ROUND = 3
 ONLINE_SECONDS = 60.0
+DIGEST_MIN_INTERVAL_SECONDS = 600.0     # at most once per peer every 10 minutes (P3-7a)
+DIGEST_COMPUTE_TIMEOUT = 5.0            # a slower replica read replies "busy" instead of blocking
 
 DBS = ("master", "raw")
 _STREAM_SUFFIX = {"master": ":m", "raw": ":r"}
 
 F_HELLO, F_BYE, F_MEMBERS, F_CHANGES, F_ACK, F_DONE, F_NEED_SNAPSHOT = (
     "hello", "bye", "members", "changes", "ack", "done", "need_snapshot")
+F_DIGEST_REQUEST, F_DIGEST_REPLY = "digest_request", "digest_reply"
 
 _CHANGE_COLS = ("origin", "origin_seq", "hlc", "tbl", "row_key", "op", "data", "sig")
 
@@ -249,6 +276,8 @@ class SyncEngine:
         self._backoff: dict[str, float] = {}
         self._gaps: dict[str, tuple] = {}          # stream -> (vector, first_seen, have_up_to)
         self._stall_reported: set[tuple] = set()
+        self._digest_last: dict[str, float] = {}   # device_id -> last digest exchange (monotonic)
+        self._last_local_change_at: Optional[float] = None
 
         self._cond = threading.Condition()
         self._poke_due: dict[str, float] = {}
@@ -540,7 +569,8 @@ class SyncEngine:
         return {"t": F_HELLO, "proto": PROTO, "schema_version": self._schema_version(),
                 "device_id": self.device_id, "office_tag": self.office_tag,
                 "vectors": self.own_vectors(), "members_rev": self.members_rev(self._member_records()),
-                "addresses": addresses, "mode": self._mode(), "accepts": self._accepts()}
+                "addresses": addresses, "mode": self._mode(), "accepts": self._accepts(),
+                "digest": True}
 
     def _needs_update(self, device_id, mine, yours) -> None:
         """Schema versions differ. ``who`` = "peer" (show "PC <name> needs updating") or
@@ -572,7 +602,8 @@ class SyncEngine:
         with self._lock:
             self._peer(session.peer_device_id)["needs_update"] = None
         return {"vectors": vectors, "members_rev": rev, "addresses": addresses[:MAX_GOSSIP_ENTRIES],
-                "accepts": hello.get("accepts") is True}
+                "accepts": hello.get("accepts") is True, "digest": hello.get("digest") is True,
+                "mode": hello.get("mode") if isinstance(hello.get("mode"), str) else None}
 
     def _run(self, session: Session, result: SessionResult, initiator: bool) -> None:
         try:
@@ -610,7 +641,10 @@ class SyncEngine:
         if result.received:
             self._check_stalls()
         if result.emitted:
-            self.notify_local_change()
+            # A merge decision made while applying a REMOTE batch (natural-key merge, P3-4) needs
+            # forwarding, so wake the poke sender -- but this is not this PC's own edit, so it
+            # must not stamp _last_local_change_at (review finding #3, P3-7a).
+            self._wake_poke_sender()
 
     def _exchange(self, session: Session, result: SessionResult, initiator: bool) -> None:
         dev = session.peer_device_id
@@ -642,6 +676,7 @@ class SyncEngine:
             result.sent += self._send_changes(session, peer)
 
         if initiator:
+            self._run_digest_exchange(session, peer, dev)
             session.send({"t": F_BYE, "reason": "done", "vectors": self.own_vectors()})
             final = self._recv_final_bye(session)
         else:
@@ -651,12 +686,28 @@ class SyncEngine:
         self._store_peer_vectors(dev, result.peer_vectors)
 
     def _recv_final_bye(self, session: Session) -> Optional[dict]:
-        frame = session.recv()
-        if frame.get("t") != F_BYE:
-            raise self._abort(session, "protocol", "expected bye")
-        if frame.get("reason") != "done":
-            raise SessionAborted(str(frame.get("reason"))[:32], by_peer=True)
-        return _valid_vectors(frame.get("vectors"))
+        """Waits for the peer's final ``bye done``, answering any ``digest_request`` (P3-7a) it
+        sees along the way -- the initiator may run the digest exchange right before sending its
+        own final bye, so the responder must not mistake that frame for a protocol error. At most
+        one ``digest_request`` is actually answered (computed, spawning a worker thread) per
+        session; a peer sending more than one gets an immediate ``busy`` for each extra one
+        (review finding #4, P3-7a: nothing should let one session spawn unbounded workers)."""
+        answered_digest = False
+        while True:
+            frame = session.recv()
+            t = frame.get("t")
+            if t == F_DIGEST_REQUEST:
+                if answered_digest:
+                    session.send({"t": F_DIGEST_REPLY, "busy": True})
+                else:
+                    answered_digest = True
+                    self._answer_digest_request(session)
+                continue
+            if t != F_BYE:
+                raise self._abort(session, "protocol", "expected bye")
+            if frame.get("reason") != "done":
+                raise SessionAborted(str(frame.get("reason"))[:32], by_peer=True)
+            return _valid_vectors(frame.get("vectors"))
 
     def _merge_gossip(self, addresses) -> None:
         import sync_discovery
@@ -836,6 +887,102 @@ class SyncEngine:
             except Exception:
                 _log.exception("could not store the vectors of %s", device_id)
 
+    # ------------------------------------------------------------ peer digest exchange (P3-7a)
+
+    def _should_request_digest(self, dev: str, peer: dict) -> bool:
+        if self._mode() != "shadow" or self.shadow_apply is None:
+            return False
+        if peer.get("mode") != "shadow" or not peer.get("digest"):
+            return False
+        last = self._digest_last.get(dev)
+        if last is not None and time.monotonic() - last < DIGEST_MIN_INTERVAL_SECONDS:
+            return False
+        return True
+
+    def _replica_snapshot_with_timeout(self):
+        """``(vectors, digest)`` of this PC's shadow replica (``sync_shadow.replica_snapshot``),
+        computed off this thread with a bounded wait -- "computing a digest must not block the
+        session past its timeouts" (P3-7a). Returns None on timeout or any read failure; the
+        background thread (if still running) is abandoned, not joined further."""
+        import sync_shadow
+        outcome: dict = {}
+        done = threading.Event()
+
+        def work():
+            try:
+                outcome["value"] = sync_shadow.replica_snapshot(self.app_dir, self.db.hex_key)
+            except Exception as exc:
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=work, name="sera-sync-digest", daemon=True).start()
+        if not done.wait(DIGEST_COMPUTE_TIMEOUT):
+            return None
+        if "error" in outcome:
+            _log.warning("could not compute the shadow replica digest: %s", outcome["error"])
+            return None
+        return outcome.get("value")
+
+    def _seconds_since_last_seal(self) -> Optional[int]:
+        if self._last_local_change_at is None:
+            return None
+        return int(time.time() - self._last_local_change_at)
+
+    def _answer_digest_request(self, session: Session) -> None:
+        """Replies to a peer's ``digest_request`` with this PC's own replica vectors + digest,
+        or ``busy`` if mode/replica aren't ready or the read didn't finish in time."""
+        snap = self._replica_snapshot_with_timeout() if self._mode() == "shadow" and self.shadow_apply else None
+        if snap is None:
+            session.send({"t": F_DIGEST_REPLY, "busy": True})
+            return
+        vectors, digest = snap
+        session.send({"t": F_DIGEST_REPLY, "vectors": vectors, "digest": digest})
+
+    def _run_digest_exchange(self, session: Session, peer: dict, dev: str) -> None:
+        """Initiator side: request the peer's replica digest and log the comparison. A no-op
+        unless both PCs are in mode shadow and both advertised ``digest: true`` in HELLO, and not
+        more than once per peer every ``DIGEST_MIN_INTERVAL_SECONDS``."""
+        if not self._should_request_digest(dev, peer):
+            return
+        self._digest_last[dev] = time.monotonic()
+        import sync_shadow
+        name = self._member_name(dev)
+        session.send({"t": F_DIGEST_REQUEST})
+        frame = self._recv(session, wait=ACK_WAIT_SECONDS, expect=(F_DIGEST_REPLY,))
+        if frame.get("busy"):
+            sync_shadow.log_peer_digest_check(self.app_dir, name, "skipped", "peer busy")
+            self._event("digest_checked", device_id=dev, name=name, ok=None, skipped=True)
+            return
+        peer_vectors = _valid_vectors(frame.get("vectors"))
+        peer_digest = frame.get("digest")
+        if peer_vectors is None or not isinstance(peer_digest, str) or len(peer_digest) != 64 or not _is_hex(peer_digest):
+            # Malformed reply: best-effort check, never fatal to the session itself, but still
+            # worth a line so a buggy/half-built peer build is visible (review finding #2, P3-7a).
+            sync_shadow.log_peer_digest_check(self.app_dir, name, "skipped", "malformed reply")
+            self._event("digest_checked", device_id=dev, name=name, ok=None, skipped=True)
+            return
+        snap = self._replica_snapshot_with_timeout()
+        if snap is None:
+            sync_shadow.log_peer_digest_check(self.app_dir, name, "skipped", "could not read own replica in time")
+            self._event("digest_checked", device_id=dev, name=name, ok=None, skipped=True)
+            return
+        own_vectors, own_digest = snap
+        since = self._seconds_since_last_seal()
+        since_text = f"{since}s since last local seal" if since is not None else "no local seal yet"
+        if own_vectors != peer_vectors:
+            # Either a genuine race (a replica moved between the reply and this comparison) or
+            # this session simply didn't leave both PCs fully caught up with each other this
+            # round (a parked change, a stalled stream, a batch limit) -- "differ" doesn't claim
+            # to know which, unlike the earlier wording "vectors moved" (review finding #1, P3-7a).
+            sync_shadow.log_peer_digest_check(self.app_dir, name, "skipped", f"vectors differ ({since_text})")
+            self._event("digest_checked", device_id=dev, name=name, ok=None, skipped=True)
+            return
+        convergence = sync_shadow.convergence_check(self.device_id, own_digest, {dev: peer_digest})
+        status = "OK" if convergence.ok else "MISMATCH"
+        sync_shadow.log_peer_digest_check(self.app_dir, name, status, since_text)
+        self._event("digest_checked", device_id=dev, name=name, ok=convergence.ok, skipped=False)
+
     # ------------------------------------------------------------ stuck streams
 
     def _check_stalls(self, now: Optional[float] = None) -> list:
@@ -897,7 +1044,15 @@ class SyncEngine:
 
     def notify_local_change(self, *_args) -> None:
         """Call after a local seal produced changes (it runs on the writer's thread, maybe the UI
-        thread): wakes the poke sender, which pokes the members. Bursts are coalesced."""
+        thread): wakes the poke sender, which pokes the members. Bursts are coalesced. Also
+        records when the last local seal happened, for the P3-7a digest-check log line. Only for
+        this PC's own edits -- a merge decision made while applying a remote batch wakes the poke
+        sender too (``_finish``), but through ``_wake_poke_sender`` directly, since that isn't
+        this PC's own edit (review finding #3, P3-7a)."""
+        self._last_local_change_at = time.time()
+        self._wake_poke_sender()
+
+    def _wake_poke_sender(self) -> None:
         if self._running:
             self._poke_out.set()
 

@@ -1848,6 +1848,219 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - A future WP that wants "use discarded value" to actually restore data needs to re-create the row: un-tombstone (`DELETE FROM _sync_tombstones WHERE tbl=? AND row_key=?`), re-insert with the original gid and the row's other columns filled from `_absent` defaults, and -- for the "edit after delete discarded" reason specifically -- translate the discarded value through `sync_apply._translate_data`-style FK/gid resolution before writing (its `_decode(v)` is wire form, still holding gids for FK columns). Composite-key tables (`client_values`, `client_services`, `cell_formatting`) store `row_key` in canonical (gid-translated) form, not local column values -- resolving that back to `key_local` needs the same machinery `sync_apply._resolve_key` uses, not a positional match against `spec.row_key`.
   - Peer-digest exchange for the shadow convergence check needs a new session-protocol frame (or an out-of-band request) -- likely belongs with whoever next touches `sync_engine.py`'s session protocol, since it's the same code P3-5 built and reviewed.
 
+### P3-7a — Peer digest exchange for the convergence check — Done — 2026-09-26
+- Model: Claude Sonnet 5   Commit: uncommitted
+- Tests: new `tests/test_sync_digest_exchange.py`, 7 tests, all pass, covering every Accept
+  bullet: `test_digest_exchange_converges_and_logs_ok` (two shadow-mode nodes converge on one
+  round, a real `digest_request`/`digest_reply` over mTLS logs `peer_digest_check OK`, and the
+  two replica digests actually match); `test_digest_exchange_logs_mismatch_when_a_replica_is_edited_directly`
+  (a row changed directly in one replica's file, bypassing sync entirely, so `_sync_vector` never
+  moves but the row data differs -> next round logs `peer_digest_check MISMATCH`);
+  `test_digest_exchange_skipped_when_a_local_edit_races_the_reply` (a local edit is injected on
+  the requester between it receiving the peer's reply and it reading its own replica snapshot for
+  comparison -> logs "skipped: vectors moved", asserts "MISMATCH" never appears);
+  `test_no_digest_frames_sent_when_peer_does_not_advertise_digest` (peer's HELLO has `digest`
+  stripped -> `_answer_digest_request` is never called on either side, the session still
+  completes, no `peer_digest_check` line in either log). Also 3 smaller unit tests for
+  `sync_shadow.replica_snapshot` (reads vectors + digest together; raises without a replica) and
+  `sync_shadow.log_peer_digest_check`. Full suite: 1566 passed / 12 failed / 3 skipped (993s) --
+  11 of the 12 are the same pre-existing failures every recent WP has reported (dom_page_replace,
+  gst_dom_tracker, purge_duplicates, raw_payload_db_and_srpf, updater, vsdc_beeper,
+  vsdc_gemini_enricher x5); the 12th, `test_sync_status_panel_ui.py::test_members_network_warning_shows_clock_ahead`,
+  belongs to the concurrent, uncommitted P3-8a/P3-8b work already in this working tree (fails the
+  same way in isolation, untouched by this WP) -- see the notes below. Zero failures introduced
+  by this WP.
+- Files: `sync_engine.py` (new frames `digest_request`/`digest_reply`; `_hello()` now advertises
+  `digest: true` and `_check_hello` records the peer's `digest`/`mode`; `_run_digest_exchange`,
+  `_answer_digest_request`, `_should_request_digest`, `_replica_snapshot_with_timeout`,
+  `_seconds_since_last_seal`; `_recv_final_bye` now loops so it can answer an optional
+  `digest_request` while waiting for the peer's final bye; `notify_local_change` records the last
+  local-seal time); `sync_shadow.py` (`replica_snapshot(app_dir, hex_key)`: vectors + digest of
+  the replica read in one transaction per file; `log_peer_digest_check`); new
+  `tests/test_sync_digest_exchange.py`.
+- Deviations from spec (for the T3 review):
+  1. **Only the session initiator runs the exchange, not a fully symmetric double-request.**
+     §7's row says "a `digest_request`/`digest_reply` exchange... run after a session leaves both
+     vectors equal", without saying which side asks. A fully symmetric design (both sides request
+     from each other in the same session) needs its own ordering/negotiation to avoid a protocol
+     race (who sends first, and does the responder wait for one request or two before its final
+     bye). Instead: only the protocol **initiator** decides whether to run it (its own mode,
+     rate-limit and the peer's advertised `mode`/`digest` from HELLO), sends `digest_request`
+     right before its own final `bye`; the **responder** transparently answers any
+     `digest_request` it sees while waiting for that final bye (`_recv_final_bye`'s new loop) and
+     otherwise never initiates. Since `tests/sync_harness.py`'s `run_sync_round` already
+     alternates which side dials each round (P3-0, unchanged), both sides get their own
+     convergence check over time without a second negotiation layer. `_digest_last` (the 10-minute
+     rate limit) is therefore tracked only on the initiating side per round, which is what the
+     Accept tests exercise.
+  2. **"The session left both PCs' vectors equal (for both streams)" is implemented as the
+     replica-vector equality check at comparison time, not as a separate pre-check on the live
+     DB's ordinary `own_vectors()`.** Read literally, a live-DB vector comparison between this PC
+     and the peer's *own* streams is degenerate for a 2-node office (a device never tracks receipt
+     of its own origin in `_sync_vector`, so the intersection of tracked streams between two
+     directly-paired devices is often empty and the check would pass vacuously). The real
+     consistency mechanism the spec goes on to describe -- "each side reads its replica's
+     `_sync_vector`... compare only when the vectors in the reply equal the requester's own
+     replica vectors read in the same way" -- already gives a meaningful, race-safe gate: at true
+     convergence every PC's replica has received the identical total history from every origin
+     (including itself, since `mirror_own_changes_to_replica` and `shadow_apply` both route
+     through `sync_apply.apply_batch`, which advances `_sync_vector` the same way for own and
+     remote origins), so the full vector dicts genuinely agree. A stray difference means someone's
+     replica moved since the last read, which is exactly what "skipped: vectors moved" (not
+     "mismatch") is for. This single check does the job of both sentences in the spec; a second,
+     separate live-vector pre-filter would either be redundant with it or (read the degenerate way
+     above) not actually gate anything.
+  3. **Malformed `digest_reply` is silently ignored, not a protocol abort.** A missing/short/non-hex
+     digest or invalid vectors dict just returns from `_run_digest_exchange` without logging or
+     aborting the session -- this check is best-effort telemetry, not part of the sync protocol's
+     correctness, so a buggy or half-built peer shouldn't be able to kill an otherwise-fine
+     changes exchange over it.
+  4. **`digest_checked` engine event added**, beyond the spec's frame list: `on_event("digest_checked",
+     device_id=, name=, ok=<True|False|None>, skipped=<bool>)` after every attempted exchange
+     (`ok=None` when skipped/busy). Not required by P3-7a's Accept list, but cheap and mirrors the
+     existing `clock_ahead`/`stalled`/`parked` event pattern for whoever wires the panel to show
+     live digest-check status later.
+- Notes for later WPs:
+  - **Concurrent working tree, same as the P3-7/P3-8 note above:** this WP's session found
+    `database.py`, `main.py`, `sync_panel.py`, `sync_shadow.py` and several `tests/test_sync_*`
+    files already modified (uncommitted) by what is evidently a concurrent P3-8a/P3-8b session
+    (parked-change age read from the replica, a `SealTimingLogger`, `_peer()`'s new `clock_ahead`
+    entry in `sync_engine.py`, `run_shadow_checks` now also logs `parked_changes count=...`). None
+    of it was touched or reverted by this WP; `sync_shadow.py`'s new `run_shadow_checks` parked-log
+    block and this WP's `log_peer_digest_check` sit side by side without conflict. Whoever commits
+    should stage P3-7a's files separately from that other work, same as the P3-7/P3-8 note asked.
+    The one full-suite failure not in the standard pre-existing list
+    (`test_members_network_warning_shows_clock_ahead`) belongs to that other, still-in-progress
+    work, not to this WP -- confirmed by running it alone (fails the same way with or without this
+    WP's changes).
+  - `sync_shadow.replica_snapshot(app_dir, hex_key, timeout=5.0) -> (vectors, digest)` is the
+    building block a future WP (P3-8, panel) can reuse to show *this PC's own* replica vectors/digest
+    without going through a session.
+  - The digest exchange only ever runs in mode `shadow` on both sides (checked via HELLO's `mode`
+    field); it naturally stops mattering after P3-9 (go-live turns shadow off) with no extra work.
+  - `DIGEST_MIN_INTERVAL_SECONDS = 600` and `DIGEST_COMPUTE_TIMEOUT = 5.0` are module constants in
+    `sync_engine.py`, easy to retune later if the shadow week shows the digest read is slower than
+    5 s on a large database (P3-8a's seal-timing work, mentioned above, measures a related but
+    different cost -- the seal listener's mirroring, not this read).
+
+### P3-7a — review — 2026-09-26
+- Reviewed by: Claude Opus 5.5. No blocking problems found; `tools/sync_v3_tracker.py set P3-7a
+  --reviewed-by "Claude Opus 5.5"` was run. No code changed in this review pass -- only the
+  tracker's status entry was written.
+- Confirmed against the spec: `digest_request`/`digest_reply` run inside the existing mTLS
+  session; both sides advertise `digest: true` in HELLO and the exchange only runs when the peer
+  also advertised it; a build without this WP's `_check_hello` change ignores the extra key, so a
+  PC on the P3-5/P3-7 build never sees the new frames; `replica_snapshot` reads each replica file
+  in one transaction, and since the replicas are WAL this read doesn't block `shadow_apply`;
+  digests are compared only when the replica vectors match, else logged "skipped: vectors moved"
+  instead of a false mismatch; the digest computation's 5 s worker timeout sits well inside the
+  30 s frame timeout and the 120 s reply wait; the log line has the peer name, OK/MISMATCH/skipped
+  and seconds since the last seal, no row contents. All four Accept tests confirmed covered.
+- Tests: this WP's tests together with the engine and shadow suites pass 56/56. Full suite: 1567
+  passed / 11 failed / 3 skipped -- the same 11 pre-existing failures every recent WP has
+  reported (DOM/GST parsers, purge, updater, VSDC/Gemini), none a sync test. The implementer's
+  entry above blamed a 12th failure (`test_members_network_warning_shows_clock_ahead`) on the
+  concurrent P3-8a work; it now passes (that work has since progressed in this shared tree).
+- Deviations from spec (all in the implementer's entry above): accepted, with comments --
+  1. Only the session initiator runs the check: fine for the go-live criterion (same comparison
+     either way), but a PC that can only ever be dialled by one particular peer (e.g. a Wi-Fi/
+     other-subnet PC, D4, that never successfully dials out) would have its side of the check
+     logged only on the peer, never on itself. Not fixed; noted for whoever next revisits this if
+     it turns out to matter operationally.
+  2. No separate "left the vectors equal" pre-check before sending the request: the
+     post-reply replica-vector comparison does prevent a false digest mismatch, as designed. The
+     cost is that a session that didn't fully converge this round (a parked change, a stalled
+     stream, hitting the batch limit) still spends the exchange and the peer's 10-minute slot, and
+     logs "skipped: vectors moved" -- which reads as more surprising than it is. A message like
+     "skipped: vectors differ" (rather than "moved") would be more honest about a session that
+     simply didn't finish converging, versus one where a genuine race happened between the reply
+     and the comparison. Not fixed (cosmetic wording, not a correctness issue).
+  3. A malformed `digest_reply` is silently ignored: agreed this is safe (best-effort telemetry,
+     never fatal to the session), but logging "skipped: malformed reply" instead of nothing would
+     help diagnose a buggy peer build. Not fixed.
+  4. The extra `digest_checked` event: accepted, does no harm.
+- Minor issues found, not blocking, not fixed:
+  1. **`_last_local_change_at` is also set by a remote apply**, not only a local edit --
+     `_finish()` calls `notify_local_change()` for both directions of a session, and
+     `notify_local_change` is what stamps `_last_local_change_at`. So "seconds since last local
+     seal" in the digest-check log line can understate the true time since this PC's own last
+     edit whenever a remote change was applied more recently. A future fix would need a separate
+     timestamp for "own seal" versus "any reason to poke/wake", since pokes must still fire on
+     remote-driven forwarding too.
+  2. **No cap on `digest_request` frames answered per session**: `_recv_final_bye`'s loop will
+     answer any number of them, each spawning a fresh worker thread for
+     `_replica_snapshot_with_timeout`; a worker that hits the 5 s timeout is abandoned, not
+     cancelled, and keeps running. Only mTLS-authenticated members can reach this at all, so the
+     risk is low, but capping it at one `digest_request` answered per session would be a cheap
+     hardening.
+  3. **One test assertion doesn't exercise what it looks like it does**: in
+     `test_no_digest_frames_sent_when_peer_does_not_advertise_digest`, the spy is placed on the
+     dialling PC's (`admin`'s) own `_answer_digest_request`, which never runs on that side in this
+     scenario (only the responder, `joiner`, could receive a `digest_request` to answer, and none
+     is sent). The test still correctly proves the behaviour via its other two assertions (`result.ok`
+     and no `peer_digest_check` line in either log), so it's a redundant/misleading assertion
+     rather than a false pass.
+- Before committing: the working tree mixes uncommitted work from three WPs. P3-8a code is
+  interleaved with P3-7a's own changes inside `sync_engine.py` (the `clock_ahead` hunks in
+  `_peer()`/`_receive_changes`), `sync_shadow.py` (the parked-count logging in
+  `run_shadow_checks`, `SealTimingLogger`), `database.py` and `main.py`; P3-8b also has
+  uncommitted changes (`sync_panel.py`, `ui/dialogs/sera_sync_dialog.py`, several UI tests).
+  Whoever commits P3-7a must stage it separately, hunk by hunk where a file is shared, matching
+  the P3-7/P3-8 precedent above.
+- Note on this entry's heading word versus the tracker: this entry (and the implementation entry
+  above it) uses "Done" per §8.3's template, whose three allowed words (Done/Partial/Blocked)
+  describe whether *this session's own work* finished, was partial, or was blocked -- not the
+  tracker's separate workflow stage. The tracker (`docs/sera-sync-v3-status.csv`) correctly shows
+  **In review** (implemented, now reviewed with no blocking problems, not yet committed); it
+  becomes Done only after the commit step (§8.2 step 4). Both P3-5 and P3-7/P3-8 used the same
+  "Done" heading word while their own tracker rows read "In review" at the equivalent point, so
+  this isn't a P3-7a-specific inconsistency -- it's the template's fixed vocabulary. No heading
+  text was changed to avoid inventing a status word outside {Done, Partial, Blocked}.
+
+### P3-7a — review fixes — 2026-09-26
+- Model: Claude Sonnet 5. Fixed all 5 non-blocking findings from the two Claude Opus 5.5 review
+  passes (first pass and the re-review after P3-7b landed in the shared tree); neither pass found
+  a blocking problem.
+  1. **Wording: "vectors moved" -> "vectors differ".** A vector mismatch at comparison time can
+     equally mean the session simply didn't leave both PCs fully caught up with each other this
+     round (a parked change, a stalled stream, a batch limit) as it can a genuine race between the
+     two reads; "differ" doesn't claim to know which. `sync_engine._run_digest_exchange` and the
+     module docstring updated; no behaviour change (still logged as "skipped", never "MISMATCH").
+  2. **A malformed `digest_reply` is now logged, not silently ignored.** `_run_digest_exchange`
+     logs `peer_digest_check skipped: malformed reply` before returning, instead of returning with
+     nothing written -- a buggy or half-built peer build is now visible in the log. New test
+     `test_digest_exchange_logs_skipped_for_a_malformed_reply`.
+  3. **`_last_local_change_at` no longer stamped by a remote-driven merge.** `notify_local_change`
+     (called only from the DB's seal listener, i.e. this PC's own edits) still stamps it and wakes
+     the poke sender; `_finish`'s `if result.emitted:` branch (a merge decision made while applying
+     a REMOTE batch, P3-4 natural-key merge) now calls a new `_wake_poke_sender()` directly instead
+     of `notify_local_change()`, so "seconds since last local seal" in the digest-check log line
+     reflects this PC's own edits only. New test
+     `test_finish_with_emitted_merges_wakes_poke_without_stamping_last_local_change`.
+  4. **At most one `digest_request` answered (computed) per session.** `_recv_final_bye` now
+     tracks whether it has already answered one; a second (or later) `digest_request` in the same
+     session gets an immediate `{"t": "digest_reply", "busy": true}` without spawning another
+     `_replica_snapshot_with_timeout` worker thread. New test
+     `test_digest_request_answered_at_most_once_per_session` (a fake `Session` stub feeding two
+     `digest_request` frames then a final `bye`, asserting the real answer function is called
+     exactly once).
+  5. **Fixed the test whose spy sat on the wrong side.**
+     `test_no_digest_frames_sent_when_peer_does_not_advertise_digest`'s spy now wraps `joiner`'s
+     (the responder's) `_answer_digest_request`, not `admin`'s (the initiator's, which can never be
+     asked to answer one in this scenario) -- the test's other two assertions (`result.ok`, no
+     `peer_digest_check` line in either log) already covered the real behaviour, but the spy itself
+     now actually exercises what its name says.
+- Tests: `tests/test_sync_digest_exchange.py` now 10 tests (3 new), all pass.
+  `tests/test_sync_engine.py` + `tests/test_sync_shadow.py` + `tests/test_sync_convergence.py`:
+  55 passed / 1 skipped (unchanged from before this fix pass). Full suite: see the next tracker
+  update for the count (running in the background as this entry is written).
+- Deviations from spec: none (these are all internal engine/logging refinements; no frame, no
+  HELLO field and no Accept-test behaviour changed).
+- Notes for later WPs: none beyond what the two review entries above already recorded. The
+  `_wake_poke_sender()` split (finding #3) is the only new public-ish surface: `notify_local_change`
+  stays the one callers outside this module should use (it is what `db.set_seal_listener` is wired
+  to); `_wake_poke_sender` is private, for `_finish`'s own remote-merge case only.
+
 ## 10. Doc changelog
 
 - **1.0** (2026-09-23): initial blueprint.
