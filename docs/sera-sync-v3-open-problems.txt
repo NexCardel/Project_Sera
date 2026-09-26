@@ -1,0 +1,250 @@
+SERA SYNC V3 -- OPEN PROBLEMS BEFORE GO-LIVE
+=============================================
+Compiled: 2026-09-25 by Claude Opus 5.5, after the P3-9 review.
+Sources: docs/sera-sync-v3-blueprint.md §7 (risks and open items), §9 (progress log),
+and the P3-9 review (items marked [NEW] were not recorded anywhere before).
+
+Core function of Sera Sync v3 (blueprint §2): every office PC ends up with the same
+data, merged field by field (latest edit wins), offline on the LAN, with no silent
+data loss and no PC quietly falling out of sync.
+
+Classes:
+  1. CORE        - without this, the core function isn't met or can't be proven.
+                   Must be done before go-live (P3-9 on any PC).
+  2. SAFETY      - core sync works, but a specific failure would lose data or stall
+                   sync silently / need manual repair. Fix before or right after go-live.
+  3. DECISION    - needs an owner decision before anyone can fix it.
+  4. FEATURE/UX  - a promised feature or panel behaviour that's missing or wrong.
+                   Doesn't stop data from converging.
+  5. HOUSEKEEPING- tests, environment, docs, commits.
+
+Each item: what / where / why it matters / suggested fix / source.
+
+---------------------------------------------------------------------------------
+1. CORE -- required for the core function (gate for go-live)
+---------------------------------------------------------------------------------
+
+C1. The convergence check can't compare PCs
+    What:   sync_shadow.convergence_check takes peer replica digests, but nothing
+            collects them. The P3-5 session protocol has no frame for it. The 30-min
+            timer and "Run now" run only the capture check.
+    Where:  sync_engine.py (no digest_request/digest_reply), sync_shadow.run_shadow_checks
+    Why:    "All PCs hold the same data" is the core function, and nothing can prove it.
+            Go-live criterion "replica digests equal within 2 minutes of quiet" can't
+            be measured.
+    Fix:    New WP (T2, review T3): digest_request/digest_reply in sync_engine.py over
+            mTLS, members only, run after a session leaves both vectors equal; feed
+            run_shadow_checks(peer_digests=...); log to logs/sync_shadow.log.
+    Source: §7 (P3-7 review), "Must be done before P3-9".
+
+C2. Parked-change age isn't shown or logged
+    What:   The panel shows only a total parked count. Nothing reads
+            _sync_parked.first_at.
+    Where:  sync_panel.py (parked_count), sync_shadow.py log
+    Why:    A change stuck in parking never reaches the data, so PCs diverge without
+            anyone noticing. Go-live criterion "no parked changes older than 1 hour"
+            can't be checked. P3-4 promised >7-day parked changes surface in the panel.
+    Fix:    Small T2: show the oldest parked age (+ warning past 7 days) in the panel;
+            log the oldest age with each shadow check.
+    Source: §7 (P3-8 review), "Must be done before P3-9".
+
+C3. Own-change sequence gap possible during go-live staging  [NEW]
+    What:   While Go Live stages, the seal-after-commit listener is still on. A
+            background write (extension bridge, parser) after the replica export but
+            before the process exits gets a sequence number that is in neither the
+            staged replica nor anything a peer holds. keys/sync_seq.json has already
+            moved past it, so after the swap numbering skips it.
+    Where:  ui/dialogs/sera_sync_dialog.py _on_go_live, sync_shadow.stage_go_live_swap
+    Why:    Every other PC waits forever for the missing number (owner decision: nothing
+            is skipped). This PC's whole stream stops replicating office-wide. The panel
+            shows it as stalled, but the fix is manual.
+    Fix:    In stage_go_live_swap, after the final seal_pending + mirror, set the live
+            DBs' mode to 'off' (so later writes aren't captured) and only then export.
+            Such writes then survive only in the pre-golive backup instead of breaking
+            the stream. Add a test.
+    Source: P3-9 re-review.
+
+C4. "Run now" shadow check works in any mode
+    What:   "Run now" calls run_shadow_checks in any mode; the 30-min timer only in
+            shadow.
+    Where:  ui/dialogs/sera_sync_dialog.py
+    Why:    After go-live it logs false capture-check mismatches, so the sync-health
+            signal can't be trusted. In mode 'off' it logs a "no baseline" failure.
+    Fix:    Enable "Run now" only in mode 'shadow'.
+    Source: §7 (P3-8 review, panel defect (a)).
+
+C5. No office-wide view of who has gone live  [NEW]
+    What:   Go-live is per PC and manual (a button on each PC). Nothing shows which PCs
+            are still in shadow mode.
+    Where:  sync_shadow.stage_go_live_swap, panel, §6 runbook step 6
+    Why:    P4-1 (removing the legacy protocol) requires "P3-9 on all PCs"; there's no
+            way to confirm that. A PC left in shadow still sends its own edits, but it
+            never applies remote edits to its live DB, so its staff see stale data.
+    Fix:    Show each member's sync mode in the panel (add mode to HELLO -- it's already
+            there as "mode" -- and surface it). Optionally, the propagated go-live
+            request suggested in the P3-9 log (app_settings flag + timer check).
+            Add a runbook line: check the panel shows every PC 'live' before P4-1.
+    Source: P3-9 review (implementer's note + reviewer).
+
+---------------------------------------------------------------------------------
+2. SAFETY -- risks of silent loss, stall or manual repair
+---------------------------------------------------------------------------------
+
+S1. Sealing on the committing (possibly UI) thread was never measured
+    What:   In shadow/live mode every committed write seals on the calling thread
+            (plus mirroring to the replica in shadow mode).
+    Where:  database.py _seal_after_commit, sync_shadow.mirror_own_changes_to_replica
+    Why:    If slow, the UI freezes on every save. Continues in live mode.
+    Fix:    Log UI-thread time per commit during the shadow week; if noticeable, move
+            the seal listener's work to a background thread.
+    Source: §7 (P3-3 note, P3-7 review).
+
+S2. A failed Go Live leaves sync stopped  [NEW]
+    What:   _on_go_live stops the sync engine and seal timer before staging. If staging
+            fails, they stay stopped until the app restarts; the user sees only
+            "Could not stage".
+    Where:  ui/dialogs/sera_sync_dialog.py _on_go_live
+    Why:    That PC silently stops syncing.
+    Fix:    On failure, restart the seal timer and engine, or tell the user to restart.
+    Source: P3-9 re-review.
+
+S3. Go-live swap races the old process  [NEW]
+    What:   version.restart_app starts the new process before the old one exits. The
+            swap relies on _retry_file_op (5 s) for file locks. If the old process takes
+            longer, the swap rolls back, the marker becomes .failed, and the PC starts
+            normally in shadow mode.
+    Where:  version.restart_app, sync_peer.apply_pending_go_live_swap, main.py
+    Why:    Safe, but the user thinks the PC went live when it didn't. Only a console
+            print says otherwise.
+    Fix:    Show a start-up message when a go-live swap failed (_pending_swap_error is
+            already set -- surface it), or wait for the parent PID to exit first.
+    Source: P3-9 review.
+
+S4. shadow mode can be re-enabled through mode 'off' (and from 'live')
+    What:   enable_shadow_mode refuses only while mode is 'shadow'.
+    Where:  sync_shadow.enable_shadow_mode
+    Why:    A second replica built from the live DBs permanently loses remote changes the
+            old replica held. After go-live, re-enabling would build a replica that
+            disagrees with every PC. No UI can do this today.
+    Fix:    Refuse when shadow/replica_master.db exists or when mode is 'live'.
+    Source: §7 (P3-7 review), extended by the P3-9 review.
+
+S5. Rejected/parked remote changes count as received in shadow bookkeeping
+    What:   _record_receipt_in_live records every item handed to shadow_apply, whether
+            the replica accepted it or not.
+    Where:  sync_shadow._record_receipt_in_live
+    Why:    During the shadow week a PC may stop asking for changes its replica never
+            applied. Mostly ends at go-live (the replica's own vector takes over), but
+            it can skew shadow-week results.
+    Fix:    Needs a per-item outcome from sync_apply.apply_batch first.
+    Source: §9 P3-7 follow-up #7.
+
+S6. Leftover shadow/ folder after go-live  [NEW]
+    What:   shadow/baseline_* and replica_* stay on disk after go-live; no rule says
+            when they can be archived.
+    Why:    Old copies of client data lying around; confusion with S4.
+    Fix:    After go-live is confirmed, move shadow/ to backups/shadow-<ts>/ (§0 rule 3:
+            never delete).
+    Source: P3-9 review.
+
+---------------------------------------------------------------------------------
+3. DECISION -- owner decision needed
+---------------------------------------------------------------------------------
+
+D1. Every office PC serves full snapshots to any member at any time
+    Since P3-7 every PC answers {"t":"snapshot"} (before: admin PC only, pairing window
+    open). Members already get the data through sync, so it's a larger attack surface,
+    not a new leak. Options: keep it (P4-4 may want any PC to serve) or restrict to the
+    admin PC while pairing is open.
+    Source: §7 (P3-7 review).
+
+D2. Ordinary same-field losses never reach the conflicts list
+    The D7 row says the losing value shows in the conflicts list; P3-4 writes no
+    conflict row for an ordinary LWW loss. Two PCs changing the same field: the losing
+    value is dropped with no record. Options: accept and correct D7, or record LWW
+    losses (e.g. when the loser's HLC is within N minutes of the winner's; T3).
+    Source: §7 (P3-8 review).
+
+D3. delete_client() leaves local references on the deleting PC
+    The deleting PC keeps local audit/tracker references; other PCs store NULL.
+    Decide whether delete_client() should null/remove them locally too.
+    Source: §9 P3-6 log (handed down from P3-4).
+
+D4. Go Live button isn't gated on admin PIN
+    Anyone can click it on any PC. Decide whether it should need admin mode.
+    Source: §9 P3-9 log.
+
+---------------------------------------------------------------------------------
+4. FEATURE/UX -- missing or wrong, doesn't block convergence
+---------------------------------------------------------------------------------
+
+F1. "Use discarded value" can never restore anything
+    sync_apply writes conflict rows only for deleted/tombstoned rows; the panel action
+    is a plain UPDATE that changes 0 rows. Needs a T3 WP (un-tombstone, re-insert with
+    the original gid, FK/key translation). Until then, hide the button for
+    sync_panel.DELETED_ROW_REASONS.
+    Source: §7 (P3-8 review).
+
+F2. No clock-drift warning in the panel
+    The engine emits clock_ahead; main.py's on_sync_engine_event handles only
+    'synced'. A PC with a clock far ahead gets its changes parked silently (links to C2).
+    Fix: handle clock_ahead, show "PC <name>'s clock is <n> minutes ahead" in the panel
+    banner, plus an activity-log line.
+    Source: §7 (P3-8 review).
+
+F3. Panel defects (P3-8 follow-up)
+    (b) Conflicts table rebuilt every 3 s and selected by row position -- "Keep" can
+        delete a different conflict. Track selection by (db, id).
+    (c) "Last Successful Sync" mixes two timestamp formats.
+    (d) "Run now" thread emits a signal on the dialog even after it's closed.
+    Source: §7 (P3-8 review).
+
+F4. Possible false "Public network" warnings from virtual adapters
+    VirtualBox/Hyper-V adapters often report as Public.
+    Source: §9 P0-9b log.
+
+F5. Partial snapshot download isn't deleted on Windows after a failure
+    Unlinked while still open; harmless (the next attempt cleans up).
+    Source: §9 P2-6 log.
+
+---------------------------------------------------------------------------------
+5. HOUSEKEEPING
+---------------------------------------------------------------------------------
+
+H1. Test suite isn't clean
+    Full suite: 1536 passed / 23 failed / 3 skipped (P3-9), vs 11 failed at P3-8.
+    The extra failures are put down to the rebuilt venv (newer openpyxl etc.) but not
+    verified. tests/test_raw_payload_db_and_srpf.py::
+    test_get_srpf_containers_grouping_eliminates_duplicate_rows hangs forever, so the
+    suite can't run unattended. Needs its own WP.
+    Source: §9 P3-9 log.
+
+H2. Dev environment drift  [NEW as a tracked item]
+    venv/pyvenv.cfg was repointed and pytest, spake2, nameparser pip-installed by hand.
+    Check requirements.txt covers everything the tests need; pin openpyxl if it's the
+    cause of H1.
+    Source: §9 P3-9 log.
+
+H3. Uncommitted / mixed work
+    P3-9 is uncommitted. P3-7/P3-8 were meant to be split into separate commits
+    ("not done"). Commit per WP with the status CSVs (§0 rule 14).
+    Source: §9 P3-8/P3-9 logs.
+
+H4. Stale blueprint header
+    The Status row still says "Nothing implemented yet".
+
+H5. §7 doesn't list the [NEW] items above
+    Add C3, C5, S2, S3, S6 to §7 (owner's call -- agents don't rewrite the spec, §0 rule 13).
+
+---------------------------------------------------------------------------------
+Already resolved (for reference, no action)
+---------------------------------------------------------------------------------
+- Tombstone rule for natural/composite keys (P3-4, owner decision).
+- Sequence numbers repeating after a DB file is replaced (keys/sync_seq.json mark, option A).
+- A newly promoted admin not knowing later members (member records exchanged in P3-5 sessions).
+- staff_users.alias ownership (admin-PC-signed roster).
+- P3-9 first-review blockers: raw copy of WAL replica, non-durable mode switch,
+  -wal/-shm deleted without backup, staging name collision, LOCAL tables lost.
+
+---------------------------------------------------------------------------------
+Minimum to go live: C1, C2, C3, C4 (and C5 before P4-1).

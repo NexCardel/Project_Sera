@@ -253,6 +253,8 @@ class SeraApp:
         self._run_pending_office_key_migration()
         self._run_pending_rejoin()
         self._run_pending_shadow_start()
+        self._go_live_alert = None
+        self._run_pending_go_live()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -564,6 +566,9 @@ class SeraApp:
                 failed_swap_marker.unlink(missing_ok=True)
             except OSError:
                 pass
+
+        if getattr(self, "_go_live_alert", None):
+            startup_alerts.append(self._go_live_alert)
 
         if startup_alerts:
             level = "error" if any(a[0] == "error" for a in startup_alerts) else "warning"
@@ -1464,6 +1469,31 @@ class SeraApp:
             return
         from ui.dialogs.shadow_start_dialog import run_pending_shadow_start
         run_pending_shadow_start(app_dir)
+
+    def _run_pending_go_live(self) -> None:
+        """P3-9: install a staged go-live (the shadow replicas become the live databases, mode
+        live). Runs before any database is opened. The outcome is shown as a start-up alert,
+        so a failed go-live isn't mistaken for a successful one."""
+        import sync_shadow
+        app_dir = Path(self.app_dir)
+        if not sync_shadow.has_pending_go_live(app_dir):
+            return
+        try:
+            sync_shadow.apply_pending_go_live(app_dir)
+        except sync_shadow.GoLiveError as e:
+            print(f"[SeraApp] Go-live failed: {e}")
+            self._go_live_alert = ("error", f"Sera Sync did not go live on this PC: {e}. It is still in "
+                                            "shadow mode; see logs/sync_shadow.log.", 0)
+            return
+        except Exception as e:
+            # The office key couldn't be loaded: nothing was touched, retried at the next start.
+            print(f"[SeraApp] Go-live not applied yet: {e}")
+            self._go_live_alert = ("warning", f"Sera Sync could not go live yet ({type(e).__name__}); "
+                                              "it will try again at the next start.", 0)
+            return
+        self._go_live_alert = ("warning", "Sera Sync is now live on this PC: other PCs' changes appear "
+                                          "in your data directly. The previous database is kept in the "
+                                          "shadow folder.", 15000)
 
     def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
         """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""
