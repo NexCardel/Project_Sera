@@ -59,12 +59,12 @@ def _office_db(tmp_path):
     return SeraDatabase(str(tmp_path / "master.db"), hex_key, defer_startup_maintenance=True)
 
 
-def _insert_conflict(db, tbl, row_key, col, kept, discarded, reason="lww"):
+def _insert_conflict(db, tbl, row_key, col, kept, discarded, reason="lww", at="2026-09-25T00:00:00"):
     with db._connect() as conn:
         conn.execute(
             "INSERT INTO _sync_conflicts(at, tbl, row_key, col, kept, discarded, reason) "
-            "VALUES ('2026-09-25T00:00:00', ?, ?, ?, ?, ?, ?)",
-            (tbl, row_key, col, json.dumps(kept), json.dumps(discarded), reason))
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (at, tbl, row_key, col, json.dumps(kept), json.dumps(discarded), reason))
 
 
 def test_sync_status_panel_hidden_in_legacy_mode(tmp_path):
@@ -553,4 +553,165 @@ def test_members_network_warning_shows_clock_ahead(tmp_path):
 
     assert not dlg.members_network_warning.isHidden()
     assert "clock is 3 minutes ahead" in dlg.members_network_warning.text()
+
+
+# ---------------------------------------------------------------- P3-8b: panel defect fixes
+
+def test_conflict_selection_survives_refresh_by_db_and_id_not_row_position(tmp_path):
+    """P3-8b fix (b): the conflicts table is rebuilt from scratch on every 3-second refresh.
+    Selecting by (db, id) instead of row position means a newly-arrived conflict that sorts
+    ahead of the selected one doesn't leave "Keep" acting on the wrong row.
+
+    ``at`` values are chosen so display order (sorted by ``at`` descending in
+    ``_refresh_sync_status``) runs opposite to insertion/id order -- this is what actually
+    proves the table is re-sorting by ``at`` and not just replaying insertion order, which id
+    order alone can't distinguish (review finding 4)."""
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    # Inserted first (lowest id) but the newest edit -> must display first.
+    _insert_conflict(db, "clients", json.dumps(["gid-new"]), "notes", "new-kept", "new-discarded",
+                      at="2026-09-25T00:00:09")
+    # Inserted second (highest id) but the oldest edit -> must display last.
+    _insert_conflict(db, "clients", json.dumps(["gid-old"]), "notes", "old-kept", "old-discarded",
+                      at="2026-09-25T00:00:00")
+
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+
+    # If this were id order, gid-old (inserted last) would be row 0. Confirms `at` governs it.
+    assert dlg.conflicts_table.rowCount() == 2
+    assert dlg._conflicts_cache[0]["row_key"] == json.dumps(["gid-new"])
+    assert dlg._conflicts_cache[1]["row_key"] == json.dumps(["gid-old"])
+    dlg.conflicts_table.selectRow(1)
+    selected = dlg._selected_conflict()
+    assert selected["row_key"] == json.dumps(["gid-old"])
+    selected_id = selected["id"]
+
+    # A conflict newer still arrives and sorts ahead of both, pushing the selected one to row 2.
+    _insert_conflict(db, "clients", json.dumps(["gid-newest"]), "notes", "x", "y",
+                      at="2026-09-25T00:00:10")
+    dlg._refresh_sync_status()
+
+    assert dlg.conflicts_table.rowCount() == 3
+    still_selected = dlg._selected_conflict()
+    assert still_selected is not None
+    assert still_selected["id"] == selected_id
+    assert still_selected["row_key"] == json.dumps(["gid-old"])
+
+    # "Keep" now acts on the right one even though it moved rows.
+    dlg._on_conflict_keep()
+    with db._connect() as conn:
+        remaining = {r[0] for r in conn.execute("SELECT row_key FROM _sync_conflicts")}
+    assert json.dumps(["gid-old"]) not in remaining
+    assert json.dumps(["gid-new"]) in remaining
+    assert json.dumps(["gid-newest"]) in remaining
+
+
+def test_conflict_selection_cleared_when_the_selected_conflict_is_gone(tmp_path):
+    """P3-8b review finding 1: if the previously-selected conflict is no longer in the list
+    (e.g. resolved from elsewhere), Qt would otherwise keep the old row index selected, which
+    then silently points at whatever conflict now sits in that position -- a second click on
+    "Keep" would then dismiss the wrong one. The fix clears the selection instead."""
+    _app()
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    _insert_conflict(db, "clients", json.dumps(["gid-a"]), "notes", "a-kept", "a-discarded",
+                      at="2026-09-25T00:00:00")
+    _insert_conflict(db, "clients", json.dumps(["gid-b"]), "notes", "b-kept", "b-discarded",
+                      at="2026-09-25T00:00:01")
+
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+    dlg._refresh_sync_status()
+    assert dlg.conflicts_table.rowCount() == 2
+
+    # Select row 1 (gid-a, the older one), then have it resolved by something else entirely
+    # (not through this dialog's own Keep/Use-discarded, which already clear the selection).
+    dlg.conflicts_table.selectRow(1)
+    assert dlg._selected_conflict()["row_key"] == json.dumps(["gid-a"])
+    with db._connect() as conn:
+        conn.execute("DELETE FROM _sync_conflicts WHERE row_key = ?", (json.dumps(["gid-a"]),))
+
+    dlg._refresh_sync_status()
+
+    assert dlg.conflicts_table.rowCount() == 1
+    assert dlg._selected_conflict() is None
+    assert not dlg.conflicts_table.selectionModel().hasSelection()
+
+
+def test_last_successful_sync_stamps_use_the_same_format_for_engine_and_address_book(tmp_path):
+    """P3-8b fix (c): the engine's peer_status() stamp used to render as naive local time
+    while the address book's local_ok_at rendered as UTC with a "Z" suffix -- both paths must
+    produce the same format."""
+    _app()
+    import re
+    import sync_discovery
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    stamp_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    db = _office_db(tmp_path)
+    svc = _office_sync_service(tmp_path)
+    engine = MagicMock()
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester", sync_engine=engine)
+    dlg.members_group.isVisible = lambda: True
+    own_device_id, _ = dlg._own_identity()
+
+    engine.peer_status.return_value = {own_device_id: {"last_ok": 1_700_000_000.0, "online": True}}
+    dlg._refresh_members()
+    engine_text = dlg.members_table.item(0, 3).text()
+    assert stamp_re.match(engine_text), engine_text
+
+    engine.peer_status.return_value = {}
+    with db._connect() as conn:
+        sync_discovery.ensure_address_book_table(conn)
+        sync_discovery.record_successful_session(conn, own_device_id, "10.0.0.5", 49159,
+                                                   ok_at="2026-09-25T00:00:00")
+    dlg._refresh_members()
+    addr_text = dlg.members_table.item(0, 3).text()
+    assert stamp_re.match(addr_text), addr_text
+
+
+def test_run_shadow_check_worker_does_not_emit_after_dialog_closed(tmp_path, monkeypatch):
+    """P3-8b fix (d): the background worker must not emit shadow_check_finished_signal on a
+    dialog that was closed while the check was running."""
+    _app()
+    import sync_shadow
+    from ui.dialogs.sera_sync_dialog import SeraSyncDialog
+
+    db = _office_db(tmp_path)
+    sync_shadow.enable_shadow_mode(db, tmp_path)
+    svc = _office_sync_service(tmp_path)
+    dlg = SeraSyncDialog(svc, db=db, actor="Tester")
+    dlg.sync_status_group.isVisible = lambda: True
+
+    import threading
+    # Synchronized with an Event rather than a fixed sleep, so the test can't flake on a slow
+    # machine (review finding 3): the worker only returns once the main thread has set
+    # `_closed = True` and told it to proceed.
+    proceed = threading.Event()
+
+    def _blocking_run_shadow_checks(*a, **k):
+        proceed.wait(timeout=5.0)
+        return {}
+    monkeypatch.setattr(sync_shadow, "run_shadow_checks", _blocking_run_shadow_checks)
+
+    emitted = []
+    dlg.shadow_check_finished_signal.connect(lambda: emitted.append(True))
+
+    dlg._on_run_shadow_check()
+    dlg._closed = True  # simulate the dialog closing while the worker is still blocked
+    proceed.set()  # let the worker's run_shadow_checks() return and reach its finally-block
+
+    # Give the worker thread up to a few seconds to run its finally-block and (not) emit --
+    # polling rather than a single fixed sleep, so this only takes as long as it needs to.
+    _pump_until(lambda: False, timeout=1.0)  # pumps the event loop for up to 1s regardless
+
+    assert emitted == []
 

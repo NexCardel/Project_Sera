@@ -852,6 +852,11 @@ class SeraSyncDialog(QDialog):
         self.conflicts_table.setUpdatesEnabled(True)
         if restore_row is not None:
             self.conflicts_table.selectRow(restore_row)
+        elif prev_key is not None:
+            # The previously-selected conflict is gone (dismissed, resolved, or pushed past
+            # the LIMIT 200) -- Qt keeps the old row index selected otherwise, which would
+            # then point at whatever conflict now occupies that position (review finding 1).
+            self.conflicts_table.clearSelection()
 
         lines = sync_panel.shadow_check_summary(self._app_dir())
         self.shadow_status_label.setText("\n".join(lines) if lines else "Shadow checks: none logged yet")
