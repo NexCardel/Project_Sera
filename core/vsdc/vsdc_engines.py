@@ -7,27 +7,36 @@ Settings -> Tracker has three independent switches:
     vsdc_x_enabled   VSDC-X  - UI Automation exact-text reading
     vsdc247_enabled  VSDC247 - the crosshair-independent submission safety net
 
+and SGT's mode (sgt_mode: off / shadow / live). SGT live is the main capture engine
+(2026-09-26): it runs alone, the other three off.
+
 They are stored as "1" / "0" in the settings table. This module only turns those stored
 values into three booleans, using the same defaults the settings page shows for a value that
 was never saved, so what the page shows is what runs. VSDCRouter.apply_engine_settings()
 does the work with them.
 """
 
-from typing import Callable, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
-# The defaults the Settings -> Tracker page shows for a switch that was never saved.
-ENGINE_DEFAULTS = {"vsdc_enabled": "1", "vsdc_x_enabled": "1", "vsdc247_enabled": "0"}
+# The defaults the Settings -> Tracker page shows for a switch that was never saved. All off:
+# SGT (below) is the capture engine.
+ENGINE_DEFAULTS = {"vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled": "0"}
 
 # The HUD pill switch (Settings -> Tracker). It is not an engine - it only decides whether the
 # pill is shown - so it lives beside ENGINE_DEFAULTS rather than in it.
 HUD_SETTING = "vsdc_hud_enabled"
 HUD_DEFAULT = "1"
 
-# SGT - Sera Global Tracker - the fourth switch. Not on/off but a mode: "off" or "shadow"
-# ("live" arrives once shadow mode has been compared against the live pipeline).
+# SGT - Sera Global Tracker - the fourth switch. Not on/off but a mode: "off", "shadow" (its
+# rows kept apart from the other engines', for comparison) or "live" (the capture engine).
 SGT_SETTING = "sgt_mode"
-SGT_DEFAULT = "off"
-SGT_MODES = ("off", "shadow")
+SGT_DEFAULT = "live"
+SGT_MODES = ("off", "shadow", "live")
+# One-time switch-over of the whole office to SGT live (settings are office-wide and synced):
+# SGT live, VSDC / VSDC-X / VSDC 24/7 off. The marker makes it happen once - a PC switched back
+# afterwards by hand stays as it was set.
+SGT_LIVE_ROLLOUT_SETTING = "sgt_live_rollout_done"
+SGT_LIVE_ROLLOUT_VALUES = {SGT_SETTING: "live", "vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled": "0"}
 # Record the text of the pages SGT reads, for replaying spec changes against real pages
 # (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
 SGT_RECORD_SETTING = "sgt_record_pages"
@@ -52,12 +61,26 @@ def read_engine_flags(get_setting: Callable[..., object]) -> Tuple[bool, bool, b
 
 
 def read_sgt_mode(get_setting: Callable[..., object]) -> str:
-    """SGT's mode: "off" or "shadow". Anything unrecognised reads as off."""
+    """SGT's mode: "off", "shadow" or "live". Anything unrecognised reads as the default."""
     try:
         value = str(get_setting(SGT_SETTING, SGT_DEFAULT) or SGT_DEFAULT).strip().lower()
     except Exception:
         return SGT_DEFAULT
     return value if value in SGT_MODES else SGT_DEFAULT
+
+
+def apply_sgt_live_rollout(get_setting: Callable[..., object],
+                           set_settings: Callable[[Dict[str, str]], None]) -> bool:
+    """Switches this office to SGT live once (see SGT_LIVE_ROLLOUT_VALUES). True when it did."""
+    try:
+        if str(get_setting(SGT_LIVE_ROLLOUT_SETTING, "") or "").strip() == "1":
+            return False
+        set_settings({**SGT_LIVE_ROLLOUT_VALUES, SGT_LIVE_ROLLOUT_SETTING: "1"})
+    except Exception as e:
+        print(f"[SGT] could not switch the engines over to SGT live: {e}")
+        return False
+    print("[SGT] switched to SGT live: SGT is the capture engine; VSDC, VSDC-X and VSDC 24/7 are off")
+    return True
 
 
 def read_sgt_record_pages(get_setting: Callable[..., object]) -> bool:

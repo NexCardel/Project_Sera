@@ -21,8 +21,9 @@ ITR_FORM_URL = "https://eportal.incometax.gov.in/iec/foservices/#/foreturns-ay26
 
 class TestReadingTheSettings(unittest.TestCase):
     def test_a_switch_never_saved_uses_the_default_the_settings_page_shows(self):
-        self.assertEqual(read_engine_flags(lambda key, default=None: default), (True, True, False))
-        self.assertEqual(ENGINE_DEFAULTS, {"vsdc_enabled": "1", "vsdc_x_enabled": "1", "vsdc247_enabled": "0"})
+        # All off: SGT live is the capture engine (2026-09-26).
+        self.assertEqual(read_engine_flags(lambda key, default=None: default), (False, False, False))
+        self.assertEqual(ENGINE_DEFAULTS, {"vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled": "0"})
 
     def test_saved_values_are_read_as_saved(self):
         for stored, want in (({"vsdc_enabled": "0", "vsdc_x_enabled": "0", "vsdc247_enabled": "1"}, (False, False, True)),
@@ -31,12 +32,12 @@ class TestReadingTheSettings(unittest.TestCase):
             self.assertEqual(read_engine_flags(lambda k, d=None, s=stored: s.get(k, d)), want, stored)
 
     def test_odd_stored_values_and_a_failing_lookup_fall_back_to_the_defaults(self):
-        self.assertEqual(read_engine_flags(lambda k, d=None: None), (True, True, False))
+        self.assertEqual(read_engine_flags(lambda k, d=None: None), (False, False, False))
         self.assertEqual(read_engine_flags(lambda k, d=None: "TRUE"), (True, True, True))
 
         def boom(k, d=None):
             raise RuntimeError("db locked")
-        self.assertEqual(read_engine_flags(boom), (True, True, False))
+        self.assertEqual(read_engine_flags(boom), (False, False, False))
 
 
 class _Base(unittest.TestCase):

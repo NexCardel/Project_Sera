@@ -216,7 +216,7 @@ class TestDatabaseIsolation(unittest.TestCase):
     def test_superseded_delete_is_sgt_only(self):
         self.insert("VSDC-X_itr_submitted", arn="123456789150925")
         vsdc_key = self.rows()[0][4]
-        assert self.db.delete_sgt_rows_by_dataset_key(vsdc_key) == 0          # not an SGT key: refused
+        assert self.db.delete_sgt_rows_by_dataset_key(vsdc_key) == 0          # not an SGT row: untouched
         self.insert(CAPTURE_METHOD, status="Draft", key="SGT:ITR:SABC:ITR4:AY202526")
         assert self.db.delete_sgt_rows_by_dataset_key("SGT:ITR:SABC:ITR4:AY202526") == 1
         assert [r[0] for r in self.rows()] == ["VSDC-X_itr_submitted"]

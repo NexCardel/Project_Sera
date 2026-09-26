@@ -1,13 +1,20 @@
 """
-core/sgt/sgt_shadow.py — SGT in shadow mode
-============================================
-Runs beside the live pipeline on every in-scope page, builds the session SGT WOULD have
-dispatched, and writes it to a local log. Its datasets also go into the tracker dump as their
-OWN rows (capture method "SGT_shadow", keys in an "SGT:" namespace), beside the other engines'
-rows so the two can be compared - an SGT row can never replace, drop or purge another engine's
-row, nor be removed by one. A row is written as soon as SGT has a dataset it can key, and again
-when it changes, so nothing waits for the session to end. Its captures also show on the HUD
-pill, tagged "SGT (Shadow)" - only real captures, never page reads.
+core/sgt/sgt_shadow.py — the SGT engine (live or shadow)
+========================================================
+(The module keeps its first name; since 2026-09-26 SGT live is the main capture engine.)
+
+Runs on every in-scope page, builds each session's client profile and datasets, and writes
+every dataset to the tracker dump as soon as it can be keyed, and again whenever it changes,
+so nothing waits for the session to end. Its captures show on the HUD pill - only real
+captures, never page reads. Everything is also written to a local log.
+
+  live      capture method "SGT_live", the tracker's canonical keys (core/dataset_key.py): a
+            dataset another engine captured earlier is the same row, and its status never
+            moves down. HUD tag "SGT (Live)". A submission whose client never became known is
+            written unattributed AND raises the phone alert (VSDC247's client-unknown path).
+  shadow    capture method "SGT_shadow", keys in an "SGT:" namespace: rows kept apart from the
+            other engines' so the two can be compared - a shadow row can never replace, drop or
+            purge another engine's row, nor be removed by one. HUD tag "SGT (Shadow)".
 
 Per browser window (one client per session, two windows = two sessions):
 
@@ -33,8 +40,8 @@ Per browser window (one client per session, two windows = two sessions):
             opened, or at session end - and only if complete; otherwise it is logged as
             incomplete and never dispatched. List pages never feed it.
   session   ends on a login/logout keyword in the link, 20 minutes idle, or app quit.
-            The would-be payload is logged then, with a note of which of its ARNs the
-            live pipeline also dispatched - the comparison shadow mode exists for.
+            The session's payload is logged then, with a note of which of its ARNs the
+            other engines also dispatched - the comparison shadow mode exists for.
   identity  a dataset filed under the WRONG client is worse than a missed one - and a missed
             one is not acceptable either (2026-09-22). The first sighting of the client's
             PAN/GSTIN attributes the session's rows (the log notes "seen once" / "seen on two
@@ -76,10 +83,17 @@ from core.vsdc.vsdc_alerts import SERA_DATA_DIR_NAME, device_name
 from .sgt_resolver import Dataset, PageResult, resolve_page
 from .sgt_specs import SpecStore, compose_values
 from .sgt_toolbox import MERGES, SUBMIT_LEVELS, submit_level
+from core.dataset_key import compute_dataset_key
 
 SHADOW_DIR_ENV = "SGT_SHADOW_DIR"
-HUD_TAG = "SGT (Shadow)"        # the pill colours this tag (ui/components/vsdc_hud_pill.py)
-CAPTURE_METHOD = "SGT_shadow"   # tracker rows; the tracker colours and can hide rows starting "SGT"
+MODE_SHADOW = "shadow"
+MODE_LIVE = "live"
+# Per mode: the HUD pill colours the tag (ui/components/vsdc_hud_pill.py); the tracker colours
+# and can hide rows whose capture method starts "SGT".
+HUD_TAGS = {MODE_SHADOW: "SGT (Shadow)", MODE_LIVE: "SGT (Live)"}
+CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
+HUD_TAG = HUD_TAGS[MODE_SHADOW]
+CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
 IDLE_END_SEC = 20 * 60
 REREAD_AFTER_SEC = 15.0
 MIN_UIA_LINES = 3               # fewer than this and the page is treated as blind
@@ -136,6 +150,7 @@ class _Slot:
     # The PANs printed where this dataset was read (its card's own PAN; or every PAN on a page
     # whose text built it). Once the client is known, it must be one of them.
     claimed: Optional[List[str]] = None
+    alerted: bool = False               # live: the client-unknown phone alert went out for it
 
     @property
     def arn(self) -> Optional[str]:
@@ -222,7 +237,13 @@ class SgtShadow:
         recorder: Any = None,
         stats: Any = None,
         state_path: Optional[Path] = None,
+        mode: str = MODE_SHADOW,
+        alert_unattributed: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
+        self.mode = MODE_SHADOW
+        self.set_mode(mode)
+        # live: (form, page) of a submission written with no client - the phone alert
+        self._alert_unattributed = alert_unattributed
         self.store = store or SpecStore()
         self._recorder = recorder           # sgt_corpus.PageRecorder, or None
         self._stats = stats                 # sgt_health.SpecStats, or None
@@ -255,13 +276,27 @@ class SgtShadow:
         if self._state_path is not None:
             self._recover()
 
+    # ── Mode ─────────────────────────────────────────────────────────────────────
+    def set_mode(self, mode: str) -> None:
+        """"live" or "shadow". Switch only between sessions (the router ends them first):
+        the mode decides how a row is keyed."""
+        self.mode = MODE_LIVE if str(mode).strip().lower() == MODE_LIVE else MODE_SHADOW
+
+    @property
+    def live(self) -> bool:
+        return self.mode == MODE_LIVE
+
+    @property
+    def _tag(self) -> str:
+        return f"({self.mode})"
+
     # ── Entry points ─────────────────────────────────────────────────────────────
     def observe(self, hwnd: int, portal: Optional[str], url: str, frame: Any = None,
                 ocr: Any = None, title: str = "") -> Optional[PageResult]:
         try:
             return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "")
         except Exception as e:                  # shadow mode must never disturb capture
-            self._echo(f"[SGT] (shadow) error, page skipped: {e}")
+            self._echo(f"[SGT] {self._tag} error, page skipped: {e}")
             return None
 
     def end_session(self, hwnd: int, reason: str) -> None:
@@ -407,7 +442,7 @@ class SgtShadow:
             if piece["misses"] >= MISSES_TO_CLEAR and now - piece["missing_since"] >= MISSING_CLEAR_SEC:
                 del d.pieces[fld]
                 self._event(s, "current", change="cleared", field=fld, value=piece["value"], page=url, source=source)
-                self._echo(f"[SGT] (shadow) dataset in progress: {fld} cleared (gone from its page)")
+                self._echo(f"[SGT] {self._tag} dataset in progress: {fld} cleared (gone from its page)")
         if not seen:
             return
         # A different period is a different dataset: close the one being built, start afresh.
@@ -427,7 +462,7 @@ class SgtShadow:
                              "evidence": hit.evidence, "misses": 0, "missing_since": None}
             self._event(s, "current", change="changed" if old else "set", field=fld, value=hit.value,
                         previous=old["value"] if old else None, spec=hit.spec, via=hit.source, page=url, source=source)
-            self._echo(f"[SGT] (shadow) dataset in progress: {fld} = {hit.value}"
+            self._echo(f"[SGT] {self._tag} dataset in progress: {fld} = {hit.value}"
                        f"{' (was ' + old['value'] + ')' if old else ''}  [{hit.spec}, {hit.source}]")
         # Complete already? Then it is a dataset now - written at once rather than when it
         # closes, so quitting the app (or a crash) in the middle of a filing loses nothing.
@@ -444,7 +479,7 @@ class SgtShadow:
                 self._queue(s, prev)
                 self._event(s, "dataset", change="moved", record=CURRENT_RECORD, previous=old,
                             values=prev.values, page=url, source=source)
-                self._echo(f"[SGT] (shadow) dataset in progress moved: {self._label(old)} -> {self._label(prev.values)}")
+                self._echo(f"[SGT] {self._tag} dataset in progress moved: {self._label(old)} -> {self._label(prev.values)}")
             else:
                 d.slot = self._merge_values(s, vals, CURRENT_RECORD, 85, url, source, claimed=d.claims or None)
 
@@ -480,7 +515,7 @@ class SgtShadow:
         vals, missing = self._draft_as_dataset(d, rules)
         if missing:
             self._event(s, "current", change="incomplete - not dispatched", values=vals, missing=missing, reason=reason)
-            self._echo(f"[SGT] (shadow) dataset in progress dropped ({reason}): missing {', '.join(missing)}")
+            self._echo(f"[SGT] {self._tag} dataset in progress dropped ({reason}): missing {', '.join(missing)}")
             return
         self._merge_values(s, vals, CURRENT_RECORD, 85, url, "pages", claimed=d.claims or None)
 
@@ -521,7 +556,7 @@ class SgtShadow:
             if slot.held != problems:
                 slot.held = problems
                 self._event(s, "dataset", change="held - not written", values=dict(slot.values), problems=problems)
-                self._echo(f"[SGT] (shadow) dataset {self._label(slot.values)} HELD: {'; '.join(problems)}")
+                self._echo(f"[SGT] {self._tag} dataset {self._label(slot.values)} HELD: {'; '.join(problems)}")
             return
         if slot.held:
             slot.held = None
@@ -558,12 +593,32 @@ class SgtShadow:
                 return out
             out.append(p)
 
+    def row_key(self, s: _Session, values: Dict[str, str]) -> str:
+        """The tracker key for a dataset in the current mode (see live_key / dataset_key)."""
+        return self.live_key(s, values) if self.live else self.dataset_key(s, values)
+
+    @staticmethod
+    def live_key(s: _Session, values: Dict[str, str]) -> str:
+        """
+        Live: the tracker's canonical key (core/dataset_key.py), identified the way the database
+        identifies any row (GSTIN, else PAN), so a dataset another engine saved is the same row.
+        Until the client is known the identifier is "SGT<session>" - it cannot collide with a
+        real client's row, and is superseded once the client is known. A dataset known only by
+        its ARN is keyed by it ("ARN_<n>" in the period place).
+        """
+        prof = SgtShadow._client_ids(s)
+        ident = prof.get("gstin") or prof.get("pan") or f"SGT{s.session_id}"
+        form, period = values.get("form") or "", values.get("period") or ""
+        if not (form and period):
+            form, period = "", f"ARN {values.get('arn') or ''}"
+        return compute_dataset_key(s.portal, ident, form, period)
+
     @staticmethod
     def dataset_key(s: _Session, values: Dict[str, str]) -> str:
         """
-        SGT's own key namespace ("SGT:..."), so an SGT row only ever replaces an SGT row - never
-        VSDC's row for the same dataset. Stable across sessions for a known client, so seeing
-        the same dataset again updates its row instead of adding one.
+        Shadow: SGT's own key namespace ("SGT:..."), so an SGT row only ever replaces an SGT
+        row - never VSDC's row for the same dataset. Stable across sessions for a known client,
+        so seeing the same dataset again updates its row instead of adding one.
         """
         def norm(x: Any) -> str:
             return re.sub(r"[^A-Z0-9]", "", str(x or "").upper())
@@ -596,7 +651,7 @@ class SgtShadow:
         prof.update(self._client_ids(s))
         if s.confirmed and "name" in s.profile:
             prof["name"] = s.profile["name"]["value"]
-        key = self.dataset_key(s, v)
+        key = self.row_key(s, v)
         supersedes = slot.sent_key if slot.sent_key and slot.sent_key != key else None
         slot.sent_key = key
         gstin = prof.get("gstin") or ""
@@ -622,13 +677,13 @@ class SgtShadow:
             "status": status,
             "filing_date": filing_date,
             "raw_text": "",                         # SGT never stores page text
-            "capture_method": CAPTURE_METHOD,
+            "capture_method": CAPTURE_METHODS[self.mode],
             "identity_resolved": bool(pan),
             "page_url": slot.first_page,
             "dataset_key": key,
             "supersedes_dataset_key": supersedes,
             "raw_payload": {
-                "source": {"engine": "SGT", "mode": "shadow", "record": slot.record, "confidence": slot.confidence,
+                "source": {"engine": "SGT", "mode": self.mode, "record": slot.record, "confidence": slot.confidence,
                            "identity": s.confirm_note or "not confirmed yet"},
                 "sgt_dataset": v,
                 "client_profile": prof,
@@ -647,9 +702,9 @@ class SgtShadow:
         ctx = {"portal": s.portal, "form": v.get("form"), "filing_pref": v.get("filing_type"),
                "period": v.get("period")}
         try:
-            self._notify(event_type, title, f"{subtitle} • {HUD_TAG}".strip(" •"), ctx)
+            self._notify(event_type, title, f"{subtitle} • {HUD_TAGS[self.mode]}".strip(" •"), ctx)
         except Exception as e:                  # the pill must never break capture
-            self._echo(f"[SGT] (shadow) HUD event failed: {e}")
+            self._echo(f"[SGT] {self._tag} HUD event failed: {e}")
 
     @staticmethod
     def _who(s: _Session) -> str:
@@ -675,7 +730,7 @@ class SgtShadow:
                 return
             self._event(s, "profile", change="promoted", field=fld, value=value, previous=held["value"],
                         spec=spec, confidence=confidence, page=url, source=source)
-            self._echo(f"[SGT] (shadow) profile {fld} promoted: {held['value']} -> {value}  [{spec}]")
+            self._echo(f"[SGT] {self._tag} profile {fld} promoted: {held['value']} -> {value}  [{spec}]")
             s.profile[fld] = {"value": value, "spec": spec, "confidence": confidence}
             if fld == "name":
                 self._hud(s, "update", "Client name completed", value)
@@ -683,7 +738,7 @@ class SgtShadow:
             return
         s.profile[fld] = {"value": value, "spec": spec, "confidence": confidence, "pages": [url]}
         self._event(s, "profile", field=fld, value=value, spec=spec, confidence=confidence, page=url, source=source)
-        self._echo(f"[SGT] (shadow) profile {fld} = {value}  [{spec}]")
+        self._echo(f"[SGT] {self._tag} profile {fld} = {value}  [{spec}]")
         if fld in _CLIENT_KEYS:
             self._sighted(s, fld, url)
         if fld in ("pan", "gstin", "name"):
@@ -711,7 +766,7 @@ class SgtShadow:
         self._event(s, "identity", change="client identified" if first else "identity strengthened", note=note)
         if not first:
             return
-        self._echo(f"[SGT] (shadow) client identified ({note})")
+        self._echo(f"[SGT] {self._tag} client identified ({note})")
         self._queue_all(s)
         for slot in s.slots:
             if slot.held and slot.sent_key is None:
@@ -829,7 +884,7 @@ class SgtShadow:
             self._event(s, "dataset", change="not attributed - another client's", record=ds.record,
                         field=other, page=url, source=source,
                         **({"reason": "another PAN is readable on the page"} if other == "page" else {}))
-            self._echo(f"[SGT] (shadow) {ds.record}: names a different {other.upper()} than this session's client - skipped")
+            self._echo(f"[SGT] {self._tag} {ds.record}: names a different {other.upper()} than this session's client - skipped")
             return
         card_pan = values.get("pan") or (values["gstin"][2:12] if len(values.get("gstin") or "") == 15 else None)
         claimed = [card_pan] if card_pan else None
@@ -838,7 +893,7 @@ class SgtShadow:
         if values.get("status"):
             values["status_evidence"] = ds.evidence("status")
         if rules is not None and self._fill_from_draft(s, values, rules):
-            self._echo(f"[SGT] (shadow) {ds.record}: form/period taken from the dataset in progress")
+            self._echo(f"[SGT] {self._tag} {ds.record}: form/period taken from the dataset in progress")
             if values.get("arn"):
                 # Submitted: the dataset being built is this one, and it is finished.
                 s.draft = _Draft()
@@ -862,7 +917,7 @@ class SgtShadow:
             self._queue(s, slot)
             self._event(s, "dataset", change="new", record=record, values=values,
                         confidence=confidence, page=url, source=source)
-            self._echo(f"[SGT] (shadow) dataset {self._label(values)}  [{record}]")
+            self._echo(f"[SGT] {self._tag} dataset {self._label(values)}  [{record}]")
             if slot.held:
                 return slot                     # not written - the pill stays quiet about it
             submitted = submit_level(values.get("status")) >= 2
@@ -893,7 +948,7 @@ class SgtShadow:
         if changes:
             self._event(s, "dataset", change="updated", record=ds_record, key=self._label(slot.values),
                         changes=changes, page=url, source=source)
-            self._echo(f"[SGT] (shadow) dataset {self._label(slot.values)} updated: "
+            self._echo(f"[SGT] {self._tag} dataset {self._label(slot.values)} updated: "
                        + ", ".join(f"{k} {c[0]!r}->{c[1]!r}" for k, c in changes.items()))
             if "status" in changes and changes["status"][0]:        # a status that moved forward
                 self._hud(s, "update", "Dataset status updated",
@@ -945,6 +1000,7 @@ class SgtShadow:
                     self._queue(s, slot)
         # The dataset still being built is dispatched only if it is complete.
         self._close_draft(s, self.store.get().current_rules, f"session end ({reason})", s.last_url)
+        self._alert_unknown_client(s)
         payload = self.would_be_payload(s)
         stats = {"reads": s.reads, "ocr_reads": s.ocr_reads, "blind_pages": s.blind_pages,
                  "read_ms_total": round(s.read_ms, 1), "conflicts": s.conflicts,
@@ -954,9 +1010,9 @@ class SgtShadow:
             or payload["client_profile"].get("gstin") or "client unknown"
         note = ""
         if payload["datasets"] and not payload["client_known"]:
-            # Live mode hands these to VSDC247's unattributed path (tracker row + phone alert).
-            note = " - no PAN/GSTIN: live mode would send these through VSDC247's client-unknown path"
-        self._echo(f"[SGT] (shadow) session ended ({reason}): {who}, "
+            note = (" - no PAN/GSTIN: written unattributed" if self.live
+                    else " - no PAN/GSTIN: live mode would write these unattributed and alert")
+        self._echo(f"[SGT] {self._tag} session ended ({reason}): {who}, "
                    f"{len(payload['datasets'])} dataset(s), {len(payload['client_profile'])} profile field(s){note}")
         # Not on app quit or when SGT is switched off: nobody is looking at the pill then.
         quiet = ("shutdown", "switched off", "recovered")
@@ -966,6 +1022,24 @@ class SgtShadow:
                 self._hud(s, "prompt", "SGT session ended - client unknown", f"{n} dataset(s) with no PAN/GSTIN")
             else:
                 self._hud(s, "logout", "SGT session logged", f"{who} • {n} dataset(s)")
+
+    def _alert_unknown_client(self, s: _Session) -> None:
+        """Live: a submission written with no client needs a human to attach it - the phone
+        alert VSDC247 raises for its own client-unknown rows. Once per dataset; never for one
+        held back by a dataset rule (it was not written)."""
+        # Its rows carry the client only once confirmed (_client_ids), so a PAN merely seen does
+        # not count: those rows went out unassigned too.
+        if not self.live or self._alert_unattributed is None or self._client_ids(s):
+            return
+        for slot in s.slots:
+            if slot.held or slot.alerted or submit_level(slot.values.get("status")) < 2:
+                continue
+            slot.alerted = True
+            self._event(s, "alert", change="submission with no client - phone alert", values=dict(slot.values))
+            try:
+                self._alert_unattributed(slot.values.get("form") or "", slot.first_page or s.last_url)
+            except Exception as e:              # an alert must never break capture
+                self._echo(f"[SGT] {self._tag} phone alert failed: {e}")
 
     # ── Crash safety ─────────────────────────────────────────────────────────────
     STATE_SAVE_EVERY_SEC = 2.0
@@ -991,7 +1065,7 @@ class SgtShadow:
             tmp.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
             tmp.replace(self._state_path)
         except Exception as e:
-            self._echo(f"[SGT] (shadow) could not snapshot sessions: {e}")
+            self._echo(f"[SGT] {self._tag} could not snapshot sessions: {e}")
 
     def _recover(self) -> None:
         """Sessions the app never ended (it crashed or was killed): finish them now and re-write
@@ -1001,14 +1075,14 @@ class SgtShadow:
                 return
             snap = json.loads(self._state_path.read_text(encoding="utf-8"))
         except Exception as e:
-            self._echo(f"[SGT] (shadow) crash snapshot unreadable, ignored: {e}")
+            self._echo(f"[SGT] {self._tag} crash snapshot unreadable, ignored: {e}")
             return
         n = 0
         for raw in snap.get("sessions") or []:
             try:
                 s = _session_from_json(raw)
             except Exception as e:
-                self._echo(f"[SGT] (shadow) could not recover a session: {e}")
+                self._echo(f"[SGT] {self._tag} could not recover a session: {e}")
                 continue
             self._finish(s, "recovered - the app stopped without ending it")
             self._queue_all(s, every=True)
@@ -1018,7 +1092,7 @@ class SgtShadow:
         except OSError:
             pass
         if n:
-            self._echo(f"[SGT] (shadow) recovered {n} session(s) the app did not end; their datasets are re-written")
+            self._echo(f"[SGT] {self._tag} recovered {n} session(s) the app did not end; their datasets are re-written")
 
     # ── Portal-change watch ──────────────────────────────────────────────────────
     def _daily_health_check(self) -> None:
@@ -1045,7 +1119,7 @@ class SgtShadow:
             with open(d / f"sgt_shadow_{date.today().isoformat()}.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:
-            self._echo(f"[SGT] (shadow) could not write the log: {e}")
+            self._echo(f"[SGT] {self._tag} could not write the log: {e}")
 
     def _event(self, s: _Session, event: str, **data: Any) -> None:
         rec = {"ts": datetime.now().isoformat(timespec="seconds"), "event": event,
@@ -1056,7 +1130,7 @@ class SgtShadow:
             with open(d / f"sgt_shadow_{date.today().isoformat()}.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:
-            self._echo(f"[SGT] (shadow) could not write the log: {e}")
+            self._echo(f"[SGT] {self._tag} could not write the log: {e}")
 
 
 def _session_to_json(s: _Session) -> Dict[str, Any]:

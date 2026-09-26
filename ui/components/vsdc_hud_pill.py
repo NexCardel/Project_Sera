@@ -304,7 +304,7 @@ class VSDCHudPill(QWidget):
           monospace Consolas chip (#39FF14).
         - If a capture-source tag is present ("VSDC-X (Exact)" from the UI
           Automation accessibility-tree read, "VSDC (Visual)" from OCR,
-          "VSDC247 (Visual)" or "SGT (Shadow)"),
+          "VSDC247 (Visual)", "SGT (Live)" or "SGT (Shadow)"),
           renders it in a distinct color so the user can see at a glance
           which engine actually supplied that capture.
         Both apply independently — a subtitle can carry either, both, or neither.
