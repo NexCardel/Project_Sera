@@ -1976,7 +1976,8 @@ class SeraApp:
         self.admin_win.set_discovery_service(getattr(self, "discovery_service", None))
         self.admin_win.set_sync_engine(getattr(self, "sync_engine", None))
 
-        self.shell.setWindowTitle("Project Sera — Aman Associates")
+        from version import APP_VERSION
+        self.shell.setWindowTitle(f"Project Sera — Aman Associates — v{APP_VERSION}")
         self.shell.on_minimized_to_tray = self._on_window_put_away
         self.shell.on_minimized = lambda: QTimer.singleShot(5_000, lambda: self._trim_if_idle("window minimised"))
         self.shell.on_quit_requested = self._quit_application

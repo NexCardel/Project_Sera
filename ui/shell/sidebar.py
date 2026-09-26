@@ -314,6 +314,15 @@ class Sidebar(QFrame):
         self.sync_status_badge.clicked.connect(self._on_sync_pill_clicked)
         self.main_layout.addWidget(self.sync_status_badge)
 
+        # App version, so staff (and a two-PC sync test) can tell which build a PC runs --
+        # the window starts full-screen by default, which hides the title bar.
+        from version import APP_VERSION
+        self.version_lbl = QLabel(f"v{APP_VERSION}")
+        self.version_lbl.setObjectName("SidebarVersion")
+        self.version_lbl.setAlignment(Qt.AlignCenter)
+        self.version_lbl.setStyleSheet("background-color: transparent; color: #6E6E6E; font-size: 10px; margin-top: 2px;")
+        self.main_layout.addWidget(self.version_lbl)
+
         self._update_visibility()
 
     def _style_sync_pill(self, state: str = "idle"):

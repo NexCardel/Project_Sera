@@ -37,9 +37,9 @@ P3-8,Done,Claude Sonnet 5,Claude Opus 5.5,a897eb5,"2026-09-25: 2026-09-25: Revie
 P3-7a,Done,Claude Sonnet 5,Claude Opus 5.5,c3f91c5,"2026-09-26: Review fixes applied (all 5 non-blocking findings from both Opus 5.5 review passes): 'vectors moved'->'vectors differ' wording; malformed digest_reply now logged as skipped instead of silently ignored; _last_local_change_at no longer stamped by a remote-driven merge (_wake_poke_sender split out); at most one digest_request answered per session (extras get busy); fixed test spy that sat on the wrong side. tests/test_sync_digest_exchange.py now 10 tests, all pass. Full suite: 1604 passed / 11 failed / 3 skipped -- the standard pre-existing set only, zero new failures.",2026-09-26 09:33
 P3-7b,Done,Claude Opus 5.5,Claude Opus 5.5,c522654,"2026-09-26: Review fixes: own changes carried over at swap (no seq gap after Reset->Start), admin Reset refused after receiving, journaled swap with crash recovery, raw required, admin identity checked; 7 new tests; full suite 1611 passed / 11 pre-existing failed / 3 skipped",2026-09-26 10:02
 P3-8a,Done,Gemini 3.7 Flash,Claude Opus 5.5,1943770,"2026-09-26: Coalesced clock-ahead events & rate-limited log, replica parked-change age & warnings, shadow-only seal timing logger; 85 passed in sync suite",2026-09-26 15:27
-P3-8b,In review,Claude Sonnet 5,Claude Opus 5.5,1943770 (dialog fixes + 3 tests); rest uncommitted,"2026-09-26: Run-now gated to mode shadow, conflict selection by (db,id), stamps unified, late-emit guard; 1616 passed/11 failed(pre-existing)/3 skipped
+P3-8b,Done,Claude Sonnet 5,Claude Opus 5.5,1943770 (dialog fixes + 3 tests); ff87571 (remaining tests + review fixes),"2026-09-26: Run-now gated to mode shadow, conflict selection by (db,id), stamps unified, late-emit guard; 1616 passed/11 failed(pre-existing)/3 skipped
 2026-09-26: 2026-09-26: reviewed by Claude Opus 5.5, no blocking findings; 4 non-blocking findings fixed (selection-clear gap, weak sort test, timing-flaky test, UTC-vs-local flagged for owner)
-2026-09-26: 2026-09-26: full suite after review fixes: 1617 passed/11 failed(pre-existing)/3 skipped",2026-09-26 15:23
+2026-09-26: 2026-09-26: full suite after review fixes: 1617 passed/11 failed(pre-existing)/3 skipped",2026-09-26 15:28
 P3-9,Not started,,,,,
 P4-1,Not started,,,,,
 P4-2,Not started,,,,,
