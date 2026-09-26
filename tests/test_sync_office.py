@@ -210,3 +210,79 @@ def test_join_office_wraps_pairing_error_without_writing_anything(tmp_path):
         assert not (joiner_dir / sync_office.MASTER_DB_NAME).exists()
     finally:
         session.close()
+
+
+# ------------------------------------------------------------------ ensure_office_identity
+
+def _converted_pc(tmp_path, *, with_admin_key: bool = True) -> tuple[Path, sera_keys.OfficeInfo, str]:
+    """The shape "Convert to office key" (sync_migrate) leaves behind: office key, admin key
+    and office.json, a database -- but no device identity and no membership records."""
+    app = tmp_path / "converted_pc"
+    app.mkdir(parents=True)
+    dek = sera_keys.new_dek()
+    office_id = sera_keys.OfficeInfo.new_office_id()
+    sera_keys.store_dek(app, dek, MASTER_PW, office_id)
+    admin_pubkey = None
+    if with_admin_key:
+        admin_pubkey = sync_admin.write_admin_key_files(app, sync_admin.generate_admin_key(), MASTER_PW, office_id)
+    office = sera_keys.OfficeInfo(office_id=office_id, office_name="Office", key_id=sera_keys.key_id(dek),
+                                  admin_pubkey=admin_pubkey)
+    sera_keys.save_office(app, office)
+    hex_key = sera_keys.dek_hex(dek)
+    from database import SeraDatabase
+    db = SeraDatabase(str(app / sync_office.MASTER_DB_NAME), hex_key, defer_startup_maintenance=True)
+    del db
+    return app, office, hex_key
+
+
+def test_ensure_office_identity_sets_up_a_converted_admin_pc(tmp_path):
+    app, office, hex_key = _converted_pc(tmp_path)
+    assert sync_identity.load_device_identity(app) is None
+
+    conn = _open_db_factory(app / sync_office.MASTER_DB_NAME, hex_key)()
+    try:
+        identity = sync_office.ensure_office_identity(app, conn, "Front Desk")
+        assert sync_identity.load_device_identity(app).device_id == identity.device_id
+        members = sync_admin.list_members(conn, office.admin_pubkey)
+        assert [(m["device_id"], m["role"], m["token_letter"], m["name"]) for m in members] == [
+            (identity.device_id, sync_admin.ROLE_ADMIN, "A", "Front Desk")]
+        assert sync_admin.get_office_admin(conn, office.admin_pubkey)["device_id"] == identity.device_id
+    finally:
+        conn.close()
+
+
+def test_ensure_office_identity_is_idempotent(tmp_path):
+    app, office, hex_key = _converted_pc(tmp_path)
+    conn = _open_db_factory(app / sync_office.MASTER_DB_NAME, hex_key)()
+    try:
+        first = sync_office.ensure_office_identity(app, conn, "Front Desk")
+        second = sync_office.ensure_office_identity(app, conn, "Another Name")
+        assert second.device_id == first.device_id
+        members = sync_admin.list_members(conn, office.admin_pubkey)
+        assert len(members) == 1 and members[0]["name"] == "Front Desk" and members[0]["rev"] == 1
+    finally:
+        conn.close()
+
+
+def test_ensure_office_identity_leaves_a_new_office_unchanged(tmp_path):
+    admin_dir, office, identity = _make_admin(tmp_path)
+    hex_key = sera_keys.dek_hex(sera_keys.load_dek(admin_dir))
+    conn = _open_db_factory(admin_dir / sync_office.MASTER_DB_NAME, hex_key)()
+    try:
+        before = sync_admin.list_members(conn, office.admin_pubkey)
+        again = sync_office.ensure_office_identity(admin_dir, conn, "Renamed")
+        assert again.device_id == identity.device_id
+        assert sync_admin.list_members(conn, office.admin_pubkey) == before
+    finally:
+        conn.close()
+
+
+def test_ensure_office_identity_writes_no_records_without_the_admin_key(tmp_path):
+    app, office, hex_key = _converted_pc(tmp_path, with_admin_key=False)
+    conn = _open_db_factory(app / sync_office.MASTER_DB_NAME, hex_key)()
+    try:
+        identity = sync_office.ensure_office_identity(app, conn, "Back Office")
+        assert identity is not None
+        assert conn.execute("SELECT COUNT(*) FROM %s" % sync_admin.MEMBERS_TABLE).fetchone()[0] == 0
+    finally:
+        conn.close()

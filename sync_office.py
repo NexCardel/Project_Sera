@@ -118,6 +118,28 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     return office
 
 
+def ensure_office_identity(app_dir, conn, device_name: str) -> sync_identity.DeviceIdentity:
+    """Office-mode start-up: make sure this PC has a device identity and, on the PC that holds
+    the office admin key, that the office has its first membership records.
+
+    "New office" and "Join office" already set both up, but "Convert to office key"
+    (``sync_migrate``, P1-4) creates only the office and admin keys -- a converted admin PC
+    had no device identity and no member record, so discovery, the sync engine, "Add
+    workstation" and "Become admin" all stayed off on it. Idempotent: the identity is loaded
+    if it exists, and the membership records are only written while the office has none
+    (``init_office_membership`` refuses otherwise). A PC without the admin key never writes
+    records here -- it gets its own from the admin PC when it joins.
+    """
+    identity = sync_identity.ensure_device_identity(app_dir)
+    sync_admin.ensure_members_table(conn)
+    has_records = conn.execute("SELECT 1 FROM %s LIMIT 1" % sync_admin.MEMBERS_TABLE).fetchone()
+    if not has_records and sync_admin.has_admin_key(app_dir):
+        cert_pem = identity.cert_pem.decode("ascii") if isinstance(identity.cert_pem, bytes) else identity.cert_pem
+        sync_admin.init_office_membership(app_dir, conn, cert_pem, device_name)
+        _log.info("wrote this admin PC's first membership records as %s", identity.device_id)
+    return identity
+
+
 def dispatch_session(session, app_dir, engine) -> None:
     """Routes one incoming session on the permanent sync port: a snapshot request
     (``{"t": "snapshot"}``, P2-6) goes to ``sync_snapshot.handle_snapshot_session``; everything

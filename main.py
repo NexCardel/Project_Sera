@@ -71,6 +71,27 @@ from ui.components.vsdc_hud_pill import VSDCHudPill
 
 APP_DIR = Path.home() / "AmanAssociates_Sera"
 
+
+def _setup_sync_log(app_dir: Path) -> None:
+    """Sera Sync v3 events (pairing, snapshot, transport, engine, discovery) to
+    ``logs/sync.log`` (1 MB x 3). The installed app has no console, so a pairing that fails on
+    the admin PC only shows "connection closed" on the joiner without this. The sync modules
+    log ids, addresses and outcomes -- never keys, codes or row contents."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    try:
+        (app_dir / "logs").mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(app_dir / "logs" / "sync.log", maxBytes=1_000_000,
+                                      backupCount=3, encoding="utf-8")
+    except OSError as exc:
+        print(f"[Sera Sync] could not open logs/sync.log: {exc}")
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    for name in ("sera", "sync_discovery"):
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.INFO)
+        lg.addHandler(handler)
+
 def _copy_if_changed(src: Path, dst: Path) -> None:
     """copy2 keeps the modified time, so a same-size, same-time copy is already up to date -
     runs on every start, and re-copying unchanged files was ~0.1 s of it."""
@@ -377,7 +398,13 @@ class SeraApp:
             try:
                 import sync_discovery
                 import sync_identity
-                own_identity = sync_identity.load_device_identity(self.app_dir)
+                import socket
+                import sync_office
+                # Creates the identity (and, on the admin PC, the first member records) if a
+                # "Convert to office key" PC doesn't have them yet; loads them otherwise.
+                with self.db._connect() as _conn:
+                    own_identity = sync_office.ensure_office_identity(
+                        self.app_dir, _conn, (self.actor_alias or "").strip() or socket.gethostname())
                 if own_identity is not None:
                     def _open_v3_discovery_db(_db_path=self.db_path, _hex_key=hex_key):
                         # DiscoveryService closes what open_db() returns itself; SeraDatabase's
@@ -2674,6 +2701,7 @@ class SeraApp:
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
+    _setup_sync_log(APP_DIR)
     SeraApp().run()
 
 

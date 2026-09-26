@@ -381,7 +381,9 @@ def build_viewer(plan: dict, out: Path):
     header(pcs, 3, ["#", "Phase", "Check", "Related WP", "Result", "Date", "Notes"], [5, 7, 80, 12, 11, 12, 40])
     for i, chk in enumerate(plan["phase_checks"]):
         n = 4 + i
-        look = lambda idx: f"INDEX(ChecksData!${idx}:${idx},MATCH($A{n},ChecksData!$A:$A,0))"
+        # ""& because column A holds the check number as a number, but Power Query loads every
+        # CSV column as text (AsText below) -- MATCH never matches 1 to "1".
+        look = lambda idx: f"INDEX(ChecksData!${idx}:${idx},MATCH(\"\"&$A{n},ChecksData!$A:$A,0))"
         vals = [chk["n"], chk["phase"], chk["check"], chk["wp"],
                 f'=IFERROR(IF({look("B")}="","Not run",""&{look("B")}),"Not run")',
                 f'=IFERROR(""&{look("C")},"")', f'=IFERROR(""&{look("D")},"")']

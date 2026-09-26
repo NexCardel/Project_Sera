@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QSizePolicy,
     QLineEdit,
+    QScrollArea,
+    QFrame,
 )
 from PySide6.QtGui import QColor, QFont
 
@@ -75,6 +77,11 @@ class SeraSyncDialog(QDialog):
         self.setWindowTitle("Sera Sync — LAN Database Sync & Live Activity")
         self.resize(1080, 620)
         self.setMinimumSize(920, 500)
+        # Office mode shows three panels on the left; start large enough for them (capped to the
+        # screen -- the left side scrolls if it still doesn't fit).
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            self.resize(min(1280, int(screen.width() * 0.9)), min(900, int(screen.height() * 0.9)))
 
         self._build_ui()
         self._refresh_peers()
@@ -170,8 +177,22 @@ class SeraSyncDialog(QDialog):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # Left Widget (Peers Table & Main Action Buttons)
-        left_widget = QGroupBox("Discovered LAN Devices")
+        # Left side: the office panels (Members, Sync Status) and the legacy LAN-devices box, as
+        # sibling groups in a scroll area, so no table gets squeezed to nothing when all three
+        # are shown -- the area scrolls instead.
+        office_mode = self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_container = QWidget()
+        left_column = QVBoxLayout(left_container)
+        left_column.setContentsMargins(0, 0, 6, 0)
+        left_column.setSpacing(10)
+        left_scroll.setWidget(left_container)
+
+        # Legacy LAN devices (peers table & push/pull buttons)
+        left_widget = QGroupBox("Discovered LAN Devices (legacy sync)" if office_mode else "Discovered LAN Devices")
+        self.devices_group = left_widget
         left_widget.setStyleSheet("QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(12, 14, 12, 12)
@@ -206,6 +227,7 @@ class SeraSyncDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self.table.setMinimumHeight(140)
         left_layout.addWidget(self.table)
 
         # Left Action Buttons
@@ -242,6 +264,12 @@ class SeraSyncDialog(QDialog):
             self.btn_refresh.setIcon(icon)
         self.btn_refresh.clicked.connect(self._refresh_peers)
         btn_row.addWidget(self.btn_refresh)
+        btn_row.addStretch()
+        left_layout.addLayout(btn_row)
+
+        # Second row: addresses and office-key actions (one row of eight buttons was cut off).
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
 
         self.btn_add_ip = QPushButton("  Add PC by IP")
         icon = _safe_icon("mdi.plus-network", color="#FFFFFF")
@@ -257,9 +285,8 @@ class SeraSyncDialog(QDialog):
         self.btn_remove_ip.clicked.connect(self._on_remove_pc_by_ip)
         btn_row.addWidget(self.btn_remove_ip)
 
-        btn_row.addStretch()
-
-        self.btn_office_key = QPushButton("  Convert to office key (admin PC only)")
+        self.btn_office_key = QPushButton("  Convert to office key")
+        self.btn_office_key.setToolTip("Admin PC only: the PC with the most complete database. Every other PC uses Rejoin office.")
         icon = _safe_icon("mdi.key-change", color="#FFFFFF")
         if icon:
             self.btn_office_key.setIcon(icon)
@@ -290,6 +317,7 @@ class SeraSyncDialog(QDialog):
             self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
         )
         btn_row.addWidget(self.btn_export_kit)
+        btn_row.addStretch()
 
         left_layout.addLayout(btn_row)
 
@@ -322,7 +350,8 @@ class SeraSyncDialog(QDialog):
         self.members_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.members_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.members_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.members_table.setMaximumHeight(140)
+        self.members_table.setMinimumHeight(110)
+        self.members_table.setMaximumHeight(200)
         members_layout.addWidget(self.members_table)
 
         members_btn_row = QHBoxLayout()
@@ -356,7 +385,6 @@ class SeraSyncDialog(QDialog):
         members_btn_row.addStretch()
         members_layout.addLayout(members_btn_row)
 
-        left_layout.addWidget(self.members_group)
         # Office mode only: key_id is set once office.json exists (legacy PCs have none).
         self.members_group.setVisible(
             self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
@@ -431,7 +459,8 @@ class SeraSyncDialog(QDialog):
         self.conflicts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.conflicts_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.conflicts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.conflicts_table.setMaximumHeight(120)
+        self.conflicts_table.setMinimumHeight(100)
+        self.conflicts_table.setMaximumHeight(180)
         sync_status_layout.addWidget(self.conflicts_table)
 
         conflicts_btn_row = QHBoxLayout()
@@ -453,7 +482,6 @@ class SeraSyncDialog(QDialog):
         conflicts_btn_row.addStretch()
         sync_status_layout.addLayout(conflicts_btn_row)
 
-        left_layout.addWidget(self.sync_status_group)
         # Mirrors the Members panel's own condition, not members_group.isVisible() -- at this
         # point in _build_ui() the dialog hasn't been shown yet, so isVisible() would read
         # False regardless.
@@ -461,7 +489,19 @@ class SeraSyncDialog(QDialog):
             self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
         )
 
-        splitter.addWidget(left_widget)
+        # Office mode: the office panels first, legacy push/pull last. Legacy mode shows only the
+        # devices box (the office groups are hidden).
+        if office_mode:
+            left_column.addWidget(self.members_group)
+            left_column.addWidget(self.sync_status_group)
+            left_column.addWidget(left_widget)
+        else:
+            left_column.addWidget(left_widget, 1)
+            left_column.addWidget(self.members_group)
+            left_column.addWidget(self.sync_status_group)
+        left_column.addStretch()
+
+        splitter.addWidget(left_scroll)
 
         # Right Widget (Activity Log Sidebar)
         right_widget = QGroupBox("⚡ Live Sync Activity Stream")
@@ -492,9 +532,10 @@ class SeraSyncDialog(QDialog):
 
         splitter.addWidget(right_widget)
 
-        # Set Splitter ratio: Left 62%, Right 38%
-        splitter.setSizes([650, 410])
-        main_layout.addWidget(splitter)
+        # Set Splitter ratio: Left ~70%, Right ~30%; extra width goes to the left panels
+        splitter.setSizes([880, 360])
+        splitter.setStretchFactor(0, 1)
+        main_layout.addWidget(splitter, 1)  # the panels get the spare height, not the banners
 
         # Bottom Close Row
         bottom_row = QHBoxLayout()
