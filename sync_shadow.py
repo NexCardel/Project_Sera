@@ -48,6 +48,20 @@ Turning shadow mode on (WP P3-7b, owner decision 2026-09-26: start point "1a"):
     and ``started.json`` to ``*.bak-<ts>`` and sets mode off, which also resets the week.
   - ``shadow_status(db, app_dir)``: mode, start time and day of the shadow week for the panel.
 
+Going live (WP P3-9), per PC, when the owner decides the P3-7 criteria are met:
+  1. ``stage_go_live(db, app_dir)`` (the caller stops the sync engine and the seal timer first):
+     seals and mirrors this PC's last edits into the replica, switches the live DBs to mode
+     ``off`` (so a write before the restart can't take a sequence number the new live DB lacks),
+     exports both replicas into ``incoming/golive/new/`` with this PC's per-PC state carried
+     over (local-mode tables with client ids translated by gid, ``_local_*`` tables, member
+     records, sequence and clock state) and mode ``live``. On failure the mode goes back to
+     ``shadow`` and nothing is staged. Then restart.
+  2. ``apply_pending_go_live(app_dir)`` at start-up, before any DB is opened: the old live DBs
+     and the shadow files move to ``shadow/pre-golive-<ts>/`` (§0 rule 3), the staged files
+     become the live DBs. Journaled like the P3-7b start; a failure puts everything back and
+     returns the PC to mode ``shadow``. ``shadow/golive.json`` records it, and shadow mode can't
+     be turned on again afterwards.
+
 Checks (blueprint §5 P3-7), logged to ``logs/sync_shadow.log``:
   - ``capture_check(db, app_dir)``: replays the baseline snapshot plus this device's own-origin
     changes (``_own_captured_changes``) into a scratch copy, and compares its digest to the live
@@ -105,6 +119,11 @@ PENDING_START_FILE = "pending.json"
 INSTALL_JOURNAL_FILE = "installing.json"   # incoming/shadow_start/: moves of an install in progress
 FRAME_SHADOW_SNAPSHOT = "shadow_snapshot"   # request for the admin PC's replica (P3-7b)
 SHADOW_WEEK_DAYS = 7
+GOLIVE_DIRNAME = "golive"                   # incoming/golive/: staged go-live (P3-9)
+GOLIVE_PENDING_FILE = "pending.json"
+GOLIVE_JOURNAL_FILE = "installing.json"
+PRE_GOLIVE_PREFIX = "pre-golive-"           # shadow/pre-golive-<ts>/: live DBs + shadow files before go-live
+GOLIVE_FILE = "golive.json"                 # shadow/golive.json: this PC went live
 _SIDECARS = ("-wal", "-shm", "-journal")
 
 _CHANGE_COLS = ("origin", "origin_seq", "hlc", "tbl", "row_key", "op", "data", "sig")
@@ -120,6 +139,14 @@ class ShadowStartRefused(RuntimeError):
 
 class ShadowStartError(RuntimeError):
     """Turning shadow mode on failed (admin PC unreachable or refused, bad download, install)."""
+
+
+class GoLiveRefused(RuntimeError):
+    """Going live isn't allowed in this PC's current state (P3-9)."""
+
+
+class GoLiveError(RuntimeError):
+    """Going live failed; this PC is back in mode shadow with its databases unchanged (P3-9)."""
 
 
 # ---------------------------------------------------------------- paths / logging
@@ -225,6 +252,10 @@ def enable_shadow_mode(db, app_dir=None) -> None:
             "shadow mode is already on; enabling it again would silently and permanently lose "
             "any remote changes only the old replica holds (see enable_shadow_mode's docstring)")
     app_dir = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
+    if (_shadow_dir(app_dir) / GOLIVE_FILE).exists():
+        # P3-9: after go-live the shadow files are set aside, so the check above no longer
+        # sees them; a new replica from these live DBs would disagree with every PC.
+        raise ShadowStartRefused("this PC has gone live; shadow mode can't be turned on again")
     _refuse_if_old_shadow_files(app_dir)
     remote = _remote_origins(db)
     if remote:
@@ -319,6 +350,12 @@ def mirror_own_changes_to_replica(db, app_dir=None) -> None:
     (matches ``database.py._seal_after_commit``'s own rule); it is logged instead."""
     if db.get_sync_mode() != "shadow":
         return
+    _mirror_own(db, app_dir, strict=False)
+
+
+def _mirror_own(db, app_dir=None, *, strict: bool) -> None:
+    """``mirror_own_changes_to_replica`` without the mode check. ``strict`` (go-live staging,
+    P3-9) raises instead of logging, so a failed mirror can't silently drop own changes."""
     app_dir = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
     replica_master, replica_raw = replica_paths(app_dir)
     if not replica_master.exists():
@@ -355,6 +392,8 @@ def mirror_own_changes_to_replica(db, app_dir=None) -> None:
         except Exception as exc:
             _log.warning("could not mirror own %s changes to the shadow replica: %s", which, exc)
             _log_line(app_dir, f"replica mirror FAILED for {which}: {exc}")
+            if strict:
+                raise
 
 
 # ---------------------------------------------------------------- remote changes -> replica
@@ -436,6 +475,10 @@ def make_shadow_apply(db, app_dir=None):
         with _REPLICA_LOCK:
             if not replica_path.exists():
                 raise RuntimeError("shadow mode has no replica yet (enable_shadow_mode was not run)")
+            # P3-9: go-live staging switches the live DBs off (under this lock) before exporting
+            # the replica; a session that checked the mode earlier must not write to it after.
+            if db.get_sync_mode() != "shadow":
+                raise RuntimeError("this PC is no longer in shadow mode; remote change not applied")
             result = sync_apply.apply_batch(str(replica_path), db.hex_key, which, items, **kw)
             _record_receipt_in_live(live_path, db.hex_key, items)
         return result
@@ -1575,7 +1618,9 @@ def reset_shadow_mode(db, app_dir=None) -> list:
     app_dir = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
     if has_pending_shadow_start(app_dir):
         raise ShadowStartRefused("a shadow-mode start is waiting for a restart; restart Sera first")
-    if db.get_sync_mode() == "live":
+    if has_pending_go_live(app_dir):
+        raise ShadowStartRefused("going live is waiting for a restart; restart Sera first")
+    if db.get_sync_mode() == "live" or (_shadow_dir(app_dir) / GOLIVE_FILE).exists():
         raise ShadowStartRefused("this PC is already live; there is no shadow mode to reset")
     # Review fix (#2): the admin PC is every other PC's start point. Once its live DBs count
     # other PCs' changes as received, its own guard would refuse a new start and nobody could
@@ -1604,7 +1649,8 @@ def reset_shadow_mode(db, app_dir=None) -> list:
 
 def shadow_status(db, app_dir=None) -> dict:
     """For the panel: ``mode``, ``replica`` (bool), ``started_at``, ``method``, ``day`` (1-based
-    day of the shadow week, None when not started), ``pending_start`` and ``salvage_pending``."""
+    day of the shadow week, None when not started), ``pending_start``, ``salvage_pending``,
+    ``pending_golive`` and ``went_live_at`` (P3-9; None before go-live)."""
     import calendar
     app_dir = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
     started = _read_json(_shadow_dir(app_dir) / STARTED_FILE) or {}
@@ -1624,6 +1670,8 @@ def shadow_status(db, app_dir=None) -> dict:
         "day": day,
         "pending_start": has_pending_shadow_start(app_dir),
         "salvage_pending": pending_shadow_salvage(app_dir) is not None,
+        "pending_golive": has_pending_go_live(app_dir),
+        "went_live_at": (_read_json(_shadow_dir(app_dir) / GOLIVE_FILE) or {}).get("went_live_at"),
     }
 
 
@@ -1656,3 +1704,393 @@ def open_admin_session(engine, db, app_dir=None):
         except Exception as exc:
             last = exc
     raise ShadowStartError(f"the admin PC can't be reached ({type(last).__name__}); is Sera open there?")
+
+
+# ---------------------------------------------------------------- go live (blueprint §5 P3-9)
+#
+# "On each PC, at the next start-up, a staged swap (the P0-4 mechanism) installs the shadow
+# replicas (which already contain everyone's merged changes) as the live DBs. Set mode=live."
+# Staging runs in the app (``stage_go_live``); the swap runs at start-up before any database is
+# opened (``apply_pending_go_live``, journaled like the P3-7b start). The reviewed problems of
+# the first attempt (commit 3b99932, docs/sera-sync-v3-open-problems.txt) are handled here: the
+# replicas are exported consistently under ``_REPLICA_LOCK``, never copied raw (F4); mode
+# ``live`` is written into the staged files, so no separate switch can be skipped by a crash;
+# old files are moved aside, never deleted (§0 rule 3); per-PC local tables are carried over;
+# the live DBs go to mode ``off`` before the export (C3); a failure puts this PC back in mode
+# ``shadow`` (S2).
+
+def _golive_dir(app_dir) -> Path:
+    return Path(app_dir) / "incoming" / GOLIVE_DIRNAME
+
+
+def has_pending_go_live(app_dir) -> bool:
+    d = _golive_dir(app_dir)
+    return (d / GOLIVE_PENDING_FILE).exists() or (d / GOLIVE_JOURNAL_FILE).exists()
+
+
+def _pending_rows(path, hex_key: str) -> int:
+    import sync_capture
+    if not path or not Path(path).exists():
+        return 0
+    conn = sync_capture._open(str(path), hex_key, 5.0)
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM _sync_pending").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _own_max_seq(path, hex_key: str, origin: str) -> int:
+    import sync_capture
+    if not path or not Path(path).exists():
+        return 0
+    conn = sync_capture._open(str(path), hex_key, 5.0)
+    try:
+        row = conn.execute("SELECT MAX(origin_seq) FROM _sync_changes WHERE origin = ?", (origin,)).fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def _check_own_changes_in_replica(db, app_dir: Path) -> None:
+    """Every change this PC sealed must be in the replica, or the new live DB would lack numbers
+    of its own stream that the other PCs would wait for forever."""
+    device_id = _device_id(db)
+    if not device_id:
+        raise GoLiveError("this PC has no device id")
+    replica_master, replica_raw = replica_paths(app_dir)
+    for which, live, replica in (("master", db.db_path, replica_master),
+                                 ("raw", db.raw_db_path, replica_raw)):
+        origin = _origin_for(device_id, which)
+        live_max = _own_max_seq(live, db.hex_key, origin)
+        have = _replica_vector(replica, db.hex_key, origin)
+        if have < live_max:
+            raise GoLiveError(
+                f"this PC's own {which} changes #{have + 1}..#{live_max} are not in the replica "
+                "(see logs/sync_shadow.log); nothing was staged")
+
+
+def _copy_client_mapped(conn, table: str, src: str, id_map_sql: str) -> None:
+    """Replaces main.<table> with <src>.<table>, translating ``client_id`` through the rows of
+    ``id_map_sql`` (old_id, new_id). Rows whose client isn't in the new DB are dropped when
+    ``client_id`` is NOT NULL, otherwise kept with a NULL client."""
+    new_info = {r[1]: r for r in conn.execute(f'PRAGMA main.table_info("{table}")')}
+    old_cols = [r[1] for r in conn.execute(f'PRAGMA {src}.table_info("{table}")')]
+    cols = [c for c in old_cols if c in new_info]
+    conn.execute(f'DELETE FROM main."{table}"')
+    if not cols:
+        return
+    col_sql = ", ".join(f'"{c}"' for c in cols)
+    if "client_id" not in cols:
+        conn.execute(f'INSERT INTO main."{table}" ({col_sql}) SELECT {col_sql} FROM {src}."{table}"')
+        return
+    sel = ", ".join("m.new_id" if c == "client_id" else f'o."{c}"' for c in cols)
+    join = "JOIN" if new_info["client_id"][3] else "LEFT JOIN"
+    conn.execute(
+        f'INSERT INTO main."{table}" ({col_sql}) SELECT {sel} FROM {src}."{table}" o '
+        f"{join} ({id_map_sql}) m ON m.old_id = o.client_id")
+
+
+def _local_table_names(which: str) -> list:
+    import sync_schema
+    return [t.name for t in sync_schema.tables_for(which) if t.mode == sync_schema.LOCAL]
+
+
+def _prepare_golive_file(staged: Path, live: Path, hex_key: str, which: str,
+                         staged_master: Path, live_master: Path) -> None:
+    """Turns an exported replica into this PC's new live DB: mode live; the live DB's sequence
+    and clock state and peer vectors; its local-mode tables (never replicated, so the replica's
+    copies are from the day shadow mode started) with client ids translated by gid, because a
+    client can have a different local id in the replica than in the live DB."""
+    import sync_capture
+    conn = sync_capture._open(str(staged), hex_key, 10.0)
+    attached = []
+    try:
+        def attach(alias, path):
+            escaped = str(path).replace("'", "''")
+            conn.execute(f"ATTACH DATABASE '{escaped}' AS {alias} KEY \"x'{hex_key}'\";")
+            attached.append(alias)
+        attach("old", live)
+        if which == "raw":
+            attach("om", live_master)
+            attach("nm", staged_master)
+            id_map = ("SELECT oc.id AS old_id, nc.id AS new_id FROM om.clients oc "
+                      "JOIN nm.clients nc ON nc.gid = oc.gid")
+        else:
+            id_map = ("SELECT oc.id AS old_id, nc.id AS new_id FROM old.clients oc "
+                      "JOIN main.clients nc ON nc.gid = oc.gid")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if conn.execute("SELECT 1 FROM main._sync_pending LIMIT 1").fetchone():
+                raise GoLiveError(f"the {which} replica has uncaptured pending rows; nothing was staged")
+            meta = dict(conn.execute("SELECT key, value FROM old._sync_meta").fetchall())
+            new_meta = dict(conn.execute("SELECT key, value FROM main._sync_meta").fetchall())
+            updates = {"mode": "live"}
+            for key in ("next_seq", "next_seq_stream"):
+                if meta.get(key) is not None:
+                    updates[key] = meta[key]
+            last_hlc = max(meta.get("last_hlc") or "", new_meta.get("last_hlc") or "")
+            if last_hlc:
+                updates["last_hlc"] = last_hlc
+            for key, value in updates.items():
+                conn.execute("INSERT INTO main._sync_meta(key, value) VALUES (?, ?) "
+                             "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+            conn.execute("DELETE FROM main._sync_peer_vectors")
+            conn.execute("INSERT INTO main._sync_peer_vectors SELECT * FROM old._sync_peer_vectors")
+            for table in _local_table_names(which):
+                in_both = all(conn.execute(f"SELECT 1 FROM {s}.sqlite_master WHERE type='table' AND name=?",
+                                           (table,)).fetchone() for s in ("main", "old"))
+                if in_both:
+                    _copy_client_mapped(conn, table, "old", id_map)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        for alias in attached:
+            try:
+                conn.execute(f"DETACH DATABASE {alias}")
+            except Exception:
+                pass
+        conn.close()
+
+
+def stage_go_live(db, app_dir=None) -> Path:
+    """Stages this PC's go-live (blueprint §5 P3-9); it happens at the next start-up. Returns the
+    path of ``incoming/golive/pending.json``.
+
+    **The caller stops the sync engine and the seal timer first** (the Sera Sync panel does).
+    Anything still running is handled anyway: the last edits are sealed and mirrored here, the
+    live DBs are then switched to mode ``off`` under ``_REPLICA_LOCK`` (so a later write isn't
+    captured and can't take a sequence number the new live DB lacks, and ``shadow_apply``
+    refuses from then on), and the replicas are exported with ``sqlcipher_export``.
+
+    Whether the go-live criteria (§5 P3-7) are met is the owner's decision; this doesn't check
+    them. Raises ``GoLiveRefused`` (nothing touched) or ``GoLiveError`` (this PC back in mode
+    ``shadow``, nothing staged)."""
+    import sera_keys
+    import sync_backup
+    import sync_snapshot
+    app = Path(app_dir or os.path.dirname(os.path.abspath(db.db_path)))
+    if sera_keys.load_office(app) is None:
+        raise GoLiveRefused("going live needs office mode (this PC has no office key)")
+    if has_pending_go_live(app):
+        raise GoLiveRefused("going live is already staged on this PC; restart Sera to finish it")
+    if (_shadow_dir(app) / GOLIVE_FILE).exists():
+        raise GoLiveRefused("this PC has already gone live")
+    if has_pending_shadow_start(app):
+        raise GoLiveRefused("a shadow-mode start is waiting for a restart; restart Sera first")
+    if pending_shadow_salvage(app) is not None:
+        raise GoLiveRefused("the import offered after shadow mode started hasn't been answered; "
+                            "restart Sera and answer it first")
+    if db.get_sync_mode() != "shadow":
+        raise GoLiveRefused(f"going live needs mode shadow (this PC is in mode {db.get_sync_mode()!r})")
+    replica_master, replica_raw = replica_paths(app)
+    if not (replica_master.exists() and replica_raw.exists()):
+        raise GoLiveRefused("this PC has no complete shadow replica to go live with")
+    hex_key = db.hex_key
+
+    try:
+        sync_backup.backup_before_golive(app, hex_key=hex_key, db=db)
+    except Exception as exc:
+        raise GoLiveError(f"the backup before going live failed: {exc}") from exc
+
+    stage = _golive_dir(app)
+    new_dir = stage / "new"
+    switched_off = False
+    try:
+        shutil.rmtree(stage, ignore_errors=True)
+        with _REPLICA_LOCK:
+            for _attempt in range(3):
+                db.seal_pending()
+                _mirror_own(db, app, strict=True)
+                db.set_sync_mode("off")
+                switched_off = True
+                if not (_pending_rows(db.db_path, hex_key) or _pending_rows(db.raw_db_path, hex_key)):
+                    break
+                # An edit landed between the seal and the switch: seal it too, then try again.
+                db.set_sync_mode("shadow")
+                switched_off = False
+            else:
+                raise GoLiveError("edits kept arriving while going live; try again when nobody is saving")
+            _mirror_own(db, app, strict=True)      # anything the switch's own commit sealed
+            _check_own_changes_in_replica(db, app)
+            new_dir.mkdir(parents=True)
+            staged_master = new_dir / sync_snapshot.MASTER_DB_NAME
+            staged_raw = new_dir / sync_snapshot.RAW_DB_NAME
+            sync_backup.export_database(replica_master, staged_master, hex_key)
+            sync_backup.export_database(replica_raw, staged_raw, hex_key)
+        live_master, live_raw = Path(db.db_path), Path(db.raw_db_path)
+        _prepare_golive_file(staged_master, live_master, hex_key, "master", staged_master, live_master)
+        _prepare_golive_file(staged_raw, live_raw, hex_key, "raw", staged_master, live_master)
+        _carry_over_local_state(staged_master, live_master, hex_key)
+        files = [{"name": p.name, "sha256": _sha256(p)} for p in (staged_master, staged_raw)]
+        pending = stage / GOLIVE_PENDING_FILE
+        _write_json(pending, {"staged_at": _utc_now_iso(), "device_id": _device_id(db), "files": files})
+    except BaseException as exc:
+        shutil.rmtree(stage, ignore_errors=True)
+        if switched_off:
+            try:
+                db.set_sync_mode("shadow")
+            except Exception as mode_exc:
+                _log.error("could not switch back to mode shadow after a failed go-live: %s", mode_exc)
+        _log_line(app, f"go-live staging FAILED, this PC stays in shadow mode: {type(exc).__name__}")
+        if not isinstance(exc, Exception) or isinstance(exc, (GoLiveError, GoLiveRefused)):
+            raise
+        raise GoLiveError(f"going live could not be prepared: {exc}") from exc
+    _log_line(app, "go-live staged; the shadow replicas become the live databases at the next start")
+    return pending
+
+
+def _restore_shadow_mode(app: Path, hex_key: Optional[str]) -> None:
+    """After a failed install the live DBs are the ones staging switched to mode off; with the
+    replica still in place, put them back in mode shadow so the PC keeps syncing."""
+    if not replica_paths(app)[0].exists():
+        return
+    try:
+        hex_key = hex_key or _office_hex(app)
+        for name in ("master.db", "rawPayload.db"):
+            if (app / name).exists():
+                _set_mode(app / name, hex_key, "shadow")
+    except Exception as exc:
+        _log.error("could not put this PC back in mode shadow: %s", exc)
+        _log_line(app, f"could not put this PC back in mode shadow ({type(exc).__name__})")
+
+
+def _fail_go_live(app: Path, reason: str, hex_key: Optional[str]) -> None:
+    """Keeps the pending file as ``incoming/golive.pending.json.failed`` and drops the staged
+    copies; the next start-up doesn't try again. Only called while the live DBs are the old
+    ones (never moved, or moved back)."""
+    stage = _golive_dir(app)
+    try:
+        pending = stage / GOLIVE_PENDING_FILE
+        if pending.exists():
+            os.replace(pending, app / "incoming" / f"{GOLIVE_DIRNAME}.{GOLIVE_PENDING_FILE}.failed")
+    except OSError:
+        pass
+    shutil.rmtree(stage, ignore_errors=True)
+    _restore_shadow_mode(app, hex_key)
+    _log_line(app, f"go-live FAILED, databases unchanged, back in shadow mode: {reason}")
+
+
+def _finish_go_live(app: Path, pre_dir: Path) -> dict:
+    """Last step of the swap; safe to run again after a crash."""
+    _write_json(_shadow_dir(app) / GOLIVE_FILE,
+                {"went_live_at": _utc_now_iso(), "pre_golive_dir": str(pre_dir)})
+    shutil.rmtree(_golive_dir(app), ignore_errors=True)
+    _log_line(app, f"went live: the shadow replicas are now the live databases; the previous "
+                   f"databases and shadow files are in {pre_dir.name}")
+    return {"pre_golive_dir": str(pre_dir)}
+
+
+def apply_pending_go_live(app_dir, hex_key: Optional[str] = None, *,
+                          _undo_on_error: bool = True) -> Optional[dict]:
+    """At start-up, **before any database is opened** (``main.py``). Returns None when nothing is
+    staged, else ``{"pre_golive_dir"}`` after installing the staged files as the live DBs:
+
+      - checks each staged file against the checksum recorded when staged, that it opens with
+        the office key and passes the integrity checks, and that it is mode ``live``;
+      - journals the moves, then moves the old live DBs (with sidecars) and the shadow replica,
+        baseline and ``started.json`` to ``shadow/pre-golive-<ts>/`` (§0 rule 3), and the staged
+        files into place; a failure puts everything back; a crash is finished or put back at the
+        next start from the journal.
+
+    Raises ``GoLiveError`` on failure: the live DBs are then as they were, back in mode shadow,
+    and it isn't retried. A key that can't be loaded propagates without touching anything, so
+    it's retried next time. ``_undo_on_error`` is for tests that simulate a crash mid-move."""
+    import sync_capture
+    import sync_snapshot
+    app = Path(app_dir)
+    stage = _golive_dir(app)
+    journal = _read_json(stage / GOLIVE_JOURNAL_FILE)
+    if journal is not None:
+        return _recover_go_live(app, journal, hex_key)
+    pending_path = stage / GOLIVE_PENDING_FILE
+    if not pending_path.exists():
+        return None
+    pending = _read_json(pending_path)
+    if pending is None or not isinstance(pending.get("files"), list):
+        _fail_go_live(app, "pending.json is unreadable", hex_key)
+        raise GoLiveError("the staged go-live is unreadable")
+    hex_key = hex_key or _office_hex(app)
+
+    new_dir = stage / "new"
+    try:
+        names = []
+        for f in pending["files"]:
+            name = f.get("name") if isinstance(f, dict) else None
+            if name not in sync_snapshot.ALLOWED_DB_NAMES or name in names:
+                raise GoLiveError("the staged file list is invalid")
+            path = new_dir / name
+            if not path.is_file() or _sha256(path) != f.get("sha256"):
+                raise GoLiveError(f"the staged {name} changed or is missing since it was prepared")
+            sync_snapshot._verify_downloaded_db(path, hex_key)
+            conn = sync_capture._open(str(path), hex_key, 5.0)
+            try:
+                if sync_capture._meta(conn, "mode") != "live":
+                    raise GoLiveError(f"the staged {name} isn't in mode live")
+            finally:
+                conn.close()
+            names.append(name)
+        if set(names) != set(sync_snapshot.ALLOWED_DB_NAMES):
+            raise GoLiveError("the staged go-live needs both master.db and rawPayload.db")
+    except Exception as exc:
+        _fail_go_live(app, str(exc) if isinstance(exc, GoLiveError) else type(exc).__name__, hex_key)
+        if isinstance(exc, GoLiveError):
+            raise
+        raise GoLiveError(f"the staged go-live could not be checked: {exc}") from exc
+
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    pre_dir = _shadow_dir(app) / f"{PRE_GOLIVE_PREFIX}{ts}"
+    n = 1
+    while pre_dir.exists():
+        pre_dir = _shadow_dir(app) / f"{PRE_GOLIVE_PREFIX}{ts}_{n}"
+        n += 1
+    moves = []
+    for base in (app / sync_snapshot.MASTER_DB_NAME, app / sync_snapshot.RAW_DB_NAME,
+                 *replica_paths(app), *baseline_paths(app)):
+        for suffix in (*_SIDECARS, ""):
+            src = Path(f"{base}{suffix}")
+            if src.exists():
+                moves.append((str(src), str(pre_dir / src.name)))
+    started = _shadow_dir(app) / STARTED_FILE
+    if started.exists():
+        moves.append((str(started), str(pre_dir / started.name)))
+    moves += [(str(new_dir / name), str(app / name)) for name in
+              (sync_snapshot.MASTER_DB_NAME, sync_snapshot.RAW_DB_NAME)]
+    pre_dir.mkdir(parents=True)
+    _write_json(stage / GOLIVE_JOURNAL_FILE, {"pre_dir": str(pre_dir), "moves": moves})
+    try:
+        for src, dst in moves:
+            os.replace(src, dst)
+    except BaseException as exc:
+        if not _undo_on_error:
+            raise
+        _undo_moves(moves)
+        try:
+            (stage / GOLIVE_JOURNAL_FILE).unlink()
+        except OSError:
+            pass
+        _fail_go_live(app, f"files could not be moved ({type(exc).__name__}); put back", hex_key)
+        if not isinstance(exc, Exception):
+            raise
+        raise GoLiveError(f"going live could not be installed and was put back: {exc}") from exc
+    return _finish_go_live(app, pre_dir)
+
+
+def _recover_go_live(app: Path, journal: dict, hex_key: Optional[str]) -> dict:
+    """The previous start-up died while moving files. If every move finished, complete the
+    go-live; otherwise put everything back and say so."""
+    moves = journal.get("moves") or []
+    last = moves[-1] if moves else None
+    if last and Path(last[1]).exists() and not Path(last[0]).exists():
+        _log_line(app, "go-live was interrupted after its files moved; finishing it")
+        return _finish_go_live(app, Path(journal["pre_dir"]))
+    _undo_moves(moves)
+    try:
+        (_golive_dir(app) / GOLIVE_JOURNAL_FILE).unlink()
+    except OSError:
+        pass
+    _fail_go_live(app, "the previous start-up was interrupted while moving files; they were put back",
+                  hex_key)
+    raise GoLiveError("going live was interrupted and has been put back; this PC's database was "
+                      "not changed and it is still in shadow mode")

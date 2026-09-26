@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy, QStackedWidget, QWidget, QGraphicsBlurEffect, QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt
 
 
 from ui.shell.sidebar import Sidebar
@@ -27,10 +27,22 @@ class AppShell(QWidget):
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange and self.isMinimized():
-            callback = getattr(self, "on_minimized", None)
+        if event.type() == QEvent.WindowStateChange:
+            if self.isMinimized():
+                callback = getattr(self, "on_minimized", None)
+            elif event.oldState() & Qt.WindowMinimized:
+                callback = getattr(self, "on_restored", None)
+            else:
+                callback = None
             if callable(callback):
                 callback()
+
+    def showEvent(self, event):
+        """Back from the tray: refreshes held back while hidden run now (on_restored)."""
+        super().showEvent(event)
+        callback = getattr(self, "on_restored", None)
+        if callable(callback) and not self.isMinimized():
+            callback()
 
     def closeEvent(self, event):
         """Intercept close button (X).

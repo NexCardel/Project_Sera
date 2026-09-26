@@ -680,6 +680,24 @@ class SyncPeerService:
         with self._activity_lock:
             return list(self._activity_history)
 
+    def _legacy_db_sync_blocked(self) -> Optional[str]:
+        """Blueprint §5 P3-9: legacy 49157 database pushes are disabled once this PC runs
+        Sera Sync v3 (mode shadow or live) -- a whole-DB overwrite would replace a shadow PC's
+        live DB under its replica, or throw away a live PC's field-level merges, and peer
+        tracker dumps would be written as this PC's own edits of rows that already replicate.
+        Returns the reason, or None in mode off (before shadow mode legacy sync is the only
+        sync there is). P4-1 removes the legacy protocol."""
+        mode = "off"
+        if self.db is not None and hasattr(self.db, "get_sync_mode"):
+            try:
+                mode = self.db.get_sync_mode()
+            except Exception:
+                mode = "off"
+        if mode in ("shadow", "live"):
+            return (f"this PC runs Sera Sync v3 (mode {mode}), which exchanges changes by itself; "
+                    "legacy full-database sync is disabled")
+        return None
+
     def _get_local_metrics(self) -> dict:
         if self.db and hasattr(self.db, "get_sync_metrics"):
             try:
@@ -1196,6 +1214,17 @@ class SyncPeerService:
                 _send_framed(conn, json.dumps(reject_payload).encode("utf-8"))
                 return
 
+            # P3-9: checked after authentication, so an unauthenticated caller can't learn
+            # this PC's sync mode.
+            if action in ("push_database", "request_database_pull", "push_tracker_dump"):
+                blocked = self._legacy_db_sync_blocked()
+                if blocked:
+                    print(f"[Sync Guard] Rejected {action!r} from {sender_host}: V3_SYNC_ACTIVE")
+                    self.log_activity("GUARD", f"Rejected {action} from {sender_host}", f"V3_SYNC_ACTIVE: {blocked}")
+                    reject_payload = {"status": "rejected", "reason": "V3_SYNC_ACTIVE", "hint": blocked}
+                    _send_framed(conn, json.dumps(reject_payload).encode("utf-8"))
+                    return
+
             is_live_update = bool(header.get("live_update", False))
             force_override = bool(header.get("force_override", False))
             incoming_client_count = int(header.get("client_count", 0))
@@ -1624,6 +1653,12 @@ class SyncPeerService:
         Pushes local master.db + sera.salt to the specified peer.
         Returns a success/failure message string.
         """
+        blocked = self._legacy_db_sync_blocked()
+        if blocked:
+            msg = f"Legacy database push is disabled: {blocked}."
+            self.log_activity("GUARD", "Outbound push blocked (Sera Sync v3 active)", msg)
+            return msg
+
         # ---- BOOTSTRAP QUARANTINE ----
         # Never push from a machine that has zero clients (new/empty install).
         # This is an absolute hard block — it is unconditional and cannot be
@@ -1797,6 +1832,8 @@ class SyncPeerService:
         """
         if not dumps:
             return True
+        if self._legacy_db_sync_blocked():      # P3-9: tracker_dump replicates in v3
+            return False
         try:
             with socket.create_connection((host_ip, host_port), timeout=SOCK_TIMEOUT_SEC) as conn:
                 header = {
@@ -1820,6 +1857,8 @@ class SyncPeerService:
         Returns the count of peers that successfully accepted and acknowledged the dumps.
         """
         if not dumps:
+            return 0
+        if self._legacy_db_sync_blocked():      # P3-9: tracker_dump replicates in v3
             return 0
         if peers is None:
             peers = self.get_peers()
@@ -1936,6 +1975,10 @@ class SyncPeerService:
 
     def request_pull_from(self, peer_ip: str, peer_port: int = SYNC_PORT) -> bool:
         """Requests specified peer to push their higher-revision database to us."""
+        blocked = self._legacy_db_sync_blocked()
+        if blocked:
+            self.log_activity("GUARD", "Outbound pull request blocked (Sera Sync v3 active)", blocked)
+            return False
         try:
             with socket.create_connection((peer_ip, peer_port), timeout=SOCK_TIMEOUT_SEC) as conn:
                 header = {

@@ -369,8 +369,16 @@ def build_viewer(plan: dict, out: Path):
                                  f'=COUNTIFS({W}!{rng("D")},A{n},{W}!{rng("J")},"Done")',
                                  f'=COUNTIFS({W}!{rng("D")},A{n},{W}!{rng("G")},"Yes*")'], start=1):
             body(ss.cell(row=n, column=col, value=v), bold=(col == 1))
-    ss.cell(row=t0 + 5, column=1, value="Status last refreshed from the CSV:").font = F_NOTE
-    ss.cell(row=t0 + 5, column=4, value='=IFERROR(MAX(StatusData!G:G)&"","")').font = F_NOTE
+    # Power Query loads "Updated" as text ("YYYY-MM-DD HH:MM"), so MAX(G:G) is always 0. Strip the
+    # separators to get a comparable number (202609261528), take the max, and format it back.
+    # AGGREGATE(14,6,...) evaluates the array natively (SUMPRODUCT(MAX(...)) implicitly intersects
+    # to one row in pre-365 Excel) and skips any cell that isn't a stamp. It is an Excel 2010
+    # function, so the file must store it as _xlfn.AGGREGATE.
+    stamp = ('_xlfn.AGGREGATE(14,6,--(0&SUBSTITUTE(SUBSTITUTE(SUBSTITUTE('
+             'StatusData!$G$2:$G$500,"-","")," ",""),":","")),1)')
+    ss.cell(row=t0 + 5, column=1, value="Latest status update in the CSV:").font = F_NOTE
+    ss.cell(row=t0 + 5, column=4,
+            value=f'=IFERROR(IF({stamp}=0,"",TEXT({stamp},"0000-00-00 00\\:00")),"")').font = F_NOTE
 
     # Phase Checks
     pcs = wb.create_sheet("Phase Checks", 2)

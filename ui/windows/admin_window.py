@@ -1234,6 +1234,12 @@ class AdminWindow(QWidget):
             self._on_new()
 
     def _refresh_activity_tags(self):
+        # Only while someone can see it (see SearchWindow._on_activity_tick); SeraApp catches up
+        # when the window is back.
+        if not self.isVisible() or self.window().isMinimized():
+            self._activity_stale = True
+            return
+        self._activity_stale = False
         try:
             recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
             for r in range(self.table.rowCount()):

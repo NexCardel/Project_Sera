@@ -428,6 +428,14 @@ class SeraSyncDialog(QDialog):
         self.btn_reset_shadow.setToolTip("Set shadow mode off on this PC and set its shadow files aside (the week starts over).")
         self.btn_reset_shadow.clicked.connect(self._on_reset_shadow_mode)
         shadow_mode_row.addWidget(self.btn_reset_shadow)
+        # Going live (P3-9): per PC, admin mode (PIN), when the owner decides the week passed.
+        self.btn_go_live = QPushButton("  Go live")
+        icon = _safe_icon("mdi.rocket-launch-outline", color="#FFFFFF")
+        if icon:
+            self.btn_go_live.setIcon(icon)
+        self.btn_go_live.setToolTip("Make this PC's shadow copy its live data and switch Sera Sync to live (after a restart).")
+        self.btn_go_live.clicked.connect(self._on_go_live)
+        shadow_mode_row.addWidget(self.btn_go_live)
         sync_status_layout.addLayout(shadow_mode_row)
 
         shadow_row = QHBoxLayout()
@@ -915,9 +923,13 @@ class SeraSyncDialog(QDialog):
             self.shadow_mode_label.setText(f"Shadow mode: status unavailable ({exc})")
             self.btn_start_shadow.setEnabled(False)
             self.btn_reset_shadow.setEnabled(False)
+            self.btn_go_live.setEnabled(False)
             return
         busy = getattr(self, "_shadow_start_busy", False)
-        if st["pending_start"]:
+        pending_golive = st.get("pending_golive", False)
+        if pending_golive:
+            text = "Sync mode: goes live when Sera restarts"
+        elif st["pending_start"]:
             text = "Shadow mode: starts when Sera restarts"
         elif st["mode"] == "shadow":
             since = (st["started_at"] or "")[:10] or "unknown date"
@@ -929,15 +941,21 @@ class SeraSyncDialog(QDialog):
             else:
                 text = f"Shadow mode: on since {since}, day {day} (the 7-day week is complete; check the go-live criteria)"
         elif st["mode"] == "live":
-            text = "Sync mode: live"
+            since = (st.get("went_live_at") or "")[:10]
+            text = f"Sync mode: live (since {since})" if since else "Sync mode: live"
         else:
             text = "Shadow mode: off"
         self.shadow_mode_label.setText(text)
+        went_live = bool(st.get("went_live_at"))
         self.btn_start_shadow.setEnabled(
-            not busy and st["mode"] == "off" and not st["replica"] and not st["pending_start"])
+            not busy and st["mode"] == "off" and not st["replica"] and not st["pending_start"]
+            and not pending_golive and not went_live)
         self.btn_reset_shadow.setEnabled(
-            not busy and st["mode"] != "live" and not st["pending_start"]
-            and (st["replica"] or st["started_at"] is not None))
+            not busy and st["mode"] != "live" and not st["pending_start"] and not pending_golive
+            and not went_live and (st["replica"] or st["started_at"] is not None))
+        self.btn_go_live.setEnabled(
+            not busy and st["mode"] == "shadow" and st["replica"] and not st["pending_start"]
+            and not pending_golive and not st.get("salvage_pending"))
 
     def _confirm_admin_pin(self) -> bool:
         """Starting and resetting shadow mode are admin-mode actions: ask for the PIN again."""
@@ -1099,6 +1117,67 @@ class SeraSyncDialog(QDialog):
             return
         self.shell_alert_or_status(f"Shadow mode reset ({len(renamed)} file(s) set aside).")
         self._refresh_sync_status()
+
+    # ------------------------------------------------------------------
+    # Going live (P3-9).
+    # ------------------------------------------------------------------
+
+    def _on_go_live(self):
+        if self.db is None:
+            return
+        import sync_shadow
+        try:
+            day = sync_shadow.shadow_status(self.db, self._app_dir()).get("day")
+        except Exception:
+            day = None
+        week = sync_shadow.SHADOW_WEEK_DAYS
+        if day is not None and day <= week:
+            week_text = (f"This PC is on day {day} of {week} of the shadow week. The week is NOT "
+                         "complete yet.\n\n")
+        else:
+            week_text = ""
+        text = (
+            week_text +
+            "Go live on this PC?\n\n"
+            "Do this only when the owner has decided the shadow week passed: 7 days in a row with "
+            "no capture-check mismatch, equal replicas on all PCs within 2 minutes of quiet, and "
+            "no parked change older than 1 hour (see the shadow checks above and "
+            "logs/sync_shadow.log).\n\n"
+            "Sera restarts. This PC's shadow copy, which already holds every PC's changes, becomes "
+            "the data staff work with, and other PCs' changes then appear directly. The current "
+            "database is kept in the shadow folder. Old-style \"Sync To\" pushes stay off.\n\n"
+            "Go live on every PC, one after the other.")
+        if QMessageBox.question(self, "Go Live", text, QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) != QMessageBox.Yes:
+            return
+        if not self._confirm_admin_pin():
+            return
+        # Nothing may write to the replica while it is exported: stop the engine and the seal
+        # timer first (stage_go_live seals and mirrors what is left itself).
+        engine_was_running = bool(self.sync_engine is not None and getattr(self.sync_engine, "running", False))
+        if engine_was_running:
+            self.sync_engine.stop()
+        self.db.stop_seal_timer()
+        try:
+            sync_shadow.stage_go_live(self.db, self._app_dir())
+        except Exception as exc:
+            # Staging put this PC back in shadow mode; get sync running again (open-problems S2).
+            try:
+                self.db.start_seal_timer()
+                if engine_was_running:
+                    self.sync_engine.start()
+            except Exception as restart_exc:
+                exc = f"{exc} (and Sera Sync could not be restarted: {restart_exc}; restart Sera)"
+            QMessageBox.warning(self, "Go Live", f"This PC did not go live: {exc}")
+            self._refresh_sync_status()
+            return
+        try:
+            if self.sync_service:
+                self.sync_service.stop()
+        except Exception:
+            pass
+        import version
+        version.restart_app()
 
     def _selected_conflict(self):
         """Returns the selected row's conflict dict from ``_conflicts_cache``, or ``None``."""

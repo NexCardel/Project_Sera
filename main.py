@@ -253,6 +253,8 @@ class SeraApp:
         self._run_pending_office_key_migration()
         self._run_pending_rejoin()
         self._run_pending_shadow_start()
+        self._go_live_alert = None
+        self._run_pending_go_live()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -565,6 +567,9 @@ class SeraApp:
             except OSError:
                 pass
 
+        if getattr(self, "_go_live_alert", None):
+            startup_alerts.append(self._go_live_alert)
+
         if startup_alerts:
             level = "error" if any(a[0] == "error" for a in startup_alerts) else "warning"
             duration = 0 if any(a[2] == 0 for a in startup_alerts) else max(a[2] for a in startup_alerts)
@@ -614,6 +619,9 @@ class SeraApp:
         self._memory_timer.timeout.connect(
             lambda: sample_and_maybe_trim("running: periodic sample", may_trim=lambda: not self._window_in_use()))
         self._memory_timer.start(10 * 60_000)
+        # A frozen window ("Not responding") writes every thread's stack to logs/hang.log.
+        from core import hang_watchdog
+        hang_watchdog.start(self.app)
 
         # Heavy historical repair/report work is intentionally deferred until
         # after the main window and extension listener are available.
@@ -678,9 +686,10 @@ class SeraApp:
                     continue
                 if name == "tracker_dump_win":
                     if not getattr(win, "_first_load_pending", False):   # not filled yet: fills when opened
-                        win.load_data()
+                        self._refresh_when_seen(name, win.load_data)
                 else:
-                    win._on_search_changed()     # redraw only - refresh() would clear the search box
+                    # redraw only - refresh() would clear the search box
+                    self._refresh_when_seen(name, win._on_search_changed)
             except Exception as exc:
                 print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
@@ -851,7 +860,7 @@ class SeraApp:
     def _refresh_tracker_dump_ui(self):
         self._capture_ui_refresh_pending = False
         if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-            self.tracker_dump_win.load_data()
+            self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
 
     def _handle_extension_result(self, msg: dict):
         # Queue all extension captures; the database/report pipeline is too
@@ -1464,6 +1473,31 @@ class SeraApp:
         from ui.dialogs.shadow_start_dialog import run_pending_shadow_start
         run_pending_shadow_start(app_dir)
 
+    def _run_pending_go_live(self) -> None:
+        """P3-9: install a staged go-live (the shadow replicas become the live databases, mode
+        live). Runs before any database is opened. The outcome is shown as a start-up alert,
+        so a failed go-live isn't mistaken for a successful one."""
+        import sync_shadow
+        app_dir = Path(self.app_dir)
+        if not sync_shadow.has_pending_go_live(app_dir):
+            return
+        try:
+            sync_shadow.apply_pending_go_live(app_dir)
+        except sync_shadow.GoLiveError as e:
+            print(f"[SeraApp] Go-live failed: {e}")
+            self._go_live_alert = ("error", f"Sera Sync did not go live on this PC: {e}. It is still in "
+                                            "shadow mode; see logs/sync_shadow.log.", 0)
+            return
+        except Exception as e:
+            # The office key couldn't be loaded: nothing was touched, retried at the next start.
+            print(f"[SeraApp] Go-live not applied yet: {e}")
+            self._go_live_alert = ("warning", f"Sera Sync could not go live yet ({type(e).__name__}); "
+                                              "it will try again at the next start.", 0)
+            return
+        self._go_live_alert = ("warning", "Sera Sync is now live on this PC: other PCs' changes appear "
+                                          "in your data directly. The previous database is kept in the "
+                                          "shadow folder.", 15000)
+
     def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
         """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""
         from PySide6.QtWidgets import QMessageBox
@@ -2006,6 +2040,7 @@ class SeraApp:
         from version import APP_VERSION
         self.shell.setWindowTitle(f"Project Sera — Aman Associates — v{APP_VERSION}")
         self.shell.on_minimized_to_tray = self._on_window_put_away
+        self.shell.on_restored = self._on_window_restored
         self.shell.on_minimized = lambda: QTimer.singleShot(5_000, lambda: self._trim_if_idle("window minimised"))
         self.shell.on_quit_requested = self._quit_application
         self._setup_system_tray()
@@ -2160,6 +2195,57 @@ class SeraApp:
         shell = getattr(self, "shell", None)
         return bool(shell is not None and shell.isVisible() and not shell.isMinimized())
 
+    def _refresh_when_seen(self, key: str, fn) -> None:
+        """Background-triggered screen refreshes (a capture, a sync, maintenance) run now if the
+        window is in use; while it is minimised or in the tray only the latest one per screen is
+        kept and run once the window is back. Every one of them rebuilds a table on the UI thread,
+        and the app froze while minimised (2026-09-26) - nobody can see those tables then."""
+        if self._window_in_use():
+            fn()
+            return
+        if not hasattr(self, "_deferred_refreshes"):
+            self._deferred_refreshes = {}
+        self._deferred_refreshes[key] = fn
+
+    def _refresh_synced_screens(self, targets) -> None:
+        """Refreshes the named screens after synced data arrived, via _refresh_when_seen."""
+        refreshers = {
+            "dashboard_win": "refresh", "search_win": "refresh", "admin_win": "refresh",
+            "tracker_dump_win": "load_data",
+        }
+        for name, method in refreshers.items():
+            win = getattr(self, name, None)
+            if name in targets and win:
+                self._refresh_when_seen(name, getattr(win, method))
+        detail = getattr(self, "detail_win", None)
+        if "detail_win" in targets and detail is not None:
+            def _reload_detail(d=detail):
+                if d.isVisible() and getattr(d, "client_id", None):
+                    d.load_client(d.client_id)
+            self._refresh_when_seen("detail_win", _reload_detail)
+
+    def _on_window_restored(self) -> None:
+        # After the window has painted, so coming back from the tray is instant.
+        QTimer.singleShot(0, self._run_deferred_refreshes)
+
+    def _run_deferred_refreshes(self) -> None:
+        if not self._window_in_use():
+            return
+        pending, self._deferred_refreshes = getattr(self, "_deferred_refreshes", {}), {}
+        # Keys are window attribute names; a screen whose minute tick was skipped catches up
+        # here, unless a full refresh of it is already pending.
+        for win_name in ("search_win", "admin_win"):
+            win = getattr(self, win_name, None)
+            if win is not None and getattr(win, "_activity_stale", False):
+                win._activity_stale = False
+                tick = getattr(win, "_on_activity_tick", None) or getattr(win, "_refresh_activity_tags", None)
+                pending.setdefault(win_name, tick)
+        for key, fn in pending.items():
+            try:
+                fn()
+            except Exception as e:
+                print(f"[UI] Deferred refresh '{key}' failed: {e}")
+
     def _trim_if_idle(self, reason: str) -> None:
         """Hand back touched-once memory, but only while nobody is looking at the window."""
         if self._window_in_use():
@@ -2167,7 +2253,8 @@ class SeraApp:
         from core.memlog import trim_working_set
         trim_working_set(reason)
         if getattr(self, "_backup_scheduler", None):
-            self._backup_scheduler.check_now()
+            # Off the Qt thread: a due backup copies both databases, which froze the window.
+            self._backup_scheduler.check_soon()
 
     def _on_window_put_away(self):
         self._show_tray_minimized_hint()
@@ -2438,7 +2525,7 @@ class SeraApp:
         """Main thread GUI handler when peer tracker dumps are received."""
         try:
             if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-                self.tracker_dump_win.load_data()
+                self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
             if hasattr(self, "shell") and self.shell:
                 self.shell.show_alert(f"📥 Received {count} filing capture(s) from {sender_host}", level="info", duration=3500)
         except Exception:
@@ -2447,17 +2534,8 @@ class SeraApp:
     def _handle_live_sync_received_main_thread(self, sender_username: str, sender_host: str):
         """Main thread GUI handler for live auto-sync without app restart."""
         try:
-            if hasattr(self, "dashboard_win") and self.dashboard_win:
-                self.dashboard_win.refresh()
-            if hasattr(self, "search_win") and self.search_win:
-                self.search_win.refresh()
-            if hasattr(self, "admin_win") and self.admin_win:
-                self.admin_win.refresh()
-            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-                self.tracker_dump_win.load_data()
-            if hasattr(self, "detail_win") and self.detail_win and self.detail_win.isVisible():
-                if getattr(self.detail_win, "client_id", None):
-                    self.detail_win.load_client(self.detail_win.client_id)
+            self._refresh_synced_screens(("dashboard_win", "search_win", "admin_win",
+                                          "tracker_dump_win", "detail_win"))
             if hasattr(self, "sidebar") and self.sidebar:
                 self.sidebar.notify_sync_received(sender_username, sender_host)
             if hasattr(self, "shell") and self.shell:
@@ -2552,17 +2630,7 @@ class SeraApp:
             targets = set()
             for table in tables:
                 targets.update(self._SYNC_TABLE_REFRESH.get(table, ()))
-            if "dashboard_win" in targets and getattr(self, "dashboard_win", None):
-                self.dashboard_win.refresh()
-            if "search_win" in targets and getattr(self, "search_win", None):
-                self.search_win.refresh()
-            if "admin_win" in targets and getattr(self, "admin_win", None):
-                self.admin_win.refresh()
-            if "tracker_dump_win" in targets and getattr(self, "tracker_dump_win", None):
-                self.tracker_dump_win.load_data()
-            if "detail_win" in targets and getattr(self, "detail_win", None) and self.detail_win.isVisible():
-                if getattr(self.detail_win, "client_id", None):
-                    self.detail_win.load_client(self.detail_win.client_id)
+            self._refresh_synced_screens(targets)
             if hasattr(self, "sidebar") and self.sidebar:
                 self.sidebar.notify_sync_received("", "")
         except Exception as e:
