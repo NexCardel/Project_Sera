@@ -629,7 +629,7 @@ def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
                     return 2
                 wait = min((min(waits) - now()).total_seconds() + 120, (t.deadline() - now()).total_seconds())
                 log(f"[{stamp()}] every runner for {wp} is at its usage limit: sleeping {wait / 60:.0f} min")
-                time.sleep(max(60, wait))
+                countdown(max(60, wait), f"{wp} waits for the usage limit / connection to clear")
                 continue
             reset = run_one(t, wp, key, dry=dry, log=log)
             if once or dry:
@@ -638,6 +638,32 @@ def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
                 runner = t.plan["models"][key]["runner"]
                 held[runner] = reset
                 log(f"[{stamp()}] {runner} usage limit until {reset:%H:%M}; other runners carry on")
+
+
+WAIT_FILE = LOG_DIR / "waiting.json"
+
+
+def countdown(seconds: float, reason: str) -> None:
+    """Sleeps, showing a live 'resumes in mm:ss' timer in the console, and leaves the end time in
+    logs/sgt-overhaul/waiting.json so 'watch' can show the same timer."""
+    until = now() + dt.timedelta(seconds=seconds)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    WAIT_FILE.write_text(json.dumps({"until": until.isoformat(), "reason": reason}), encoding="utf-8")
+    live = bool(getattr(sys.stdout, "isatty", lambda: False)())
+    try:
+        while (left := (until - now()).total_seconds()) > 0:
+            if live:
+                h, rem = divmod(int(left), 3600)
+                sys.stdout.write(f"\r  {reason}: resumes at {until:%H:%M} (in {h}:{rem // 60:02d}:{rem % 60:02d})   ")
+                sys.stdout.flush()
+            time.sleep(1 if live else min(30, left))
+        if live:
+            print()
+    finally:
+        try:
+            WAIT_FILE.unlink()
+        except OSError:
+            pass
 
 
 def watch(poll_s: float = 1.0) -> None:
@@ -669,6 +695,15 @@ def watch(poll_s: float = 1.0) -> None:
                             what = inp.get("command") or inp.get("file_path") or inp.get("pattern") or json.dumps(inp)[:120]
                             print(f"{ts} {part.get('name', ''):5} {str(what)[:200]}", flush=True)
                 pos = f.tell()
+        try:                                    # the dispatcher is waiting: show its timer
+            w = json.loads(WAIT_FILE.read_text(encoding="utf-8"))
+            left = (dt.datetime.fromisoformat(w["until"]) - now()).total_seconds()
+            if left > 0:
+                h, rem = divmod(int(left), 3600)
+                print(f"\r  WAITING  {w['reason']}: resumes at {w['until'][11:16]} (in {h}:{rem // 60:02d}:{rem % 60:02d})   ",
+                      end="", flush=True)
+        except (OSError, ValueError, KeyError):
+            pass
         time.sleep(poll_s)
 
 
