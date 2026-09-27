@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 01:48)
+# SGT overhaul — report (2026-09-28 01:56)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 10 |
+| Not started | 9 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 17 |
+| Done | 18 |
 | Blocked | 0 |
 
-Runs: 23   output tokens: 723890   API-equivalent cost: $31.28
+Runs: 24   output tokens: 758373   API-equivalent cost: $32.56
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -31,7 +31,7 @@ Runs: 23   output tokens: 723890   API-equivalent cost: $31.28
 | W5-2 | Done | sonnet | 5827a96 | Atlas tool: show / diff / coverage | atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed |
 | W6-1 | Done | sonnet | 35d558a | The GPS: position, route, progress, row enrichment | core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: |
 | W6-2 | Done | opus | 86afa24 | Read harder near the finish line (advisory to the Core) | GPS opens a 30 s read-every-tick window on arriving before a confirmation; only adds reads, inert with SGT-I Off; 425 sgt tests pass |
-| W7-1 | Not started | sonnet |  | Assertion checker (NegEx-style), trigger words in config |  |
+| W7-1 | Done | sonnet | f6f9cc7 | Assertion checker (NegEx-style), trigger words in config | assertions.py + sgt_i_config.json assertions section; 17 new tests, 442 total pass |
 | W7-2 | Not started | sonnet |  | Page kinds classifier |  |
 | W8-1 | Not started | opus |  | Evidence ledger, retraction, explanations, second opinions |  |
 | W9-1 | Not started | sonnet |  | Sera's own data: client list and tracker, read-only |  |

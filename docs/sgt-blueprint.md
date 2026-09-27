@@ -1603,3 +1603,29 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   priority ordering, and the NegEx scope mechanism (a synthetic config, since no real wording needs
   a `post` trigger yet - `negated.post` ships empty). `test_sgt_*.py`: 442 passed (pre-existing
   flaky ordering failure noted in W6-2 not seen this run).
+
+- **W7-2** (2026-09-28, claude-sonnet-5): step 6's other half. New `core/sgt_i/page_kinds.py`:
+  `classify(page, config=, atlas_hint=) -> PageKind(kind, evidence)`, one of `PAGE_KINDS` (login,
+  dashboard, profile, list, wizard_step, confirmation, error, payment) or `None` (abstain).
+  Priority (most-structural first): stepper-current -> wizard_step; negated assertion / error
+  vocab -> error; an identifier (`code`/`number` pair, masked shape >= 6 chars) + `happened`
+  assertion, both in dialog/main -> confirmation; amount pair + payment vocab -> payment;
+  input-dominant (by node count, not pairs - an empty field never becomes a pair, page_map.py's
+  own rule) + login vocab -> login; a table with >=2 rows -> list; repeated sibling blocks sharing
+  a child-role signature (>=3, atlas.py's own "3 cards = 14 cards" idea applied to whole blocks)
+  -> list (data-shaped children) or dashboard (link/button-shaped); profile vocab + an identity-
+  typed pair -> profile; else abstain. `atlas_hint={"in_degree": int}` is an optional last-resort
+  tie-break only (an unvocabbed input-dominant page nothing else leads to reads as login) - two
+  decisions recorded (`tools/sgt_overhaul.py show W7-2`: why atlas_hint stays this thin, why
+  repeated-blocks is detected this way), since atlas.py stores no page-level kind today. New
+  `sgt_i_config.json` `"page_kinds"` section: login/payment/profile/error vocabulary, generic
+  across portals. Vocab is matched only against headings, free text and pair *labels* in
+  dialog/main, never a pair's value or a control's typed-in text. Pure, stateless, no Component
+  registered yet (step 7 wires evidence/second-opinion; a later WP). Tests
+  `tests/test_sgt_i_page_kinds.py` (18): both 14.1 bug-table cases (a stepper's un-reached step
+  reading "happened" text stays wizard_step; the original-return ack reads reference_to_past, not
+  confirmation), error beating confirmation when both an identifier and negated wording are
+  present, payment/login requiring vocab (an amount or input count alone never fires), the
+  atlas-tie-break bounds, and both repeated-block outcomes. `test_sgt_*.py`: 460 passed (was 442).
+  Next: no component yet: step 7 (evidence ledger) is the WP that calls `page_kinds.classify()`
+  and `assertions.classify()` together and puts kind + assertion on the row.

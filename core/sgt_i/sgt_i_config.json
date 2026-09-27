@@ -61,5 +61,12 @@
         "filing\\s+successful"
       ]
     }
+  },
+  "page_kinds": {
+    "note": "Blueprint 14.4 step 6, second half: generic vocabulary for core/sgt_i/page_kinds.py. These are login/payment/profile/error words shared by many portals ('log in', 'otp', 'pay now', ...), never one portal's own field names - a new portal's wording is a change here, never a code change. Matched case-insensitively as whole words/phrases against heading, dialog and label text.",
+    "login": ["log\\s*in", "sign\\s*in", "\\busername\\b", "\\bpassword\\b", "\\botp\\b", "\\bcaptcha\\b", "\\bpin\\b"],
+    "payment": ["\\bpayment\\b", "\\bpay\\s*now\\b", "amount\\s+due", "amount\\s+payable", "\\bchallan\\b", "net\\s*banking", "\\bupi\\b", "\\bcheckout\\b"],
+    "profile": ["\\bprofile\\b", "my\\s+account", "personal\\s+details", "\\bmy\\s+profile\\b", "update\\s+profile", "account\\s+details"],
+    "error": ["\\berror\\b", "something\\s+went\\s+wrong", "\\btry\\s+again\\b", "\\bunable\\s+to\\b", "page\\s+not\\s+found", "\\bunavailable\\b"]
   }
 }
