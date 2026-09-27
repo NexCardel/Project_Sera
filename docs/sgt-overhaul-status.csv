@@ -8,7 +8,7 @@ W2-1,2,Measure a cached UIA node read vs the current line reader,Done,claude-opu
 W2-2,2,"Page map: node model, zones, sections, layout pairing",Done,claude-opus-5-5,1,63c7f4c,"core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass",2026-09-27 19:56
 W2-3,2,Lines view from nodes + equivalence check against today's reader,Done,claude-sonnet-5,1,56b03e3,"tools/sgt_lines_equivalence.py: 14.2 gate, synthetic+corpus+live modes; 316 tests pass",2026-09-27 20:04
 W2-4,2,"Recorder stores nodes (corpus format v2, backwards compatible)",Done,claude-sonnet-5,1,cec95e6,corpus v2: PageRecorder records nodes alongside lines while SGT-I is on; replay reads v1/v2 unchanged; 322 tests pass,2026-09-28 00:15
-W3-1,3,Container -> value pairs with generic types and masking,In progress,claude-sonnet-5,1,,,2026-09-28 00:16
+W3-1,3,Container -> value pairs with generic types and masking,Done,claude-sonnet-5,1,ede9b8d,core/sgt_i/pairs.py: pairs_from_page produces container/type/masked-shape only; disk-level privacy test round-trips through insert_tracker_dump and scans file bytes,2026-09-28 00:24
 W4-1,4,Maths 1: shape grammar induction with rule-of-three bounds,Not started,claude-sonnet-5,0,,,
 W4-2,4,"Maths 2: checksum discovery, values inside values, relations",Not started,claude-sonnet-5,0,,,
 W4-3,4,Maths 3: container kinds from salted-hash statistics,Not started,claude-sonnet-5,0,,,
