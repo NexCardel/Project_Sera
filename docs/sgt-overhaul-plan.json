@@ -61,16 +61,7 @@
       "enabled": false,
       "exe": "agy",
       "prompt": "arg",
-      "args": [
-        "--model",
-        "{model}",
-        "--output-format",
-        "json",
-        "--mode",
-        "accept-edits",
-        "--sandbox",
-        "-p"
-      ],
+      "args": ["--model", "{model}", "--output-format", "json", "--mode", "accept-edits", "--sandbox", "-p"],
       "coauthor": "Gemini (Antigravity) <noreply@google.com>",
       "_note": "agy 1.2.12 (Go flags; the prompt is the value of -p, so it goes last). Kept to the restricted mode (accept-edits + sandbox). Disabled until a test shows workers can run the tests in that mode; the unrestricted --dangerously-skip-permissions mode is the owner's decision, not the dispatcher's."
     }
