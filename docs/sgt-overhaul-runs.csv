@@ -1,3 +1,4 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
 20260927-163846,W0-1,claude-sonnet-5,2,2026-09-27 16:38,0.1,usage limit,0,0,0,0,0,1,You've hit your session limit · resets 5:30pm (Asia/Kolkata)
 20260927-175946,W0-1,claude-sonnet-5,2,2026-09-27 17:34,25.0,error,178,93552,9830912,182041,3.6302223999999996,105,API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)
+20260927-191145,W0-1,claude-sonnet-5,3,2026-09-27 18:59,12.6,Done,140,53062,7108416,152868,2.5640552000000003,84,"W0-1 is done. Summary:  **Root cause** (confirmed via evidence, not guesswork): `sgt_shadow/spec_stats.json` showed `record_read` firing on every day from 23–27 Sep — called in the exact same code block as `PageRecorder.record()` in `SgtShadow._absorb`. Since `record()` only skips silently when `not"
