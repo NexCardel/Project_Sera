@@ -1,22 +1,22 @@
-# SGT overhaul — report (2026-09-27 19:19)
+# SGT overhaul — report (2026-09-27 19:26)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 25 |
+| Not started | 24 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 2 |
+| Done | 3 |
 | Blocked | 0 |
 
-Runs: 4   output tokens: 151628   API-equivalent cost: $6.45
+Runs: 5   output tokens: 182910   API-equivalent cost: $8.61
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | sonnet | 623424f | Find why the SGT page corpus stopped recording after 22 Sep and fix it | Root cause: sgt_record_pages flipped off silently (spec_stats.json proved reads continued); made PageRecorder.enabled echo every transition; regression tests ad |
 | W0-2 | Done | haiku | 0238725 | Baseline: SGT tests and replay baseline, recorded for later diffs | SGT 281 passed, VSDC 388+6 pre-existing, baseline 8 sessions/1 dataset |
-| W1-1 | Not started | opus |  | SGT-I host: the C/I contract in code |  |
+| W1-1 | Done | opus | bea35a6 | SGT-I host: the C/I contract in code | core/sgt_i host (thread, budget, hang trip, advisory+enrichment channels), sgt_i_mode Off/On, Core byte-identical On vs Off; 297 SGT tests pass |
 | W1-2 | Not started | sonnet |  | Enrichment fields on tracker rows (no schema change) |  |
 | W1-R | Not started | opus |  | Review: W0-1..W1-2 against the SGT-C safety rules |  |
 | W2-1 | Not started | opus |  | Measure a cached UIA node read vs the current line reader |  |
@@ -41,3 +41,12 @@ Runs: 4   output tokens: 151628   API-equivalent cost: $6.45
 | W12-1 | Not started | opus |  | The miner: proposals from the atlas, maths and anchoring |  |
 | W12-2 | Not started | sonnet |  | SGT lab screen |  |
 | W12-R | Not started | opus |  | Final review and merge-readiness report |  |
+
+## Decisions taken for you
+
+- **W1-1** SGT-I budget, hang limit and what trips it → 2.0 s per page for all components, hung = still running 15 s (checked when the Core hands over the next page); any component exception, overrun, hang or non-JSON/over-4KB enrichment trips ALL of SGT-I off for the run; re-enabling does not reset (Blueprint 14.2 rule 5 read literally; cheapest safe guard, Python threads cannot be killed)
+- **W1-1** Advisory and enrichment channel shape → ask_more_reads: max 3 outstanding per session, each expires after 60 s, consumed only when the Core's change gate would have skipped the read; enrichment keyed session -> component, merged into raw_payload['sgt_i'] at row dispatch (best effort, async) and dropped when SGT-I is off/tripped; queue holds 8 pages, oldest dropped (Rule 3 (more reads only, bounded) and rule 4 (own key only); Off leaves rows byte-identical)
+
+## Checks waiting for you
+
+- #1 (W1-1) Settings -> Tracker shows the new 'SGT-I' Off/On row under SGT; flip it On, save, and confirm the app log is quiet and SGT rows are unchanged on a real portal session — Not run
