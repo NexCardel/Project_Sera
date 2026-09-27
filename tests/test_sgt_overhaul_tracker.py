@@ -133,15 +133,13 @@ def test_ask_takes_an_answer_given_from_the_command_line(docs, monkeypatch):
     assert got == {"q": "1", "answer": "A", "by": "user"}
 
 
-def test_sonnet_tier_prefers_gemini_and_falls_back_to_claude(docs, monkeypatch):
+def test_claude_first_gemini_only_as_fallback(docs, monkeypatch):
     t = so.Tracker(docs)
     monkeypatch.setenv("SGT_CLAUDE", '["claude"]')
-    monkeypatch.delenv("SGT_RUNNER_ANTIGRAVITY", raising=False)
-    assert so.pick_model(t, "W0-2", {}) == "haiku"            # Gemini not installed: Claude
     monkeypatch.setenv("SGT_RUNNER_ANTIGRAVITY", '["agy"]')
-    assert so.pick_model(t, "W0-2", {}) == "gemini-flash"     # installed: Gemini first
     later = so.now() + dt.timedelta(hours=1)
-    assert so.pick_model(t, "W0-2", {"antigravity": later}) == "haiku"   # at its limit: Claude
-    assert so.pick_model(t, "W0-1", {}) == "sonnet"           # claude_only WP
+    assert so.pick_model(t, "W0-2", {}) == "haiku"            # Claude first
+    assert so.pick_model(t, "W0-2", {"claude": later}) == "gemini-flash"   # Claude at its limit
+    assert so.pick_model(t, "W0-1", {"claude": later}) is None             # claude_only WP waits
     assert so.pick_model(t, "W1-1", {}) == "opus"             # Opus work never goes to Gemini
     assert so.pick_model(t, "W1-1", {"claude": later}) is None
