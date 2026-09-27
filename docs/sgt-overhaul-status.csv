@@ -22,7 +22,7 @@ W8-1,8,"Evidence ledger, retraction, explanations, second opinions",Done,claude-
 W9-1,9,"Sera's own data: client list and tracker, read-only",Done,claude-sonnet-5,1,eebec24,"sera_data.py: read-only cached clients/tracker accessor, OCR recovery, name-vs-PAN cross-check, masked confirm; 15 new tests, 492 passed total",2026-09-28 02:25
 W9-2,9,Tracker expectations and self-healing (known-value anchoring),Done,claude-sonnet-5,1,4272cba,expectations.py: due/revision/duplicate + known-value anchoring synonyms; unwired from default_components (check-list item added); 507 tests pass,2026-09-28 02:35
 W10-1,10,UIA events for short-lived messages + page diffing,Done,claude-opus-5-5,1,0e1794c,"FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list",2026-09-28 02:47
-W11-1,11,'Not understood' residue report,In progress,claude-haiku-4-5-20251001,1,,,2026-09-28 02:47
+W11-1,11,'Not understood' residue report,Retry,claude-haiku-4-5-20251001,1,,dispatcher restarted,2026-09-28 02:55
 W12-1,12,"The miner: proposals from the atlas, maths and anchoring",Not started,claude-opus-5-5,0,,,
 W12-2,12,SGT lab screen,Not started,claude-sonnet-5,0,,,
 W12-R,12,Final review and merge-readiness report,Not started,claude-opus-5-5,0,,,
