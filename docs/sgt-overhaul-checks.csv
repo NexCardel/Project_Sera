@@ -2,3 +2,4 @@ Check,WP,Text,Result,Date,Notes
 1,W1-1,"Settings -> Tracker shows the new 'SGT-I' Off/On row under SGT; flip it On, save, and confirm the app log is quiet and SGT rows are unchanged on a real portal session",Not run,2026-09-27 19:26,
 2,W2-1,Re-run tools/sgt_i_uia_node_bench.py on a real GST/ITR portal page in the office Edge session (only local mocks measured) and confirm node-read lines are IDENTICAL to read_page_text there.,Not run,2026-09-27 19:48,
 3,W2-3,"tools/sgt_lines_equivalence.py --title ""<substr>"" live-window mode is untested against a real open portal window (needs an unlocked desktop with Edge open on a page) - only the no-window-found path was exercised here",Not run,2026-09-27 20:04,
+4,W2-4,Switch SGT-I on for a real portal session so the corpus actually gains v2 nodes records; then re-run tools/sgt_lines_equivalence.py (no --skip-corpus) to see it move off '0 comparable'.,Not run,2026-09-27 20:18,

@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-27 19:57)
+# SGT overhaul — report (2026-09-28 00:04)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 20 |
+| Not started | 18 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 7 |
-| Blocked | 0 |
+| Done | 8 |
+| Blocked | 1 |
 
-Runs: 9   output tokens: 277907   API-equivalent cost: $14.22
+Runs: 14   output tokens: 353663   API-equivalent cost: $17.44
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -21,8 +21,8 @@ Runs: 9   output tokens: 277907   API-equivalent cost: $14.22
 | W1-R | Done | opus | d4d6da4 | Review: W0-1..W1-2 against the SGT-C safety rules | Review OK except 2 fixed defects: SGT-I detach race could drop a Core row; 4 payload scanners read raw_payload.sgt_i as identity/name evidence |
 | W2-1 | Done | opus | 54ae8d7 | Measure a cached UIA node read vs the current line reader | Cached node read: heavy 927->530 ms, normal ~40->~32 ms, control-view lines identical; unpack ~205 ms is next cost |
 | W2-2 | Done | opus | 63c7f4c | Page map: node model, zones, sections, layout pairing | core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass |
-| W2-3 | Not started | sonnet |  | Lines view from nodes + equivalence check against today's reader |  |
-| W2-4 | Not started | sonnet |  | Recorder stores nodes (corpus format v2, backwards compatible) |  |
+| W2-3 | Done | sonnet | 56b03e3 | Lines view from nodes + equivalence check against today's reader | tools/sgt_lines_equivalence.py: 14.2 gate, synthetic+corpus+live modes; 316 tests pass |
+| W2-4 | Blocked | sonnet |  | Recorder stores nodes (corpus format v2, backwards compatible) | error after 3 attempts; see logs/sgt-overhaul/20260928-000437-W2-4.json |
 | W3-1 | Not started | sonnet |  | Container -> value pairs with generic types and masking |  |
 | W4-1 | Not started | sonnet |  | Maths 1: shape grammar induction with rule-of-three bounds |  |
 | W4-2 | Not started | sonnet |  | Maths 2: checksum discovery, values inside values, relations |  |
@@ -49,8 +49,12 @@ Runs: 9   output tokens: 277907   API-equivalent cost: $14.22
 - **W2-1** Which UIA tree view should the cached node read use? → Control view (UIA default TreeFilter) (Its lines are identical to read_page_text on all 3 test pages and it is fastest (heavy 530 ms vs raw 767 ms); raw view adds ~2x nodes and different lines.)
 - **W2-2** Where do the zone words (help/FAQ, stepper) live? → Generic UI words as DEFAULT_VOCAB in page_map.py, overridable via a vocab argument; no portal wording in code (They are portal-neutral UI words; portal-specific wording can be passed from config by the step-2 component without changing page_map)
 - **W2-2** How is a stepper told apart from a tab bar or a row of labels, and how is the current step known? → Row of >=3 short labels that are numbered or inside a container named like a stepper; current = the selected step (uia_nodes now caches SelectionItem.IsSelected for TabItems too) (Tab bars and form column labels must not become steppers; selection is already in the cache request so it costs nothing extra; without it step state stays unknown rather than guessed)
+- **W2-3** Build the equivalence check as a real side-by-side (fake UIA layer feeding both readers) or as hand-written expected-output tests like W2-1's? → Real side-by-side: one FakeElement tree implements both the live pattern API and the cached-property API, fed into the actual vsdc_uia_text._collect_descendant_lines and uia_nodes.lines_from_nodes (hand-written expectations (W2-1's test_sgt_i_uia_nodes.py) only prove lines_from_nodes matches what a human expects, not that it matches the Core's real function; a shared fixture tree makes any future edit to either reader show up as a real diff, which is what the 14.2 gate is for)
+- **W2-4** Where does the extra node read for corpus v2 happen? → Synchronous, in SgtShadow._observe on the Core thread, gated on recorder.enabled and sgt_i.active; injectable via a new read_nodes= constructor param (default: core.sgt_i.uia_nodes.read_page_nodes), so tests and replay never touch real UIA (One JSONL record needs lines+nodes together; a separate async write from SGT-I's own thread would need to merge into an already-written line, which is much more complex for no gain since read_page_nodes already bounds itself to a few hundred ms (W2-1 bench) and has its own 3s timeout, same as the existing lines read)
 
 ## Checks waiting for you
 
 - #1 (W1-1) Settings -> Tracker shows the new 'SGT-I' Off/On row under SGT; flip it On, save, and confirm the app log is quiet and SGT rows are unchanged on a real portal session — Not run
 - #2 (W2-1) Re-run tools/sgt_i_uia_node_bench.py on a real GST/ITR portal page in the office Edge session (only local mocks measured) and confirm node-read lines are IDENTICAL to read_page_text there. — Not run
+- #3 (W2-3) tools/sgt_lines_equivalence.py --title "<substr>" live-window mode is untested against a real open portal window (needs an unlocked desktop with Edge open on a page) - only the no-window-found path was exercised here — Not run
+- #4 (W2-4) Switch SGT-I on for a real portal session so the corpus actually gains v2 nodes records; then re-run tools/sgt_lines_equivalence.py (no --skip-corpus) to see it move off '0 comparable'. — Not run
