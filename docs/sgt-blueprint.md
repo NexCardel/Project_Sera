@@ -1418,3 +1418,16 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   (767 ms) with different lines - decided: control view. Heavy split: ~330 ms the native call, ~205 ms
   comtypes unpacking (~85 us/node) - the next cost to cut. A cold page can return no Document for the first
   reads (warm-up). Tests `tests/test_sgt_i_uia_nodes.py` (2); `test_sgt_*.py` 302 passed. Real-portal check added.
+
+- **W2-2** (2026-09-27, claude-opus-5-5): new `core/sgt_i/page_map.py`, pure functions. `Node` (frozen: text, role,
+  box, row/col + table inherited by a cell's children, heading, landmark, selected, value, zone, section, step;
+  `truncated`, `trust` = ZONE_TRUST x 0.5 if cut short, `is_content`). Builders `nodes_from_uia(docs)` (W2-1 dicts;
+  ARIA role wins over control type; a combobox's list items become `option`) and `ocr_line_boxes()` +
+  `nodes_from_ocr()` (tall short line = heading). `build_page_map()` -> `PageMap(nodes, sections, pairs)`:
+  zones (dialog > banner/nav/search/footer landmarks > stepper > main; no banner -> before main landmark or top
+  100 px = header), sections by heading nesting (main and dialog separate stacks; help words in a heading -> help),
+  pairs in order control -> choice (SELECTED option only; option texts consumed) -> table column header -> free text
+  right, else below (column-header layouts go below); never across zone/section; nav/footer/stepper skipped.
+  `uia_nodes._node` now also caches selection for TabItems (current stepper step). Not wired into any component.
+  Tests `tests/test_sgt_i_page_map.py` (10, one per 14.1 case + table/OCR/help/dialog); `test_sgt_*.py` 312 passed.
+  Next: step 2 builds pairs on `PageMap.pairs`; generic words sit in `DEFAULT_VOCAB` (override via `vocab`).

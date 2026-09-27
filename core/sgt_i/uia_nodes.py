@@ -46,6 +46,7 @@ CT_COMBOBOX = 50003
 CT_EDIT = 50004
 CT_RADIOBUTTON = 50013
 CT_SPINNER = 50016
+CT_TABITEM = 50019
 CT_DATAITEM = 50029
 CT_DOCUMENT = 50030
 _VALUE_BEARING = frozenset({CT_COMBOBOX, CT_EDIT, CT_SPINNER})
@@ -93,7 +94,7 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
         node["role"] = role
     if ctype in _VALUE_BEARING:
         node["value"] = (_cached(el, PID_VALUE) or "").strip()
-    elif ctype == CT_RADIOBUTTON:
+    elif ctype in (CT_RADIOBUTTON, CT_TABITEM):     # a tab item's selection = the current step
         node["selected"] = bool(_cached(el, PID_SELECTION_IS_SELECTED))
     elif ctype == CT_CHECKBOX:
         node["selected"] = _cached(el, PID_TOGGLE_STATE) == 1

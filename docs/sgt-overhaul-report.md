@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-27 19:43)
+# SGT overhaul — report (2026-09-27 19:49)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 22 |
+| Not started | 21 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 5 |
+| Done | 6 |
 | Blocked | 0 |
 
-Runs: 7   output tokens: 223634   API-equivalent cost: $11.68
+Runs: 8   output tokens: 243471   API-equivalent cost: $12.78
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -19,7 +19,7 @@ Runs: 7   output tokens: 223634   API-equivalent cost: $11.68
 | W1-1 | Done | opus | bea35a6 | SGT-I host: the C/I contract in code | core/sgt_i host (thread, budget, hang trip, advisory+enrichment channels), sgt_i_mode Off/On, Core byte-identical On vs Off; 297 SGT tests pass |
 | W1-2 | Done | sonnet | e724987 | Enrichment fields on tracker rows (no schema change) | Enrichment channel already round-tripped via existing raw_payload_json plumbing (no schema change); added read-only SGT-I card in PayloadInspectorDialog; tests: |
 | W1-R | Done | opus | d4d6da4 | Review: W0-1..W1-2 against the SGT-C safety rules | Review OK except 2 fixed defects: SGT-I detach race could drop a Core row; 4 payload scanners read raw_payload.sgt_i as identity/name evidence |
-| W2-1 | Not started | opus |  | Measure a cached UIA node read vs the current line reader |  |
+| W2-1 | Done | opus | 54ae8d7 | Measure a cached UIA node read vs the current line reader | Cached node read: heavy 927->530 ms, normal ~40->~32 ms, control-view lines identical; unpack ~205 ms is next cost |
 | W2-2 | Not started | opus |  | Page map: node model, zones, sections, layout pairing |  |
 | W2-3 | Not started | sonnet |  | Lines view from nodes + equivalence check against today's reader |  |
 | W2-4 | Not started | sonnet |  | Recorder stores nodes (corpus format v2, backwards compatible) |  |
@@ -46,7 +46,9 @@ Runs: 7   output tokens: 223634   API-equivalent cost: $11.68
 
 - **W1-1** SGT-I budget, hang limit and what trips it → 2.0 s per page for all components, hung = still running 15 s (checked when the Core hands over the next page); any component exception, overrun, hang or non-JSON/over-4KB enrichment trips ALL of SGT-I off for the run; re-enabling does not reset (Blueprint 14.2 rule 5 read literally; cheapest safe guard, Python threads cannot be killed)
 - **W1-1** Advisory and enrichment channel shape → ask_more_reads: max 3 outstanding per session, each expires after 60 s, consumed only when the Core's change gate would have skipped the read; enrichment keyed session -> component, merged into raw_payload['sgt_i'] at row dispatch (best effort, async) and dropped when SGT-I is off/tripped; queue holds 8 pages, oldest dropped (Rule 3 (more reads only, bounded) and rule 4 (own key only); Off leaves rows byte-identical)
+- **W2-1** Which UIA tree view should the cached node read use? → Control view (UIA default TreeFilter) (Its lines are identical to read_page_text on all 3 test pages and it is fastest (heavy 530 ms vs raw 767 ms); raw view adds ~2x nodes and different lines.)
 
 ## Checks waiting for you
 
 - #1 (W1-1) Settings -> Tracker shows the new 'SGT-I' Off/On row under SGT; flip it On, save, and confirm the app log is quiet and SGT rows are unchanged on a real portal session — Not run
+- #2 (W2-1) Re-run tools/sgt_i_uia_node_bench.py on a real GST/ITR portal page in the office Edge session (only local mocks measured) and confirm node-read lines are IDENTICAL to read_page_text there. — Not run
