@@ -78,6 +78,13 @@ backups/
 !docs/sera-sync-v3-status.csv
 !docs/sera-sync-v3-checks.csv
 docs/.sera-sync-v3-tracker.lock
+# SGT overhaul tracker (task status only, no client data)
+!docs/sgt-overhaul-status.csv
+!docs/sgt-overhaul-runs.csv
+!docs/sgt-overhaul-decisions.csv
+!docs/sgt-overhaul-checks.csv
+.sgt-overhaul.lock
+logs/sgt-overhaul/
 *.tmp
 ~*
 scratch/

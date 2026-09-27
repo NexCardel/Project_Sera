@@ -1,0 +1,466 @@
+"""
+tools/sgt_overhaul.py
+---------------------
+Tracker and dispatcher for the SGT overhaul (docs/sgt-blueprint.md section 14).
+
+Nothing here is an AI. The dispatcher picks the next work package (WP) whose dependencies are
+Done, starts ONE fresh Claude Code CLI session for it with the WP's model (a fresh session per
+WP is the "/clear"), records the run, and moves on. When the plan's usage limit is hit it sleeps
+until the limit resets, then carries on, until the deadline in the plan.
+
+Files (all in docs/ of the sgt-overhaul worktree):
+  sgt-overhaul-plan.json       fixed plan: WPs, deps, models, CLI permissions   (edit by hand)
+  sgt-overhaul-runner.md       the prompt every worker session gets              (edit by hand)
+  sgt-overhaul-status.csv      one row per WP                                    (this tool only)
+  sgt-overhaul-runs.csv        one row per CLI run: tokens, cost, outcome        (this tool only)
+  sgt-overhaul-decisions.csv   decisions agents took where the user was needed   (this tool only)
+  sgt-overhaul-checks.csv      hands-on checks left for the user                 (this tool only)
+  sgt-overhaul-report.md / sgt-overhaul-agents.xlsx   read-only views, rebuilt after every run
+
+  PY=../APP/venv/Scripts/python.exe
+  $PY tools/sgt_overhaul.py show [WP]
+  $PY tools/sgt_overhaul.py next
+  $PY tools/sgt_overhaul.py finish W0-1 --commit 1a2b3c4 --notes "..."
+  $PY tools/sgt_overhaul.py block W0-1 --reason "..."
+  $PY tools/sgt_overhaul.py decide W0-1 --question "..." --choice "..." --why "..."
+  $PY tools/sgt_overhaul.py check-add W2-1 --text "..."
+  $PY tools/sgt_overhaul.py check 3 --result Pass --notes "..."
+  $PY tools/sgt_overhaul.py report
+  $PY tools/sgt_overhaul.py run [--once] [--dry-run]
+
+Exit code 2 = refused (unknown WP, dependencies not Done, Done without a commit...).
+"""
+
+import argparse
+import csv
+import datetime as dt
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+REPO = Path(__file__).resolve().parent.parent
+DOCS = REPO / "docs"
+LOG_DIR = REPO / "logs" / "sgt-overhaul"
+LOCK = REPO / ".sgt-overhaul.lock"
+
+STATUSES = ["Not started", "In progress", "Retry", "Done", "Blocked"]
+STATUS_FIELDS = ["WP", "Status", "Model", "Attempts", "Commit", "Notes", "Updated"]
+RUN_FIELDS = ["Run", "WP", "Model", "Attempt", "Started", "Minutes", "Outcome", "Input tokens",
+              "Output tokens", "Cache read", "Cache write", "Cost USD", "Turns", "Summary"]
+DECISION_FIELDS = ["WP", "Question", "Choice", "Why", "Date"]
+CHECK_FIELDS = ["Check", "WP", "Text", "Result", "Date", "Notes"]
+LOCK_STALE_S = 600
+
+
+class Refused(Exception):
+    pass
+
+
+def now() -> dt.datetime:
+    return dt.datetime.now().astimezone()
+
+
+def stamp() -> str:
+    return now().strftime("%Y-%m-%d %H:%M")
+
+
+# ── Files ─────────────────────────────────────────────────────────────────────────
+def _read_csv(path: Path, fields: List[str]) -> List[Dict[str, str]]:
+    if not path.exists():
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return [{k: (r.get(k) or "") for k in fields} for r in csv.DictReader(f)]
+
+
+def _write_csv(path: Path, fields: List[str], rows: List[Dict[str, str]]) -> None:
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=fields, lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    for _ in range(20):                         # Excel may hold the file for a moment
+        try:
+            tmp.write_text(buf.getvalue(), encoding="utf-8")
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.5)
+    raise Refused(f"{path.name} is locked (close it in Excel)")
+
+
+class Tracker:
+    def __init__(self, docs: Optional[Path] = None):
+        self.docs = docs = docs or DOCS
+        self.plan = json.loads((docs / "sgt-overhaul-plan.json").read_text(encoding="utf-8"))
+        self.wps = {w["wp"]: w for w in self.plan["wps"]}
+        self.order = [w["wp"] for w in self.plan["wps"]]
+        self.p_status = docs / "sgt-overhaul-status.csv"
+        self.p_runs = docs / "sgt-overhaul-runs.csv"
+        self.p_decisions = docs / "sgt-overhaul-decisions.csv"
+        self.p_checks = docs / "sgt-overhaul-checks.csv"
+        rows = {r["WP"]: r for r in _read_csv(self.p_status, STATUS_FIELDS)}
+        self.status = {wp: rows.get(wp) or {"WP": wp, "Status": "Not started", "Model": self.model_id(wp),
+                                            "Attempts": "0", "Commit": "", "Notes": "", "Updated": ""}
+                       for wp in self.order}
+        if not self.p_status.exists():
+            self.save()
+
+    # plan
+    def model_id(self, wp: str) -> str:
+        return self.plan["models"][self.wps[wp]["model"]]
+
+    def deadline(self) -> dt.datetime:
+        return dt.datetime.fromisoformat(self.plan["deadline"])
+
+    def wp(self, wp: str) -> Dict:
+        if wp not in self.wps:
+            raise Refused(f"unknown WP {wp}")
+        return self.wps[wp]
+
+    # status
+    def save(self) -> None:
+        _write_csv(self.p_status, STATUS_FIELDS, [self.status[w] for w in self.order])
+
+    def set(self, wp: str, **kw: str) -> None:
+        self.wp(wp)
+        row = self.status[wp]
+        for k, v in kw.items():
+            row[k] = v
+        row["Updated"] = stamp()
+        self.save()
+
+    def deps_done(self, wp: str) -> bool:
+        return all(self.status[d]["Status"] == "Done" for d in self.wp(wp)["deps"])
+
+    def next_ready(self) -> Optional[str]:
+        for wp in self.order:
+            if self.status[wp]["Status"] in ("Not started", "Retry") and self.deps_done(wp):
+                return wp
+        return None
+
+    def finish(self, wp: str, commit: str, notes: str) -> None:
+        if not re.fullmatch(r"[0-9a-f]{7,40}", commit or ""):
+            raise Refused("Done needs the commit hash (git rev-parse --short HEAD)")
+        if not self.deps_done(wp):
+            raise Refused(f"{wp}: dependencies are not Done")
+        self.set(wp, Status="Done", Commit=commit, Notes=notes)
+
+    def block(self, wp: str, reason: str) -> None:
+        self.set(wp, Status="Blocked", Notes=reason)
+
+    # other tables
+    def add_row(self, path: Path, fields: List[str], row: Dict[str, str]) -> None:
+        rows = _read_csv(path, fields)
+        rows.append({k: row.get(k, "") for k in fields})
+        _write_csv(path, fields, rows)
+
+    def decide(self, wp: str, question: str, choice: str, why: str) -> None:
+        self.wp(wp)
+        self.add_row(self.p_decisions, DECISION_FIELDS,
+                     {"WP": wp, "Question": question, "Choice": choice, "Why": why, "Date": stamp()})
+
+    def check_add(self, wp: str, text: str) -> int:
+        self.wp(wp)
+        rows = _read_csv(self.p_checks, CHECK_FIELDS)
+        n = len(rows) + 1
+        self.add_row(self.p_checks, CHECK_FIELDS,
+                     {"Check": str(n), "WP": wp, "Text": text, "Result": "Not run", "Date": stamp()})
+        return n
+
+    def check(self, n: int, result: str, notes: str) -> None:
+        if result not in ("Pass", "Fail", "Not run"):
+            raise Refused("result must be Pass, Fail or Not run")
+        rows = _read_csv(self.p_checks, CHECK_FIELDS)
+        for r in rows:
+            if r["Check"] == str(n):
+                r.update(Result=result, Notes=notes, Date=stamp())
+                _write_csv(self.p_checks, CHECK_FIELDS, rows)
+                return
+        raise Refused(f"no check {n}")
+
+    # views
+    def show(self, wp: Optional[str] = None) -> str:
+        if wp:
+            w, s = self.wp(wp), self.status[wp]
+            return (f"{wp} [{w['kind']}, {w['size']}, {self.model_id(wp)}] {w['what']}\n"
+                    f"deps: {', '.join(w['deps']) or '-'}   status: {s['Status']}   attempts: {s['Attempts']}\n"
+                    f"notes: {s['Notes']}\n\nfocus: {w['focus']}")
+        lines = []
+        for x in self.order:
+            s = self.status[x]
+            lines.append(f"{x:6} {s['Status']:12} {self.wps[x]['model']:6} {s['Commit'][:7]:7} {self.wps[x]['what']}")
+        return "\n".join(lines)
+
+    def report(self) -> str:
+        runs = _read_csv(self.p_runs, RUN_FIELDS)
+        counts = {k: sum(1 for s in self.status.values() if s["Status"] == k) for k in STATUSES}
+        tok = sum(int(r["Output tokens"] or 0) for r in runs)
+        cost = sum(float(r["Cost USD"] or 0) for r in runs)
+        out = [f"# SGT overhaul — report ({stamp()})", "",
+               f"Deadline: {self.plan['deadline']}", "",
+               "| Status | WPs |", "| :--- | ---: |"] + [f"| {k} | {v} |" for k, v in counts.items()] + [
+               "", f"Runs: {len(runs)}   output tokens: {tok}   API-equivalent cost: ${cost:.2f}", "",
+               "| WP | Status | Model | Commit | What | Notes |", "| :--- | :--- | :--- | :--- | :--- | :--- |"]
+        for x in self.order:
+            s = self.status[x]
+            out.append(f"| {x} | {s['Status']} | {self.wps[x]['model']} | {s['Commit'][:7]} | "
+                       f"{self.wps[x]['what']} | {s['Notes'][:160].replace('|', '/')} |")
+        dec = _read_csv(self.p_decisions, DECISION_FIELDS)
+        if dec:
+            out += ["", "## Decisions taken for you", ""] + [f"- **{d['WP']}** {d['Question']} → {d['Choice']} ({d['Why']})" for d in dec]
+        chk = [c for c in _read_csv(self.p_checks, CHECK_FIELDS) if c["Result"] != "Pass"]
+        if chk:
+            out += ["", "## Checks waiting for you", ""] + [f"- #{c['Check']} ({c['WP']}) {c['Text']} — {c['Result']}" for c in chk]
+        text = "\n".join(out) + "\n"
+        (self.docs / "sgt-overhaul-report.md").write_text(text, encoding="utf-8")
+        self._xlsx()
+        return text
+
+    def _xlsx(self) -> None:
+        try:
+            from openpyxl import Workbook
+        except ImportError:
+            return
+        wb = Workbook()
+        sheets = [("Status", ["WP", "Phase", "What", "Model", "Kind", "Size", "Deps"] + STATUS_FIELDS[1:],
+                   [{**{"Phase": w["phase"], "What": w["what"], "Kind": w["kind"], "Size": w["size"],
+                        "Deps": ", ".join(w["deps"])}, **self.status[w["wp"]]} for w in self.plan["wps"]]),
+                  ("Runs", RUN_FIELDS, _read_csv(self.p_runs, RUN_FIELDS)),
+                  ("Decisions", DECISION_FIELDS, _read_csv(self.p_decisions, DECISION_FIELDS)),
+                  ("Checks", CHECK_FIELDS, _read_csv(self.p_checks, CHECK_FIELDS))]
+        wb.remove(wb.active)
+        for name, fields, rows in sheets:
+            ws = wb.create_sheet(name)
+            ws.append(fields)
+            for r in rows:
+                ws.append([r.get(f, "") for f in fields])
+            ws.freeze_panes = "A2"
+        try:
+            wb.save(self.docs / "sgt-overhaul-agents.xlsx")
+        except PermissionError:
+            pass                                # open in Excel; the CSVs and report.md are current
+
+
+# ── The dispatcher ────────────────────────────────────────────────────────────────
+def claude_cmd() -> List[str]:
+    env = os.environ.get("SGT_CLAUDE")
+    if env:
+        return json.loads(env)
+    exe = shutil.which("claude")
+    if not exe:
+        raise Refused("Claude Code CLI not found on PATH (install it, then run 'claude' once to log in)")
+    return [exe]
+
+
+def build_prompt(t: Tracker, wp: str) -> str:
+    w, s = t.wp(wp), t.status[wp]
+    text = (t.docs / "sgt-overhaul-runner.md").read_text(encoding="utf-8")
+    for k, v in {"{WP}": wp, "{WHAT}": w["what"], "{FOCUS}": w["focus"], "{KIND}": w["kind"],
+                 "{MODEL}": t.model_id(wp), "{ATTEMPT}": str(int(s["Attempts"] or 0)),
+                 "{PREVIOUS}": s["Notes"] or "none", "{DEADLINE}": t.plan["deadline"]}.items():
+        text = text.replace(k, v)
+    return text
+
+
+_EPOCH = re.compile(r"\|\s*(\d{10})\b")
+_CLOCK = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
+_LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(reached|exceeded|hit)", re.I)
+
+
+def limit_reset(text: str, ref: Optional[dt.datetime] = None) -> Optional[dt.datetime]:
+    """When `text` says a usage limit was hit: the moment it resets (best guess), else None."""
+    if not _LIMIT.search(text or ""):
+        return None
+    ref = ref or now()
+    m = _EPOCH.search(text)
+    if m:
+        return dt.datetime.fromtimestamp(int(m.group(1))).astimezone()
+    m = _CLOCK.search(text)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if ap == "pm" and h < 12:
+            h += 12
+        if ap == "am" and h == 12:
+            h = 0
+        if h < 24:
+            at = ref.replace(hour=h, minute=mi, second=0, microsecond=0)
+            return at if at > ref else at + dt.timedelta(days=1)
+    return ref + dt.timedelta(minutes=30)
+
+
+def _parse(stdout: str) -> Dict:
+    for line in reversed((stdout or "").strip().splitlines()):
+        try:
+            d = json.loads(line)
+            if isinstance(d, dict):
+                return d
+        except ValueError:
+            continue
+    try:
+        return json.loads(stdout)
+    except (ValueError, TypeError):
+        return {}
+
+
+class _Lock:
+    def __enter__(self):
+        if LOCK.exists() and time.time() - LOCK.stat().st_mtime < LOCK_STALE_S:
+            raise Refused(f"another dispatcher is running ({LOCK.read_text(errors='ignore').strip()})")
+        LOCK.write_text(f"pid {os.getpid()} since {stamp()}")
+        self._stop = threading.Event()
+        threading.Thread(target=self._beat, daemon=True).start()
+        return self
+
+    def _beat(self):
+        while not self._stop.wait(60):
+            try:
+                os.utime(LOCK)
+            except OSError:
+                pass
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        try:
+            LOCK.unlink()
+        except OSError:
+            pass
+
+
+def run_one(t: Tracker, wp: str, dry: bool = False, log=print) -> Optional[dt.datetime]:
+    """Runs one WP in a fresh CLI session. Returns a reset time when a usage limit stopped it."""
+    cli = t.plan["cli"]
+    attempt = int(t.status[wp]["Attempts"] or 0) + 1
+    cmd = claude_cmd() + ["-p", "--model", t.model_id(wp), "--output-format", "json",
+                          "--permission-mode", cli["permission_mode"],
+                          "--allowedTools", ",".join(cli["allowed_tools"]),
+                          "--disallowedTools", ",".join(cli["disallowed_tools"])]
+    prompt = build_prompt(t, wp)
+    if dry:
+        log(" ".join(cmd) + "\n\n" + prompt)
+        return None
+    t.set(wp, Status="In progress", Attempts=str(attempt), Model=t.model_id(wp))
+    log(f"[{stamp()}] {wp} attempt {attempt} on {t.model_id(wp)}: {t.wps[wp]['what']}")
+    started = time.time()
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        p = subprocess.run(cmd, input=prompt, cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=cli["run_timeout_min"] * 60)
+        out, err, code = p.stdout, p.stderr, p.returncode
+    except subprocess.TimeoutExpired as e:
+        out, err, code = (e.stdout or ""), "timeout", -1
+        out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out
+    run_id = now().strftime("%Y%m%d-%H%M%S")
+    (LOG_DIR / f"{run_id}-{wp}.json").write_text(out + ("\n--- stderr ---\n" + err if err else ""), encoding="utf-8")
+    d = _parse(out)
+    usage = d.get("usage") or {}
+    result = str(d.get("result") or err or "")[:4000]
+    reset = limit_reset(result + " " + (err or "")) if (d.get("is_error") or code != 0 or not d) else None
+
+    fresh = Tracker(t.docs)                     # the worker updated the status file itself
+    state = fresh.status[wp]["Status"]
+    if reset:
+        outcome = "usage limit"
+        if state not in ("Done", "Blocked"):
+            fresh.set(wp, Status="Retry", Attempts=str(attempt - 1),
+                      Notes=f"stopped by usage limit, resumes after {reset:%H:%M}")
+    elif state in ("Done", "Blocked"):
+        outcome = state
+    else:
+        outcome = "timeout" if code == -1 else ("error" if code else "no finish")
+        if attempt >= cli["max_attempts"]:
+            fresh.block(wp, f"{outcome} after {attempt} attempts; see logs/sgt-overhaul/{run_id}-{wp}.json")
+        else:
+            fresh.set(wp, Status="Retry", Notes=f"attempt {attempt}: {outcome}. {result[:300]}")
+    fresh.add_row(fresh.p_runs, RUN_FIELDS, {
+        "Run": run_id, "WP": wp, "Model": t.model_id(wp), "Attempt": str(attempt),
+        "Started": dt.datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M"),
+        "Minutes": f"{(time.time() - started) / 60:.1f}", "Outcome": outcome,
+        "Input tokens": str(usage.get("input_tokens", "")), "Output tokens": str(usage.get("output_tokens", "")),
+        "Cache read": str(usage.get("cache_read_input_tokens", "")),
+        "Cache write": str(usage.get("cache_creation_input_tokens", "")),
+        "Cost USD": str(d.get("total_cost_usd", "")), "Turns": str(d.get("num_turns", "")),
+        "Summary": result[:300].replace("\n", " ")})
+    fresh.report()
+    log(f"[{stamp()}] {wp}: {outcome}")
+    return reset
+
+
+def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
+    t = Tracker()
+    for wp, s in t.status.items():             # a crash mid-run leaves a WP "In progress"
+        if s["Status"] == "In progress":
+            t.set(wp, Status="Retry", Notes=(s["Notes"] + " | dispatcher restarted").strip(" |"))
+    with _Lock():
+        while True:
+            t = Tracker()
+            if now() >= t.deadline():
+                log(f"[{stamp()}] deadline reached")
+                return 0
+            wp = t.next_ready()
+            if not wp:
+                log(f"[{stamp()}] nothing ready: " + ", ".join(f"{k} {v}" for k, v in
+                    {s: sum(1 for x in t.status.values() if x['Status'] == s) for s in STATUSES}.items() if v))
+                return 0
+            reset = run_one(t, wp, dry=dry, log=log)
+            if once or dry:
+                return 0
+            if reset:
+                wait = min((reset - now()).total_seconds() + 120, (t.deadline() - now()).total_seconds())
+                log(f"[{stamp()}] usage limit: sleeping {wait / 60:.0f} min")
+                time.sleep(max(60, wait))
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────────
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="SGT overhaul tracker and dispatcher")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("show"); s.add_argument("wp", nargs="?")
+    sub.add_parser("next")
+    s = sub.add_parser("finish"); s.add_argument("wp"); s.add_argument("--commit", required=True); s.add_argument("--notes", default="")
+    s = sub.add_parser("block"); s.add_argument("wp"); s.add_argument("--reason", required=True)
+    s = sub.add_parser("decide"); s.add_argument("wp"); s.add_argument("--question", required=True)
+    s.add_argument("--choice", required=True); s.add_argument("--why", default="")
+    s = sub.add_parser("check-add"); s.add_argument("wp"); s.add_argument("--text", required=True)
+    s = sub.add_parser("check"); s.add_argument("n", type=int); s.add_argument("--result", required=True); s.add_argument("--notes", default="")
+    s = sub.add_parser("reset"); s.add_argument("wp")
+    sub.add_parser("report")
+    s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd == "run":
+            return run_loop(once=a.once, dry=a.dry_run)
+        t = Tracker()
+        if a.cmd == "show":
+            print(t.show(a.wp))
+        elif a.cmd == "next":
+            print(t.next_ready() or "nothing ready")
+        elif a.cmd == "finish":
+            t.finish(a.wp, a.commit, a.notes)
+        elif a.cmd == "block":
+            t.block(a.wp, a.reason)
+        elif a.cmd == "decide":
+            t.decide(a.wp, a.question, a.choice, a.why)
+        elif a.cmd == "check-add":
+            print(f"check {t.check_add(a.wp, a.text)} added")
+        elif a.cmd == "check":
+            t.check(a.n, a.result, a.notes)
+        elif a.cmd == "reset":
+            t.set(a.wp, Status="Not started", Attempts="0", Notes="reset by hand")
+        elif a.cmd == "report":
+            print(t.report())
+        return 0
+    except Refused as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
