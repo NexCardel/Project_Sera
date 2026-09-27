@@ -12,7 +12,7 @@ W3-1,3,Container -> value pairs with generic types and masking,Done,claude-sonne
 W4-1,4,Maths 1: shape grammar induction with rule-of-three bounds,Done,claude-sonnet-5,1,27201bb,"shapes.py: shape grammar generalisation + rule-of-three confidence bound; 13 new tests, 345 total pass",2026-09-28 00:31
 W4-2,4,"Maths 2: checksum discovery, values inside values, relations",Done,claude-sonnet-5,1,4af6a8f,"invariants.py: checksum discovery (Luhn/Verhoeff/mod11/mod36, Bonferroni-corrected), value containment, order/sum relations; 19 new tests, 364 total pass",2026-09-28 00:42
 W4-3,4,Maths 3: container kinds from salted-hash statistics,Done,claude-sonnet-5,1,38f3e57,"stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass",2026-09-28 00:53
-W5-1,5,"The atlas: model, page matching, merge, template promotion, ageing",Retry,claude-opus-5-5,1,,dispatcher restarted,2026-09-28 00:55
+W5-1,5,"The atlas: model, page matching, merge, template promotion, ageing",Done,claude-opus-5-5,1,3f5464e,"core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regions, ageing, transitions; 15 tests; 398 SGT tests pass",2026-09-28 01:03
 W5-2,5,Atlas tool: show / diff / coverage,Not started,claude-sonnet-5,0,,,
 W6-1,6,"The GPS: position, route, progress, row enrichment",Not started,claude-sonnet-5,0,,,
 W6-2,6,Read harder near the finish line (advisory to the Core),Not started,claude-opus-5-5,0,,,
