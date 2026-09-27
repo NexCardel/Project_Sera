@@ -1345,4 +1345,14 @@ Each step starts in a fresh session from this section and ends with a hand-off n
 
 ### 14.10 Hand-off notes
 
-- *(none yet)*
+- **W0-1** (2026-09-27, claude-sonnet-5): `sgt_shadow/spec_stats.json` shows `record_read` firing
+  23-27 Sep — right beside `PageRecorder.record()` in `SgtShadow._absorb` — proving SGT kept
+  reading real pages while the corpus stayed empty. `record()` only skips silently on
+  `not self.enabled or not lines`; lines were non-empty, so `enabled` (the `sgt_record_pages`
+  setting) must have gone off with nothing saying so — traced its read/write paths and the
+  6ae61c5 mode switch end to end, all correct, none the culprit. Real defect: the flip itself was
+  silent. Fix in `core/sgt/sgt_corpus.py`: `enabled` is now a property; every transition and the
+  construction-time state are echoed, matching the existing size-cap-pause echo. Behaviour
+  otherwise identical (SGT-C unaffected). Tests added in `tests/test_sgt_replay.py` (day
+  rollover, restart mid-day dedup, size-cap lift, on/off echo). `pytest tests/test_sgt_*.py`:
+  281 passed. If `sgt_record_pages` is still "0" on a real PC, that's Settings -> Tracker to flip.

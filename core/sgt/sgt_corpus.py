@@ -15,6 +15,8 @@ database. It holds client data (names, PANs, whatever the portal shows), so it i
 into the repository; tests use the fictional pages in tests/sgt_golden/. Files older than
 RETENTION_DAYS are deleted, and recording stops for the day past MAX_DAY_BYTES.
 Switch: Settings -> Tracker -> "Record pages for SGT testing" (on by default while SGT is on).
+Every time that switch flips (on <-> off) it is echoed to the console: the corpus going dark for
+days after 22 Sep 2026 traced back to this switch turning off with nothing saying so.
 """
 
 import hashlib
@@ -41,13 +43,29 @@ class PageRecorder:
     """Appends pages to the day's file. record() never raises."""
 
     def __init__(self, directory: Optional[Path] = None, enabled: bool = True, echo=print) -> None:
-        self.enabled = enabled
         self._dir = directory
         self._echo = echo
         self._day: Optional[str] = None
         self._seen: set = set()
         self._bytes = 0
         self._full = False
+        self._enabled = bool(enabled)
+        self._echo(f"[SGT] page recording is {'ON' if self._enabled else 'OFF'} "
+                   f"(Settings -> Tracker -> \"Record pages for SGT testing\")")
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        # A silent, permanent stop here is exactly what let the corpus go dark for days without
+        # anyone noticing (2026-09-27): every transition is echoed, same as the size-cap pause.
+        value = bool(value)
+        if value != self._enabled:
+            self._echo(f"[SGT] page recording turned {'ON' if value else 'OFF'} "
+                       f"(Settings -> Tracker -> \"Record pages for SGT testing\")")
+        self._enabled = value
 
     @property
     def directory(self) -> Path:
