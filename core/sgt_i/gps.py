@@ -317,6 +317,8 @@ class GpsComponent:
         return self._last_route.get(session_id)
 
     def observe(self, obs: Any, ctx: Any) -> None:
+        if getattr(obs, "event", ""):
+            return            # a message that flashed (step 9) is not a page visit
         portal = self._atlas.portal(obs.portal)
         pos = self._gps.visit(obs.session_id, obs.url, portal, draft=dict(obs.draft))
         arrived = self._last_page.get(obs.session_id) != pos.page

@@ -32,13 +32,14 @@ class Observation:
     portal: str
     url: str
     title: str
-    source: str                      # "uia" or "ocr"
+    source: str                      # "uia" or "ocr"; "uia_event" = a message that flashed (step 9)
     lines: Tuple[str, ...]
     result: Mapping[str, Any]        # PageResult.as_dict(): profile, datasets, current, is_list, conflicts
     profile: Mapping[str, str]       # the session's client profile after this page
     draft: Mapping[str, str]         # the dataset being worked on, after this page
     ts: float                        # the Core's clock when the page was read
     today: str                       # ISO date the Core used
+    event: str = ""                  # for source "uia_event": live_region / notification / window_opened
 
 
 def make_observation(*, session_id: str, portal: str, url: str, title: str, source: str,

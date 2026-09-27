@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 02:25)
+# SGT overhaul — report (2026-09-28 02:35)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 5 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 21 |
+| Done | 22 |
 | Blocked | 0 |
 
-Runs: 27   output tokens: 885830   API-equivalent cost: $38.84
+Runs: 28   output tokens: 927260   API-equivalent cost: $40.99
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -35,7 +35,7 @@ Runs: 27   output tokens: 885830   API-equivalent cost: $38.84
 | W7-2 | Done | sonnet | a1fb737 | Page kinds classifier | page_kinds.py: classify() for 8 page kinds from content signals + config vocab; 18 tests, 460 total passed |
 | W8-1 | Done | opus | 58a7263 | Evidence ledger, retraction, explanations, second opinions | core/sgt_i/ledger.py: beliefs+sightings, config weights, truth-maintenance retraction, one-line explanations, 5 second opinions via enrichment; LedgerComponent  |
 | W9-1 | Done | sonnet | eebec24 | Sera's own data: client list and tracker, read-only | sera_data.py: read-only cached clients/tracker accessor, OCR recovery, name-vs-PAN cross-check, masked confirm; 15 new tests, 492 passed total |
-| W9-2 | Not started | sonnet |  | Tracker expectations and self-healing (known-value anchoring) |  |
+| W9-2 | Done | sonnet | 4272cba | Tracker expectations and self-healing (known-value anchoring) | expectations.py: due/revision/duplicate + known-value anchoring synonyms; unwired from default_components (check-list item added); 507 tests pass |
 | W10-1 | Not started | opus |  | UIA events for short-lived messages + page diffing |  |
 | W11-1 | Not started | haiku |  | 'Not understood' residue report |  |
 | W12-1 | Not started | opus |  | The miner: proposals from the atlas, maths and anchoring |  |
@@ -66,6 +66,7 @@ Runs: 27   output tokens: 885830   API-equivalent cost: $38.84
 - **W8-1** Page kind for the ledger: Observation has lines, not nodes → Stack the Core's lines as synthetic nodes (no header band) and run page_kinds.classify; skip pages over 400 lines (Shared node read is not adopted (14.2); lines are what SGT-I gets; cap keeps pair_by_layout inside the 2 s budget)
 - **W8-1** What counts as another client's evidence for retraction → A sighting carries field:hash of the client (card's own PAN, else session profile); withdrawn when the session has the SAME identity field with a different hash (Blueprint 14.4 step 7 truth maintenance; per-field so a GSTIN-only profile never contradicts a card PAN)
 - **W8-1** Identifier date rule and ITR-7 / GST ARN → Config-driven identifier_dates: only the ITR ack's DDMMYY tail configured; AY window = the AY itself (Updated filings exempt), FY/month/quarter windows have grace days; no ITR-7 PAN rule; GST ARN date layout not configured (Only the ITR ack date layout is confirmed in sgt_fields.json (ddmmyy_tail checks); an unsure rule would give false second opinions)
+- **W9-2** Wire ExpectationsComponent into the live default_components() list now, or leave it built-but-unwired like sera_data.py (W9-1)? → Leave unwired; build the pure component + tests only (default_components() takes no arguments and SeraData needs db_path/hex_key/raw_db_path, which only main.py's Database instance holds; threading those through VSDCRouter/vsdc_worker.py to wire a real SeraData into the host is a separate, riskier app-wiring change I cannot verify without a real portal session. Scoping W9-2 to the component + config + tests keeps SGT-I Off/On behaviour unchanged either way and matches W9-1's own precedent (accessor built, not yet wired).)
 
 ## Checks waiting for you
 
@@ -74,3 +75,4 @@ Runs: 27   output tokens: 885830   API-equivalent cost: $38.84
 - #3 (W2-3) tools/sgt_lines_equivalence.py --title "<substr>" live-window mode is untested against a real open portal window (needs an unlocked desktop with Edge open on a page) - only the no-window-found path was exercised here — Not run
 - #4 (W2-4) Switch SGT-I on for a real portal session so the corpus actually gains v2 nodes records; then re-run tools/sgt_lines_equivalence.py (no --skip-corpus) to see it move off '0 comparable'. — Not run
 - #5 (W6-2) With SGT-I On and a learned atlas, reach a filing's last page before the confirmation on a real portal: the Core should read every tick for 30 s (SGT reads count rises), then fall back to the change gate; CPU stays reasonable. — Not run
+- #6 (W9-2) Wire ExpectationsComponent into core/sgt_i/__init__.py's default_components() for real: thread db_path/hex_key/raw_db_path from main.py's Database through VSDCRouter (_apply_sgt_i) into a SeraData instance, then add ExpectationsComponent(sera) to the list. Needs a real app run to verify SGT-I stays Off/On-safe with a live master.db/rawPayload.db. — Not run

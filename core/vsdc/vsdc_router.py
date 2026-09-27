@@ -432,7 +432,8 @@ class VSDCRouter:
         host = getattr(self, "_sgt_i_host", None)
         if on and host is None:
             from core.sgt_i import SgtIntelligence, default_components
-            host = self._sgt_i_host = SgtIntelligence(default_components())
+            from core.sgt_i.uia_events import FlashWatcher
+            host = self._sgt_i_host = SgtIntelligence(default_components(), flashes=FlashWatcher())
         if host is not None:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)

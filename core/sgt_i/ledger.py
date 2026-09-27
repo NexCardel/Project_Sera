@@ -448,6 +448,8 @@ class LedgerComponent:
         return None
 
     def observe(self, obs: Any, ctx: Any) -> None:
+        if getattr(obs, "event", ""):
+            return            # a flash (step 9) carries no Core capture: not a page of evidence
         cfg = self._cfg if self._cfg is not None else load_config()
         st = self._session(obs.session_id)
         led = st.ledger

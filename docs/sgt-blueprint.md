@@ -1691,3 +1691,17 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   natural consumer of `synonyms` once graduation exists; `service_form_aliases` is empty by
   default - an office whose service names don't already match their form's own wording needs an
   entry there, never a code change.
+
+- **W10-1** (2026-09-28, claude-opus-5-5): step 9 without Downloads (user: out of scope). New `core/sgt_i/uia_events.py`:
+  `FlashWatcher` listens for live-region-changed, window-opened and (IUIAutomation5, needs `CUIAutomation8`) notification
+  events on the Documents of the window the Core just read, re-registering when its URL changes; handlers read only the
+  sender's cached subtree (W2-1's CacheRequest) into a bounded, deduped per-window buffer. **Own MTA thread** (decision:
+  the read worker is an STA without a message loop and gets replaced on hangs); a registration hung > 10 s switches
+  listening off for the run. comtypes must be imported before that thread starts (first import makes a thread STA).
+  Host: `flashes=` + `window_seen(hwnd, obs)` (the Core calls it via getattr from `_hand_to_sgt_i`, which now gets hwnd)
+  queues each flash as an Observation (`source="uia_event"`, new field `event`) before the page; `wants_read` is True while
+  a flash waits; Off/trip stops the listener. New `core/sgt_i/page_diff.py`: pure `diff()` (node-key multiset, a new dialog
+  = event) + `FlashComponent` ("flashes", in `default_components()`; salted hashes, counts only: flashes by kind,
+  `missed_by_polling`, `flash_claims`, `last_appeared()` in memory); GPS and ledger skip event observations. Router wires
+  `FlashWatcher()`. Tests `tests/test_sgt_i_flashes.py` (11); `test_sgt_*.py` 518 passed. COM add/remove verified on this PC;
+  real Edge delivery NOT (launching Edge needed approval) - check-list item + `tools/sgt_i_flash_probe.py` / `sgt_i_flash_page.html`.

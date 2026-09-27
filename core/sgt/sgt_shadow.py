@@ -430,7 +430,7 @@ class SgtShadow:
         self._absorb(s, res, url, source, registry)
         self._save_state()
         if self._sgt_i is not None:
-            self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today)
+            self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today, hwnd)
         return res
 
     def _nodes_for_recording(self, hwnd: int) -> Optional[List[List[Dict[str, Any]]]]:
@@ -442,17 +442,22 @@ class SgtShadow:
             return None
 
     def _hand_to_sgt_i(self, s: _Session, portal: str, url: str, title: str, source: str,
-                       lines: List[str], res: PageResult, registry: Any, now: float, today: date) -> None:
+                       lines: List[str], res: PageResult, registry: Any, now: float, today: date,
+                       hwnd: int = 0) -> None:
         """SGT-I (core/sgt_i) gets a frozen copy of the page the Core has just finished with.
         It runs on its own thread; nothing it does can come back here (blueprint 14.2)."""
         try:
             if not self._sgt_i.active:
                 return
             from core.sgt_i import make_observation
-            self._sgt_i.submit(make_observation(
+            obs = make_observation(
                 session_id=s.session_id, portal=portal, url=url, title=title, source=source, lines=lines,
                 result=res, profile={k: p.get("value", "") for k, p in s.profile.items()},
-                draft=s.draft.values(registry.current_rules), ts=now, today=today.isoformat()))
+                draft=s.draft.values(registry.current_rules), ts=now, today=today.isoformat())
+            seen = getattr(self._sgt_i, "window_seen", None)
+            if seen is not None:
+                seen(hwnd, obs)     # step 9: what flashed in this (scope-gated) window since the last read
+            self._sgt_i.submit(obs)
         except Exception as e:
             self._echo(f"[SGT-I] page not handed over: {e}")
 

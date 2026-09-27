@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SGT flash test page</title></head>
+<body>
+<h1>Fictional return page</h1>
+<p>Form GSTR-3B, period August 2026</p>
+<div id="live" role="status" aria-live="polite"></div>
+<div id="alert" role="alert"></div>
+<dialog id="dlg"><p>Dialog opened for one second</p></dialog>
+<script>
+let n = 0;
+function flash() {
+  n += 1;
+  const live = document.getElementById('live');
+  live.textContent = 'Toast ' + n + ': dataset submitted successfully';
+  setTimeout(() => { live.textContent = ''; }, 1000);
+  if (n % 2 === 0) {
+    const a = document.getElementById('alert');
+    a.textContent = 'Alert ' + n + ': session will expire soon';
+    setTimeout(() => { a.textContent = ''; }, 1000);
+    const d = document.getElementById('dlg');
+    d.showModal();
+    setTimeout(() => d.close(), 1000);
+  }
+}
+setInterval(flash, 3000);
+</script>
+</body></html>

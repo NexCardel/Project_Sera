@@ -22,13 +22,14 @@ A component is any object with a `name` and `observe(obs, ctx)`; ctx is a _Conte
 the observation's session. No components are registered yet - they come with the later steps.
 """
 
+import dataclasses
 import json
 import threading
 import time
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional
 
-from .observation import Observation
+from .observation import Observation, freeze
 
 PAGE_BUDGET_SEC = 2.0          # all components together, one page
 HANG_SEC = 15.0                # a page still running this long = hung
@@ -66,8 +67,13 @@ class SgtIntelligence:
     def __init__(self, components: Optional[List[Any]] = None, enabled: bool = False,
                  budget_sec: float = PAGE_BUDGET_SEC, hang_sec: float = HANG_SEC,
                  echo: Callable[[str], None] = print,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+                 monotonic: Callable[[], float] = time.monotonic,
+                 flashes: Any = None) -> None:
         self._components: List[Any] = list(components or [])
+        # Step 9's listener (uia_events.FlashWatcher), or None: what flashed in a window between
+        # two of the Core's reads comes in as an Observation of its own (source "uia_event").
+        self._flashes = flashes
+        self._flash_windows: Dict[str, int] = {}     # session -> the window it was last read in
         self._enabled = bool(enabled)
         self._budget = float(budget_sec)
         self._hang = float(hang_sec)
@@ -95,6 +101,8 @@ class SgtIntelligence:
             self._enabled = bool(on)
             if not self._enabled:
                 self._clear()
+        if not on:
+            self._stop_flashes()
 
     @property
     def active(self) -> bool:
@@ -105,6 +113,14 @@ class SgtIntelligence:
         self._enrichment.clear()
         self._reads.clear()
         self._harder.clear()
+        self._flash_windows.clear()
+
+    def _stop_flashes(self) -> None:
+        try:
+            if self._flashes is not None:
+                self._flashes.stop()
+        except Exception:
+            pass
 
     def _trip(self, why: str) -> None:
         with self._lock:
@@ -113,6 +129,7 @@ class SgtIntelligence:
             self.tripped = why
             self._clear()
             self._wake.notify_all()
+        self._stop_flashes()
         self._echo(f"[SGT-I] switched off for the rest of this run: {why} (SGT capture is not affected)")
 
     # ── Core side (the Core's thread): never blocks, never raises ────────────────
@@ -138,7 +155,8 @@ class SgtIntelligence:
 
     def wants_read(self, session_id: str) -> bool:
         """Advisory channel: True when SGT-I asked for another read of this session - inside a
-        read-harder window, or by consuming one counted extra read."""
+        read-harder window, while something that flashed in its window waits (step 9), or by
+        consuming one counted extra read."""
         try:
             if not self.active:
                 return False
@@ -149,6 +167,11 @@ class SgtIntelligence:
                     if until > now:
                         return True
                     del self._harder[session_id]
+                hwnd = self._flash_windows.get(session_id)
+            if hwnd is not None and self._flashes is not None and self._flashes.pending(hwnd):
+                return True     # something flashed there: read now, so it reaches SGT-I at once
+            with self._lock:
+                now = self._now()
                 live = [t for t in self._reads.get(session_id, ()) if t > now]
                 if not live:
                     self._reads.pop(session_id, None)
@@ -161,6 +184,25 @@ class SgtIntelligence:
                 return True
         except Exception:
             return False
+
+    def window_seen(self, hwnd: int, obs: Observation) -> None:
+        """Step 9: the Core has just read `obs` in window hwnd (already scope-gated). The flash
+        listener is pointed at that page, and what flashed there since the last read is queued as
+        Observations of its own - before `obs`, the order they happened in. Never blocks or raises."""
+        try:
+            if not self.active or self._flashes is None or not hwnd:
+                return
+            with self._lock:
+                self._flash_windows.pop(obs.session_id, None)
+                self._flash_windows[obs.session_id] = hwnd
+                while len(self._flash_windows) > QUEUE_CAP:
+                    del self._flash_windows[next(iter(self._flash_windows))]
+            for f in self._flashes.take(hwnd):
+                self.submit(dataclasses.replace(obs, source="uia_event", event=f.kind, lines=tuple(f.lines),
+                                                result=freeze({}), ts=obs.ts))
+            self._flashes.watch(hwnd, obs.url)
+        except Exception:
+            pass
 
     def enrichment(self, session_id: str) -> Dict[str, Any]:
         """Enrichment channel: a copy of what the components added for this session ({} = nothing)."""
