@@ -466,6 +466,10 @@ _LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(r
                     r"quota|resource[_ ]exhausted|too many requests|\b429\b", re.I)
 
 
+_TRANSIENT = re.compile(r"can.t reach the api|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|"
+                        r"overloaded|5\d\d|internal server error|service unavailable|connection (reset|refused|error)", re.I)
+
+
 def limit_reset(text: str, ref: Optional[dt.datetime] = None) -> Optional[dt.datetime]:
     """When `text` says a usage limit was hit: the moment it resets (best guess), else None."""
     if not _LIMIT.search(text or ""):
@@ -568,14 +572,16 @@ def run_one(t: Tracker, wp: str, key: Optional[str] = None, dry: bool = False, l
     if not d.get("result") and not d.get("response") and err:
         result = err[:4000]
     reset = limit_reset(result + " " + (err or "")) if failed else None
+    if failed and not reset and _TRANSIENT.search(result + " " + (err or "")):
+        reset = now() + dt.timedelta(minutes=5)     # network / API hiccup: wait, retry, no attempt spent
 
     fresh = Tracker(t.docs)                     # the worker updated the status file itself
     state = fresh.status[wp]["Status"]
     if reset:
-        outcome = "usage limit"
+        outcome = "usage limit" if _LIMIT.search(result + " " + (err or "")) else "network/API error"
         if state not in ("Done", "Blocked"):
             fresh.set(wp, Status="Retry", Attempts=str(attempt - 1),
-                      Notes=f"stopped by usage limit, resumes after {reset:%H:%M}")
+                      Notes=f"stopped by {outcome}, resumes after {reset:%H:%M}")
     elif state in ("Done", "Blocked"):
         outcome = state
     else:

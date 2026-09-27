@@ -105,7 +105,7 @@
       "WebSearch"
     ],
     "run_timeout_min": 150,
-    "max_attempts": 2
+    "max_attempts": 3
   },
   "wps": [
     {

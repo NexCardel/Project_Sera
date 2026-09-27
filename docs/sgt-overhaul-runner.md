@@ -36,6 +36,10 @@ What to do:
 
 ## Token discipline (the budget is tight)
 
+Shell commands are checked against an allow-list, so run ONE plain command per Bash call: no `cd`, no
+`&&`, `;`, `|` chains, no `2>/dev/null`. Read files outside the repo (e.g. `~/AmanAssociates_Sera/`) with the
+Read/Glob tools, not `ls`. A denied command wastes a turn; don't retry it in another form.
+
 Grep before you read; read files in parts (offset/limit), never whole large files unless needed.
 Do not re-read files you just edited. Run the narrowest tests that prove your change, then once:
 `../APP/venv/Scripts/python.exe -m pytest -q tests/test_sgt_*.py` plus any test file you touched.
