@@ -114,7 +114,20 @@ def test_no_finish_twice_blocks(docs, monkeypatch):
     so.run_loop(once=True, log=lambda *_: None)
     assert so.Tracker(docs).status["W0-1"]["Status"] == "Retry"
     so.run_loop(once=True, log=lambda *_: None)
-    assert so.Tracker(docs).status["W0-1"]["Status"] == "Blocked"
+    assert so.Tracker(docs).status["W0-1"]["Status"] == "Retry"
+    so.run_loop(once=True, log=lambda *_: None)
+    assert so.Tracker(docs).status["W0-1"]["Status"] == "Blocked"      # max_attempts = 3
+
+
+def test_network_error_is_retried_without_spending_an_attempt(docs, monkeypatch):
+    body = ("import sys, json; sys.stdin.read()
+"
+            "print(json.dumps({'is_error': True, 'result': \"API Error: Can't reach the API server (ENOTFOUND)\"}))
+")
+    monkeypatch.setenv("SGT_CLAUDE", _fake_cli(docs, body))
+    so.run_loop(once=True, log=lambda *_: None)
+    s = so.Tracker(docs).status["W0-1"]
+    assert s["Status"] == "Retry" and s["Attempts"] == "0" and "network" in s["Notes"]
 
 
 def test_ask_uses_the_default_when_nobody_answers(docs):
