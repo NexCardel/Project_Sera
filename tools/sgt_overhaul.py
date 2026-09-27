@@ -466,6 +466,7 @@ _LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(r
                     r"quota|resource[_ ]exhausted|too many requests|\b429\b", re.I)
 
 
+_AUTH = re.compile(r"authentication required|please (visit|log ?in|sign ?in)|not (logged|signed) in|invalid api key|oauth", re.I)
 _TRANSIENT = re.compile(r"can.t reach the api|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|"
                         r"overloaded|API Error: 5\d\d\b|internal server error|service unavailable|connection (reset|refused|error)", re.I)
 
@@ -572,13 +573,17 @@ def run_one(t: Tracker, wp: str, key: Optional[str] = None, dry: bool = False, l
     if not d.get("result") and not d.get("response") and err:
         result = err[:4000]
     reset = limit_reset(result + " " + (err or "")) if failed else None
+    if failed and not reset and _AUTH.search(result + " " + (err or "")):
+        reset = now() + dt.timedelta(hours=12)      # the runner needs a sign-in: set it aside, no attempt spent
     if failed and not reset and _TRANSIENT.search(result + " " + (err or "")):
         reset = now() + dt.timedelta(minutes=5)     # network / API hiccup: wait, retry, no attempt spent
 
     fresh = Tracker(t.docs)                     # the worker updated the status file itself
     state = fresh.status[wp]["Status"]
     if reset:
-        outcome = "usage limit" if _LIMIT.search(result + " " + (err or "")) else "network/API error"
+        both = result + " " + (err or "")
+        outcome = ("usage limit" if _LIMIT.search(both) else
+                   "runner needs sign-in" if _AUTH.search(both) else "network/API error")
         if state not in ("Done", "Blocked"):
             fresh.set(wp, Status="Retry", Attempts=str(attempt - 1),
                       Notes=f"stopped by {outcome}, resumes after {reset:%H:%M}")

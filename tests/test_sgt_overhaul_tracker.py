@@ -154,3 +154,12 @@ def test_claude_first_gemini_only_as_fallback(docs, monkeypatch):
     assert so.pick_model(t, "W0-1", {"claude": later}) is None             # claude_only WP waits
     assert so.pick_model(t, "W1-1", {}) == "opus"             # Opus work never goes to Gemini
     assert so.pick_model(t, "W1-1", {"claude": later}) is None
+
+
+def test_runner_sign_in_failure_spends_no_attempt(docs, monkeypatch):
+    body = ("import sys, json; sys.stdin.read()" + chr(10) +
+            "print(json.dumps({'is_error': True, 'result': 'Authentication required. Please visit the URL to log in'}))" + chr(10))
+    monkeypatch.setenv("SGT_CLAUDE", _fake_cli(docs, body))
+    so.run_loop(once=True, log=lambda *_: None)
+    s = so.Tracker(docs).status["W0-1"]
+    assert s["Status"] == "Retry" and s["Attempts"] == "0" and "sign-in" in s["Notes"]
