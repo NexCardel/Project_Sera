@@ -1551,3 +1551,28 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   empty in practice) rather than being a mirror of `fingerprint_removed`. Tests `tests/test_sgt_atlas.py`
   (10). `pytest tests/test_sgt_*.py`: 408 passed (was 398). Next (miner, step 11): `coverage`'s
   unclaimed list is the raw material for "what SGT-I found that nobody registered".
+
+- **W6-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/gps.py` - step 5. `build_routes(atlas)`:
+  starts/confirmations are pages with in/out-degree 0 in the atlas's own transitions (step 6's page
+  kinds don't exist yet - build order puts them after the GPS); a route is the highest-bottleneck
+  simple path from a start to a confirmation (bounded DFS, edges below `min_support` excluded),
+  named from the confirmation page's own heading. `identify_page()` matches a live read to a page
+  by `url_hint` alone (Observation carries lines, not nodes - the shared read isn't adopted); a
+  hint shared by several pages is settled by the session's lookback, else no guess (14.4 step 5).
+  `Gps.visit()`: position, route, `step n of m`, `dead_reckoning()` when the page can't be told,
+  odd-jump (landing straight on another route's confirmation - closes the route and drops any
+  carried context), and the form/period second opinion (the session's own earlier `obs.draft`
+  values only, never the atlas's text, never persisted). `GpsComponent` (`name="gps"`) is now in
+  `default_components()` - it owns a read-only `atlas.Atlas()` (never merges) and enriches via
+  `ctx.enrich`: `{"route", "step", "position": "reached <page>[, not submitted]", "context"?,
+  "note"? on an odd jump}`. Four decisions recorded (`tools/sgt_overhaul.py show W6-1`): start/
+  confirmation from transition topology; wire the component in now (a no-op while the atlas is
+  empty, 14.6); odd-jump = a different route's confirmation only; context sourced from the Core's
+  own draft, not the atlas. Tests `tests/test_sgt_i_gps.py` (11, incl. the shared-dashboard/no-
+  chimera-route fixture and a shared-address-settled-by-lookback case for `identify_page`).
+  `pytest tests/test_sgt_*.py`: 419 passed (was 408), none pre-existing failing. Next (W6-2, "read
+  harder near the finish line"): needs `Position.step`/`steps_total`/`at_confirmation` from here to
+  decide when to call `ctx.ask_more_reads()`; nothing in `Gps` calls it today. Also worth knowing:
+  a portal whose routes fully reconverge then fan back out (no page in between) is genuinely
+  unresolvable from pairwise transition counts alone - `Gps` correctly reports no route rather than
+  guessing; that's why the test fixture keeps its two routes apart after the shared dashboard.

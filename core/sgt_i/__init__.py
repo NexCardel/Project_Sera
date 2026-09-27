@@ -10,8 +10,11 @@ from .observation import Observation, make_observation
 
 
 def default_components() -> list:
-    """The SGT-I components the app runs. None yet - they arrive with the later steps."""
-    return []
+    """The SGT-I components the app runs. Only the GPS (step 5) so far; it costs nothing while
+    its atlas is empty (cold start, 14.6) - later steps add to this list."""
+    from .gps import GpsComponent
+
+    return [GpsComponent()]
 
 
 __all__ = ["SgtIntelligence", "Observation", "make_observation", "default_components"]

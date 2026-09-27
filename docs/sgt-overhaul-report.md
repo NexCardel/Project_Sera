@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 01:03)
+# SGT overhaul — report (2026-09-28 01:13)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 13 |
+| Not started | 12 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 14 |
+| Done | 15 |
 | Blocked | 0 |
 
-Runs: 20   output tokens: 565708   API-equivalent cost: $25.81
+Runs: 21   output tokens: 612654   API-equivalent cost: $27.25
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ Runs: 20   output tokens: 565708   API-equivalent cost: $25.81
 | W4-2 | Done | sonnet | 4af6a8f | Maths 2: checksum discovery, values inside values, relations | invariants.py: checksum discovery (Luhn/Verhoeff/mod11/mod36, Bonferroni-corrected), value containment, order/sum relations; 19 new tests, 364 total pass |
 | W4-3 | Done | sonnet | 38f3e57 | Maths 3: container kinds from salted-hash statistics | stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass |
 | W5-1 | Done | opus | 3f5464e | The atlas: model, page matching, merge, template promotion, ageing | core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regio |
-| W5-2 | Not started | sonnet |  | Atlas tool: show / diff / coverage |  |
+| W5-2 | Done | sonnet | 5827a96 | Atlas tool: show / diff / coverage | atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed |
 | W6-1 | Not started | sonnet |  | The GPS: position, route, progress, row enrichment |  |
 | W6-2 | Not started | opus |  | Read harder near the finish line (advisory to the Core) |  |
 | W7-1 | Not started | sonnet |  | Assertion checker (NegEx-style), trigger words in config |  |
