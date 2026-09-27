@@ -96,6 +96,24 @@ def test_dead_reckoning_when_the_next_page_cannot_be_told(tmp_path):
     assert pos.page == ids["GSTR-1 Payment"]         # the only page GSTR-1 Details ever led to
 
 
+def test_confirmation_next_only_on_the_page_before_the_confirmation(tmp_path):
+    atlas = _new_atlas(tmp_path)
+    _build(atlas)
+    tracker = gps.Gps()
+    flags = [tracker.visit("live-5", url, atlas).confirmation_next
+             for url in ("/dashboard", "/gstr1/form", "/gstr1/pay", "/gstr1/pay", "/gstr1/confirm")]
+    assert flags == [False, False, True, True, False]
+
+
+def test_no_route_means_no_confirmation_next(tmp_path):
+    atlas = _new_atlas(tmp_path)
+    _build(atlas)
+    tracker = gps.Gps(config={"min_route_len": 99})   # no route qualifies: only transitions remain
+    assert gps.build_routes(atlas, tracker.config) == []
+    pos = tracker.visit("live-6", "/gstr1/pay", atlas)
+    assert pos.route is None and not pos.confirmation_next    # no route = no known confirmation
+
+
 # ── odd jumps ────────────────────────────────────────────────────────────────────────────────
 def test_landing_on_the_other_routes_confirmation_is_an_odd_jump(tmp_path):
     atlas = _new_atlas(tmp_path)
@@ -154,9 +172,13 @@ def test_identify_page_needs_the_lookback_to_settle_a_shared_address(tmp_path):
 class _FakeCtx:
     def __init__(self):
         self.data = None
+        self.harder = 0
 
     def enrich(self, data):
         self.data = data
+
+    def read_harder(self, seconds=None):
+        self.harder += 1
 
 
 class _FakeObs:
@@ -190,4 +212,25 @@ def test_component_enriches_nothing_on_an_unmatched_page(tmp_path):
     comp = gps.GpsComponent(atlas=live_atlas)
     ctx = _FakeCtx()
     comp.observe(_FakeObs("s1", PORTAL, "/anything"), ctx)
-    assert ctx.data is None
+    assert ctx.data is None and ctx.harder == 0
+
+
+def test_component_reads_harder_once_per_arrival_before_the_confirmation(tmp_path):
+    atlas = _new_atlas(tmp_path)
+    _build(atlas)
+    atlas.save()
+    comp = gps.GpsComponent(atlas=at.Atlas(directory=tmp_path))
+    ctx = _FakeCtx()
+    for url in ("/dashboard", "/gstr1/form"):
+        comp.observe(_FakeObs("s1", PORTAL, url), ctx)
+    assert ctx.harder == 0                            # far from the finish line: reads as usual
+    for _ in range(4):                                # arrive, then re-read the same page 3 times
+        comp.observe(_FakeObs("s1", PORTAL, "/gstr1/pay"), ctx)
+    assert ctx.harder == 1                            # staying does not keep the window open
+    comp.observe(_FakeObs("s2", PORTAL, "/gstr1/pay"), ctx)
+    assert ctx.harder == 2                            # another session arriving asks for its own
+    comp.observe(_FakeObs("s1", PORTAL, "/gstr1/form"), ctx)
+    comp.observe(_FakeObs("s1", PORTAL, "/gstr1/pay"), ctx)
+    assert ctx.harder == 3                            # back, then forward again = a new arrival
+    comp.observe(_FakeObs("s1", PORTAL, "/gstr1/confirm"), ctx)
+    assert ctx.harder == 3

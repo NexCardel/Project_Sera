@@ -141,6 +141,42 @@ def test_enrichment_and_more_reads():
     assert h.enrichment("s1") == {}
 
 
+def _clocked_host():
+    clock = [100.0]
+    return host(monotonic=lambda: clock[0]), clock
+
+
+def test_read_harder_window_is_bounded_and_never_shortened():
+    from core.sgt_i.host import READ_HARDER_MAX_SEC, _Context
+    h, clock = _clocked_host()
+    ctx = _Context(h, "gps", "s1")
+    ctx.read_harder(3600)                                # clamped to the cap
+    assert all(h.wants_read("s1") for _ in range(20))    # every tick while it is open, uncounted
+    assert h.wants_read("other") is False
+    clock[0] += READ_HARDER_MAX_SEC - 1
+    ctx.read_harder(1)                                   # a shorter ask cannot close it early
+    assert h.wants_read("s1") is True
+    clock[0] += 1.5
+    assert h.wants_read("s1") is False                   # over: back to the plain change gate
+    ctx.read_harder(-5)
+    assert h.wants_read("s1") is False
+
+
+def test_read_harder_is_inert_when_off_or_tripped():
+    from core.sgt_i.host import _Context
+    off = SgtIntelligence([], enabled=False, echo=lambda m: None)
+    _Context(off, "gps", "s1").read_harder()
+    assert off.wants_read("s1") is False and off._harder == {}
+    h, _ = _clocked_host()
+    _Context(h, "gps", "s1").read_harder()
+    h.set_enabled(False)                                 # the switch closes every open window
+    h.set_enabled(True)
+    assert h.wants_read("s1") is False
+    _Context(h, "gps", "s1").read_harder()
+    h._trip("fictional")
+    assert h.wants_read("s1") is False
+
+
 class FakeHost:
     """Stands in for the host inside the Core: deterministic channels."""
     active = True
@@ -195,6 +231,45 @@ def test_core_hands_a_copy_and_reads_more_only_when_asked(tmp_path):
     s2.observe(1, "itr", "https://example.test/a", frame=Frame())
     assert len(reads2) == 2                             # one extra read, as asked, no more
     assert len(fake.submitted) == 2 and fake.submitted[0].source == "uia"
+
+
+class Changing(Frame):
+    """A frame whose picture is `key` - equal keys look unchanged to the change gate."""
+
+    def __init__(self, key):
+        self.key = key
+
+    def tobytes(self):
+        return self.key.encode()
+
+
+def _read_ticks(tmp_path, host_obj, keys, open_window_at=None):
+    """Which ticks the Core actually read, for one page shown as `keys` frame by frame."""
+    from core.sgt_i.host import _Context
+    s, reads = core(tmp_path, host_obj)
+    read_at = []
+    for i, key in enumerate(keys):
+        if i == open_window_at and host_obj is not None:
+            _Context(host_obj, "gps", s._sessions[1].session_id).read_harder()
+        before = len(reads)
+        s.observe(1, "itr", "https://example.test/a", frame=Changing(key))
+        if len(reads) > before:
+            read_at.append(i)
+    return read_at
+
+
+def test_read_harder_only_adds_reads_and_is_inert_with_sgt_i_off(tmp_path):
+    keys = ["a", "a", "b", "b", "b", "c", "c", "a", "a", "a"]
+    plain = _read_ticks(tmp_path, None, keys)
+    assert plain == [0, 2, 5, 7]                         # the change gate alone
+    off = SgtIntelligence([], enabled=False, echo=lambda m: None)
+    assert _read_ticks(tmp_path, off, keys, open_window_at=1) == plain
+    h, _ = _clocked_host()
+    harder = _read_ticks(tmp_path, h, keys, open_window_at=1)
+    assert set(plain) <= set(harder)                     # never a read fewer
+    assert harder == list(range(len(keys)))              # every tick while the window is open
+    h2, _ = _clocked_host()
+    assert _read_ticks(tmp_path, h2, keys) == plain      # nobody asked: exactly as before
 
 
 def test_router_switch_attaches_and_detaches_one_host(tmp_path):

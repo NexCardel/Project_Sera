@@ -51,6 +51,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 LABEL_MAX_LEN = 60
+MAX_TRACKED_SESSIONS = 64         # GpsComponent's per-session "last page" memory
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class Position:
     step: Optional[int] = None
     steps_total: Optional[int] = None
     at_confirmation: bool = False
+    confirmation_next: bool = False   # the page usually reached next is a route's confirmation
     odd_jump: bool = False
     dead_reckoned: bool = False
     context: Optional[Dict[str, str]] = None
@@ -268,8 +270,8 @@ class Gps:
             if cur is not None:
                 st.route_id = cur.id
 
-        if not dead_reckoned:
-            st.lookback.append(page)
+        if not dead_reckoned and (not st.lookback or st.lookback[-1] != page):
+            st.lookback.append(page)       # a re-read of the same page is not a new step back
             del st.lookback[:-self.config["lookback"]]
 
         step = steps_total = None
@@ -278,6 +280,10 @@ class Gps:
             step = cur.pages.index(page) + 1
             steps_total = len(cur.pages)
             at_conf = page == cur.pages[-1]
+            next_page = cur.pages[step] if step < steps_total else None
+        else:
+            next_page = dead_reckoning(atlas, page) if page not in confirmations else None
+        conf_next = next_page is not None and next_page in confirmations
 
         context = None
         if cur is not None and not odd:
@@ -286,7 +292,7 @@ class Gps:
 
         return Position(page=page, label=_page_label(atlas, page), route=cur.name if cur else None,
                         step=step, steps_total=steps_total, at_confirmation=at_conf,
-                        odd_jump=odd, dead_reckoned=dead_reckoned, context=context)
+                        confirmation_next=conf_next, odd_jump=odd, dead_reckoned=dead_reckoned, context=context)
 
 
 class GpsComponent:
@@ -303,12 +309,24 @@ class GpsComponent:
             atlas = Atlas()
         self._atlas = atlas
         self._gps = Gps(config)
+        self._last_page: Dict[str, Optional[str]] = {}   # session -> page of its previous visit
 
     def observe(self, obs: Any, ctx: Any) -> None:
         portal = self._atlas.portal(obs.portal)
         pos = self._gps.visit(obs.session_id, obs.url, portal, draft=dict(obs.draft))
+        arrived = self._last_page.get(obs.session_id) != pos.page
+        self._last_page.pop(obs.session_id, None)
+        self._last_page[obs.session_id] = pos.page
+        while len(self._last_page) > MAX_TRACKED_SESSIONS:
+            del self._last_page[next(iter(self._last_page))]
         if pos.page is None:
             return
+        # Read harder near the finish line (14.4 step 5 item 1, contract rule 3): on ARRIVING at a
+        # page whose usual next page is the confirmation, the Core reads on every tick for a bounded
+        # window, so a success message shown for under a second is not missed. Asked once per
+        # arrival - staying on the page does not keep the window open.
+        if pos.confirmation_next and arrived:
+            ctx.read_harder()
         data: Dict[str, Any] = {}
         if pos.route:
             data["route"] = pos.route

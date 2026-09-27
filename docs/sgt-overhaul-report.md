@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 01:13)
+# SGT overhaul — report (2026-09-28 01:36)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 12 |
+| Not started | 11 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 21   output tokens: 612654   API-equivalent cost: $27.25
+Runs: 22   output tokens: 705370   API-equivalent cost: $29.93
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 21   output tokens: 612654   API-equivalent cost: $27.25
 | W4-3 | Done | sonnet | 38f3e57 | Maths 3: container kinds from salted-hash statistics | stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass |
 | W5-1 | Done | opus | 3f5464e | The atlas: model, page matching, merge, template promotion, ageing | core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regio |
 | W5-2 | Done | sonnet | 5827a96 | Atlas tool: show / diff / coverage | atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed |
-| W6-1 | Not started | sonnet |  | The GPS: position, route, progress, row enrichment |  |
+| W6-1 | Done | sonnet | 35d558a | The GPS: position, route, progress, row enrichment | core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: |
 | W6-2 | Not started | opus |  | Read harder near the finish line (advisory to the Core) |  |
 | W7-1 | Not started | sonnet |  | Assertion checker (NegEx-style), trigger words in config |  |
 | W7-2 | Not started | sonnet |  | Page kinds classifier |  |
@@ -55,6 +55,10 @@ Runs: 21   output tokens: 612654   API-equivalent cost: $27.25
 - **W4-3** When a container's counts fit more than one row of the kind table (e.g. an identifier's values are also technically per-client 'changing'), which row wins? → Priority order template > identifier > profile > dataset > vocabulary; template/profile additionally require >=2 distinct clients or >=2 stable clients (a single client's stability is ambiguous between template and profile, so it stays unclassified until a second client is seen) (Blueprint's table lists rows narratively, not by precedence; identifier (never repeats, anywhere) is a stronger, more specific claim than dataset (repeats allowed, just changes per client), so it is checked first. Cheapest and most accurate to build without extra machinery.)
 - **W5-1** How is mixed text (Welcome, <name>) split into template and client parts without AI, and what names the slot? → Word-level promotion: a word is template when seen at the same page/role/zone/position for >=3 different clients AND >=60% of the page's clients (config template_min_clients, template_share); runs of other words become «generic type», e.g. 'Welcome, «text»' (Whole-text identity can never learn mixed text; the share test stops a surname shared by 3 of 50 clients being promoted; the atlas cannot know meaning, so the placeholder is the step-2 generic type, not 'name')
 - **W5-1** Where do the hashes the atlas counts with live, given the atlas may sync but hashes must never leave the PC? → Two files per portal: sgt_i/atlas/<portal>.json (public: structure, counts, shapes, dates) and sgt_i/atlas_private/<portal>.json (salted page tokens, word/client counters, url counts); page matching uses the private token hashes so it is stable across promotion (14.5 rules 3 and 7; losing the private file only means pages are re-learnt; the Core never reads either)
+- **W6-1** How does the GPS tell a 'starting' and a 'confirmation' page apart, since step 6 (page kinds) is built after step 5? → Purely from the atlas's own transition graph: a page that is never arrived at from another known page (in-degree 0) but leads somewhere is a start; a page that is arrived at but never leads anywhere else (out-degree 0) is a confirmation. (Build order (14.7) puts step 6 after step 5, so no sentence/page-kind classifier exists yet for the GPS to lean on; source/sink topology over transitions already stored by the atlas (step 4) is the only signal available now and matches 'over atlas transitions' in 14.4 step 5.)
+- **W6-1** Should the GPS be wired into core/sgt_i/default_components() now, or left unwired until a live atlas-merge component exists? → Wire it in now (GpsComponent, read-only against the atlas). It costs nothing while the atlas is empty - no page matches, nothing is enriched - and picks up data the moment anything (replay, a future step-4 live component) populates the atlas. (W1-2's hand-off said the enrichment channel had nothing producing data yet; 14.6's cold-start risk answer says the Core never depends on SGT-I and SGT-I only adds as it learns, so an empty-atlas no-op component is safe by design.)
+- **W6-1** What exactly counts as an 'odd jump' that closes a route? → Landing directly on a DIFFERENT route's confirmation page while a route is being tracked. Any other move off the tracked route (a start/dashboard page, or a page in no known route) ends the route quietly, without the odd_jump flag. (14.4 step 5's own example is exactly this case (a GSTR-1 route jumping into a GSTR-3B confirmation); the guard says the dashboard or a logout ends the route on its own, so only the confirmation-jump case needs a flag rather than a quiet reset.)
+- **W6-1** Where does the carried form/period context (the second opinion) come from - the atlas's own template-promoted text, or the session's own earlier draft? → The session's own earlier obs.draft (the Core's own already-captured form/period for this exact session), carried forward in memory only, never persisted. The atlas's cross-client text is never used as context. (14.4 step 5 says a confirmation that leaves out the form/period 'gets them from the route it came along' inside one session; 14.5's guard is 'context flows only... inside one session'. Using the Core's own value (not an SGT-I discovery) also avoids any new privacy exposure - it is the same value already destined for the row.)
 
 ## Checks waiting for you
 

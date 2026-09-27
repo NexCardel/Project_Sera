@@ -8,7 +8,7 @@ Blueprint 14.2, the contract between SGT-C (the Core) and SGT-I (Intelligence), 
   2. The Core only changes through the user's approval (the SGT lab, step 11) - so there is no
      call here that writes into the Core.
   3. Look harder, never less. The advisory channel can only ASK for extra reads of a session
-     (wants_read); it has no way to skip a read, veto a capture or change a value.
+     (wants_read: counted reads, or a bounded read-every-tick window); it has no way to skip a read, veto a capture or change a value.
   4. Beside, never instead. The enrichment channel collects each component's output per session;
      the Core puts it in raw_payload["sgt_i"] of the row and nowhere else.
   5. Isolated failure. Components run on this host's own thread, after the Core's tick, with a
@@ -35,6 +35,7 @@ HANG_SEC = 15.0                # a page still running this long = hung
 QUEUE_CAP = 8                  # pages waiting; the oldest is dropped when full
 MAX_EXTRA_READS = 3            # outstanding extra reads one session may ask for
 EXTRA_READ_TTL_SEC = 60.0      # an unused request expires
+READ_HARDER_MAX_SEC = 30.0     # longest "read on every tick" window one ask can open (user, W6-2)
 ENRICH_MAX_BYTES = 4096        # one component's enrichment for one session, as JSON
 
 
@@ -55,6 +56,11 @@ class _Context:
         """Ask the Core to read this session's page again even if nothing seems to change."""
         self._host._ask_reads(self._session_id, count)
 
+    def read_harder(self, seconds: float = READ_HARDER_MAX_SEC) -> None:
+        """Ask the Core to read this session's page on every tick for a while (at most
+        READ_HARDER_MAX_SEC from now), whether or not it seems to change. Never shortens a window."""
+        self._host._read_harder(self._session_id, seconds)
+
 
 class SgtIntelligence:
     def __init__(self, components: Optional[List[Any]] = None, enabled: bool = False,
@@ -74,6 +80,7 @@ class SgtIntelligence:
         self._busy_since: Optional[float] = None
         self._enrichment: Dict[str, Dict[str, Any]] = {}
         self._reads: Dict[str, List[float]] = {}     # session -> expiry times of asked-for reads
+        self._harder: Dict[str, float] = {}          # session -> end of its read-every-tick window
         self.tripped: Optional[str] = None            # why SGT-I switched itself off, this run
         self.pages = 0
         self.dropped = 0
@@ -97,6 +104,7 @@ class SgtIntelligence:
         self._queue.clear()
         self._enrichment.clear()
         self._reads.clear()
+        self._harder.clear()
 
     def _trip(self, why: str) -> None:
         with self._lock:
@@ -129,12 +137,18 @@ class SgtIntelligence:
             pass
 
     def wants_read(self, session_id: str) -> bool:
-        """Advisory channel: True when SGT-I asked for another read of this session (consumes one)."""
+        """Advisory channel: True when SGT-I asked for another read of this session - inside a
+        read-harder window, or by consuming one counted extra read."""
         try:
             if not self.active:
                 return False
             with self._lock:
                 now = self._now()
+                until = self._harder.get(session_id)
+                if until is not None:
+                    if until > now:
+                        return True
+                    del self._harder[session_id]
                 live = [t for t in self._reads.get(session_id, ()) if t > now]
                 if not live:
                     self._reads.pop(session_id, None)
@@ -210,3 +224,12 @@ class SgtIntelligence:
             live = [t for t in self._reads.get(session_id, ()) if t > now]
             live += [now + EXTRA_READ_TTL_SEC] * max(0, int(count))
             self._reads[session_id] = live[:MAX_EXTRA_READS]
+
+    def _read_harder(self, session_id: str, seconds: float) -> None:
+        if not self.active:
+            return
+        span = min(max(0.0, float(seconds)), READ_HARDER_MAX_SEC)
+        with self._lock:
+            until = self._now() + span
+            if until > self._harder.get(session_id, 0.0):
+                self._harder[session_id] = until

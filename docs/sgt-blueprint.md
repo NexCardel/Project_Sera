@@ -1576,3 +1576,15 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   a portal whose routes fully reconverge then fan back out (no page in between) is genuinely
   unresolvable from pairwise transition counts alone - `Gps` correctly reports no route rather than
   guessing; that's why the test fixture keeps its two routes apart after the shared dashboard.
+
+- **W6-2** (2026-09-28, claude-opus-5-5): read harder near the finish line. `host.py`: new `ctx.read_harder(seconds)`
+  opens a per-session window (capped `READ_HARDER_MAX_SEC` = 30 s, user's answer) during which `wants_read` is True
+  on every call, uncounted; a later ask only extends it, never shortens; Off / tripped / switch-off = no window.
+  The Core is unchanged - `sgt_shadow._observe` already asks `wants_read` only when the change gate would skip, so it
+  can only ADD reads. Worker tick (0.35 s) untouched (decision recorded). `gps.py`: `Position.confirmation_next`
+  (next page on the route - or, off-route, the usual transition - is a route's confirmation); `GpsComponent` asks
+  once per ARRIVAL on such a page (per-session last page, capped 64), so staying does not keep the window open;
+  lookback no longer appends a re-read of the same page (the window makes re-reads common). Tests: host (bounded,
+  never shortened, inert off/tripped; Core reads with window ⊇ plain gate, Off identical), gps (flag, once per
+  arrival, no route = inert). `test_sgt_*.py`: 425 passed; one run had a flaky ordering failure in
+  `test_sgt_tracker_rows::test_same_arn_seconds_apart...` that passes on re-run (untouched by this WP).
