@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 02:35)
+# SGT overhaul — report (2026-09-28 02:47)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 5 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 22 |
+| Done | 23 |
 | Blocked | 0 |
 
-Runs: 28   output tokens: 927260   API-equivalent cost: $40.99
+Runs: 29   output tokens: 981888   API-equivalent cost: $44.21
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -36,7 +36,7 @@ Runs: 28   output tokens: 927260   API-equivalent cost: $40.99
 | W8-1 | Done | opus | 58a7263 | Evidence ledger, retraction, explanations, second opinions | core/sgt_i/ledger.py: beliefs+sightings, config weights, truth-maintenance retraction, one-line explanations, 5 second opinions via enrichment; LedgerComponent  |
 | W9-1 | Done | sonnet | eebec24 | Sera's own data: client list and tracker, read-only | sera_data.py: read-only cached clients/tracker accessor, OCR recovery, name-vs-PAN cross-check, masked confirm; 15 new tests, 492 passed total |
 | W9-2 | Done | sonnet | 4272cba | Tracker expectations and self-healing (known-value anchoring) | expectations.py: due/revision/duplicate + known-value anchoring synonyms; unwired from default_components (check-list item added); 507 tests pass |
-| W10-1 | Not started | opus |  | UIA events for short-lived messages + page diffing |  |
+| W10-1 | Done | opus | 0e1794c | UIA events for short-lived messages + page diffing | FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list |
 | W11-1 | Not started | haiku |  | 'Not understood' residue report |  |
 | W12-1 | Not started | opus |  | The miner: proposals from the atlas, maths and anchoring |  |
 | W12-2 | Not started | sonnet |  | SGT lab screen |  |
@@ -67,6 +67,8 @@ Runs: 28   output tokens: 927260   API-equivalent cost: $40.99
 - **W8-1** What counts as another client's evidence for retraction → A sighting carries field:hash of the client (card's own PAN, else session profile); withdrawn when the session has the SAME identity field with a different hash (Blueprint 14.4 step 7 truth maintenance; per-field so a GSTIN-only profile never contradicts a card PAN)
 - **W8-1** Identifier date rule and ITR-7 / GST ARN → Config-driven identifier_dates: only the ITR ack's DDMMYY tail configured; AY window = the AY itself (Updated filings exempt), FY/month/quarter windows have grace days; no ITR-7 PAN rule; GST ARN date layout not configured (Only the ITR ack date layout is confirmed in sgt_fields.json (ddmmyy_tail checks); an unsure rule would give false second opinions)
 - **W9-2** Wire ExpectationsComponent into the live default_components() list now, or leave it built-but-unwired like sera_data.py (W9-1)? → Leave unwired; build the pure component + tests only (default_components() takes no arguments and SeraData needs db_path/hex_key/raw_db_path, which only main.py's Database instance holds; threading those through VSDCRouter/vsdc_worker.py to wire a real SeraData into the host is a separate, riskier app-wiring change I cannot verify without a real portal session. Scoping W9-2 to the component + config + tests keeps SGT-I Off/On behaviour unchanged either way and matches W9-1's own precedent (accessor built, not yet wired).)
+- **W10-1** Which thread owns the UIA event registrations? → Its own MTA COM thread in core/sgt_i/uia_events.py, not vsdc_uia_text's read worker (The read worker is an STA with no message loop (UIA would never deliver events to it) and is replaced when a read hangs, which would silently drop registrations. MTA handlers run on UIA's threads and only read the sender's cached subtree. Same hang guard: a registration over 10 s switches listening off for the run.)
+- **W10-1** Where are the event handlers registered (scope)? → On the Document elements of the window the Core has just read (already scope-gated), re-registered when its URL changes; never desktop-wide or on browser chrome (Keeps other tabs/apps out (privacy + portal allowlist); a JS alert() outside the page document is not caught by events, but page diffing sees in-page dialogs.)
 
 ## Checks waiting for you
 
@@ -76,3 +78,4 @@ Runs: 28   output tokens: 927260   API-equivalent cost: $40.99
 - #4 (W2-4) Switch SGT-I on for a real portal session so the corpus actually gains v2 nodes records; then re-run tools/sgt_lines_equivalence.py (no --skip-corpus) to see it move off '0 comparable'. — Not run
 - #5 (W6-2) With SGT-I On and a learned atlas, reach a filing's last page before the confirmation on a real portal: the Core should read every tick for 30 s (SGT reads count rises), then fall back to the change gate; CPU stays reasonable. — Not run
 - #6 (W9-2) Wire ExpectationsComponent into core/sgt_i/__init__.py's default_components() for real: thread db_path/hex_key/raw_db_path from main.py's Database through VSDCRouter (_apply_sgt_i) into a SeraData instance, then add ExpectationsComponent(sera) to the list. Needs a real app run to verify SGT-I stays Off/On-safe with a live master.db/rawPayload.db. — Not run
+- #7 (W10-1) Live UIA events: with SGT-I On, open a local page with a role=status toast shown for 1 s (e.g. scratch toast.html from W10-1) in Edge on an allowed-portal-like session, or run a real portal submission; confirm the row's raw_payload.sgt_i.flashes counts a live_region/notification flash and missed_by_polling. The COM plumbing (CUIAutomation8, IUIAutomation5 notification + live-region/window-opened add/remove on the MTA thread) was verified; real event delivery from Edge was not (launching Edge needed approval). — Not run

@@ -409,6 +409,12 @@ class SgtShadow:
             self._stats.record_hits(portal, [h.spec for h in res.profile.values()]
                                     + [h.spec for h in res.current.values()]
                                     + [d.record for d in res.datasets], today)
+            # Step 10: track unclaimed containers/typed values (residues)
+            from core.sgt.sgt_health import compute_residues
+            residue_result = compute_residues(lines, res, url, title)
+            if residue_result is not None:
+                page_kind, residues = residue_result
+                self._stats.record_residues(portal, page_kind, residues)
         clash = None if res.is_list else self._identity_conflict(s, res)
         if clash:
             # Another client's PAN/GSTIN: this window moved to someone else without passing a

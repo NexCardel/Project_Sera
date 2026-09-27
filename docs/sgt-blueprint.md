@@ -1705,3 +1705,13 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `missed_by_polling`, `flash_claims`, `last_appeared()` in memory); GPS and ledger skip event observations. Router wires
   `FlashWatcher()`. Tests `tests/test_sgt_i_flashes.py` (11); `test_sgt_*.py` 518 passed. COM add/remove verified on this PC;
   real Edge delivery NOT (launching Edge needed approval) - check-list item + `tools/sgt_i_flash_probe.py` / `sgt_i_flash_page.html`.
+
+- **W11-1** (2026-09-28, claude-haiku-4-5-20251001): step 10, tracking unclaimed containers/typed values (residues).
+  Modified `core/sgt/sgt_health.py`: added `"residues"` key to data structure, `record_residues(portal, page_kind, {shape: count})`
+  method, and updated `summary()` to include residues per page kind. Added residue helpers: `compute_residues(lines, result, url, title)`
+  -> `(page_kind, residues)` or None; uses domain patterns (PAN, ARN, GSTIN, Aadhaar). Core calls `compute_residues` after
+  `resolve_page()` in `sgt_shadow.py:observe()`. Pure functions detect shaped values in text, extract claimed shapes from
+  PageResult, compute difference. Page kind heuristics: URL/title/content keywords (gst_*/itr_*/form_page/list_page/other).
+  Created `core/sgt_i/residues.py` (component, not registered yet - for step 11 learning). Tests `tests/test_sgt_residues.py` (19);
+  `test_sgt_{residues,reliability,replay}.py` 67 passed. Decision: Core tracks residues directly for health (not SGT-I enrichment),
+  preserving 14.2 passivity contract. W12+ will use residues for proposals.
