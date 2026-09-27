@@ -1,20 +1,20 @@
-# SGT overhaul — report (2026-09-27 14:39)
+# SGT overhaul — report (2026-09-27 17:59)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 27 |
+| Not started | 26 |
 | In progress | 0 |
 | Retry | 0 |
 | Done | 0 |
-| Blocked | 0 |
+| Blocked | 1 |
 
-Runs: 0   output tokens: 0   API-equivalent cost: $0.00
+Runs: 2   output tokens: 93552   API-equivalent cost: $3.63
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W0-1 | Not started | sonnet |  | Find why the SGT page corpus stopped recording after 22 Sep and fix it |  |
+| W0-1 | Blocked | sonnet |  | Find why the SGT page corpus stopped recording after 22 Sep and fix it | error after 2 attempts; see logs/sgt-overhaul/20260927-175946-W0-1.json |
 | W0-2 | Not started | haiku |  | Baseline: SGT tests and replay baseline, recorded for later diffs |  |
 | W1-1 | Not started | opus |  | SGT-I host: the C/I contract in code |  |
 | W1-2 | Not started | sonnet |  | Enrichment fields on tracker rows (no schema change) |  |

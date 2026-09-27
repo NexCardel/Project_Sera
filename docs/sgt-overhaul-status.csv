@@ -1,5 +1,5 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
-W0-1,0,Find why the SGT page corpus stopped recording after 22 Sep and fix it,Not started,claude-sonnet-5,0,,,
+W0-1,0,Find why the SGT page corpus stopped recording after 22 Sep and fix it,Done,claude-sonnet-5,3,623424f,Root cause: sgt_record_pages flipped off silently (spec_stats.json proved reads continued); made PageRecorder.enabled echo every transition; regression tests added; 281 SGT tests pass,2026-09-27 19:11
 W0-2,0,"Baseline: SGT tests and replay baseline, recorded for later diffs",Not started,claude-haiku-4-5-20251001,0,,,
 W1-1,1,SGT-I host: the C/I contract in code,Not started,claude-opus-5-5,0,,,
 W1-2,1,Enrichment fields on tracker rows (no schema change),Not started,claude-sonnet-5,0,,,
