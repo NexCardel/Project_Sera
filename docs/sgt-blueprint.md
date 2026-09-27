@@ -1461,3 +1461,15 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `test_sgt_i_host.py` (nodes only with SGT-I on; a failing node read breaks nothing).
   `test_sgt_*.py`: 322 passed. Next: needs SGT-I on for a real session so the corpus mode check
   (#4) stops reporting 0 comparable; that tool then gates the Core adopting the node reader.
+
+- **W3-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/pairs.py` - `pairs_from_page(PageMap)` turns
+  each page-map pair into a `ValuePair(container, type, shape, method, zone, row)`; no field can
+  hold a value. `container_path()` = section headings + the pair's own label. `classify_type()`:
+  a "choice" pair is typed structurally; else regex order yes/no > percentage > email > phone >
+  date > amount > code > number > text, tuned so a bank-account digit run never misreads as phone
+  and a plain decimal never misreads as amount. `mask_shape()` matches 14.9's own examples exactly
+  (`ABCDE1234F` -> `AAAAA9999A`, Aadhaar-shaped -> `9999 9999 9999`). Privacy test round-trips real
+  output through the one path SGT-I enrichment reaches disk by today (`raw_payload['sgt_i']` ->
+  `insert_tracker_dump` -> sqlite), then reads the file's own bytes for any fixture value. Tests:
+  `tests/test_sgt_i_pairs.py` (10, new). `test_sgt_*.py`: 332 passed. Next (step 3): pairs.py
+  gives it the (container, type, shape) stream; not wired into host.py yet (no component yet).

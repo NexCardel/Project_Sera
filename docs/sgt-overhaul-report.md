@@ -1,4 +1,4 @@
-# SGT overhaul — report (2026-09-28 00:04)
+# SGT overhaul — report (2026-09-28 00:16)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
@@ -7,10 +7,10 @@ Deadline: 2026-09-29T01:30:00+05:30
 | Not started | 18 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 8 |
-| Blocked | 1 |
+| Done | 9 |
+| Blocked | 0 |
 
-Runs: 14   output tokens: 353663   API-equivalent cost: $17.44
+Runs: 15   output tokens: 364267   API-equivalent cost: $18.16
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -22,7 +22,7 @@ Runs: 14   output tokens: 353663   API-equivalent cost: $17.44
 | W2-1 | Done | opus | 54ae8d7 | Measure a cached UIA node read vs the current line reader | Cached node read: heavy 927->530 ms, normal ~40->~32 ms, control-view lines identical; unpack ~205 ms is next cost |
 | W2-2 | Done | opus | 63c7f4c | Page map: node model, zones, sections, layout pairing | core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass |
 | W2-3 | Done | sonnet | 56b03e3 | Lines view from nodes + equivalence check against today's reader | tools/sgt_lines_equivalence.py: 14.2 gate, synthetic+corpus+live modes; 316 tests pass |
-| W2-4 | Blocked | sonnet |  | Recorder stores nodes (corpus format v2, backwards compatible) | error after 3 attempts; see logs/sgt-overhaul/20260928-000437-W2-4.json |
+| W2-4 | Done | sonnet | cec95e6 | Recorder stores nodes (corpus format v2, backwards compatible) | corpus v2: PageRecorder records nodes alongside lines while SGT-I is on; replay reads v1/v2 unchanged; 322 tests pass |
 | W3-1 | Not started | sonnet |  | Container -> value pairs with generic types and masking |  |
 | W4-1 | Not started | sonnet |  | Maths 1: shape grammar induction with rule-of-three bounds |  |
 | W4-2 | Not started | sonnet |  | Maths 2: checksum discovery, values inside values, relations |  |
