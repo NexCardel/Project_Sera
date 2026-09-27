@@ -282,3 +282,39 @@ def test_sgt_i_enrichment_is_never_identity_or_name_evidence():
     assert extract_name_evidence({}, msg) == []
     prof = extract_profile_from_payload(msg)
     assert not (prof["pan"] or prof["gstin"] or prof["company_name"] or prof["proprietor_name"])
+
+
+# ── The corpus's node dump (W2-4, format v2): only while SGT-I is on, never disturbs capture ────
+def test_recorder_gets_nodes_only_while_sgt_i_is_on(tmp_path):
+    from core.sgt.sgt_corpus import PageRecorder, load_pages
+    lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
+    fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "x"}]]
+    rec = PageRecorder(tmp_path, echo=lambda m: None)
+
+    def build(intelligence):
+        return SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines},
+                         read_nodes=lambda h: {"docs": fake_nodes}, recorder=rec,
+                         log_dir=tmp_path, echo=lambda m: None, intelligence=intelligence)
+
+    build(None).observe(1, "itr", "https://example.test/sgt-i-off", frame=Frame())
+    on = SgtIntelligence([], enabled=True, echo=lambda m: None)
+    build(on).observe(1, "itr", "https://example.test/sgt-i-on", frame=Frame())
+    pages = {p["url"]: p for p in load_pages(tmp_path)}
+    assert "nodes" not in pages["https://example.test/sgt-i-off"]
+    assert pages["https://example.test/sgt-i-on"]["nodes"] == fake_nodes
+
+
+def test_a_failing_node_read_never_breaks_recording_or_capture(tmp_path):
+    from core.sgt.sgt_corpus import PageRecorder, load_pages
+    lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
+    rec = PageRecorder(tmp_path, echo=lambda m: None)
+
+    def boom(_h):
+        raise RuntimeError("no window")
+
+    on = SgtIntelligence([], enabled=True, echo=lambda m: None)
+    s = SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=boom, recorder=rec,
+                 log_dir=tmp_path, echo=lambda m: None, intelligence=on)
+    res = s.observe(1, "itr", "https://example.test/broken-nodes", frame=Frame())
+    pages = load_pages(tmp_path)
+    assert res is not None and len(pages) == 1 and "nodes" not in pages[0]

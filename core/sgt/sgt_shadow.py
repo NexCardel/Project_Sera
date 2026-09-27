@@ -228,6 +228,7 @@ class SgtShadow:
         self,
         store: Optional[SpecStore] = None,
         read_uia: Optional[Callable[[int], Dict[str, Any]]] = None,
+        read_nodes: Optional[Callable[[int], Dict[str, Any]]] = None,
         dispatched_ids: Optional[Callable[[], Iterable[str]]] = None,
         log_dir: Optional[Path] = None,
         clock: Callable[[], float] = time.time,
@@ -267,6 +268,13 @@ class SgtShadow:
                 # Ticked radio buttons / checkboxes too: a filing type is often a radio choice.
                 return vsdc_uia_text.read_page_text(hwnd, include_selection=True)
         self._read_uia = read_uia
+        # SGT-I's own extra read (blueprint 14.2's "shared read" is not adopted yet): only ever
+        # called for the corpus, only while SGT-I is on - see _nodes_for_recording.
+        if read_nodes is None:
+            def read_nodes(hwnd: int) -> Dict[str, Any]:
+                from core.sgt_i.uia_nodes import read_page_nodes
+                return read_page_nodes(hwnd)
+        self._read_nodes = read_nodes
         self._dispatched_ids = dispatched_ids or (lambda: ())
         self._log_dir = log_dir
         self._clock = clock
@@ -384,8 +392,10 @@ class SgtShadow:
             return None
         today = self._today()
         if self._recorder is not None:
+            record_nodes = self._recorder.enabled and sgt_i is not None and sgt_i.active
+            nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
-                                  source=source, lines=lines, ts=now, today=today)
+                                  source=source, lines=lines, ts=now, today=today, nodes=nodes)
         if self._stats is not None:
             self._stats.record_read(portal, source, today)
 
@@ -422,6 +432,14 @@ class SgtShadow:
         if self._sgt_i is not None:
             self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today)
         return res
+
+    def _nodes_for_recording(self, hwnd: int) -> Optional[List[List[Dict[str, Any]]]]:
+        """The page's node dump for the corpus (sgt_corpus format v2) - an extra read, never
+        allowed to disturb capture: any failure here is silent, same as a recorder failure."""
+        try:
+            return list((self._read_nodes(hwnd) or {}).get("docs") or []) or None
+        except Exception:
+            return None
 
     def _hand_to_sgt_i(self, s: _Session, portal: str, url: str, title: str, source: str,
                        lines: List[str], res: PageResult, registry: Any, now: float, today: date) -> None:

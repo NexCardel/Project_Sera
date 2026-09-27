@@ -1447,3 +1447,17 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `tests/test_sgt_lines_equivalence.py` (4); `test_sgt_*.py` 316 passed. Next (W2-4): add the
   `"nodes"` field to recorded pages so the corpus mode has something to check; once the whole
   corpus passes this gate, the Core can switch to the node reader.
+
+- **W2-4** (2026-09-28, claude-sonnet-5): corpus format v2. `sgt_corpus.py`: `CORPUS_VERSION = 2`,
+  every record carries `"v"`; `PageRecorder.record()` takes optional `nodes` (W2-1's
+  `read_page_nodes(hwnd)["docs"]` shape), written as `"nodes"` only when given - the key
+  `tools/sgt_lines_equivalence.py`'s corpus mode already looks for. `sgt_shadow.py`: new
+  `read_nodes` ctor param (default: lazy `uia_nodes.read_page_nodes`); `_observe` fetches nodes
+  only when `recorder.enabled and sgt_i.active`, into the same `record()` call - one JSONL write,
+  not two to merge; decided sync-in-`_observe` over an async write from SGT-I's own thread for
+  that reason (full decision: `tools/sgt_overhaul.py show W2-4`). `sgt_replay.py` untouched - it
+  only ever reads `"lines"`, so v1 (no `"v"`) and v2 pages replay identically. Tests:
+  `test_sgt_replay.py` (version field, v1/v2 pages both replay the golden rows) and
+  `test_sgt_i_host.py` (nodes only with SGT-I on; a failing node read breaks nothing).
+  `test_sgt_*.py`: 322 passed. Next: needs SGT-I on for a real session so the corpus mode check
+  (#4) stops reporting 0 comparable; that tool then gates the Core adopting the node reader.

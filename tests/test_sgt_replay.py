@@ -161,6 +161,44 @@ def test_the_recorder_writes_each_page_once_and_the_replay_reads_it_back(tmp_pat
     assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
 
 
+def test_record_writes_the_version_field_and_nodes_only_when_given(tmp_path):
+    from datetime import date
+    rec = PageRecorder(tmp_path)
+    rec.record(session="s1", portal="Income Tax", url="u1", title="", source="uia",
+               lines=["a"], ts=1.0, today=date(2026, 9, 27))
+    rec.record(session="s1", portal="Income Tax", url="u2", title="", source="uia",
+               lines=["b"], ts=2.0, today=date(2026, 9, 27), nodes=[[{"name": "b"}]])
+    pages = {p["url"]: p for p in load_pages(tmp_path)}
+    assert pages["u1"]["v"] == sgt_corpus.CORPUS_VERSION and "nodes" not in pages["u1"]
+    assert pages["u2"]["v"] == sgt_corpus.CORPUS_VERSION and pages["u2"]["nodes"] == [[{"name": "b"}]]
+
+
+def test_a_v1_page_with_no_version_field_still_replays(tmp_path):
+    """Every page recorded before 2026-09-27 looks like this - no "v", no "nodes"."""
+    doc = load(GOLDEN / "itr_wizard_to_submission.json")
+    path = tmp_path / "pages_2026-09-01.jsonl"
+    path.write_text("\n".join(json.dumps({
+        "hash": str(i), "ts": p["ts"], "today": p["today"], "session": "s1", "portal": p["portal"],
+        "url": p["url"], "title": p["title"], "source": p["source"], "lines": p["lines"],
+    }, ensure_ascii=False) for i, p in enumerate(doc["pages"])) + "\n", encoding="utf-8")
+    pages = load_pages(tmp_path)
+    assert len(pages) == len(doc["pages"]) and all("v" not in p for p in pages)
+    assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
+
+
+def test_a_v2_page_with_nodes_replays_the_same_way_ignoring_them(tmp_path):
+    from datetime import date
+    doc = load(GOLDEN / "itr_wizard_to_submission.json")
+    rec = PageRecorder(tmp_path)
+    fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "Personal details"}]]
+    for p in doc["pages"]:
+        rec.record(session="s1", portal=p["portal"], url=p["url"], title=p["title"], source=p["source"],
+                   lines=p["lines"], ts=p["ts"], today=date.fromisoformat(p["today"]), nodes=fake_nodes)
+    pages = load_pages(tmp_path)
+    assert all(p["v"] == sgt_corpus.CORPUS_VERSION and p["nodes"] == fake_nodes for p in pages)
+    assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
+
+
 def test_the_recorder_prunes_old_days(tmp_path):
     (tmp_path / "pages_2020-01-01.jsonl").write_text("{}\n", encoding="utf-8")
     (tmp_path / "pages_2099-01-01.jsonl").write_text("{}\n", encoding="utf-8")

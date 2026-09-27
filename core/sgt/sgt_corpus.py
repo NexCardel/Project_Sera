@@ -10,6 +10,14 @@ What is recorded: the TEXT LINES of each page SGT resolved (UIA, or OCR when UIA
 its sanitized link, window title, portal and time. No screenshots. A page whose lines are
 unchanged since the last time they were recorded today is not written again.
 
+Format version ("v" field, CORPUS_VERSION below): v1 records (no "v" field - every page recorded
+before 2026-09-27) hold lines only. v2 adds an optional "nodes" field - the same page's node dump
+(core/sgt_i/uia_nodes.read_page_nodes()["docs"]), written beside the lines only while SGT-I is on
+(blueprint 14.2's "shared read" is not adopted yet, so this is an extra read, on SGT-I's own
+account). It is the fuel tools/sgt_lines_equivalence.py's corpus mode checks. load_pages() and
+sgt_replay.py read both versions unchanged - "nodes" is simply absent on v1 (and v2 pages read
+with SGT-I off) and on any page whose extra read failed.
+
 Where: ~/AmanAssociates_Sera/sgt_corpus/pages_YYYY-MM-DD.jsonl - on this PC only, like the
 database. It holds client data (names, PANs, whatever the portal shows), so it is NEVER copied
 into the repository; tests use the fictional pages in tests/sgt_golden/. Files older than
@@ -32,6 +40,7 @@ CORPUS_DIR_ENV = "SGT_CORPUS_DIR"
 RETENTION_DAYS = 30
 MAX_DAY_BYTES = 50 * 1024 * 1024
 FILE_PREFIX = "pages_"
+CORPUS_VERSION = 2   # 1 = lines only (no "v" field); 2 = lines + an optional "nodes" field
 
 
 def corpus_dir() -> Path:
@@ -83,7 +92,8 @@ class PageRecorder:
         return path
 
     def record(self, *, session: str, portal: str, url: str, title: str, source: str,
-               lines: List[str], ts: float, today: date) -> None:
+               lines: List[str], ts: float, today: date,
+               nodes: Optional[List[List[Dict[str, Any]]]] = None) -> None:
         if not self.enabled or not lines:
             return
         try:
@@ -95,9 +105,12 @@ class PageRecorder:
                                   .encode("utf-8")).hexdigest()[:16]
             if digest in self._seen:
                 return
-            line = json.dumps({"hash": digest, "ts": ts, "today": day, "session": session,
-                               "portal": portal, "url": url, "title": title, "source": source,
-                               "lines": lines}, ensure_ascii=False) + "\n"
+            rec: Dict[str, Any] = {"v": CORPUS_VERSION, "hash": digest, "ts": ts, "today": day,
+                                   "session": session, "portal": portal, "url": url, "title": title,
+                                   "source": source, "lines": lines}
+            if nodes:
+                rec["nodes"] = nodes             # only while SGT-I is on and the extra read worked
+            line = json.dumps(rec, ensure_ascii=False) + "\n"
             if self._bytes + len(line) > MAX_DAY_BYTES:
                 self._full = True
                 self._echo(f"[SGT] page recording paused for today: {MAX_DAY_BYTES // (1024 * 1024)} MB reached")
