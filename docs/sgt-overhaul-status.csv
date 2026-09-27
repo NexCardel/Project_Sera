@@ -24,5 +24,5 @@ W9-2,9,Tracker expectations and self-healing (known-value anchoring),Done,claude
 W10-1,10,UIA events for short-lived messages + page diffing,Done,claude-opus-5-5,1,0e1794c,"FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list",2026-09-28 02:47
 W11-1,11,'Not understood' residue report,Done,claude-haiku-4-5-20251001,2,4a6451f,Core tracks residues directly via compute_residues (PAN/ARN/GSTIN/Aadhaar patterns); record_residues adds to daily health report per page kind; core/sgt_i/residues.py prepared for step 11 mining; 19 residue tests + 537 SGT tests pass,2026-09-28 03:00
 W12-1,12,"The miner: proposals from the atlas, maths and anchoring",Done,claude-opus-5-5,1,2aef1b7,"core/sgt_i/miner.py: 5 sources, drafted specs pass Core self-tests, fictional examples, gates + replay red flag, proposals.json; 564 sgt tests pass",2026-09-28 03:13
-W12-2,12,SGT lab screen,In progress,claude-sonnet-5,1,,,2026-09-28 03:14
+W12-2,12,SGT lab screen,Done,claude-sonnet-5,1,5b131ba,"SGT lab dialog: core/sgt_i/lab.py accept/reject logic + ui/dialogs/sgt_lab_dialog.py, wired at Settings->Tracker. 13 new tests, 577 total pass.",2026-09-28 03:21
 W12-R,12,Final review and merge-readiness report,Not started,claude-opus-5-5,0,,,
