@@ -115,3 +115,19 @@ def test_no_finish_twice_blocks(docs, monkeypatch):
     assert so.Tracker(docs).status["W0-1"]["Status"] == "Retry"
     so.run_loop(once=True, log=lambda *_: None)
     assert so.Tracker(docs).status["W0-1"]["Status"] == "Blocked"
+
+
+def test_ask_uses_the_default_when_nobody_answers(docs):
+    t = so.Tracker(docs)
+    got = t.ask("W0-1", "Which?", ["A", "B"], "B", wait_s=1, popup=False)
+    assert got["answer"] == "B" and got["by"].startswith("default")
+    dec = so._read_csv(t.p_decisions, so.DECISION_FIELDS)
+    assert dec[-1]["Choice"] == "B" and dec[-1]["By"].startswith("default")
+
+
+def test_ask_takes_an_answer_given_from_the_command_line(docs, monkeypatch):
+    t = so.Tracker(docs)
+    real = t._answer_in_csv
+    monkeypatch.setattr(t, "_answer_in_csv", lambda q: (t.answer(int(q), "A"), real(q))[1])
+    got = t.ask("W0-1", "Which?", ["A", "B"], "B", wait_s=5, popup=False)
+    assert got == {"q": "1", "answer": "A", "by": "user"}

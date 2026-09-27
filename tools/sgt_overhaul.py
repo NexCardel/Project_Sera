@@ -22,7 +22,10 @@ Files (all in docs/ of the sgt-overhaul worktree):
   $PY tools/sgt_overhaul.py next
   $PY tools/sgt_overhaul.py finish W0-1 --commit 1a2b3c4 --notes "..."
   $PY tools/sgt_overhaul.py block W0-1 --reason "..."
+  $PY tools/sgt_overhaul.py ask W0-1 --question "..." --options "A|B" --default B   (pop-up; 4 min, then the default)
+  $PY tools/sgt_overhaul.py answer 3 "A"                                             (answer a question without the pop-up)
   $PY tools/sgt_overhaul.py decide W0-1 --question "..." --choice "..." --why "..."
+  $PY tools/sgt_overhaul.py viewer                                                   (build the live Excel viewer once)
   $PY tools/sgt_overhaul.py check-add W2-1 --text "..."
   $PY tools/sgt_overhaul.py check 3 --result Pass --notes "..."
   $PY tools/sgt_overhaul.py report
@@ -52,12 +55,14 @@ LOG_DIR = REPO / "logs" / "sgt-overhaul"
 LOCK = REPO / ".sgt-overhaul.lock"
 
 STATUSES = ["Not started", "In progress", "Retry", "Done", "Blocked"]
-STATUS_FIELDS = ["WP", "Status", "Model", "Attempts", "Commit", "Notes", "Updated"]
+STATUS_FIELDS = ["WP", "Phase", "What", "Status", "Model", "Attempts", "Commit", "Notes", "Updated"]
 RUN_FIELDS = ["Run", "WP", "Model", "Attempt", "Started", "Minutes", "Outcome", "Input tokens",
               "Output tokens", "Cache read", "Cache write", "Cost USD", "Turns", "Summary"]
-DECISION_FIELDS = ["WP", "Question", "Choice", "Why", "Date"]
+DECISION_FIELDS = ["WP", "Question", "Choice", "By", "Why", "Date"]
 CHECK_FIELDS = ["Check", "WP", "Text", "Result", "Date", "Notes"]
+QUESTION_FIELDS = ["Q", "WP", "Question", "Options", "Default", "Answer", "By", "Asked", "Answered"]
 LOCK_STALE_S = 600
+ASK_WAIT_S = 240                                # the user has 4 minutes to answer a worker's question
 
 
 class Refused(Exception):
@@ -106,10 +111,17 @@ class Tracker:
         self.p_runs = docs / "sgt-overhaul-runs.csv"
         self.p_decisions = docs / "sgt-overhaul-decisions.csv"
         self.p_checks = docs / "sgt-overhaul-checks.csv"
+        self.p_questions = docs / "sgt-overhaul-questions.csv"
         rows = {r["WP"]: r for r in _read_csv(self.p_status, STATUS_FIELDS)}
         self.status = {wp: rows.get(wp) or {"WP": wp, "Status": "Not started", "Model": self.model_id(wp),
                                             "Attempts": "0", "Commit": "", "Notes": "", "Updated": ""}
                        for wp in self.order}
+        for wp, row in self.status.items():     # plan columns, so the live sheet explains itself
+            row["Phase"], row["What"] = str(self.wps[wp]["phase"]), self.wps[wp]["what"]
+        for p, fields in ((self.p_runs, RUN_FIELDS), (self.p_decisions, DECISION_FIELDS),
+                          (self.p_checks, CHECK_FIELDS), (self.p_questions, QUESTION_FIELDS)):
+            if not p.exists():                  # the viewer's queries need every file, even empty
+                _write_csv(p, fields, [])
         if not self.p_status.exists():
             self.save()
 
@@ -165,7 +177,7 @@ class Tracker:
     def decide(self, wp: str, question: str, choice: str, why: str) -> None:
         self.wp(wp)
         self.add_row(self.p_decisions, DECISION_FIELDS,
-                     {"WP": wp, "Question": question, "Choice": choice, "Why": why, "Date": stamp()})
+                     {"WP": wp, "Question": question, "Choice": choice, "By": "agent", "Why": why, "Date": stamp()})
 
     def check_add(self, wp: str, text: str) -> int:
         self.wp(wp)
@@ -221,32 +233,172 @@ class Tracker:
             out += ["", "## Checks waiting for you", ""] + [f"- #{c['Check']} ({c['WP']}) {c['Text']} — {c['Result']}" for c in chk]
         text = "\n".join(out) + "\n"
         (self.docs / "sgt-overhaul-report.md").write_text(text, encoding="utf-8")
-        self._xlsx()
         return text
 
-    def _xlsx(self) -> None:
-        try:
-            from openpyxl import Workbook
-        except ImportError:
-            return
+    # questions: a worker asks, the user has ASK_WAIT_S to answer, then the default stands
+    def ask(self, wp: str, question: str, options: List[str], default: str, wait_s: int = ASK_WAIT_S,
+            popup: bool = True) -> Dict[str, str]:
+        self.wp(wp)
+        if default not in options:
+            raise Refused("the default must be one of the options")
+        rows = _read_csv(self.p_questions, QUESTION_FIELDS)
+        q = str(len(rows) + 1)
+        self.add_row(self.p_questions, QUESTION_FIELDS, {"Q": q, "WP": wp, "Question": question,
+                     "Options": " | ".join(options), "Default": default, "Asked": stamp()})
+        answer = _popup(q, wp, question, options, default, wait_s, self._answer_in_csv) if popup else None
+        if answer is None:                      # no window (locked desktop / tests): the CSV only
+            end = time.time() + wait_s
+            while answer is None and time.time() < end:
+                answer = self._answer_in_csv(q)
+                if answer is None:
+                    time.sleep(2)
+        by = "user" if answer else "default (no answer in time)"
+        answer = answer or default
+        rows = _read_csv(self.p_questions, QUESTION_FIELDS)
+        for r in rows:
+            if r["Q"] == q:
+                r.update(Answer=answer, By=by, Answered=stamp())
+        _write_csv(self.p_questions, QUESTION_FIELDS, rows)
+        self.add_row(self.p_decisions, DECISION_FIELDS, {"WP": wp, "Question": question, "Choice": answer,
+                     "By": by, "Why": f"asked as Q{q}", "Date": stamp()})
+        return {"q": q, "answer": answer, "by": by}
+
+    def _answer_in_csv(self, q: str) -> Optional[str]:
+        for r in _read_csv(self.p_questions, QUESTION_FIELDS):
+            if r["Q"] == q and r["Answer"].strip():
+                return r["Answer"].strip()
+        return None
+
+    def answer(self, q: int, choice: str) -> None:
+        rows = _read_csv(self.p_questions, QUESTION_FIELDS)
+        for r in rows:
+            if r["Q"] == str(q):
+                r.update(Answer=choice, By="user", Answered=stamp())
+                _write_csv(self.p_questions, QUESTION_FIELDS, rows)
+                return
+        raise Refused(f"no question {q}")
+
+    def viewer(self) -> Path:
+        """
+        Builds docs/sgt-overhaul-agents.xlsx once: a How-to sheet, the fixed plan, and one sheet per
+        CSV, each a Power Query table that refreshes when the workbook opens and every minute - so
+        the workbook can stay open while the agents work. Needs Excel (COM); close the file first.
+        """
+        from openpyxl import Workbook
+        out = self.docs / "sgt-overhaul-agents.xlsx"
+        if out.with_name("~$" + out.name).exists():
+            raise Refused(f"{out.name} is open in Excel - close it and run again")
         wb = Workbook()
-        sheets = [("Status", ["WP", "Phase", "What", "Model", "Kind", "Size", "Deps"] + STATUS_FIELDS[1:],
-                   [{**{"Phase": w["phase"], "What": w["what"], "Kind": w["kind"], "Size": w["size"],
-                        "Deps": ", ".join(w["deps"])}, **self.status[w["wp"]]} for w in self.plan["wps"]]),
-                  ("Runs", RUN_FIELDS, _read_csv(self.p_runs, RUN_FIELDS)),
-                  ("Decisions", DECISION_FIELDS, _read_csv(self.p_decisions, DECISION_FIELDS)),
-                  ("Checks", CHECK_FIELDS, _read_csv(self.p_checks, CHECK_FIELDS))]
-        wb.remove(wb.active)
-        for name, fields, rows in sheets:
-            ws = wb.create_sheet(name)
-            ws.append(fields)
-            for r in rows:
-                ws.append([r.get(f, "") for f in fields])
-            ws.freeze_panes = "A2"
-        try:
-            wb.save(self.docs / "sgt-overhaul-agents.xlsx")
-        except PermissionError:
-            pass                                # open in Excel; the CSVs and report.md are current
+        ws = wb.active
+        ws.title = "How to use"
+        for line in ("SGT overhaul tracker - read-only viewer.",
+                     "Every sheet except Plan is a live copy of a CSV in this folder: it refreshes when the",
+                     "file opens and every minute (or Data -> Refresh All). Nothing typed here is saved back.",
+                     "Answer a worker's question in the pop-up window, or:",
+                     r"  ..\APP\venv\Scripts\python.exe tools\sgt_overhaul.py answer <Q> <choice>",
+                     f"Deadline: {self.plan['deadline']}"):
+            ws.append([line])
+        ws.column_dimensions["A"].width = 100
+        plan = wb.create_sheet("Plan")
+        plan.append(["WP", "Phase", "What", "Model", "Kind", "Size", "Deps", "Focus"])
+        for w in self.plan["wps"]:
+            plan.append([w["wp"], w["phase"], w["what"], self.model_id(w["wp"]), w["kind"], w["size"],
+                         ", ".join(w["deps"]), w["focus"]])
+        plan.freeze_panes = "A2"
+        links = [("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
+                 ("Checks", self.p_checks), ("Runs", self.p_runs)]
+        for name, _ in links:
+            wb.create_sheet(name)
+        wb.save(out)
+        _attach_power_query(out, links)
+        return out
+
+
+def _popup(q: str, wp: str, question: str, options: List[str], default: str, wait_s: int,
+           poll) -> Optional[str]:
+    """A small always-on-top window with one button per option and a countdown. Returns the
+    user's choice, None when the time runs out (or no window can be shown)."""
+    try:
+        import tkinter as tk
+    except ImportError:
+        return None
+    got: Dict[str, Optional[str]] = {"v": None}
+    try:
+        root = tk.Tk()
+    except Exception:
+        return None
+    end = time.time() + wait_s
+    root.title(f"SGT overhaul - {wp} asks (Q{q})")
+    root.attributes("-topmost", True)
+    tk.Label(root, text=question, wraplength=520, justify="left", font=("Segoe UI", 11)).pack(padx=16, pady=(14, 8))
+    left = tk.Label(root, font=("Segoe UI", 9))
+    left.pack()
+
+    def pick(v):
+        got["v"] = v
+        root.destroy()
+
+    for o in options:
+        tk.Button(root, text=o + ("   (default)" if o == default else ""), wraplength=500,
+                  command=lambda v=o: pick(v)).pack(fill="x", padx=16, pady=3)
+
+    def tick():
+        remaining = int(end - time.time())
+        csv_answer = poll(q)                    # answered from the command line instead
+        if csv_answer:
+            pick(csv_answer)
+            return
+        if remaining <= 0:
+            root.destroy()
+            return
+        left.config(text=f"No answer in {remaining // 60}:{remaining % 60:02d} -> the default is used")
+        root.after(1000, tick)
+
+    root.bell()
+    tick()
+    root.mainloop()
+    return got["v"]
+
+
+def _attach_power_query(xlsx: Path, links) -> None:
+    """Excel itself (COM) adds one CSV query per sheet, refreshes them and saves (as the Sera Sync
+    v3 viewer does)."""
+    import comtypes.client
+
+    def m_formula(path: Path) -> str:
+        p = str(path.resolve()).replace('"', '""')
+        return ('let Source = Csv.Document(File.Contents("' + p + '"),[Delimiter=",", Encoding=65001, '
+                'QuoteStyle=QuoteStyle.Csv]), Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars=true]), '
+                'AsText = Table.TransformColumnTypes(Promoted, List.Transform(Table.ColumnNames(Promoted), '
+                'each {_, type text})) in AsText')
+
+    xl = comtypes.client.CreateObject("Excel.Application")
+    try:
+        xl.Visible = False
+        xl.DisplayAlerts = False
+        wb = xl.Workbooks.Open(str(xlsx.resolve()))
+        for sheet_name, path in links:
+            query = f"Sgt{sheet_name}Csv"
+            wb.Queries.Add(query, m_formula(path))
+            ws = wb.Worksheets(sheet_name)
+            ws.Cells.Clear()
+            lo = ws.ListObjects.Add(0, 'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
+                                       f'Location={query};Extended Properties=""', None, 1, ws.Range("$A$1"))
+            lo.Name = query
+            qt = lo.QueryTable
+            qt.CommandType = 2
+            qt.CommandText = f"SELECT * FROM [{query}]"
+            qt.BackgroundQuery = False
+            qt.Refresh(False)
+            conn = qt.WorkbookConnection.OLEDBConnection
+            conn.BackgroundQuery = True
+            conn.RefreshOnFileOpen = True
+            conn.RefreshPeriod = 1
+        wb.Worksheets("Status").Activate()
+        wb.Save()
+        wb.Close(False)
+    finally:
+        xl.Quit()
 
 
 # ── The dispatcher ────────────────────────────────────────────────────────────────
@@ -351,7 +503,10 @@ def run_one(t: Tracker, wp: str, dry: bool = False, log=print) -> Optional[dt.da
     started = time.time()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        p = subprocess.run(cmd, input=prompt, cwd=REPO, capture_output=True, text=True, encoding="utf-8",
+        # A worker's "ask" waits up to 4 minutes for the user; the CLI's shell timeout must outlast it.
+        env = {**os.environ, "BASH_DEFAULT_TIMEOUT_MS": str((ASK_WAIT_S + 90) * 1000),
+               "BASH_MAX_TIMEOUT_MS": "600000"}
+        p = subprocess.run(cmd, input=prompt, cwd=REPO, env=env, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=cli["run_timeout_min"] * 60)
         out, err, code = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
@@ -431,6 +586,11 @@ def main(argv=None) -> int:
     s = sub.add_parser("check-add"); s.add_argument("wp"); s.add_argument("--text", required=True)
     s = sub.add_parser("check"); s.add_argument("n", type=int); s.add_argument("--result", required=True); s.add_argument("--notes", default="")
     s = sub.add_parser("reset"); s.add_argument("wp")
+    s = sub.add_parser("ask"); s.add_argument("wp"); s.add_argument("--question", required=True)
+    s.add_argument("--options", required=True, help="choices separated by |"); s.add_argument("--default", required=True)
+    s.add_argument("--wait", type=int, default=ASK_WAIT_S)
+    s = sub.add_parser("answer"); s.add_argument("q", type=int); s.add_argument("choice")
+    sub.add_parser("viewer")
     sub.add_parser("report")
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -452,6 +612,14 @@ def main(argv=None) -> int:
             print(f"check {t.check_add(a.wp, a.text)} added")
         elif a.cmd == "check":
             t.check(a.n, a.result, a.notes)
+        elif a.cmd == "ask":
+            got = t.ask(a.wp, a.question, [o.strip() for o in a.options.split("|") if o.strip()],
+                        a.default.strip(), a.wait)
+            print(f"ANSWER: {got['answer']}   (by {got['by']}, Q{got['q']})")
+        elif a.cmd == "answer":
+            t.answer(a.q, a.choice)
+        elif a.cmd == "viewer":
+            print(f"built {t.viewer()}")
         elif a.cmd == "reset":
             t.set(a.wp, Status="Not started", Attempts="0", Notes="reset by hand")
         elif a.cmd == "report":

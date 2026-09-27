@@ -83,6 +83,7 @@ docs/.sera-sync-v3-tracker.lock
 !docs/sgt-overhaul-runs.csv
 !docs/sgt-overhaul-decisions.csv
 !docs/sgt-overhaul-checks.csv
+!docs/sgt-overhaul-questions.csv
 .sgt-overhaul.lock
 logs/sgt-overhaul/
 *.tmp
