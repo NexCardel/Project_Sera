@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 00:16)
+# SGT overhaul — report (2026-09-28 00:24)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 18 |
+| Not started | 17 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 9 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 15   output tokens: 364267   API-equivalent cost: $18.16
+Runs: 16   output tokens: 402828   API-equivalent cost: $19.54
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 15   output tokens: 364267   API-equivalent cost: $18.16
 | W2-2 | Done | opus | 63c7f4c | Page map: node model, zones, sections, layout pairing | core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass |
 | W2-3 | Done | sonnet | 56b03e3 | Lines view from nodes + equivalence check against today's reader | tools/sgt_lines_equivalence.py: 14.2 gate, synthetic+corpus+live modes; 316 tests pass |
 | W2-4 | Done | sonnet | cec95e6 | Recorder stores nodes (corpus format v2, backwards compatible) | corpus v2: PageRecorder records nodes alongside lines while SGT-I is on; replay reads v1/v2 unchanged; 322 tests pass |
-| W3-1 | Not started | sonnet |  | Container -> value pairs with generic types and masking |  |
+| W3-1 | Done | sonnet | ede9b8d | Container -> value pairs with generic types and masking | core/sgt_i/pairs.py: pairs_from_page produces container/type/masked-shape only; disk-level privacy test round-trips through insert_tracker_dump and scans file b |
 | W4-1 | Not started | sonnet |  | Maths 1: shape grammar induction with rule-of-three bounds |  |
 | W4-2 | Not started | sonnet |  | Maths 2: checksum discovery, values inside values, relations |  |
 | W4-3 | Not started | sonnet |  | Maths 3: container kinds from salted-hash statistics |  |
