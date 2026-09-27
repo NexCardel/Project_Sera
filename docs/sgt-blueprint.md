@@ -1406,3 +1406,15 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `test_sgt_*.py`: 300 passed. Not caused by this change (no payload in them has `sgt_i`): 3 failures in
   test_raw_payload_db_and_srpf / test_dual_pk_and_sad_resolution, plus the 5 known Gemini ones. Next WPs: any new
   deep walker over payloads must skip `sgt_i` too.
+
+- **W2-1** (2026-09-27, claude-opus-5-5): new `core/sgt_i/uia_nodes.py` - `read_page_nodes(hwnd)` does ONE
+  `FindAllBuildCache` (Documents, CacheRequest TreeScope_Subtree, element mode None; Name, ControlType, rect,
+  AutomationId, offscreen, value, SelectionItem/Toggle, GridItem row/col, AriaRole, LandmarkType, HeadingLevel)
+  on vsdc_uia_text's guarded worker, walks the cached tree pre-order into dicts (parent, depth, ...);
+  `lines_from_nodes()` rebuilds today's lines for the 14.2 gate. `vsdc_uia_text.py` untouched, Core not wired.
+  Bench `tools/sgt_i_uia_node_bench.py` (real Edge, desktop unlocked, median of 10, include_selection on):
+  personal_info 38.0 -> **32.5 ms**; gst_submission 41.5 -> **31.3 ms**; heavy 300x7 table (2115 lines,
+  2421 nodes) 927 -> **530 ms**. Control-view lines IDENTICAL to read_page_text on all 3; raw view is slower
+  (767 ms) with different lines - decided: control view. Heavy split: ~330 ms the native call, ~205 ms
+  comtypes unpacking (~85 us/node) - the next cost to cut. A cold page can return no Document for the first
+  reads (warm-up). Tests `tests/test_sgt_i_uia_nodes.py` (2); `test_sgt_*.py` 302 passed. Real-portal check added.
