@@ -16,7 +16,7 @@ W5-1,5,"The atlas: model, page matching, merge, template promotion, ageing",Done
 W5-2,5,Atlas tool: show / diff / coverage,Done,claude-sonnet-5,1,5827a96,"atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed",2026-09-28 01:13
 W6-1,6,"The GPS: position, route, progress, row enrichment",Done,claude-sonnet-5,1,35d558a,"core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: test_sgt_i_gps.py (11). pytest tests/test_sgt_*.py: 419 passed.",2026-09-28 01:36
 W6-2,6,Read harder near the finish line (advisory to the Core),Done,claude-opus-5-5,1,86afa24,"GPS opens a 30 s read-every-tick window on arriving before a confirmation; only adds reads, inert with SGT-I Off; 425 sgt tests pass",2026-09-28 01:47
-W7-1,7,"Assertion checker (NegEx-style), trigger words in config",Not started,claude-sonnet-5,0,,,
+W7-1,7,"Assertion checker (NegEx-style), trigger words in config",Retry,claude-sonnet-5,1,,dispatcher restarted,2026-09-28 01:55
 W7-2,7,Page kinds classifier,Not started,claude-sonnet-5,0,,,
 W8-1,8,"Evidence ledger, retraction, explanations, second opinions",Not started,claude-opus-5-5,0,,,
 W9-1,9,"Sera's own data: client list and tracker, read-only",Not started,claude-sonnet-5,0,,,

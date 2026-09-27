@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 01:36)
+# SGT overhaul — report (2026-09-28 01:48)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 11 |
+| Not started | 10 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 16 |
+| Done | 17 |
 | Blocked | 0 |
 
-Runs: 22   output tokens: 705370   API-equivalent cost: $29.93
+Runs: 23   output tokens: 723890   API-equivalent cost: $31.28
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ Runs: 22   output tokens: 705370   API-equivalent cost: $29.93
 | W5-1 | Done | opus | 3f5464e | The atlas: model, page matching, merge, template promotion, ageing | core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regio |
 | W5-2 | Done | sonnet | 5827a96 | Atlas tool: show / diff / coverage | atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed |
 | W6-1 | Done | sonnet | 35d558a | The GPS: position, route, progress, row enrichment | core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: |
-| W6-2 | Not started | opus |  | Read harder near the finish line (advisory to the Core) |  |
+| W6-2 | Done | opus | 86afa24 | Read harder near the finish line (advisory to the Core) | GPS opens a 30 s read-every-tick window on arriving before a confirmation; only adds reads, inert with SGT-I Off; 425 sgt tests pass |
 | W7-1 | Not started | sonnet |  | Assertion checker (NegEx-style), trigger words in config |  |
 | W7-2 | Not started | sonnet |  | Page kinds classifier |  |
 | W8-1 | Not started | opus |  | Evidence ledger, retraction, explanations, second opinions |  |
@@ -59,6 +59,8 @@ Runs: 22   output tokens: 705370   API-equivalent cost: $29.93
 - **W6-1** Should the GPS be wired into core/sgt_i/default_components() now, or left unwired until a live atlas-merge component exists? → Wire it in now (GpsComponent, read-only against the atlas). It costs nothing while the atlas is empty - no page matches, nothing is enriched - and picks up data the moment anything (replay, a future step-4 live component) populates the atlas. (W1-2's hand-off said the enrichment channel had nothing producing data yet; 14.6's cold-start risk answer says the Core never depends on SGT-I and SGT-I only adds as it learns, so an empty-atlas no-op component is safe by design.)
 - **W6-1** What exactly counts as an 'odd jump' that closes a route? → Landing directly on a DIFFERENT route's confirmation page while a route is being tracked. Any other move off the tracked route (a start/dashboard page, or a page in no known route) ends the route quietly, without the odd_jump flag. (14.4 step 5's own example is exactly this case (a GSTR-1 route jumping into a GSTR-3B confirmation); the guard says the dashboard or a logout ends the route on its own, so only the confirmation-jump case needs a flag rather than a quiet reset.)
 - **W6-1** Where does the carried form/period context (the second opinion) come from - the atlas's own template-promoted text, or the session's own earlier draft? → The session's own earlier obs.draft (the Core's own already-captured form/period for this exact session), carried forward in memory only, never persisted. The atlas's cross-client text is never used as context. (14.4 step 5 says a confirmation that leaves out the form/period 'gets them from the route it came along' inside one session; 14.5's guard is 'context flows only... inside one session'. Using the Core's own value (not an SGT-I discovery) also avoids any new privacy exposure - it is the same value already destined for the row.)
+- **W6-2** When SGT-I's GPS says the NEXT page is usually the confirmation (e.g. user reaches the Preview page), the Core reads the page on every tick (~0.35 s) instead of only when the screen changes. How long should that last after arriving on the page? Longer = more likely to catch a quick success message if the user reviews the page slowly, but more CPU (a read costs ~30 ms, up to ~0.5 s on huge tables). → 30 seconds (asked as Q1)
+- **W6-2** Read harder: loosen the change gate, or also shorten the worker's tick interval? → Loosen the change gate only (read on every tick for the window); the worker tick (0.35 s, vsdc_worker) is untouched (A 0.35 s tick already catches a sub-second toast once every tick reads; changing the Core's loop timing from SGT-I would widen the contract surface and CPU cost for no capture gain)
 
 ## Checks waiting for you
 
@@ -66,3 +68,4 @@ Runs: 22   output tokens: 705370   API-equivalent cost: $29.93
 - #2 (W2-1) Re-run tools/sgt_i_uia_node_bench.py on a real GST/ITR portal page in the office Edge session (only local mocks measured) and confirm node-read lines are IDENTICAL to read_page_text there. — Not run
 - #3 (W2-3) tools/sgt_lines_equivalence.py --title "<substr>" live-window mode is untested against a real open portal window (needs an unlocked desktop with Edge open on a page) - only the no-window-found path was exercised here — Not run
 - #4 (W2-4) Switch SGT-I on for a real portal session so the corpus actually gains v2 nodes records; then re-run tools/sgt_lines_equivalence.py (no --skip-corpus) to see it move off '0 comparable'. — Not run
+- #5 (W6-2) With SGT-I On and a learned atlas, reach a filing's last page before the confirmation on a real portal: the Core should read every tick for 30 s (SGT reads count rises), then fall back to the change gate; CPU stays reasonable. — Not run

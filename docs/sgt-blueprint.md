@@ -1588,3 +1588,18 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   never shortened, inert off/tripped; Core reads with window ⊇ plain gate, Off identical), gps (flag, once per
   arrival, no route = inert). `test_sgt_*.py`: 425 passed; one run had a flaky ordering failure in
   `test_sgt_tracker_rows::test_same_arn_seconds_apart...` that passes on re-run (untouched by this WP).
+
+- **W7-1** (2026-09-28, claude-sonnet-5): the assertion checker, step 6's first half. New
+  `core/sgt_i/assertions.py`: `classify(text, config=None) -> Assertion(cls, trigger)`, one of
+  `negated` / `reference_to_past` / `future_conditional` / `happened`, or `(None, None)`. Trigger
+  words live in `core/sgt_i/sgt_i_config.json`'s new `"assertions"` section (`self` phrases that
+  decide a class outright; `negated.pre`/`.post` are generic negators whose scope runs to the next
+  `terminators` entry or the text's end - a `happened` trigger inside that scope reads negated, the
+  NegEx idea). Priority: negated > reference_to_past > future_conditional > happened. Pure,
+  stateless, no Component registered yet - this only classifies wording; combining it with page
+  kinds (a stepper's un-reached step still reading "happened" from its own text) is step 6's other
+  half, for a later WP. `tests/test_sgt_i_assertions.py`: all four step-6 classes, both 14.1 bug-
+  table cases, the real wordings/examples from `sgt_fields.json`'s `submit_rules`/`dataset_rules`,
+  priority ordering, and the NegEx scope mechanism (a synthetic config, since no real wording needs
+  a `post` trigger yet - `negated.post` ships empty). `test_sgt_*.py`: 442 passed (pre-existing
+  flaky ordering failure noted in W6-2 not seen this run).

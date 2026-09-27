@@ -1,0 +1,65 @@
+{
+  "assertions": {
+    "note": "Blueprint 14.4 step 6: trigger words for the assertion checker (core/sgt_i/assertions.py). One mechanism covers the past-tense rule, the future-stepper rule and the ack gate on every portal - a new portal's wording is a change here, never a code change. 'self' triggers assert their class wherever they appear; 'pre' triggers are generic negators whose scope runs forward from themselves to the next terminator (or the end of the text) - a 'happened' trigger falling inside that scope is negated, not happened (NegEx's own idea, ported from clinical text). Patterns are matched case-insensitively against the lower-cased text.",
+    "terminators": ["\\bbut\\b", "\\bhowever\\b", "\\balthough\\b", "\\bexcept\\b", ";", ","],
+    "negated": {
+      "self": [
+        "\\bfailed\\b",
+        "\\brejected\\b",
+        "\\bdeclined\\b",
+        "\\bexpired\\b",
+        "\\bunsuccessful\\b",
+        "\\binvalid\\b",
+        "not\\s+yet\\s+\\w+",
+        "not\\s+found",
+        "not\\s+available",
+        "e-?verification\\s+failed"
+      ],
+      "pre": [
+        "has\\s+not\\s+been",
+        "have\\s+not\\s+been",
+        "is\\s+not",
+        "was\\s+not",
+        "cannot\\s+be",
+        "could\\s+not\\s+be",
+        "\\bnot\\b"
+      ],
+      "post": []
+    },
+    "reference_to_past": {
+      "self": [
+        "of\\s+original\\s+return",
+        "original\\s+return",
+        "acknowledgement\\s+number\\s+of\\s+original",
+        "previous\\s+(?:year|return|filing)",
+        "as\\s+per\\s+(?:the\\s+)?(?:last|previous)\\s+filed"
+      ]
+    },
+    "future_conditional": {
+      "self": [
+        "you\\s+will\\s+receive",
+        "\\bwill\\s+\\w+",
+        "once\\s+you",
+        "after\\s+you\\s+submit",
+        "\\bpending\\b",
+        "still\\s+need\\s+to",
+        "need\\s+to\\s+e-?verify",
+        "within\\s+\\d+\\s+days",
+        "under\\s+processing"
+      ]
+    },
+    "happened": {
+      "self": [
+        "successfully",
+        "e-?verified",
+        "\\bverified\\b",
+        "\\bfiled\\b",
+        "\\bsubmitted\\b",
+        "\\bprocessed\\b",
+        "\\bcompleted\\b",
+        "\\bgenerated\\b",
+        "filing\\s+successful"
+      ]
+    }
+  }
+}
