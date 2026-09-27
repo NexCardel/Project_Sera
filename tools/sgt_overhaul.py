@@ -562,7 +562,11 @@ def run_one(t: Tracker, wp: str, key: Optional[str] = None, dry: bool = False, l
     d = _parse(out)
     usage = d.get("usage") or {}
     result = str(d.get("result") or d.get("response") or (out if not d else "") or err or "")[:4000]
-    failed = d.get("is_error") or d.get("error") or code != 0 or not d
+    # Claude reports is_error; Antigravity reports status (and puts its reason on stderr).
+    failed = (d.get("is_error") or d.get("error") or code != 0 or not d
+              or str(d.get("status", "SUCCESS")).upper() not in ("SUCCESS", "OK"))
+    if not d.get("result") and not d.get("response") and err:
+        result = err[:4000]
     reset = limit_reset(result + " " + (err or "")) if failed else None
 
     fresh = Tracker(t.docs)                     # the worker updated the status file itself
