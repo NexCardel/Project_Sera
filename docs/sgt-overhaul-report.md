@@ -1,21 +1,21 @@
-# SGT overhaul — report (2026-09-27 19:11)
+# SGT overhaul — report (2026-09-27 19:19)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 26 |
+| Not started | 25 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 1 |
+| Done | 2 |
 | Blocked | 0 |
 
-Runs: 3   output tokens: 146614   API-equivalent cost: $6.19
+Runs: 4   output tokens: 151628   API-equivalent cost: $6.45
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | sonnet | 623424f | Find why the SGT page corpus stopped recording after 22 Sep and fix it | Root cause: sgt_record_pages flipped off silently (spec_stats.json proved reads continued); made PageRecorder.enabled echo every transition; regression tests ad |
-| W0-2 | Not started | haiku |  | Baseline: SGT tests and replay baseline, recorded for later diffs |  |
+| W0-2 | Done | haiku | 0238725 | Baseline: SGT tests and replay baseline, recorded for later diffs | SGT 281 passed, VSDC 388+6 pre-existing, baseline 8 sessions/1 dataset |
 | W1-1 | Not started | opus |  | SGT-I host: the C/I contract in code |  |
 | W1-2 | Not started | sonnet |  | Enrichment fields on tracker rows (no schema change) |  |
 | W1-R | Not started | opus |  | Review: W0-1..W1-2 against the SGT-C safety rules |  |

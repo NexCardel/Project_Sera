@@ -1362,3 +1362,16 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   Gemini enricher tests — missing API key, unfinished feature), 1 skipped. **Replay baseline:**
   `C:\Users\Nex\AmanAssociates_Sera\sgt_corpus\replay_baseline.json` holds 8 session(s), 1 dataset
   row(s), replayed from 204 recorded pages. Baseline ready for diff tool. No code changes.
+
+- **W1-1** (2026-09-27, claude-opus-5-5): the C/I contract in code. New `core/sgt_i/`:
+  `observation.py` (frozen `Observation`: lines, url, title, portal, source, `PageResult.as_dict()`,
+  profile, draft values, session id, ts/today; `make_observation`) and `host.py` (`SgtIntelligence`:
+  own daemon thread, queue of 8, 2.0 s page budget, hang = 15 s checked on next `submit`; any
+  exception/overrun/hang/bad enrichment trips it off for the run). Components = objects with
+  `name` + `observe(obs, ctx)`; `ctx.enrich(dict)` (JSON, <=4 KB) and `ctx.ask_more_reads(n)`
+  (max 3/session, 60 s TTL). `default_components()` is empty - add new steps there. Core hooks in
+  `sgt_shadow.py`: `_hand_to_sgt_i` after `_absorb`, `wants_read` only when the change gate would skip,
+  enrichment into `raw_payload['sgt_i']` in `_tracker_payload`. Setting `sgt_i_mode` (off/on,
+  default off) in `vsdc_engines.py`, Settings -> Tracker, `main.py`, router `_apply_sgt_i`.
+  `replay_session(..., intelligence=, keep_payloads=)`. Tests `tests/test_sgt_i_host.py` (16); all
+  test_sgt_*.py pass (297). Not yet checked in the real app (check-list item added).

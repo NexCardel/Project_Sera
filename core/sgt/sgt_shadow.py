@@ -239,8 +239,11 @@ class SgtShadow:
         state_path: Optional[Path] = None,
         mode: str = MODE_SHADOW,
         alert_unattributed: Optional[Callable[[str, str], Any]] = None,
+        intelligence: Any = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # SGT-I (core.sgt_i.SgtIntelligence), or None. It only ever gets copies; see _hand_to_sgt_i.
+        self._sgt_i = intelligence
         self.set_mode(mode)
         # live: (form, page) of a submission written with no client - the phone alert
         self._alert_unattributed = alert_unattributed
@@ -281,6 +284,10 @@ class SgtShadow:
         """"live" or "shadow". Switch only between sessions (the router ends them first):
         the mode decides how a row is keyed."""
         self.mode = MODE_LIVE if str(mode).strip().lower() == MODE_LIVE else MODE_SHADOW
+
+    def set_intelligence(self, host: Any) -> None:
+        """Attaches SGT-I's host (or None). It never changes what the Core captures."""
+        self._sgt_i = host
 
     @property
     def live(self) -> bool:
@@ -353,6 +360,8 @@ class SgtShadow:
 
         h = _frame_hash(frame)
         changed = url_changed or h is None or h != s.last_hash or (now - s.last_read) >= REREAD_AFTER_SEC
+        if not changed and self._sgt_i is not None:
+            changed = self._sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
         s.last_hash = h
         if not changed:
             return None
@@ -409,7 +418,24 @@ class SgtShadow:
             self._update_draft(s, res, url, source, registry.current_rules)
         self._absorb(s, res, url, source, registry)
         self._save_state()
+        if self._sgt_i is not None:
+            self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today)
         return res
+
+    def _hand_to_sgt_i(self, s: _Session, portal: str, url: str, title: str, source: str,
+                       lines: List[str], res: PageResult, registry: Any, now: float, today: date) -> None:
+        """SGT-I (core/sgt_i) gets a frozen copy of the page the Core has just finished with.
+        It runs on its own thread; nothing it does can come back here (blueprint 14.2)."""
+        try:
+            if not self._sgt_i.active:
+                return
+            from core.sgt_i import make_observation
+            self._sgt_i.submit(make_observation(
+                session_id=s.session_id, portal=portal, url=url, title=title, source=source, lines=lines,
+                result=res, profile={k: p.get("value", "") for k, p in s.profile.items()},
+                draft=s.draft.values(registry.current_rules), ts=now, today=today.isoformat()))
+        except Exception as e:
+            self._echo(f"[SGT-I] page not handed over: {e}")
 
     # ── The dataset being worked on ──────────────────────────────────────────────
     def _update_draft(self, s: _Session, res: PageResult, url: str, source: str, rules: Any) -> None:
@@ -660,7 +686,7 @@ class SgtShadow:
         filing_date = (f"{v['filing_date']} 00:00:00" if v.get("filing_date")
                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         default_form = "GST Return" if "gst" in (s.portal or "").lower() else "ITR"
-        return {
+        payload = {
             "source": "sgt",
             "session_id": f"SGT-{s.session_id}",
             "portal": s.portal,
@@ -692,6 +718,12 @@ class SgtShadow:
                 "dataset_key": key,
             },
         }
+        if self._sgt_i is not None:
+            # SGT-I's enrichment sits beside the Core's values, in its own key only (14.2 rule 4).
+            extra = self._sgt_i.enrichment(s.session_id)
+            if extra:
+                payload["raw_payload"]["sgt_i"] = extra
+        return payload
 
     # ── HUD pill ─────────────────────────────────────────────────────────────────
     def _hud(self, s: _Session, event_type: str, title: str, subtitle: str,
