@@ -1502,3 +1502,25 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `test_sgt_*.py`: 364 passed. Decision recorded (mod-11 scheme choice, Bonferroni correction
   factors) - see `sgt_overhaul_runs.csv`. Not wired into a component yet - for the atlas (step 4)
   and W4-3 to call once containers accumulate value summaries over time.
+
+- **W4-3** (2026-09-28, claude-sonnet-5): `core/sgt_i/stats.py` - step 3's container-kind table,
+  the one SGT-I module that keeps state on disk (everything else in step 3 is a pure function).
+  `generate_salt()`/`salted_hash(value, salt, domain)`: a per-PC random salt (`secrets.token_hex`,
+  32 bytes) and an HMAC-SHA256 truncated to 24 hex chars, `domain` ("value"/"client") keeping a
+  container's values and its client-grouping keys in separate hash spaces. `ContainerStats`
+  (mirrors `sgt_health.SpecStats`'s debounced tmp+replace save): `observe(container, value,
+  client=)` stores only hash counts, capped (`MAX_TRACKED_VALUES`/`_CLIENTS` = 4096, per-client
+  hash list capped at 6 - enough to tell "stable" from "changed", never more); `classify(container)`
+  turns those counts into `classify_container`'s pure decision. `classify_container(n, distinct,
+  clients, stable_clients, changed_clients)` picks one row of 14.4 step 3's table or returns
+  kind=None rather than guess (fewer than `MIN_SUPPORT`=3 observations, or a single client's own
+  stability with no second client yet to confirm template vs. profile). **Decision recorded**
+  (precedence when counts fit more than one row: template > identifier > profile > dataset >
+  vocabulary - identifier, "never repeats anywhere", is more specific than dataset, "repeats
+  allowed, changes per client"). Persisted under `sgt_i_dir()` = `~/AmanAssociates_Sera/sgt_i/`
+  (`SGT_I_STATS_DIR` env override for tests): `salt` (plain hex) and `container_stats.json`
+  (counts and hashes only - a disk-scan test proves a fictional PAN/client id used in `observe()`
+  never appears in either file's bytes). Tests: `tests/test_sgt_i_stats.py` (19, new). `test_sgt_*.py`:
+  383 passed. Not wired into a component yet - for the atlas (step 4, a later WP) to call once it
+  accumulates a container's values across visits; `container` here is any string the caller likes
+  (pairs.py's `container_path()` joined however the atlas prefers) - this module never inspects it.
