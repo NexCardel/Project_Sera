@@ -688,6 +688,9 @@ def main(argv=None) -> int:
     sub.add_parser("report")
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
+    if sys.stdout is None:                      # started by pythonw (the scheduled task): log to a file
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        sys.stdout = sys.stderr = open(LOG_DIR / "dispatcher.log", "a", encoding="utf-8", buffering=1)
     try:
         if a.cmd == "run":
             return run_loop(once=a.once, dry=a.dry_run)
