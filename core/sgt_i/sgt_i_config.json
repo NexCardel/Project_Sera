@@ -121,5 +121,18 @@
     },
     "max_synonyms": 6,
     "max_expectations": 6
+  },
+  "miner": {
+    "note": "Blueprint 14.4 step 11 (core/sgt_i/miner.py): gates for turning what SGT-I learned into proposals. Every proposal waits for the user's approval; nothing here applies one.",
+    "min_clients": 3,
+    "type_share": 0.98,
+    "zones": ["main", "dialog", "header"],
+    "placeholder_words": ["\\bselect\\b", "\\benter\\b", "\\bsearch\\b", "\\bchoose\\b", "\\bclick\\b", "type\\s+here", "\\bplaceholder\\b", "\\boptional\\b", "\\bdd/mm/yyyy\\b"],
+    "field_aliases": {"ack": "arn", "acknowledgement": "arn", "mobile": "phone", "mobile_number": "phone", "e_mail": "email", "email_id": "email", "date_of_birth": "dob"},
+    "status_window": 3,
+    "status_phrase_words": [2, 8],
+    "status_settled_level": 2,
+    "require_share": 0.9,
+    "max_proposals": 60
   }
 }

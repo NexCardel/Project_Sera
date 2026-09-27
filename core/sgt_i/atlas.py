@@ -361,10 +361,17 @@ class PortalAtlas:
             texts = [" ".join(t.split()) for t in page.section_path(p.section) + (p.label,)]
             roles = ["heading"] * (len(texts) - 1) + ["label"]
             raw = SEP.join(texts)
-            slot = self._item(pub, priv["slot_keys"], "slots", self._h("atlas-slot", p.zone, raw),
-                              today, cfg["max_slots"])
+            key = self._h("atlas-slot", p.zone, raw)
+            slot = self._item(pub, priv["slot_keys"], "slots", key, today, cfg["max_slots"])
             if slot is None:
                 continue
+            if client:
+                # Support for the miner (step 11): how many different clients filled this slot.
+                seen_by = priv.setdefault("slot_clients", {}).setdefault(priv["slot_keys"][key], [])
+                ch = self._h("atlas-client", client)
+                if ch not in seen_by and len(seen_by) < WORD_CLIENT_CAP:
+                    seen_by.append(ch)
+                slot["clients"] = len(seen_by)
             slot["container"] = SEP.join(self._render(priv, r, p.zone, t)[0] for r, t in zip(roles, texts))
             slot["zone"] = p.zone
             types = slot.setdefault("types", {})

@@ -1,4 +1,4 @@
-# SGT overhaul — report (2026-09-28 02:57)
+# SGT overhaul — report (2026-09-28 03:00)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-09-29T01:30:00+05:30
 | :--- | ---: |
 | Not started | 3 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 23 |
+| Retry | 0 |
+| Done | 24 |
 | Blocked | 0 |
 
-Runs: 30   output tokens: 1009320   API-equivalent cost: $45.06
+Runs: 31   output tokens: 1014586   API-equivalent cost: $45.29
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -37,11 +37,7 @@ Runs: 30   output tokens: 1009320   API-equivalent cost: $45.06
 | W9-1 | Done | sonnet | eebec24 | Sera's own data: client list and tracker, read-only | sera_data.py: read-only cached clients/tracker accessor, OCR recovery, name-vs-PAN cross-check, masked confirm; 15 new tests, 492 passed total |
 | W9-2 | Done | sonnet | 4272cba | Tracker expectations and self-healing (known-value anchoring) | expectations.py: due/revision/duplicate + known-value anchoring synonyms; unwired from default_components (check-list item added); 507 tests pass |
 | W10-1 | Done | opus | 0e1794c | UIA events for short-lived messages + page diffing | FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list |
-| W11-1 | Retry | haiku |  | 'Not understood' residue report | attempt 1: no finish. Perfect! W11-1 is complete. Here's a summary:
-
-## W11-1 Completion Summary
-
-I've successfully implemented **step 10** of the SGT blueprint |
+| W11-1 | Done | haiku | 4a6451f | 'Not understood' residue report | Core tracks residues directly via compute_residues (PAN/ARN/GSTIN/Aadhaar patterns); record_residues adds to daily health report per page kind; core/sgt_i/resid |
 | W12-1 | Not started | opus |  | The miner: proposals from the atlas, maths and anchoring |  |
 | W12-2 | Not started | sonnet |  | SGT lab screen |  |
 | W12-R | Not started | opus |  | Final review and merge-readiness report |  |

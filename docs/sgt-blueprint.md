@@ -1715,3 +1715,16 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   Created `core/sgt_i/residues.py` (component, not registered yet - for step 11 learning). Tests `tests/test_sgt_residues.py` (19);
   `test_sgt_{residues,reliability,replay}.py` 67 passed. Decision: Core tracks residues directly for health (not SGT-I enrichment),
   preserving 14.2 passivity contract. W12+ will use residues for proposals.
+
+- **W12-1** (2026-09-28, claude-opus-5-5): step 11's miner, `core/sgt_i/miner.py` (offline, not a host component). Five
+  sources: `from_atlas` (unclaimed slots -> profile/current_dataset field by slot `kind`; repeating slots under one heading ->
+  a card record, start = first label, require = fields on >=90% of cards), `from_synonyms` (step 8 synonyms in rows'
+  `raw_payload.sgt_i` -> donor Core spec's pattern/checks under the new label), `from_status_phrases` (corpus lines just before
+  a settled ARN; `needs:["level"]`, map output null until `spec_for_accept(p, level)`), `from_second_opinions` (needs a
+  `verdict` callable - none exists yet, so it proposes nothing by default). `draft_field`: regex from `shapes` grammar
+  (positional fallback for GSTIN-like shapes), checks from proven rules (`mod36`->gstin_checksum, `date_tail`), fictional
+  examples (`fictional_pan/gstin/ack/date`, `fill_shape`). Gates: clients >= 3, type share >= 0.98, zone/placeholder/masked
+  label, not already claimed, `check_spec` (Core `load_registry` self-tests), `replay_diff` (counts only; red = any change).
+  `mine()` -> `write_proposals()` (`sgt_i/proposals.json`, keeps the user's accepted/rejected). Config: `sgt_i_config.json`
+  "miner". `atlas.py` now counts clients per slot (`slots[].clients`). Tests `tests/test_sgt_i_miner.py` (27); `test_sgt_*.py`
+  564 passed. Next (W12-2 lab): Accept = write `spec_for_accept()` into the override file under `p["section"]`; rename field.
