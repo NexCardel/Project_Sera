@@ -1156,6 +1156,13 @@ class UnifiedSettingsDialog(QDialog):
             "is built. It never changes what SGT captures - it may only add its own notes to a row and ask "
             "SGT to read a page again. If it ever fails or runs slow it switches itself off until the app "
             "restarts. Off = SGT exactly as before.", self.sgt_i_combo))
+        lab_btn = QPushButton("Open SGT lab →")
+        lab_btn.setIcon(_icon("mdi.flask-outline", color=_TEXT_PRI))
+        lab_btn.clicked.connect(self._on_open_sgt_lab)
+        lay.addWidget(_setting_row("SGT lab",
+            "New datapoints SGT-I found on portals, drawn only from counting and maths (no AI). "
+            "Accept writes one to this PC's local override file; Reject only remembers your choice.",
+            lab_btn))
 
         lay.addWidget(_sub_header("HUD Pill"))
         self.vsdc_hud_check = QCheckBox()
@@ -1661,6 +1668,10 @@ class UnifiedSettingsDialog(QDialog):
             self.db.delete_service(svc_id)
             self._svc_reload()
             self.services_changed.emit()
+
+    def _on_open_sgt_lab(self):
+        from ui.dialogs.sgt_lab_dialog import SgtLabDialog
+        SgtLabDialog(self).exec()
 
     # ── Data tool actions ─────────────────────────────────────────────────────
     def _on_export_csv(self):

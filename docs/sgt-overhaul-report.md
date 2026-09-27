@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 03:00)
+# SGT overhaul — report (2026-09-28 03:14)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 3 |
+| Not started | 2 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 24 |
+| Done | 25 |
 | Blocked | 0 |
 
-Runs: 31   output tokens: 1014586   API-equivalent cost: $45.29
+Runs: 32   output tokens: 1077949   API-equivalent cost: $49.08
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -38,7 +38,7 @@ Runs: 31   output tokens: 1014586   API-equivalent cost: $45.29
 | W9-2 | Done | sonnet | 4272cba | Tracker expectations and self-healing (known-value anchoring) | expectations.py: due/revision/duplicate + known-value anchoring synonyms; unwired from default_components (check-list item added); 507 tests pass |
 | W10-1 | Done | opus | 0e1794c | UIA events for short-lived messages + page diffing | FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list |
 | W11-1 | Done | haiku | 4a6451f | 'Not understood' residue report | Core tracks residues directly via compute_residues (PAN/ARN/GSTIN/Aadhaar patterns); record_residues adds to daily health report per page kind; core/sgt_i/resid |
-| W12-1 | Not started | opus |  | The miner: proposals from the atlas, maths and anchoring |  |
+| W12-1 | Done | opus | 2aef1b7 | The miner: proposals from the atlas, maths and anchoring | core/sgt_i/miner.py: 5 sources, drafted specs pass Core self-tests, fictional examples, gates + replay red flag, proposals.json; 564 sgt tests pass |
 | W12-2 | Not started | sonnet |  | SGT lab screen |  |
 | W12-R | Not started | opus |  | Final review and merge-readiness report |  |
 
@@ -69,6 +69,8 @@ Runs: 31   output tokens: 1014586   API-equivalent cost: $45.29
 - **W9-2** Wire ExpectationsComponent into the live default_components() list now, or leave it built-but-unwired like sera_data.py (W9-1)? → Leave unwired; build the pure component + tests only (default_components() takes no arguments and SeraData needs db_path/hex_key/raw_db_path, which only main.py's Database instance holds; threading those through VSDCRouter/vsdc_worker.py to wire a real SeraData into the host is a separate, riskier app-wiring change I cannot verify without a real portal session. Scoping W9-2 to the component + config + tests keeps SGT-I Off/On behaviour unchanged either way and matches W9-1's own precedent (accessor built, not yet wired).)
 - **W10-1** Which thread owns the UIA event registrations? → Its own MTA COM thread in core/sgt_i/uia_events.py, not vsdc_uia_text's read worker (The read worker is an STA with no message loop (UIA would never deliver events to it) and is replaced when a read hangs, which would silently drop registrations. MTA handlers run on UIA's threads and only read the sender's cached subtree. Same hang guard: a registration over 10 s switches listening off for the run.)
 - **W10-1** Where are the event handlers registered (scope)? → On the Document elements of the window the Core has just read (already scope-gated), re-registered when its URL changes; never desktop-wide or on browser chrome (Keeps other tabs/apps out (privacy + portal allowlist); a JS alert() outside the page document is not caught by events, but page diffing sees in-page dialogs.)
+- **W12-1** Where does the miner's support gate (>= N clients per slot) get its client count, and what reaches proposals.json from the replay diff? → atlas.py now keeps salted client hashes per slot (private file) and a public slots[].clients count; the replay diff is stored as counts only (added/changed/removed/held/adds, red) (the atlas only counted clients per page; replay diff lines name real values (PAN, ARN) so they must never be written to a file that may sync)
+- **W12-1** Graduation candidates and proven checksum rules have no stored source yet - how does the miner get them? → Caller supplies them: mine(verdict=callable(row, opinion)->True/False/None, proven={container: {checksum, date_tail}}) or a slot's own 'proven' key; with no verdict source 5 proposes nothing (no component records whether a second opinion was right or which checksum a container proved; guessing would violate 'never wrong'; W12-2/lab can wire a replay-based verdict)
 
 ## Checks waiting for you
 

@@ -1728,3 +1728,22 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `mine()` -> `write_proposals()` (`sgt_i/proposals.json`, keeps the user's accepted/rejected). Config: `sgt_i_config.json`
   "miner". `atlas.py` now counts clients per slot (`slots[].clients`). Tests `tests/test_sgt_i_miner.py` (27); `test_sgt_*.py`
   564 passed. Next (W12-2 lab): Accept = write `spec_for_accept()` into the override file under `p["section"]`; rename field.
+
+- **W12-2** (2026-09-28, claude-sonnet-5): the SGT lab. `core/sgt_i/lab.py` (no Qt, tested on its own):
+  `accept(proposal, level=, rename=)` calls `miner.spec_for_accept`, optionally renames the field (a record's
+  first field only), merges it into `sgt_specs.override_path()` by `section` (profile/records: a list keyed by
+  `name`; current_dataset: `{"fields":[...]}`) replacing any earlier mined spec of the same name and leaving
+  every other key untouched, then marks the proposal `"accepted"` in `proposals.json`. `reject(id)` only marks
+  `"rejected"` - the override file is never touched. Decision (this WP): accepted datapoints stay in the lab
+  and the override file only, no tracker column added. `ui/dialogs/sgt_lab_dialog.py` (`SgtLabDialog`): one
+  card per pending proposal (container, page kind, type, support, proven rules, drafted spec as JSON, replay
+  diff, red flag), a field-name box, a ladder-level picker for `needs:["level"]` proposals (pre-picks the most
+  common settled level), Accept/Reject buttons calling `lab.py` and dropping the card from the list; proposals
+  with `needs:["developer"]` (graduation candidates, no spec) show Reject only. Wired at Settings -> Tracker ->
+  "Open SGT lab" (`unified_settings_dialog.py`, next to the SGT-I row). Manually smoke-tested the dialog against
+  a fake proposals.json (profile/current_dataset/graduation cards): renders, Accept writes the merged spec and
+  Reject drops the card with no file write - see check-list. Tests `tests/test_sgt_i_lab.py` (13, accept/reject/
+  rename/section-shape/level-gate/no-spec-raises). `pytest tests/test_sgt_*.py`: 577 passed. Next: nobody yet
+  reads `proposals.json`'s `"dropped"` counts anywhere in the UI (only the miner's own return value) - a future
+  WP may want that visible too. A developer still promotes an accepted override spec into the shipped file by
+  hand (unchanged from W12-1).
