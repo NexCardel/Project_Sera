@@ -14,7 +14,7 @@ W4-2,4,"Maths 2: checksum discovery, values inside values, relations",Done,claud
 W4-3,4,Maths 3: container kinds from salted-hash statistics,Done,claude-sonnet-5,1,38f3e57,"stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass",2026-09-28 00:53
 W5-1,5,"The atlas: model, page matching, merge, template promotion, ageing",Done,claude-opus-5-5,1,3f5464e,"core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regions, ageing, transitions; 15 tests; 398 SGT tests pass",2026-09-28 01:03
 W5-2,5,Atlas tool: show / diff / coverage,Done,claude-sonnet-5,1,5827a96,"atlas tool: show/coverage/diff, tests/test_sgt_atlas.py (10), test_sgt_*.py 408 passed",2026-09-28 01:13
-W6-1,6,"The GPS: position, route, progress, row enrichment",Retry,claude-sonnet-5,1,,dispatcher restarted,2026-09-28 01:25
+W6-1,6,"The GPS: position, route, progress, row enrichment",Done,claude-sonnet-5,1,35d558a,"core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: test_sgt_i_gps.py (11). pytest tests/test_sgt_*.py: 419 passed.",2026-09-28 01:36
 W6-2,6,Read harder near the finish line (advisory to the Core),Not started,claude-opus-5-5,0,,,
 W7-1,7,"Assertion checker (NegEx-style), trigger words in config",Not started,claude-sonnet-5,0,,,
 W7-2,7,Page kinds classifier,Not started,claude-sonnet-5,0,,,
