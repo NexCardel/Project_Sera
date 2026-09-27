@@ -1629,3 +1629,16 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   atlas-tie-break bounds, and both repeated-block outcomes. `test_sgt_*.py`: 460 passed (was 442).
   Next: no component yet: step 7 (evidence ledger) is the WP that calls `page_kinds.classify()`
   and `assertions.classify()` together and puts kind + assertion on the row.
+
+- **W8-1** (2026-09-28, claude-opus-5-5): step 7. New `core/sgt_i/ledger.py`: `Ledger` (in memory, per session, keyed
+  by salted hash) of `Belief`s with `Sighting`s (page no., page kind, assertion class + trigger in a +-3/2-line window
+  around the value, source, GPS route via new `GpsComponent.last_route()`, client `field:hash`, Core confidence);
+  weight = source x kind x assertion x confidence, score = 1-prod(1-w). `retract()` = truth maintenance (status
+  depends on its dataset's ack; repeats until stable) - fires when the profile's PAN/GSTIN changes or a card names
+  another PAN. `explain()` one line; `second_opinions()`: reference_ack, form_vs_pan, form_vs_period, identifier_date,
+  form_portal - all tables in new `sgt_i_config.json` `"ledger"` section. `LedgerComponent` (`name="ledger"`) runs
+  after the GPS in `default_components()`; row gets `{"datasets":[{dataset, explanation, confidence, second_opinions?}],
+  "retracted"?}` (<=6 datasets, <=3.8 KB; never a PAN or whole value - only the ack's DDMMYY tail). Page kind is built
+  from the Core's lines as stacked nodes (no nodes in Observation yet). 3 decisions recorded. Tests
+  `tests/test_sgt_i_ledger.py` (17) + ledger in host's golden On/Off byte-identical test; `test_sgt_*.py` 477 passed.
+  Next: step 11 can count second opinions that keep being right (graduation); weights still hand-set.

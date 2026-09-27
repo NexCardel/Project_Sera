@@ -18,6 +18,7 @@ from core.sgt.sgt_replay import replay_session
 from core.sgt.sgt_shadow import SgtShadow
 from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.sgt_i import SgtIntelligence, make_observation
+from core.sgt_i.ledger import LedgerComponent
 from core.vsdc.vsdc_engines import SGT_I_DEFAULT, read_sgt_i_mode
 
 GOLDEN = Path(__file__).resolve().parent / "sgt_golden"
@@ -336,6 +337,10 @@ def test_core_rows_identical_with_sgt_i_on_and_off(path, monkeypatch):
     assert _payloads(doc, live, strip=True) == off
     failing = SgtIntelligence([Comp(lambda o, c: 1 / 0)], enabled=True, echo=lambda m: None)
     assert _payloads(doc, failing, strip=True) == off
+    # The evidence ledger (step 7): explanations and second opinions only, Core fields unchanged.
+    ledger = SgtIntelligence([LedgerComponent()], enabled=True, echo=lambda m: None)
+    assert _payloads(doc, ledger, strip=True) == off
+    assert ledger.tripped is None
     # Enrichment, when there is some, lands in raw_payload["sgt_i"] only.
     fake = FakeHost(extra={"comp": {"n": 1}})
     rows = replay_session(doc["pages"], STORE, intelligence=fake, keep_payloads=True)["payloads"]

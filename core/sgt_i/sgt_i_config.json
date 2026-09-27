@@ -68,5 +68,44 @@
     "payment": ["\\bpayment\\b", "\\bpay\\s*now\\b", "amount\\s+due", "amount\\s+payable", "\\bchallan\\b", "net\\s*banking", "\\bupi\\b", "\\bcheckout\\b"],
     "profile": ["\\bprofile\\b", "my\\s+account", "personal\\s+details", "\\bmy\\s+profile\\b", "update\\s+profile", "account\\s+details"],
     "error": ["\\berror\\b", "something\\s+went\\s+wrong", "\\btry\\s+again\\b", "\\bunable\\s+to\\b", "page\\s+not\\s+found", "\\bunavailable\\b"]
+  },
+  "ledger": {
+    "note": "Blueprint 14.4 step 7: weights and dataset constraints for the evidence ledger (core/sgt_i/ledger.py). Weights are hand-set; they are to be tuned by counting on the corpus, never learned by a model. A sighting's weight is source x page kind x assertion x the Core's own confidence; a belief's score combines its sightings as 1 - product(1 - w). Constraints only ever produce a second opinion on the row - the Core's value stands (14.2). A new form, portal or period wording is a change here, never a code change.",
+    "source": {"uia": 1.0, "pdf": 0.9, "ocr": 0.75, "_none": 0.7},
+    "page_kind": {"confirmation": 1.0, "list": 0.9, "profile": 0.9, "dashboard": 0.8, "payment": 0.6, "wizard_step": 0.5, "login": 0.4, "error": 0.3, "_none": 0.7},
+    "assertion": {"happened": 1.0, "_none": 0.8, "future_conditional": 0.5, "reference_to_past": 0.3, "negated": 0.2},
+    "assertion_window": {"before": 3, "after": 2},
+    "max_lines_for_page_kind": 400,
+    "client_fields": ["pan", "gstin", "tan"],
+    "identifier_fields": ["arn"],
+    "show_tail": {"arn": 6},
+    "pan_letter_names": {"P": "an individual's", "C": "a company's", "H": "a HUF's", "F": "a firm's", "A": "an AOP's", "B": "a BOI's", "T": "a trust's", "L": "a local authority's", "J": "an artificial juridical person's", "G": "a government's"},
+    "form_pan_letters": {
+      "^ITR-1$": "P",
+      "^ITR-2$": "PH",
+      "^ITR-3$": "PH",
+      "^ITR-4$": "PHF",
+      "^ITR-5$": "FABLJT",
+      "^ITR-6$": "C"
+    },
+    "period_kinds": {
+      "quarterly": ["\\bq[1-4]\\b", "\\bquarter\\b"],
+      "monthly": ["\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\b"],
+      "annual": ["^\\s*a\\.?y\\.?\\s*20\\d{2}", "^\\s*f\\.?y\\.?\\s*20\\d{2}"]
+    },
+    "form_periods": {
+      "^(?:24|26|27)Q$|^27EQ$|^CMP-?08$": "quarterly",
+      "^ITR-?(?:[1-7]|U)$": "annual",
+      "^GSTR-9C?$": "annual"
+    },
+    "identifier_dates": [
+      {"field": "arn", "forms": "^ITR", "pattern": "^\\d{9}(\\d{2})(\\d{2})(\\d{2})$", "order": "DMY"}
+    ],
+    "period_grace_days": {"ay": 0, "fy": 1000, "month": 400, "quarter": 400},
+    "exempt_filing_types": ["Updated"],
+    "portal_forms": {
+      "income tax": ["^ITR-?(?:[1-7]|U)$"],
+      "gst": ["^GSTR-", "^CMP-?08$", "^ITC-"]
+    }
   }
 }

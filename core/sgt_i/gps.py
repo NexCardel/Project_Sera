@@ -310,15 +310,21 @@ class GpsComponent:
         self._atlas = atlas
         self._gps = Gps(config)
         self._last_page: Dict[str, Optional[str]] = {}   # session -> page of its previous visit
+        self._last_route: Dict[str, Optional[str]] = {}  # session -> route of its latest visit
+
+    def last_route(self, session_id: str) -> Optional[str]:
+        """The route of this session's latest page, for the evidence ledger (step 7)."""
+        return self._last_route.get(session_id)
 
     def observe(self, obs: Any, ctx: Any) -> None:
         portal = self._atlas.portal(obs.portal)
         pos = self._gps.visit(obs.session_id, obs.url, portal, draft=dict(obs.draft))
         arrived = self._last_page.get(obs.session_id) != pos.page
-        self._last_page.pop(obs.session_id, None)
-        self._last_page[obs.session_id] = pos.page
-        while len(self._last_page) > MAX_TRACKED_SESSIONS:
-            del self._last_page[next(iter(self._last_page))]
+        for memo, v in ((self._last_page, pos.page), (self._last_route, pos.route)):
+            memo.pop(obs.session_id, None)
+            memo[obs.session_id] = v
+            while len(memo) > MAX_TRACKED_SESSIONS:
+                del memo[next(iter(memo))]
         if pos.page is None:
             return
         # Read harder near the finish line (14.4 step 5 item 1, contract rule 3): on ARRIVING at a

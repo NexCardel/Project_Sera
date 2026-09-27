@@ -18,7 +18,7 @@ W6-1,6,"The GPS: position, route, progress, row enrichment",Done,claude-sonnet-5
 W6-2,6,Read harder near the finish line (advisory to the Core),Done,claude-opus-5-5,1,86afa24,"GPS opens a 30 s read-every-tick window on arriving before a confirmation; only adds reads, inert with SGT-I Off; 425 sgt tests pass",2026-09-28 01:47
 W7-1,7,"Assertion checker (NegEx-style), trigger words in config",Done,claude-sonnet-5,1,f6f9cc7,"assertions.py + sgt_i_config.json assertions section; 17 new tests, 442 total pass",2026-09-28 01:56
 W7-2,7,Page kinds classifier,Done,claude-sonnet-5,1,a1fb737,"page_kinds.py: classify() for 8 page kinds from content signals + config vocab; 18 tests, 460 total passed",2026-09-28 02:05
-W8-1,8,"Evidence ledger, retraction, explanations, second opinions",Not started,claude-opus-5-5,0,,,
+W8-1,8,"Evidence ledger, retraction, explanations, second opinions",Retry,claude-opus-5-5,1,,dispatcher restarted,2026-09-28 02:10
 W9-1,9,"Sera's own data: client list and tracker, read-only",Not started,claude-sonnet-5,0,,,
 W9-2,9,Tracker expectations and self-healing (known-value anchoring),Not started,claude-sonnet-5,0,,,
 W10-1,10,UIA events for short-lived messages + page diffing,Not started,claude-opus-5-5,0,,,

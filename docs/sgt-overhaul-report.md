@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 01:56)
+# SGT overhaul — report (2026-09-28 02:05)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 9 |
+| Not started | 8 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 18 |
+| Done | 19 |
 | Blocked | 0 |
 
-Runs: 24   output tokens: 758373   API-equivalent cost: $32.56
+Runs: 25   output tokens: 797651   API-equivalent cost: $34.40
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ Runs: 24   output tokens: 758373   API-equivalent cost: $32.56
 | W6-1 | Done | sonnet | 35d558a | The GPS: position, route, progress, row enrichment | core/sgt_i/gps.py: routes, position, progress, odd-jump, context second opinion; GpsComponent wired into default_components(), enriches via W1-2 channel. Tests: |
 | W6-2 | Done | opus | 86afa24 | Read harder near the finish line (advisory to the Core) | GPS opens a 30 s read-every-tick window on arriving before a confirmation; only adds reads, inert with SGT-I Off; 425 sgt tests pass |
 | W7-1 | Done | sonnet | f6f9cc7 | Assertion checker (NegEx-style), trigger words in config | assertions.py + sgt_i_config.json assertions section; 17 new tests, 442 total pass |
-| W7-2 | Not started | sonnet |  | Page kinds classifier |  |
+| W7-2 | Done | sonnet | a1fb737 | Page kinds classifier | page_kinds.py: classify() for 8 page kinds from content signals + config vocab; 18 tests, 460 total passed |
 | W8-1 | Not started | opus |  | Evidence ledger, retraction, explanations, second opinions |  |
 | W9-1 | Not started | sonnet |  | Sera's own data: client list and tracker, read-only |  |
 | W9-2 | Not started | sonnet |  | Tracker expectations and self-healing (known-value anchoring) |  |
@@ -61,6 +61,8 @@ Runs: 24   output tokens: 758373   API-equivalent cost: $32.56
 - **W6-1** Where does the carried form/period context (the second opinion) come from - the atlas's own template-promoted text, or the session's own earlier draft? → The session's own earlier obs.draft (the Core's own already-captured form/period for this exact session), carried forward in memory only, never persisted. The atlas's cross-client text is never used as context. (14.4 step 5 says a confirmation that leaves out the form/period 'gets them from the route it came along' inside one session; 14.5's guard is 'context flows only... inside one session'. Using the Core's own value (not an SGT-I discovery) also avoids any new privacy exposure - it is the same value already destined for the row.)
 - **W6-2** When SGT-I's GPS says the NEXT page is usually the confirmation (e.g. user reaches the Preview page), the Core reads the page on every tick (~0.35 s) instead of only when the screen changes. How long should that last after arriving on the page? Longer = more likely to catch a quick success message if the user reviews the page slowly, but more CPU (a read costs ~30 ms, up to ~0.5 s on huge tables). → 30 seconds (asked as Q1)
 - **W6-2** Read harder: loosen the change gate, or also shorten the worker's tick interval? → Loosen the change gate only (read on every tick for the window); the worker tick (0.35 s, vsdc_worker) is untouched (A 0.35 s tick already catches a sub-second toast once every tick reads; changing the Core's loop timing from SGT-I would widen the contract surface and CPU cost for no capture gain)
+- **W7-2** How does the atlas feed page-kind classification, given atlas.py stores no page-level kind today? → classify() takes an optional atlas_hint dict ({"in_degree": int}) as a last-resort tie-break only (currently: an unvocabbed input-dominant page with in_degree=0 reads as login); never required, never overrides a content signal (cheapest to build: keeps page_kinds.py decoupled/pure and testable without atlas plumbing; a later WP can compute atlas_hint from PortalAtlas.pages/transitions and pass it in)
+- **W7-2** How to detect 'repeated blocks' (list vs dashboard) when page_map.py has no table? → group sibling nodes sharing a parent+grandparent with an identical child-role signature, repeated >=3 times; a group's children mostly link/button -> dashboard, mostly edit/text -> list (reuses atlas.py's own collapsing idea (3 cards and 14 cards are one pattern) at block granularity instead of single elements; pure structural signal, no portal wording needed)
 
 ## Checks waiting for you
 
