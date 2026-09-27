@@ -5,7 +5,7 @@ W1-1,1,SGT-I host: the C/I contract in code,Done,claude-opus-5-5,1,bea35a6,"core
 W1-2,1,Enrichment fields on tracker rows (no schema change),Done,claude-sonnet-5,1,e724987,"Enrichment channel already round-tripped via existing raw_payload_json plumbing (no schema change); added read-only SGT-I card in PayloadInspectorDialog; tests: DB round trip + UI toggle, 299 passed",2026-09-27 19:34
 W1-R,1,Review: W0-1..W1-2 against the SGT-C safety rules,Done,claude-opus-5-5,1,d4d6da4,Review OK except 2 fixed defects: SGT-I detach race could drop a Core row; 4 payload scanners read raw_payload.sgt_i as identity/name evidence,2026-09-27 19:42
 W2-1,2,Measure a cached UIA node read vs the current line reader,Done,claude-opus-5-5,1,54ae8d7,"Cached node read: heavy 927->530 ms, normal ~40->~32 ms, control-view lines identical; unpack ~205 ms is next cost",2026-09-27 19:49
-W2-2,2,"Page map: node model, zones, sections, layout pairing",Retry,claude-opus-5-5,1,,dispatcher restarted,2026-09-27 19:55
+W2-2,2,"Page map: node model, zones, sections, layout pairing",Done,claude-opus-5-5,1,63c7f4c,"core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass",2026-09-27 19:56
 W2-3,2,Lines view from nodes + equivalence check against today's reader,Not started,claude-sonnet-5,0,,,
 W2-4,2,"Recorder stores nodes (corpus format v2, backwards compatible)",Not started,claude-sonnet-5,0,,,
 W3-1,3,Container -> value pairs with generic types and masking,Not started,claude-sonnet-5,0,,,
