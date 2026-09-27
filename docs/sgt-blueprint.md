@@ -1375,3 +1375,19 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   default off) in `vsdc_engines.py`, Settings -> Tracker, `main.py`, router `_apply_sgt_i`.
   `replay_session(..., intelligence=, keep_payloads=)`. Tests `tests/test_sgt_i_host.py` (16); all
   test_sgt_*.py pass (297). Not yet checked in the real app (check-list item added).
+
+- **W1-2** (2026-09-27, claude-sonnet-5): the enrichment channel end to end - no DB schema change
+  (decision already made by the WP). Traced the existing plumbing: `sgt_shadow._tracker_payload`
+  already puts SGT-I's output at `raw_payload["sgt_i"]` (W1-1); `main.py._handle_extension_result`
+  dumps the whole row with `json.dumps(dataset_msg)` into `raw_payload_json`, and
+  `database.insert_tracker_dump` stores that TEXT column verbatim - so any component's enrichment
+  already survives, untouched, with zero schema work. Added: `PayloadInspectorDialog` in
+  `ui/windows/tracker_dump_window.py` now shows an "SGT-I - advisory, read-only" card (pretty-
+  printed JSON, `QLabel`, text-selectable, no edit path) whenever `raw_payload.sgt_i` is non-empty,
+  right beside the existing Gemini card; absent otherwise, so today's rows are unchanged. Tests:
+  `tests/test_sgt_tracker_rows.py` - `test_sgt_i_enrichment_round_trips_beside_the_core_values`
+  (DB round trip: `sgt_i` and `sgt_dataset` both come back byte-identical, Core columns/`pan`/`arn`
+  unaffected) and `test_payload_inspector_shows_sgt_i_enrichment_read_only` (card appears/hidden
+  correctly). `pytest tests/test_sgt_*.py`: 299 passed (was 297; the two new tests). No component
+  produces route/explanation/second-opinion data yet (steps 5/7, later WPs) - this only builds and
+  proves the channel they will use; nothing to build on for those WPs beyond what W1-1 gave them.

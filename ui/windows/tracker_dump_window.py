@@ -751,6 +751,17 @@ class PayloadInspectorDialog(QDialog):
             except Exception:
                 pass
 
+        # SGT-I's enrichment (blueprint 14.2 rule 4): its own key, beside the Core's values,
+        # never in place of them - shown read-only, never editable from here.
+        sgt_i_info = {}
+        try:
+            pj_i = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            rp_i = pj_i.get("raw_payload") if isinstance(pj_i.get("raw_payload"), dict) else {}
+            if isinstance(rp_i.get("sgt_i"), dict):
+                sgt_i_info = rp_i["sgt_i"]
+        except Exception:
+            pass
+
         # Give priority to Gemini-extracted details for display
         prop_name = ""
         comp_name = ""
@@ -903,6 +914,20 @@ class PayloadInspectorDialog(QDialog):
             ai_v.addLayout(grid)
             ai_v.addStretch()
             cards_row.addWidget(ai_card, stretch=2)
+
+        if sgt_i_info:
+            sgti_card, sgti_v = _card("SGT-I — advisory, read-only")
+            sgti_card.setToolTip("SGT Intelligence's own facts about this row (route, explanation, second "
+                                  "opinion). They sit beside the Core's captured values and never replace "
+                                  "them (blueprint 14.2 rule 4).")
+            sgti_text = QLabel(json.dumps(sgt_i_info, indent=2, sort_keys=True, ensure_ascii=False))
+            sgti_text.setObjectName("FieldVal")
+            sgti_text.setStyleSheet("font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; font-weight: 400;")
+            sgti_text.setWordWrap(True)
+            sgti_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            sgti_v.addWidget(sgti_text)
+            sgti_v.addStretch()
+            cards_row.addWidget(sgti_card, stretch=2)
 
         sum_layout.addLayout(cards_row)
 
