@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 00:42)
+# SGT overhaul — report (2026-09-28 00:53)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 12 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 18   output tokens: 472589   API-equivalent cost: $21.95
+Runs: 19   output tokens: 519534   API-equivalent cost: $23.53
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Runs: 18   output tokens: 472589   API-equivalent cost: $21.95
 | W3-1 | Done | sonnet | ede9b8d | Container -> value pairs with generic types and masking | core/sgt_i/pairs.py: pairs_from_page produces container/type/masked-shape only; disk-level privacy test round-trips through insert_tracker_dump and scans file b |
 | W4-1 | Done | sonnet | 27201bb | Maths 1: shape grammar induction with rule-of-three bounds | shapes.py: shape grammar generalisation + rule-of-three confidence bound; 13 new tests, 345 total pass |
 | W4-2 | Done | sonnet | 4af6a8f | Maths 2: checksum discovery, values inside values, relations | invariants.py: checksum discovery (Luhn/Verhoeff/mod11/mod36, Bonferroni-corrected), value containment, order/sum relations; 19 new tests, 364 total pass |
-| W4-3 | Not started | sonnet |  | Maths 3: container kinds from salted-hash statistics |  |
+| W4-3 | Done | sonnet | 38f3e57 | Maths 3: container kinds from salted-hash statistics | stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass |
 | W5-1 | Not started | opus |  | The atlas: model, page matching, merge, template promotion, ageing |  |
 | W5-2 | Not started | sonnet |  | Atlas tool: show / diff / coverage |  |
 | W6-1 | Not started | sonnet |  | The GPS: position, route, progress, row enrichment |  |
@@ -52,6 +52,7 @@ Runs: 18   output tokens: 472589   API-equivalent cost: $21.95
 - **W2-3** Build the equivalence check as a real side-by-side (fake UIA layer feeding both readers) or as hand-written expected-output tests like W2-1's? → Real side-by-side: one FakeElement tree implements both the live pattern API and the cached-property API, fed into the actual vsdc_uia_text._collect_descendant_lines and uia_nodes.lines_from_nodes (hand-written expectations (W2-1's test_sgt_i_uia_nodes.py) only prove lines_from_nodes matches what a human expects, not that it matches the Core's real function; a shared fixture tree makes any future edit to either reader show up as a real diff, which is what the 14.2 gate is for)
 - **W2-4** Where does the extra node read for corpus v2 happen? → Synchronous, in SgtShadow._observe on the Core thread, gated on recorder.enabled and sgt_i.active; injectable via a new read_nodes= constructor param (default: core.sgt_i.uia_nodes.read_page_nodes), so tests and replay never touch real UIA (One JSONL record needs lines+nodes together; a separate async write from SGT-I's own thread would need to merge into an already-written line, which is much more complex for no gain since read_page_nodes already bounds itself to a few hundred ms (W2-1 bench) and has its own 3s timeout, same as the existing lines read)
 - **W4-2** Which mod-11 check-digit scheme, and how to bound multiple testing? → ISBN-10-style mod-11 (weights n..1, no X digit); checksum p-values Bonferroni-corrected by the 4 schemes tried; containment/order/sum relations reuse shapes.py's rule-of-three bound, corrected by the number of candidate offsets/directions tried (blueprint names mod-11 as a known scheme but not an exact weighting; ISBN-10's is the most standard. Bonferroni keeps the multi-scheme test from manufacturing false discoveries, matching the WP's explicit ask for a multiple-testing bound)
+- **W4-3** When a container's counts fit more than one row of the kind table (e.g. an identifier's values are also technically per-client 'changing'), which row wins? → Priority order template > identifier > profile > dataset > vocabulary; template/profile additionally require >=2 distinct clients or >=2 stable clients (a single client's stability is ambiguous between template and profile, so it stays unclassified until a second client is seen) (Blueprint's table lists rows narratively, not by precedence; identifier (never repeats, anywhere) is a stronger, more specific claim than dataset (repeats allowed, just changes per client), so it is checked first. Cheapest and most accurate to build without extra machinery.)
 
 ## Checks waiting for you
 

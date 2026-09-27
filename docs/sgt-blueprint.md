@@ -1524,3 +1524,16 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   383 passed. Not wired into a component yet - for the atlas (step 4, a later WP) to call once it
   accumulates a container's values across visits; `container` here is any string the caller likes
   (pairs.py's `container_path()` joined however the atlas prefers) - this module never inspects it.
+
+- **W5-1** (2026-09-28, claude-opus-5-5): `core/sgt_i/atlas.py` - `PortalAtlas.merge(PageMap, url=, client=, session=)`
+  -> page id; `Atlas` opens one per portal. Two files, both tmp+replace: `sgt_i/atlas/<portal>.json` (public, may sync:
+  pages with fingerprint/regions views, elements, slots {container, type(s), shapes, seen, repeating/max_rows, kind},
+  url_hints, dates, retired, transitions, retired_pages) and `sgt_i/atlas_private/<portal>.json` (salted page tokens,
+  word/client counters - never syncs; salt shared via new `stats.load_or_create_salt`). Page identity = Jaccard of
+  structural (role, text) token hashes vs the page's core tokens (>= half its visits), 0.5, or 0.3 when the masked
+  URL path is known. Promotion is per word (decision recorded): same page/role/zone/position for >=3 clients and >=60%
+  of the page's clients, else masked shape; mixed text -> `Welcome, «text»` (generic type, not meaning). Parts age
+  against their page's last visit (fade 30 d, retire 90 d); pages against today. All thresholds in `DEFAULT_CONFIG`
+  (`config=` override). Not wired into a component (no step-1/2 component exists yet); `stats=` gives slots a kind.
+  Tests `tests/test_sgt_i_atlas.py` (15, incl. file-byte privacy scan and Core-never-imports); `test_sgt_*.py` 398 passed.
+  Next (GPS): read `transitions`; pass a stable `session` to `merge`; `claimed_by` not filled yet.

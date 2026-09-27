@@ -43,7 +43,7 @@ from core.vsdc.vsdc_alerts import SERA_DATA_DIR_NAME
 from .shapes import shape_grammar_confidence
 
 __all__ = [
-    "KINDS", "generate_salt", "salted_hash", "sgt_i_dir",
+    "KINDS", "generate_salt", "salted_hash", "sgt_i_dir", "load_or_create_salt",
     "ContainerKind", "classify_container", "ContainerStats",
 ]
 
@@ -249,19 +249,26 @@ class ContainerStats:
             pass
 
     def _load_or_create_salt(self) -> str:
-        path = self.directory / SALT_FILE
-        try:
-            existing = path.read_text(encoding="utf-8").strip()
-            if existing:
-                return existing
-        except OSError:
-            pass
-        salt = generate_salt()
-        try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(salt, encoding="utf-8")
-            tmp.replace(path)
-        except OSError:
-            pass
-        return salt
+        return load_or_create_salt(self.directory)
+
+
+def load_or_create_salt(directory: Optional[Path] = None) -> str:
+    """This PC's salt from `directory` (default sgt_i_dir()), created on first use. Shared by
+    every SGT-I module that hashes (stats, the atlas's private side)."""
+    directory = directory or sgt_i_dir()
+    path = directory / SALT_FILE
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+    salt = generate_salt()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(salt, encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+    return salt
