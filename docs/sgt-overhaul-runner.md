@@ -61,7 +61,7 @@ record it with `... tools/sgt_overhaul.py check-add {WP} --text "..."` and carry
    `*(none yet)*` line if it is still there): `- **{WP}** (date, {MODEL}): what was built, files,
    tests, decisions taken, what the next WP must know.` Keep it under 12 lines.
 3. `git add -A` then `git commit -m "sgt-overhaul {WP}: <summary>"` with this last line in the message:
-   `Co-Authored-By: Claude <noreply@anthropic.com>`
+   `Co-Authored-By: {COAUTHOR}`
 4. `../APP/venv/Scripts/python.exe tools/sgt_overhaul.py finish {WP} --commit <short hash> --notes "<one line>"`
    then `git add -A && git commit -m "sgt-overhaul {WP}: tracker"` (the status file changed).
 

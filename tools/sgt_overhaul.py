@@ -127,7 +127,9 @@ class Tracker:
 
     # plan
     def model_id(self, wp: str) -> str:
-        return self.plan["models"][self.wps[wp]["model"]]
+        """The model a WP last ran on, else its tier's last-resort (Claude) model."""
+        used = getattr(self, "status", {}).get(wp, {}).get("Model")
+        return used or self.plan["models"][self.plan["tiers"][self.wps[wp]["model"]][-1]]["id"]
 
     def deadline(self) -> dt.datetime:
         return dt.datetime.fromisoformat(self.plan["deadline"])
@@ -402,21 +404,57 @@ def _attach_power_query(xlsx: Path, links) -> None:
 
 
 # ── The dispatcher ────────────────────────────────────────────────────────────────
-def claude_cmd() -> List[str]:
-    env = os.environ.get("SGT_CLAUDE")
+# A WP names a TIER ("sonnet" = Sonnet-level work). plan["tiers"] lists the models allowed for it,
+# in order of preference; each model says which RUNNER (agent CLI) runs it. The first model whose
+# runner is enabled, installed and not held by a usage limit is used - so Gemini can take
+# Sonnet-level work and save the Claude budget for Opus work, and Claude takes over when Gemini's
+# quota runs out (and the other way round).
+def runner_exe(t: Tracker, runner: str) -> Optional[List[str]]:
+    r = t.plan["runners"][runner]
+    env = os.environ.get(f"SGT_RUNNER_{runner.upper()}") or (os.environ.get("SGT_CLAUDE") if runner == "claude" else None)
     if env:
         return json.loads(env)
-    exe = shutil.which("claude")
-    if not exe:
-        raise Refused("Claude Code CLI not found on PATH (install it, then run 'claude' once to log in)")
-    return [exe]
+    if not r.get("enabled"):
+        return None
+    exe = shutil.which(r["exe"]) if r.get("exe") else None
+    return [exe] if exe else None
 
 
-def build_prompt(t: Tracker, wp: str) -> str:
+def pick_model(t: Tracker, wp: str, held: Dict[str, dt.datetime]) -> Optional[str]:
+    """The model key to run `wp` with now, or None if every allowed runner is unavailable."""
+    w = t.wp(wp)
+    for key in t.plan["tiers"][w["model"]]:
+        runner = t.plan["models"][key]["runner"]
+        if w.get("claude_only") and runner != "claude":
+            continue
+        if held.get(runner) and held[runner] > now():
+            continue
+        if runner_exe(t, runner):
+            return key
+    return None
+
+
+def build_cmd(t: Tracker, key: str) -> List[str]:
+    m = t.plan["models"][key]
+    r, cli = t.plan["runners"][m["runner"]], t.plan["cli"]
+    fill = {"{model}": m["id"], "{permission_mode}": cli["permission_mode"],
+            "{allowed_tools}": ",".join(cli["allowed_tools"]), "{disallowed_tools}": ",".join(cli["disallowed_tools"])}
+    args = []
+    for a in r["args"]:
+        for k, v in fill.items():
+            a = a.replace(k, v)
+        args.append(a)
+    return runner_exe(t, m["runner"]) + args
+
+
+def build_prompt(t: Tracker, wp: str, key: Optional[str] = None) -> str:
     w, s = t.wp(wp), t.status[wp]
+    key = key or t.plan["tiers"][w["model"]][-1]
+    m = t.plan["models"][key]
     text = (t.docs / "sgt-overhaul-runner.md").read_text(encoding="utf-8")
     for k, v in {"{WP}": wp, "{WHAT}": w["what"], "{FOCUS}": w["focus"], "{KIND}": w["kind"],
-                 "{MODEL}": t.model_id(wp), "{ATTEMPT}": str(int(s["Attempts"] or 0)),
+                 "{MODEL}": m["id"], "{COAUTHOR}": t.plan["runners"][m["runner"]]["coauthor"],
+                 "{ATTEMPT}": str(int(s["Attempts"] or 0)),
                  "{PREVIOUS}": s["Notes"] or "none", "{DEADLINE}": t.plan["deadline"]}.items():
         text = text.replace(k, v)
     return text
@@ -424,7 +462,8 @@ def build_prompt(t: Tracker, wp: str) -> str:
 
 _EPOCH = re.compile(r"\|\s*(\d{10})\b")
 _CLOCK = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
-_LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(reached|exceeded|hit)", re.I)
+_LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(reached|exceeded|hit)|"
+                    r"quota|resource[_ ]exhausted|too many requests|\b429\b", re.I)
 
 
 def limit_reset(text: str, ref: Optional[dt.datetime] = None) -> Optional[dt.datetime]:
@@ -486,27 +525,33 @@ class _Lock:
             pass
 
 
-def run_one(t: Tracker, wp: str, dry: bool = False, log=print) -> Optional[dt.datetime]:
+def run_one(t: Tracker, wp: str, key: Optional[str] = None, dry: bool = False, log=print) -> Optional[dt.datetime]:
     """Runs one WP in a fresh CLI session. Returns a reset time when a usage limit stopped it."""
     cli = t.plan["cli"]
+    key = key or pick_model(t, wp, {})
+    if not key:
+        raise Refused(f"{wp}: no runner available for tier {t.wp(wp)['model']}")
+    model_id, runner = t.plan["models"][key]["id"], t.plan["models"][key]["runner"]
     attempt = int(t.status[wp]["Attempts"] or 0) + 1
-    cmd = claude_cmd() + ["-p", "--model", t.model_id(wp), "--output-format", "json",
-                          "--permission-mode", cli["permission_mode"],
-                          "--allowedTools", ",".join(cli["allowed_tools"]),
-                          "--disallowedTools", ",".join(cli["disallowed_tools"])]
-    prompt = build_prompt(t, wp)
+    cmd = build_cmd(t, key)
+    prompt = build_prompt(t, wp, key)
+    as_arg = t.plan["runners"][runner].get("prompt") == "arg"
+    if as_arg:
+        cmd = cmd + [prompt]
     if dry:
-        log(" ".join(cmd) + "\n\n" + prompt)
+        log(" ".join(cmd if not as_arg else cmd[:-1]) + "\n\n" + prompt)
         return None
-    t.set(wp, Status="In progress", Attempts=str(attempt), Model=t.model_id(wp))
-    log(f"[{stamp()}] {wp} attempt {attempt} on {t.model_id(wp)}: {t.wps[wp]['what']}")
+    t.set(wp, Status="In progress", Attempts=str(attempt), Model=model_id)
+    log(f"[{stamp()}] {wp} attempt {attempt} on {model_id}: {t.wps[wp]['what']}")
     started = time.time()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
         # A worker's "ask" waits up to 4 minutes for the user; the CLI's shell timeout must outlast it.
+        # SGT_OVERHAUL_WORKER makes the repository's pre-push hook refuse any push from a worker.
         env = {**os.environ, "BASH_DEFAULT_TIMEOUT_MS": str((ASK_WAIT_S + 90) * 1000),
-               "BASH_MAX_TIMEOUT_MS": "600000"}
-        p = subprocess.run(cmd, input=prompt, cwd=REPO, env=env, capture_output=True, text=True, encoding="utf-8",
+               "BASH_MAX_TIMEOUT_MS": "600000", "SGT_OVERHAUL_WORKER": wp}
+        p = subprocess.run(cmd, input=None if as_arg else prompt, cwd=REPO, env=env, capture_output=True,
+                           text=True, encoding="utf-8",
                            errors="replace", timeout=cli["run_timeout_min"] * 60)
         out, err, code = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
@@ -516,8 +561,9 @@ def run_one(t: Tracker, wp: str, dry: bool = False, log=print) -> Optional[dt.da
     (LOG_DIR / f"{run_id}-{wp}.json").write_text(out + ("\n--- stderr ---\n" + err if err else ""), encoding="utf-8")
     d = _parse(out)
     usage = d.get("usage") or {}
-    result = str(d.get("result") or err or "")[:4000]
-    reset = limit_reset(result + " " + (err or "")) if (d.get("is_error") or code != 0 or not d) else None
+    result = str(d.get("result") or d.get("response") or (out if not d else "") or err or "")[:4000]
+    failed = d.get("is_error") or d.get("error") or code != 0 or not d
+    reset = limit_reset(result + " " + (err or "")) if failed else None
 
     fresh = Tracker(t.docs)                     # the worker updated the status file itself
     state = fresh.status[wp]["Status"]
@@ -535,7 +581,7 @@ def run_one(t: Tracker, wp: str, dry: bool = False, log=print) -> Optional[dt.da
         else:
             fresh.set(wp, Status="Retry", Notes=f"attempt {attempt}: {outcome}. {result[:300]}")
     fresh.add_row(fresh.p_runs, RUN_FIELDS, {
-        "Run": run_id, "WP": wp, "Model": t.model_id(wp), "Attempt": str(attempt),
+        "Run": run_id, "WP": wp, "Model": model_id, "Attempt": str(attempt),
         "Started": dt.datetime.fromtimestamp(started).strftime("%Y-%m-%d %H:%M"),
         "Minutes": f"{(time.time() - started) / 60:.1f}", "Outcome": outcome,
         "Input tokens": str(usage.get("input_tokens", "")), "Output tokens": str(usage.get("output_tokens", "")),
@@ -553,6 +599,7 @@ def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
     for wp, s in t.status.items():             # a crash mid-run leaves a WP "In progress"
         if s["Status"] == "In progress":
             t.set(wp, Status="Retry", Notes=(s["Notes"] + " | dispatcher restarted").strip(" |"))
+    held: Dict[str, dt.datetime] = {}           # runner -> when its usage limit resets
     with _Lock():
         while True:
             t = Tracker()
@@ -564,13 +611,23 @@ def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
                 log(f"[{stamp()}] nothing ready: " + ", ".join(f"{k} {v}" for k, v in
                     {s: sum(1 for x in t.status.values() if x['Status'] == s) for s in STATUSES}.items() if v))
                 return 0
-            reset = run_one(t, wp, dry=dry, log=log)
+            key = pick_model(t, wp, held)
+            if not key:
+                waits = [r for r in held.values() if r > now()]
+                if not waits:
+                    log(f"[{stamp()}] {wp}: no runner installed/enabled for tier {t.wps[wp]['model']}")
+                    return 2
+                wait = min((min(waits) - now()).total_seconds() + 120, (t.deadline() - now()).total_seconds())
+                log(f"[{stamp()}] every runner for {wp} is at its usage limit: sleeping {wait / 60:.0f} min")
+                time.sleep(max(60, wait))
+                continue
+            reset = run_one(t, wp, key, dry=dry, log=log)
             if once or dry:
                 return 0
             if reset:
-                wait = min((reset - now()).total_seconds() + 120, (t.deadline() - now()).total_seconds())
-                log(f"[{stamp()}] usage limit: sleeping {wait / 60:.0f} min")
-                time.sleep(max(60, wait))
+                runner = t.plan["models"][key]["runner"]
+                held[runner] = reset
+                log(f"[{stamp()}] {runner} usage limit until {reset:%H:%M}; other runners carry on")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────────
