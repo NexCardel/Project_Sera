@@ -1356,3 +1356,9 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   otherwise identical (SGT-C unaffected). Tests added in `tests/test_sgt_replay.py` (day
   rollover, restart mid-day dedup, size-cap lift, on/off echo). `pytest tests/test_sgt_*.py`:
   281 passed. If `sgt_record_pages` is still "0" on a real PC, that's Settings -> Tracker to flip.
+
+- **W0-2** (2026-09-27, claude-haiku-4-5-20251001): Baseline established. **SGT tests:** 281 passed
+  (all test_sgt_*.py, no regressions). **VSDC tests:** 388 passed, 6 pre-existing failures (all in
+  Gemini enricher tests — missing API key, unfinished feature), 1 skipped. **Replay baseline:**
+  `C:\Users\Nex\AmanAssociates_Sera\sgt_corpus\replay_baseline.json` holds 8 session(s), 1 dataset
+  row(s), replayed from 204 recorded pages. Baseline ready for diff tool. No code changes.
