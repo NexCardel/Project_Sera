@@ -275,6 +275,25 @@ def _load_due_services(conn: "sqlite3.Connection") -> List[DueService]:
     return [DueService(client_id=r[0], service=r[1] or "") for r in rows]
 
 
+def _load_known_values(conn: "sqlite3.Connection") -> Dict[int, Dict[str, str]]:
+    """Every client_values entry, keyed by client then by the column's own label (self-healing,
+    14.4 step 8) - not just PAN/GSTIN/name. Password columns are excluded, the same way
+    `_find_columns` excludes them; nothing else is filtered, since an office may hold DOB, email
+    or any other field under a label of its own choosing."""
+    rows = conn.execute(
+        "SELECT cv.client_id, mc.label, cv.value FROM client_values cv "
+        "JOIN mcl_columns mc ON mc.id = cv.column_id "
+        "JOIN clients c ON c.id = cv.client_id AND c.is_archived = 0 "
+        "WHERE cv.value IS NOT NULL AND TRIM(cv.value) != ''"
+    ).fetchall()
+    out: Dict[int, Dict[str, str]] = {}
+    for cid, label, value in rows:
+        if "PASS" in (label or "").upper():
+            continue
+        out.setdefault(cid, {})[(label or "").strip()] = value
+    return out
+
+
 class SeraData:
     """Read-only, cached access to Sera's own client list and tracker rows (blueprint 14.4 step
     8). Opens its own connections read-only (`mode=ro` plus `PRAGMA query_only`) and never touches
@@ -292,6 +311,7 @@ class SeraData:
         self._clients: List[ClientRecord] = []
         self._tracker: List[TrackerRow] = []
         self._due: List[DueService] = []
+        self._known: Dict[int, Dict[str, str]] = {}
         self._loaded_at = float("-inf")
 
     def _connect(self, path: str) -> "sqlite3.Connection":
@@ -309,6 +329,7 @@ class SeraData:
                 try:
                     self._clients = _load_clients(conn)
                     self._due = _load_due_services(conn)
+                    self._known = _load_known_values(conn)
                 finally:
                     conn.close()
             except sqlite3.Error:
@@ -338,6 +359,13 @@ class SeraData:
         if client_id is None:
             return list(self._due)
         return [d for d in self._due if d.client_id == client_id]
+
+    def known_values(self, client_id: int) -> Dict[str, str]:
+        """This client's own field values, keyed by the label the office gave the column
+        (14.4 step 8, self-healing) - never just PAN/GSTIN/name. Callers compare in memory and
+        never store a value; only the label a match was found under may be kept."""
+        self._refresh_if_stale()
+        return dict(self._known.get(client_id, {}))
 
     def find_by_pan(self, pan: str) -> Optional[ClientRecord]:
         pan_u = (pan or "").strip().upper()

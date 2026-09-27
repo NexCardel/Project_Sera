@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 02:14)
+# SGT overhaul — report (2026-09-28 02:25)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 20 |
+| Done | 21 |
 | Blocked | 0 |
 
-Runs: 26   output tokens: 838713   API-equivalent cost: $36.88
+Runs: 27   output tokens: 885830   API-equivalent cost: $38.84
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -34,7 +34,7 @@ Runs: 26   output tokens: 838713   API-equivalent cost: $36.88
 | W7-1 | Done | sonnet | f6f9cc7 | Assertion checker (NegEx-style), trigger words in config | assertions.py + sgt_i_config.json assertions section; 17 new tests, 442 total pass |
 | W7-2 | Done | sonnet | a1fb737 | Page kinds classifier | page_kinds.py: classify() for 8 page kinds from content signals + config vocab; 18 tests, 460 total passed |
 | W8-1 | Done | opus | 58a7263 | Evidence ledger, retraction, explanations, second opinions | core/sgt_i/ledger.py: beliefs+sightings, config weights, truth-maintenance retraction, one-line explanations, 5 second opinions via enrichment; LedgerComponent  |
-| W9-1 | Not started | sonnet |  | Sera's own data: client list and tracker, read-only |  |
+| W9-1 | Done | sonnet | eebec24 | Sera's own data: client list and tracker, read-only | sera_data.py: read-only cached clients/tracker accessor, OCR recovery, name-vs-PAN cross-check, masked confirm; 15 new tests, 492 passed total |
 | W9-2 | Not started | sonnet |  | Tracker expectations and self-healing (known-value anchoring) |  |
 | W10-1 | Not started | opus |  | UIA events for short-lived messages + page diffing |  |
 | W11-1 | Not started | haiku |  | 'Not understood' residue report |  |

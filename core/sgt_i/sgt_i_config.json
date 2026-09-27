@@ -107,5 +107,19 @@
       "income tax": ["^ITR-?(?:[1-7]|U)$"],
       "gst": ["^GSTR-", "^CMP-?08$", "^ITC-"]
     }
+  },
+  "expectations": {
+    "note": "Blueprint 14.4 step 8: due filings, revision/duplicate detection and known-value anchoring (core/sgt_i/expectations.py). A new portal's wording, filed-status vocabulary or field synonym is a change here, never a code change.",
+    "client_fields": ["pan", "gstin"],
+    "filed_statuses": ["submitted", "filed", "verified", "e-verified", "processed", "accepted"],
+    "revision_wording": ["\\brevis", "\\bamend"],
+    "service_form_aliases": {},
+    "known_field_labels": {
+      "pan": ["\\bpan\\b", "permanent\\s*account"],
+      "gstin": ["\\bgstin\\b", "\\bgst\\s*no", "goods\\s+and\\s+services\\s+tax"],
+      "ack": ["\\back\\b", "acknowledg", "\\barn\\b", "reference\\s*no"]
+    },
+    "max_synonyms": 6,
+    "max_expectations": 6
   }
 }

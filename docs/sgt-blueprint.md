@@ -1665,3 +1665,29 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   anchoring finds a new label wording when a value Sera already holds turns up unclaimed);
   `due_services()` gives the "due" universe (no due-date schedule exists in the schema, so "due" =
   services the client is subscribed to via `client_services`), `tracker_rows()` gives "filed".
+
+- **W9-2** (2026-09-28, claude-sonnet-5): step 8, the component. Extended `sera_data.py` with
+  `SeraData.known_values(client_id)` - every client_values entry keyed by the office's own column
+  label (not just PAN/GSTIN/name), password columns excluded, cached alongside `clients()`.
+  New `core/sgt_i/expectations.py`, `ExpectationsComponent` (not yet in `default_components()` -
+  see below): identifies the session's client by PAN/GSTIN (`sgt_i_config.json`'s new
+  "expectations" section), then (a) **expectations** - `classify_dataset()` matches each dataset's
+  form against the client's due services (`service_form_aliases` config, default: normalised-name
+  equality) and its tracker rows filtered to this portal by period label: nothing filed yet ->
+  "prime_candidate", already filed -> "revision" (wording in `revision_wording` matches) or
+  "duplicate"; (b) **self-healing** - `find_synonyms()` builds one page map from the Observation's
+  lines (no nodes yet, same trick as `ledger._page_kind`) and compares every pair's actual value
+  (in memory only) against everything `known_values()` + PAN/GSTIN + the client's own seen acks
+  hold; a match under a label that does not already read as that field (`label_is_known()`: shared
+  word, or a `known_field_labels` config pattern) is reported as `{"field", "container"}` - never
+  the value - deduped per session. Both are second opinion only (14.2); enrichment is `{
+  "expectations": [...], "synonyms": [...]}`. Tests `tests/test_sgt_i_expectations.py` (15,
+  includes a raw-value-never-in-output check); `test_sgt_*.py`: 507 passed (was 492).
+  **Decision (recorded):** left OUT of `default_components()` - it needs a real `SeraData` built
+  from `db_path`/`hex_key`/`raw_db_path`, which only main.py's `Database` instance holds today;
+  threading those through `VSDCRouter._apply_sgt_i` is a separate app-wiring change that needs a
+  real app run to verify, and is not needed for this WP's tests (check-list item added: wire
+  `ExpectationsComponent(sera)` into `default_components()`). Next: step 11 (the miner) is the
+  natural consumer of `synonyms` once graduation exists; `service_form_aliases` is empty by
+  default - an office whose service names don't already match their form's own wording needs an
+  entry there, never a code change.
