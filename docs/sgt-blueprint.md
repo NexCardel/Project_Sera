@@ -1537,3 +1537,17 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   (`config=` override). Not wired into a component (no step-1/2 component exists yet); `stats=` gives slots a kind.
   Tests `tests/test_sgt_i_atlas.py` (15, incl. file-byte privacy scan and Core-never-imports); `test_sgt_*.py` 398 passed.
   Next (GPS): read `transitions`; pass a stable `session` to `merge`; `claimed_by` not filled yet.
+
+- **W5-2** (2026-09-28, claude-sonnet-5): `tools/sgt_atlas.py` - read-only CLI over W5-1's atlas
+  files, never merges a page. `list` (portals with an atlas), `show <portal> [--page ID]` (every
+  page's visits/clients/slots/fingerprint, or one page's slots/regions/retired in full), `coverage
+  <portal>` (slots claimed/unclaimed - reads whatever `claimed_by` already holds, so it needs no
+  change once a later WP starts filling it), `diff old.json new.json` (pages added/removed, and for
+  a page in both, fingerprint tokens and slot containers gained/lost - matched by page id, which is
+  salt-free and stable across saves/syncs). `diff`'s second arg may be a directory + `--portal`
+  instead of a file, for comparing two live installs. Learned while testing: a page's `slots` dict
+  has no floor filter like `fingerprint` does, so a relabelled field's old slot stays until it ages
+  out (90 d) even once its fingerprint token has dropped out - `slots_removed` reflects that (mostly
+  empty in practice) rather than being a mirror of `fingerprint_removed`. Tests `tests/test_sgt_atlas.py`
+  (10). `pytest tests/test_sgt_*.py`: 408 passed (was 398). Next (miner, step 11): `coverage`'s
+  unclaimed list is the raw material for "what SGT-I found that nobody registered".

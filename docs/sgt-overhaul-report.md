@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 00:53)
+# SGT overhaul — report (2026-09-28 01:03)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 14 |
+| Not started | 13 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 19   output tokens: 519534   API-equivalent cost: $23.53
+Runs: 20   output tokens: 565708   API-equivalent cost: $25.81
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 19   output tokens: 519534   API-equivalent cost: $23.53
 | W4-1 | Done | sonnet | 27201bb | Maths 1: shape grammar induction with rule-of-three bounds | shapes.py: shape grammar generalisation + rule-of-three confidence bound; 13 new tests, 345 total pass |
 | W4-2 | Done | sonnet | 4af6a8f | Maths 2: checksum discovery, values inside values, relations | invariants.py: checksum discovery (Luhn/Verhoeff/mod11/mod36, Bonferroni-corrected), value containment, order/sum relations; 19 new tests, 364 total pass |
 | W4-3 | Done | sonnet | 38f3e57 | Maths 3: container kinds from salted-hash statistics | stats.py: salted-hash container-kind classifier (template/vocabulary/profile/dataset/identifier), persisted counts+hashes only; 19 new tests, 383 total pass |
-| W5-1 | Not started | opus |  | The atlas: model, page matching, merge, template promotion, ageing |  |
+| W5-1 | Done | opus | 3f5464e | The atlas: model, page matching, merge, template promotion, ageing | core/sgt_i/atlas.py: public+private per-portal JSON, Jaccard page identity with URL hint, per-word template promotion (>=3 clients, >=60% share), optional regio |
 | W5-2 | Not started | sonnet |  | Atlas tool: show / diff / coverage |  |
 | W6-1 | Not started | sonnet |  | The GPS: position, route, progress, row enrichment |  |
 | W6-2 | Not started | opus |  | Read harder near the finish line (advisory to the Core) |  |
@@ -53,6 +53,8 @@ Runs: 19   output tokens: 519534   API-equivalent cost: $23.53
 - **W2-4** Where does the extra node read for corpus v2 happen? → Synchronous, in SgtShadow._observe on the Core thread, gated on recorder.enabled and sgt_i.active; injectable via a new read_nodes= constructor param (default: core.sgt_i.uia_nodes.read_page_nodes), so tests and replay never touch real UIA (One JSONL record needs lines+nodes together; a separate async write from SGT-I's own thread would need to merge into an already-written line, which is much more complex for no gain since read_page_nodes already bounds itself to a few hundred ms (W2-1 bench) and has its own 3s timeout, same as the existing lines read)
 - **W4-2** Which mod-11 check-digit scheme, and how to bound multiple testing? → ISBN-10-style mod-11 (weights n..1, no X digit); checksum p-values Bonferroni-corrected by the 4 schemes tried; containment/order/sum relations reuse shapes.py's rule-of-three bound, corrected by the number of candidate offsets/directions tried (blueprint names mod-11 as a known scheme but not an exact weighting; ISBN-10's is the most standard. Bonferroni keeps the multi-scheme test from manufacturing false discoveries, matching the WP's explicit ask for a multiple-testing bound)
 - **W4-3** When a container's counts fit more than one row of the kind table (e.g. an identifier's values are also technically per-client 'changing'), which row wins? → Priority order template > identifier > profile > dataset > vocabulary; template/profile additionally require >=2 distinct clients or >=2 stable clients (a single client's stability is ambiguous between template and profile, so it stays unclassified until a second client is seen) (Blueprint's table lists rows narratively, not by precedence; identifier (never repeats, anywhere) is a stronger, more specific claim than dataset (repeats allowed, just changes per client), so it is checked first. Cheapest and most accurate to build without extra machinery.)
+- **W5-1** How is mixed text (Welcome, <name>) split into template and client parts without AI, and what names the slot? → Word-level promotion: a word is template when seen at the same page/role/zone/position for >=3 different clients AND >=60% of the page's clients (config template_min_clients, template_share); runs of other words become «generic type», e.g. 'Welcome, «text»' (Whole-text identity can never learn mixed text; the share test stops a surname shared by 3 of 50 clients being promoted; the atlas cannot know meaning, so the placeholder is the step-2 generic type, not 'name')
+- **W5-1** Where do the hashes the atlas counts with live, given the atlas may sync but hashes must never leave the PC? → Two files per portal: sgt_i/atlas/<portal>.json (public: structure, counts, shapes, dates) and sgt_i/atlas_private/<portal>.json (salted page tokens, word/client counters, url counts); page matching uses the private token hashes so it is stable across promotion (14.5 rules 3 and 7; losing the private file only means pages are re-learnt; the Core never reads either)
 
 ## Checks waiting for you
 
