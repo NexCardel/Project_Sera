@@ -46,15 +46,15 @@ def test_first_run_dialog_has_office_mode_pages(tmp_path):
     from ui.dialogs.first_run_dialog import FirstRunDialog
 
     dlg = FirstRunDialog(app_dir=tmp_path, actor_alias="TestAdmin")
-    assert dlg.stack.count() == 6
+    assert dlg.stack.count() == 3
     assert dlg.office_mode is False
 
     # Choice page routes "Create a New Office" / "Join an Existing Office" to the office-mode
-    # pages (index 4/5), not the legacy no-office-key pages (index 1/2).
-    dlg.stack.setCurrentIndex(4)
-    assert dlg.stack.currentIndex() == 4
-    dlg.stack.setCurrentIndex(5)
-    assert dlg.stack.currentIndex() == 5
+    # pages (index 1/2). The legacy no-office-key pages were removed in P4-2.
+    dlg.stack.setCurrentIndex(1)
+    assert dlg.stack.currentIndex() == 1
+    dlg.stack.setCurrentIndex(2)
+    assert dlg.stack.currentIndex() == 2
 
 
 def test_first_run_office_new_page_validates_before_creating(tmp_path):
@@ -62,7 +62,7 @@ def test_first_run_office_new_page_validates_before_creating(tmp_path):
     from ui.dialogs.first_run_dialog import FirstRunDialog
 
     dlg = FirstRunDialog(app_dir=tmp_path, actor_alias="TestAdmin")
-    dlg.stack.setCurrentIndex(4)
+    dlg.stack.setCurrentIndex(1)
 
     dlg.office_name_input.setText("")
     dlg.office_new_pwd_input.setText("OfficeMaster#2026")
@@ -79,7 +79,7 @@ def test_first_run_office_new_page_creates_office(tmp_path):
     import sera_keys
 
     dlg = FirstRunDialog(app_dir=tmp_path, actor_alias="TestAdmin")
-    dlg.stack.setCurrentIndex(4)
+    dlg.stack.setCurrentIndex(1)
     dlg.office_name_input.setText("Aman Associates")
     dlg.office_new_pwd_input.setText("OfficeMaster#2026")
     dlg.office_new_pwd_confirm.setText("OfficeMaster#2026")
@@ -99,7 +99,7 @@ def test_first_run_office_join_page_requires_ip_and_code(tmp_path):
     from ui.dialogs.first_run_dialog import FirstRunDialog
 
     dlg = FirstRunDialog(app_dir=tmp_path, actor_alias="TestAdmin")
-    dlg.stack.setCurrentIndex(5)
+    dlg.stack.setCurrentIndex(2)
 
     dlg.office_manual_ip_input.setText("")
     dlg.office_code_input.setText("")
@@ -131,22 +131,19 @@ def test_first_run_office_signals_deliver_across_threads(tmp_path, monkeypatch):
     received = []
     dlg.office_peer_found_signal.connect(lambda peer: received.append(peer))
     dlg.office_join_done_signal.connect(lambda ok, reason: received.append((ok, reason)))
-    dlg.legacy_scan_finished_signal.connect(lambda: received.append("legacy_scan_done"))
 
     def _emit():
         time.sleep(0.05)
         dlg.office_peer_found_signal.emit({"ip": "127.0.0.1"})
         dlg.office_join_done_signal.emit(False, "no admin PC reachable")
-        dlg.legacy_scan_finished_signal.emit()
 
     with patch.object(QMessageBox, "warning", return_value=QMessageBox.Ok):
         t = threading.Thread(target=_emit, daemon=True)
         t.start()
-        assert _pump_until(lambda: len(received) >= 3)
+        assert _pump_until(lambda: len(received) >= 2)
         t.join()
     assert received[0] == {"ip": "127.0.0.1"}
     assert received[1] == (False, "no admin PC reachable")
-    assert received[2] == "legacy_scan_done"
 
 
 # ------------------------------------------------------------------ SeraSyncDialog (Office Members panel)

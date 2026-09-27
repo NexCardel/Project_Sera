@@ -65,8 +65,8 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     ``office.json``, then creates an empty ``master.db`` with this PC's own (admin, letter A)
     membership record.
 
-    Unlike ``sync_pairing._install`` / ``sync_migrate.migrate_to_office_key`` (which write
-    ``office.json`` last because everything it names is already verified by then), this PC's
+    Unlike ``sync_pairing._install`` (which writes ``office.json`` last because everything it
+    names is already verified by then), this PC's
     own ``init_office_membership`` needs ``office.json``'s ``admin_pubkey`` to sign its first
     records with (``sync_admin.load_admin_key`` reads it back), so it has to exist first. If
     database creation then fails, this PC is left in office mode with no database -- the same

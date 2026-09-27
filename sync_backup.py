@@ -97,15 +97,6 @@ def _resolve_hex_key(app_dir: Path, hex_key: str | None = None, db=None) -> str:
     if dek is not None:
         return sera_keys.dek_hex(dek)
 
-    # Legacy fallback if available
-    salt_file = app_dir / SALT_NAME
-    if salt_file.exists():
-        import security
-        salt_bytes = security.load_salt(str(salt_file))
-        # Check default master password if known
-        default_pw = "admin123"
-        return security.derive_key_hex(default_pw, salt_bytes)
-
     raise BackupError("Could not resolve encryption key for database backup")
 
 

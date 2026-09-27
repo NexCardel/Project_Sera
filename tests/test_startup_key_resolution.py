@@ -9,11 +9,11 @@ Verifies key resolution behavior:
   - Passes hex_key and key_id into SyncPeerService
   - Ignores sera.key completely (never reads or writes it)
   - Falls back to recovery prompt (P1-6) on KeyUnavailable
-- Legacy mode (when keys/office.json does not exist):
-  - Unchanged today's path with P0-5
-  - Exposes self.key_mode == "legacy"
-  - Exposes self.key_id == None
-  - Passes hex_key and key_id=None into SyncPeerService
+- No office key (when keys/office.json does not exist):
+  - No database yet -> FirstRunDialog (office key only since P4-2 removed the legacy
+    password+salt start-up path and its "Legacy: new/join" pages)
+  - A database exists (pre-office-key install) -> the P2-8 rejoin/salvage wizard is offered
+    directly instead
 
 All tests use pytest's tmp_path; never touches real data directories (§0 rule 2).
 """
@@ -36,9 +36,6 @@ class StubSeraApp:
     """Lightweight test harness mirroring SeraApp's key resolution wiring."""
     _resolve_encryption_key = SeraApp._resolve_encryption_key
     _recover_office_dek = SeraApp._recover_office_dek
-    _verify_master_password = SeraApp._verify_master_password
-    _get_master_password = SeraApp._get_master_password
-    _show_startup_auth_error = SeraApp._show_startup_auth_error
 
     def __init__(self, folder: Path):
         self.app_dir = folder
@@ -51,10 +48,6 @@ class StubSeraApp:
         self.key_mode = None
         self.key_id = None
         self.sync_service = None
-
-    def _prompt_master_password(self, prompt_text="Enter Master Password:"):
-        self.prompt_calls.append(prompt_text)
-        return ""
 
 
 @windows_only
@@ -183,57 +176,86 @@ def test_startup_office_mode_without_sera_key(tmp_path, monkeypatch):
     assert sync_service.key_id == expected_key_id
 
 
-def test_startup_legacy_mode_unchanged(tmp_path, monkeypatch):
-    """Legacy mode: keys/office.json does not exist -> uses P0-5 path, exposes
-    key_mode='legacy', key_id=None, and passes them to SyncPeerService.
+def test_startup_no_office_key_with_database_offers_rejoin_and_exits_if_declined(tmp_path, monkeypatch):
+    """P4-2: keys/office.json missing but master.db exists (a pre-office-key install) ->
+    the P2-8 rejoin/salvage wizard is offered instead of the removed legacy password+salt
+    path. Declining it (office.json still absent afterwards) exits rather than looping.
     """
     monkeypatch.setattr("main.APP_DIR", tmp_path)
 
     legacy_password = "legacy_office_pass_789"
-
-    # Setup legacy salt, key, and database
     salt_path = str(tmp_path / security.SALT_FILE)
     security.generate_and_save_salt(salt_path)
     salt = security.load_salt(salt_path)
-    expected_hex_key = security.derive_key_hex(legacy_password, salt)
+    hex_key = security.derive_key_hex(legacy_password, salt)
 
     db_path = str(tmp_path / "master.db")
-    db = SeraDatabase(db_path, expected_hex_key, defer_startup_maintenance=True)
+    db = SeraDatabase(db_path, hex_key, defer_startup_maintenance=True)
     del db
+    (tmp_path / "sera.key").write_text(legacy_password, encoding="utf-8")
 
-    key_file = tmp_path / "sera.key"
-    key_file.write_text(legacy_password, encoding="utf-8")
-
-    # Verify keys/office.json does NOT exist
     office_file = tmp_path / "keys" / "office.json"
     assert not office_file.exists()
 
-    # Run key resolution
+    calls = []
+
+    def fake_run_pending_rejoin(app_dir, requested):
+        calls.append((Path(app_dir), requested))
+        return None  # user declined the wizard; nothing changed
+
+    monkeypatch.setattr("ui.dialogs.rejoin_office_dialog.run_pending_rejoin", fake_run_pending_rejoin)
+
+    app = StubSeraApp(tmp_path)
+    with pytest.raises(SystemExit):
+        app._resolve_encryption_key()
+
+    assert calls == [(tmp_path, True)]
+    # The legacy files were never touched by key resolution itself.
+    assert (tmp_path / "sera.key").read_text(encoding="utf-8") == legacy_password
+
+
+def test_startup_no_office_key_with_database_continues_after_successful_rejoin(tmp_path, monkeypatch):
+    """Same starting point, but the rejoin wizard succeeds (writes office.json/DEK):
+    key resolution re-runs and takes the office-mode branch."""
+    monkeypatch.setattr("main.APP_DIR", tmp_path)
+
+    legacy_password = "legacy_office_pass_789"
+    salt_path = str(tmp_path / security.SALT_FILE)
+    security.generate_and_save_salt(salt_path)
+    salt = security.load_salt(salt_path)
+    legacy_hex_key = security.derive_key_hex(legacy_password, salt)
+
+    db_path = str(tmp_path / "master.db")
+    db = SeraDatabase(db_path, legacy_hex_key, defer_startup_maintenance=True)
+    del db
+
+    office_id = sera_keys.OfficeInfo.new_office_id()
+    dek = sera_keys.new_dek()
+    expected_key_id = sera_keys.key_id(dek)
+    expected_hex_key = sera_keys.dek_hex(dek)
+
+    def fake_run_pending_rejoin(app_dir, requested):
+        # Simulate a completed rejoin: the office DB (and key) replace this PC's own files.
+        app = Path(app_dir)
+        (app / "master.db").unlink()
+        raw_db = app / "rawPayload.db"
+        if raw_db.exists():
+            raw_db.unlink()
+        info = sera_keys.OfficeInfo(office_id=office_id, office_name="Aman Office", key_id=expected_key_id)
+        sera_keys.save_office(app, info)
+        sera_keys.store_dek(app, dek, "SecretMaster123!", office_id)
+        new_db = SeraDatabase(str(app / "master.db"), expected_hex_key, defer_startup_maintenance=True)
+        del new_db
+        return None
+
+    monkeypatch.setattr("ui.dialogs.rejoin_office_dialog.run_pending_rejoin", fake_run_pending_rejoin)
+
     app = StubSeraApp(tmp_path)
     key_mode, key_id, hex_key = app._resolve_encryption_key()
 
-    # Assertions
-    assert key_mode == "legacy"
-    assert app.key_mode == "legacy"
-    assert key_id is None
-    assert app.key_id is None
+    assert key_mode == "office"
+    assert key_id == expected_key_id
     assert hex_key == expected_hex_key
-
-    # DB can be opened with hex_key
-    test_db = SeraDatabase(db_path, hex_key, defer_startup_maintenance=True)
-    assert test_db is not None
-    del test_db
-
-    # SyncPeerService receives hex_key and key_id=None
-    sync_service = SyncPeerService(
-        db_path=app.db_path,
-        salt_path=app.salt_path,
-        username=app.actor_alias,
-        hex_key=hex_key,
-        key_id=app.key_id,
-    )
-    assert sync_service.hex_key == expected_hex_key
-    assert sync_service.key_id is None
 
 
 @windows_only

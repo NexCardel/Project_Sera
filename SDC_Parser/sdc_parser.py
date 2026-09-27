@@ -23,8 +23,9 @@ except ImportError:
     sys.exit(1)
 
 def get_db_hex_key():
-    """Derives the SQLCipher key: office key via sera_keys if this PC has one,
-    else the legacy sera.key / default password + sera.salt derivation."""
+    """Derives the SQLCipher key via the office key (sera_keys). P4-2 removed the legacy
+    sera.key / default password + sera.salt fallback: every real PC already has an office
+    key since Sera Sync v3 went live (P3-9)."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.abspath(os.path.join(base_dir, ".."))
     data_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
@@ -41,45 +42,6 @@ def get_db_hex_key():
         except Exception:
             pass
 
-    salt_candidates = [
-        os.path.join(app_dir, "sera.salt"),
-        os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "sera.salt"),
-        os.path.join(app_dir, "salt.bin"),
-        os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "salt.bin"),
-    ]
-    key_candidates = [
-        os.path.join(app_dir, "sera.key"),
-        os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "sera.key"),
-    ]
-
-    salt = None
-    for s_path in salt_candidates:
-        if os.path.exists(s_path):
-            try:
-                with open(s_path, "rb") as f:
-                    salt = f.read()
-                if salt: break
-            except Exception: pass
-
-    pwd = "admin123"
-    for k_path in key_candidates:
-        if os.path.exists(k_path):
-            try:
-                with open(k_path, "r", encoding="utf-8") as f:
-                    p = f.read().strip()
-                if p:
-                    pwd = p
-                    break
-            except Exception: pass
-            
-    if salt:
-        try:
-            if app_dir not in sys.path:
-                sys.path.insert(0, app_dir)
-            import security
-            return security.derive_key_hex(pwd, salt)
-        except Exception:
-            pass
     return None
 
 def get_db_connection():

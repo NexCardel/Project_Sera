@@ -781,49 +781,10 @@ def test_hand_over_admin_by_non_admin_pc_refused(admin_office):
         sync_admin.hand_over_admin(app, conn, "f" * 32, b_dev)
 
 
-# ------------------------------------------------------------------ P1-4 migration creates the admin key
-
-@windows_only
-def test_migration_creates_admin_key(tmp_path):
-    from test_office_key_migration import LEGACY_PW, NEW_PW
-    import sync_migrate
-    app = _legacy_app(tmp_path)
-    sync_migrate.migrate_to_office_key(app, LEGACY_PW, "Test Office", new_password=NEW_PW)
-    office = sera_keys.load_office(app)
-    assert office.admin_pubkey
-    assert sync_admin.public_key_b64(sync_admin.load_admin_key(app)) == office.admin_pubkey
-    blob = json.loads((sera_keys.keys_dir(app) / sera_keys.ADMIN_KEY_RECOVERY_FILE).read_text(encoding="utf-8"))
-    sera_keys.unwrap_with_password(blob, NEW_PW, sera_keys.admin_aad(office.office_id))
-
-
-@windows_only
-def test_migration_rollback_removes_admin_key(tmp_path, monkeypatch):
-    from test_office_key_migration import LEGACY_PW, NEW_PW
-    import sync_migrate
-    app = _legacy_app(tmp_path)
-
-    def boom(*a, **k):
-        raise RuntimeError("simulated failure after the admin key was written")
-    monkeypatch.setattr(sera_keys, "save_office", boom)
-    with pytest.raises(RuntimeError):
-        sync_migrate.migrate_to_office_key(app, LEGACY_PW, "Test Office", new_password=NEW_PW)
-    kdir = sera_keys.keys_dir(app)
-    for name in (sera_keys.ADMIN_KEY_DPAPI_FILE, sera_keys.ADMIN_KEY_RECOVERY_FILE, sera_keys.OFFICE_FILE):
-        assert not (kdir / name).exists(), name
-
-
-def _legacy_app(tmp_path) -> Path:
-    import security
-    from database import SeraDatabase
-    from test_office_key_migration import LEGACY_PW
-    app = tmp_path / "legacy"
-    app.mkdir()
-    security.generate_and_save_salt(str(app / security.SALT_FILE))
-    hex_key = security.derive_key_hex(LEGACY_PW, security.load_salt(str(app / security.SALT_FILE)))
-    (app / "sera.key").write_text(LEGACY_PW, encoding="utf-8")
-    db = SeraDatabase(str(app / "master.db"), hex_key, defer_startup_maintenance=True)
-    del db
-    return app
+# P1-4's migration-creates-admin-key tests were removed in P4-2 along with
+# sync_migrate.migrate_to_office_key (the "Convert to office key" feature): every real PC
+# already has an office key since Sera Sync v3 went live (P3-9). Admin-key creation for a
+# brand-new office is still covered via sync_office.create_new_office in test_sync_office.py.
 
 
 # ------------------------------------------------------------------ module rules

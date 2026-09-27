@@ -219,8 +219,15 @@ def test_dialog_shows_different_office_key(tmp_path):
 
 
 def test_office_refuses_legacy_fetch_snapshot(tmp_path):
-    """An office-mode node strictly refuses legacy fetch_snapshot join requests."""
-    from sync_peer import join_office_fetch_snapshot
+    """An office-mode node strictly refuses legacy fetch_snapshot join requests.
+
+    P4-2 removed the client-side ``join_office_fetch_snapshot`` helper (the "Legacy: join"
+    first-run page it served was removed along with the rest of the legacy password+salt
+    start-up path), so this sends the raw request the old helper used to send.
+    """
+    import socket
+    import json
+    from sync_peer import SyncPeerService, _send_framed, _recv_framed
 
     office_dek = sera_keys.new_dek()
     key_id = sera_keys.key_id(office_dek)
@@ -242,23 +249,22 @@ def test_office_refuses_legacy_fetch_snapshot(tmp_path):
     service.start()
     try:
         port = service._tcp_server.getsockname()[1]
-        joiner_dir = tmp_path / "joiner"
-        joiner_dir.mkdir()
 
-        ok, reason, staged_db, staged_salt = join_office_fetch_snapshot(
-            peer_ip="127.0.0.1",
-            peer_port=port,
-            host_name="LegacyJoiner",
-            username="JoinerUser",
-            code="123456",
-            app_dir=joiner_dir,
-            timeout=5.0,
-        )
-        assert ok is False
-        assert "KEY_ID_MISMATCH" in reason
-        assert "different office key — rejoin needed" in reason
-        assert staged_db is None
-        assert staged_salt is None
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", port))
+        header = {
+            "action": "fetch_snapshot",
+            "host": "LegacyJoiner",
+            "username": "JoinerUser",
+            "code": "123456",
+        }
+        _send_framed(sock, json.dumps(header).encode("utf-8"))
+        resp = json.loads(_recv_framed(sock).decode("utf-8"))
+        sock.close()
+
+        assert resp.get("status") == "rejected"
+        assert resp.get("reason") == "KEY_ID_MISMATCH"
+        assert "different office key — rejoin needed" in resp.get("hint", "")
     finally:
         service.stop()
 
