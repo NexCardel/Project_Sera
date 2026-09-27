@@ -1473,3 +1473,15 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `insert_tracker_dump` -> sqlite), then reads the file's own bytes for any fixture value. Tests:
   `tests/test_sgt_i_pairs.py` (10, new). `test_sgt_*.py`: 332 passed. Next (step 3): pairs.py
   gives it the (container, type, shape) stream; not wired into host.py yet (no component yet).
+
+- **W4-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/shapes.py` - shape grammar over many masked
+  shapes from one container. `mask_shape` re-exported from `pairs.py`, not redefined.
+  `induce_shape_grammar(shapes)`: collapses each shape into (class, run-length) runs, takes the
+  run structure the most shapes share, builds an anchored regex (fixed `{n}` when every matching
+  shape agrees on a run's length, `{min,max}` when they don't), counts shapes with a different
+  structure as exceptions rather than folding them in. `shape_grammar_confidence(n, exceptions,
+  confidence=0.95)`: rule of three, `-ln(1-confidence)/n`, only defined for zero exceptions (one
+  exception already disproves the pattern) - at 95% this is ~3/n, matching 14.4 step 3 exactly.
+  Not wired into a component or the atlas yet - pure functions over shape strings only, for W4-2/
+  W4-3 and step 4 (atlas) to call once they accumulate shapes per container over time. Tests:
+  `tests/test_sgt_i_shapes.py` (13, new). `test_sgt_*.py`: 345 passed.
