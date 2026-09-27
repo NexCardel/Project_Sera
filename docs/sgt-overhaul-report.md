@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-27 19:49)
+# SGT overhaul — report (2026-09-27 19:57)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 21 |
+| Not started | 20 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 6 |
+| Done | 7 |
 | Blocked | 0 |
 
-Runs: 8   output tokens: 243471   API-equivalent cost: $12.78
+Runs: 9   output tokens: 277907   API-equivalent cost: $14.22
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -20,7 +20,7 @@ Runs: 8   output tokens: 243471   API-equivalent cost: $12.78
 | W1-2 | Done | sonnet | e724987 | Enrichment fields on tracker rows (no schema change) | Enrichment channel already round-tripped via existing raw_payload_json plumbing (no schema change); added read-only SGT-I card in PayloadInspectorDialog; tests: |
 | W1-R | Done | opus | d4d6da4 | Review: W0-1..W1-2 against the SGT-C safety rules | Review OK except 2 fixed defects: SGT-I detach race could drop a Core row; 4 payload scanners read raw_payload.sgt_i as identity/name evidence |
 | W2-1 | Done | opus | 54ae8d7 | Measure a cached UIA node read vs the current line reader | Cached node read: heavy 927->530 ms, normal ~40->~32 ms, control-view lines identical; unpack ~205 ms is next cost |
-| W2-2 | Not started | opus |  | Page map: node model, zones, sections, layout pairing |  |
+| W2-2 | Done | opus | 63c7f4c | Page map: node model, zones, sections, layout pairing | core/sgt_i/page_map.py: Node, UIA+OCR builders, zones, sections, layout pairs; 10 tests on 14.1 cases; 312 SGT tests pass |
 | W2-3 | Not started | sonnet |  | Lines view from nodes + equivalence check against today's reader |  |
 | W2-4 | Not started | sonnet |  | Recorder stores nodes (corpus format v2, backwards compatible) |  |
 | W3-1 | Not started | sonnet |  | Container -> value pairs with generic types and masking |  |
@@ -47,6 +47,8 @@ Runs: 8   output tokens: 243471   API-equivalent cost: $12.78
 - **W1-1** SGT-I budget, hang limit and what trips it → 2.0 s per page for all components, hung = still running 15 s (checked when the Core hands over the next page); any component exception, overrun, hang or non-JSON/over-4KB enrichment trips ALL of SGT-I off for the run; re-enabling does not reset (Blueprint 14.2 rule 5 read literally; cheapest safe guard, Python threads cannot be killed)
 - **W1-1** Advisory and enrichment channel shape → ask_more_reads: max 3 outstanding per session, each expires after 60 s, consumed only when the Core's change gate would have skipped the read; enrichment keyed session -> component, merged into raw_payload['sgt_i'] at row dispatch (best effort, async) and dropped when SGT-I is off/tripped; queue holds 8 pages, oldest dropped (Rule 3 (more reads only, bounded) and rule 4 (own key only); Off leaves rows byte-identical)
 - **W2-1** Which UIA tree view should the cached node read use? → Control view (UIA default TreeFilter) (Its lines are identical to read_page_text on all 3 test pages and it is fastest (heavy 530 ms vs raw 767 ms); raw view adds ~2x nodes and different lines.)
+- **W2-2** Where do the zone words (help/FAQ, stepper) live? → Generic UI words as DEFAULT_VOCAB in page_map.py, overridable via a vocab argument; no portal wording in code (They are portal-neutral UI words; portal-specific wording can be passed from config by the step-2 component without changing page_map)
+- **W2-2** How is a stepper told apart from a tab bar or a row of labels, and how is the current step known? → Row of >=3 short labels that are numbered or inside a container named like a stepper; current = the selected step (uia_nodes now caches SelectionItem.IsSelected for TabItems too) (Tab bars and form column labels must not become steppers; selection is already in the cache request so it costs nothing extra; without it step state stays unknown rather than guessed)
 
 ## Checks waiting for you
 

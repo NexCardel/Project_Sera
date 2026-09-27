@@ -1431,3 +1431,19 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   `uia_nodes._node` now also caches selection for TabItems (current stepper step). Not wired into any component.
   Tests `tests/test_sgt_i_page_map.py` (10, one per 14.1 case + table/OCR/help/dialog); `test_sgt_*.py` 312 passed.
   Next: step 2 builds pairs on `PageMap.pairs`; generic words sit in `DEFAULT_VOCAB` (override via `vocab`).
+
+- **W2-3** (2026-09-27, claude-sonnet-5): the 14.2 gate itself, as a tool. W2-1 already had
+  `uia_nodes.lines_from_nodes()`; new `tools/sgt_lines_equivalence.py` checks it properly, three
+  modes: **synthetic** (always runs) - a `FakeElement` implements both the live pattern-API
+  `vsdc_uia_text._collect_descendant_lines` needs and the cached-property API `uia_nodes._walk`
+  needs, so one fixture tree is read by both real functions and any future edit to either shows
+  up as a real diff, not a hand-written expectation; 4 fixtures cover 14.1's cases (option list
+  vs chosen radio, checkbox, combobox `Selected: label = value`, value==name not duplicated).
+  **corpus** (best effort) - scans `sgt_corpus.load_pages()` for a `"nodes"` key (the dump W2-4 is
+  expected to add); today reports "0 comparable" rather than failing (204 recorded pages, none
+  yet). **live** (best effort, `--title`) - reads an already-open window with both real readers;
+  never opens/clicks anything; only the no-window-found path was exercised here (check-list item
+  added for a real portal window). Core's reader untouched, nothing wired in. Tests
+  `tests/test_sgt_lines_equivalence.py` (4); `test_sgt_*.py` 316 passed. Next (W2-4): add the
+  `"nodes"` field to recorded pages so the corpus mode has something to check; once the whole
+  corpus passes this gate, the Core can switch to the node reader.
