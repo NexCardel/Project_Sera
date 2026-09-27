@@ -634,6 +634,38 @@ def run_loop(once: bool = False, dry: bool = False, log=print) -> int:
                 log(f"[{stamp()}] {runner} usage limit until {reset:%H:%M}; other runners carry on")
 
 
+def watch(poll_s: float = 1.0) -> None:
+    """Follows the newest Claude worker transcript and prints what the worker does, readably.
+    Switches to a newer transcript when the next WP starts. Ctrl+C to stop."""
+    folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(REPO))
+    current, pos = None, 0
+    while True:
+        files = sorted(folder.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) if folder.exists() else []
+        if files and files[-1] != current:
+            current, pos = files[-1], 0
+            print(f"\n===== {current.name} ({dt.datetime.fromtimestamp(current.stat().st_mtime):%H:%M}) =====", flush=True)
+        if current:
+            with open(current, encoding="utf-8", errors="replace") as f:
+                f.seek(pos)
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    for part in (d.get("message") or {}).get("content") or []:
+                        if not isinstance(part, dict):
+                            continue
+                        ts = (d.get("timestamp") or "")[11:19]
+                        if part.get("type") == "text" and d.get("type") == "assistant":
+                            print(f"{ts} SAYS  {part['text'].strip()[:400]}", flush=True)
+                        elif part.get("type") == "tool_use":
+                            inp = part.get("input") or {}
+                            what = inp.get("command") or inp.get("file_path") or inp.get("pattern") or json.dumps(inp)[:120]
+                            print(f"{ts} {part.get('name', ''):5} {str(what)[:200]}", flush=True)
+                pos = f.tell()
+        time.sleep(poll_s)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────────
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="SGT overhaul tracker and dispatcher")
@@ -652,6 +684,7 @@ def main(argv=None) -> int:
     s.add_argument("--wait", type=int, default=ASK_WAIT_S)
     s = sub.add_parser("answer"); s.add_argument("q", type=int); s.add_argument("choice")
     sub.add_parser("viewer")
+    sub.add_parser("watch")
     sub.add_parser("report")
     s = sub.add_parser("run"); s.add_argument("--once", action="store_true"); s.add_argument("--dry-run", action="store_true")
     a = ap.parse_args(argv)
@@ -679,6 +712,8 @@ def main(argv=None) -> int:
             print(f"ANSWER: {got['answer']}   (by {got['by']}, Q{got['q']})")
         elif a.cmd == "answer":
             t.answer(a.q, a.choice)
+        elif a.cmd == "watch":
+            watch()
         elif a.cmd == "viewer":
             print(f"built {t.viewer()}")
         elif a.cmd == "reset":
