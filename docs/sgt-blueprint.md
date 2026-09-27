@@ -1642,3 +1642,26 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   from the Core's lines as stacked nodes (no nodes in Observation yet). 3 decisions recorded. Tests
   `tests/test_sgt_i_ledger.py` (17) + ledger in host's golden On/Off byte-identical test; `test_sgt_*.py` 477 passed.
   Next: step 11 can count second opinions that keep being right (graduation); weights still hand-set.
+
+- **W9-1** (2026-09-28, claude-sonnet-5): step 8. New `core/sgt_i/sera_data.py`: `SeraData`, a
+  cached, read-only accessor to master.db (clients: PAN/GSTIN/name via the same `mcl_columns`
+  label conventions `database.py` uses - word-boundary PAN/GSTIN, excluding password/company
+  columns) and rawPayload.db (`tracker_dump` filed rows, `client_services` "due" rows). Each
+  connection is opened `mode=ro` plus `PRAGMA query_only = ON` - two independent guarantees against
+  ever writing. Not a host.py component yet (no `observe()`); it is called, not wired in. Pure
+  functions: `correct_shape()` (OCR confusion candidates only at positions that violate a PAN/GSTIN
+  shape, cartesian product when a glyph is ambiguous, e.g. '0' from O/D/Q), `gstin_checksum_ok()`
+  (mod-36, re-derived locally so sgt_i has no dependency on `core.sgt`), `recover_gstin()`/
+  `recover_pan()` (unique-survivor only: GSTIN by checksum first, a known-client match breaks a
+  remaining tie; PAN has no checksum so a known-client match is required outright; an
+  already-shape-valid value is never touched), `name_pan_mismatch()` (no shared significant word
+  between a read name and the PAN's known client name), `masked_confirms()` ("98XXXXXX12" vs a
+  candidate, unmasked characters only, neither value ever stored). Tests
+  `tests/test_sgt_i_sera_data.py` (15) build a temp SQLCipher-encrypted master.db/rawPayload.db
+  pair with the real table shapes and prove a write through the accessor's own connection is
+  rejected. `test_sgt_*.py`: 492 passed (was 477).
+  Next (W9-2): wire this into a component that reads the tracker's due/filed rows to build
+  expectations ("client X, GSTR-3B, August, not submitted") and self-healing (known-value
+  anchoring finds a new label wording when a value Sera already holds turns up unclaimed);
+  `due_services()` gives the "due" universe (no due-date schedule exists in the schema, so "due" =
+  services the client is subscribed to via `client_services`), `tracker_rows()` gives "filed".
