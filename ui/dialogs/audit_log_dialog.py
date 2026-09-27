@@ -2,13 +2,15 @@
 audit_log_dialog.py
 --------------------
 Redesigned wide SSAL (Sera-Sync Audit Log) window for Project Sera.
-Displays local audit log and peer workstation logs received by the Host PC.
+Displays the audit log, which now replicates from every workstation under Sera
+Sync v3 (the legacy per-workstation "peer_logs/" viewer was removed in P4-1 --
+see docs/sera-sync-v3-blueprint.md §5 -- since audit_log itself carries every
+PC's entries now).
 Includes date presets, custom date range, full-text live search, action filter,
 local timezone timestamp conversion, service name resolution, token-safe CSV export,
 and rich row drill-down details.
 """
 
-import os
 import csv
 import datetime
 from PySide6.QtCore import Qt, Signal, QDate, QTimer
@@ -41,8 +43,6 @@ try:
     import qtawesome as qta
 except ImportError:
     qta = None
-
-from database import PeerAuditLogManager
 
 
 def _safe_qta_icon(icon_name: str, color: str = "#FFFFFF") -> QIcon:
@@ -118,9 +118,11 @@ class AuditLogDialog(QDialog):
         self.resize(1180, 720)
         self.setMinimumSize(1020, 580)
 
-        live_dir = os.path.dirname(self.db.db_path) if hasattr(self.db, "db_path") else "."
-        self.peer_mgr = PeerAuditLogManager(live_dir)
-        self.selected_host = "local"  # "local" or hostname
+        # "local" is the only workstation entry since P4-1: audit_log itself now replicates
+        # under Sera Sync v3, so this PC's audit_log already carries every PC's entries
+        # (the legacy peer_logs/ per-workstation viewer was removed; see database.py's
+        # _migrate_legacy_peer_logs and docs/sera-sync-v3-blueprint.md §5).
+        self.selected_host = "local"
         self._raw_logs_cache = []
 
         # Live search debounce timer
@@ -523,21 +525,14 @@ class AuditLogDialog(QDialog):
         self._load_logs()
 
     def _load_workstations(self):
+        # Since P4-1, audit_log replicates under Sera Sync v3, so the local audit log
+        # already carries every workstation's entries -- there is no separate per-peer
+        # log to switch to any more (see the note in __init__).
         self.workstation_list.blockSignals(True)
         self.workstation_list.clear()
-
-        # Local Workstation
-        item_local = QListWidgetItem("🖥️ Local Workstation")
+        item_local = QListWidgetItem("🖥️ All Workstations (this office)")
         item_local.setData(Qt.UserRole, "local")
         self.workstation_list.addItem(item_local)
-
-        # Peer Workstations
-        peer_ws = self.peer_mgr.get_peer_workstations()
-        for ws in peer_ws:
-            item = QListWidgetItem(f"💻 {ws['hostname']}")
-            item.setData(Qt.UserRole, ws['hostname'])
-            self.workstation_list.addItem(item)
-
         self.workstation_list.setCurrentRow(0)
         self.workstation_list.blockSignals(False)
 
@@ -558,16 +553,10 @@ class AuditLogDialog(QDialog):
             from_date = self.dt_from.date().toString("yyyy-MM-dd") + "T00:00:00"
             to_date = self.dt_to.date().addDays(1).toString("yyyy-MM-dd") + "T00:00:00"
 
-        if self.selected_host == "local":
-            logs = self.db.get_audit_logs(
-                actor=actor_filter, action=action_filter,
-                from_date=from_date, to_date=to_date, resolve_names=True, limit=1000
-            )
-        else:
-            logs = self.peer_mgr.get_peer_logs(
-                hostname=self.selected_host, actor=actor_filter, action=action_filter,
-                from_date=from_date, to_date=to_date, limit=1000
-            )
+        logs = self.db.get_audit_logs(
+            actor=actor_filter, action=action_filter,
+            from_date=from_date, to_date=to_date, resolve_names=True, limit=1000
+        )
 
         self._raw_logs_cache = logs
         self._apply_client_side_filter()
@@ -712,16 +701,10 @@ class AuditLogDialog(QDialog):
                     from_date = self.dt_from.date().toString("yyyy-MM-dd") + "T00:00:00"
                     to_date = self.dt_to.date().addDays(1).toString("yyyy-MM-dd") + "T00:00:00"
 
-                if self.selected_host == "local":
-                    logs = self.db.get_audit_logs(
-                        actor=actor_filter, action=action_filter,
-                        from_date=from_date, to_date=to_date, resolve_names=True, limit=10000
-                    )
-                else:
-                    logs = self.peer_mgr.get_peer_logs(
-                        hostname=self.selected_host, actor=actor_filter, action=action_filter,
-                        from_date=from_date, to_date=to_date, limit=10000
-                    )
+                logs = self.db.get_audit_logs(
+                    actor=actor_filter, action=action_filter,
+                    from_date=from_date, to_date=to_date, resolve_names=True, limit=10000
+                )
 
                 with open(path, "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)

@@ -47,7 +47,6 @@ class SeraSyncDialog(QDialog):
     a live plain-text activity log sidebar tracking all P2P discovery, push, pull,
     and Sync Guard events.
     """
-    sync_pushed = Signal(str)  # emitted with peer hostname after successful push
     activity_signal = Signal(str, str, str)  # (timestamp, category, message)
     # AddWorkstationSession's on_joined/on_closed run on PairingWindow's background thread
     # (P2-4). QTimer.singleShot(0, fn) called from a non-GUI thread creates the timer on
@@ -130,18 +129,6 @@ class SeraSyncDialog(QDialog):
         header_layout.addWidget(title)
         header_layout.addStretch()
 
-        # Inv-Frames Sovereign Mode Toggle Button
-        self.btn_inv_frames = QPushButton("🛡️ Inv-Frames: OFF")
-        self.btn_inv_frames.setCursor(Qt.PointingHandCursor)
-        self.btn_inv_frames.setToolTip(
-            "Toggle Invincibility Frames (inv_frames) protocol:\n"
-            "• ON: Node rejects all incoming database sync, but can push to other nodes.\n"
-            "• If only 1 node is ON, it acts as sovereign master.\n"
-            "• If >1 node is ON, sync across entire LAN is frozen to prevent corruption."
-        )
-        self.btn_inv_frames.clicked.connect(self._on_toggle_inv_frames)
-        header_layout.addWidget(self.btn_inv_frames)
-
         # Online indicator
         self.status_label = QLabel()
         self.status_label.setStyleSheet("color: #4CF9B7; font-size: 13px; font-weight: 600; margin: 0px; padding: 0px;")
@@ -149,14 +136,6 @@ class SeraSyncDialog(QDialog):
 
         main_layout.addWidget(header_widget)
 
-        # LAN Protocol Status Banner
-        self.protocol_banner = QLabel()
-        self.protocol_banner.setWordWrap(True)
-        self.protocol_banner.setStyleSheet(
-            "QLabel { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
-        )
-        main_layout.addWidget(self.protocol_banner)
-        self._update_inv_frames_ui()
 
         # Public-network warning (P0-9b). Hidden unless the active network is Public.
         self.network_warning_banner = QLabel()
@@ -190,8 +169,10 @@ class SeraSyncDialog(QDialog):
         left_column.setSpacing(10)
         left_scroll.setWidget(left_container)
 
-        # Legacy LAN devices (peers table & push/pull buttons)
-        left_widget = QGroupBox("Discovered LAN Devices (legacy sync)" if office_mode else "Discovered LAN Devices")
+        # Discovered LAN devices (beacon discovery; P4-1 removed the legacy whole-database
+        # push/pull buttons that used to live in this box -- Sera Sync v3 exchanges changes
+        # by itself once workstations are paired as office members, below).
+        left_widget = QGroupBox("Discovered LAN Devices")
         self.devices_group = left_widget
         left_widget.setStyleSheet("QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
         left_layout = QVBoxLayout(left_widget)
@@ -199,19 +180,18 @@ class SeraSyncDialog(QDialog):
         left_layout.setSpacing(10)
 
         desc = QLabel(
-            "Devices running Sera on your local network are listed below. "
-            "Select a workstation to push/pull database updates or monitor LAN revision scores."
+            "Devices running Sera on your local network are listed below."
         )
         desc.setWordWrap(True)
         desc.setProperty("class", "GuidanceText")
         desc.setStyleSheet("font-size: 12px; color: #B0B0B0;")
         left_layout.addWidget(desc)
 
-        # Peer Table (8 Columns: Username, Hostname, IP, Version, DB Modified, Rev Score, Clients / Dumps, Mode / Status)
+        # Peer Table (7 Columns: Username, Hostname, IP, Version, DB Modified, Clients / Dumps, Mode / Status)
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            "Username", "Hostname", "IP Address", "App Version", "DB Modified", "Rev Score", "Clients / Dumps", "Mode / Status"
+            "Username", "Hostname", "IP Address", "App Version", "DB Modified", "Clients / Dumps", "Mode / Status"
         ])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -220,7 +200,6 @@ class SeraSyncDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -233,30 +212,6 @@ class SeraSyncDialog(QDialog):
         # Left Action Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-
-        self.btn_sync = QPushButton("  Sync Selected")
-        icon = _safe_icon("mdi.database-export", color="#FFFFFF")
-        if icon:
-            self.btn_sync.setIcon(icon)
-        self.btn_sync.setStyleSheet(
-            "QPushButton { background-color: #2E9B5F; color: white; font-weight: 600; "
-            "padding: 8px 14px; border-radius: 6px; } "
-            "QPushButton:hover { background-color: #34B76D; }"
-        )
-        self.btn_sync.clicked.connect(self._on_sync_clicked)
-        btn_row.addWidget(self.btn_sync)
-
-        self.btn_sync_all = QPushButton("  Sync To All Devices")
-        icon = _safe_icon("mdi.database-sync", color="#FFFFFF")
-        if icon:
-            self.btn_sync_all.setIcon(icon)
-        self.btn_sync_all.setStyleSheet(
-            "QPushButton { background-color: #1A73E8; color: white; font-weight: 600; "
-            "padding: 8px 14px; border-radius: 6px; } "
-            "QPushButton:hover { background-color: #2884FB; }"
-        )
-        self.btn_sync_all.clicked.connect(self._on_sync_all_clicked)
-        btn_row.addWidget(self.btn_sync_all)
 
         self.btn_refresh = QPushButton("  Refresh")
         icon = _safe_icon("mdi.refresh", color="#FFFFFF")
@@ -1422,79 +1377,6 @@ class SeraSyncDialog(QDialog):
             return
         self._refresh_members()
 
-    def _on_toggle_inv_frames(self):
-        if not self.sync_service:
-            return
-        new_val = not getattr(self.sync_service, "inv_frames", False)
-        self.sync_service.set_inv_frames(new_val)
-        if self.db:
-            try:
-                self.db.set_setting("inv_frames", "1" if new_val else "0")
-            except Exception:
-                pass
-        self._update_inv_frames_ui()
-        self._refresh_peers()
-
-    def _update_inv_frames_ui(self):
-        if not self.sync_service:
-            return
-
-        is_local_inv = getattr(self.sync_service, "inv_frames", False)
-        if not hasattr(self, "_last_inv_state") or self._last_inv_state != is_local_inv:
-            self._last_inv_state = is_local_inv
-            if is_local_inv:
-                self.btn_inv_frames.setText("🛡️ Inv-Frames: ON")
-                self.btn_inv_frames.setStyleSheet(
-                    "QPushButton { background-color: #F2C94C; color: #121212; font-weight: 700; "
-                    "padding: 5px 12px; border-radius: 5px; border: 1px solid #E5B83B; } "
-                    "QPushButton:hover { background-color: #FFD566; }"
-                )
-            else:
-                self.btn_inv_frames.setText("🛡️ Inv-Frames: OFF")
-                self.btn_inv_frames.setStyleSheet(
-                    "QPushButton { background-color: #21262D; color: #8B949E; font-weight: 600; "
-                    "padding: 5px 12px; border-radius: 5px; border: 1px solid #30363D; } "
-                    "QPushButton:hover { background-color: #30363D; color: #C9D1D9; }"
-                )
-
-        # Update dynamic LAN protocol status banner
-        sync_state = self.sync_service.get_sync_state() if hasattr(self.sync_service, "get_sync_state") else {}
-        status = sync_state.get("status", "NORMAL")
-        
-        # Check if text/status actually changed to avoid re-parsing CSS
-        auth = sync_state.get("authority_host", "Remote Master")
-        inv_nodes_str = ", ".join(sync_state.get("active_inv_frames_nodes", []))
-        cache_key = f"{status}_{auth}_{inv_nodes_str}"
-        
-        if getattr(self, "_last_banner_state", None) == cache_key:
-            return
-        self._last_banner_state = cache_key
-
-        if status == "INV_FRAMES_MASTER":
-            self.protocol_banner.setText("🛡️ INV-FRAMES ACTIVE (Local Node is Master Authority — All incoming sync rejected, pushing to LAN)")
-            self.protocol_banner.setStyleSheet(
-                "QLabel { background-color: #2A2000; color: #F2C94C; border: 1px solid #F2C94C; "
-                "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; }"
-            )
-        elif status == "LAN_SYNC_FROZEN_MULTI_INV":
-            self.protocol_banner.setText(f"⛔ LAN SYNC FROZEN — Multiple nodes ({inv_nodes_str}) have Inv-Frames enabled. All LAN sync is paused.")
-            self.protocol_banner.setStyleSheet(
-                "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
-                "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; }"
-            )
-        elif status == "INV_FRAMES_FOLLOWER":
-            self.protocol_banner.setText(f"📥 FOLLOWING INV-FRAMES MASTER ({auth}) — Normal P2P sync locked; accepting master pushes.")
-            self.protocol_banner.setStyleSheet(
-                "QLabel { background-color: #001F33; color: #7DD3FC; border: 1px solid #38BDF8; "
-                "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
-            )
-        else:
-            self.protocol_banner.setText("🟢 LAN SYNC ACTIVE (Normal P2P Operational — All nodes synchronized bidirectionally)")
-            self.protocol_banner.setStyleSheet(
-                "QLabel { background-color: #082012; color: #4CF9B7; border: 1px solid #2E9B5F; "
-                "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
-            )
-
     def _update_network_warning(self):
         if not self.sync_service or not hasattr(self.sync_service, "get_network_category"):
             self.network_warning_banner.setVisible(False)
@@ -1519,7 +1401,6 @@ class SeraSyncDialog(QDialog):
 
     def _on_activity_received(self, timestamp: str, category: str, message: str):
         self._add_log_item(timestamp, category, message, auto_scroll=True)
-        self._update_inv_frames_ui()
 
     def _add_log_item(self, ts: str, cat: str, message: str, auto_scroll: bool = True):
         # Format organized plain-text activity log item with colored badges
@@ -1573,7 +1454,6 @@ class SeraSyncDialog(QDialog):
             return
         peers = self.sync_service.get_peers()
         self.status_label.setText(f"🟢 {len(peers)} device{'s' if len(peers) != 1 else ''} online")
-        self._update_inv_frames_ui()
         self._update_network_warning()
         self._refresh_members()
 
@@ -1621,217 +1501,34 @@ class SeraSyncDialog(QDialog):
             item4.setText(peer.get("db_mtime", "N/A"))
             if not self.table.item(r_idx, 4): self.table.setItem(r_idx, 4, item4)
 
-            # 5: Revision
-            item5 = self.table.item(r_idx, 5) or QTableWidgetItem()
-            item5.setText(str(peer.get("sync_revision", 0)))
-            item5.setTextAlignment(Qt.AlignCenter)
-            item5.setForeground(QColor("#38D9A9"))
-            if not self.table.item(r_idx, 5): self.table.setItem(r_idx, 5, item5)
-
-            # 6: Data Counts
+            # 5: Data Counts
             c_cnt = peer.get("client_count", 0)
             t_cnt = peer.get("tracker_count", 0)
-            item6 = self.table.item(r_idx, 6) or QTableWidgetItem()
-            item6.setText(f"{c_cnt} CLI | {t_cnt} Dumps")
-            item6.setTextAlignment(Qt.AlignCenter)
-            item6.setForeground(QColor("#7DD3FC"))
-            if not self.table.item(r_idx, 6): self.table.setItem(r_idx, 6, item6)
+            item5 = self.table.item(r_idx, 5) or QTableWidgetItem()
+            item5.setText(f"{c_cnt} CLI | {t_cnt} Dumps")
+            item5.setTextAlignment(Qt.AlignCenter)
+            item5.setForeground(QColor("#7DD3FC"))
+            if not self.table.item(r_idx, 5): self.table.setItem(r_idx, 5, item5)
 
-            # 7: Status
-            item7 = self.table.item(r_idx, 7) or QTableWidgetItem()
+            # 6: Status
+            item6 = self.table.item(r_idx, 6) or QTableWidgetItem()
             local_key_id = getattr(self.sync_service, "key_id", None)
             peer_key_id = peer.get("key_id")
             if local_key_id != peer_key_id:
-                item7.setText("different office key — rejoin needed")
-                item7.setForeground(QColor("#FFA657"))
-            elif peer.get("inv_frames", False):
-                item7.setText("🛡️ Inv-Frames")
-                item7.setForeground(QColor("#F2C94C"))
+                item6.setText("different office key — rejoin needed")
+                item6.setForeground(QColor("#FFA657"))
             else:
-                item7.setText("🟢 Normal")
-                item7.setForeground(QColor("#4CF9B7"))
-            if not self.table.item(r_idx, 7): self.table.setItem(r_idx, 7, item7)
+                item6.setText("🟢 Normal")
+                item6.setForeground(QColor("#4CF9B7"))
+            if not self.table.item(r_idx, 6): self.table.setItem(r_idx, 6, item6)
 
         if new_sel_row >= 0:
             self.table.selectRow(new_sel_row)
         self.table.setUpdatesEnabled(True)
 
-    def _on_sync_clicked(self):
-        selected = self.table.currentRow()
-        if selected < 0:
-            QMessageBox.information(
-                self, "No Device Selected",
-                "Please select a device from the list to sync your database to."
-            )
-            return
-
-        sync_state = self.sync_service.get_sync_state() if hasattr(self.sync_service, "get_sync_state") else {}
-        if sync_state.get("status") == "LAN_SYNC_FROZEN_MULTI_INV":
-            inv_nodes_str = ", ".join(sync_state.get("active_inv_frames_nodes", []))
-            QMessageBox.warning(
-                self, "LAN Sync Frozen",
-                f"LAN Sync is currently frozen because multiple nodes ({inv_nodes_str}) have Inv-Frames active.\n\n"
-                f"Please disable Inv-Frames on other nodes before initiating sync."
-            )
-            return
-
-        username_item = self.table.item(selected, 0)
-        peer_data = username_item.data(Qt.UserRole)
-        peer_host = peer_data.get("host", "Unknown")
-        peer_ip = peer_data.get("ip")
-        peer_port = peer_data.get("sync_port", 49157)
-        peer_username = peer_data.get("username", "Unknown")
-        peer_inv = peer_data.get("inv_frames", False)
-
-        local_key_id = getattr(self.sync_service, "key_id", None)
-        peer_key_id = peer_data.get("key_id")
-        if local_key_id != peer_key_id:
-            QMessageBox.warning(
-                self, "Different Office Key",
-                f"Workstation {peer_username} ({peer_host}) has a different office key — rejoin needed.\n\n"
-                f"Database exchange between this workstation and {peer_host} is blocked."
-            )
-            return
-
-        if peer_inv:
-            QMessageBox.warning(
-                self, "Target Node is Sovereign (Inv-Frames)",
-                f"Workstation {peer_username} ({peer_host}) has Inv-Frames enabled.\n\n"
-                f"This node rejects all incoming database sync. To sync to this node, disable Inv-Frames on {peer_host} first."
-            )
-            return
-
-        confirm = QMessageBox.warning(
-            self, "Confirm Database Sync",
-            f"You are about to push your entire database to:\n\n"
-            f"  Username: {peer_username}\n"
-            f"  Hostname: {peer_host}\n"
-            f"  IP: {peer_ip}\n\n"
-            f"This will OVERWRITE their database with yours.\n"
-            f"Their app will auto-restart with your database.\n\n"
-            f"Are you sure?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-
-        if confirm != QMessageBox.Yes:
-            return
-
-        status_item = self.table.item(selected, 6)
-        if status_item:
-            status_item.setText("🔄 Syncing...")
-
-        self.btn_sync.setEnabled(False)
-        self.btn_sync.setText("  Syncing...")
-
-        try:
-            result = self.sync_service.push_to(peer_ip, peer_port, force_override=True)
-
-            if "successfully" in result.lower():
-                if self.db:
-                    try:
-                        self.db.log_action(
-                            self.actor, "sync_pushed",
-                            detail=f"Pushed database to {peer_username} ({peer_host} - {peer_ip})"
-                        )
-                    except Exception:
-                        pass
-                QMessageBox.information(self, "Sync Complete", f"{result}\n\nDatabase sent to {peer_username} ({peer_host}).")
-                self.sync_pushed.emit(peer_host)
-            else:
-                QMessageBox.warning(self, "Sync Issue", result)
-        except Exception as e:
-            QMessageBox.critical(self, "Sync Error", f"Failed to sync database:\n{e!s}")
-        finally:
-            self.btn_sync.setEnabled(True)
-            self.btn_sync.setText("  Sync Selected")
-            self._refresh_peers()
-
-    def _on_sync_all_clicked(self):
-        sync_state = self.sync_service.get_sync_state() if hasattr(self.sync_service, "get_sync_state") else {}
-        if sync_state.get("status") == "LAN_SYNC_FROZEN_MULTI_INV":
-            inv_nodes_str = ", ".join(sync_state.get("active_inv_frames_nodes", []))
-            QMessageBox.warning(
-                self, "LAN Sync Frozen",
-                f"LAN Sync is currently frozen because multiple nodes ({inv_nodes_str}) have Inv-Frames active.\n\n"
-                f"Please disable Inv-Frames on other nodes before initiating sync."
-            )
-            return
-
-        peers = self.sync_service.get_peers()
-        if not peers:
-            QMessageBox.information(
-                self, "No Online Devices",
-                "No other devices running Sera were discovered on the local network."
-            )
-            return
-
-        local_key_id = getattr(self.sync_service, "key_id", None)
-        valid_peers = [p for p in peers if p.get("key_id") == local_key_id]
-        if not valid_peers:
-            QMessageBox.warning(
-                self, "Sync Blocked",
-                "No online workstations share this office's key.\n\n"
-                "Workstations with different office keys or in legacy mode require a rejoin."
-            )
-            return
-
-        peer_names = ", ".join([f"{p.get('username')} ({p.get('host')})" for p in valid_peers])
-        confirm = QMessageBox.warning(
-            self, "Confirm Bulk Database Sync",
-            f"You are about to push your database to ALL {len(valid_peers)} compatible online device(s):\n\n"
-            f"  Target Devices: {peer_names}\n\n"
-            f"This will OVERWRITE their databases with your current database.\n"
-            f"Target devices will auto-restart with your database.\n\n"
-            f"Are you sure you want to proceed?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-
-        if confirm != QMessageBox.Yes:
-            return
-
-        self.btn_sync_all.setEnabled(False)
-        self.btn_sync_all.setText("  Syncing All...")
-
-        try:
-            results = self.sync_service.push_to_all(valid_peers)
-            successes = []
-            failures = []
-
-            for peer in valid_peers:
-                host = peer.get("host", "Unknown")
-                user = peer.get("username", "Unknown")
-                res = results.get(host, "No response")
-                if "successfully" in res.lower():
-                    successes.append(f"• {user} ({host}): Success")
-                    if self.db:
-                        try:
-                            self.db.log_action(
-                                self.actor, "sync_pushed",
-                                detail=f"Pushed database to {user} ({host} - {peer.get('ip')})"
-                            )
-                        except Exception:
-                            pass
-                else:
-                    failures.append(f"• {user} ({host}): {res}")
-
-            msg_parts = []
-            if successes:
-                msg_parts.append("Successfully synced database to:\n" + "\n".join(successes))
-            if failures:
-                msg_parts.append("Failed to sync to:\n" + "\n".join(failures))
-
-            full_msg = "\n\n".join(msg_parts)
-            if failures:
-                QMessageBox.warning(self, "Bulk Sync Results", full_msg)
-            else:
-                QMessageBox.information(self, "Bulk Sync Complete", full_msg)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Sync Error", f"Bulk sync failed:\n{e!s}")
-        finally:
-            self.btn_sync_all.setEnabled(True)
-            self.btn_sync_all.setText("  Sync To All Devices")
-            self._refresh_peers()
+    # _on_sync_clicked / _on_sync_all_clicked (push_to / push_to_all to a selected LAN
+    # device) were removed in P4-1 along with the legacy protocol they called; Sera Sync
+    # v3 exchanges changes on its own once workstations are paired as office members.
 
     def _on_add_pc_by_ip(self):
         """

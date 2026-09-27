@@ -75,11 +75,6 @@ class SeraDatabase:
         self._last_reresolve_ts = 0.0  # Debounce timestamp for re_resolve_all_tracker_dumps
         self._last_resequence_ts = 0.0  # Debounce timestamp for resequence_client_serial_numbers
         self._resequence_pending = False  # Track debounced pending resequence for clients
-        # Set externally by main.py once SyncPeerService exists, so this
-        # module never has to import sync_peer.py directly (sync depends
-        # on the db, not the other way around). Left as a no-op until then
-        # so every call site stays safe regardless of init order.
-        self._sync_revision_hook = None
         self.raw_db_was_reset = None
         self._master_db_failed = False
         self._sync_mode = "off"  # read from _sync_meta in _init_schema
@@ -143,6 +138,30 @@ class SeraDatabase:
             self.optimize_storage()
         except Exception as e:
             print(f"[-] Startup storage optimization skipped: {e}")
+        try:
+            self._migrate_legacy_peer_logs()
+        except Exception as e:
+            print(f"[-] Legacy peer_logs migration skipped: {e}")
+
+    def _migrate_legacy_peer_logs(self):
+        """P4-1: peer_logs/ (per-workstation SQLite files written by the legacy
+        PeerAuditLogManager, §5 P0) is no longer used -- audit_log itself replicates
+        under Sera Sync v3. Blueprint §0 rule 3 forbids deleting data, so a one-time,
+        idempotent move renames any existing peer_logs/ directory to
+        backups/peer_logs-<YYYYmmdd_HHMMSS>/ instead of removing it."""
+        peer_logs_dir = os.path.join(self.app_dir, "peer_logs")
+        if not os.path.isdir(peer_logs_dir):
+            return
+        backups_dir = os.path.join(self.app_dir, "backups")
+        os.makedirs(backups_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(backups_dir, f"peer_logs-{ts}")
+        suffix = 0
+        while os.path.exists(dest):
+            suffix += 1
+            dest = os.path.join(backups_dir, f"peer_logs-{ts}-{suffix}")
+        shutil.move(peer_logs_dir, dest)
+        print(f"[database] Moved legacy peer_logs/ to {dest}")
 
     # ─── Material Icon Ligature Noise Cleanup ─────────────────────────────────
     _ICON_LIGATURE_RE = re.compile(
@@ -397,12 +416,6 @@ class SeraDatabase:
             print(f"[database] Notice during upgrade_all_placeholder_client_names: {e}")
         return upgraded
 
-    def set_sync_revision_hook(self, fn):
-        """fn is called with no arguments after any write that should
-        propagate to other machines (see log_action, which fires this for
-        every mutating action already going through the audit trail)."""
-        self._sync_revision_hook = fn
-
     def get_sync_device_id(self) -> Optional[str]:
         return self._device_id
 
@@ -415,6 +428,11 @@ class SeraDatabase:
             sync_tables.set_sync_device_id(conn, "raw", device_id)
 
     def _bump_sync_revision_if_configured(self):
+        """Invalidates the cached get_sync_metrics() result after a write. Named for the
+        Rev Score / sync_revision mechanism this used to also drive; P4-1 removed that
+        (and the write hook that broadcast to legacy LAN peers) along with the rest of the
+        legacy v2 protocol, but call sites throughout this module still rely on the cache
+        invalidation, so the method (and its many call sites) stayed."""
         if hasattr(self, "_sync_metrics_cache"):
             try:
                 del self._sync_metrics_cache
@@ -424,12 +442,6 @@ class SeraDatabase:
             try:
                 del self._sync_metrics_cache_ts
             except AttributeError:
-                pass
-        if self._sync_revision_hook:
-            try:
-                self._sync_revision_hook()
-            except Exception:
-                # A sync hiccup must never break the caller's actual DB write.
                 pass
 
     @contextmanager
@@ -3057,15 +3069,14 @@ class SeraDatabase:
 
     def get_sync_metrics(self) -> dict:
         """
-        Returns database structural metrics used by LAN Sync engine to evaluate revisions:
+        Returns database structural metrics used by the Sera Sync beacon and panel:
         - client_count: Total active non-deleted client records
         - archived_count: Total archived client records
         - log_count: Total SSAL audit log entries
         - tracker_count: Total tracker dump captures in rawPayload.db
         - timeline_count: Total SDC session timelines in rawPayload.db
         - latest_timestamp: ISO timestamp of most recent audit log / capture entry
-        - sync_revision: Structural database revision score
-        
+
         Uses a 15-second cache to prevent heavy SQLite lock contention on background thread.
         """
         import time
@@ -3106,8 +3117,6 @@ class SeraDatabase:
             if latest_dump_ts and latest_dump_ts > latest_ts:
                 latest_ts = latest_dump_ts
 
-            sync_revision = (client_count * 10000) + (log_count * 10) + (tracker_count * 5) + timeline_count
-
             res = {
                 "client_count": client_count,
                 "archived_count": archived_count,
@@ -3115,7 +3124,6 @@ class SeraDatabase:
                 "tracker_count": tracker_count,
                 "timeline_count": timeline_count,
                 "latest_timestamp": latest_ts,
-                "sync_revision": sync_revision,
             }
             self._sync_metrics_cache = res
             self._sync_metrics_cache_ts = now
@@ -3129,7 +3137,6 @@ class SeraDatabase:
                 "tracker_count": 0,
                 "timeline_count": 0,
                 "latest_timestamp": "",
-                "sync_revision": 0,
             }
 
     def make_snapshot(self, dest_path: str) -> str:
@@ -5330,135 +5337,6 @@ class SeraDatabase:
         except Exception as e:
             print(f"[database] Daily dump cleanup notice: {e}")
 
-
-class PeerAuditLogManager:
-    """
-    Manages audit logs received from peer workstations over Sera Sync (SSAL).
-    Stores per-workstation logs in isolated SQLite databases under ~/AmanAssociates_Sera/peer_logs/
-    to prevent locks, transaction overhead, or schema conflicts with live master.db.
-    """
-    def __init__(self, base_dir: str):
-        self.peer_logs_dir = os.path.join(base_dir, "peer_logs")
-        os.makedirs(self.peer_logs_dir, exist_ok=True)
-
-    def _get_peer_db_path(self, hostname: str) -> str:
-        safe_host = "".join(c for c in hostname if c.isalnum() or c in ("-", "_")).lower()
-        if not safe_host:
-            safe_host = "unknown"
-        return os.path.join(self.peer_logs_dir, f"peer_{safe_host}.db")
-
-    def store_peer_logs(self, hostname: str, logs: list[dict]):
-        if not hostname:
-            return
-        db_path = self._get_peer_db_path(hostname)
-        conn = sqlite3.connect(db_path)
-        try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS peer_audit_log (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    orig_id     INTEGER,
-                    ts          TEXT NOT NULL,
-                    actor       TEXT NOT NULL,
-                    action      TEXT NOT NULL,
-                    client_id   INTEGER,
-                    client_name TEXT,
-                    service_id  INTEGER,
-                    detail      TEXT,
-                    UNIQUE(ts, actor, action, detail)
-                );
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS peer_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                );
-            """)
-            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('hostname', ?)", (hostname,))
-            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('last_received', ?)", (now_iso,))
-
-            for l in logs:
-                conn.execute("""
-                    INSERT OR IGNORE INTO peer_audit_log (orig_id, ts, actor, action, client_id, client_name, service_id, detail)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    l.get("id"), l.get("ts"), l.get("actor", "Unknown"), l.get("action", "unknown"),
-                    l.get("client_id"), l.get("client_name") or l.get("client_label"), l.get("service_id"), l.get("detail")
-                ))
-            conn.execute("INSERT OR REPLACE INTO peer_meta (key, value) VALUES ('log_count', (SELECT CAST(COUNT(*) AS TEXT) FROM peer_audit_log))")
-            conn.commit()
-        finally:
-            conn.close()
-
-    def get_peer_workstations(self) -> list[dict]:
-        workstations = []
-        if not os.path.exists(self.peer_logs_dir):
-            return workstations
-
-        for f in os.listdir(self.peer_logs_dir):
-            if f.startswith("peer_") and f.endswith(".db"):
-                db_path = os.path.join(self.peer_logs_dir, f)
-                try:
-                    conn = sqlite3.connect(db_path)
-                    meta = {}
-                    for row in conn.execute("SELECT key, value FROM peer_meta").fetchall():
-                        meta[row[0]] = row[1]
-                    count = conn.execute("SELECT COUNT(*) FROM peer_audit_log").fetchone()[0]
-                    conn.close()
-
-                    host = meta.get("hostname", f[5:-3])
-                    workstations.append({
-                        "hostname": host,
-                        "last_received": meta.get("last_received", ""),
-                        "count": count,
-                        "db_path": db_path
-                    })
-                except Exception:
-                    pass
-        return sorted(workstations, key=lambda x: x["hostname"].lower())
-
-    def get_peer_logs(self, hostname: str, actor: str = None, action: str = None, from_date: str = None, to_date: str = None, limit: int = 500) -> list[dict]:
-        db_path = self._get_peer_db_path(hostname)
-        if not os.path.exists(db_path):
-            return []
-
-        conn = sqlite3.connect(db_path)
-        try:
-            sql = "SELECT id, ts, actor, action, client_id, client_name, service_id, detail FROM peer_audit_log"
-            where = []
-            params = []
-            if actor:
-                where.append("actor LIKE ?")
-                params.append(f"%{actor}%")
-            if action and action != "All Actions":
-                where.append("action = ?")
-                params.append(action)
-            if from_date:
-                where.append("ts >= ?")
-                params.append(from_date)
-            if to_date:
-                if to_date.endswith("T00:00:00"):
-                    where.append("ts < ?")
-                else:
-                    where.append("ts <= ?")
-                params.append(to_date)
-
-            if where:
-                sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY id DESC LIMIT ?"
-            params.append(limit)
-
-            cur = conn.execute(sql, params)
-            return [
-                {
-                    "id": r[0], "ts": r[1], "actor": r[2], "action": r[3],
-                    "client_id": r[4], "client_name": r[5] or (f"CLI-{r[4]:05d}" if r[4] else "—"),
-                    "service_id": r[6], "detail": r[7]
-                }
-                for r in cur.fetchall()
-            ]
-        finally:
-            conn.close()
 
 
 def make_snapshot(db, dest_path: str) -> str:

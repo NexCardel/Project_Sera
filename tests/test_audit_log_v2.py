@@ -2,7 +2,7 @@ import os
 import tempfile
 import shutil
 import unittest
-from database import SeraDatabase, PeerAuditLogManager
+from database import SeraDatabase
 from security import generate_and_save_salt, derive_key_hex
 
 
@@ -48,23 +48,10 @@ class TestAuditLogV2(unittest.TestCase):
         # Raw company name must not appear in exported CSV per blueprint §2.A
         self.assertNotIn("Acme Corp", csv_text)
 
-    def test_peer_audit_log_manager(self):
-        mgr = PeerAuditLogManager(self.temp_dir)
-        logs = [
-            {"id": 1, "ts": "2026-08-13T12:00:00", "actor": "OutsideUser", "action": "view", "client_id": 5, "detail": "Viewed client"},
-            {"id": 2, "ts": "2026-08-13T12:05:00", "actor": "OutsideUser", "action": "filing_submitted", "client_id": 5, "detail": "Submitted GST R1"},
-        ]
-        mgr.store_peer_logs("Outside_PC", logs)
-
-        workstations = mgr.get_peer_workstations()
-        self.assertEqual(len(workstations), 1)
-        self.assertEqual(workstations[0]["hostname"], "Outside_PC")
-
-        peer_logs = mgr.get_peer_logs("Outside_PC")
-        self.assertEqual(len(peer_logs), 2)
-        self.assertEqual(peer_logs[0]["action"], "filing_submitted")
-        self.assertEqual(peer_logs[0]["actor"], "OutsideUser")
-
+    # test_peer_audit_log_manager tested PeerAuditLogManager, which P4-1 removed: audit_log
+    # itself replicates under Sera Sync v3 now, so the legacy per-workstation peer_logs/
+    # SQLite files are no longer written (database.py's _migrate_legacy_peer_logs moves any
+    # pre-existing ones to backups/ instead). Deleted rather than weakened (blueprint §0 rule 4).
 
 if __name__ == "__main__":
     unittest.main()

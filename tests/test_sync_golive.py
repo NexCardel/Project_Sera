@@ -646,68 +646,12 @@ def test_add_workstation_snapshot_follows_the_live_mode(cluster, tmp_path):
 
 
 # ---------------------------------------------------------------- legacy 49157 pushes disabled
-
-def _legacy_service(tmp_path, mode):
-    import security
-    import sera_keys
-    from sync_peer import SyncPeerService
-    dek = sera_keys.new_dek()
-    d = tmp_path / f"legacy_{mode}"
-    d.mkdir()
-    salt = d / "sera.salt"
-    security.generate_and_save_salt(str(salt))
-    (d / "master.db").write_bytes(b"")
-    svc = SyncPeerService(db_path=str(d / "master.db"), salt_path=str(salt), username=f"U{mode}",
-                          sync_port=0, hex_key=sera_keys.dek_hex(dek), key_id=sera_keys.key_id(dek))
-    svc.db = SimpleNamespace(get_sync_mode=lambda: mode)
-    return svc, dek
-
-
-@pytest.mark.parametrize("mode", ["shadow", "live"])
-def test_legacy_push_and_pull_are_refused_outbound(tmp_path, mode):
-    svc, _ = _legacy_service(tmp_path, mode)
-    result = svc.push_to("127.0.0.1", 9, force_override=True)     # nothing listens there
-    assert "disabled" in result
-    assert svc.request_pull_from("127.0.0.1", 9) is False
-    assert svc.push_to_all([{"ip": "127.0.0.1", "sync_port": 9, "host": "X"}]) == {"X": result}
-    assert svc.broadcast_tracker_dumps([{"id": 1}], peers=[{"ip": "127.0.0.1", "sync_port": 9}]) == 0
-    assert svc.push_tracker_dumps_to_host("127.0.0.1", [{"id": 1}], host_port=9) is False
-
-
-@pytest.mark.parametrize("mode", ["shadow", "live"])
-def test_legacy_push_and_pull_are_refused_inbound(tmp_path, mode):
-    import socket
-    from sync_peer import _recv_framed, _send_framed
-    svc, dek = _legacy_service(tmp_path, mode)
-    svc.start()
-    try:
-        port = svc._tcp_server.getsockname()[1]
-        for action in ("push_database", "request_database_pull", "push_tracker_dump"):
-            header = svc._sign_header({"action": action, "host": "Sender", "username": "S",
-                                       "key_id": svc.key_id, "dumps": [{"id": 1}], "sync_port": 9})
-            with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
-                _send_framed(conn, json.dumps(header).encode("utf-8"))
-                reply = json.loads(_recv_framed(conn).decode("utf-8"))
-            assert reply["status"] == "rejected", action
-            assert reply["reason"] == "V3_SYNC_ACTIVE", action
-        assert not (Path(svc.db_path).parent / "incoming" / "pending_swap.json").exists()
-    finally:
-        svc.stop()
-
-
-def test_legacy_push_still_allowed_in_mode_off(tmp_path):
-    """Mode off (before shadow mode) keeps the legacy path: it's the only sync there is."""
-    svc, _ = _legacy_service(tmp_path, "off")
-    assert svc._legacy_db_sync_blocked() is None
-
-
-def test_legacy_push_blocked_when_the_mode_can_not_be_read(tmp_path):
-    """P3-9 review #3: an unreadable mode must not fall back to "off" (legacy allowed)."""
-    svc, _ = _legacy_service(tmp_path, "off")
-
-    def broken():
-        raise RuntimeError("database is locked")
-    svc.db = SimpleNamespace(get_sync_mode=broken)
-    assert svc._legacy_db_sync_blocked()
-    assert "disabled" in svc.push_to("127.0.0.1", 9, force_override=True)
-    assert svc.request_pull_from("127.0.0.1", 9) is False
+#
+# P4-1 removed the legacy v2 whole-database push/pull protocol these tests exercised
+# (push_to, push_to_all, request_pull_from, push_tracker_dumps_to_host,
+# broadcast_tracker_dumps, _legacy_db_sync_blocked, and the inbound push_database /
+# request_database_pull / push_tracker_dump actions) now that Sera Sync v3 is live on
+# every PC. Deleted rather than weakened (blueprint §0 rule 4): the behaviour under test
+# (legacy sync refusing to run once v3 is active) no longer applies because the legacy
+# sync methods themselves are gone. The TCP server now serves only fetch_snapshot,
+# covered by tests/test_sync_hotfix.py's join-flow tests.

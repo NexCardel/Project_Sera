@@ -29,143 +29,13 @@ def _init_test_db(db_path: Path, hex_key: str):
     conn.close()
 
 
-def test_key_id_mismatch_rejected(tmp_path):
-    """
-    Accept test for P1-5:
-    1. Legacy sender (no key_id) pushing to office-mode receiver (with key_id) is REJECTED (KEY_ID_MISMATCH).
-    2. Office-mode sender pushing to legacy receiver (no key_id) is REJECTED (KEY_ID_MISMATCH).
-    3. Office-mode sender pushing to office-mode receiver with DIFFERENT key_id is REJECTED (KEY_ID_MISMATCH).
-    4. request_database_pull with mismatched key_id is REJECTED (KEY_ID_MISMATCH).
-    5. Two office-mode peers with MATCHING key_id can successfully exchange databases.
-    """
-    # Keys setup
-    office_dek_1 = sera_keys.new_dek()
-    key_id_1 = sera_keys.key_id(office_dek_1)
-    hex_key_1 = sera_keys.dek_hex(office_dek_1)
-
-    office_dek_2 = sera_keys.new_dek()
-    key_id_2 = sera_keys.key_id(office_dek_2)
-    hex_key_2 = sera_keys.dek_hex(office_dek_2)
-
-    # 1. Receiver in office mode (key_id_1)
-    receiver_dir = tmp_path / "receiver_office1"
-    receiver_dir.mkdir()
-    recv_db = receiver_dir / "master.db"
-    recv_salt = receiver_dir / "sera.salt"
-    security.generate_and_save_salt(str(recv_salt))
-    _init_test_db(recv_db, hex_key_1)
-
-    receiver_service = SyncPeerService(
-        db_path=str(recv_db),
-        salt_path=str(recv_salt),
-        username="ReceiverOffice1",
-        sync_port=0,
-        hex_key=hex_key_1,
-        key_id=key_id_1,
-    )
-    receiver_service.start()
-
-    try:
-        recv_port = receiver_service._tcp_server.getsockname()[1]
-
-        # Case 1: Legacy sender (no key_id) pushes to office-mode receiver
-        sender_legacy_dir = tmp_path / "sender_legacy"
-        sender_legacy_dir.mkdir()
-        send_leg_salt = sender_legacy_dir / "sera.salt"
-        security.generate_and_save_salt(str(send_leg_salt))
-        send_leg_salt_bytes = security.load_salt(str(send_leg_salt))
-        legacy_hex_key = security.derive_key_hex("legacy_pwd", send_leg_salt_bytes)
-        send_leg_db = sender_legacy_dir / "master.db"
-        _init_test_db(send_leg_db, legacy_hex_key)
-
-        sender_legacy_service = SyncPeerService(
-            db_path=str(send_leg_db),
-            salt_path=str(send_leg_salt),
-            username="SenderLegacy",
-            sync_port=0,
-            hex_key=legacy_hex_key,
-            key_id=None,  # Legacy mode
-        )
-        res1 = sender_legacy_service.push_to("127.0.0.1", recv_port, force_override=True)
-        assert "KEY_ID_MISMATCH" in res1
-        assert "different office key" in res1
-        assert not (receiver_dir / "incoming" / "pending_swap.json").exists()
-
-        # Case 2: Office sender with DIFFERENT key_id pushes to receiver
-        sender_diff_dir = tmp_path / "sender_office2"
-        sender_diff_dir.mkdir()
-        send_diff_salt = sender_diff_dir / "sera.salt"
-        security.generate_and_save_salt(str(send_diff_salt))
-        send_diff_db = sender_diff_dir / "master.db"
-        _init_test_db(send_diff_db, hex_key_2)
-
-        sender_diff_service = SyncPeerService(
-            db_path=str(send_diff_db),
-            salt_path=str(send_diff_salt),
-            username="SenderOffice2",
-            sync_port=0,
-            hex_key=hex_key_2,
-            key_id=key_id_2,
-        )
-        res2 = sender_diff_service.push_to("127.0.0.1", recv_port, force_override=True)
-        assert "KEY_ID_MISMATCH" in res2
-        assert "different office key" in res2
-        assert not (receiver_dir / "incoming" / "pending_swap.json").exists()
-
-        # Case 3: Pull request with mismatched key_id
-        pull_ok = sender_diff_service.request_pull_from("127.0.0.1", recv_port)
-        assert pull_ok is False
-
-        # Case 4: Office sender pushes to legacy receiver
-        receiver_legacy_dir = tmp_path / "receiver_legacy"
-        receiver_legacy_dir.mkdir()
-        recv_leg_salt = receiver_legacy_dir / "sera.salt"
-        security.generate_and_save_salt(str(recv_leg_salt))
-        recv_leg_salt_bytes = security.load_salt(str(recv_leg_salt))
-        recv_leg_hex_key = security.derive_key_hex("legacy_pwd_2", recv_leg_salt_bytes)
-        recv_leg_db = receiver_legacy_dir / "master.db"
-        _init_test_db(recv_leg_db, recv_leg_hex_key)
-
-        receiver_legacy_service = SyncPeerService(
-            db_path=str(recv_leg_db),
-            salt_path=str(recv_leg_salt),
-            username="ReceiverLegacy",
-            sync_port=0,
-            hex_key=recv_leg_hex_key,
-            key_id=None,
-        )
-        receiver_legacy_service.start()
-        try:
-            recv_leg_port = receiver_legacy_service._tcp_server.getsockname()[1]
-            res4 = sender_diff_service.push_to("127.0.0.1", recv_leg_port, force_override=True)
-            assert "KEY_ID_MISMATCH" in res4
-            assert "different office key" in res4
-            assert not (receiver_legacy_dir / "incoming" / "pending_swap.json").exists()
-        finally:
-            receiver_legacy_service.stop()
-
-        # Case 5: Matching key_id successfully accepted and staged in office mode
-        sender_match_dir = tmp_path / "sender_match"
-        sender_match_dir.mkdir()
-        send_match_salt = sender_match_dir / "sera.salt"
-        security.generate_and_save_salt(str(send_match_salt))
-        send_match_db = sender_match_dir / "master.db"
-        _init_test_db(send_match_db, hex_key_1)
-
-        sender_match_service = SyncPeerService(
-            db_path=str(send_match_db),
-            salt_path=str(send_match_salt),
-            username="SenderMatch",
-            sync_port=0,
-            hex_key=hex_key_1,
-            key_id=key_id_1,
-        )
-        res5 = sender_match_service.push_to("127.0.0.1", recv_port, force_override=True)
-        assert "successfully" in res5.lower()
-        assert (receiver_dir / "incoming" / "pending_swap.json").exists()
-
-    finally:
-        receiver_service.stop()
+# test_key_id_mismatch_rejected (the blueprint's named "Accept" test for this WP) exercised the
+# key-fingerprint gate through the legacy push_database / request_database_pull actions
+# (push_to, request_pull_from), which P4-1 removed once Sera Sync v3 went live everywhere; the
+# TCP server now serves only fetch_snapshot, whose own key-fingerprint gate is covered by
+# test_office_refuses_legacy_fetch_snapshot below, and the peer-table "different office key"
+# badge is covered by test_dialog_shows_different_office_key. Deleted rather than weakened
+# (blueprint §0 rule 4).
 
 
 def test_auto_heal_disabled_in_office_mode(tmp_path):
@@ -278,74 +148,9 @@ def test_key_id_in_beacons_and_headers(tmp_path):
     assert leg_signed.get("key_id") is None
 
 
-def test_bootstrap_autopull_skips_mismatched_key_id(tmp_path):
-    """An empty bootstrapping node does not trigger auto-pull from peers with mismatched key_id."""
-    dek1 = sera_keys.new_dek()
-    kid1 = sera_keys.key_id(dek1)
-    hex_k1 = sera_keys.dek_hex(dek1)
-
-    dek2 = sera_keys.new_dek()
-    kid2 = sera_keys.key_id(dek2)
-
-    app_dir = tmp_path / "bootstrap_node"
-    app_dir.mkdir()
-    db_path = app_dir / "master.db"
-    salt_path = app_dir / "sera.salt"
-    security.generate_and_save_salt(str(salt_path))
-    # Empty DB with 0 clients
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(f"PRAGMA key = \"x'{hex_k1}'\";")
-    conn.execute("CREATE TABLE clients (id INTEGER PRIMARY KEY, is_archived INTEGER DEFAULT 0);")
-    conn.commit()
-    conn.close()
-
-    service = SyncPeerService(
-        db_path=str(db_path),
-        salt_path=str(salt_path),
-        username="Bootstrapper",
-        hex_key=hex_k1,
-        key_id=kid1,
-    )
-    assert service._is_bootstrapping is True
-
-    # Simulate beacon from peer with mismatched key_id (kid2) and client_count > 0
-    beacon_mismatched = {
-        "magic": "sera-sync-v2",
-        "username": "PeerDiffKey",
-        "host": "RemoteHost1",
-        "sync_port": 49157,
-        "client_count": 50,
-        "sync_revision": 10,
-        "key_id": kid2,
-    }
-    service._handle_beacon(json.dumps(beacon_mismatched).encode("utf-8"), "192.168.1.100")
-    # Must NOT have attempted bootstrap pull to this IP
-    assert "192.168.1.100" not in service._bootstrap_pull_attempted_peers
-
-    # Simulate beacon from peer with NO key_id (legacy)
-    beacon_legacy = {
-        "magic": "sera-sync-v2",
-        "username": "PeerLegacy",
-        "host": "RemoteHost2",
-        "sync_port": 49157,
-        "client_count": 50,
-        "sync_revision": 10,
-    }
-    service._handle_beacon(json.dumps(beacon_legacy).encode("utf-8"), "192.168.1.101")
-    assert "192.168.1.101" not in service._bootstrap_pull_attempted_peers
-
-    # Simulate beacon from peer with MATCHING key_id (kid1)
-    beacon_matching = {
-        "magic": "sera-sync-v2",
-        "username": "PeerMatch",
-        "host": "RemoteHost3",
-        "sync_port": 49157,
-        "client_count": 50,
-        "sync_revision": 10,
-        "key_id": kid1,
-    }
-    service._handle_beacon(json.dumps(beacon_matching).encode("utf-8"), "192.168.1.102")
-    assert "192.168.1.102" in service._bootstrap_pull_attempted_peers
+# test_bootstrap_autopull_skips_mismatched_key_id tested the bootstrap-quarantine auto-pull
+# mechanism (_is_bootstrapping, _bootstrap_pull_attempted_peers), which P4-1 removed along with
+# the legacy push/pull protocol it fed. Deleted rather than weakened (blueprint §0 rule 4).
 
 
 def test_dialog_shows_different_office_key(tmp_path):
@@ -405,7 +210,7 @@ def test_dialog_shows_different_office_key(tmp_path):
     rows = {}
     for r in range(dialog.table.rowCount()):
         host = dialog.table.item(r, 1).text()
-        status = dialog.table.item(r, 7).text()
+        status = dialog.table.item(r, 6).text()  # Status is column 6 since P4-1 dropped Rev Score
         rows[host] = status
 
     assert "Normal" in rows["HostMatch"]
@@ -458,93 +263,11 @@ def test_office_refuses_legacy_fetch_snapshot(tmp_path):
         service.stop()
 
 
-def test_office_push_sends_zero_salt_and_swap_does_not_install_salt(tmp_path):
-    """
-    In office mode:
-    1. push_to sends salt_size=0 and no salt bytes.
-    2. Receiver accepts the snapshot and writes pending_swap.json with NO salt field.
-    3. apply_pending_swap replaces master.db without creating or installing sera.salt.
-    """
-    from sync_peer import apply_pending_swap
-
-    office_dek = sera_keys.new_dek()
-    key_id = sera_keys.key_id(office_dek)
-    hex_key = sera_keys.dek_hex(office_dek)
-
-    # Receiver in office mode with NO sera.salt
-    recv_dir = tmp_path / "recv_office"
-    recv_dir.mkdir()
-    recv_db = recv_dir / "master.db"
-    _init_test_db(recv_db, hex_key)
-    assert not (recv_dir / "sera.salt").exists()
-
-    recv_service = SyncPeerService(
-        db_path=str(recv_db),
-        salt_path=str(recv_dir / "sera.salt"),
-        username="RecvOffice",
-        sync_port=0,
-        hex_key=hex_key,
-        key_id=key_id,
-    )
-    recv_service.start()
-    try:
-        recv_port = recv_service._tcp_server.getsockname()[1]
-
-        # Sender in office mode with NO sera.salt
-        send_dir = tmp_path / "send_office"
-        send_dir.mkdir()
-        send_db = send_dir / "master.db"
-        # Create a DB with a new row to distinguish it
-        conn = sqlite3.connect(str(send_db))
-        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-        conn.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, val TEXT);")
-        conn.execute("INSERT INTO test_table (val) VALUES ('new_office_content');")
-        conn.commit()
-        conn.close()
-        assert not (send_dir / "sera.salt").exists()
-
-        send_service = SyncPeerService(
-            db_path=str(send_db),
-            salt_path=str(send_dir / "sera.salt"),
-            username="SendOffice",
-            sync_port=0,
-            hex_key=hex_key,
-            key_id=key_id,
-        )
-        res = send_service.push_to("127.0.0.1", recv_port, force_override=True)
-        assert "successfully" in res.lower()
-
-        # Check receiver staging
-        pending_json = recv_dir / "incoming" / "pending_swap.json"
-        assert pending_json.exists()
-        with open(pending_json, "r", encoding="utf-8") as f:
-            swap_info = json.load(f)
-        assert "salt" not in swap_info
-        assert not (recv_dir / "incoming" / "sera.salt").exists()
-
-        # Stop receiver service before applying swap
-        recv_service.stop()
-
-        # Apply pending swap
-        swapped = apply_pending_swap(recv_dir)
-        assert swapped is True
-        assert not pending_json.exists()
-
-        # Verify sera.salt WAS NOT created on receiver
-        assert not (recv_dir / "sera.salt").exists()
-
-        # Verify updated DB opens with office DEK and has the new content
-        conn2 = sqlite3.connect(str(recv_db))
-        conn2.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-        row = conn2.execute("SELECT val FROM test_table;").fetchone()
-        conn2.close()
-        assert row is not None and row[0] == "new_office_content"
-
-    finally:
-        try:
-            recv_service.stop()
-        except Exception:
-            pass
+# test_office_push_sends_zero_salt_and_swap_does_not_install_salt exercised push_to (office
+# mode sends salt_size=0), which P4-1 removed with the rest of the legacy push/pull protocol.
+# apply_pending_swap's no-salt handling itself is still covered directly by
+# test_apply_pending_swap_preserves_stray_salt_as_stale_backup below. Deleted rather than
+# weakened (blueprint §0 rule 4).
 
 
 def test_apply_pending_swap_preserves_stray_salt_as_stale_backup(tmp_path):

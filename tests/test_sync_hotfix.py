@@ -4,93 +4,11 @@ import pytest
 from unittest.mock import MagicMock
 from main import SeraApp
 
-class FakeSyncService:
-    def __init__(self):
-        self.push_to_calls = 0
-        self.request_pull_calls = 0
-        self.broadcast_tracker_calls = 0
-        self.broadcast_audit_calls = 0
-
-    def get_peers(self):
-        return [{"ip": "192.168.1.5", "host": "Test-PC"}]
-
-    def push_to(self, *args, **kwargs):
-        self.push_to_calls += 1
-
-    def request_pull_from(self, *args, **kwargs):
-        self.request_pull_calls += 1
-
-    def broadcast_tracker_dumps(self, *args, **kwargs):
-        self.broadcast_tracker_calls += 1
-
-    def broadcast_audit_logs(self, *args, **kwargs):
-        self.broadcast_audit_calls += 1
-
-class DummyApp:
-    _telemetry_delay = 0.5
-    
-    def __init__(self):
-        import threading
-        self.sync_service = FakeSyncService()
-        self.db = MagicMock()
-        self.db.get_tracker_dumps.return_value = [{"dump": "1"}]
-        self.db.get_audit_logs.return_value = [{"log": "1"}]
-        self._telemetry_lock = threading.Lock()
-        self._telemetry_timer = None
-        self._last_telemetry_time = 0.0
-
-def test_write_does_not_push_database():
-    win = DummyApp()
-    
-    # Track call times to verify the gap
-    call_times = []
-    original_broadcast = win.sync_service.broadcast_tracker_dumps
-    def tracking_broadcast(*args, **kwargs):
-        call_times.append(time.monotonic())
-        original_broadcast(*args, **kwargs)
-    win.sync_service.broadcast_tracker_dumps = tracking_broadcast
-
-    # Bind the method from SeraApp to our dummy instance
-    method = SeraApp._broadcast_live_update_to_peers.__get__(win, DummyApp)
-    
-    # Fire 10 calls instantly
-    for _ in range(10):
-        method()
-        
-    # Wait for the first immediate thread to run
-    time.sleep(0.1)
-    
-    # Verify that push_to and request_pull_from were NEVER called
-    assert win.sync_service.push_to_calls == 0
-    assert win.sync_service.request_pull_calls == 0
-    
-    # Verify the first call fired immediately
-    assert win.sync_service.broadcast_tracker_calls == 1
-    
-    # Wait for the debounce timer to end the first window
-    time.sleep(0.5)
-    
-    # The debounced run should have fired now
-    assert win.sync_service.broadcast_tracker_calls == 2
-    
-    # If we fire again right after the timer, it should NOT fire immediately 
-    # since the window was just reset by the timer run setting _last_telemetry_time.
-    method()
-    time.sleep(0.1)
-    assert win.sync_service.broadcast_tracker_calls == 2
-    
-    # Fire more calls in this new window
-    for _ in range(5):
-        method()
-        
-    # End of second window
-    time.sleep(0.5)
-    assert win.sync_service.broadcast_tracker_calls == 3
-    assert win.sync_service.broadcast_audit_calls == 3
-    
-    # Check that no two sends are closer than the window (with small slack)
-    for i in range(1, len(call_times)):
-        assert call_times[i] - call_times[i-1] >= DummyApp._telemetry_delay - 0.05
+# FakeSyncService, DummyApp and test_write_does_not_push_database tested
+# SeraApp._broadcast_live_update_to_peers, the debounced telemetry broadcast (tracker dumps /
+# audit logs to LAN peers) that P4-1 removed along with the rest of the legacy v2 protocol
+# (push_to, request_pull_from, broadcast_tracker_dumps, broadcast_audit_logs) once Sera Sync
+# v3 went live everywhere. Deleted rather than weakened (blueprint §0 rule 4).
 
 
 def test_sync_metrics_counts_clients(tmp_path):
@@ -119,7 +37,6 @@ def test_sync_metrics_counts_clients(tmp_path):
     metrics = db.get_sync_metrics()
     assert metrics["client_count"] == 2
     assert metrics["archived_count"] == 1
-    assert metrics["sync_revision"] > 0
 
 
 def test_snapshot_includes_wal_changes(tmp_path):
@@ -182,83 +99,10 @@ def test_snapshot_includes_wal_changes(tmp_path):
         snap_conn.close()
 
 
-def test_push_to_streams_snapshot_and_cleans_up(tmp_path):
-    import os
-    import time
-    import security
-    import sqlcipher3.dbapi2 as sqlite3
-    from database import SeraDatabase
-    from sync_peer import SyncPeerService
-
-    sender_dir = tmp_path / "sender"
-    receiver_dir = tmp_path / "receiver"
-    sender_dir.mkdir()
-    receiver_dir.mkdir()
-
-    salt_path = str(sender_dir / "sera.salt")
-    security.generate_and_save_salt(salt_path)
-    salt = security.load_salt(salt_path)
-    hex_key = security.derive_key_hex("testpass123", salt)
-
-    sender_db_path = str(sender_dir / "master.db")
-    sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
-    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
-    pan_id = pan_col["id"] if pan_col else 5
-    sender_db.add_client({pan_id: "CCCCC3333C"}, "Stream Test Client", [])
-
-    receiver_db_path = str(receiver_dir / "master.db")
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    (receiver_dir / "sera.key").write_text("testpass123", encoding="utf-8")
-
-    sync_received_flag = []
-    receiver_service = SyncPeerService(
-        db_path=receiver_db_path,
-        salt_path=receiver_salt_path,
-        username="Receiver",
-        sync_port=0,
-        on_sync_received=lambda: sync_received_flag.append(True),
-    )
-    receiver_service.start()
-
-    try:
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=salt_path,
-            username="Sender",
-            db=sender_db,
-        )
-
-        res = sender_service.push_to("127.0.0.1", receiver_service._tcp_server.getsockname()[1], force_override=True)
-        assert "successfully" in res.lower()
-
-        # Check that temp directory under sender incoming/out/ was deleted in finally
-        sender_out_dir = sender_dir / "incoming" / "out"
-        if sender_out_dir.exists():
-            remaining_files = list(sender_out_dir.iterdir())
-            assert remaining_files == []
-
-        time.sleep(0.5)
-
-        # Receiver push was staged (pending_swap.json exists, restart triggered)
-        assert (receiver_dir / "incoming" / "pending_swap.json").exists()
-        assert len(sync_received_flag) >= 1
-
-        # Swap is applied at startup via apply_pending_swap
-        from sync_peer import apply_pending_swap
-        assert apply_pending_swap(receiver_dir) is True
-
-        # Receiver DB opens with the same hex_key and has the client
-        rec_conn = sqlite3.connect(receiver_db_path)
-        try:
-            rec_conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-            integrity = rec_conn.execute("PRAGMA cipher_integrity_check;").fetchall()
-            assert integrity == []
-            count = rec_conn.execute("SELECT count(*) FROM clients;").fetchone()[0]
-            assert count >= 1
-        finally:
-            rec_conn.close()
-    finally:
-        receiver_service.stop()
+# test_push_to_streams_snapshot_and_cleans_up exercised push_to (the legacy whole-database TCP
+# push), removed in P4-1 with the rest of the legacy v2 protocol; make_snapshot's own streaming
+# and cleanup is still covered by test_snapshot_includes_wal_changes and
+# test_prune_outgoing_snapshots below. Deleted rather than weakened (blueprint §0 rule 4).
 
 
 def test_recv_exact_uses_bytearray():
@@ -346,96 +190,11 @@ def test_prune_outgoing_snapshots(tmp_path):
     assert not fresh_dir.exists()
 
 
-def test_push_is_staged_not_live(tmp_path):
-    import json
-    import time
-    import security
-    from database import SeraDatabase
-    from sync_peer import SyncPeerService
-
-    sender_dir = tmp_path / "sender"
-    receiver_dir = tmp_path / "receiver"
-    sender_dir.mkdir()
-    receiver_dir.mkdir()
-
-    password = "office_password_123"
-
-    # Sender DB & Salt
-    sender_salt_path = str(sender_dir / "sera.salt")
-    security.generate_and_save_salt(sender_salt_path)
-    sender_salt = security.load_salt(sender_salt_path)
-    sender_hex = security.derive_key_hex(password, sender_salt)
-    sender_db_path = str(sender_dir / "master.db")
-    sender_db = SeraDatabase(sender_db_path, sender_hex, defer_startup_maintenance=True)
-    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
-    pan_id = pan_col["id"] if pan_col else 5
-    sender_db.add_client({pan_id: "AAAAA1111A"}, "Sender Client", [])
-
-    # Receiver DB, Salt & sera.key
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    security.generate_and_save_salt(receiver_salt_path)
-    receiver_salt = security.load_salt(receiver_salt_path)
-    receiver_hex = security.derive_key_hex(password, receiver_salt)
-    receiver_db_path = str(receiver_dir / "master.db")
-    receiver_db = SeraDatabase(receiver_db_path, receiver_hex, defer_startup_maintenance=True)
-    receiver_db.add_client({pan_id: "BBBBB2222B"}, "Receiver Client", [])
-
-    # Save password in receiver's sera.key
-    (receiver_dir / "sera.key").write_text(password, encoding="utf-8")
-
-    # Record initial receiver live master.db bytes
-    initial_receiver_db_bytes = (receiver_dir / "master.db").read_bytes()
-    initial_receiver_salt_bytes = (receiver_dir / "sera.salt").read_bytes()
-
-    restart_called = []
-    receiver_service = SyncPeerService(
-        db_path=receiver_db_path,
-        salt_path=receiver_salt_path,
-        username="ReceiverUser",
-        sync_port=0,
-        on_sync_received=lambda: restart_called.append(True),
-    )
-    receiver_service.start()
-
-    try:
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=sender_salt_path,
-            username="SenderUser",
-            db=sender_db,
-        )
-
-        port = receiver_service._tcp_server.getsockname()[1]
-        res = sender_service.push_to("127.0.0.1", port, force_override=True)
-        assert "successfully" in res.lower()
-
-        time.sleep(0.5)
-
-        # 1. Live master.db bytes are completely unchanged
-        assert (receiver_dir / "master.db").read_bytes() == initial_receiver_db_bytes
-        assert (receiver_dir / "sera.salt").read_bytes() == initial_receiver_salt_bytes
-
-        # 2. pending_swap.json exists in incoming/
-        pending_swap = receiver_dir / "incoming" / "pending_swap.json"
-        assert pending_swap.exists()
-        swap_info = json.loads(pending_swap.read_text(encoding="utf-8"))
-        assert "db" in swap_info
-        assert "salt" in swap_info
-        assert swap_info["from"] == sender_service.host_name
-        assert "at" in swap_info
-
-        # 3. Staged DB and salt exist in incoming/
-        staged_db = receiver_dir / "incoming" / "master.db"
-        staged_salt = receiver_dir / "incoming" / "sera.salt"
-        assert staged_db.exists()
-        assert staged_salt.exists()
-        assert not (receiver_dir / "incoming" / "master.db.part").exists()
-        assert not (receiver_dir / "incoming" / "sera.salt.part").exists()
-
-        # 4. Restart notification callback was called
-        assert len(restart_called) >= 1
-    finally:
-        receiver_service.stop()
+# test_push_is_staged_not_live exercised push_to's staging behaviour (the legacy whole-database
+# TCP push writes to incoming/, never in place), removed in P4-1 along with the inbound
+# push_database handler; pending_swap.json is now only ever produced by a pre-P4-1 sender, and
+# apply_pending_swap's own staged-file handling is covered by test_apply_pending_swap below.
+# Deleted rather than weakened (blueprint §0 rule 4).
 
 
 def test_apply_pending_swap(tmp_path):
@@ -504,81 +263,11 @@ def test_apply_pending_swap(tmp_path):
     assert not shm_file.exists()
 
 
-def test_push_with_other_password_rejected(tmp_path):
-    import time
-    import security
-    from database import SeraDatabase
-    from sync_peer import SyncPeerService
-
-    sender_dir = tmp_path / "sender"
-    receiver_dir = tmp_path / "receiver"
-    sender_dir.mkdir()
-    receiver_dir.mkdir()
-
-    sender_password = "sender_secret_password"
-    receiver_password = "receiver_different_password"
-
-    # Sender DB & Salt with sender_password
-    sender_salt_path = str(sender_dir / "sera.salt")
-    security.generate_and_save_salt(sender_salt_path)
-    sender_salt = security.load_salt(sender_salt_path)
-    sender_hex = security.derive_key_hex(sender_password, sender_salt)
-    sender_db_path = str(sender_dir / "master.db")
-    sender_db = SeraDatabase(sender_db_path, sender_hex, defer_startup_maintenance=True)
-    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
-    pan_id = pan_col["id"] if pan_col else 5
-    sender_db.add_client({pan_id: "CCCCC5555C"}, "Sender Client", [])
-
-    # Receiver DB & Salt with receiver_password
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    security.generate_and_save_salt(receiver_salt_path)
-    receiver_salt = security.load_salt(receiver_salt_path)
-    receiver_hex = security.derive_key_hex(receiver_password, receiver_salt)
-    receiver_db_path = str(receiver_dir / "master.db")
-    receiver_db = SeraDatabase(receiver_db_path, receiver_hex, defer_startup_maintenance=True)
-
-    # Save receiver_password in sera.key
-    (receiver_dir / "sera.key").write_text(receiver_password, encoding="utf-8")
-
-    receiver_errors = []
-    receiver_service = SyncPeerService(
-        db_path=receiver_db_path,
-        salt_path=receiver_salt_path,
-        username="ReceiverUser",
-        sync_port=0,
-        on_error=lambda msg: receiver_errors.append(msg),
-    )
-    receiver_service.start()
-
-    try:
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=sender_salt_path,
-            username="SenderUser",
-            db=sender_db,
-        )
-
-        port = receiver_service._tcp_server.getsockname()[1]
-        res = sender_service.push_to("127.0.0.1", port, force_override=True)
-
-        # Sender gets failure with reason PASSWORD_MISMATCH
-        assert "password_mismatch" in res.lower()
-
-        time.sleep(0.5)
-
-        # Receiver staging files are completely deleted/cleaned up
-        incoming_dir = receiver_dir / "incoming"
-        if incoming_dir.exists():
-            assert not (incoming_dir / "master.db").exists()
-            assert not (incoming_dir / "sera.salt").exists()
-            assert not (incoming_dir / "master.db.part").exists()
-            assert not (incoming_dir / "sera.salt.part").exists()
-            assert not (incoming_dir / "pending_swap.json").exists()
-
-        # Receiver error callback was notified
-        assert any("password mismatch" in str(err).lower() for err in receiver_errors)
-    finally:
-        receiver_service.stop()
+# test_push_with_other_password_rejected exercised the inbound push_database handler's
+# password-mismatch verification, removed in P4-1 along with the rest of the legacy v2 protocol
+# (the TCP server now serves only fetch_snapshot, whose own password/key verification is
+# covered by tests/test_key_fingerprint.py and the join-flow tests below). Deleted rather than
+# weakened (blueprint §0 rule 4).
 
 
 def test_apply_pending_swap_backup_failure_preserves_live_db(tmp_path, monkeypatch):
@@ -709,188 +398,10 @@ def test_apply_pending_swap_db_replace_failure_restores_wal_and_shm(tmp_path, mo
     assert (incoming_dir / "pending_swap.json.failed").exists()
 
 
-def test_push_rejected_on_zero_byte_or_zero_table(tmp_path):
-    """Blocking 3 regression: 0-byte payload or 0-table database must be rejected by receiver."""
-    import socket
-    import json
-    import security
-    import sqlcipher3.dbapi2 as sqlite3
-    from sync_peer import SyncPeerService, _send_framed, _recv_framed
-
-    receiver_dir = tmp_path / "receiver"
-    receiver_dir.mkdir()
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    security.generate_and_save_salt(receiver_salt_path)
-    (receiver_dir / "sera.key").write_text("receiver_pass_123", encoding="utf-8")
-
-    receiver_errors = []
-    receiver_service = SyncPeerService(
-        db_path=str(receiver_dir / "master.db"),
-        salt_path=receiver_salt_path,
-        username="ReceiverUser",
-        sync_port=0,
-        on_error=lambda msg: receiver_errors.append(msg),
-    )
-    receiver_service.start()
-
-    try:
-        port = receiver_service._tcp_server.getsockname()[1]
-
-        # Case 1: Send header with db_size = 0
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(("127.0.0.1", port))
-        header = {
-            "action": "push_database",
-            "host": "TestSender",
-            "db_size": 0,
-            "salt_size": 16,
-            "client_count": 1,
-            "sync_revision": 1,
-        }
-        _send_framed(sock, json.dumps(header).encode("utf-8"))
-        resp = json.loads(_recv_framed(sock).decode("utf-8"))
-        sock.close()
-        assert resp.get("status") == "rejected"
-        assert resp.get("reason") == "INVALID_PAYLOAD"
-
-        # Case 2: Send encrypted DB that has 0 tables in sqlite_master
-        sender_dir = tmp_path / "sender"
-        sender_dir.mkdir()
-        sender_salt_path = str(sender_dir / "sera.salt")
-        security.generate_and_save_salt(sender_salt_path)
-        salt_bytes = security.load_salt(sender_salt_path)
-        hex_key = security.derive_key_hex("receiver_pass_123", salt_bytes)
-
-        zero_table_db = sender_dir / "zero_table.db"
-        conn = sqlite3.connect(str(zero_table_db))
-        conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-        # Empty DB, create no tables
-        conn.execute("VACUUM;")
-        conn.close()
-
-        sender_service = SyncPeerService(
-            db_path=str(zero_table_db),
-            salt_path=sender_salt_path,
-            username="SenderZeroTable",
-        )
-        res = sender_service.push_to("127.0.0.1", port, force_override=True)
-        assert "password_mismatch" in res.lower()
-
-        # Receiver staging area must be cleaned up
-        incoming_dir = receiver_dir / "incoming"
-        if incoming_dir.exists():
-            assert not (incoming_dir / "master.db").exists()
-            assert not (incoming_dir / "pending_swap.json").exists()
-    finally:
-        receiver_service.stop()
-
-
-def test_push_rejected_when_busy(tmp_path):
-    """Should Fix 1 regression: Staging lock rejects concurrent transfers with BUSY."""
-    import security
-    from sync_peer import SyncPeerService
-    from database import SeraDatabase
-
-    receiver_dir = tmp_path / "receiver"
-    receiver_dir.mkdir()
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    security.generate_and_save_salt(receiver_salt_path)
-    (receiver_dir / "sera.key").write_text("common_pass_123", encoding="utf-8")
-
-    receiver_service = SyncPeerService(
-        db_path=str(receiver_dir / "master.db"),
-        salt_path=receiver_salt_path,
-        username="ReceiverUser",
-        sync_port=0,
-    )
-    receiver_service.start()
-
-    try:
-        sender_dir = tmp_path / "sender"
-        sender_dir.mkdir()
-        sender_salt_path = str(sender_dir / "sera.salt")
-        security.generate_and_save_salt(sender_salt_path)
-        salt_bytes = security.load_salt(sender_salt_path)
-        hex_key = security.derive_key_hex("common_pass_123", salt_bytes)
-        sender_db_path = str(sender_dir / "master.db")
-        sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
-
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=sender_salt_path,
-            username="SenderUser",
-            db=sender_db,
-        )
-
-        port = receiver_service._tcp_server.getsockname()[1]
-
-        # Hold the staging lock on receiver to simulate an ongoing transfer
-        assert receiver_service._staging_lock.acquire(blocking=False) is True
-        try:
-            res = sender_service.push_to("127.0.0.1", port, force_override=True)
-            assert "busy" in res.lower(), f"Expected busy in response, got {res}"
-        finally:
-            receiver_service._staging_lock.release()
-    finally:
-        receiver_service.stop()
-
-
-def test_push_rejected_when_restart_pending(tmp_path):
-    """Worth fixing 1 regression: Incoming push is rejected when pending_swap.json already exists."""
-    import json
-    import security
-    from sync_peer import SyncPeerService
-    from database import SeraDatabase
-
-    receiver_dir = tmp_path / "receiver"
-    receiver_dir.mkdir()
-    incoming_dir = receiver_dir / "incoming"
-    incoming_dir.mkdir()
-
-    # Pre-existing accepted swap
-    (incoming_dir / "master.db").write_bytes(b"STAGED_A_DB")
-    (incoming_dir / "sera.salt").write_bytes(b"STAGED_A_SALT")
-    pending_json = incoming_dir / "pending_swap.json"
-    pending_json.write_text(json.dumps({"db": "master.db", "salt": "sera.salt", "from": "PC_A"}), encoding="utf-8")
-
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    security.generate_and_save_salt(receiver_salt_path)
-    (receiver_dir / "sera.key").write_text("common_pass_123", encoding="utf-8")
-
-    receiver_service = SyncPeerService(
-        db_path=str(receiver_dir / "master.db"),
-        salt_path=receiver_salt_path,
-        username="ReceiverUser",
-        sync_port=0,
-    )
-    receiver_service.start()
-
-    try:
-        sender_dir = tmp_path / "sender"
-        sender_dir.mkdir()
-        sender_salt_path = str(sender_dir / "sera.salt")
-        security.generate_and_save_salt(sender_salt_path)
-        salt_bytes = security.load_salt(sender_salt_path)
-        hex_key = security.derive_key_hex("common_pass_123", salt_bytes)
-        sender_db_path = str(sender_dir / "master.db")
-        sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
-
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=sender_salt_path,
-            username="SenderUser",
-            db=sender_db,
-        )
-
-        port = receiver_service._tcp_server.getsockname()[1]
-        res = sender_service.push_to("127.0.0.1", port, force_override=True)
-        assert "restart_pending" in res.lower(), f"Expected restart_pending in response, got {res}"
-
-        # Crucial: Pre-existing accepted staged files and pending_swap.json are untouched!
-        assert (incoming_dir / "master.db").read_bytes() == b"STAGED_A_DB"
-        assert (incoming_dir / "pending_swap.json").exists()
-    finally:
-        receiver_service.stop()
+# test_push_rejected_on_zero_byte_or_zero_table, test_push_rejected_when_busy and
+# test_push_rejected_when_restart_pending exercised the inbound push_database handler's
+# payload/staging guards, removed in P4-1 along with the rest of the legacy v2 protocol (the
+# TCP server now serves only fetch_snapshot). Deleted rather than weakened (blueprint §0 rule 4).
 
 
 def test_raw_db_reset_is_reported(tmp_path):
@@ -1897,57 +1408,14 @@ def test_complete_join_office_password_strip_consistent(tmp_path):
 
 # ---------------- P0-7: authenticate legacy sync messages (HMAC) ----------------
 
-def test_authenticated_push_accepted(tmp_path):
-    """A push_database sent by a peer configured with the same hex_key as the receiver
-    is authenticated and proceeds exactly as an unauthenticated push did before P0-7."""
-    import security
-    from database import SeraDatabase
-    from sync_peer import SyncPeerService
-
-    sender_dir = tmp_path / "sender"
-    receiver_dir = tmp_path / "receiver"
-    sender_dir.mkdir()
-    receiver_dir.mkdir()
-
-    salt_path = str(sender_dir / "sera.salt")
-    security.generate_and_save_salt(salt_path)
-    salt = security.load_salt(salt_path)
-    hex_key = security.derive_key_hex("testpass123", salt)
-
-    sender_db_path = str(sender_dir / "master.db")
-    sender_db = SeraDatabase(sender_db_path, hex_key, defer_startup_maintenance=True)
-    pan_col = next((c for c in sender_db.get_mcl_columns() if c["label"].strip().upper() == "PAN"), None)
-    pan_id = pan_col["id"] if pan_col else 5
-    sender_db.add_client({pan_id: "AUTHK0001A"}, "Auth Test Client", [])
-
-    receiver_db_path = str(receiver_dir / "master.db")
-    receiver_salt_path = str(receiver_dir / "sera.salt")
-    (receiver_dir / "sera.key").write_text("testpass123", encoding="utf-8")
-
-    receiver_service = SyncPeerService(
-        db_path=receiver_db_path,
-        salt_path=receiver_salt_path,
-        username="Receiver",
-        sync_port=0,
-        hex_key=hex_key,
-    )
-    receiver_service.start()
-
-    try:
-        sender_service = SyncPeerService(
-            db_path=sender_db_path,
-            salt_path=salt_path,
-            username="Sender",
-            db=sender_db,
-            hex_key=hex_key,
-        )
-
-        port = receiver_service._tcp_server.getsockname()[1]
-        res = sender_service.push_to("127.0.0.1", port, force_override=True)
-        assert "successfully" in res.lower(), f"Expected success, got: {res}"
-        assert (receiver_dir / "incoming" / "pending_swap.json").exists()
-    finally:
-        receiver_service.stop()
+# test_authenticated_push_accepted sent an authenticated push_database through push_to and
+# expected the legacy staged-swap acceptance path to run; P4-1 removed push_to and the inbound
+# push_database handler along with the rest of the legacy v2 protocol (the TCP server now
+# serves only fetch_snapshot). The HMAC signing/verification machinery itself
+# (_sign_header/_verify_header/_auth_key) is still exercised by
+# test_unauthenticated_push_rejected and test_stale_timestamp_rejected below, which construct
+# their own wire messages rather than going through push_to. Deleted rather than weakened
+# (blueprint §0 rule 4).
 
 
 def test_unauthenticated_push_rejected(tmp_path):
@@ -2017,8 +1485,10 @@ def test_unauthenticated_push_rejected(tmp_path):
 
 
 def test_unauthenticated_pull_rejected(tmp_path):
-    """request_database_pull with no mac is rejected and never reaches the code that
-    would push our database back to the requester (F9)."""
+    """request_database_pull with no mac is rejected. (P4-1 removed the inbound
+    request_database_pull handler entirely along with push_to/the reverse-push it used to
+    trigger (F9); this now checks only that the auth gate still rejects the message before
+    any other handling, since fetch_snapshot is the only action the server still serves.)"""
     import socket
     import json
     import security
@@ -2040,13 +1510,6 @@ def test_unauthenticated_pull_rejected(tmp_path):
     )
     receiver_service.start()
 
-    push_calls = []
-    orig_push_to = receiver_service.push_to
-    def _tracking_push_to(*a, **kw):
-        push_calls.append((a, kw))
-        return orig_push_to(*a, **kw)
-    receiver_service.push_to = _tracking_push_to
-
     try:
         port = receiver_service._tcp_server.getsockname()[1]
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2061,9 +1524,6 @@ def test_unauthenticated_pull_rejected(tmp_path):
         sock.close()
         assert resp.get("status") == "rejected"
         assert resp.get("reason") == "UNAUTHENTICATED"
-
-        time.sleep(0.3)
-        assert push_calls == [], "An unauthenticated pull request must not trigger a reverse push"
     finally:
         receiver_service.stop()
 
@@ -2154,7 +1614,6 @@ def test_peer_ip_change_updates_entry(tmp_path):
         "username": "StaffMember",
         "host": "WORKSTATION-A",
         "sync_port": 49157,
-        "sync_revision": 10,
         "client_count": 5,
     }
     service._handle_beacon(json.dumps(beacon_body_1).encode("utf-8"), "192.168.1.50")
@@ -2163,7 +1622,6 @@ def test_peer_ip_change_updates_entry(tmp_path):
     assert len(peers) == 1
     assert peers[0]["host"] == "WORKSTATION-A"
     assert peers[0]["ip"] == "192.168.1.50"
-    assert peers[0]["sync_revision"] == 10
 
     # Second beacon from SAME WORKSTATION-A, but its IP changed to 192.168.1.75 (e.g. DHCP renewal)
     beacon_body_2 = {
@@ -2171,7 +1629,6 @@ def test_peer_ip_change_updates_entry(tmp_path):
         "username": "StaffMember",
         "host": "WORKSTATION-A",
         "sync_port": 49157,
-        "sync_revision": 12,
         "client_count": 6,
     }
     service._handle_beacon(json.dumps(beacon_body_2).encode("utf-8"), "192.168.1.75")
@@ -2181,7 +1638,6 @@ def test_peer_ip_change_updates_entry(tmp_path):
     assert len(peers_after) == 1, f"Expected 1 peer after IP change, got {len(peers_after)}"
     assert peers_after[0]["host"] == "WORKSTATION-A"
     assert peers_after[0]["ip"] == "192.168.1.75"
-    assert peers_after[0]["sync_revision"] == 12
     assert peers_after[0]["client_count"] == 6
 
 

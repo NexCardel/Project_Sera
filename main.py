@@ -48,8 +48,6 @@ def _safe_qta_icon(icon_name, color=None):
 class SyncSignalBridge(QObject):
     sync_received_signal = Signal()
     live_sync_received_signal = Signal(str, str)
-    peer_logs_received_signal = Signal(str)
-    tracker_dump_received_signal = Signal(str, int)
     sync_sent_signal = Signal(int, int)
     capture_processed_signal = Signal(dict, dict)
     update_found_signal = Signal(dict)
@@ -161,11 +159,6 @@ class SeraApp:
     }
 
     def __init__(self):
-        self._telemetry_lock = threading.Lock()
-        self._telemetry_timer = None
-        self._last_telemetry_time = 0.0
-        self._telemetry_delay = 60.0
-        
         # Keeps the extension folders on disk in a stable location (outside the temporary
         # PyInstaller extraction dir) so the browser has somewhere fixed to load them from.
         # Native messaging's registry registration used to happen here too; the bridge to the
@@ -197,8 +190,6 @@ class SeraApp:
         self.sync_bridge = SyncSignalBridge()
         self.sync_bridge.sync_received_signal.connect(self._lock_and_force_restart)
         self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
-        self.sync_bridge.peer_logs_received_signal.connect(self._handle_peer_logs_received_main_thread)
-        self.sync_bridge.tracker_dump_received_signal.connect(self._handle_tracker_dump_received_main_thread)
         self.sync_bridge.sync_sent_signal.connect(self._handle_sync_sent_main_thread)
         self.sync_bridge.capture_processed_signal.connect(self._on_capture_processed_ui)
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
@@ -367,12 +358,6 @@ class SeraApp:
         # Start Sera Sync LAN peer service
         loading_dlg.set_status("Starting Sera Sync LAN discovery...")
         from sync_peer import SyncPeerService
-        inv_frames_enabled = False
-        if self.db and hasattr(self.db, "get_setting"):
-            try:
-                inv_frames_enabled = (self.db.get_setting("inv_frames", "0") == "1")
-            except Exception:
-                pass
         self.sync_service = SyncPeerService(
             db_path=self.db_path,
             salt_path=self.salt_path,
@@ -380,16 +365,12 @@ class SeraApp:
             db=self.db,
             hex_key=hex_key,
             key_id=self.key_id,
-            inv_frames=inv_frames_enabled,
             on_sync_received=self._on_sync_received,
             on_live_sync_received=self._on_live_sync_received,
-            on_peer_logs_received=self._on_peer_logs_received,
-            on_tracker_dump_received=self._on_tracker_dump_received,
             on_error=lambda msg: print(f"[Sera Sync] {msg}"),
             on_join_approval_requested=self._on_join_approval_requested,
         )
         self.sync_service.start()
-        self.db.set_sync_revision_hook(self._broadcast_live_update_to_peers)
 
         # Sera Sync v3 LAN discovery (P2-5/P2-7), office mode only. Shares the beacon socket
         # with the legacy (v2) listener above via on_v3_beacon (P2-5's design) instead of
@@ -619,6 +600,9 @@ class SeraApp:
         self._memory_timer.timeout.connect(
             lambda: sample_and_maybe_trim("running: periodic sample", may_trim=lambda: not self._window_in_use()))
         self._memory_timer.start(10 * 60_000)
+        # A frozen window ("Not responding") writes every thread's stack to logs/hang.log.
+        from core import hang_watchdog
+        hang_watchdog.start(self.app)
 
         # Heavy historical repair/report work is intentionally deferred until
         # after the main window and extension listener are available.
@@ -683,9 +667,10 @@ class SeraApp:
                     continue
                 if name == "tracker_dump_win":
                     if not getattr(win, "_first_load_pending", False):   # not filled yet: fills when opened
-                        win.load_data()
+                        self._refresh_when_seen(name, win.load_data)
                 else:
-                    win._on_search_changed()     # redraw only - refresh() would clear the search box
+                    # redraw only - refresh() would clear the search box
+                    self._refresh_when_seen(name, win._on_search_changed)
             except Exception as exc:
                 print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
@@ -857,7 +842,7 @@ class SeraApp:
     def _refresh_tracker_dump_ui(self):
         self._capture_ui_refresh_pending = False
         if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-            self.tracker_dump_win.load_data()
+            self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
 
     def _handle_extension_result(self, msg: dict):
         # Queue all extension captures; the database/report pipeline is too
@@ -2037,6 +2022,7 @@ class SeraApp:
         from version import APP_VERSION
         self.shell.setWindowTitle(f"Project Sera — Aman Associates — v{APP_VERSION}")
         self.shell.on_minimized_to_tray = self._on_window_put_away
+        self.shell.on_restored = self._on_window_restored
         self.shell.on_minimized = lambda: QTimer.singleShot(5_000, lambda: self._trim_if_idle("window minimised"))
         self.shell.on_quit_requested = self._quit_application
         self._setup_system_tray()
@@ -2194,6 +2180,57 @@ class SeraApp:
         shell = getattr(self, "shell", None)
         return bool(shell is not None and shell.isVisible() and not shell.isMinimized())
 
+    def _refresh_when_seen(self, key: str, fn) -> None:
+        """Background-triggered screen refreshes (a capture, a sync, maintenance) run now if the
+        window is in use; while it is minimised or in the tray only the latest one per screen is
+        kept and run once the window is back. Every one of them rebuilds a table on the UI thread,
+        and the app froze while minimised (2026-09-26) - nobody can see those tables then."""
+        if self._window_in_use():
+            fn()
+            return
+        if not hasattr(self, "_deferred_refreshes"):
+            self._deferred_refreshes = {}
+        self._deferred_refreshes[key] = fn
+
+    def _refresh_synced_screens(self, targets) -> None:
+        """Refreshes the named screens after synced data arrived, via _refresh_when_seen."""
+        refreshers = {
+            "dashboard_win": "refresh", "search_win": "refresh", "admin_win": "refresh",
+            "tracker_dump_win": "load_data",
+        }
+        for name, method in refreshers.items():
+            win = getattr(self, name, None)
+            if name in targets and win:
+                self._refresh_when_seen(name, getattr(win, method))
+        detail = getattr(self, "detail_win", None)
+        if "detail_win" in targets and detail is not None:
+            def _reload_detail(d=detail):
+                if d.isVisible() and getattr(d, "client_id", None):
+                    d.load_client(d.client_id)
+            self._refresh_when_seen("detail_win", _reload_detail)
+
+    def _on_window_restored(self) -> None:
+        # After the window has painted, so coming back from the tray is instant.
+        QTimer.singleShot(0, self._run_deferred_refreshes)
+
+    def _run_deferred_refreshes(self) -> None:
+        if not self._window_in_use():
+            return
+        pending, self._deferred_refreshes = getattr(self, "_deferred_refreshes", {}), {}
+        # Keys are window attribute names; a screen whose minute tick was skipped catches up
+        # here, unless a full refresh of it is already pending.
+        for win_name in ("search_win", "admin_win"):
+            win = getattr(self, win_name, None)
+            if win is not None and getattr(win, "_activity_stale", False):
+                win._activity_stale = False
+                tick = getattr(win, "_on_activity_tick", None) or getattr(win, "_refresh_activity_tags", None)
+                pending.setdefault(win_name, tick)
+        for key, fn in pending.items():
+            try:
+                fn()
+            except Exception as e:
+                print(f"[UI] Deferred refresh '{key}' failed: {e}")
+
     def _trim_if_idle(self, reason: str) -> None:
         """Hand back touched-once memory, but only while nobody is looking at the window."""
         if self._window_in_use():
@@ -2201,7 +2238,8 @@ class SeraApp:
         from core.memlog import trim_working_set
         trim_working_set(reason)
         if getattr(self, "_backup_scheduler", None):
-            self._backup_scheduler.check_now()
+            # Off the Qt thread: a due backup copies both databases, which froze the window.
+            self._backup_scheduler.check_soon()
 
     def _on_window_put_away(self):
         self._show_tray_minimized_hint()
@@ -2435,14 +2473,6 @@ class SeraApp:
         is retired; incoming databases are staged and require application restart to swap."""
         self._on_sync_received()
 
-    def _on_peer_logs_received(self, sender_host: str):
-        """Called from SyncPeerService background thread when SSAL logs are received."""
-        self.sync_bridge.peer_logs_received_signal.emit(sender_host)
-
-    def _on_tracker_dump_received(self, sender_host: str, count: int):
-        """Called from SyncPeerService background thread when tracker dumps are received."""
-        self.sync_bridge.tracker_dump_received_signal.emit(sender_host, count)
-
     def _on_join_approval_requested(self, host: str, username: str, code: str) -> bool:
         """Called from SyncPeerService background thread when a join request arrives (P0-6)."""
         event = threading.Event()
@@ -2468,30 +2498,11 @@ class SeraApp:
         finally:
             event.set()
 
-    def _handle_tracker_dump_received_main_thread(self, sender_host: str, count: int):
-        """Main thread GUI handler when peer tracker dumps are received."""
-        try:
-            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-                self.tracker_dump_win.load_data()
-            if hasattr(self, "shell") and self.shell:
-                self.shell.show_alert(f"📥 Received {count} filing capture(s) from {sender_host}", level="info", duration=3500)
-        except Exception:
-            pass
-
     def _handle_live_sync_received_main_thread(self, sender_username: str, sender_host: str):
         """Main thread GUI handler for live auto-sync without app restart."""
         try:
-            if hasattr(self, "dashboard_win") and self.dashboard_win:
-                self.dashboard_win.refresh()
-            if hasattr(self, "search_win") and self.search_win:
-                self.search_win.refresh()
-            if hasattr(self, "admin_win") and self.admin_win:
-                self.admin_win.refresh()
-            if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-                self.tracker_dump_win.load_data()
-            if hasattr(self, "detail_win") and self.detail_win and self.detail_win.isVisible():
-                if getattr(self.detail_win, "client_id", None):
-                    self.detail_win.load_client(self.detail_win.client_id)
+            self._refresh_synced_screens(("dashboard_win", "search_win", "admin_win",
+                                          "tracker_dump_win", "detail_win"))
             if hasattr(self, "sidebar") and self.sidebar:
                 self.sidebar.notify_sync_received(sender_username, sender_host)
             if hasattr(self, "shell") and self.shell:
@@ -2586,29 +2597,11 @@ class SeraApp:
             targets = set()
             for table in tables:
                 targets.update(self._SYNC_TABLE_REFRESH.get(table, ()))
-            if "dashboard_win" in targets and getattr(self, "dashboard_win", None):
-                self.dashboard_win.refresh()
-            if "search_win" in targets and getattr(self, "search_win", None):
-                self.search_win.refresh()
-            if "admin_win" in targets and getattr(self, "admin_win", None):
-                self.admin_win.refresh()
-            if "tracker_dump_win" in targets and getattr(self, "tracker_dump_win", None):
-                self.tracker_dump_win.load_data()
-            if "detail_win" in targets and getattr(self, "detail_win", None) and self.detail_win.isVisible():
-                if getattr(self.detail_win, "client_id", None):
-                    self.detail_win.load_client(self.detail_win.client_id)
+            self._refresh_synced_screens(targets)
             if hasattr(self, "sidebar") and self.sidebar:
                 self.sidebar.notify_sync_received("", "")
         except Exception as e:
             print(f"[Sync Engine] Error refreshing UI for tables {tables}: {e}")
-
-    def _handle_peer_logs_received_main_thread(self, sender_host: str):
-        """Main thread GUI handler when Host PC receives peer audit logs."""
-        try:
-            if hasattr(self, "shell") and self.shell:
-                self.shell.show_alert(f"📋 SSAL Audit Logs received from {sender_host}", level="info", duration=3000)
-        except Exception:
-            pass
 
     def _handle_sync_sent_main_thread(self, count: int, total: int):
         """Main thread GUI handler when local changes are broadcasted to peers."""
@@ -2620,53 +2613,6 @@ class SeraApp:
                 self.shell.show_alert(f"⬆️ Live update synced to {target_str}", level="success", duration=3500)
         except Exception:
             pass
-
-    def _broadcast_live_update_to_peers(self):
-        """Called by Database write hook to broadcast mutations to LAN peers live."""
-        if hasattr(self, "sync_service") and self.sync_service:
-            import time
-                
-            def do_telemetry_broadcast(is_timer=False):
-                if is_timer:
-                    with self._telemetry_lock:
-                        self._telemetry_timer = None
-                        self._last_telemetry_time = time.monotonic()
-                try:
-                    peers = self.sync_service.get_peers()
-                    if not peers:
-                        return
-                    
-                    try:
-                        recent_dumps = self.db.get_tracker_dumps(limit=50)
-                        if recent_dumps:
-                            self.sync_service.broadcast_tracker_dumps(recent_dumps, peers=peers)
-                    except Exception as ex:
-                        print(f"[SYNC] Broadcast tracker dumps failed: {ex}")
-
-                    try:
-                        recent_logs = self.db.get_audit_logs(limit=100)
-                        if recent_logs:
-                            self.sync_service.broadcast_audit_logs(recent_logs, peers=peers)
-                    except Exception as ex:
-                        print(f"[SSAL] Broadcast audit logs failed: {ex}")
-                except Exception as e:
-                    print(f"[Live Auto-Sync] Broadcast exception: {e}")
-
-            with self._telemetry_lock:
-                now = time.monotonic()
-                time_since_last = now - self._last_telemetry_time
-                if time_since_last >= self._telemetry_delay:
-                    # Fire immediately if it's been long enough
-                    if self._telemetry_timer is None:
-                        self._last_telemetry_time = now
-                        threading.Thread(target=do_telemetry_broadcast, kwargs={"is_timer": False}, daemon=True).start()
-                else:
-                    # Within the window, schedule at the end of the current window if not already scheduled
-                    if self._telemetry_timer is None:
-                        wait_time = self._telemetry_delay - time_since_last
-                        self._telemetry_timer = threading.Timer(wait_time, do_telemetry_broadcast, kwargs={"is_timer": True})
-                        self._telemetry_timer.daemon = True
-                        self._telemetry_timer.start()
 
     def _show_sca_diagnostics(self):
         from ui.dialogs.sca_diagnostics_dialog import ScaDiagnosticsDialog

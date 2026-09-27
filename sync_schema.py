@@ -140,8 +140,10 @@ staff_users = _register(TableSpec(
 app_settings = _register(TableSpec(
     "app_settings", MASTER_DB, LWW, row_key=("key",),
     notes="Every key is office-wide (D7): no per-PC list, no exceptions "
-          "(includes theme, window_mode, sync_manual_peers, inv_frames). "
-          "Not admin_lww: any admin-mode PC may change settings (D7/v1.2).",
+          "(includes theme, window_mode, sync_manual_peers). "
+          "Not admin_lww: any admin-mode PC may change settings (D7/v1.2). "
+          "'inv_frames' was a legacy v2 setting, no longer written since P4-1; a "
+          "leftover value from before that release may still replicate harmlessly.",
 ))
 
 client_activity_stats = _register(TableSpec(
