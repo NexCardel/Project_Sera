@@ -1,23 +1,23 @@
-# SGT overhaul — report (2026-09-27 19:26)
+# SGT overhaul — report (2026-09-27 19:35)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 24 |
+| Not started | 23 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 3 |
+| Done | 4 |
 | Blocked | 0 |
 
-Runs: 5   output tokens: 182910   API-equivalent cost: $8.61
+Runs: 6   output tokens: 208013   API-equivalent cost: $10.38
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | sonnet | 623424f | Find why the SGT page corpus stopped recording after 22 Sep and fix it | Root cause: sgt_record_pages flipped off silently (spec_stats.json proved reads continued); made PageRecorder.enabled echo every transition; regression tests ad |
 | W0-2 | Done | haiku | 0238725 | Baseline: SGT tests and replay baseline, recorded for later diffs | SGT 281 passed, VSDC 388+6 pre-existing, baseline 8 sessions/1 dataset |
 | W1-1 | Done | opus | bea35a6 | SGT-I host: the C/I contract in code | core/sgt_i host (thread, budget, hang trip, advisory+enrichment channels), sgt_i_mode Off/On, Core byte-identical On vs Off; 297 SGT tests pass |
-| W1-2 | Not started | sonnet |  | Enrichment fields on tracker rows (no schema change) |  |
+| W1-2 | Done | sonnet | e724987 | Enrichment fields on tracker rows (no schema change) | Enrichment channel already round-tripped via existing raw_payload_json plumbing (no schema change); added read-only SGT-I card in PayloadInspectorDialog; tests: |
 | W1-R | Not started | opus |  | Review: W0-1..W1-2 against the SGT-C safety rules |  |
 | W2-1 | Not started | opus |  | Measure a cached UIA node read vs the current line reader |  |
 | W2-2 | Not started | opus |  | Page map: node model, zones, sections, layout pairing |  |

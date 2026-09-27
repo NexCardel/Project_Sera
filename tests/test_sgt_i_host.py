@@ -266,3 +266,19 @@ def test_core_rows_identical_with_sgt_i_on_and_off(path, monkeypatch):
     rows = replay_session(doc["pages"], STORE, intelligence=fake, keep_payloads=True)["payloads"]
     assert all(r["raw_payload"]["sgt_i"] == {"comp": {"n": 1}} for r in rows)
     assert _payloads(doc, fake, strip=True) == off
+
+
+def test_sgt_i_enrichment_is_never_identity_or_name_evidence():
+    """A masked shape can look like a PAN ("AAAAA9999A"): the deep payload scanners that pick a
+    row's client must not read raw_payload["sgt_i"] (rule 4). Fictional values."""
+    from database import SeraDatabase
+    from tracker_dump_parser.identity_resolver import extract_identity_evidence
+    from tracker_dump_parser.name_resolver import extract_name_evidence
+    from ui.utils.profile_parser import extract_profile_from_payload
+    notes = {"shape": {"pan": "ABCDE1234F", "gstin": "27ABCDE1234F1Z5", "name": "Fictional Traders"}}
+    msg = {"source": "sgt", "raw_payload": {"sgt_i": notes}}
+    assert SeraDatabase._extract_identity_candidates_from_payload(None, raw_payload_json=json.dumps(msg)) == []
+    assert extract_identity_evidence({}, msg)["pans"] == []
+    assert extract_name_evidence({}, msg) == []
+    prof = extract_profile_from_payload(msg)
+    assert not (prof["pan"] or prof["gstin"] or prof["company_name"] or prof["proprietor_name"])

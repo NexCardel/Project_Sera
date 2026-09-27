@@ -360,8 +360,9 @@ class SgtShadow:
 
         h = _frame_hash(frame)
         changed = url_changed or h is None or h != s.last_hash or (now - s.last_read) >= REREAD_AFTER_SEC
-        if not changed and self._sgt_i is not None:
-            changed = self._sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
+        sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
+        if not changed and sgt_i is not None:
+            changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
         s.last_hash = h
         if not changed:
             return None
@@ -718,9 +719,10 @@ class SgtShadow:
                 "dataset_key": key,
             },
         }
-        if self._sgt_i is not None:
+        sgt_i = self._sgt_i    # one read (see observe): a failure here would drop this row
+        if sgt_i is not None:
             # SGT-I's enrichment sits beside the Core's values, in its own key only (14.2 rule 4).
-            extra = self._sgt_i.enrichment(s.session_id)
+            extra = sgt_i.enrichment(s.session_id)
             if extra:
                 payload["raw_payload"]["sgt_i"] = extra
         return payload

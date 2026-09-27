@@ -1391,3 +1391,18 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   correctly). `pytest tests/test_sgt_*.py`: 299 passed (was 297; the two new tests). No component
   produces route/explanation/second-opinion data yet (steps 5/7, later WPs) - this only builds and
   proves the channel they will use; nothing to build on for those WPs beyond what W1-1 gave them.
+
+- **W1-R** (2026-09-27, claude-opus-5-5): reviewed W0-1, W1-1, W1-2 against 14.2. Holds: Off = no hook
+  runs (`_sgt_i` is None, `core.sgt_i` not even imported); Observation is a deep frozen copy (draft
+  `values()` is pure); host lock is never held while calling a component, the Core or echo, so no
+  deadlock; `wants_read` can only add reads. **Two defects fixed:** (1) `sgt_shadow` read `self._sgt_i`
+  twice while Settings (UI thread) can detach it mid-tick - an AttributeError could escape `observe`
+  or, in `_tracker_payload`, make `pop_dispatch` DROP a Core row; now read once into a local.
+  (2) Four deep payload scanners (`database._extract_identity_candidates_from_payload`,
+  `tracker_dump_parser/identity_resolver._walk_values`, `name_resolver._walk`,
+  `ui/utils/profile_parser._collect`) read every string in `raw_payload_json`, so a masked shape like
+  "AAAAA9999A" or a `name` key in `raw_payload.sgt_i` would become a client PAN/name candidate (rule 4
+  breach); all four now skip the `sgt_i` key. Test: `test_sgt_i_enrichment_is_never_identity_or_name_evidence`.
+  `test_sgt_*.py`: 300 passed. Not caused by this change (no payload in them has `sgt_i`): 3 failures in
+  test_raw_payload_db_and_srpf / test_dual_pk_and_sad_resolution, plus the 5 known Gemini ones. Next WPs: any new
+  deep walker over payloads must skip `sgt_i` too.
