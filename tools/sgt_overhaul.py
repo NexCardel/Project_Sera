@@ -91,7 +91,7 @@ def _write_csv(path: Path, fields: List[str], rows: List[Dict[str, str]]) -> Non
     w.writeheader()
     w.writerows(rows)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    for _ in range(20):                         # Excel may hold the file for a moment
+    for _ in range(600):                        # Excel may hold the file (up to 5 minutes)
         try:
             tmp.write_text(buf.getvalue(), encoding="utf-8")
             os.replace(tmp, path)
