@@ -467,7 +467,7 @@ _LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(r
 
 
 _TRANSIENT = re.compile(r"can.t reach the api|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|"
-                        r"overloaded|5\d\d|internal server error|service unavailable|connection (reset|refused|error)", re.I)
+                        r"overloaded|API Error: 5\d\d\b|internal server error|service unavailable|connection (reset|refused|error)", re.I)
 
 
 def limit_reset(text: str, ref: Optional[dt.datetime] = None) -> Optional[dt.datetime]:

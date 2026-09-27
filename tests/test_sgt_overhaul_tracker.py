@@ -120,10 +120,8 @@ def test_no_finish_twice_blocks(docs, monkeypatch):
 
 
 def test_network_error_is_retried_without_spending_an_attempt(docs, monkeypatch):
-    body = ("import sys, json; sys.stdin.read()
-"
-            "print(json.dumps({'is_error': True, 'result': \"API Error: Can't reach the API server (ENOTFOUND)\"}))
-")
+    body = ("import sys, json; sys.stdin.read()\n"
+            "print(json.dumps({'is_error': True, 'result': \"API Error: Can't reach the API server (ENOTFOUND)\"}))\n")
     monkeypatch.setenv("SGT_CLAUDE", _fake_cli(docs, body))
     so.run_loop(once=True, log=lambda *_: None)
     s = so.Tracker(docs).status["W0-1"]
