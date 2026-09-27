@@ -1485,3 +1485,20 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   Not wired into a component or the atlas yet - pure functions over shape strings only, for W4-2/
   W4-3 and step 4 (atlas) to call once they accumulate shapes per container over time. Tests:
   `tests/test_sgt_i_shapes.py` (13, new). `test_sgt_*.py`: 345 passed.
+
+- **W4-2** (2026-09-28, claude-sonnet-5): `core/sgt_i/invariants.py` - the rest of step 3.
+  `discover_checksum(values)`: tests Luhn, Verhoeff, an ISBN-10-style mod-11 (blueprint names no
+  exact weighting) and a mod-36 generalising `sgt_toolbox.c_gstin_checksum` to any length; zero-
+  exception schemes get a chance-of-luck p-value, Bonferroni-corrected by the 4 schemes tried (the
+  WP's "multiple-testing bound"). `find_value_containment(outer, inner)`: paired samples from the
+  same observation; finds a fixed offset from the start (GSTIN chars 3-12 hold the PAN) or the end
+  (an ack's own trailing date via `format_ddmmyy`), rule-of-three confidence corrected by the
+  number of candidate offsets tried. `find_order_relation` (`<=`, corrected by 2 for the untried
+  `>=` direction) and `find_sum_relation` (`total == sum(rows)`) round out invariant mining. All
+  four functions are pure and stateless - the caller's value list is a "summary" passed in, used
+  once, never stored; result objects hold only counts/offsets/p-values, never a value (tested
+  explicitly). Tests: `tests/test_sgt_i_invariants.py` (19, new, fictional/generated values only,
+  vectors built with `gen_vectors.py`/`gen_vectors2.py` in the scratchpad - not checked in).
+  `test_sgt_*.py`: 364 passed. Decision recorded (mod-11 scheme choice, Bonferroni correction
+  factors) - see `sgt_overhaul_runs.csv`. Not wired into a component yet - for the atlas (step 4)
+  and W4-3 to call once containers accumulate value summaries over time.

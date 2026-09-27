@@ -10,7 +10,7 @@ W2-3,2,Lines view from nodes + equivalence check against today's reader,Done,cla
 W2-4,2,"Recorder stores nodes (corpus format v2, backwards compatible)",Done,claude-sonnet-5,1,cec95e6,corpus v2: PageRecorder records nodes alongside lines while SGT-I is on; replay reads v1/v2 unchanged; 322 tests pass,2026-09-28 00:15
 W3-1,3,Container -> value pairs with generic types and masking,Done,claude-sonnet-5,1,ede9b8d,core/sgt_i/pairs.py: pairs_from_page produces container/type/masked-shape only; disk-level privacy test round-trips through insert_tracker_dump and scans file bytes,2026-09-28 00:24
 W4-1,4,Maths 1: shape grammar induction with rule-of-three bounds,Done,claude-sonnet-5,1,27201bb,"shapes.py: shape grammar generalisation + rule-of-three confidence bound; 13 new tests, 345 total pass",2026-09-28 00:31
-W4-2,4,"Maths 2: checksum discovery, values inside values, relations",Not started,claude-sonnet-5,0,,,
+W4-2,4,"Maths 2: checksum discovery, values inside values, relations",Retry,claude-sonnet-5,1,,dispatcher restarted,2026-09-28 00:40
 W4-3,4,Maths 3: container kinds from salted-hash statistics,Not started,claude-sonnet-5,0,,,
 W5-1,5,"The atlas: model, page matching, merge, template promotion, ageing",Not started,claude-opus-5-5,0,,,
 W5-2,5,Atlas tool: show / diff / coverage,Not started,claude-sonnet-5,0,,,
