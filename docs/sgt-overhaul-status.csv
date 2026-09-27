@@ -3,7 +3,7 @@ W0-1,0,Find why the SGT page corpus stopped recording after 22 Sep and fix it,Do
 W0-2,0,"Baseline: SGT tests and replay baseline, recorded for later diffs",Done,claude-haiku-4-5-20251001,1,0238725,"SGT 281 passed, VSDC 388+6 pre-existing, baseline 8 sessions/1 dataset",2026-09-27 19:17
 W1-1,1,SGT-I host: the C/I contract in code,Done,claude-opus-5-5,1,bea35a6,"core/sgt_i host (thread, budget, hang trip, advisory+enrichment channels), sgt_i_mode Off/On, Core byte-identical On vs Off; 297 SGT tests pass",2026-09-27 19:26
 W1-2,1,Enrichment fields on tracker rows (no schema change),Done,claude-sonnet-5,1,e724987,"Enrichment channel already round-tripped via existing raw_payload_json plumbing (no schema change); added read-only SGT-I card in PayloadInspectorDialog; tests: DB round trip + UI toggle, 299 passed",2026-09-27 19:34
-W1-R,1,Review: W0-1..W1-2 against the SGT-C safety rules,Retry,claude-opus-5-5,1,,dispatcher restarted,2026-09-27 19:40
+W1-R,1,Review: W0-1..W1-2 against the SGT-C safety rules,Done,claude-opus-5-5,1,d4d6da4,Review OK except 2 fixed defects: SGT-I detach race could drop a Core row; 4 payload scanners read raw_payload.sgt_i as identity/name evidence,2026-09-27 19:42
 W2-1,2,Measure a cached UIA node read vs the current line reader,Not started,claude-opus-5-5,0,,,
 W2-2,2,"Page map: node model, zones, sections, layout pairing",Not started,claude-opus-5-5,0,,,
 W2-3,2,Lines view from nodes + equivalence check against today's reader,Not started,claude-sonnet-5,0,,,
