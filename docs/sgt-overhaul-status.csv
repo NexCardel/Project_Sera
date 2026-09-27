@@ -1,7 +1,7 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
 W0-1,0,Find why the SGT page corpus stopped recording after 22 Sep and fix it,Done,claude-sonnet-5,3,623424f,Root cause: sgt_record_pages flipped off silently (spec_stats.json proved reads continued); made PageRecorder.enabled echo every transition; regression tests added; 281 SGT tests pass,2026-09-27 19:11
 W0-2,0,"Baseline: SGT tests and replay baseline, recorded for later diffs",Done,claude-haiku-4-5-20251001,1,0238725,"SGT 281 passed, VSDC 388+6 pre-existing, baseline 8 sessions/1 dataset",2026-09-27 19:17
-W1-1,1,SGT-I host: the C/I contract in code,Retry,claude-opus-5-5,1,,dispatcher restarted,2026-09-27 19:25
+W1-1,1,SGT-I host: the C/I contract in code,Done,claude-opus-5-5,1,bea35a6,"core/sgt_i host (thread, budget, hang trip, advisory+enrichment channels), sgt_i_mode Off/On, Core byte-identical On vs Off; 297 SGT tests pass",2026-09-27 19:26
 W1-2,1,Enrichment fields on tracker rows (no schema change),Not started,claude-sonnet-5,0,,,
 W1-R,1,Review: W0-1..W1-2 against the SGT-C safety rules,Not started,claude-opus-5-5,0,,,
 W2-1,2,Measure a cached UIA node read vs the current line reader,Not started,claude-opus-5-5,0,,,
