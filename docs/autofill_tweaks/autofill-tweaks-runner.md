@@ -49,6 +49,10 @@ Grep before you read; read large files in parts (offset/limit) — `background.j
 Do not re-read files you just edited. Run the narrowest tests that prove your change, then once the
 tests your WP's focus names.
 
+**Never use `git stash`** (it cost W1-2 half an hour and hides the tracker files). To tell whether a
+failing test is yours, compare with the pre-existing failures in W0-1's hand-off note (section 12).
+Don't run the whole test suite; run the test files your change touches.
+
 ## When the user would normally be asked
 
 The blueprint's open decisions (D1–D8) are asked by the WP that needs them — the exact `ask` command
