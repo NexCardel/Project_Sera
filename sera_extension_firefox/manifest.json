@@ -15,9 +15,7 @@
     "activeTab",
     "scripting",
     "tabs",
-    "alarms",
-    "browsingData",
-    "cookies"
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",
@@ -57,25 +55,6 @@
       ],
       "run_at": "document_end",
       "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "config.json",
-        "event_types.json",
-        "content_scripts/filing_detector.js",
-        "tracker.js",
-        "sdc/sdc_toast.js",
-        "sdc/sdc_core.js",
-        "sdc/protocols/itr_protocol.js",
-        "sdc/protocols/gst_protocol.js",
-        "sdc/protocols/traces_protocol.js",
-        "sdc/protocols/mca_protocol.js"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
     }
   ]
 }

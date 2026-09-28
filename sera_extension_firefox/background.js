@@ -159,30 +159,17 @@ function handleDesktopMessage(message) {
     else if (message.mode === "manual_assist") handleManualAssistTab(message);
     else handleAutofillTab(message);
   } else if (message.type === "update_settings") {
-    const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
     const allowedDomains = message.allowed_domains || [];
-    const overallTracker = fst;
     const storageObj = {
-      trackerEnabled: overallTracker,
-      fstEnabled: fst,
       scaEnabled: sca,
       scaMode: scaMode
     };
     if (allowedDomains && allowedDomains.length > 0) {
       storageObj.allowedDomains = allowedDomains;
     }
-    if (!overallTracker) {
-      storageObj.activeAutofillPayload = null;
-    }
-    chrome.storage.local.set(storageObj, () => {
-      if (overallTracker) {
-        injectAllOpenTabs('desktop-settings-enabled');
-      } else {
-        broadcastTrackerState(false);
-      }
-    });
+    chrome.storage.local.set(storageObj);
   }
 }
 
@@ -217,32 +204,6 @@ async function sendToDesktop(msg, waitForAck = false) {
 }
 
 
-// Reopen the last Manual Assist widget from the browser toolbar if clicked directly
-if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener((tab) => {
-    chrome.storage.local.get(['manualAssistPayload', 'mecpPayload'], data => {
-      const mecp = data.mecpPayload;
-      if (mecp && mecp.expiresAt && mecp.expiresAt >= Date.now()) {
-        let targetHost = '';
-        try { targetHost = new URL(mecp.url).hostname; } catch (_) {}
-        if (tab.url && targetHost && tab.url.includes(targetHost)) {
-          injectMECP(tab.id, mecp);
-          return;
-        }
-      }
-      const payload = data.manualAssistPayload;
-      if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
-        chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload']);
-        return;
-      }
-      let targetHost = '';
-      try { targetHost = new URL(payload.url).hostname; } catch (_) { return; }
-      if (!tab.url || !tab.url.includes(targetHost)) return;
-      injectManualAssist(tab.id, payload);
-    });
-  });
-}
-
 try {
   chrome.alarms.create("sera_keep_alive", { periodInMinutes: 0.5 });
   chrome.alarms.onAlarm.addListener((alarm) => {
@@ -252,111 +213,12 @@ try {
 
 chrome.runtime.onStartup.addListener(ensureConnected);
 chrome.runtime.onInstalled.addListener(() => {
-  // Ensure native connection
   ensureConnected();
-  // Enable tracker by default the first time the extension is installed
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled'], (data) => {
-    const update = {};
-    if (data.trackerEnabled === undefined) update.trackerEnabled = true;
-    if (data.fstEnabled === undefined) update.fstEnabled = true;
-    if (Object.keys(update).length > 0) {
-      chrome.storage.local.set(update);
-    }
-  });
-});
-
-// Broadcast changes to open tabs whenever settings change in storage
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
-    chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
-      const trackerEnabled = data.trackerEnabled !== false;
-      const sdcEnabled = data.sdcEnabled !== false && trackerEnabled;
-      const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-      broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled);
-    });
-  }
 });
 
 ensureConnected();
 
-console.log('Sera SDC: background.js module loaded, registering listeners.');
-
-// Helper to broadcast tracker & SDC state changes to open tabs
-function broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled) {
-  const tOn = trackerEnabled !== false;
-  const sOn = (sdcEnabled !== undefined ? (sdcEnabled !== false) : tOn) && tOn;
-  const fOn = (fstEnabled !== undefined ? (fstEnabled !== false) : tOn) && tOn;
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
-      try {
-        chrome.tabs.sendMessage(tab.id, {
-          type: "SERA_TRACKER_STATE_CHANGED",
-          trackerEnabled: tOn,
-          sdcEnabled: sOn,
-          fstEnabled: fOn
-        }).catch(() => {});
-      } catch (_) {}
-    }
-  });
-}
-
-// SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
-function injectSDC(tabId, reason) {
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
-    const trackerEnabled = data.trackerEnabled !== false;
-    const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
-
-    if (!trackerEnabled || !sdcEnabled) {
-      return; // All visual and DOM scanning disabled
-    }
-
-    console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
-
-    // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
-    const sdcFiles = [
-      'sdc/sdc_toast.js',
-      'sdc/sdc_core.js',
-      'sdc/protocols/itr_protocol.js',
-      'sdc/protocols/gst_protocol.js',
-      'sdc/protocols/traces_protocol.js',
-      'sdc/protocols/mca_protocol.js'
-    ];
-
-    chrome.scripting.executeScript({
-      target: { tabId: tabId, allFrames: false }, // top frame only for SDC
-      files: sdcFiles
-    }).catch(err => {
-      // Ignored for non-matching or restricted URLs
-    });
-  });
-}
-
-// Inject into ALL open tabs
-function injectAllOpenTabs(reason) {
-  chrome.tabs.query({}, (tabs) => {
-    console.log('Sera SDC: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
-    for (const tab of tabs) {
-      if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
-      if (tab.status === 'complete') injectSDC(tab.id, reason || 'startup-scan');
-    }
-  });
-}
-
-// Inject into every tab that finishes loading or updates its SPA URL
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
-  if (changeInfo.status === 'complete' || changeInfo.url) {
-    injectSDC(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
-  }
-});
-
-// Also scan open tabs on worker startup
-injectAllOpenTabs('service-worker-startup');
-
-
+console.log('Sera: background.js module loaded, registering listeners.');
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
@@ -594,15 +456,6 @@ function handleAutofillTab(message) {
   let targetHostname;
   try { targetHostname = new URL(message.url).hostname; } catch (e) { console.error("Invalid URL", message.url); return; }
 
-  // Store payload  // Keep the active payload around for the content scripts
-  const isTrackerEnabled = message.tracker_enabled === true;
-  const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
-  chrome.storage.local.set({
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, ts: Date.now() },
-    trackerEnabled: isTrackerEnabled,
-    fstEnabled: isFstEnabled
-  });
-
   chrome.tabs.query({}, (tabs) => {
     const existing = tabs.find(t => {
       if (!t.url) return false;
@@ -614,7 +467,6 @@ function handleAutofillTab(message) {
     if (existing) {
       chrome.windows.update(existing.windowId, { focused: true }, () => {
         if (chrome.runtime.lastError) {}
-        chrome.storage.local.set({ trackingTabId: existing.id });
         chrome.tabs.update(existing.id, { url: message.url, active: true }, () => {
           if (chrome.runtime.lastError) {}
           chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
@@ -628,7 +480,6 @@ function handleAutofillTab(message) {
     } else {
       chrome.tabs.create({ url: message.url }, (newTab) => {
         if (chrome.runtime.lastError || !newTab) return;
-        chrome.storage.local.set({ trackingTabId: newTab.id });
         chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
           if (tabId === newTab.id && info.status === 'complete') {
             chrome.tabs.onUpdated.removeListener(listener);
@@ -1314,66 +1165,7 @@ function handleManualAssistTab(message) {
   });
 }
 
-function recordInjectionAndClearCookiesIfNeeded() {
-  chrome.storage.local.get({ injectionCount: 0 }, (data) => {
-    let newCount = (data.injectionCount || 0) + 1;
-    console.log(`Sera: Extension injection count = ${newCount}/5`);
-    
-    if (newCount >= 5) {
-      console.log("Sera: Reached 5 extension injections. Clearing browser cookies...");
-      clearBrowserCookies(() => {
-        console.log("Sera: Browser cookies cleared successfully after 5 injections.");
-      });
-      chrome.storage.local.set({ injectionCount: 0 });
-    } else {
-      chrome.storage.local.set({ injectionCount: newCount });
-    }
-  });
-}
-
-function clearBrowserCookies(callback) {
-  let done = false;
-  const finish = () => {
-    if (!done) {
-      done = true;
-      if (callback) callback();
-    }
-  };
-
-  if (chrome.browsingData && chrome.browsingData.removeCookies) {
-    chrome.browsingData.removeCookies({ "since": 0 }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn("Sera: removeCookies error:", chrome.runtime.lastError.message);
-      }
-      finish();
-    });
-  } else if (chrome.browsingData && chrome.browsingData.remove) {
-    chrome.browsingData.remove({ "since": 0 }, { "cookies": true }, () => {
-      finish();
-    });
-  } else if (chrome.cookies) {
-    chrome.cookies.getAll({}, (cookies) => {
-      if (!cookies || cookies.length === 0) {
-        finish();
-        return;
-      }
-      let pending = cookies.length;
-      cookies.forEach((cookie) => {
-        const protocol = cookie.secure ? "https:" : "http:";
-        const url = `${protocol}//${cookie.domain.replace(/^\./, "")}${cookie.path}`;
-        chrome.cookies.remove({ url: url, name: cookie.name }, () => {
-          pending--;
-          if (pending <= 0) finish();
-        });
-      });
-    });
-  } else {
-    finish();
-  }
-}
-
 function injectManualAssist(tabId, message) {
-  recordInjectionAndClearCookiesIfNeeded();
   // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
   scaCoordinator.disarm("manual assist started");
   chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
@@ -1383,24 +1175,7 @@ function injectManualAssist(tabId, message) {
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }
 
-// Track tab closure for Tier 2 fallback
-chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
-  chrome.storage.local.get(['trackingTabId', 'activeAutofillPayload'], (data) => {
-    if (data.trackingTabId === tabId && data.activeAutofillPayload) {
-      // The tracked tab was closed. Send uncertain_result to desktop app
-      sendToDesktop({
-        type: "uncertain_result",
-        client_id: data.activeAutofillPayload.client_id,
-        portal: data.activeAutofillPayload.portal
-      });
-      // Clear tracking state
-      chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-    }
-  });
-});
-
 function injectFillScript(tabId, userid, password, usernameSelector, passwordSelector, extensionFlow) {
-  recordInjectionAndClearCookiesIfNeeded();
   chrome.scripting.executeScript({
     target: { tabId: tabId, allFrames: true },
     func: fillCredentialsInPage,
@@ -1422,15 +1197,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
     const s = msg.settings || {};
-    if (s.trackerEnabled && s.fstEnabled) {
-      injectAllOpenTabs('popup-settings-enabled');
-    } else {
-      broadcastTrackerState(false);
-    }
     sendToDesktop({
       type: "extension_settings_updated",
-      fst_enabled: s.fstEnabled,
-      tracker_enabled: s.trackerEnabled,
       sca_enabled: s.scaEnabled
     });
     sendResponse({ status: "ok" });
@@ -1451,32 +1219,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     }
     sendResponse({ status: "ok" });
-    return true;
-  }
-  if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
-    console.log("Sera background: handling filing_result, sending to desktop...");
-    sendToDesktop(msg, true).then((sent) => {
-      if (sent) chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-      sendResponse({ status: sent ? "accepted" : "failed" });
-    }).catch((err) => {
-      console.warn("Sera background: filing_result delivery error:", err);
-      sendResponse({ status: "failed" });
-    });
-    return true;
-  }
-  // sudr_capture / sdc_session_timeline / session_start / audit_event: SDC's page script
-  // (sdc_core.js) hands every capture to this background page over chrome.runtime.sendMessage
-  // now (it never talks to the app directly - see that file's _emitDual). 2026-09-22: this
-  // listener used to only recognise filing_result, so a capture with any other type silently
-  // reached here and was dropped (no case matched it, no reply was ever sent).
-  if (["sudr_capture", "sdc_session_timeline", "session_start", "audit_event", "uncertain_result"].includes(msg.type)) {
-    sendToDesktop(msg, true).then((sent) => {
-      if (!sent) console.warn(`Sera background: ${msg.type} was not delivered to desktop.`);
-      sendResponse({ status: sent ? "accepted" : "failed" });
-    }).catch((err) => {
-      console.warn(`Sera background: ${msg.type} delivery error:`, err);
-      sendResponse({ status: "failed" });
-    });
     return true;
   }
 });
@@ -1721,7 +1463,6 @@ function handleMECPTab(message) {
 }
 
 function injectMECP(tabId, message) {
-  recordInjectionAndClearCookiesIfNeeded();
   chrome.scripting.executeScript({
     target: { tabId },
     func: mecpWidget,

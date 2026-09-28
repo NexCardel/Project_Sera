@@ -66,42 +66,6 @@ document.addEventListener('keyup', (e) => {
   }
 }, true);
 
-// ---------------- Autofill fallback (desktop "Autofill" button, not SCA) ----------------
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "autofill" && message.userid) {
-    if (SERA_DEBUG) console.log("Sera content script: received fallback autofill message.");
-    var userField = document.querySelector("input[id*='userId']") ||
-                    document.querySelector("input[name*='userId']") ||
-                    document.querySelector("#userId") ||
-                    document.querySelector("input[name='userId']") ||
-                    document.querySelector("#panAdhaarUserId") ||
-                    document.querySelector("#username") ||
-                    document.querySelector("input[name='user_name']") ||
-                    document.querySelector("input[name='pan']");
-    if (userField && message.userid) {
-      userField.focus();
-      userField.value = message.userid;
-      userField.dispatchEvent(new Event('input', { bubbles: true }));
-      userField.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    var passField = document.querySelector("input[id*='psw']") ||
-                    document.querySelector("input[name*='psw']") ||
-                    document.querySelector("#psw") ||
-                    document.querySelector("input[name='psw']") ||
-                    document.querySelector("#passwordInput") ||
-                    document.querySelector("input[type='password']") ||
-                    document.querySelector("#user_pass") ||
-                    document.querySelector("input[name='user_pass']");
-    if (passField && message.password) {
-      passField.focus();
-      passField.value = message.password;
-      passField.dispatchEvent(new Event('input', { bubbles: true }));
-      passField.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }
-});
-
 function checkSccLoginSuccess() {
   try {
     const href = window.location.href || "";

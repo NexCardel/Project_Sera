@@ -1,8 +1,6 @@
 // popup.js - Project Sera Extension Companion Toolbar UI Logic
 
 document.addEventListener('DOMContentLoaded', () => {
-  const toggleFst = document.getElementById('toggle-fst');
-  const toggleToast = document.getElementById('toggle-toast');
   const toggleSca = document.getElementById('toggle-sca');
   const statusDot = document.getElementById('status-dot');
   const statusLabel = document.getElementById('status-label');
@@ -23,21 +21,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // 1. Load current extension settings from storage
   function loadSettings() {
     chrome.storage.local.get([
-      'trackerEnabled',
-      'fstEnabled',
-      'sdcEnabled',
-      'sdcToastEnabled',
       'scaEnabled',
       'manualAssistPayload',
       'mecpPayload'
     ], (data) => {
-      const tracker = data.trackerEnabled !== false;
-      const fst = data.fstEnabled !== false && tracker;
-      const toast = data.sdcToastEnabled !== false;
       const sca = data.scaEnabled !== false;
 
-      if (toggleFst) toggleFst.checked = fst;
-      if (toggleToast) toggleToast.checked = toast;
       if (toggleSca) toggleSca.checked = sca;
 
       // Update manual assist button status
@@ -79,15 +68,9 @@ document.addEventListener('DOMContentLoaded', () => {
     syncStatus.textContent = 'Saving...';
     syncStatus.style.color = '#f59e0b';
 
-    const fstVal = toggleFst ? toggleFst.checked : true;
-    const toastVal = toggleToast ? toggleToast.checked : true;
     const scaVal = toggleSca ? toggleSca.checked : true;
 
     const storageUpdate = {
-      fstEnabled: fstVal,
-      sdcEnabled: fstVal,
-      sdcToastEnabled: toastVal,
-      trackerEnabled: fstVal,
       scaEnabled: scaVal
     };
 
@@ -109,8 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Attach toggle change listeners
-  if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
-  if (toggleToast) toggleToast.addEventListener('change', () => saveSettings('sdcToastEnabled'));
   if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
 
   // Reconnect button
