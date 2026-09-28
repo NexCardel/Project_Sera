@@ -1,22 +1,22 @@
-# Autofill tweaks — report (2026-09-28 22:58)
+# Autofill tweaks — report (2026-09-29 00:30)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 24 |
+| Not started | 22 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 1 |
+| Retry | 1 |
+| Done | 2 |
 | Blocked | 0 |
 
-Runs: 1   output tokens: 11268   API-equivalent cost: $0.35
+Runs: 6   output tokens: 73700   API-equivalent cost: $3.51
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | haiku | ec6e0dd | Baseline: tests before any change | Part H confirmed; test files verified; sgt_replay blocked by permissions |
-| W0-2 | Not started | sonnet |  | Password guard in both UIA readers (finding #17) |  |
-| W1-1 | Not started | sonnet |  | Part A: remove all tracking and the cookie wipe from the extension |  |
+| W0-2 | Done | sonnet | b8f7fa5 | Password guard in both UIA readers (finding #17) | Password guard added to vsdc_uia_text and uia_nodes; both UIA readers now skip ValuePattern reads for IsPassword elements; 982 tests pass, 6 pre-existing unrela |
+| W1-1 | Retry | sonnet |  | Part A: remove all tracking and the cookie wipe from the extension | stopped by usage limit, resumes after 01:00 |
 | W1-2 | Not started | sonnet |  | Part A, desktop side: stop serving extension tracking |  |
 | W1-R | Not started | opus |  | Review Part A |  |
 | W2-1 | Not started | sonnet |  | Part B1: passwords off disk in the extension (#2) |  |
