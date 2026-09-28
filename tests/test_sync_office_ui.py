@@ -154,7 +154,6 @@ def _office_sync_service(tmp_path, key_id="somekeyid"):
     svc.get_peers.return_value = []
     svc.get_activity_history.return_value = []
     svc.get_network_category.return_value = {"is_public": False}
-    svc.inv_frames = False
     svc.key_id = key_id
     svc.app_dir = tmp_path
     svc.db_path = str(tmp_path / "master.db")

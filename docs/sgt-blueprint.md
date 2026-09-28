@@ -596,7 +596,10 @@ That is the reason the validation rules are not optional extras.
 
 ## 12. Enhancement roadmap — a more flexible, smarter SGT (proposed 2026-09-23)
 
-**Status:** proposed, nothing built. Two decisions are still the user's (see "Open decisions").
+**Status:** proposed, nothing built. **Superseded by §14 (2026-09-27)**, which absorbs A, B1,
+B2, C and D into the SGT-C / SGT-I design and drops the masked-LLM drafting (the user declined it). Kept
+for its record of the limits found in the code; do not start work from this section's step table.
+Two decisions are still the user's (see "Open decisions").
 Every phase keeps the existing rules: config not code, strictly passive (never click or type
 into a portal), global fixes rather than page-shaped ones, "dataset" not "return", the 4-level
 submit ladder, and every change passes `tests/test_sgt_replay.py` plus a `tools/sgt_replay.py diff`
@@ -782,3 +785,564 @@ key once the PAN is read. A dataset known only by its ARN is keyed `...:FORM:ARN
   switch.
 
 Tests: `tests/test_sgt_live.py`.
+
+---
+
+## 14. SGT-C and SGT-I — a smarter SGT, without AI (proposed 2026-09-27)
+
+**Status:** proposed, nothing built. Supersedes §12. Written from a design conversation with the
+user on 2026-09-27; the ideas marked *(user)* are the user's own, the rest were proposed and
+checked in that conversation.
+
+**The one rule over everything in this section: no AI.** No trained model and no LLM, anywhere
+— not in capture and not in offline authoring. Everything below is geometry, checksums, grammar
+rules, constraint checks and counting. Every decision can be repeated and explained in one line.
+
+Every rule from earlier sections still holds: config not code, strictly passive (never click or
+type into a portal), global fixes rather than page-shaped ones, "dataset" not "return", the
+4-level submit ladder, one sighting of a PAN/GSTIN attributes at once, never drop a dataset, and
+every change passes `tests/test_sgt_replay.py` plus a `tools/sgt_replay.py diff` on the corpus.
+
+---
+
+### 14.0 The whole idea on one page
+
+SGT is split into two halves *(user)*:
+
+* **SGT-C (Core)** is SGT as it is today. It captures the datapoints someone registered by hand
+  in `sgt_fields.json`, the same way every time. It is what the tracker trusts.
+* **SGT-I (Intelligence)** watches the same pages *beside* the Core. It learns how each portal is
+  built, works out where the user is, finds values nobody registered, discovers the rules those
+  values follow — and turns what it learns into **proposals**. It never changes what the Core
+  captures.
+
+The only road from SGT-I into SGT-C is **your approval**: an accepted proposal becomes an ordinary
+spec in `sgt_fields.json`, and from then on it is Core.
+
+```
+                 the browser page (read ONCE)
+                           |
+          +----------------+-----------------+
+          |                                  |
+      SGT-C (Core)                     SGT-I (Intelligence)
+   registered specs only          read-only copy of the page and
+   -> tracker rows                of what the Core captured
+          ^                                  |
+          |                          1  page map (nodes, zones, sections)
+          |                          2  every label -> value pair
+          |                          3  maths: the rules values follow
+          |                          4  the atlas: the portal, built bit by bit
+          |                          5  the GPS: where the user is
+          |                          6  what sentences claim, what pages are
+          |                          7  evidence, explanations, second opinion
+          |                          8  what Sera already knows
+          |                          9  what flashes, what is downloaded
+          |                         10  what was not understood
+          |                                  |
+          |                         11  the miner -> proposals -> SGT lab
+          |                                  |
+          +------------ YOUR APPROVAL -------+
+             (a proposal becomes a Core spec)
+
+   SGT-I may also: add extra facts to a row (route, explanation) in their own
+   fields, and ask the Core to read MORE often. Never less, never different.
+```
+
+Each numbered step in 14.4 uses what the step before it produced. Read them in order.
+
+---
+
+### 14.1 Why: the ceiling SGT is hitting
+
+SGT flattens each page into lines, then a regex looks for "label, then value". Every bug fixed so
+far was the same missing understanding, patched one at a time:
+
+| Bug we hit | What SGT did not understand | Fixed in general by |
+| :--- | :--- | :--- |
+| "Belated" read from the option list under "Filed u/s" | an option list vs the chosen value | step 1 (page map) |
+| A revised-return wizard's original ack read as a new submission | a reference to the past vs an event now | step 6 (sentences) |
+| "Search Box Input Field" captured as a client name | a control vs content | step 1 (zones) |
+| Landlord / donee PANs in the ITR wizard | whose section a value sits in | step 1 (sections) |
+| The truncated header name beating the profile name | how far each part of a page is trusted | step 1 (zones) + step 7 |
+| "Return Successfully Verified" drawn on step 1 of a stepper | what is to come vs what has happened | step 6 (sentences) |
+
+"Smarter" means SGT makes those distinctions itself, the same way on every portal.
+
+---
+
+### 14.2 The big rule: two halves, and the contract between them *(user)*
+
+**Why split at all:** SGT is now the office's only capture engine (§13). Intelligence is where
+new mistakes come from. The split means that if SGT-I ever misbehaves, it is switched off and SGT
+behaves exactly as it does today — nothing it learned can have damaged a single Core capture.
+
+**The contract — six rules:**
+
+1. **Information flows one way.** SGT-I gets a read-only copy of what the Core read and captured.
+   It never writes into the Core's sessions, slots or rows.
+2. **SGT-I reaches the Core only through your approval.** Proposals are accepted in the SGT lab
+   (step 11) and written as ordinary specs. Nothing learned is ever applied silently.
+3. **SGT-I may make the Core look harder, never less.** Asking for extra reads near a submission
+   (step 5) is allowed. Skipping a read, vetoing a capture or changing a value is not.
+4. **Enrichment sits beside the Core's values, never in place of them.** Route position
+   ("stopped at Payment"), explanations and second opinions go in their own fields on the row.
+5. **Failure is isolated.** SGT-I runs after the Core has finished each tick, on its own thread,
+   with a time budget. An exception, a budget overrun or a hang (watched by
+   `core/hang_watchdog.py`) switches SGT-I off for the rest of the run. The Core never notices.
+6. **One switch:** Settings → Tracker → **SGT-I: Off / On**. Off = exactly today's behaviour.
+
+**Graduation — how an intelligent rule becomes a Core rule.** Some intelligence would change
+captures if applied directly: OCR correction, "this ack is only a reference", dataset
+constraints, correction from the client list. Under rule 3 they start as a **second opinion**:
+SGT-I flags its disagreement on the row, and the Core's value stands. A rule graduates into the
+Core only when (a) the replay suite and a corpus diff show it helps and breaks nothing, and
+(b) you approve it. It then becomes a toolbox tool or a spec like any other. This is the same
+road SGT itself took from shadow to live.
+
+**The one shared part: reading the page.** The Core reads *lines*; SGT-I wants *nodes*. Reading
+twice would double the UIA cost (41–935 ms a page, §7), so both share **one** read. The gate:
+the lines produced from the new node read must be **identical** to today's lines on the whole
+recorded corpus before the Core switches to it. Until they are, the Core keeps its current
+reader and SGT-I does its own read, on its own budget.
+
+---
+
+### 14.3 What goes where
+
+| SGT-C (Core) — built today, registered by hand | SGT-I (Intelligence) — learns, infers, proposes |
+| :--- | :--- |
+| scope gate (allowed portals), change gate | page map: zones, sections, layout pairing (step 1) |
+| reading the page: UIA, OCR fallback (shared read) | every label → value pair, generic types (step 2) |
+| `sgt_fields.json`, loader + self-tests, toolbox | maths: shapes, checksums, relations (step 3) |
+| resolver (profile, records, dataset in progress) | the atlas (step 4) |
+| profile builder, latching, name promotion | the GPS (step 5) |
+| submit ladder, `submit_rules`, `dataset_rules` | sentences and page kinds (step 6) |
+| identity rules, contradiction splits | evidence ledger, explanations, second opinion (step 7) |
+| sessions, crash snapshot, recovery | client list, tracker expectations, self-healing (step 8) |
+| tracker rows, live keys, unattributed path + phone alert | UIA events, diffing, Downloads (step 9) |
+| HUD pill | the "not understood" report (step 10) |
+| replay harness, golden tests | the miner and the SGT lab (step 11) |
+| | page recorder (`sgt_corpus.py`), health watch (`sgt_health.py`) — they only observe |
+
+---
+
+### 14.4 One page's journey through SGT-I, step by step
+
+#### Step 1 — Read the page as a map, not a list of lines
+
+*In plain words:* today SGT sees a page like a shopping list. Step 1 sees it like a floor plan —
+what is a heading, what sits in which box, what is a table, what is a pop-up.
+
+* **Nodes, not lines.** Each piece of text keeps its role, its box on screen, its table row and
+  column, its heading level, its region (header / navigation / main / dialog), and whether it is
+  selected. OCR also returns boxes, so the same works on canvas portals.
+* **One cross-process call.** A UIA *cache request* (`FindAllBuildCache`) fetches all of this at
+  once. Today's reader asks element by element, so the richer read may even be *cheaper* than the
+  935 ms heavy page. **Measured before anything is built on it.**
+* **Zones, each trusted differently:** page header (the logged-in identity), main content, dialog
+  (what just happened), stepper (progress), help / FAQ (never evidence), navigation and footer
+  (ignored).
+* **Labels pair with values by layout:** to the right, directly below, or the same table row under
+  a column header — not by line order.
+* **Sections:** a value belongs to the heading it sits under. A PAN under "Landlord details" is
+  the landlord's.
+
+*Gives:* a structured page. *Feeds:* every later step.
+
+#### Step 2 — Pick up every pair: container → value *(user)*
+
+*In plain words:* SGT writes down every "label: value" pair on the page, even the ones nobody
+asked for — but it does not pretend to know what they mean.
+
+* The label is the **container**; what sits beside it is the **value**. Containers can nest:
+  `Bank Details › Account Number`. In a table, the column header is the container.
+* Values get **generic types**, not meanings: text, number, amount, date, code (letters and
+  digits mixed), email, phone, choice (a ticked option or dropdown value), percentage, yes/no.
+  Specific meanings (PAN, period…) exist only in the Core's registered specs.
+* **Privacy rule:** unknown pairs include things SGT must never store — Aadhaar, bank account
+  numbers, IFSC, addresses, family members' PANs. So SGT-I keeps the **container, the type and the
+  masked shape** (`9999 9999 9999`), **never the value**. A value is stored only after you
+  register that container as a Core datapoint.
+
+*Gives:* a list of (container, type, shape) for every page. *Feeds:* step 3 (what to measure) and
+step 4 (what to remember).
+
+#### Step 3 — Recognise patterns with mathematics *(user)*
+
+*In plain words:* by looking at many values from the same container, SGT works out the rules they
+obey — their shape, their check digit, what is hidden inside them — and proves it with numbers.
+
+* **Shape grammar.** Each value becomes a class string (`AAAAA9999A`: A = letter, 9 = digit).
+  Across many values the common shape is generalised into a pattern ("always exactly 15 digits").
+  This drafts a spec's regex without anyone writing it.
+* **Checksum discovery.** Known check-digit schemes (Luhn, Verhoeff, mod-11, mod-36) are tested
+  against a container's values. The maths bounds luck: a random value passes a mod-36 check 1 time
+  in 36, so 30 values all passing by chance is about 1 in 10^46. Found this way, a checksum is a
+  proven fact, not a guess.
+* **Values inside values.** Is part of one container always equal to another? This finds, unaided,
+  that a GSTIN contains the PAN (characters 3–12) and that an ITR ack ends with its own date
+  (DDMMYY).
+* **Relations between containers.** "Filed on ≤ Processed on" always; "Total = sum of the rows".
+  Invariant mining — counting, the idea behind the Daikon tool, not learning.
+* **What kind of container is it?** Pure counting answers it:
+
+  | How its values behave | What the container is |
+  | :--- | :--- |
+  | identical for every client | template text, not data |
+  | a few values that repeat | a vocabulary (e.g. status wording) |
+  | stable for one client across sessions, different between clients | a **profile** datapoint |
+  | changes for the same client from period to period | a **dataset** datapoint |
+  | unique every time | an identifier |
+
+* **Where maths stops:** it proves *structure*, never *meaning*. It can prove a container holds a
+  stable, checksummed, 15-character code belonging to the client; it cannot know the code is
+  called a GSTIN. The label and you supply the meaning.
+* **Measuring without keeping values** (step 2's privacy rule): SGT-I keeps only summaries —
+  shape counts, how often each checksum passes, and *salted hashes* to count distinct values and
+  test per-client stability. The hashes and their salt stay on their PC and never sync: the
+  space of possible PANs is small enough that an unsalted hash could be reversed by trying them
+  all.
+
+*Gives:* for every container, its proven shape, checks, relations and kind. *Feeds:* step 4 (the
+atlas records them) and step 11 (the miner drafts specs from them).
+
+#### Step 4 — Remember the portal: the atlas *(user — the fingerprint idea)*
+
+*In plain words:* like a phone enrolling a fingerprint — each touch captures part of the finger,
+the phone ignores the parts it already has and keeps only the new ones — SGT builds each portal's
+structure bit by bit, visit after visit.
+
+| Fingerprint enrolment | Portal atlas |
+| :--- | :--- |
+| each touch captures part of the finger | each page read captures part of a portal |
+| matched against what is already enrolled | matched against the pages already in the atlas |
+| known area ignored, new ridges added | known structure only counted; new sections, dialogs, columns added |
+| the print fills in over many touches | the portal fills in over many visits and many clients |
+
+**Where the analogy breaks — and what the atlas does about it:**
+
+1. **A finger never changes; a portal does.** Every part of the atlas carries first-seen and
+   last-seen dates. What is not seen for a while fades, then retires. A redesign shows exactly
+   what changed ("Date of Birth" gone, "DOB" appeared in the same place) — a far sharper alarm
+   than today's `sgt_health.py`.
+2. **A page mixes the portal's words with client data.** On a first visit SGT cannot tell the
+   label "PAN" from "RAVI MEHTA". Rule: text enters the atlas as *structure* only after it has
+   been seen **identical for several different clients**; until then only its masked shape is
+   stored. So the atlas holds no client data, can be synced between PCs, and outlives the 30-day
+   page recordings.
+
+**How it works:**
+
+* *Same page?* Decided by structure — the overlap of (role, label) sets — with the address only as
+  a hint (single-page apps reuse addresses).
+* *Lists:* a page with 3 cards and one with 14 are the same page; repeated blocks collapse into
+  one "repeating block" entry, or the atlas would grow without limit.
+* *Mixed text:* "Welcome, RAVI MEHTA" is stored as `Welcome, «name»`.
+* *Sometimes-there parts* (dialogs, error banners, expanded sections, tab panels) are optional
+  regions with how often they appear — the "new ridges".
+* *Cost:* merging a page is a few milliseconds.
+
+**Format:** one JSON file per portal, e.g. `sgt_atlas/gst.gov.in.json`, written atomically like
+`sessions_state.json`. Readable, diffable, syncable; SQLite only if it ever outgrows JSON.
+
+```json
+{
+  "portal": "gst.gov.in",
+  "version": 17,
+  "pages": [
+    {
+      "id": "p-3f9a",
+      "fingerprint": ["heading:Returns Dashboard", "label:Financial Year"],
+      "url_hints": ["/returns/auth/dashboard"],
+      "kind": "dashboard",
+      "first_seen": "2026-09-28", "last_seen": "2026-10-14",
+      "visits": 212, "clients": 41,
+      "regions": [
+        {"role": "dialog", "label": "Filing Successful", "optional": true, "seen": 38}
+      ],
+      "slots": [
+        {"container": "Financial Year", "type": "choice", "shape": "9999-99",
+         "kind": "dataset", "claimed_by": "gst_fy"}
+      ]
+    }
+  ],
+  "transitions": [{"from": "p-3f9a", "to": "p-81c2", "count": 96}]
+}
+```
+
+**Written rule:** the Core never *needs* the atlas. Empty or corrupt atlas = SGT exactly as today.
+
+*Gives:* a lasting map of every portal. *Feeds:* step 5 (transitions), step 6 (page kinds),
+step 10 (what is unclaimed), step 11 (the miner works from it instead of raw recordings).
+
+#### Step 5 — Know where the user is: the GPS *(user)*
+
+*In plain words:* the atlas is the map; the GPS says where on it the user stands, which route they
+are on, and what usually comes next.
+
+* The atlas's transitions ("this page led to that one, 96 times") plus the last few pages visited
+  answer: **which page**, **which route** (e.g. a GSTR-3B filing path: dashboard → return →
+  preview → payment → submit → confirmation), **how far along** (step 4 of 6, confirmation next).
+* It is a **graph, not a chain**: back/forward, reloads and bookmarks are normal. A page shared by
+  several routes (payment) is settled by the short lookback; if still unclear, no guess.
+* Routes are **not** written by hand: a route is a frequent path from a starting kind to a
+  confirmation kind, named by what its pages say (the form).
+
+**What it gives:**
+
+1. **Read harder near the finish line** — the biggest capture gain. When the next page is usually
+   the confirmation, SGT-I asks the Core to loosen the change gate and read more often, so a
+   success toast shown for under a second is not missed. Elsewhere reads can stay as they are.
+   (Contract rule 3: more, never less.)
+2. **Context carried along the route.** A confirmation that leaves out the form or period gets them
+   from the route it came along — a principled version of §10's "dataset in progress". Offered as a
+   second opinion until it graduates.
+3. **Rows show where work stopped** — *decided 2026-09-27: option 1, rows only.* A row can say
+   "reached Payment, not submitted" instead of a bare "Draft". There is **no** live view of where
+   each PC is right now.
+4. **Dead reckoning:** when a page cannot be read (loading, UIA blind), the likely position comes
+   from the previous page plus the usual transition.
+5. **Odd jumps** (a GSTR-1 route jumping into a GSTR-3B confirmation) are flagged rather than given
+   the wrong context. A tab switch in the same window shows up as such a jump and closes the route.
+
+*Guards:* context flows only along observed transitions, inside one session; a value read on the
+page itself always wins; the dashboard or a logout ends the route. The GPS stores no client data.
+
+*Gives:* position, route and progress. *Feeds:* step 7 (context as evidence) and the Core's read
+timing.
+
+#### Step 6 — Understand what sentences claim, and what kind of page this is
+
+*In plain words:* "your return has been verified" and "you will receive an acknowledgement" both
+contain the right words; only one of them says something happened.
+
+* **Assertion checker** (rule-based, the NegEx technique from clinical text): every statement is
+  one of
+
+  | Class | Example |
+  | :--- | :--- |
+  | happened | "Your return has been successfully e-verified" |
+  | negated | "e-Verification failed", "not yet filed" |
+  | future / conditional | "You will receive an acknowledgement…", a stepper step not reached |
+  | reference to the past | "Acknowledgement Number of Original Return: …" |
+
+  Trigger words live in config. One mechanism covers the past-tense rule, the future-stepper rule
+  and the ack gate on every portal.
+* **Page kinds:** login, dashboard, profile, list, wizard step, confirmation, error, payment —
+  from content signals (a stepper, repeated cards, a dialog holding an identifier and *happened*
+  wording, a page that is mostly inputs) and from the atlas. Rules can then say "confirmation +
+  identifier + happened" once, for every portal, with no URLs and no per-page specs.
+
+*Gives:* what each statement means and what each page is. *Feeds:* step 7.
+
+#### Step 7 — Weigh the evidence, explain it, and give a second opinion
+
+*In plain words:* SGT-I keeps a notebook of *why* it believes each value — and says so on the row.
+
+* **Evidence ledger:** every value is a belief with its sightings — page, zone, source (UIA / OCR /
+  PDF), checks passed, route context (step 5), times seen. Its score comes from weights in config:
+  hand-set, then tuned by counting on the corpus. Statistics, not a model.
+* **Retraction:** when evidence turns out to come from another client's page, everything that
+  depended on it is withdrawn automatically (truth maintenance).
+* **Explanations on the row:** e.g. "Submitted & Verified — ack …270926 on a confirmation page +
+  'successfully e-verified', read twice, UIA." In its own field, beside the Core's value.
+* **Second opinion:** where SGT-I disagrees with the Core it says so on the row — "this ack looks
+  like a reference to the original return", "ITR-6 with an individual's PAN (P) cannot be right".
+  The Core's value stands until the rule graduates (14.2).
+* **Dataset constraints** it checks: ITR-6 needs a company PAN (C) and ITR-1 an individual's (P);
+  a quarterly form needs a quarterly period; an identifier's own date falls inside its period; a
+  form belongs to its portal.
+
+*Gives:* confidence, reasons and disagreements. *Feeds:* the rows (enrichment) and step 11
+(disagreements that keep being right are graduation candidates).
+
+#### Step 8 — Use what Sera already knows
+
+*In plain words:* Sera already has the office's client list and the tracker. They are the answer
+key.
+
+Local and read-only; nothing leaves the PC.
+
+* **The client list as a dictionary.** A PAN/GSTIN read that *fails* its shape and, after
+  correction, matches exactly one known client is recovered. A read that is already valid is
+  **never** swapped for another client's — a new client must not be snapped onto an old one.
+* **OCR correction by constraints** (from steps 2–3): candidates from known confusions (O/0, I/1,
+  S/5, B/8, Z/2) in the slots where they are possible, kept only if they pass the type's
+  arithmetic. A GSTIN with one misread character is recovered exactly by its checksum. More than
+  one survivor = no value.
+* **Name ↔ PAN cross-check** against the client list catches wrong-client reads. A masked value
+  (`98XXXXXX12`) may confirm an identity; it is never stored.
+* **Expectations from the tracker.** The tracker knows what is due (client X, GSTR-3B, August, not
+  submitted). When X's route reaches a confirmation, that filing is the prime candidate; a filing
+  for a period already filed is flagged as a revision or duplicate.
+* **Self-healing (known-value anchoring).** When a value Sera already holds for this client (PAN,
+  DOB, email, ack) appears where no spec reads it, the container beside it is recorded as a new
+  wording for that known field. "Date of Birth" renamed "DOB" is found this way.
+
+All of it is second opinion or proposal until graduated.
+
+*Gives:* corrections, cross-checks, expectations, new label wordings. *Feeds:* step 7 and step 11.
+
+#### Step 9 — Catch what flashes, and what is downloaded
+
+*In plain words:* some evidence is on screen for under a second, and the best evidence of all is
+a PDF the user saves.
+
+* **UIA events:** live-region-changed, notification and window-opened events catch a toast shown
+  for under a second.
+* **Diffing:** comparing each page map with the previous one says what just *appeared*; a new
+  dialog *is* the event.
+* **Downloads folder** *(only if put in scope — open decision)*: the ITR-V / acknowledgement / ARN
+  receipt PDF, read as a third source beside UIA and OCR.
+
+*Gives:* events the polling misses. *Feeds:* step 7.
+
+#### Step 10 — Report what was not understood
+
+*In plain words:* SGT-I tells you where it is blind.
+
+Every page leaves a residue: containers and typed values that no spec claimed. Only counts and
+shapes are kept. The health report then says, for example, "GST confirmation pages: ARN-shaped
+value seen 4×, claimed 0×". Silent misses become visible, and each one is a lead for step 11.
+
+#### Step 11 — The miner and the SGT lab: from learning to a Core spec
+
+*In plain words:* everything steps 1–10 learned becomes a short list of suggestions. You say yes
+or no. A yes becomes part of the Core.
+
+**Where proposals come from** (all counting, none of it AI):
+
+1. **Template vs data** — from the atlas (step 4): every "fixed container → changing value" slot
+   that no spec claims. The same idea as the classic wrapper-induction algorithms RoadRunner and
+   ExAlg (string alignment, not learning).
+2. **Known-value anchoring** — from step 8: a new wording for a field the Core already knows.
+3. **Repeated structure → list records** — from the atlas's repeating blocks: the record spec for
+   a new list or table (where a card starts, its fields, which are required), with no
+   hand-written `start` regex.
+4. **Status wording from outcomes** — phrases that appeared just before an identifier first showed
+   up, for datasets whose status was later settled. **You map each to a ladder level**; the miner
+   never decides a level.
+5. **Graduation candidates** — second opinions (steps 7–8) that the replay shows would have been
+   right, offered as toolbox rules.
+
+**Every drafted spec is filled in from step 3:** the regex from the shape grammar, the checks from
+the proven checksums and relations, profile vs dataset from the container's behaviour.
+
+**Ranking and gates:**
+
+* *support* — seen for at least N different clients, never one session only;
+* *type consistency* — e.g. 98 % of the slot's values are dates; a mixed slot is dropped;
+* *placement* — never from help zones, controls or navigation, never a placeholder;
+* *replay diff on the whole corpus* — what the proposal adds; a proposal that would change **any**
+  existing capture is flagged red.
+
+**A proposal** is a card in the **SGT lab** screen: container, page kind, type, support, proven
+rules, drafted spec, replay diff. **Accept** writes it to the local override `sgt_fields.json`; a
+developer later promotes it into the shipped file.
+
+**Examples must be fictional.** Specs must carry examples (§4), and the shipped file goes into the
+installer and the repository. So drafted examples use made-up values of the same shape (a
+structurally valid fictional PAN, a GSTIN with a valid checksum) from a small generator per type.
+Real client values never reach it.
+
+**Teach by pointing** is the manual way in: click a value on a recorded page and name it; SGT
+works out container, zone and type, finds every other occurrence, and shows the same replay diff.
+
+---
+
+### 14.5 Privacy rules, all in one place
+
+1. Unknown values are never stored — only container, type and masked shape (step 2).
+2. Text enters the atlas as structure only when identical across several different clients
+   (step 4).
+3. Statistics over values use salted hashes; hashes and salt never leave their PC (step 3).
+4. The client list and tracker are read locally and read-only (step 8).
+5. Masked values confirm; they are never stored (step 8).
+6. Spec examples are fictional (step 11). The corpus never goes into the repository.
+7. What may sync between PCs: the atlas, GPS transitions and proposals — structure, counts and
+   shapes only.
+8. The GPS enriches rows only; there is no live view of where each PC is (decision 2026-09-27).
+
+---
+
+### 14.6 Limits and risks
+
+| Risk | Answer |
+| :--- | :--- |
+| More machinery, more ways to be wrong | the SGT-C / SGT-I split: switch SGT-I off and nothing it did remains in a capture |
+| SGT-I slows or hangs the Core | runs after the Core's tick, own thread, time budget, hang watchdog, switches itself off |
+| The shared read changes Core lines | node read adopted by the Core only when its lines are identical on the whole corpus |
+| New wording misread at first | sentences and page kinds abstain when unsure; step 10 shows where |
+| Weights and statistics need data | hand-set first; tuned by counting once the corpus has weeks of pages |
+| Cold start (atlas empty) | the Core never depends on SGT-I; SGT-I only adds as it learns |
+| Snapping a new client onto a known one | only reads that *fail* their shape are corrected, only to a unique match |
+| Maths finds structure, not meaning | meaning comes from the label and from you, in the SGT lab |
+
+**Found 2026-09-27:** `~/AmanAssociates_Sera/sgt_corpus/` on the dev PC holds only
+`pages_2026-09-22.jsonl`, while the SGT logs continue to 26 Sep. Recording appears to have
+stopped. The corpus is the fuel for steps 3, 7, 11 and every replay check, so it is step 0.
+
+---
+
+### 14.7 Build order
+
+Each step starts in a fresh session from this section and ends with a hand-off note in 14.9.
+
+| Step | What | Why here |
+| :--- | :--- | :--- |
+| 0 | Confirm / fix corpus recording | the fuel for everything |
+| 1 | The SGT-C / SGT-I split: the contract, the thread + budget + watchdog, the SGT-I switch, row fields for enrichment | the safety frame, before any intelligence exists |
+| 2 | Step 1 — page map; measure the cached read; lines-equivalence check on the corpus; recorder stores nodes | the foundation |
+| 3 | Step 2 — container → value pairs, generic types, masking | needs the page map |
+| 4 | Step 3 — the maths (shapes, checksums, values inside values, relations, container kinds) | needs pairs |
+| 5 | Step 4 — the atlas | needs pairs and maths |
+| 6 | Step 5 — the GPS; "read harder near the finish line"; rows show where work stopped | needs the atlas |
+| 7 | Step 6 — sentences and page kinds | uses atlas + page map |
+| 8 | Step 7 — evidence ledger, explanations, second opinions | uses everything above |
+| 9 | Step 8 — client list, tracker expectations, OCR correction, self-healing | needs decision 1 |
+| 10 | Step 9 — UIA events and diffing; Downloads if in scope | needs decision 2 |
+| 11 | Step 10 — the "not understood" report | small; can ride along from step 5 on |
+| 12 | Step 11 — the miner and the SGT lab screen | after weeks of atlas and corpus |
+
+---
+
+### 14.8 Decisions
+
+**Taken (2026-09-27):**
+
+* No AI anywhere, including offline spec drafting (the §12 masked-LLM idea is dropped).
+* SGT is split into SGT-C and SGT-I; intelligence must never affect Core capture.
+* GPS: rows only ("stopped at Payment"); no live position view.
+
+**Open (the user's):**
+
+1. **Client list and tracker:** may SGT-I read them (local, read-only) for step 8?
+2. **Downloads folder:** in scope for step 9, or does SGT stay page-only?
+3. **Mined datapoints with no tracker column** (refund amount, intimation date…): once registered,
+   stored in a per-dataset "details" bag shown in the row detail, or only shown in the SGT lab?
+4. **Approval:** approve every proposal (recommended for the first months), or auto-accept the
+   safest kind — a new wording for an existing field whose replay diff only adds captures?
+5. **Pooling:** should the admin PC combine every PC's atlas and proposals (structure, counts,
+   shapes — never values) through Sera Sync?
+
+---
+
+### 14.9 Words used in this section
+
+| Word | Meaning |
+| :--- | :--- |
+| node | one piece of a page with its role, box, table cell and region |
+| zone | a region of the page with its own trust: header, main, dialog, stepper, help, navigation |
+| container | the label a value sits under (`Bank Details › Account Number`) |
+| generic type | what a value looks like (date, amount, code…), not what it means |
+| shape | a value with letters as A and digits as 9 (`AAAAA9999A`) |
+| template | text that is the same for every client — the portal's own words |
+| atlas | SGT-I's lasting map of a portal, built visit by visit |
+| route | a usual path through a portal, e.g. a GSTR-3B filing |
+| second opinion | SGT-I's disagreement shown on a row; the Core's value stands |
+| graduation | an SGT-I rule becoming a Core rule, after replay proof and your approval |
+| proposal | a drafted spec waiting for your yes or no in the SGT lab |
+
+### 14.10 Hand-off notes
+
+- *(none yet)*

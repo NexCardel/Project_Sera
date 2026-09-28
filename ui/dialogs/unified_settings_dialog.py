@@ -716,27 +716,13 @@ class UnifiedSettingsDialog(QDialog):
         lay.setSpacing(0)
 
         lay.addWidget(_page_header("Action Buttons",
-            "Control which action buttons appear in the Client Detail view."))
-
-        self.btn_ext_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Ext\u2019 Button",
-            "Extension Autofill \u2014 fills portal credentials via the Sera browser extension.", self.btn_ext_check))
-
-        self.btn_assist_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Assist\u2019 Button",
-            "SMTI Manual Assist \u2014 manually triggers the multi-tab portal interaction flow.", self.btn_assist_check))
-
-        self.btn_copy_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Copy\u2019 Button",
-            "MECP Manual Copy \u2014 copies all service credentials to the clipboard in one click.", self.btn_copy_check))
+            "Each service gets one autofill button in Client Detail. Its type (Fast Autofill, "
+            "SMTI Assist or MECP Copy) is chosen per service in Services \u2192 Automation Mode."))
 
         self.show_hide_check = QCheckBox()
         lay.addWidget(_setting_row("Enable \u2018Show / Hide\u2019 Eye Buttons",
             "Shows a password-reveal toggle next to each credential field in Client Detail.", self.show_hide_check))
 
-        self.btn_ext_check.toggled.connect(self._on_control_changed)
-        self.btn_assist_check.toggled.connect(self._on_control_changed)
-        self.btn_copy_check.toggled.connect(self._on_control_changed)
         self.show_hide_check.toggled.connect(self._on_control_changed)
 
         lay.addStretch()
@@ -1209,7 +1195,7 @@ class UnifiedSettingsDialog(QDialog):
         restore_btn.setIcon(_icon("mdi.database-arrow-down", color=_DANGER))
         restore_btn.clicked.connect(self._on_restore_backup)
         lay.addWidget(_setting_row("Restore Database",
-            "Replace the live database with a previous backup. The app will restart. Use with caution.",
+            "Make a previous backup the data again (in an office: on every PC). The app will restart. Use with caution.",
             restore_btn, danger=True))
 
         import sera_keys
@@ -1281,10 +1267,7 @@ class UnifiedSettingsDialog(QDialog):
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
-        if hasattr(self, "btn_ext_check"):
-            state["btn_ext"] = self.btn_ext_check.isChecked()
-            state["btn_assist"] = self.btn_assist_check.isChecked()
-            state["btn_copy"] = self.btn_copy_check.isChecked()
+        if hasattr(self, "show_hide_check"):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
@@ -1383,10 +1366,7 @@ class UnifiedSettingsDialog(QDialog):
             if hasattr(self, "scc_opt4_str_edit"):
                 self.scc_opt4_str_edit.setText(g("scc_opt4_fixed_str", ""))
 
-        if hasattr(self, "btn_ext_check"):
-            self.btn_ext_check.setChecked(g("extension_autofill_enabled", "1") == "1")
-            self.btn_assist_check.setChecked(g("manual_assist_enabled", "1") == "1")
-            self.btn_copy_check.setChecked(g("manual_copy_btn_enabled", "1") == "1")
+        if hasattr(self, "show_hide_check"):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
 
@@ -1473,10 +1453,7 @@ class UnifiedSettingsDialog(QDialog):
                 if hasattr(self, "scc_opt4_str_edit"):
                     bulk_settings["scc_opt4_fixed_str"] = self.scc_opt4_str_edit.text()
 
-            if hasattr(self, "btn_ext_check"):
-                bulk_settings["extension_autofill_enabled"] = b(self.btn_ext_check)
-                bulk_settings["manual_assist_enabled"]      = b(self.btn_assist_check)
-                bulk_settings["manual_copy_btn_enabled"]    = b(self.btn_copy_check)
+            if hasattr(self, "show_hide_check"):
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)
 
 
@@ -1591,13 +1568,10 @@ class UnifiedSettingsDialog(QDialog):
 
     # ── Service actions ───────────────────────────────────────────────────────
     def _svc_reload(self):
+        from ui.dialogs.service_manager_dialog import service_mode_tag
         self._svc_list.clear()
         for svc in self.db.get_services():
-            mode_val = svc.get("automation_mode", "extension")
-            if mode_val in ("automated", "playwright") or not mode_val:
-                mode_val = "extension"
-            tag = "Extension (Autofill)" if mode_val == "extension" else "Manual (MECP)"
-            item = QListWidgetItem(f"{svc['name']}  [{tag}]")
+            item = QListWidgetItem(f"{svc['name']}  [{service_mode_tag(svc)}]")
             item.setData(Qt.UserRole, svc["id"])
             self._svc_list.addItem(item)
 
@@ -1684,6 +1658,9 @@ class UnifiedSettingsDialog(QDialog):
             QMessageBox.critical(self, "Backup Failed", str(e))
 
     def _on_restore_backup(self):
+        if getattr(self.db, "key_mode", None) == "office":
+            self._on_restore_office_backup()
+            return
         msg = QMessageBox(self)
         msg.setWindowTitle("Restore Source")
         msg.setText("How would you like to locate the backup?")
@@ -1719,6 +1696,63 @@ class UnifiedSettingsDialog(QDialog):
                 version.restart_app()
             except Exception as e:
                 QMessageBox.critical(self, "Restore Error", str(e))
+
+    def _on_restore_office_backup(self):
+        """Sera Sync v3 (P4-3b, D9): the restored backup becomes the data on every PC. Admin PC
+        only; a dry run with counts, and the user types RESTORE. Done at the next start."""
+        import os
+        import sync_restore
+        start = os.path.join(os.path.dirname(os.path.abspath(self.db.db_path)), "backups")
+        path = QFileDialog.getExistingDirectory(self, "Choose Backup Folder",
+                                                start if os.path.isdir(start) else "")
+        if not path:
+            return
+        try:
+            plan = sync_restore.plan_restore(self.db, path)
+        except sync_restore.RestoreRefused as e:
+            QMessageBox.warning(self, "Restore Not Possible", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Restore Error", str(e))
+            return
+        if not self._confirm_office_restore(plan):
+            return
+        try:
+            sync_restore.stage_restore(self.db, path, actor=self.actor)
+        except (sync_restore.RestoreRefused, sync_restore.RestoreError) as e:
+            QMessageBox.critical(self, "Restore Error", str(e))
+            return
+        QMessageBox.information(
+            self, "Restore Ready",
+            "The backup is ready to be restored. Sera will now restart to do it.")
+        import version
+        version.restart_app()
+
+    def _confirm_office_restore(self, plan) -> bool:
+        import sync_restore
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Restore Backup for the Whole Office")
+        lay = QVBoxLayout(dlg)
+        text = QLabel(plan.confirmation_text())
+        text.setWordWrap(True)
+        lay.addWidget(text)
+        lay.addWidget(QLabel(f"Type {sync_restore.CONFIRM_WORD} to continue:"))
+        edit = QLineEdit()
+        lay.addWidget(edit)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        ok = QPushButton("Restore")
+        ok.setProperty("class", "danger")
+        ok.setEnabled(False)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+        edit.textChanged.connect(lambda t: ok.setEnabled(t.strip() == sync_restore.CONFIRM_WORD))
+        cancel.clicked.connect(dlg.reject)
+        ok.clicked.connect(dlg.accept)
+        dlg.setMinimumWidth(480)
+        return dlg.exec() == QDialog.Accepted and edit.text().strip() == sync_restore.CONFIRM_WORD
 
     def _on_purge_duplicates(self):
         if QMessageBox.question(

@@ -51,7 +51,7 @@ For the visual design system, sidebar/navigation states, client-detail layout, a
   - Floats an on-page notification banner displaying client business name, owner name, and portal autofill confirmation.
 
 - **Instant Prompt-Free Auto-Unlock & Windows Autostart**:
-  - Auto-derives and decrypts vault on startup using local keyfile (`sera.key`).
+  - Unlocks the vault on startup with the office key stored under `keys/` (protected by Windows DPAPI; a master-password copy is kept for recovery).
   - Launches instantly into your workspace without popping up a master password login prompt on launch, while preserving full Admin PIN protection for administrative tasks.
 
 ---
@@ -66,7 +66,7 @@ playwright install chromium
 python main.py
 ```
 
-On first launch, Project Sera auto-derives and secures your vault using `sera.key`. Admin Mode remains protected by the Admin PIN (`1234` or custom PIN).
+On first launch, Project Sera asks whether to create a **New office** or **Join office** (6-digit code shown on the admin PC). The office key is kept per PC under `keys/`, protected by Windows, so Sera starts without a password prompt. Admin Mode remains protected by the Admin PIN (`1234` or custom PIN).
 
 ---
 
@@ -77,15 +77,16 @@ Project Sera stores encrypted vault data and session state in the user profile d
 ```text
 %USERPROFILE%\AmanAssociates_Sera\
 |-- master.db                  # SQLCipher encrypted client vault
-|-- rawPayload.db              # SQLite storage for tracker_dump filings
-|-- sera.salt                  # Salt for PBKDF2 vault key derivation
-|-- sera.key                   # Auto-unlock keyfile
+|-- rawPayload.db              # SQLCipher storage for tracker_dump filings (same office key)
+|-- keys\                      # Office key (DPAPI + master-password copy), office.json, device certificate
+|-- backups\                   # Daily backups (14 kept), pre-restore / pre-go-live copies
+|-- incoming\                  # Staged joins, restores and catch-ups (installed at start-up)
 |-- device_identity.txt        # Local machine GUID identifier
 |-- gemini_token_stats.json    # Gemini AI structured parser token and cost metrics
 `-- Vsdc_Captures\             # Local diagnostic captures (redirected from Program Files)
 ```
 
-`master.db` and `sera.salt` belong together: `master.db` is encrypted with SQLCipher, and `sera.salt` is required to derive the encryption key. You can synchronize these files between staff workstations using **Sera Sync** (Admin → Sera Sync) or Syncthing.
+Both databases are encrypted with the office key. Staff workstations share data through **Sera Sync** (Admin → Sera Sync), which copies changes field by field over the LAN; see [Operations & LAN Synchronization](docs/operations-sync.md). Don't copy the database files with Syncthing or cloud-sync tools. Old installs may still have `sera.key` / `sera.salt` from before the office key; only **Rejoin office** reads them.
 
 ---
 

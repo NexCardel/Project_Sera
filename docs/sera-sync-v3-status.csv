@@ -42,8 +42,8 @@ P3-8b,Done,Claude Sonnet 5,Claude Opus 5.5,1943770 (dialog fixes + 3 tests); ff8
 2026-09-26: 2026-09-26: full suite after review fixes: 1617 passed/11 failed(pre-existing)/3 skipped",2026-09-26 15:28
 P3-9,Done,Claude Opus 5.5,Claude Opus 5.5,55cf300,"2026-09-26: 2026-09-26: Review fixes: CLI- container keys remapped by gid (orphans dropped, kept in pre-golive), install renames retry 15 s on file lock, legacy push blocked if mode unreadable, restart warning in dialog; 35 go-live tests pass; full suite 1665 passed / 24 failed (same 11 usual + 13 environmental, none sync) / 3 skipped",2026-09-27 02:01
 P4-1,Done,Claude Sonnet 5,,e4abc77,"2026-09-27: Removed legacy v2 protocol (push_to/push_to_all/request_pull_from, inv_frames, Rev Score, bootstrap quarantine, force_override, PeerAuditLogManager); full suite 1656 passed / 11 failed (all pre-existing, none in sync) / 3 skipped",2026-09-27 13:46
-P4-2,In review,Claude Sonnet 5,,,"2026-09-27: 2026-09-27: Removed legacy password+salt startup path, P1-4 Convert-to-office-key migration feature, and legacy first-run pages; only P2-8 rejoin/salvage keeps reading sera.key/sera.salt; full suite 1615 passed / 11 failed (all pre-existing, none in sync) / 3 skipped",2026-09-27 14:33
+P4-2,Done,Claude Sonnet 5,,5552237,"2026-09-27: 2026-09-27: Removed legacy password+salt startup path, P1-4 Convert-to-office-key migration feature, and legacy first-run pages; only P2-8 rejoin/salvage keeps reading sera.key/sera.salt; full suite 1615 passed / 11 failed (all pre-existing, none in sync) / 3 skipped",2026-09-27 14:42
 P4-3a,Done,Gemini 3.8 Flash,,8f4d9c1,,2026-09-25 18:13
-P4-3b,Not started,,,,,
-P4-4,Not started,,,,,
+P4-3b,In review,Claude Opus 5.5,,,"2026-09-28: New sync_restore.py (dry run, stage, start-up rebuild with re-assert/deletes/audit, journaled swap), sealer sign_all, settings-dialog flow; 11 tests; tests not run yet",2026-09-28 11:26
+P4-4,In review,Claude Opus 5.5,,,"2026-09-28: New sync_compaction.py (floors, compaction, catch-up download + start-up install), engine wiring, harness dispatch/restart_node, test (g) + 13 tests; tests not run yet",2026-09-28 11:26
 P4-5,Not started,,,,,

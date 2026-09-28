@@ -456,9 +456,12 @@ class ClientDetailWindow(QWidget):
         # ======================================================================
         services = self.db.get_client_services(client_id)
         if services:
-            ext_setting = self.db.get_setting("extension_autofill_enabled", "1") == "1"
-            assist_setting = self.db.get_setting("manual_assist_enabled", "1") == "1"
-            copy_setting = self.db.get_setting("manual_copy_btn_enabled", "1") == "1"
+            # One button per service; the service's Automation Mode decides what it runs.
+            action_specs = {
+                automation.ACTION_AUTOFILL: ("Fast Autofill", "mdi.flash", self._launch_extension_autofill),
+                automation.ACTION_SMTI: ("SMTI Manual Assist", "mdi.clipboard-account-outline", self._launch_manual_assist),
+                automation.ACTION_MECP: ("MECP Manual Copy", "mdi.content-copy", self._launch_manual_copy),
+            }
 
             # Header row above services
             svc_hdr = QHBoxLayout()
@@ -471,10 +474,8 @@ class ClientDetailWindow(QWidget):
             shortcut_info = QLabel("ⓘ shortcuts: Alt+1..9")
             shortcut_info.setStyleSheet("color: #6E6D67; font-size: 10.5px;")
             shortcut_info.setToolTip(
-                "Shortcuts:\n"
-                "Alt+1..9 = Extension Autofill\n"
-                "Alt+Ctrl+1..9 = Manual Assist\n"
-                "Alt+Shift+1..9 = Manual Copy"
+                "Alt+1..9 runs the Nth service's autofill\n"
+                "(Fast Autofill, SMTI Assist or MECP Copy, as set in its Automation Mode)."
             )
             svc_hdr.addWidget(shortcut_info)
             self.scroll_layout.addLayout(svc_hdr)
@@ -487,12 +488,7 @@ class ClientDetailWindow(QWidget):
                 key_num = i + 1
                 has_shortcut = key_num <= 9
 
-                portal_mode = s.get("automation_mode", "extension")
-                is_manual_only = (portal_mode == "manual")
-
-                ext_on = ext_setting and not is_manual_only
-                assist_on = assist_setting
-                copy_on = copy_setting
+                action_label, action_icon, action_fn = action_specs[automation.service_action_mode(s)]
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
@@ -512,62 +508,20 @@ class ClientDetailWindow(QWidget):
                 svc_name.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
                 row_layout.addWidget(svc_name, stretch=1)
 
-                # 1. Ext Button (Extension Autofill)
-                if ext_setting:
-                    btn_ext = QPushButton()
-                    btn_ext.setFixedSize(36, 28)
-                    btn_ext.setCursor(Qt.PointingHandCursor if ext_on else Qt.ForbiddenCursor)
-                    btn_ext.setEnabled(ext_on)
-                    if ext_on:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#FFFFFF") if qta else QIcon())
-                        btn_ext.setIconSize(QSize(18, 18))
-                        btn_ext.setToolTip(f"Extension Autofill {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
-                        btn_ext.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
-                        btn_ext.clicked.connect(lambda _, svc=s: self._launch_extension_autofill(svc))
-                    else:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#555555") if qta else QIcon())
-                        btn_ext.setIconSize(QSize(18, 18))
-                        btn_ext.setToolTip("Extension Autofill is OFF" if not ext_setting else "Manual-only portal")
-                        btn_ext.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_ext)
-
-                # 2. Assist Button (Manual Assist)
-                if assist_setting:
-                    btn_assist = QPushButton()
-                    btn_assist.setFixedSize(36, 28)
-                    btn_assist.setCursor(Qt.PointingHandCursor if assist_on else Qt.ForbiddenCursor)
-                    btn_assist.setEnabled(assist_on)
-                    if assist_on:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#FF4D4D") if qta else QIcon())
-                        btn_assist.setIconSize(QSize(18, 18))
-                        btn_assist.setToolTip(f"Manual Assist {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
-                        btn_assist.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                        btn_assist.clicked.connect(lambda _, svc=s: self._launch_manual_assist(svc))
-                    else:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#555555") if qta else QIcon())
-                        btn_assist.setIconSize(QSize(18, 18))
-                        btn_assist.setToolTip("Manual Assist is OFF")
-                        btn_assist.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_assist)
-
-                # 3. Copy Button (Manual Copy)
-                if copy_setting:
-                    btn_copy = QPushButton()
-                    btn_copy.setFixedSize(36, 28)
-                    btn_copy.setCursor(Qt.PointingHandCursor if copy_on else Qt.ForbiddenCursor)
-                    btn_copy.setEnabled(copy_on)
-                    if copy_on:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#FF4D4D") if qta else QIcon())
-                        btn_copy.setIconSize(QSize(17, 17))
-                        btn_copy.setToolTip(f"Manual Copy {s['name']}" + (f" (Alt+Shift+{key_num})" if has_shortcut else ""))
-                        btn_copy.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                        btn_copy.clicked.connect(lambda _, svc=s: self._launch_manual_copy(svc))
-                    else:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#555555") if qta else QIcon())
-                        btn_copy.setIconSize(QSize(17, 17))
-                        btn_copy.setToolTip("Manual Copy is OFF")
-                        btn_copy.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_copy)
+                # The service's single autofill button (type set by its Automation Mode)
+                btn_action = QPushButton()
+                btn_action.setFixedSize(36, 28)
+                btn_action.setCursor(Qt.PointingHandCursor)
+                btn_action.setIconSize(QSize(18, 18))
+                btn_action.setToolTip(f"{action_label}: {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
+                if action_fn == self._launch_extension_autofill:
+                    btn_action.setIcon(qta.icon(action_icon, color="#FFFFFF") if qta else QIcon())
+                    btn_action.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
+                else:
+                    btn_action.setIcon(qta.icon(action_icon, color="#FF4D4D") if qta else QIcon())
+                    btn_action.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                btn_action.clicked.connect(lambda _, svc=s, fn=action_fn: fn(svc))
+                row_layout.addWidget(btn_action)
 
                 svc_list_layout.addWidget(row_widget)
 
@@ -578,20 +532,9 @@ class ClientDetailWindow(QWidget):
                     svc_list_layout.addWidget(item_div)
 
                 if has_shortcut:
-                    if ext_on:
-                        sc_ext = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
-                        sc_ext.activated.connect(lambda svc=s: self._launch_extension_autofill(svc))
-                        self._service_shortcuts.append(sc_ext)
-
-                    if assist_on:
-                        sc_assist = QShortcut(QKeySequence(f"Alt+Ctrl+{key_num}"), self)
-                        sc_assist.activated.connect(lambda svc=s: self._launch_manual_assist(svc))
-                        self._service_shortcuts.append(sc_assist)
-
-                    if copy_on:
-                        sc_copy = QShortcut(QKeySequence(f"Alt+Shift+{key_num}"), self)
-                        sc_copy.activated.connect(lambda svc=s: self._launch_manual_copy(svc))
-                        self._service_shortcuts.append(sc_copy)
+                    sc_action = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
+                    sc_action.activated.connect(lambda svc=s, fn=action_fn: fn(svc))
+                    self._service_shortcuts.append(sc_action)
 
             self.scroll_layout.addLayout(svc_list_layout)
 

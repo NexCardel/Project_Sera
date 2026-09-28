@@ -148,7 +148,8 @@ class SearchWindow(QWidget):
 
         self._activity_refresh_timer = QTimer(self)
         self._activity_refresh_timer.setInterval(60000)
-        self._activity_refresh_timer.timeout.connect(self._on_search_changed)
+        self._activity_refresh_timer.timeout.connect(self._on_activity_tick)
+        self._activity_stale = False
         self._activity_refresh_timer.start()
 
         self._current_mcl_cols = []
@@ -558,6 +559,16 @@ class SearchWindow(QWidget):
             self._restoring_scroll = False
         except Exception:
             self._restoring_scroll = False
+
+    def _on_activity_tick(self):
+        """The once-a-minute "5m ago" tag refresh rebuilds the whole grid on the UI thread - only
+        worth it while someone can see it. Minimised / in the tray / another page: note it and
+        let SeraApp run it when the window is back (2026-09-26: the app froze while minimised)."""
+        if not self.isVisible() or self.window().isMinimized():
+            self._activity_stale = True
+            return
+        self._activity_stale = False
+        self._on_search_changed()
 
     def _on_search_changed(self, *_):
         state_at_start = self._grid_state()     # before reading: a write during the rebuild counts

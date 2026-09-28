@@ -11,7 +11,28 @@ project_sera/
 |-- main.py                    # App entry point, signal bridge, update checker & event loop
 |-- database.py                # SQLCipher DB setup, CRUD, Audit Log, MCL, Cell Formatting, Tracker Dump & Backup/Restore
 |-- security.py                # Key derivation (PBKDF2), salt management & Argon2id PIN verification
-|-- sync_peer.py               # Built-in Sera Sync LAN peer discovery (UDP 49156) & P2P push (TCP 49157)
+|-- sync_peer.py               # Sera Sync service shell: LAN beacons (UDP 49156), activity log, legacy port 49157
+|-- sera_keys.py               # Office key: DPAPI store, master-password recovery blob, office.json, key id
+|-- sync_identity.py           # Per-PC device key + certificate (device_id)
+|-- sync_admin.py              # Office admin key, signed member / admin records, hand over / become admin
+|-- sync_transport.py          # Mutual-TLS sessions and framing (TCP 49159)
+|-- sync_pairing.py            # Pairing with a 6-digit code (TCP 49158, SPAKE2)
+|-- sync_discovery.py          # Discovery v3: beacons, address book, gossip, Add PC by IP
+|-- sync_snapshot.py           # Snapshot export / download / install (join, catch-up)
+|-- sync_office.py             # New office / Join office / Add workstation; session routing on 49159
+|-- sync_rejoin.py             # Rejoin office + salvage import of a PC's own old data
+|-- sync_migrate.py            # Checks a legacy password (used by Rejoin office only)
+|-- sync_schema.py             # Which tables/columns replicate and how (merge modes, row keys, FKs)
+|-- sync_tables.py             # gid columns and the _sync_* tables
+|-- sync_capture.py            # Capture triggers, sealer, hybrid logical clock, change signatures
+|-- sync_apply.py              # Apply engine: field LWW, tombstones, FK translation, parking, merges
+|-- sync_engine.py             # Session protocol, forwarding, pokes, scheduler (every 20 s)
+|-- sync_compaction.py         # Change-log compaction and catch-up of a PC that was away
+|-- sync_restore.py            # Restore a backup as the state on every PC (admin PC)
+|-- sync_backup.py             # Daily and pre-restore / pre-go-live backups
+|-- sync_shadow.py             # Shadow mode and go-live (the v3 switch-over)
+|-- sync_panel.py              # Data for the Sera Sync panel (conflicts, parked changes)
+|-- sync_network_probe.py      # Public-network warning
 |-- version.py                 # Version metadata & GitHub release check/download service
 |-- version.json               # GitHub auto-updater release definition
 |-- clipboard_watch.py         # Sera Clipboard Assist (SCA) ambient background listener
@@ -156,12 +177,14 @@ At runtime, the application stores data and session state in `%USERPROFILE%\Aman
 ```text
 %USERPROFILE%\AmanAssociates_Sera\
 |-- master.db            # SQLCipher encrypted client database
-|-- rawPayload.db        # SQLite storage for tracker_dump filings
-|-- sera.salt            # Salt file for PBKDF2 key derivation
-|-- sera.key             # Local vault keyfile for instant prompt-free auto-unlock
+|-- rawPayload.db        # SQLCipher storage for tracker_dump filings (same office key)
+|-- keys\                # office.json, office key (DPAPI + recovery), device certificate, admin key, sync_seq.json
+|-- backups\             # Daily backups (14 kept), pre-restore / pre-go-live / replaced copies
+|-- incoming\            # Staged joins, restores and catch-ups, installed at the next start
+|-- shadow\              # Files from the Sera Sync v3 switch-over
 |-- device_identity.txt  # Workstation identity label
 |-- gemini_token_stats.json # Gemini AI token usage & cost statistics
 `-- Vsdc_Captures\       # Local diagnostic captures (redirected to user profile)
 ```
 
-Both `master.db` and `sera.salt` belong together and can be pushed across the local network using **Sera Sync** or synchronized using Syncthing.
+Both databases are encrypted with the office key and shared between PCs only through **Sera Sync** (change replication over the LAN, see [operations-sync.md](operations-sync.md)); file-copy tools like Syncthing are not supported. `sera.salt` / `sera.key` may remain on old installs and are read only by **Rejoin office**.

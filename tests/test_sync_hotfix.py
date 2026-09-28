@@ -1044,7 +1044,6 @@ def test_sera_sync_dialog_add_pc_by_ip_validates_and_stores():
     mock_sync_service.get_peers.return_value = []
     mock_sync_service.get_activity_history.return_value = []
     mock_sync_service.get_network_category.return_value = {"is_public": False}
-    mock_sync_service.inv_frames = False
 
     class MockDB:
         def __init__(self):
@@ -1370,7 +1369,6 @@ def test_sera_sync_dialog_remove_pc_by_ip():
     mock_sync_service.get_peers.return_value = []
     mock_sync_service.get_activity_history.return_value = []
     mock_sync_service.get_network_category.return_value = {"is_public": False}
-    mock_sync_service.inv_frames = False
     mock_sync_service.get_manual_peers.return_value = []
 
     class MockDB:
@@ -1436,7 +1434,6 @@ def test_sera_sync_dialog_table_context_menu_remove():
     mock_sync_service.get_peers.return_value = []
     mock_sync_service.get_activity_history.return_value = []
     mock_sync_service.get_network_category.return_value = {"is_public": False}
-    mock_sync_service.inv_frames = False
     mock_sync_service.get_manual_peers.return_value = ["192.168.1.50"]
 
     class MockDB:

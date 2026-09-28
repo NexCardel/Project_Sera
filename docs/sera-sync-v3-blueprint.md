@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Design approved 2026-09-23. Nothing implemented yet. Doc version **1.8** (changelog in §10). |
+| **Status** | Design approved 2026-09-23. Doc version **1.9** (changelog in §10). |
 | **Agent table** | `docs/sera-sync-v3-agents.xlsx`: a read-only viewer showing which model may do which WP, and the status. Status lives in `docs/sera-sync-v3-status.csv` / `-checks.csv`, which agents update only through `tools/sync_v3_tracker.py` (§8). |
 | **Owner** | Nex |
 | **Baseline** | commit `4963ab8` (line numbers below refer to this commit) |
@@ -24,7 +24,22 @@ This document is written so a work package (WP) can be handed to an implementing
 7. **`sync_peer.py` and every new `sync_*.py` module must not import PySide6.** UI talks to them through callbacks, as today (`main.py` wires Qt signals).
 8. **`SUDR/` is not shipped. Don't edit it**, even though `SUDR/main.py` contains an old copy of the sync wiring. Only `main.py` at the repo root matters.
 9. `source_2/`, `backups/`, `.restore_points/`, `build/`, `package_*` are old copies. Don't edit them.
-10. At the end of every WP run the full suite: `venv\Scripts\python -m pytest tests -q`. Report the result honestly, including failures that were already there before you started.
+10. At the end of every WP run the full suite, **deselecting the known pre-existing failures** (none of them touch sync code; re-running them every WP just burns 10+ minutes for the same answer):
+    ```
+    venv\Scripts\python -m pytest tests -q ^
+      --deselect tests/test_dom_page_replace.py::TestDomPageRevisitReplace::test_dom_page_revisit_replaces_old_capture ^
+      --deselect tests/test_gst_dom_tracker.py::TestGstDomTracker::test_gst_summary_card_extraction_and_derived_pan ^
+      --deselect tests/test_purge_duplicates.py::TestPurgeDuplicates::test_purge_duplicates_with_different_serial_numbers ^
+      --deselect tests/test_raw_payload_db_and_srpf.py::TestRawPayloadDbAndSRPF::test_srpf_submission_status_and_chronological_ordering ^
+      --deselect tests/test_updater.py::TestUpdater::test_missing_remote_metadata_is_silent_no_update ^
+      --deselect tests/test_vsdc_beeper.py::test_live_gemini_flash_parsing ^
+      --deselect tests/test_vsdc_gemini_enricher.py::test_enrich_payload_empty_raw_text ^
+      --deselect tests/test_vsdc_gemini_enricher.py::test_enrich_payload_redacts_credentials_and_extracts ^
+      --deselect tests/test_vsdc_gemini_enricher.py::test_enrich_payload_offline_or_error_fallback ^
+      --deselect tests/test_vsdc_gemini_enricher.py::test_enrich_payload_from_scraped_data ^
+      --deselect tests/test_vsdc_gemini_enricher.py::test_enrich_payload_priority_override_of_noisy_ocr
+    ```
+    (confirmed failing, unrelated to sync, as of the P3-9 and P4-1 runs — 2026-09-27). Report the result honestly, including any *other* failure that appears (that one is new and matters). If a WP's own changes touch one of these files/areas, deselecting is wrong there — run it un-deselected and report what you find. Once in a while (start/end of a phase, §8.4) run the suite with **no** deselects, to notice if any of these got fixed or gained company; update this list if so. This is about routine WP runs, not about weakening or deleting a test (rule 4 still applies in full — the tests themselves are untouched).
 11. **When a T3 step in a WP says "stop and ask", do exactly that.**
 12. **Client privacy:** logs, test fixtures, reports and chat output may show only PAN, client name, status, ARNs/reference codes, form types, periods and timestamps. Never print or copy email addresses, phone numbers, bank details, addresses or passwords (same rule as `GEMINI.md`). Test data is invented, never copied from a real DB.
 13. **Keep the doc in step with the code:** see §8.3. You record progress and deviations; you don't rewrite the spec yourself.
@@ -42,7 +57,9 @@ The full model × tier matrix, with every Gemini model, is in `docs/sera-sync-v3
 
 ---
 
-## 1. What is broken today (evidence)
+## 1. What was broken before v3 (historical)
+
+> **Historical (P4-5, 2026-09-28).** These findings describe the v2 protocol at baseline `4963ab8`, before Sera Sync v3. Phases 0–4 fixed them; the table is kept because §5 and §9 refer to F1–F14. Current behaviour: `docs/operations-sync.md`.
 
 | # | Finding | Where | Effect |
 |---|---|---|---|
@@ -2281,6 +2298,57 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
   - **P4-5** (docs/test clean-up) should also update `docs/operations-sync.md` if it still describes the "Convert to office key" / legacy first-run join as current behaviour.
   - If the owner later decides to close deviation 1/2 (remove the now-dead P0-6 `fetch_snapshot` server branch and `JoinApprovalDialog`), the callers to touch are `sync_peer.py`'s `_handle_incoming_push` (the `if action == "fetch_snapshot":` block and `on_join_approval_requested`/`salt_path` constructor params), `main.py`'s `_on_join_approval_requested`/`_handle_join_approval_modal_main_thread`/`sync_bridge.join_approval_signal`, and `tests/test_sync_hotfix.py::test_join_approval_dialog_ui` / `tests/test_key_fingerprint.py::test_office_refuses_legacy_fetch_snapshot`.
 
+### P4-4 — Change-log compaction — In review — 2026-09-28
+- Model: Claude Opus 5.5   Commit: uncommitted
+- Tests: **not run yet** (the owner asked for one run at the end, with permission). New `tests/test_sync_compaction.py` (13): floor = lowest ack of the active members; a member not seen for 60 days is left out (59 days still counts); floors never go down and never pass what this PC holds; nothing is compacted when no other member was seen recently (own unsent changes stay); a member never seen counts from its `added_at`; tombstones kept 180 days; mode live only; a peer below the real floor gets `need_snapshot` and no changes; catch-up waits until the peer holds this PC's own changes; a snapshot without them is refused; a failed install and an interrupted install are put back. Accept: harness test (g) `tests/test_sync_convergence.py::test_convergence_offline_node_snapshot_recovery`, skip mark removed (3 nodes; the P3-0 placeholder had 2, see deviation 2).
+- Files: new `sync_compaction.py`; `sync_engine.py` (`compaction_floors()` reads the stored floors, `compact()`, `_maybe_compact()` after a scheduler round every 6 h in mode live, `_maybe_catch_up()` / `_catch_up()` / `_open_session_to()` after a session that got `need_snapshot`, events `catch_up_staged` / `catch_up_failed`); `main.py` (`_run_pending_catch_up()` at start-up before any DB is opened, start-up alert; `catch_up_staged` shown as a toast through the new `SyncSignalBridge.engine_alert_signal`); `tests/sync_harness.py` (nodes route sessions through `sync_office.dispatch_session` like the app, so a snapshot request works; `SyncHarness.restart_node(node, before_open=...)` for start-up installs).
+- How it works:
+  1. **Floors** (`sync_compaction.compact`): per DB file and stream, `min(ack of each eligible member)` capped at this PC's own `_sync_vector`, never lowered, stored as JSON in `_sync_meta.compaction_floors`. Acks = `_sync_peer_vectors` (the peer's final vectors of its last session). Eligible = active (not revoked) member other than this PC, last seen within 60 days; "seen" = newest `seen_at` over **both** DB files (a member with no raw streams would otherwise look never-seen in rawPayload.db), else the member record's `added_at`; an unreadable time counts as seen. `_sync_changes` rows with `origin_seq <= floor` are deleted; tombstones whose HLC is older than 180 days are deleted.
+  2. **Send side** (unchanged P3-5 code, now fed real floors): a peer whose vector for any stream is below our floor gets `need_snapshot {streams}` and no changes that session.
+  3. **Returning PC:** it has already sent its own changes in the same session. If the peer's final vectors cover this PC's own streams, a background thread asks that peer for `{"t": "snapshot"}` (the P2-6 service, which every PC serves), checks office id / key id / sha256 / key opens / integrity, and that the snapshot holds this PC's own changes as far as the peer acked them, then stages it in `incoming/catchup/` (pending.json with checksums and the process id). A toast asks for a restart.
+  4. **Install at start-up** (`apply_pending_catch_up`, after P3-9's go-live hook and the P4-3b restore hook): seals what the old DBs captured but hadn't sealed; builds `incoming/catchup/prep/` from the snapshot with this PC's device id and stream, the old DB's `next_seq`/`next_seq_stream`, max `last_hlc`, mode live, the old peer vectors and conflicts list, the old local-mode tables (client ids translated by gid, P3-9's `_copy_client_mapped`), `_local_*` tables and newer member records (P3-7b's `_carry_over_local_state`); the other PC's unsealed `_sync_pending` rows are dropped; own changes the snapshot doesn't have (made after the download) are carried over (P3-7b's `_carry_own_changes`). Then a journaled swap: old DBs + sidecars to `backups/pre-catchup-<ts>/` (§0 rule 3), prepared files into place; a crash is finished or put back at the next start. A failed install leaves the DBs unchanged and drops the staged download (the next `need_snapshot` stages a new one).
+- Deviations from spec (for the owner):
+  1. **Nothing is compacted when no other active member was seen in the last 60 days** (not in §5). Two cases: this PC is the one that was away (all its peers' acks are stale; "excluding members not seen for 60 days" would leave none, and a floor of "everything I hold" would delete its own unsent changes before they are sent, breaking "its own log is never compacted below what others have acked"), or it is alone in the office (its log keeps growing; a one-PC office is small). With at least one eligible member the own stream is never compacted beyond what that member acked.
+  2. **Test (g) uses 3 nodes, not 2** (the P3-0 placeholder had 2): because of deviation 1, the compacting PC needs another recently seen member.
+  3. **The returning PC keeps its own conflicts list and peer vectors**, not the snapshot's. The snapshot's parked changes are kept (they're recorded in its `_sync_changes`, so nobody would send them again).
+  4. **Relies on "every office-mode PC serves snapshots at any time"** (the §7 open item from the P3-7 review). The owner decided on 2026-09-26 to keep it (not yet written into §7); P4-4 needs it. Please fold that decision into §7.
+  5. **The catch-up is installed at the next start, not at once**: the user gets a toast and restarts when convenient (no file is replaced on a running app, §4.4). Until then this PC keeps syncing the streams it can.
+  6. **"Last seen" is recorded per session** in a new master.db meta key `_sync_meta.peer_seen` (JSON `{device_id: UTC time}`, written by `SyncEngine._store_peer_vectors` after every completed session). Peer vectors alone can't show it: they get rows only for streams that have changes, so a member that synced but owns no stream yet looked "never seen". Found by the first test run.
+- Notes for later WPs:
+  - `_sync_meta.compaction_floors` is a new meta key (JSON `{stream: seq}`); a snapshot carries the source's floors, which match the log it carries.
+  - A stalled stream (a gap nobody holds, P3-3/P3-5 notes) is still only reported. If such a PC is below another PC's floor it now gets `need_snapshot` and catches up.
+
+### P4-3b — Restore a backup → becomes the state on every PC (D9) — In review — 2026-09-28
+- Model: Claude Opus 5.5   Commit: uncommitted
+- Tests: **not run yet** (the owner asked for one run at the end, with permission). New `tests/test_sync_restore.py` (11). Accept: `test_restore_on_a_and_b_and_c_converge_to_the_backup_state` (3 nodes: restore on A, B and C converge to the backup state; an edit on B after the restore survives everywhere; one `office_restore` audit row on every PC) and `test_client_created_on_offline_c_survives_the_restore` (C offline creates W and edits a restored client; after heal W exists everywhere with no conflict row and nothing parked; C's older edit loses to the restore). Also: a client deleted after the backup comes back on every PC (under a new gid); the change set is signed with the admin key, the own stream has no gap and `keys/sync_seq.json` is raised; `_sync_members`, `_local_addresses`, device id and mode are kept, the replaced DBs are in `backups/replaced-by-restore-<ts>/` and the pre-restore backup in `backups/pre-restore-<ts>/`; only the admin PC; mode live only; a backup without rawPayload.db or with another key is refused; a failed install changes nothing; the confirmation text.
+- Files: new `sync_restore.py` (`plan_restore`, `stage_restore`, `apply_pending_restore`, `has_pending_restore`, `count_changes`, `RestorePlan`, `RestoreRefused` / `RestoreError`); `sync_capture.py` (`_seal_in_transaction(..., sign_all=False)`: sign every change, and fail instead of skipping without a key); `sync_compaction.py` (shared: `journaled_swap`, `recover_swap`, `seal_live`, `checkpoint`, `unique_dir`, `cancel_catch_up`); `main.py` (`_run_pending_restore()` at start-up before any DB is opened, start-up alert); `ui/dialogs/unified_settings_dialog.py` ("Restore from Backup" in office mode: choose the backup folder (starts in `backups/`), dry-run counts and the known limit, type `RESTORE`, stage, restart; the old path stays for a non-office DB).
+- How it works (§5 mechanics 1–5):
+  1. Staging backs up the current state (`sync_backup.backup_before_restore`), exports the backup's two files into `incoming/restore/new/`, sets them to mode off and opens them once with `SeraDatabase` so the backup's schema is migrated to the current one. Nothing live changes.
+  2. At the next start, before any DB is opened: the old DBs' unsealed captures are sealed; the staged copy is copied to `incoming/restore/prep/`; the current `_sync_*` and `_local_*` tables replace the backup's (members, change log, clocks, tombstones, vectors, sequence state, address book); `raw_repoints` jobs are dropped (they name today's local ids).
+  3. **Re-assert:** `_sync_clock` of every replicated non-append table is cleared and every row is queued as an upsert, then sealed (the P3-3 sealer: all columns because there is no clock, new HLCs, own stream, `sign_all`).
+  4. **Deletes:** every row key present today but not in the backup is queued as a delete and sealed (tombstone). Children of a removed parent are skipped (the parent's tombstone covers them, as with the capture triggers).
+  5. One `audit_log` row `action="office_restore"`: actor = who confirmed, detail = backup name, date and the counts (measured at install).
+  Then a journaled swap as in P4-4, and the sequence marks are raised from the new `next_seq`.
+- Deviations from spec (for the owner):
+  1. **A backup row whose gid is tombstoned (deleted after the backup) or merged away (`_sync_alias`) gets a new gid.** Every PC drops an upsert for a tombstoned gid ("delete always wins", P3-4), so re-asserting the old gid could never bring the client back. It comes back as a new row with the same data and token; its children follow (they're keyed by local id). A merged-away client that comes back may be merged again by the internal-PK rule.
+  2. **`audit_log` (append-only) is not reverted:** today's audit rows are kept (no PC can delete them, §4.4) and only backup rows missing today are re-sent. Reverting would leave the admin PC's log different from every other PC's for good.
+  3. **Local-mode tables come from the backup** (activity counters, `client_raw_containers` with its notes), consistent with the backup's local ids.
+  4. **A backup must have both files and be made by Sera Sync v3** (every client has a gid, same `_sync_meta.schema_version`). A pre-v3 backup would get random gids on migration and every client would count as new, so it's refused with a message.
+  5. **Mode live only**, and no restore while a go-live is staged. A staged catch-up (P4-4) is cancelled when a restore is staged (it would install an older snapshot over it).
+  6. `database.restore_from` (the old in-place restore, still used for a non-office DB and by `tests/test_syncthing_restore.py`) is left as it is; in office mode the UI no longer calls it.
+  7. **Settings revert too** (every `app_settings` key is office-wide, D7), including the admin PIN hash, to the backup's values. The confirmation doesn't mention it.
+- Notes for later WPs:
+  - The restore change set is as big as the database (every row sent once more); compaction (P4-4) trims it once every member has acked it.
+  - No UI test for the confirmation dialog (typed `RESTORE`) was written.
+
+### P4-5 — Docs + test clean-up — Partial (tracker status not set) — 2026-09-28
+- Model: Claude Opus 5.5   Commit: uncommitted
+- **Tracker:** `sync_v3_tracker.py set P4-5 --status "In progress"` was REFUSED (P4-3b and P4-4 aren't Done: they need their T3 review and a commit). The owner asked for the remaining phases in one go, so the docs were written anyway; the status stays "Not started" until P4-3b/P4-4 are Done, then set it (and re-check these docs against any review fixes).
+- Tests: not run yet (one run at the end, with the owner's permission). No test changed behaviour: only the dead `svc.inv_frames = False` / `mock_sync_service.inv_frames = False` fixture lines P4-1 left behind were removed (`test_sync_golive_ui.py`, `test_sync_hotfix.py` ×3, `test_sync_rejoin.py`, `test_sync_office_ui.py`, `test_sync_shadow_start_ui.py`, `test_sync_status_panel_ui.py`); nothing reads the attribute any more.
+- Files: `docs/operations-sync.md` rewritten for v3 (office key, devices, admin PC, joining, removing/rejoining, change replication, discovery, ports, compaction and catch-up, the panel, backups and the office-wide restore, what's not supported, files on disk); `README.md` (first-run, key storage, data folder, no Syncthing); `docs/project-structure.md` (every `sync_*.py` module and `sera_keys.py`, data folder); §1 of this blueprint marked historical (kept, since §5/§9 cite F1–F14); `ui/dialogs/unified_settings_dialog.py` restore row description.
+- Deviations from spec: none in content. §1 was marked historical rather than deleted (the spec allows either).
+- Left for the owner (from P4-1/P4-2 notes, still open): the dead P0-7 HMAC code and the unreachable legacy `fetch_snapshot` branch on port 49157 (`sync_peer._handle_incoming_push`, `JoinApprovalDialog`); `database.restore_from` and `tests/test_syncthing_restore.py` (the old in-place restore, no longer reachable in office mode). Each would be its own small WP.
+
 ## 10. Doc changelog
 
 - **1.0** (2026-09-23): initial blueprint.
@@ -2292,3 +2360,4 @@ You are <MODEL NAME, exactly as on the Models sheet> implementing work package <
 - **1.6** (2026-09-25): four open items from the P3-7 review added to §7 at the owner's request (none has a WP): peer digest exchange for the shadow convergence check (must be done before P3-9); the `enable_shadow_mode` re-enable guard can be bypassed through mode `off`; every office-mode PC now serves snapshots to members (owner decision); the cost of sealing on the committing thread is still unmeasured.
 - **1.7** (2026-09-25): five open items from the P3-8 review added to §7 at the owner's request (none has a WP): "Use discarded value" can't restore deleted rows; ordinary same-field losses never reach the conflicts list, which contradicts the D7 row (owner decision); no clock-drift warning in the panel; parked-change age not shown or logged (must be done before P3-9); small panel defects ("Run now" mode gate, conflict selection by row position, mixed timestamp formats, emit after the dialog is closed).
 - **1.8** (2026-09-26): owner chose to clear the P3-9 blockers first. New WPs in §3/§5: **P3-7a** peer digest exchange (convergence check), **P3-7b** turn on shadow mode (panel action, common start point — owner to choose, re-enable guard; T3), **P3-8a** shadow-week readiness (parked-change age read from the replicas in shadow mode, clock-ahead warning, seal timing), **P3-8b** panel defect fixes. P3-9 now depends on all four plus the P3-7 criteria. §6 step 5 and the matching §7 rows point at them. Found while scoping: nothing could turn shadow mode on, and edits made in mode `off` are never captured, so each PC's replica would start from a different state.
+- **1.9** (2026-09-27): owner decision: rule 10 (§0) now deselects the 11 confirmed pre-existing, sync-unrelated test failures on routine WP runs instead of re-running (and re-reading) the same known result every time; the full, undeselected suite is still run at phase boundaries (§8.4). The list is named in rule 10 itself, current as of the P3-9/P4-1 runs.

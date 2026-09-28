@@ -586,7 +586,10 @@ def seal(db_path: str, hex_key: str, db_name: str, *, master_path: Optional[str]
 
 def _seal_in_transaction(conn, db_name, gids: _GidLookup, get_signer, now_ms,
                          batch_rows: int = SEAL_BATCH_ROWS, signer_cache: Optional[dict] = None,
-                         seq_floor: int = 0) -> SealResult:
+                         seq_floor: int = 0, sign_all: bool = False) -> SealResult:
+    """One seal batch inside the caller's transaction. ``sign_all``: sign every change with the
+    admin key, not only admin-scoped ones (P4-3b: an office restore's change set); a change that
+    can't be signed then fails the batch instead of being skipped."""
     device_id = _meta(conn, "device_id")
     stream = _meta(conn, "stream_id")
     if not device_id or not stream:
@@ -680,7 +683,8 @@ def _seal_in_transaction(conn, db_name, gids: _GidLookup, get_signer, now_ms,
             data, hashes = None, None
 
         sig = None
-        if spec.mode == ADMIN_LWW:
+        needs_sig = spec.mode == ADMIN_LWW or sign_all
+        if needs_sig:
             if "key" not in signer_cache:
                 try:
                     signer_cache["key"] = get_signer() if get_signer else None
@@ -688,6 +692,8 @@ def _seal_in_transaction(conn, db_name, gids: _GidLookup, get_signer, now_ms,
                     _log.warning("seal: admin key unavailable (%s)", e.__class__.__name__)
                     signer_cache["key"] = None
             signer = signer_cache["key"]
+            if signer is None and sign_all:
+                raise RuntimeError("the office admin key is needed to sign this change set")
             if signer is None:
                 skipped_admin += 1
                 _log.warning("seal: %s change not sealed: this PC does not hold the office admin key",
@@ -700,7 +706,7 @@ def _seal_in_transaction(conn, db_name, gids: _GidLookup, get_signer, now_ms,
             "origin": stream, "origin_seq": next_seq, "hlc": hlc, "tbl": spec.name,
             "row_key": kt, "op": kind, "data": data,
         }
-        if spec.mode == ADMIN_LWW:
+        if needs_sig:
             sig = sign_change(change, signer)
         conn.execute(
             "INSERT INTO _sync_changes(origin, origin_seq, hlc, tbl, row_key, op, data, sig) "

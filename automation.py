@@ -61,14 +61,31 @@ class _AutofillBridge(QObject):
     failed = Signal(str, str)
 
 
+# A service's automation_mode picks the one autofill type its Client Detail button runs.
+# Stored values stay as they were ("extension", "manual") so older peers still read them.
+ACTION_AUTOFILL = "extension"   # Fast Autofill - extension fills the login form
+ACTION_SMTI = "smti"            # SMTI Manual Assist - on-page inject widget
+ACTION_MECP = "manual"          # MECP Manual Copy - floating copy card
+
+ACTION_MODES = (ACTION_AUTOFILL, ACTION_SMTI, ACTION_MECP)
+
+
+def service_action_mode(service: dict) -> str:
+    """The autofill type a service runs: ACTION_AUTOFILL, ACTION_SMTI or ACTION_MECP."""
+    mode = str((service or {}).get("automation_mode") or "").strip().lower()
+    if mode in ("smti", "assist", "manual_assist"):
+        return ACTION_SMTI
+    if mode in ("manual", "mecp", "manual_copy"):
+        return ACTION_MECP
+    return ACTION_AUTOFILL  # "extension", legacy "automated"/"playwright", or unset
+
+
 def is_manual_portal(service: dict) -> bool:
-    mode = str(service.get("automation_mode") or "extension").strip().lower()
-    return mode == "manual"
+    return service_action_mode(service) != ACTION_AUTOFILL
 
 
 def is_extension_portal(service: dict) -> bool:
-    mode = str(service.get("automation_mode") or "extension").strip().lower()
-    return mode != "manual"
+    return service_action_mode(service) == ACTION_AUTOFILL
 
 
 def is_itr_service(service: dict) -> bool:

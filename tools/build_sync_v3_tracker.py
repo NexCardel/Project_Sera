@@ -369,8 +369,16 @@ def build_viewer(plan: dict, out: Path):
                                  f'=COUNTIFS({W}!{rng("D")},A{n},{W}!{rng("J")},"Done")',
                                  f'=COUNTIFS({W}!{rng("D")},A{n},{W}!{rng("G")},"Yes*")'], start=1):
             body(ss.cell(row=n, column=col, value=v), bold=(col == 1))
-    ss.cell(row=t0 + 5, column=1, value="Status last refreshed from the CSV:").font = F_NOTE
-    ss.cell(row=t0 + 5, column=4, value='=IFERROR(MAX(StatusData!G:G)&"","")').font = F_NOTE
+    # Power Query loads "Updated" as text ("YYYY-MM-DD HH:MM"), so MAX(G:G) is always 0. Strip the
+    # separators to get a comparable number (202609261528), take the max, and format it back.
+    # AGGREGATE(14,6,...) evaluates the array natively (SUMPRODUCT(MAX(...)) implicitly intersects
+    # to one row in pre-365 Excel) and skips any cell that isn't a stamp. It is an Excel 2010
+    # function, so the file must store it as _xlfn.AGGREGATE.
+    stamp = ('_xlfn.AGGREGATE(14,6,--(0&SUBSTITUTE(SUBSTITUTE(SUBSTITUTE('
+             'StatusData!$G$2:$G$500,"-","")," ",""),":","")),1)')
+    ss.cell(row=t0 + 5, column=1, value="Latest status update in the CSV:").font = F_NOTE
+    ss.cell(row=t0 + 5, column=4,
+            value=f'=IFERROR(IF({stamp}=0,"",TEXT({stamp},"0000-00-00 00\\:00")),"")').font = F_NOTE
 
     # Phase Checks
     pcs = wb.create_sheet("Phase Checks", 2)
@@ -442,7 +450,19 @@ def build_viewer(plan: dict, out: Path):
 
 def attach_power_query(xlsx: Path, status_csv: Path, checks_csv: Path):
     """Uses Excel itself (COM) to add the two CSV queries, refresh them and save."""
+    import time
     import comtypes.client
+    from _ctypes import COMError
+
+    def busy_retry(fn, tries=60):
+        """Excel rejects calls while it is still loading (RPC_E_CALL_REJECTED / RETRYLATER); wait and retry."""
+        for i in range(tries):
+            try:
+                return fn()
+            except COMError as e:
+                if e.hresult not in (-2147418111, -2147417846) or i == tries - 1:
+                    raise
+                time.sleep(0.5)
 
     def m_formula(path: Path) -> str:
         p = str(path.resolve()).replace('"', '""')
@@ -452,33 +472,36 @@ def attach_power_query(xlsx: Path, status_csv: Path, checks_csv: Path):
                 'each {_, type text})) in AsText')
 
     xl = comtypes.client.CreateObject("Excel.Application")
+    r = busy_retry
     try:
-        xl.Visible = False
-        xl.DisplayAlerts = False
-        wb = xl.Workbooks.Open(str(xlsx.resolve()))
+        r(lambda: setattr(xl, "Visible", False))
+        r(lambda: setattr(xl, "DisplayAlerts", False))
+        wb = r(lambda: xl.Workbooks.Open(str(xlsx.resolve())))
         for sheet_name, query, path in (("StatusData", "SeraStatusCsv", status_csv),
                                         ("ChecksData", "SeraChecksCsv", checks_csv)):
-            wb.Queries.Add(query, m_formula(path))
-            ws = wb.Worksheets(sheet_name)
-            ws.Cells.Clear()
-            lo = ws.ListObjects.Add(0, 'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
-                                       f'Location={query};Extended Properties=""', None, 1, ws.Range("$A$1"))
-            lo.Name = query
-            qt = lo.QueryTable
-            qt.CommandType = 2
-            qt.CommandText = f"SELECT * FROM [{query}]"
-            qt.BackgroundQuery = False
-            qt.Refresh(False)
-            conn = qt.WorkbookConnection.OLEDBConnection
-            conn.BackgroundQuery = True
-            conn.RefreshOnFileOpen = True
-            conn.RefreshPeriod = 1
-        xl.CalculateFull()
-        wb.Worksheets("How to use").Activate()
-        wb.Save()
-        wb.Close(False)
+            r(lambda: wb.Queries.Add(query, m_formula(path)))
+            ws = r(lambda: wb.Worksheets(sheet_name))
+            r(lambda: ws.Cells.Clear())
+            anchor = r(lambda: ws.Range("$A$1"))
+            lo = r(lambda: ws.ListObjects.Add(
+                0, 'OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;'
+                   f'Location={query};Extended Properties=""', None, 1, anchor))
+            r(lambda: setattr(lo, "Name", query))
+            qt = r(lambda: lo.QueryTable)
+            r(lambda: setattr(qt, "CommandType", 2))
+            r(lambda: setattr(qt, "CommandText", f"SELECT * FROM [{query}]"))
+            r(lambda: setattr(qt, "BackgroundQuery", False))
+            r(lambda: qt.Refresh(False))
+            conn = r(lambda: qt.WorkbookConnection.OLEDBConnection)
+            r(lambda: setattr(conn, "BackgroundQuery", True))
+            r(lambda: setattr(conn, "RefreshOnFileOpen", True))
+            r(lambda: setattr(conn, "RefreshPeriod", 1))
+        r(lambda: xl.CalculateFull())
+        r(lambda: wb.Worksheets("How to use").Activate())
+        r(lambda: wb.Save())
+        r(lambda: wb.Close(False))
     finally:
-        xl.Quit()
+        r(lambda: xl.Quit())
 
 
 def main(argv=None) -> int:

@@ -56,6 +56,8 @@ class SyncSignalBridge(QObject):
     join_approval_signal = Signal(str, str, str, object)
     # SyncEngine's "synced" event (P3-5/P3-8): sorted list of tables an applied batch touched.
     engine_synced_signal = Signal(list)
+    # A message from the sync engine's thread for the toast (text, level); stays until dismissed.
+    engine_alert_signal = Signal(str, str)
 
 import security
 from database import SeraDatabase
@@ -197,6 +199,8 @@ class SeraApp:
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
+        self.sync_bridge.engine_alert_signal.connect(
+            lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
         self._synced_tables_pending = set()
         self._synced_tables_last_emit = 0.0
@@ -245,6 +249,10 @@ class SeraApp:
         self._run_pending_shadow_start()
         self._go_live_alert = None
         self._run_pending_go_live()
+        self._restore_alert = None
+        self._run_pending_restore()
+        self._catch_up_alert = None
+        self._run_pending_catch_up()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -547,8 +555,9 @@ class SeraApp:
             except OSError:
                 pass
 
-        if getattr(self, "_go_live_alert", None):
-            startup_alerts.append(self._go_live_alert)
+        for attr in ("_go_live_alert", "_restore_alert", "_catch_up_alert"):
+            if getattr(self, attr, None):
+                startup_alerts.append(getattr(self, attr))
 
         if startup_alerts:
             level = "error" if any(a[0] == "error" for a in startup_alerts) else "warning"
@@ -1397,6 +1406,54 @@ class SeraApp:
                                           "in your data directly. The previous database is kept in the "
                                           "shadow folder.", 15000)
 
+    def _run_pending_restore(self) -> None:
+        """P4-3b: a backup restore staged on the admin PC is done now, before any database is
+        opened; it then replicates to every PC. The outcome is a start-up alert."""
+        import sync_restore
+        app_dir = Path(self.app_dir)
+        if not sync_restore.has_pending_restore(app_dir):
+            return
+        try:
+            info = sync_restore.apply_pending_restore(app_dir)
+        except sync_restore.RestoreError as e:
+            print(f"[SeraApp] Restore failed: {e}")
+            self._restore_alert = ("error", f"The backup was not restored: {e}. Your data is unchanged.", 0)
+            return
+        except Exception as e:
+            # The office key couldn't be loaded: nothing was touched, retried at the next start.
+            print(f"[SeraApp] Restore not done yet: {e}")
+            self._restore_alert = ("warning", f"The backup could not be restored yet ({type(e).__name__}); "
+                                              "Sera will try again at the next start.", 0)
+            return
+        if info:
+            self._restore_alert = (
+                "warning",
+                f"Backup {info.get('backup_name')} restored: {info.get('clients_back', 0)} client(s) back, "
+                f"{info.get('clients_removed', 0)} removed, {info.get('fields_revert', 0)} field(s) reverted. "
+                "The other PCs follow when they sync.", 15000)
+
+    def _run_pending_catch_up(self) -> None:
+        """P4-4: a snapshot downloaded because this PC was below another PC's compaction floor
+        is installed now, before any database is opened."""
+        import sync_compaction
+        app_dir = Path(self.app_dir)
+        if not sync_compaction.has_pending_catch_up(app_dir):
+            return
+        try:
+            sync_compaction.apply_pending_catch_up(app_dir)
+        except sync_compaction.CatchUpError as e:
+            print(f"[SeraApp] Catch-up failed: {e}")
+            self._catch_up_alert = ("warning", f"Sera Sync could not install the office data it downloaded: {e}. "
+                                               "It will download it again.", 0)
+            return
+        except Exception as e:
+            print(f"[SeraApp] Catch-up not installed yet: {e}")
+            self._catch_up_alert = ("warning", f"Sera Sync could not install the downloaded office data yet "
+                                               f"({type(e).__name__}); it will try again at the next start.", 0)
+            return
+        self._catch_up_alert = ("warning", "This PC is up to date with the office again (it had been away "
+                                           "for a long time). Its own changes were kept.", 15000)
+
     def _handle_missing_office_db(self, app_dir: Path, db_path: str, hex_key: str) -> None:
         """Office mode requires an existing database; prevent silent initialization of empty DB (P1-6)."""
         from PySide6.QtWidgets import QMessageBox, QFileDialog
@@ -2234,6 +2291,12 @@ class SeraApp:
     # ------------------------------------------------------------------
 
     def on_sync_engine_event(self, kind: str, info: dict):
+        if kind == "catch_up_staged":
+            # P4-4: this PC was below another PC's compaction floor; a snapshot is staged.
+            self.sync_bridge.engine_alert_signal.emit(
+                "This PC was away from the office for a long time. Sera Sync has downloaded a fresh "
+                "copy of the office data; restart Sera to finish (your own changes are kept).", "warning")
+            return
         if kind == "synced":
             # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
             # for the UI to reload, and refreshing anyway would falsely tell the user a live

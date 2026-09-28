@@ -387,6 +387,7 @@ class DailyBackupScheduler:
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._check_lock = threading.Lock()     # the timer thread and check_soon() never overlap
 
     @property
     def is_running(self) -> bool:
@@ -407,8 +408,15 @@ class DailyBackupScheduler:
         self._thread = None
         _log.info("DailyBackupScheduler stopped")
 
+    def check_soon(self) -> None:
+        """check_now() on a short-lived background thread - for callers on the Qt main thread,
+        where a due backup (copying both databases) would freeze the window."""
+        threading.Thread(target=self.check_now, name="SeraDailyBackupCheck", daemon=True).start()
+
     def check_now(self) -> Path | None:
-        """Immediate check and run if conditions are met."""
+        """Immediate check and run if conditions are met. Skipped if a check is already running."""
+        if not self._check_lock.acquire(blocking=False):
+            return None
         try:
             return check_and_run_daily_backup(
                 self.app_dir,
@@ -422,6 +430,8 @@ class DailyBackupScheduler:
         except Exception as exc:
             _log.exception("Error in check_and_run_daily_backup: %s", exc)
             return None
+        finally:
+            self._check_lock.release()
 
     def _run(self) -> None:
         while not self._stop_event.is_set():

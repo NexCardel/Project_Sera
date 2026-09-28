@@ -201,6 +201,8 @@ def _stub_app_with_windows():
     app.detail_win.isVisible.return_value = False
     app.sidebar = MagicMock()
     app.shell = MagicMock()
+    app.shell.isVisible.return_value = True        # the window is open and in use
+    app.shell.isMinimized.return_value = False
     return app
 
 
@@ -371,3 +373,40 @@ def test_flush_seal_timing_called_on_quit():
         quit_cb()
         mock_flush.assert_called_once_with(app_dir)
 
+
+
+# ---------------------------------------------------------------- minimised / in the tray
+
+def test_refreshes_wait_while_the_window_is_minimised_and_run_once_when_it_is_back():
+    """A sync that lands while the app is minimised must not rebuild tables on the UI thread
+    (the app froze while minimised, 2026-09-26); the latest refresh per screen runs once the
+    window is restored."""
+    app = _stub_app_with_windows()
+    app.shell.isMinimized.return_value = True
+    app._handle_engine_synced_main_thread(["clients"])
+    app._handle_engine_synced_main_thread(["clients"])
+    app.dashboard_win.refresh.assert_not_called()
+    app.search_win.refresh.assert_not_called()
+
+    app.shell.isMinimized.return_value = False
+    app._run_deferred_refreshes()
+    app.dashboard_win.refresh.assert_called_once()
+    app.search_win.refresh.assert_called_once()
+
+    app._run_deferred_refreshes()          # nothing left over
+    app.search_win.refresh.assert_called_once()
+
+
+def test_skipped_minute_tick_catches_up_on_restore_unless_a_full_refresh_is_pending():
+    app = _stub_app_with_windows()
+    app.search_win._activity_stale = True
+    app.admin_win._activity_stale = True
+    app.shell.isVisible.return_value = False        # in the tray
+    app._handle_engine_synced_main_thread(["staff_users"])   # full admin refresh pending
+
+    app.shell.isVisible.return_value = True
+    app._run_deferred_refreshes()
+    app.search_win._on_activity_tick.assert_called_once()
+    app.admin_win.refresh.assert_called_once()
+    assert app.search_win._activity_stale is False
+    assert app.admin_win._activity_stale is False
