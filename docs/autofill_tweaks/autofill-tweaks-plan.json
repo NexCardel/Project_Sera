@@ -24,14 +24,12 @@
   }
  },
  "tiers": {
-  "_note": "A WP's 'model' names one of these tiers. Models are tried in order (Claude first, Gemini only as the fallback - owner decision 2026-09-27); the first whose runner is enabled, installed and not at its usage limit is used. Opus-level work stays on Claude (owner rule from Sera Sync v3: no Gemini for expert work).",
+  "_note": "Claude only (owner decision 2026-09-29: the Gemini fallback was unnecessary).",
   "sonnet": [
-   "sonnet",
-   "gemini-flash"
+   "sonnet"
   ],
   "haiku": [
-   "haiku",
-   "gemini-flash"
+   "haiku"
   ],
   "opus": [
    "opus"
@@ -58,7 +56,7 @@
    "coauthor": "Claude <noreply@anthropic.com>"
   },
   "antigravity": {
-   "enabled": true,
+   "enabled": false,
    "exe": "agy",
    "prompt": "arg",
    "args": [
