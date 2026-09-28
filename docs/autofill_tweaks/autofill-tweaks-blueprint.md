@@ -1,0 +1,362 @@
+# Autofill tweaks — blueprint
+
+**Status:** proposed 2026-09-28, nothing in this plan built yet (Part H, already built, is listed
+for context). Written from a design conversation with the user the same day. Built the way the SGT
+overhaul was: one set of rules, parts that each say *what is wrong → what changes*, work packages
+run one per fresh session by `tools/autofill_tweaks.py`, each ending with a hand-off note in §12.
+
+Covers every way Sera fills or offers a portal login:
+
+| Option | What staff do | Part |
+| :--- | :--- | :--- |
+| **Fast Autofill** | click the service's button in Client Detail; the extension fills the login form | C |
+| **SMTI** (Manual Assist) | a widget on the login page injects User ID / Password on click | D |
+| **MECP** (Manual Copy) | a floating card on the page with Copy buttons | E |
+| **SCA** (Clipboard Assist) | copy a client's id anywhere; pasting it on the portal fills the password | F |
+| **SCC** (Smart Credential Combinations) | Income Tax only: try PAN-based password combinations and save the one that works | G |
+
+---
+
+## 0. Rules over everything
+
+1. **The browser extension does no tracking of any kind** *(user, 2026-09-28)*. It never watches
+   pages, links, logins or filings. It only acts when staff press a button or copy a client id.
+   Capture is SGT's job (desktop, UI Automation); SGT does not use the extension at all.
+2. **Strictly passive toward portals.** Nothing Sera adds may click, submit, scroll or dismiss
+   anything on a portal by itself. (Fast Autofill's existing "click Continue/Login" is unchanged
+   by this plan; it is noted in §10 as a question for the user, not changed silently.)
+3. **Passwords never touch disk in the browser**, never reach page scripts, and never sit on the
+   clipboard longer than Settings → *clipboard clear* seconds.
+4. **Chrome and Firefox builds stay identical** in behaviour (`sera_extension/` and
+   `sera_extension_firefox/`; `tests/test_sca_v2.py` already enforces `sca/` being identical).
+5. **No AI.** Rules, wording lists, counting.
+6. **Release rules:** both extension manifests carry the same version; `version.json` is never
+   bumped before a release is published; nothing secret goes into an installer.
+
+---
+
+## 1. The whole plan on one page
+
+```
+ Part A  Extension: remove all tracking  ────────────────┐  (makes rule 1 true; removes the
+         (SDC, tracker.js, filing_detector, cookie wipe)  │   every-5th-injection cookie wipe)
+                                                          v
+ Part B  Shared plumbing: passwords off disk, one "open the portal tab" helper,
+         clipboard clearing, one per-tab "assist is open here" lock
+            |            |              |               |
+            v            v              v               v
+ Part C  Fast       Part D  SMTI   Part E  MECP    Part F  SCA
+         Autofill   field picking  card closes,     uses counted on fill,
+                    + re-inject    never flashes,   silent in an assist's tab,
+                    rule           closed shadow    portals only
+                                          |
+                                          v
+ Part G  SCC on UIA (SCC-U): SCC leaves the extension; SGT's page reads decide
+         whether a combination worked; a desktop card replaces the extension card
+```
+
+---
+
+## 2. What is wrong today — the findings, with where they live
+
+Numbers are the ones used in the conversation; every WP names the numbers it fixes.
+
+| # | Finding | Where | Part |
+| :--- | :--- | :--- | :--- |
+| 1 | Every 5th SMTI / MECP / Autofill injection clears **all cookies for every website** | `recordInjectionAndClearCookiesIfNeeded`, `background.js:1787` | A |
+| 2 | Plain-text passwords in `chrome.storage.local` (on disk): `activeAutofillPayload`, `manualAssistPayload`, `mecpPayload`, `sccActiveAttempt` | `background.js:850, 1738, 2363, 1964` | A, B, G |
+| 3 | Any open tab on the portal is taken over and navigated away (work in it is lost) | `handleAutofillTab`, `handleManualAssistTab`, `handleMECPTab` | B |
+| 4 | MECP card flashes and disappears when a portal tab is already open (injected before the navigation, then never again) | `handleMECPTab`, `background.js:2369` | B, E |
+| 5 | MECP card uses an **open** shadow root: page scripts can read the plain-text password | `mecpWidget`, `background.js:2112` | E |
+| 6 | Passwords copied by MECP / SMTI stay on the clipboard | `copyCredential`, `copyText` | B |
+| 7 | SMTI "Username" can type the User ID into the **password** box | `smartFill`, `background.js:1537` | D |
+| 8 | SMTI can fill the portal's hidden decoy field that Fast Autofill deliberately skips | `visible()`, `background.js:1353` vs `:629` | D |
+| 9 | SMTI widget re-appears on every logged-in GST page (`/auth` treated as a login URL) and on every page load in every tab of that host | `tabs.onUpdated`, `background.js:521` | D |
+| 10 | SCC saves a combination as "verified" on any URL change (Forgot password, going home, logging in with another password) and overwrites the client's saved IT password | `background.js:558`, `login.js:118`, `main._handle_scc_password_verified` | G |
+| 11 | Two SCC generators disagree (extension hardcodes `Link@`, `Income@2014`; shows empty rows) | `generateSccCombos` vs `db.generate_scc_passwords` | G |
+| 12 | SCA: a failed fill still uses up the copy, so "try again" is silently refused | `clipboard_watch.handle_password_request:343` vs `sca_coordinator.js:376` | F |
+| 13 | SMTI switches SCA off everywhere: disarms on every injection, `sca_fill_completed` consumes the arm, `manualAssistActive` blocks SCA on every site for 5 minutes | `background.js:1865, 43`, `sca_coordinator.js:453` | B, F |
+| 14 | SCA can hand one portal's password to another (first "pass" column fallback) | `clipboard_watch._password_status:213` | F |
+| 15 | MECP triggers SCA: its PAN copy arms SCA, SCA ignores the open MECP card and fills or covers it | `clipboard_watch:173`, `background.js:37` | B, E, F |
+| 16 | MECP card stays open after the password is copied (90 s, plain text on screen); the timeout leaves the payload in storage | `mecpWidget`, `background.js:2337, 2355` | E |
+| 17 | Neither UIA reader skips `IsPassword` boxes before reading their value | `vsdc_uia_text.py`, `sgt_i/uia_nodes.py` | G (W0-2) |
+| 18 | Dead code: toolbar-click handler (the extension has a popup, so it never fires); `login.js` "fallback autofill" listener (nothing sends it) | `background.js:358`, `login.js:70` | A |
+
+---
+
+## Part A — Remove all tracking from the extension
+
+**Goes (Chrome and Firefox):**
+
+* `sdc/` (core, toast, ITR / GST / TRACES / MCA protocols), `tracker.js`,
+  `content_scripts/filing_detector.js`, and their `web_accessible_resources` entries.
+* In `background.js`: SDC injection on every page load and at start-up (`injectSDC`,
+  `injectAllOpenTabs`, `sdcInjectedTabs`), `broadcastTrackerState`, `trackingTabId` /
+  `activeAutofillPayload`, the `uncertain_result` report on tab close, and forwarding of
+  `filing_result`, `sudr_capture`, `sdc_session_timeline`, `session_start`, `audit_event`.
+* Tracker / FST / SDC / VSDC settings in the extension and its popup.
+* **The cookie wipe (#1)**: `recordInjectionAndClearCookiesIfNeeded`, `clearBrowserCookies`,
+  `injectionCount`, and the `browsingData` / `cookies` permissions.
+* Dead code (#18).
+* **Not in Part A:** SCC's page watching (the tab-URL observer, `checkSccLoginSuccess`,
+  `checkUnregisteredSccTrigger`). It is removed in Part G once the desktop replacement works, so
+  SCC is never left with no way to verify. (Deleting `sdc/` removes the `itr_protocol.js` copy of
+  the unregistered-PAN trigger early; `login.js` keeps its copy until Part G.)
+
+**Desktop side:** remove the bridge handlers that only served extension tracking
+(`ui/ws_bridge.py` ~305–328), stop sending tracker fields in `automation.update_extension_settings`
+and `request_settings` replies, and remove extension-only tracker toggles from Settings. **Every
+toggle is checked first:** anything SGT, VSDC or VSDC247 reads stays.
+
+**Proof:** a grep over both extension folders finds no page-watching code; SGT tests and a
+`tools/sgt_replay.py diff` show capture unchanged.
+
+---
+
+## Part B — Shared plumbing
+
+**B1. Passwords off disk (#2).** SMTI and MECP payloads move to `chrome.storage.session` (memory,
+cleared when the browser closes; Firefox ≥ 115 has it). On start-up, any old
+`manualAssistPayload` / `mecpPayload` / `sccActiveAttempt` / `activeAutofillPayload` left in
+`storage.local` is deleted. A test scans every `storage.local.set` call site for a password field.
+
+**B2. One "open the portal tab" helper (#3, #4).** `openPortalTab(url, onReady)` used by Fast
+Autofill, SMTI and MECP:
+* reuse an open tab only when it is showing that portal's **login page** (decision D5), else open
+  a new tab;
+* attach the "page finished loading" listener **before** navigating; inject once, after load;
+* if the tab is already on the exact URL and loaded, inject without reloading;
+* every listener removes itself after 30 s.
+
+**B3. Clipboard clearing (#6).** Any password the extension copies is cleared after the desktop's
+*clipboard clear* seconds (sent in the settings sync), only if the clipboard still holds it.
+Best effort: a page cannot always write the clipboard when it is not focused; this is stated in
+the UI tooltip, not hidden.
+
+**B4. Per-tab assist lock (#13, #15).** Replace the global `manualAssistActive` flag with a map
+`tabId → "smti" | "mecp"` kept in the background (memory). SCA stays silent **in that tab only**
+while its assist is open; every other tab and client works normally.
+
+---
+
+## Part C — Fast Autofill
+
+* Uses B2 (no tab take-over, no double injection) and loses the cookie wipe (Part A).
+* No tracking payload: `activeAutofillPayload` is gone with Part A, so no password is stored.
+* **Built already (Part H):** each service's Automation Mode decides whether its button runs Fast
+  Autofill, SMTI or MECP.
+* Open question D8 (not changed without the user): Fast Autofill auto-clicks the portal's
+  Continue/Login button after filling (`autoClickContinue`).
+
+---
+
+## Part D — SMTI (Manual Assist)
+
+* **Field picking (#7):** "Username" only ever targets a visible **non-password** input; if none is
+  found it copies instead of typing. "Password" only targets a password input (or the service's
+  configured selector).
+* **Visibility (#8):** the same rules as Fast Autofill (`isVisible`: zero size, `aria-hidden`,
+  `tabindex=-1`, `hiddenPassword` are skipped). One shared function, not two copies.
+* **Re-inject rule (#9):** only in the tab SMTI opened (B4's map), only while the payload is live,
+  and only when the page shows a visible login form (a password box or the configured username
+  field). No URL keywords.
+* **SCA (#13):** SMTI no longer disarms SCA or sends `sca_fill_completed`; B4 keeps SCA quiet in
+  SMTI's tab only.
+
+---
+
+## Part E — MECP (Manual Copy)
+
+* **Never flashes (#4):** via B2.
+* **Closed shadow root (#5)**, as SMTI and SCA already use.
+* **Closes when done (#16):** after the password is copied, the card closes (decision D6: after the
+  password copy, or after both User ID and password are copied). A timer bar with pause-on-hover
+  replaces the silent 90 s; timeout and ✕ both clear the payload.
+* **Does not set off SCA (#15):** B4 in the browser, plus on the desktop: when Client Detail
+  launches MECP (or SMTI) for a client, `clipboard_watch` does not arm SCA for that client's ids
+  for the next 5 minutes.
+* **No SCC mode:** after Part G, MECP is always the plain card; unverified Income Tax clients get
+  the SCC card instead.
+
+---
+
+## Part F — SCA (Clipboard Assist)
+
+* **A use is spent on a successful fill, not on handing over the password (#12).** The desktop
+  counts grants separately and caps them at uses + 2, so a failed fill can be retried without
+  opening the door to repeated requests.
+* **Denials are shown (#12):** a `SCA_PASSWORD_DENIED` reaches the SCA notice staff already see.
+* **No "any column with pass in its name" fallback (#14):** a service with no password column
+  reports "no password".
+* **Scope (decision D7, default: portals only):** `login.js` is registered only on the approved
+  portal domains (the built-in government portals plus the configured services' hosts) with
+  `chrome.scripting.registerContentScripts`, re-registered when settings sync. It no longer runs
+  on other websites. (Host permissions stay broad: Fast Autofill / SMTI / MECP need them for
+  custom services. The point is that no script watches typing outside the portals.)
+
+---
+
+## Part G — SCC on UIA (SCC-U)
+
+SCC stays **Income Tax only**. Its page watching leaves the extension; SGT's existing UIA reads
+decide whether a combination worked; a desktop card replaces the extension's SCC card.
+
+### G.0 The idea on one page
+
+```
+ Income Tax, password page            (SGT already reads it: spec itr_pan, "#/login/password")
+          |
+ 1  NOTICE     SGT's read shows PAN P on the password page
+ 2  DECIDE     P registered + SCC-verified?  -> nothing;  otherwise -> attempt for P in this window
+ 3  CARD       desktop card beside the browser: PAN, combinations, saved password (D3),
+               Copy, "This one worked". Copies go through the desktop.
+          |    staff copy, paste and press Login themselves
+ 4  OUTCOME    SGT's next reads of the same window and session:
+                 wrong-password wording   -> that copy failed (x)
+                 lock-out wording         -> stop, warn staff
+                 logged-in header         -> login worked
+                 forgot / back / timeout  -> no conclusion
+ 5  WHICH ONE  exactly one Sera password copied since the last failure -> that one; else ask
+ 6  SAVE       one guarded save: never overwrites a different saved password silently (D2)
+ 7  CLOSE      card closes, clipboard cleared, outcome counted
+```
+
+Without SGT reading the portal (SGT Off), the card opens from Client Detail and **"This one
+worked"** is the only way to save.
+
+### G.1 The contract (built like SGT-I, `docs/sgt-blueprint.md` §14.2)
+
+1. **Read-only copy.** SCC-U receives an `Observation` (`core/sgt_i/observation.py`, reused) after
+   SGT-C finishes each page. It never writes into SGT's sessions, slots or rows.
+2. **More reads, never fewer:** while an attempt waits for an outcome, SCC-U may ask for extra
+   reads for at most 30 s after each copy (same bounded window as SGT-I's `read_harder`).
+3. **Own thread, budget and trip.** A failure switches SCC-U's automatic part off for the run; the
+   card and the manual button keep working.
+4. **One switch:** Settings → SCC → *Detect login automatically*: Off / On (default Off until the
+   live checks pass).
+5. **One way to write:** the guarded save (step 6).
+
+### G.2 The steps
+
+**Step 1 — Notice.** The trigger is SGT-C's own `itr_pan` result on the password page. The attempt
+is tied to the window (`hwnd`) and SGT's session id; SGT ends a session on a login link, so "back
+to login" or "another client" ends the attempt with no conclusion.
+
+**Step 2 — Decide.** Read-only client lookup: registered + SCC-verified → nothing; registered, not
+verified → attempt (saved password as an extra row, D3); unregistered → attempt (D4 on save). One
+card per PAN per window; closing it keeps it closed until the password page is reached again.
+
+**Step 3 — The card and every copy.** Pinned to the browser window's top-right, shown without
+taking focus. Rows: PAN, combinations from `db.generate_scc_passwords` only (empty ones left out,
+#11), saved password (D3); each with Copy and *This one worked*. Copies use the desktop clipboard
+with a new marker `application/x-sera-scc`, which `clipboard_watch` skips (no SCA arm). Each copy
+goes into the attempt's in-memory ledger. A Sera password for P copied any other way (MECP, Client
+Detail) is recognised by comparing in memory and added to the ledger; the text is never stored or
+logged.
+
+**Step 4 — Outcome.** Same window **and same SGT session** as the password page:
+* worked: a later page shows the logged-in header ("`<NAME>` Individual", as in `sgt_fields.json`;
+  a CA/ERI role does not count); any PAN or name shown must agree with P or its client;
+* wrong password: the portal's message on the password page → last copy ✗, next row highlighted;
+* locked out: stop and say so; never suggest another row;
+* neutral: OTP, secure-access message, e-verification steps;
+* no conclusion: forgot / reset password, a login link, another PAN, window closed, 10 minutes.
+
+All wording lives in `core/scc/scc_rules.json`, loaded with self-tests (`examples` /
+`counter_examples`, as SGT's specs). Real wording comes from the live probe (check list), never a
+guess.
+
+**Step 5 — Which one.** Distinct Sera passwords copied for P since the last wrong-password message:
+exactly one → that row; several → the card asks which; none → the card asks, with "None — I typed
+my own" (saves nothing). A ✗ row can't be credited in the same attempt.
+
+**Step 6 — Save.** `main._handle_scc_password_verified` becomes `core/scc/save.py`, used by the
+automatic path and the manual button; no browser message reaches it any more. Equal to the saved
+password → mark verified only; no saved password → save + verified; a **different** saved password
+→ D2; unregistered PAN → D4. Audit log: who, row label, when — never the value. Normal database path
+(Sera Sync carries it). Client Detail and search refresh.
+
+**Step 7 — Close and count.** Card closes after a save or ✕; clipboard clear still runs. Local
+counts only (attempts, worked, failed, locked, no conclusion, asked, saved, **not understood**), shown
+in Settings → SCC. A rising "not understood" count means the portal's wording changed.
+
+### G.3 Removed from the extension at the end of Part G
+
+The SCC mode of the MECP card, `generateSccCombos`, `sccActiveAttempt`, the tab-URL observer,
+`SCC_LOGIN_DETECTED`, `checkUnregisteredSccTrigger`, `TRIGGER_UNREGISTERED_SCC_MECP`, the
+`registered_pans` / `scc_settings` sync; on the desktop, the `scc_password_verified` bridge handler.
+
+---
+
+## Part H — Already built (2026-09-28, on `main` since 431db4b)
+
+Service box: selector fields removed; Automation Mode = the autofill type (`extension` = Fast
+Autofill, `smti` = SMTI, `manual` = MECP); one button per service in Client Detail, Alt+1…9 runs it;
+Ext/Assist/Copy toggles removed from Settings → Action Buttons; labels no longer boxed. Files:
+`automation.py`, `ui/dialogs/service_manager_dialog.py`, `ui/dialogs/unified_settings_dialog.py`,
+`ui/windows/client_detail_window.py`, `tests/test_service_automation_mode.py`.
+
+---
+
+## 9. Privacy rules, all in one place
+
+1. No password in `chrome.storage.local`, ever; SMTI / MECP payloads live in `storage.session`.
+2. No page script can read a password Sera shows (closed shadow roots only).
+3. Sera clears any password it put on the clipboard.
+4. SCC-U reads no password box; both UIA readers skip `IsPassword` elements (#17).
+5. SCC candidate values live only in desktop memory during an attempt; clipboard text is compared
+   in memory and never stored or logged; audit and counts hold labels, times and counts only.
+6. The extension watches nothing outside the approved portals (D7), and on them only what SCA needs.
+
+---
+
+## 10. Decisions
+
+**Taken (2026-09-28):**
+
+* No tracking of any kind in the browser extension (so the cookie wipe is removed, not scoped).
+* SCC's automatic part runs on SGT's UIA reads; desktop is the only combination generator; SCC stays
+  Income Tax only.
+* Workers decide anything else the most accurate + cheapest way and record it (`decide`).
+
+**Open (the user's) — each has a default; the WP that needs it asks with a 4-minute pop-up:**
+
+| # | Question | Default | Asked in |
+| :--- | :--- | :--- | :--- |
+| D1 | SCC combinations on a desktop card, or keep them in the extension's MECP card? | desktop card | W5-3 |
+| D2 | A *different* IT password is already saved: ask before replacing, or replace once login is confirmed? | ask | W5-6 |
+| D3 | Show the saved (unverified) password as a row so it can be verified too? | yes | W5-2 |
+| D4 | Unregistered PAN logs in: ask before adding the client, or add automatically (today)? | ask | W5-6 |
+| D5 | Tabs: reuse an open tab only when it shows the login page, or always open a new tab? | reuse login-page tab | W2-2 |
+| D6 | MECP closes after the password copy, or after both User ID and password are copied? | after password copy | W3-3 |
+| D7 | SCA: run only on approved portals, keep it everywhere, or remove SCA? | portals only | W4-3 |
+| D8 | Fast Autofill auto-clicks Continue/Login after filling: keep, or stop at filling? | keep (unchanged) | W3-1 |
+
+---
+
+## 11. Build order
+
+Run by `tools/autofill_tweaks.py` (the SGT overhaul dispatcher, pointed at this folder): one fresh
+session per WP, model per WP, retries, usage-limit sleeps with a live timer, questions by pop-up,
+decisions and hands-on checks recorded in CSVs, a live Excel viewer. Plan: `autofill-tweaks-plan.json`.
+
+| Phase | WPs | What |
+| :--- | :--- | :--- |
+| 0 | W0-1 … W0-2 | baseline; password guard in both UIA readers (#17) |
+| 1 | W1-1 … W1-R | Part A: remove extension tracking and the cookie wipe; desktop side; review |
+| 2 | W2-1 … W2-2 | Part B: passwords off disk; the tab helper |
+| 3 | W3-1 … W3-3 | Parts C–E: Fast Autofill on the helper; SMTI fixes; MECP card |
+| 4 | W4-1 … W4-R | Part F and B4: per-tab assist lock; SCA fixes; SCA scope; review |
+| 5 | W5-1 … W5-9 | Part G: SCC-U frame, rules, card, outcome, attribution, save, health, wiring, extension removal |
+| 6 | W6-1 … W6-R | docs, extension version (both manifests), final review |
+
+**Checks only a person can do** are added by workers as they go (`check-add`) and listed in
+`autofill-tweaks-checks.csv` — e.g. a real wrong-password attempt on Income Tax shows ✗ on the
+right row; a MECP card on an already-open GST tab stays up; SMTI on the ITR password step fills
+nothing into the wrong box. **Never test a portal lock-out on a real client account.**
+
+---
+
+## 12. Hand-off notes
+
+*(none yet)*

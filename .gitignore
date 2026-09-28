@@ -86,6 +86,14 @@ docs/.sera-sync-v3-tracker.lock
 !docs/sgt-overhaul-questions.csv
 .sgt-overhaul.lock
 logs/sgt-overhaul/
+# Autofill tweaks tracker (same machinery, task status only, no client data)
+!docs/autofill_tweaks/autofill-tweaks-status.csv
+!docs/autofill_tweaks/autofill-tweaks-runs.csv
+!docs/autofill_tweaks/autofill-tweaks-decisions.csv
+!docs/autofill_tweaks/autofill-tweaks-checks.csv
+!docs/autofill_tweaks/autofill-tweaks-questions.csv
+.autofill-tweaks.lock
+logs/autofill-tweaks/
 *.tmp
 ~*
 scratch/

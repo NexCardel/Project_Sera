@@ -1,0 +1,428 @@
+{
+ "about": "Autofill tweaks work packages (blueprint docs/autofill_tweaks/autofill-tweaks-blueprint.md). Fixed data: edit by hand only to re-plan. Live status is in autofill-tweaks-status.csv, written only by tools/autofill_tweaks.py.",
+ "deadline": "2026-09-29T01:30:00+05:30",
+ "models": {
+  "sonnet": {
+   "runner": "claude",
+   "id": "claude-sonnet-5"
+  },
+  "opus": {
+   "runner": "claude",
+   "id": "claude-opus-5-5"
+  },
+  "haiku": {
+   "runner": "claude",
+   "id": "claude-haiku-4-5-20251001"
+  },
+  "gemini-flash": {
+   "runner": "antigravity",
+   "id": "gemini-3.8-flash-high"
+  },
+  "gemini-pro": {
+   "runner": "antigravity",
+   "id": "gemini-3.1-pro-high"
+  }
+ },
+ "tiers": {
+  "_note": "A WP's 'model' names one of these tiers. Models are tried in order (Claude first, Gemini only as the fallback - owner decision 2026-09-27); the first whose runner is enabled, installed and not at its usage limit is used. Opus-level work stays on Claude (owner rule from Sera Sync v3: no Gemini for expert work).",
+  "sonnet": [
+   "sonnet",
+   "gemini-flash"
+  ],
+  "haiku": [
+   "haiku",
+   "gemini-flash"
+  ],
+  "opus": [
+   "opus"
+  ]
+ },
+ "runners": {
+  "claude": {
+   "enabled": true,
+   "exe": "claude",
+   "prompt": "stdin",
+   "args": [
+    "-p",
+    "--model",
+    "{model}",
+    "--output-format",
+    "json",
+    "--permission-mode",
+    "{permission_mode}",
+    "--allowedTools",
+    "{allowed_tools}",
+    "--disallowedTools",
+    "{disallowed_tools}"
+   ],
+   "coauthor": "Claude <noreply@anthropic.com>"
+  },
+  "antigravity": {
+   "enabled": true,
+   "exe": "agy",
+   "prompt": "arg",
+   "args": [
+    "--model",
+    "{model}",
+    "--output-format",
+    "json",
+    "--dangerously-skip-permissions",
+    "-p"
+   ],
+   "coauthor": "Gemini (Antigravity) <noreply@google.com>",
+   "_note": "agy 1.2.12 (Go flags; the prompt is the value of -p, so it goes last). Kept to the restricted mode (accept-edits + sandbox). Disabled until a test shows workers can run the tests in that mode; the unrestricted --dangerously-skip-permissions mode is the owner's decision, not the dispatcher's."
+  }
+ },
+ "cli": {
+  "permission_mode": "acceptEdits",
+  "allowed_tools": [
+   "Read",
+   "Edit",
+   "Write",
+   "Glob",
+   "Grep",
+   "TodoWrite",
+   "Bash(../APP/venv/Scripts/python.exe:*)",
+   "Bash(git status:*)",
+   "Bash(git diff:*)",
+   "Bash(git log:*)",
+   "Bash(git add:*)",
+   "Bash(git commit:*)",
+   "Bash(git show:*)",
+   "Bash(git rev-parse:*)",
+   "Bash(git stash:*)",
+   "Bash(ls:*)",
+   "Bash(cat:*)",
+   "Bash(head:*)",
+   "Bash(tail:*)",
+   "Bash(wc:*)",
+   "Bash(grep:*)",
+   "Bash(sed -n:*)",
+   "Bash(find:*)",
+   "Bash(mkdir:*)",
+   "Bash(cp:*)",
+   "Bash(mv:*)",
+   "Bash(rm:*)",
+   "Bash(echo:*)",
+   "Bash(date:*)",
+   "Bash(node:*)"
+  ],
+  "disallowed_tools": [
+   "Bash(git push:*)",
+   "Bash(git merge:*)",
+   "Bash(git rebase:*)",
+   "Bash(git reset --hard:*)",
+   "Bash(git checkout main:*)",
+   "Bash(git switch main:*)",
+   "Bash(git branch -D:*)",
+   "WebFetch",
+   "WebSearch"
+  ],
+  "run_timeout_min": 150,
+  "max_attempts": 3
+ },
+ "wps": [
+  {
+   "wp": "W0-1",
+   "phase": 0,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [],
+   "what": "Baseline: tests before any change",
+   "focus": "Change no code. Run and record pass/fail counts (and names of pre-existing failures) in your hand-off note: tests/test_sca_v2.py, tests/test_service_automation_mode.py, tests/test_clipboard_assist.py, tests/test_scc_vault_tagger.py, every tests/test_sgt_*.py, and `node tests/js/test_sca_coordinator.js`. Run `tools/sgt_replay.py baseline` (read its --help) and record where the baseline lives. Confirm Part H of the blueprint is on this branch (automation.service_action_mode exists)."
+  },
+  {
+   "wp": "W0-2",
+   "phase": 0,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W0-1"
+   ],
+   "what": "Password guard in both UIA readers (finding #17)",
+   "focus": "core/vsdc/vsdc_uia_text.py (the ValuePattern read in _collect_descendant_lines) and core/sgt_i/uia_nodes.py must never read the value of an element whose UIA IsPassword property is true (UIA_IsPasswordPropertyId; in uia_nodes add it to the CacheRequest). Skip the value, keep the label line. Tests with fake elements (tools/sgt_lines_equivalence.py's FakeElement shows the pattern). `tools/sgt_replay.py diff` must show no change. Never print or copy corpus content into the repo."
+  },
+  {
+   "wp": "W1-1",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W0-1"
+   ],
+   "what": "Part A: remove all tracking and the cookie wipe from the extension",
+   "focus": "Blueprint Part A, findings #1 and #18. In sera_extension/ and sera_extension_firefox/ (keep both identical in behaviour; sca/ must stay byte-identical, tests/test_sca_v2.py checks it): delete sdc/, tracker.js, content_scripts/filing_detector.js and their manifest entries; remove SDC injection (injectSDC, injectAllOpenTabs, sdcInjectedTabs, the SDC part of tabs.onUpdated), broadcastTrackerState, trackingTabId/activeAutofillPayload, the uncertain_result on tab close, forwarding of filing_result/sudr_capture/sdc_session_timeline/session_start/audit_event, tracker/FST/SDC/VSDC settings in background and popup; remove recordInjectionAndClearCookiesIfNeeded, clearBrowserCookies, injectionCount and the browsingData/cookies permissions; remove the dead toolbar onClicked handler and login.js's 'fallback autofill' listener. DO NOT touch SCC code (the sccActiveAttempt tab-URL observer, checkSccLoginSuccess, checkUnregisteredSccTrigger, MECP scc mode) - Part G removes it. Keep SMTI's re-inject in tabs.onUpdated for now (W3-2 rewrites it). `node --check` every JS file you touch; run node tests/js/test_sca_coordinator.js and tests/test_sca_v2.py."
+  },
+  {
+   "wp": "W1-2",
+   "phase": 1,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W1-1"
+   ],
+   "what": "Part A, desktop side: stop serving extension tracking",
+   "focus": "Blueprint Part A 'Desktop side'. Remove ui/ws_bridge.py handlers that only served extension tracking (uncertain_result, session_start, sdc_session_timeline, sudr_capture, tracker fields of extension_settings_updated, filing_result from the extension) and whatever in main.py only they fed; stop sending tracker/fst/sdc/vsdc fields in automation.update_extension_settings and the request_settings reply; remove extension-only tracker toggles from Settings. FIRST check each setting and handler: anything SGT, VSDC, VSDC247 or other desktop capture reads STAYS - record each keep/remove with `decide`. Keep scc_password_verified (Part G removes it). SGT tests + `tools/sgt_replay.py diff` must show capture unchanged."
+  },
+  {
+   "wp": "W1-R",
+   "phase": 1,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "W1-1",
+    "W1-2"
+   ],
+   "what": "Review Part A",
+   "focus": "Review W1-1 and W1-2 against blueprint rule 0.1 and Part A. grep both extension folders for anything that still observes pages, URLs, logins or filings (SCC excepted until Part G) and for chrome.storage.local writes holding a password. Confirm SGT/VSDC settings and handlers are intact (tests + replay diff). Fix defects; list them in your hand-off note."
+  },
+  {
+   "wp": "W2-1",
+   "phase": 2,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W1-R"
+   ],
+   "what": "Part B1: passwords off disk in the extension (#2)",
+   "focus": "In sera_extension/ and sera_extension_firefox/ (keep both identical in behaviour; sca/ must stay byte-identical, tests/test_sca_v2.py checks it): manualAssistPayload and mecpPayload move from chrome.storage.local to chrome.storage.session (if Firefox's build lacks it, keep them in background memory with the same 5-minute expiry). sccActiveAttempt moves too until Part G deletes it. On start-up delete any old manualAssistPayload/mecpPayload/sccActiveAttempt/activeAutofillPayload left in storage.local. Add a test that scans both background.js files for storage.local.set calls whose object carries a password."
+  },
+  {
+   "wp": "W2-2",
+   "phase": 2,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W2-1"
+   ],
+   "what": "Part B2: one openPortalTab helper (#3, #4)",
+   "focus": "Blueprint Part B2. One function used by handleAutofillTab, handleManualAssistTab and handleMECPTab: the load listener is attached before navigating, inject once after load, no reload when already on the URL and loaded, listeners removed after 30 s. Decision D5 - ask: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W2-2 --question \"When Sera opens a portal login, should it reuse an already open tab of that portal?\" --options \"Reuse only a tab showing the login page|Always open a new tab\" --default \"Reuse only a tab showing the login page\"`. 'Showing the login page' = the tab's URL is the service's login URL (path, ignoring query/hash) or a read-only executeScript sees a visible password box. This fixes the MECP flash (#4) and SMTI's inject-then-reload double injection."
+  },
+  {
+   "wp": "W3-1",
+   "phase": 3,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W2-2"
+   ],
+   "what": "Part C: Fast Autofill on the helper; decision D8",
+   "focus": "Confirm handleAutofillTab uses openPortalTab and stores no password anywhere. Ask D8: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W3-1 --question \"Fast Autofill clicks the portal's Continue/Login button after filling. Keep that?\" --options \"Keep the click|Stop after filling\" --default \"Keep the click\"`. If 'Stop after filling', remove autoClickContinue's call in both builds. `node --check` both background.js files."
+  },
+  {
+   "wp": "W3-2",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W2-2"
+   ],
+   "what": "Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",
+   "focus": "Blueprint Part D. In manualAssistWidget: Username only targets visible non-password inputs, else copies; Password only password inputs or the configured selector; one visibility function shared with fillCredentialsInPage's isVisible rules (zero size, aria-hidden, tabindex=-1, name=hiddenPassword). Re-inject only in the tab SMTI opened (a tabId set in the background), only while the payload is live, only when the page shows a visible login form - no URL keywords (drop the /auth rule). Remove scaCoordinator.disarm on inject and the sca_fill_completed message (W4-1 adds the per-tab lock). Node tests with a tiny hand-written fake DOM (no new npm packages). check-add: 'SMTI on the ITR password step: Username puts nothing into the password box'."
+  },
+  {
+   "wp": "W3-3",
+   "phase": 3,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W2-2"
+   ],
+   "what": "Part E: MECP card (#5, #16) and clipboard clearing (B3)",
+   "focus": "Blueprint Parts E and B3. mecpWidget: closed shadow root; a timer bar with pause-on-hover like SMTI's; timeout and x both clear mecpPayload; the card closes by itself per D6 - ask: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W3-3 --question \"When should the MECP card close by itself?\" --options \"After the password is copied|After both User ID and password are copied\" --default \"After the password is copied\"`. Clipboard clear: the desktop sends clipboard_clear_seconds in update_settings and the request_settings reply; after that many seconds the page writes an empty string only if navigator.clipboard.readText() still equals what Sera copied (try/catch, best effort). Same for SMTI's copy fallback. Leave the SCC mode untouched (Part G). check-add: 'MECP on an already open GST login tab stays on screen'."
+  },
+  {
+   "wp": "W4-1",
+   "phase": 4,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W3-2",
+    "W3-3"
+   ],
+   "what": "Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15)",
+   "focus": "Blueprint Parts B4, E, F. Background keeps tabId -> 'smti'|'mecp' for open assists (set on inject, cleared on dismiss/timeout/tab close). The coordinator's getSettings returns assistTabs instead of manualAssistActive; onCandidate refuses only when sender.tab.id is in it. sca/sca_coordinator.js stays byte-identical across builds. Desktop: clipboard_watch.suppress_client(client_id, seconds=300); client_detail_window's _launch_manual_copy and _launch_manual_assist call it; _on_clipboard_changed skips arming a suppressed client. Extend tests/js/test_sca_coordinator.js (the lock is per tab) and add python tests for suppression."
+  },
+  {
+   "wp": "W4-2",
+   "phase": 4,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W4-1"
+   ],
+   "what": "Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14)",
+   "focus": "clipboard_watch.py: handle_password_request no longer decrements uses_remaining; handle_fill_result decrements it on 'filled'; grants are capped at max_uses + 2 per arm. A SCA_PASSWORD_DENIED reaches staff: sca_coordinator.js reports it as a failed SCA_FILL_RESULT with the reason (keep sca/ identical in both builds), which already goes to sca_notice. _password_status: remove the 'any column with pass in its label' fallback; no password column -> ('', 'no_password'). Python + node tests."
+  },
+  {
+   "wp": "W4-3",
+   "phase": 4,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W4-2"
+   ],
+   "what": "Part F: SCA scope (decision D7)",
+   "focus": "Ask D7: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W4-3 --question \"SCA watches paste and typing to spot a client id. Where should it run?\" --options \"Only on approved portals|Everywhere (as today)|Remove SCA\" --default \"Only on approved portals\"`. 'Only on approved portals': take login.js and sca_adapters.js out of the manifest's content_scripts and register them with chrome.scripting.registerContentScripts for the allowed_domains (https://<d>/* and https://*.<d>/*), all_frames, document_end; re-register when update_settings or the request_settings reply brings a new list; keep host_permissions (custom services need them for Autofill/SMTI/MECP) and say so in a comment. Firefox: the same API if present, else browser.contentScripts.register. 'Everywhere': record it and finish with no change. 'Remove SCA': record it, block this WP with the reason 'user chose Remove SCA - needs its own plan', and stop."
+  },
+  {
+   "wp": "W4-R",
+   "phase": 4,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "W3-1",
+    "W4-3"
+   ],
+   "what": "Review Parts B-F",
+   "focus": "Review W2-1..W4-3 against blueprint rules 0.3/0.4 and privacy rules 1-3 and 6. Walk each flow in code: Fast Autofill, SMTI, MECP, SCA - with no portal tab open, a login tab open, a non-login tab open. Both builds identical in behaviour. Fix defects; list them."
+  },
+  {
+   "wp": "W5-1",
+   "phase": 5,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W0-2",
+    "W4-R"
+   ],
+   "what": "Part G frame: core/scc host, _hand_to_scc hook, setting",
+   "focus": "Blueprint G.1. New core/scc/ host modelled on core/sgt_i/host.py (own thread, queue, time budget, trips off on exception/overrun/hang). Hook in core/sgt/sgt_shadow.py right after _absorb: _hand_to_scc (read the attribute once into a local, as with _sgt_i; None = not called), passing make_observation(...) from core/sgt_i/observation.py plus hwnd and the SGT session id. A wants_read window (at most 30 s after each copy) consulted where sgt_i.wants_read is. Setting scc_detect_mode off/on (default off) wired like sgt_i_mode (vsdc_engines.py, main.py, router), with a Settings -> SCC row. Off must replay byte-identical (`tools/sgt_replay.py diff`)."
+  },
+  {
+   "wp": "W5-2",
+   "phase": 5,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W5-1"
+   ],
+   "what": "Part G steps 1-2, scc_rules.json and its loader",
+   "focus": "core/scc/scc_rules.json + a loader with self-tests (examples / counter_examples; refuses a rule whose examples fail), like core/sgt/sgt_specs.py: worked (the logged-in header pattern from sgt_fields.json's profile-menu spec), wrong_password, locked, neutral (OTP / secure access / e-verification), no_conclusion (forgot / reset). Wording not confirmed by tools/vsdc_uia_probe_output/*.txt is marked \"unconfirmed\": true, and a check-add asks the user to run tools/vsdc_uia_probe.py on one real wrong-password attempt (NEVER a lock-out). Steps 1-2: an attempt opens on itr_pan from the password page; read-only client lookup; verified -> nothing; one card per PAN per window. Ask D3: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W5-2 --question \"Show the client's saved (unverified) IT password as a row on the SCC card, so it can be verified too?\" --options \"Yes|No\" --default \"Yes\"`."
+  },
+  {
+   "wp": "W5-3",
+   "phase": 5,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W5-2"
+   ],
+   "what": "Part G step 3: the SCC card and its copies",
+   "focus": "Ask D1 first: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W5-3 --question \"Where should SCC's password combinations appear?\" --options \"Desktop card beside the browser|Keep them in the extension MECP card\" --default \"Desktop card beside the browser\"` (if the extension card is chosen: record it, block this WP with that reason, stop). Qt card pinned to the browser window's top-right (from hwnd), shown without activation, closed with the window. Rows from db.generate_scc_passwords (no empty rows), the saved password per D3; Copy and 'This one worked' per row. Copies set the text plus MIME application/x-sera-scc; clipboard_watch skips that marker; cleared after clipboard_clear_seconds if still ours. In-memory ledger of copies; clipboard_watch compares other clipboard text in memory with the active attempt's rows and records 'copied: <row>' - never store or log text. Offscreen Qt tests."
+  },
+  {
+   "wp": "W5-4",
+   "phase": 5,
+   "model": "opus",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W5-3"
+   ],
+   "what": "Part G step 4: the outcome reader",
+   "focus": "Blueprint G.2 step 4. Attempt state machine per (hwnd, SGT session): worked / wrong password (x on the last copy, highlight the next row) / locked (stop, plain message, no next-row hint) / neutral / no conclusion (forgot, login link = new session, another PAN, window closed, 10 minutes). Wording only from scc_rules.json. Ask for extra reads through the W5-1 window after each copy. Tests with fictional line fixtures for every outcome, including a dashboard PAN that disagrees."
+  },
+  {
+   "wp": "W5-5",
+   "phase": 5,
+   "model": "opus",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W5-4"
+   ],
+   "what": "Part G step 5: which password worked",
+   "focus": "Blueprint G.2 step 5: exactly one distinct Sera password copied since the last wrong-password message -> that row; several -> the card asks which; none -> the card asks, with 'None - I typed my own' (saves nothing); an x row is never credited in the same attempt. Tests."
+  },
+  {
+   "wp": "W5-6",
+   "phase": 5,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W5-5"
+   ],
+   "what": "Part G step 6: the guarded save",
+   "focus": "Move main._handle_scc_password_verified into core/scc/save.py; the automatic path and 'This one worked' both call it. Ask D2: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W5-6 --question \"SCC confirmed a login, but the client already has a DIFFERENT IT password saved. What should Sera do?\" --options \"Ask on the card before replacing|Replace automatically\" --default \"Ask on the card before replacing\"` and D4: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W5-6 --question \"A PAN that is not in Sera logs in with an SCC combination. What should Sera do?\" --options \"Ask on the card before adding the client|Add the client automatically\" --default \"Ask on the card before adding the client\"`. Equal to the saved password -> mark verified only. Audit: who, row label, when - never the value. UI refresh as today. Tests incl. a database round trip."
+  },
+  {
+   "wp": "W5-7",
+   "phase": 5,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W5-6"
+   ],
+   "what": "Part G step 7: close-out and counts",
+   "focus": "The card closes a few seconds after a save or on x; the clipboard clear still runs. Local counts (attempts, worked, failed, locked, no conclusion, asked, saved, not understood = the password page changed after a copy and no rule matched) in ~/AmanAssociates_Sera/scc/counts.json - counts only - shown in Settings -> SCC. Tests."
+  },
+  {
+   "wp": "W5-8",
+   "phase": 5,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W5-7"
+   ],
+   "what": "Part G: Client Detail opens the SCC card",
+   "focus": "client_detail_window: MECP on an unverified Income Tax client (today's scc_mode path in _launch_manual_copy) opens the SCC card for that PAN instead of sending scc_mode to the extension; MECP itself always sends the plain card. The card works with SCC-U Off (manual button only)."
+  },
+  {
+   "wp": "W5-9",
+   "phase": 5,
+   "model": "sonnet",
+   "kind": "auto",
+   "size": "M",
+   "deps": [
+    "W5-8"
+   ],
+   "what": "Part G: remove SCC from the extension and the old desktop handler",
+   "focus": "Blueprint G.3, in sera_extension/ and sera_extension_firefox/ (keep both identical in behaviour; sca/ must stay byte-identical, tests/test_sca_v2.py checks it): remove mecpWidget's SCC mode, generateSccCombos, sccActiveAttempt, the tab-URL observer, SCC_LOGIN_DETECTED / SCC_PASSWORD_COPIED / SCC_PASSWORD_INJECTED / TRIGGER_UNREGISTERED_SCC_MECP, checkSccLoginSuccess, checkUnregisteredSccTrigger, and registered_pans / scc_settings in the settings sync. Desktop: remove the scc_password_verified bridge handler and main's SCC-from-extension paths (scc_verified_password in session_start / results); keep core/scc/save.py; automation.trigger_mecp drops scc_mode. Update tests/test_scc_vault_tagger.py to the new flow. A grep proves nothing SCC is left in the extension."
+  },
+  {
+   "wp": "W6-1",
+   "phase": 6,
+   "model": "haiku",
+   "kind": "auto",
+   "size": "S",
+   "deps": [
+    "W5-9"
+   ],
+   "what": "Docs and extension version",
+   "focus": "Update docs/browser-automation-extension.md and docs/sera-clipboard-assist.md to the new behaviour (no tracking in the extension, per-tab assist lock, SCC-U). Bump the extension version in BOTH manifests to the same new minor version. Do NOT touch version.json or the app version (release rules). No other code changes."
+  },
+  {
+   "wp": "W6-R",
+   "phase": 6,
+   "model": "opus",
+   "kind": "review",
+   "size": "S",
+   "deps": [
+    "W6-1"
+   ],
+   "what": "Final review",
+   "focus": "Review everything against blueprint sections 0 and 9. Relevant python + node tests, replay diff unchanged, both extension builds identical in behaviour, grep for passwords in storage.local and for any page watching. Fix defects; write the merge-readiness note; list the checks the user must run by hand before merging."
+  }
+ ]
+}
