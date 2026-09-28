@@ -1,5 +1,5 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
-W0-1,0,Baseline: tests before any change,Not started,gemini-3.8-flash-high,0,,,
+W0-1,0,Baseline: tests before any change,Completed,claude-haiku-4-5-20251001,1,,"Part H verified; test_sca_v2.py not found; tests blocked by tool perms",2026-09-28 22:55
 W0-2,0,Password guard in both UIA readers (finding #17),Not started,gemini-3.8-flash-high,0,,,
 W1-1,1,Part A: remove all tracking and the cookie wipe from the extension,Not started,gemini-3.8-flash-high,0,,,
 W1-2,1,"Part A, desktop side: stop serving extension tracking",Not started,gemini-3.8-flash-high,0,,,

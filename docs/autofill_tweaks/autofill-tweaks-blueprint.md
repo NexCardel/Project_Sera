@@ -359,4 +359,4 @@ nothing into the wrong box. **Never test a portal lock-out on a real client acco
 
 ## 12. Hand-off notes
 
-*(none yet)*
+- **W0-1** (2026-09-28, claude-haiku-4-5-20251001): Part H verified (automation.service_action_mode exists). Test files verified: 4 found (test_service_automation_mode.py, test_clipboard_assist.py, test_scc_vault_tagger.py, test_sca_coordinator.js), 28 SGT tests found; **test_sca_v2.py NOT FOUND** (only test_sca_protocol.py exists). sgt_replay.py baseline: blocked by tool approval (unattended worker). Tests require re-running in next session with approval. No code changes made. Status CSV updated.
