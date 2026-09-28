@@ -41,6 +41,11 @@ SGT_LIVE_ROLLOUT_VALUES = {SGT_SETTING: "live", "vsdc_enabled": "0", "vsdc_x_ena
 # (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
 SGT_RECORD_SETTING = "sgt_record_pages"
 SGT_RECORD_DEFAULT = "1"
+# SGT-I - SGT's Intelligence half (core/sgt_i, blueprint 14.2): "off" or "on". It watches the
+# pages SGT reads on its own thread and never changes what SGT captures. Off = SGT exactly as before.
+SGT_I_SETTING = "sgt_i_mode"
+SGT_I_DEFAULT = "off"
+SGT_I_MODES = ("off", "on")
 
 _TRUE = ("1", "true", "yes", "on")
 
@@ -89,6 +94,15 @@ def read_sgt_record_pages(get_setting: Callable[..., object]) -> bool:
         return str(get_setting(SGT_RECORD_SETTING, SGT_RECORD_DEFAULT) or SGT_RECORD_DEFAULT).strip() == "1"
     except Exception:
         return True
+
+
+def read_sgt_i_mode(get_setting: Callable[..., object]) -> str:
+    """SGT-I's mode: "off" or "on". Anything unrecognised reads as off."""
+    try:
+        value = str(get_setting(SGT_I_SETTING, SGT_I_DEFAULT) or SGT_I_DEFAULT).strip().lower()
+    except Exception:
+        return SGT_I_DEFAULT
+    return value if value in SGT_I_MODES else SGT_I_DEFAULT
 
 
 def read_hud_enabled(get_setting: Callable[..., object]) -> bool:

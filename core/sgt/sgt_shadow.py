@@ -228,6 +228,7 @@ class SgtShadow:
         self,
         store: Optional[SpecStore] = None,
         read_uia: Optional[Callable[[int], Dict[str, Any]]] = None,
+        read_nodes: Optional[Callable[[int], Dict[str, Any]]] = None,
         dispatched_ids: Optional[Callable[[], Iterable[str]]] = None,
         log_dir: Optional[Path] = None,
         clock: Callable[[], float] = time.time,
@@ -239,8 +240,11 @@ class SgtShadow:
         state_path: Optional[Path] = None,
         mode: str = MODE_SHADOW,
         alert_unattributed: Optional[Callable[[str, str], Any]] = None,
+        intelligence: Any = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # SGT-I (core.sgt_i.SgtIntelligence), or None. It only ever gets copies; see _hand_to_sgt_i.
+        self._sgt_i = intelligence
         self.set_mode(mode)
         # live: (form, page) of a submission written with no client - the phone alert
         self._alert_unattributed = alert_unattributed
@@ -264,6 +268,13 @@ class SgtShadow:
                 # Ticked radio buttons / checkboxes too: a filing type is often a radio choice.
                 return vsdc_uia_text.read_page_text(hwnd, include_selection=True)
         self._read_uia = read_uia
+        # SGT-I's own extra read (blueprint 14.2's "shared read" is not adopted yet): only ever
+        # called for the corpus, only while SGT-I is on - see _nodes_for_recording.
+        if read_nodes is None:
+            def read_nodes(hwnd: int) -> Dict[str, Any]:
+                from core.sgt_i.uia_nodes import read_page_nodes
+                return read_page_nodes(hwnd)
+        self._read_nodes = read_nodes
         self._dispatched_ids = dispatched_ids or (lambda: ())
         self._log_dir = log_dir
         self._clock = clock
@@ -281,6 +292,10 @@ class SgtShadow:
         """"live" or "shadow". Switch only between sessions (the router ends them first):
         the mode decides how a row is keyed."""
         self.mode = MODE_LIVE if str(mode).strip().lower() == MODE_LIVE else MODE_SHADOW
+
+    def set_intelligence(self, host: Any) -> None:
+        """Attaches SGT-I's host (or None). It never changes what the Core captures."""
+        self._sgt_i = host
 
     @property
     def live(self) -> bool:
@@ -353,6 +368,9 @@ class SgtShadow:
 
         h = _frame_hash(frame)
         changed = url_changed or h is None or h != s.last_hash or (now - s.last_read) >= REREAD_AFTER_SEC
+        sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
+        if not changed and sgt_i is not None:
+            changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
         s.last_hash = h
         if not changed:
             return None
@@ -373,9 +391,12 @@ class SgtShadow:
         if not lines:
             return None
         today = self._today()
+        nodes = None
         if self._recorder is not None:
+            record_nodes = self._recorder.enabled and sgt_i is not None and sgt_i.active
+            nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
-                                  source=source, lines=lines, ts=now, today=today)
+                                  source=source, lines=lines, ts=now, today=today, nodes=nodes)
         if self._stats is not None:
             self._stats.record_read(portal, source, today)
 
@@ -409,7 +430,40 @@ class SgtShadow:
             self._update_draft(s, res, url, source, registry.current_rules)
         self._absorb(s, res, url, source, registry)
         self._save_state()
+        if self._sgt_i is not None:
+            self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today, hwnd,
+                                nodes if source == "uia" else None)
         return res
+
+    def _nodes_for_recording(self, hwnd: int) -> Optional[List[List[Dict[str, Any]]]]:
+        """The page's node dump for the corpus (sgt_corpus format v2) - an extra read, never
+        allowed to disturb capture: any failure here is silent, same as a recorder failure."""
+        try:
+            return list((self._read_nodes(hwnd) or {}).get("docs") or []) or None
+        except Exception:
+            return None
+
+    def _hand_to_sgt_i(self, s: _Session, portal: str, url: str, title: str, source: str,
+                       lines: List[str], res: PageResult, registry: Any, now: float, today: date,
+                       hwnd: int = 0, nodes: Optional[List[Any]] = None) -> None:
+        """SGT-I (core/sgt_i) gets a frozen copy of the page the Core has just finished with.
+        It runs on its own thread; nothing it does can come back here (blueprint 14.2). `nodes`
+        is the node tree the recorder already read for this page, if any - never an extra read."""
+        try:
+            if not self._sgt_i.active:
+                return
+            from core.sgt_i import make_observation
+            obs = make_observation(
+                session_id=s.session_id, portal=portal, url=url, title=title, source=source, lines=lines,
+                result=res, profile={k: p.get("value", "") for k, p in s.profile.items()},
+                draft=s.draft.values(registry.current_rules), ts=now, today=today.isoformat(),
+                nodes=nodes)
+            seen = getattr(self._sgt_i, "window_seen", None)
+            if seen is not None:
+                seen(hwnd, obs)     # step 9: what flashed in this (scope-gated) window since the last read
+            self._sgt_i.submit(obs)
+        except Exception as e:
+            self._echo(f"[SGT-I] page not handed over: {e}")
 
     # ── The dataset being worked on ──────────────────────────────────────────────
     def _update_draft(self, s: _Session, res: PageResult, url: str, source: str, rules: Any) -> None:
@@ -660,7 +714,7 @@ class SgtShadow:
         filing_date = (f"{v['filing_date']} 00:00:00" if v.get("filing_date")
                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         default_form = "GST Return" if "gst" in (s.portal or "").lower() else "ITR"
-        return {
+        payload = {
             "source": "sgt",
             "session_id": f"SGT-{s.session_id}",
             "portal": s.portal,
@@ -692,6 +746,13 @@ class SgtShadow:
                 "dataset_key": key,
             },
         }
+        sgt_i = self._sgt_i    # one read (see observe): a failure here would drop this row
+        if sgt_i is not None:
+            # SGT-I's enrichment sits beside the Core's values, in its own key only (14.2 rule 4).
+            extra = sgt_i.enrichment(s.session_id)
+            if extra:
+                payload["raw_payload"]["sgt_i"] = extra
+        return payload
 
     # ── HUD pill ─────────────────────────────────────────────────────────────────
     def _hud(self, s: _Session, event_type: str, title: str, subtitle: str,

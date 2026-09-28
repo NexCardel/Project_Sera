@@ -369,7 +369,7 @@ class VSDCRouter:
         return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
-                              sgt_record: bool = True) -> None:
+                              sgt_record: bool = True, sgt_i: bool = False) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -388,13 +388,16 @@ class VSDCRouter:
         SGT (off / shadow / live) is the fourth switch. Live is the capture engine and normally
         runs alone (the other three off): it reads every in-scope page with no crosshair
         routing, the same way VSDC247 works alone. Shadow keeps its rows apart from the other
-        engines', so it can run beside them. SGT_MODE overrides it.
+        engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
+        Intelligence half: it only watches what SGT reads and never changes a capture.
         """
         wanted = str(sgt).strip().lower()
         sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
         self._sgt_record = bool(sgt_record)
         if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
             self._sgt._recorder.enabled = self._sgt_record
+        self._sgt_i_on = bool(sgt_i)
+        self._apply_sgt_i()
         if sgt_mode != self._sgt_mode and self._sgt is not None:
             # Open sessions end under the mode they were read in, so no dataset is keyed half
             # one way and half the other.
@@ -420,6 +423,21 @@ class VSDCRouter:
               f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
               f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
 
+    def _apply_sgt_i(self) -> None:
+        """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
+        off after a failure stays off, even if the switch is flipped again."""
+        if self._sgt is None:
+            return
+        on = getattr(self, "_sgt_i_on", False)
+        host = getattr(self, "_sgt_i_host", None)
+        if on and host is None:
+            from core.sgt_i import SgtIntelligence, default_components
+            from core.sgt_i.uia_events import FlashWatcher
+            host = self._sgt_i_host = SgtIntelligence(default_components(), flashes=FlashWatcher())
+        if host is not None:
+            host.set_enabled(on)
+            self._sgt.set_intelligence(host if on else None)
+
     def _run_sgt(self, hwnd: int, title: str = "") -> None:
         """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
         hands them out one per tick), never through this tick's result."""
@@ -435,6 +453,7 @@ class VSDCRouter:
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
+            self._apply_sgt_i()
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
                           frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
 

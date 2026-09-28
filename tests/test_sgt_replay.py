@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import core.sgt.sgt_corpus as sgt_corpus
 from core.sgt.sgt_corpus import PageRecorder, group_sessions, load_pages
 from core.sgt.sgt_replay import diff, replay, replay_session
 from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
@@ -160,6 +161,44 @@ def test_the_recorder_writes_each_page_once_and_the_replay_reads_it_back(tmp_pat
     assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
 
 
+def test_record_writes_the_version_field_and_nodes_only_when_given(tmp_path):
+    from datetime import date
+    rec = PageRecorder(tmp_path)
+    rec.record(session="s1", portal="Income Tax", url="u1", title="", source="uia",
+               lines=["a"], ts=1.0, today=date(2026, 9, 27))
+    rec.record(session="s1", portal="Income Tax", url="u2", title="", source="uia",
+               lines=["b"], ts=2.0, today=date(2026, 9, 27), nodes=[[{"name": "b"}]])
+    pages = {p["url"]: p for p in load_pages(tmp_path)}
+    assert pages["u1"]["v"] == sgt_corpus.CORPUS_VERSION and "nodes" not in pages["u1"]
+    assert pages["u2"]["v"] == sgt_corpus.CORPUS_VERSION and pages["u2"]["nodes"] == [[{"name": "b"}]]
+
+
+def test_a_v1_page_with_no_version_field_still_replays(tmp_path):
+    """Every page recorded before 2026-09-27 looks like this - no "v", no "nodes"."""
+    doc = load(GOLDEN / "itr_wizard_to_submission.json")
+    path = tmp_path / "pages_2026-09-01.jsonl"
+    path.write_text("\n".join(json.dumps({
+        "hash": str(i), "ts": p["ts"], "today": p["today"], "session": "s1", "portal": p["portal"],
+        "url": p["url"], "title": p["title"], "source": p["source"], "lines": p["lines"],
+    }, ensure_ascii=False) for i, p in enumerate(doc["pages"])) + "\n", encoding="utf-8")
+    pages = load_pages(tmp_path)
+    assert len(pages) == len(doc["pages"]) and all("v" not in p for p in pages)
+    assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
+
+
+def test_a_v2_page_with_nodes_replays_the_same_way_ignoring_them(tmp_path):
+    from datetime import date
+    doc = load(GOLDEN / "itr_wizard_to_submission.json")
+    rec = PageRecorder(tmp_path)
+    fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "Personal details"}]]
+    for p in doc["pages"]:
+        rec.record(session="s1", portal=p["portal"], url=p["url"], title=p["title"], source=p["source"],
+                   lines=p["lines"], ts=p["ts"], today=date.fromisoformat(p["today"]), nodes=fake_nodes)
+    pages = load_pages(tmp_path)
+    assert all(p["v"] == sgt_corpus.CORPUS_VERSION and p["nodes"] == fake_nodes for p in pages)
+    assert rows_of(replay(pages, STORE)["s1"]) == doc["expect"]["rows"]
+
+
 def test_the_recorder_prunes_old_days(tmp_path):
     (tmp_path / "pages_2020-01-01.jsonl").write_text("{}\n", encoding="utf-8")
     (tmp_path / "pages_2099-01-01.jsonl").write_text("{}\n", encoding="utf-8")
@@ -172,6 +211,64 @@ def test_a_disabled_recorder_writes_nothing(tmp_path):
     PageRecorder(tmp_path, enabled=False).record(session="s", portal="Income Tax", url="u", title="",
                                                  source="uia", lines=["a"], ts=1.0, today=date.today())
     assert list(tmp_path.iterdir()) == []
+
+
+# ── A day changing under a recorder that is never restarted (2026-09-27: the corpus went dark
+# for days while everything beside it kept logging - nothing here was actually broken, but
+# nothing said so either) ───────────────────────────────────────────────────────────────────
+def test_the_recorder_rolls_over_to_a_new_day_without_a_restart(tmp_path):
+    from datetime import date
+    rec = PageRecorder(tmp_path)
+    days = [date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24), date(2026, 9, 26)]
+    for i, day in enumerate(days):
+        rec.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+                   lines=[f"day {i}"], ts=float(i), today=day)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"pages_{d.isoformat()}.jsonl" for d in days]
+    assert len(load_pages(tmp_path)) == len(days)
+
+
+def test_a_restart_mid_day_does_not_repeat_a_page_already_written(tmp_path):
+    from datetime import date
+    today = date(2026, 9, 22)
+    PageRecorder(tmp_path).record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+                                  lines=["same page"], ts=1.0, today=today)
+    # A fresh instance (as after an app restart) reads today's file before writing again.
+    restarted = PageRecorder(tmp_path)
+    restarted.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+                     lines=["same page"], ts=2.0, today=today)
+    restarted.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+                     lines=["a new page"], ts=3.0, today=today)
+    assert len(load_pages(tmp_path)) == 2
+
+
+def test_a_full_days_cap_pauses_recording_and_the_next_day_lifts_it(tmp_path, monkeypatch):
+    from datetime import date
+    monkeypatch.setattr(sgt_corpus, "MAX_DAY_BYTES", 200)   # one record fits, a second does not
+    rec = PageRecorder(tmp_path)
+    rec.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+               lines=["too big for the cap"], ts=1.0, today=date(2026, 9, 22))
+    rec.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+               lines=["still capped today"], ts=2.0, today=date(2026, 9, 22))
+    assert len(load_pages(tmp_path)) == 1
+    rec.record(session="s1", portal="Income Tax", url="u", title="", source="uia",
+               lines=["a new day lifts the pause"], ts=3.0, today=date(2026, 9, 23))
+    assert len(load_pages(tmp_path)) == 2
+
+
+def test_turning_recording_off_and_on_is_announced(tmp_path):
+    echoes = []
+    rec = PageRecorder(tmp_path, enabled=True, echo=echoes.append)
+    assert any("ON" in m for m in echoes)
+    echoes.clear()
+    rec.enabled = True                      # no change: silence
+    assert echoes == []
+    rec.enabled = False
+    assert any("OFF" in m for m in echoes)
+    echoes.clear()
+    rec.enabled = False                     # already off: silence
+    assert echoes == []
+    rec.enabled = True
+    assert any("ON" in m for m in echoes)
 
 
 def test_diff_names_what_a_spec_change_changes():

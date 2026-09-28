@@ -1,0 +1,149 @@
+{
+  "assertions": {
+    "note": "Blueprint 14.4 step 6: trigger words for the assertion checker (core/sgt_i/assertions.py). One mechanism covers the past-tense rule, the future-stepper rule and the ack gate on every portal - a new portal's wording is a change here, never a code change. 'self' triggers assert their class wherever they appear; 'pre' triggers are generic negators whose scope runs forward from themselves to the next terminator (or the end of the text) - a 'happened' trigger falling inside that scope is negated, not happened (NegEx's own idea, ported from clinical text). Patterns are matched case-insensitively against the lower-cased text.",
+    "terminators": ["\\bbut\\b", "\\bhowever\\b", "\\balthough\\b", "\\bexcept\\b", ";", ","],
+    "negated": {
+      "self": [
+        "\\bfailed\\b",
+        "\\brejected\\b",
+        "\\bdeclined\\b",
+        "\\bexpired\\b",
+        "\\bunsuccessful\\b",
+        "\\binvalid\\b",
+        "not\\s+yet\\s+\\w+",
+        "not\\s+found",
+        "not\\s+available",
+        "e-?verification\\s+failed"
+      ],
+      "pre": [
+        "has\\s+not\\s+been",
+        "have\\s+not\\s+been",
+        "is\\s+not",
+        "was\\s+not",
+        "cannot\\s+be",
+        "could\\s+not\\s+be",
+        "\\bnot\\b"
+      ],
+      "post": []
+    },
+    "reference_to_past": {
+      "self": [
+        "of\\s+original\\s+return",
+        "original\\s+return",
+        "acknowledgement\\s+number\\s+of\\s+original",
+        "previous\\s+(?:year|return|filing)",
+        "as\\s+per\\s+(?:the\\s+)?(?:last|previous)\\s+filed"
+      ]
+    },
+    "future_conditional": {
+      "self": [
+        "you\\s+will\\s+receive",
+        "\\bwill\\s+\\w+",
+        "once\\s+you",
+        "after\\s+you\\s+submit",
+        "\\bpending\\b",
+        "still\\s+need\\s+to",
+        "need\\s+to\\s+e-?verify",
+        "within\\s+\\d+\\s+days",
+        "under\\s+processing"
+      ]
+    },
+    "happened": {
+      "self": [
+        "successfully",
+        "e-?verified",
+        "\\bverified\\b",
+        "\\bfiled\\b",
+        "\\bsubmitted\\b",
+        "\\bprocessed\\b",
+        "\\bcompleted\\b",
+        "\\bgenerated\\b",
+        "filing\\s+successful"
+      ]
+    }
+  },
+  "atlas": {
+    "note": "Portal furniture (atlas.py furniture_test, page_map.mark_furniture): menus, headers and footers the page markup did not label. A text is furniture-shaped when seen on >= furniture_min_pages different pages AND in >= furniture_read_share of the portal's page reads, for >= furniture_min_clients clients; only a run of >= furniture_min_run such texts in reading order is treated as furniture (a lone shared label such as 'Acknowledgement No' never is). Nothing is furniture until the portal has furniture_min_known_pages pages. Used by SGT-I only; the Core reads everything.",
+    "furniture_min_known_pages": 10,
+    "furniture_min_pages": 5,
+    "furniture_read_share": 0.4,
+    "furniture_min_clients": 2,
+    "furniture_min_run": 3
+  },
+  "page_kinds": {
+    "note": "Blueprint 14.4 step 6, second half: generic vocabulary for core/sgt_i/page_kinds.py. These are login/payment/profile/error words shared by many portals ('log in', 'otp', 'pay now', ...), never one portal's own field names - a new portal's wording is a change here, never a code change. Matched case-insensitively as whole words/phrases against heading, dialog and label text.",
+    "login": ["log\\s*in", "sign\\s*in", "\\busername\\b", "\\bpassword\\b", "\\botp\\b", "\\bcaptcha\\b", "\\bpin\\b"],
+    "payment": ["\\bpayment\\b", "\\bpay\\s*now\\b", "amount\\s+due", "amount\\s+payable", "\\bchallan\\b", "net\\s*banking", "\\bupi\\b", "\\bcheckout\\b"],
+    "profile": ["\\bprofile\\b(?!\\s+(?:image|picture|photo|pic|icon)\\b)","my\\s+account", "personal\\s+details", "\\bmy\\s+profile\\b", "update\\s+profile", "account\\s+details"],
+    "statement_note": "A confirmation's 'happened' wording must be a statement, not a menu or column label ('View Filed Returns', 'Recent Forms Filed', 'Filed u/s' carry the same words on every dashboard). Outside a dialog a line needs one of these; inside a dialog anything counts. The profile word skips an avatar's alt text ('User profile picture').",
+    "statement": ["\\b(?:has|have|had)\\s+(?:been\\s+)?(?:successfully\\s+)?\\w+(?:ed|en)\\b", "\\b(?:is|was|were)\\s+(?:successfully\\s+)?\\w+(?:ed|en)\\b", "\\bsuccessful(?:ly)?\\b"],
+    "error_note":"'error' alone skips an empty placeholder ('Error :' with nothing after it - a hidden validation slot many forms carry on every page) and an image's alt text ('error icon'). A bare 'unavailable' is a menu item's disabled state ('e-file unavailable' on the ITR portal's menu, which is on nearly every page), so only a service/page being unavailable counts.",
+    "error": ["\\berror\\b(?!\\s*:?\\s*$)(?!\\s+icon\\b)", "something\\s+went\\s+wrong", "\\btry\\s+again\\b", "\\bunable\\s+to\\b", "page\\s+not\\s+found", "(?:service|server|site|page|portal|system|website)\\s+(?:is\\s+)?(?:temporarily\\s+|currently\\s+)?unavailable", "(?:temporarily|currently)\\s+unavailable"]
+  },
+  "ledger": {
+    "note": "Blueprint 14.4 step 7: weights and dataset constraints for the evidence ledger (core/sgt_i/ledger.py). Weights are hand-set; they are to be tuned by counting on the corpus, never learned by a model. A sighting's weight is source x page kind x assertion x the Core's own confidence; a belief's score combines its sightings as 1 - product(1 - w). Constraints only ever produce a second opinion on the row - the Core's value stands (14.2). A new form, portal or period wording is a change here, never a code change.",
+    "source": {"uia": 1.0, "pdf": 0.9, "ocr": 0.75, "_none": 0.7},
+    "page_kind": {"confirmation": 1.0, "list": 0.9, "profile": 0.9, "dashboard": 0.8, "payment": 0.6, "wizard_step": 0.5, "login": 0.4, "error": 0.3, "_none": 0.7},
+    "assertion": {"happened": 1.0, "_none": 0.8, "future_conditional": 0.5, "reference_to_past": 0.3, "negated": 0.2},
+    "assertion_window": {"before": 3, "after": 2},
+    "max_lines_for_page_kind": 400,
+    "client_fields": ["pan", "gstin", "tan"],
+    "identifier_fields": ["arn"],
+    "show_tail": {"arn": 6},
+    "pan_letter_names": {"P": "an individual's", "C": "a company's", "H": "a HUF's", "F": "a firm's", "A": "an AOP's", "B": "a BOI's", "T": "a trust's", "L": "a local authority's", "J": "an artificial juridical person's", "G": "a government's"},
+    "form_pan_letters": {
+      "^ITR-1$": "P",
+      "^ITR-2$": "PH",
+      "^ITR-3$": "PH",
+      "^ITR-4$": "PHF",
+      "^ITR-5$": "FABLJT",
+      "^ITR-6$": "C"
+    },
+    "period_kinds": {
+      "quarterly": ["\\bq[1-4]\\b", "\\bquarter\\b"],
+      "monthly": ["\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\b"],
+      "annual": ["^\\s*a\\.?y\\.?\\s*20\\d{2}", "^\\s*f\\.?y\\.?\\s*20\\d{2}"]
+    },
+    "form_periods": {
+      "^(?:24|26|27)Q$|^27EQ$|^CMP-?08$": "quarterly",
+      "^ITR-?(?:[1-7]|U)$": "annual",
+      "^GSTR-9C?$": "annual"
+    },
+    "identifier_dates": [
+      {"field": "arn", "forms": "^ITR", "pattern": "^\\d{9}(\\d{2})(\\d{2})(\\d{2})$", "order": "DMY"}
+    ],
+    "period_grace_days": {"ay": 0, "fy": 1000, "month": 400, "quarter": 400},
+    "exempt_filing_types": ["Updated"],
+    "portal_forms": {
+      "income tax": ["^ITR-?(?:[1-7]|U)$"],
+      "gst": ["^GSTR-", "^CMP-?08$", "^ITC-"]
+    }
+  },
+  "expectations": {
+    "note": "Blueprint 14.4 step 8: due filings, revision/duplicate detection and known-value anchoring (core/sgt_i/expectations.py). A new portal's wording, filed-status vocabulary or field synonym is a change here, never a code change.",
+    "client_fields": ["pan", "gstin"],
+    "filed_statuses": ["submitted", "filed", "verified", "e-verified", "processed", "accepted"],
+    "revision_wording": ["\\brevis", "\\bamend"],
+    "service_form_aliases": {},
+    "known_field_labels": {
+      "pan": ["\\bpan\\b", "permanent\\s*account"],
+      "gstin": ["\\bgstin\\b", "\\bgst\\s*no", "goods\\s+and\\s+services\\s+tax"],
+      "ack": ["\\back\\b", "acknowledg", "\\barn\\b", "reference\\s*no"]
+    },
+    "max_synonyms": 6,
+    "max_expectations": 6
+  },
+  "miner": {
+    "note": "Blueprint 14.4 step 11 (core/sgt_i/miner.py): gates for turning what SGT-I learned into proposals. Every proposal waits for the user's approval; nothing here applies one.",
+    "min_clients": 3,
+    "type_share": 0.98,
+    "zones": ["main", "dialog", "header"],
+    "placeholder_words": ["\\bselect\\b", "\\benter\\b", "\\bsearch\\b", "\\bchoose\\b", "\\bclick\\b", "type\\s+here", "\\bplaceholder\\b", "\\boptional\\b", "\\bdd/mm/yyyy\\b"],
+    "field_aliases": {"ack": "arn", "acknowledgement": "arn", "mobile": "phone", "mobile_number": "phone", "e_mail": "email", "email_id": "email", "date_of_birth": "dob"},
+    "status_window": 3,
+    "status_phrase_words": [2, 8],
+    "status_settled_level": 2,
+    "require_share": 0.9,
+    "max_proposals": 60
+  }
+}

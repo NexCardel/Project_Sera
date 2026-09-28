@@ -3498,6 +3498,8 @@ class SeraDatabase:
             if depth <= 0 or item is None:
                 return
             if isinstance(item, dict):
+                # SGT-I's advisory notes are never identity evidence (blueprint 14.2 rule 4)
+                item = {k: v for k, v in item.items() if k != "sgt_i"}
                 # Priority target keys first
                 for k, v in item.items():
                     k_lower = str(k).lower()

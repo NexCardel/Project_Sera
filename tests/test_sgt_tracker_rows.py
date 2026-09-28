@@ -221,6 +221,33 @@ class TestDatabaseIsolation(unittest.TestCase):
         assert self.db.delete_sgt_rows_by_dataset_key("SGT:ITR:SABC:ITR4:AY202526") == 1
         assert [r[0] for r in self.rows()] == ["VSDC-X_itr_submitted"]
 
+    def test_sgt_i_enrichment_round_trips_beside_the_core_values(self):
+        """W1-2: SGT-I's enrichment (route position, explanation, second opinion) travels in
+        raw_payload['sgt_i'], with no schema change, and comes back unchanged; the Core's own
+        columns are read from its own fields and never touched by it (blueprint 14.2 rule 4)."""
+        key = "SGT:ITR:ABCPD1234E:ITR4:AY202526"
+        sgt_i = {"gps": {"route": "stopped at Payment"}, "assertions": {"second_opinion": "not yet verified"}}
+        payload = {
+            "pan": "ABCPD1234E", "arn": "123456789150925", "capture_method": CAPTURE_METHOD,
+            "dataset_key": key,
+            "raw_payload": {
+                "source": {"engine": "SGT", "mode": "shadow"},
+                "sgt_dataset": {"form": "ITR-4", "period": "AY 2025-26"},
+                "sgt_i": sgt_i,
+            },
+        }
+        self.db.insert_tracker_dump(portal="Income Tax (ITR-4)", period_label="AY 2025-26",
+                                    arn_number="123456789150925", capture_method=CAPTURE_METHOD,
+                                    status="Submitted (Not Verified)", pan="ABCPD1234E", filing_type="ITR-4",
+                                    raw_payload_json=json.dumps(payload), dataset_key=key)
+        with self.db._connect_raw() as c:
+            row = c.execute("SELECT arn_number, status, dataset_key, raw_payload_json FROM tracker_dump").fetchone()
+        assert (row[0], row[1], row[2]) == ("123456789150925", "Submitted (Not Verified)", key)
+        back = json.loads(row[3])
+        assert back["raw_payload"]["sgt_i"] == sgt_i
+        assert back["raw_payload"]["sgt_dataset"] == payload["raw_payload"]["sgt_dataset"]      # beside...
+        assert back["pan"] == "ABCPD1234E" and back["arn"] == "123456789150925"                 # ...not instead
+
 
 def test_tracker_source_filter():
     from ui.windows.tracker_dump_window import _capture_method_color, _passes_source_filter
@@ -233,6 +260,31 @@ def test_tracker_source_filter():
     assert _passes_source_filter(mixed, "Hide SGT", True) and not _passes_source_filter(only_sgt, "Hide SGT", True)
     assert _passes_source_filter(mixed, "SGT Only", True)
     assert _capture_method_color(CAPTURE_METHOD) == "#FFA657" and _capture_method_color("VSDC247_itr_ack") == "#D2A8FF"
+
+
+def test_payload_inspector_shows_sgt_i_enrichment_read_only():
+    """W1-2: the tracker row detail view shows SGT-I's enrichment, read-only, when a row has
+    any (rows with SGT-I Off, or before a component exists, show nothing extra - today's rows
+    unaffected)."""
+    from PySide6.QtWidgets import QApplication, QLabel
+    from ui.windows.tracker_dump_window import PayloadInspectorDialog
+    QApplication.instance() or QApplication([])
+
+    item_data = {
+        "capture_method": CAPTURE_METHOD, "arn_number": "123456789150925", "pan": "ABCPD1234E",
+        "raw_payload_json": json.dumps({
+            "raw_payload": {"sgt_i": {"gps": {"route": "stopped at Payment"}}},
+        }),
+    }
+    dlg = PayloadInspectorDialog(item_data)
+    labels = [w.text() for w in dlg.findChildren(QLabel)]
+    assert any("SGT-I" in t for t in labels)
+    assert any("stopped at Payment" in t for t in labels)
+
+    no_enrichment = dict(item_data, raw_payload_json=json.dumps({"raw_payload": {}}))
+    dlg2 = PayloadInspectorDialog(no_enrichment)
+    labels2 = [w.text() for w in dlg2.findChildren(QLabel)]
+    assert not any("SGT-I" in t for t in labels2)
 
 
 def test_main_skips_toasts_for_sgt_rows():

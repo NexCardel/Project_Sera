@@ -14,6 +14,8 @@ _NAME_KEYS = {"fullname": 100, "full_name": 100, "assesseename": 98, "assessee_n
 def _walk(value: Any, path: str = "") -> Iterable[tuple[str, Any, str]]:
     if isinstance(value, dict):
         for key, child in value.items():
+            if key == "sgt_i":      # SGT-I's advisory notes are never evidence (blueprint 14.2 rule 4)
+                continue
             key_text = str(key)
             child_path = f"{path}.{key_text}" if path else key_text
             yield key_text, child, child_path

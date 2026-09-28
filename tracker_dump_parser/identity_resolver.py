@@ -16,6 +16,8 @@ GSTIN_REGEX = re.compile(r"\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", 
 def _walk_values(value: Any):
     if isinstance(value, dict):
         for key, child in value.items():
+            if key == "sgt_i":      # SGT-I's advisory notes are never evidence (blueprint 14.2 rule 4)
+                continue
             yield str(key), child
             yield from _walk_values(child)
     elif isinstance(value, list):

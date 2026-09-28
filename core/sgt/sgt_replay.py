@@ -36,19 +36,25 @@ class _FakeOcr:
         return {"lines": list(self.lines)}
 
 
-def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = None) -> Dict[str, Any]:
-    """One recorded session -> {"rows": {dataset_key: {...}}, "sessions": [...], "held": [...]}."""
+def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = None,
+                   intelligence: Any = None, keep_payloads: bool = False) -> Dict[str, Any]:
+    """One recorded session -> {"rows": {dataset_key: {...}}, "sessions": [...], "held": [...]}.
+    intelligence: an SGT-I host to run beside the Core. keep_payloads: also "payloads", every
+    tracker row handed out, in full and in order."""
     store = store or SpecStore()
     state = {"uia": [], "ts": float(pages[0].get("ts") or 0) if pages else 0.0,
              "today": date.fromisoformat(pages[0]["today"]) if pages and pages[0].get("today") else date.today()}
     ocr = _FakeOcr()
     with tempfile.TemporaryDirectory() as tmp:
         sgt = SgtShadow(store=store, read_uia=lambda h: {"lines": list(state["uia"])}, log_dir=Path(tmp),
-                        clock=lambda: state["ts"], today=lambda: state["today"], echo=lambda m: None)
+                        clock=lambda: state["ts"], today=lambda: state["today"], echo=lambda m: None,
+                        intelligence=intelligence)
         rows: Dict[str, Dict[str, Any]] = {}
+        payloads: List[Dict[str, Any]] = []
 
         def collect():
             for row in sgt.drain():
+                payloads.append(row)
                 if row.get("supersedes_dataset_key"):
                     rows.pop(row["supersedes_dataset_key"], None)
                 rows[row["dataset_key"]] = {k: row.get(k, "") for k in ROW_FIELDS}
@@ -78,7 +84,10 @@ def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = Non
                                      "identity": p.get("identity"), "datasets": len(p.get("datasets") or [])})
                 elif ev.get("event") == "dataset" and str(ev.get("change", "")).startswith("held"):
                     held.append({"values": ev.get("values"), "problems": ev.get("problems")})
-    return {"rows": rows, "sessions": sessions, "held": held}
+    out = {"rows": rows, "sessions": sessions, "held": held}
+    if keep_payloads:
+        out["payloads"] = payloads
+    return out
 
 
 def replay(pages: Iterable[Dict[str, Any]], store: Optional[SpecStore] = None) -> Dict[str, Dict[str, Any]]:

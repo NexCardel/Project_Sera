@@ -1809,7 +1809,7 @@ class SeraApp:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
             from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
-                                                read_sgt_mode, read_sgt_record_pages)
+                                                read_sgt_i_mode, read_sgt_mode, read_sgt_record_pages)
             # Once per office: SGT live becomes the capture engine, the other three go off.
             apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
@@ -1821,7 +1821,8 @@ class SeraApp:
             vsdc, vsdc_x, vsdc247 = read_engine_flags(self.db.get_setting)
             sgt = read_sgt_mode(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
-                                                sgt_record=read_sgt_record_pages(self.db.get_setting))
+                                                sgt_record=read_sgt_record_pages(self.db.get_setting),
+                                                sgt_i=read_sgt_i_mode(self.db.get_setting) == "on")
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "

@@ -74,6 +74,8 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
             if isinstance(item.get("gemini_extracted"), dict) and item.get("gemini_extracted") and not gemini_data:
                 gemini_data = item["gemini_extracted"]
             for k, v in item.items():
+                if k == "sgt_i":    # SGT-I's advisory notes are never profile data (blueprint 14.2 rule 4)
+                    continue
                 if isinstance(v, (str, int, float)) and v is not None:
                     s_val = _clean_str(v)
                     if s_val:

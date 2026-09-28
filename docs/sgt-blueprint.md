@@ -1345,4 +1345,441 @@ Each step starts in a fresh session from this section and ends with a hand-off n
 
 ### 14.10 Hand-off notes
 
-- *(none yet)*
+- **W0-1** (2026-09-27, claude-sonnet-5): `sgt_shadow/spec_stats.json` shows `record_read` firing
+  23-27 Sep — right beside `PageRecorder.record()` in `SgtShadow._absorb` — proving SGT kept
+  reading real pages while the corpus stayed empty. `record()` only skips silently on
+  `not self.enabled or not lines`; lines were non-empty, so `enabled` (the `sgt_record_pages`
+  setting) must have gone off with nothing saying so — traced its read/write paths and the
+  6ae61c5 mode switch end to end, all correct, none the culprit. Real defect: the flip itself was
+  silent. Fix in `core/sgt/sgt_corpus.py`: `enabled` is now a property; every transition and the
+  construction-time state are echoed, matching the existing size-cap-pause echo. Behaviour
+  otherwise identical (SGT-C unaffected). Tests added in `tests/test_sgt_replay.py` (day
+  rollover, restart mid-day dedup, size-cap lift, on/off echo). `pytest tests/test_sgt_*.py`:
+  281 passed. If `sgt_record_pages` is still "0" on a real PC, that's Settings -> Tracker to flip.
+
+- **W0-2** (2026-09-27, claude-haiku-4-5-20251001): Baseline established. **SGT tests:** 281 passed
+  (all test_sgt_*.py, no regressions). **VSDC tests:** 388 passed, 6 pre-existing failures (all in
+  Gemini enricher tests — missing API key, unfinished feature), 1 skipped. **Replay baseline:**
+  `C:\Users\Nex\AmanAssociates_Sera\sgt_corpus\replay_baseline.json` holds 8 session(s), 1 dataset
+  row(s), replayed from 204 recorded pages. Baseline ready for diff tool. No code changes.
+
+- **W1-1** (2026-09-27, claude-opus-5-5): the C/I contract in code. New `core/sgt_i/`:
+  `observation.py` (frozen `Observation`: lines, url, title, portal, source, `PageResult.as_dict()`,
+  profile, draft values, session id, ts/today; `make_observation`) and `host.py` (`SgtIntelligence`:
+  own daemon thread, queue of 8, 2.0 s page budget, hang = 15 s checked on next `submit`; any
+  exception/overrun/hang/bad enrichment trips it off for the run). Components = objects with
+  `name` + `observe(obs, ctx)`; `ctx.enrich(dict)` (JSON, <=4 KB) and `ctx.ask_more_reads(n)`
+  (max 3/session, 60 s TTL). `default_components()` is empty - add new steps there. Core hooks in
+  `sgt_shadow.py`: `_hand_to_sgt_i` after `_absorb`, `wants_read` only when the change gate would skip,
+  enrichment into `raw_payload['sgt_i']` in `_tracker_payload`. Setting `sgt_i_mode` (off/on,
+  default off) in `vsdc_engines.py`, Settings -> Tracker, `main.py`, router `_apply_sgt_i`.
+  `replay_session(..., intelligence=, keep_payloads=)`. Tests `tests/test_sgt_i_host.py` (16); all
+  test_sgt_*.py pass (297). Not yet checked in the real app (check-list item added).
+
+- **W1-2** (2026-09-27, claude-sonnet-5): the enrichment channel end to end - no DB schema change
+  (decision already made by the WP). Traced the existing plumbing: `sgt_shadow._tracker_payload`
+  already puts SGT-I's output at `raw_payload["sgt_i"]` (W1-1); `main.py._handle_extension_result`
+  dumps the whole row with `json.dumps(dataset_msg)` into `raw_payload_json`, and
+  `database.insert_tracker_dump` stores that TEXT column verbatim - so any component's enrichment
+  already survives, untouched, with zero schema work. Added: `PayloadInspectorDialog` in
+  `ui/windows/tracker_dump_window.py` now shows an "SGT-I - advisory, read-only" card (pretty-
+  printed JSON, `QLabel`, text-selectable, no edit path) whenever `raw_payload.sgt_i` is non-empty,
+  right beside the existing Gemini card; absent otherwise, so today's rows are unchanged. Tests:
+  `tests/test_sgt_tracker_rows.py` - `test_sgt_i_enrichment_round_trips_beside_the_core_values`
+  (DB round trip: `sgt_i` and `sgt_dataset` both come back byte-identical, Core columns/`pan`/`arn`
+  unaffected) and `test_payload_inspector_shows_sgt_i_enrichment_read_only` (card appears/hidden
+  correctly). `pytest tests/test_sgt_*.py`: 299 passed (was 297; the two new tests). No component
+  produces route/explanation/second-opinion data yet (steps 5/7, later WPs) - this only builds and
+  proves the channel they will use; nothing to build on for those WPs beyond what W1-1 gave them.
+
+- **W1-R** (2026-09-27, claude-opus-5-5): reviewed W0-1, W1-1, W1-2 against 14.2. Holds: Off = no hook
+  runs (`_sgt_i` is None, `core.sgt_i` not even imported); Observation is a deep frozen copy (draft
+  `values()` is pure); host lock is never held while calling a component, the Core or echo, so no
+  deadlock; `wants_read` can only add reads. **Two defects fixed:** (1) `sgt_shadow` read `self._sgt_i`
+  twice while Settings (UI thread) can detach it mid-tick - an AttributeError could escape `observe`
+  or, in `_tracker_payload`, make `pop_dispatch` DROP a Core row; now read once into a local.
+  (2) Four deep payload scanners (`database._extract_identity_candidates_from_payload`,
+  `tracker_dump_parser/identity_resolver._walk_values`, `name_resolver._walk`,
+  `ui/utils/profile_parser._collect`) read every string in `raw_payload_json`, so a masked shape like
+  "AAAAA9999A" or a `name` key in `raw_payload.sgt_i` would become a client PAN/name candidate (rule 4
+  breach); all four now skip the `sgt_i` key. Test: `test_sgt_i_enrichment_is_never_identity_or_name_evidence`.
+  `test_sgt_*.py`: 300 passed. Not caused by this change (no payload in them has `sgt_i`): 3 failures in
+  test_raw_payload_db_and_srpf / test_dual_pk_and_sad_resolution, plus the 5 known Gemini ones. Next WPs: any new
+  deep walker over payloads must skip `sgt_i` too.
+
+- **W2-1** (2026-09-27, claude-opus-5-5): new `core/sgt_i/uia_nodes.py` - `read_page_nodes(hwnd)` does ONE
+  `FindAllBuildCache` (Documents, CacheRequest TreeScope_Subtree, element mode None; Name, ControlType, rect,
+  AutomationId, offscreen, value, SelectionItem/Toggle, GridItem row/col, AriaRole, LandmarkType, HeadingLevel)
+  on vsdc_uia_text's guarded worker, walks the cached tree pre-order into dicts (parent, depth, ...);
+  `lines_from_nodes()` rebuilds today's lines for the 14.2 gate. `vsdc_uia_text.py` untouched, Core not wired.
+  Bench `tools/sgt_i_uia_node_bench.py` (real Edge, desktop unlocked, median of 10, include_selection on):
+  personal_info 38.0 -> **32.5 ms**; gst_submission 41.5 -> **31.3 ms**; heavy 300x7 table (2115 lines,
+  2421 nodes) 927 -> **530 ms**. Control-view lines IDENTICAL to read_page_text on all 3; raw view is slower
+  (767 ms) with different lines - decided: control view. Heavy split: ~330 ms the native call, ~205 ms
+  comtypes unpacking (~85 us/node) - the next cost to cut. A cold page can return no Document for the first
+  reads (warm-up). Tests `tests/test_sgt_i_uia_nodes.py` (2); `test_sgt_*.py` 302 passed. Real-portal check added.
+
+- **W2-2** (2026-09-27, claude-opus-5-5): new `core/sgt_i/page_map.py`, pure functions. `Node` (frozen: text, role,
+  box, row/col + table inherited by a cell's children, heading, landmark, selected, value, zone, section, step;
+  `truncated`, `trust` = ZONE_TRUST x 0.5 if cut short, `is_content`). Builders `nodes_from_uia(docs)` (W2-1 dicts;
+  ARIA role wins over control type; a combobox's list items become `option`) and `ocr_line_boxes()` +
+  `nodes_from_ocr()` (tall short line = heading). `build_page_map()` -> `PageMap(nodes, sections, pairs)`:
+  zones (dialog > banner/nav/search/footer landmarks > stepper > main; no banner -> before main landmark or top
+  100 px = header), sections by heading nesting (main and dialog separate stacks; help words in a heading -> help),
+  pairs in order control -> choice (SELECTED option only; option texts consumed) -> table column header -> free text
+  right, else below (column-header layouts go below); never across zone/section; nav/footer/stepper skipped.
+  `uia_nodes._node` now also caches selection for TabItems (current stepper step). Not wired into any component.
+  Tests `tests/test_sgt_i_page_map.py` (10, one per 14.1 case + table/OCR/help/dialog); `test_sgt_*.py` 312 passed.
+  Next: step 2 builds pairs on `PageMap.pairs`; generic words sit in `DEFAULT_VOCAB` (override via `vocab`).
+
+- **W2-3** (2026-09-27, claude-sonnet-5): the 14.2 gate itself, as a tool. W2-1 already had
+  `uia_nodes.lines_from_nodes()`; new `tools/sgt_lines_equivalence.py` checks it properly, three
+  modes: **synthetic** (always runs) - a `FakeElement` implements both the live pattern-API
+  `vsdc_uia_text._collect_descendant_lines` needs and the cached-property API `uia_nodes._walk`
+  needs, so one fixture tree is read by both real functions and any future edit to either shows
+  up as a real diff, not a hand-written expectation; 4 fixtures cover 14.1's cases (option list
+  vs chosen radio, checkbox, combobox `Selected: label = value`, value==name not duplicated).
+  **corpus** (best effort) - scans `sgt_corpus.load_pages()` for a `"nodes"` key (the dump W2-4 is
+  expected to add); today reports "0 comparable" rather than failing (204 recorded pages, none
+  yet). **live** (best effort, `--title`) - reads an already-open window with both real readers;
+  never opens/clicks anything; only the no-window-found path was exercised here (check-list item
+  added for a real portal window). Core's reader untouched, nothing wired in. Tests
+  `tests/test_sgt_lines_equivalence.py` (4); `test_sgt_*.py` 316 passed. Next (W2-4): add the
+  `"nodes"` field to recorded pages so the corpus mode has something to check; once the whole
+  corpus passes this gate, the Core can switch to the node reader.
+
+- **W2-4** (2026-09-28, claude-sonnet-5): corpus format v2. `sgt_corpus.py`: `CORPUS_VERSION = 2`,
+  every record carries `"v"`; `PageRecorder.record()` takes optional `nodes` (W2-1's
+  `read_page_nodes(hwnd)["docs"]` shape), written as `"nodes"` only when given - the key
+  `tools/sgt_lines_equivalence.py`'s corpus mode already looks for. `sgt_shadow.py`: new
+  `read_nodes` ctor param (default: lazy `uia_nodes.read_page_nodes`); `_observe` fetches nodes
+  only when `recorder.enabled and sgt_i.active`, into the same `record()` call - one JSONL write,
+  not two to merge; decided sync-in-`_observe` over an async write from SGT-I's own thread for
+  that reason (full decision: `tools/sgt_overhaul.py show W2-4`). `sgt_replay.py` untouched - it
+  only ever reads `"lines"`, so v1 (no `"v"`) and v2 pages replay identically. Tests:
+  `test_sgt_replay.py` (version field, v1/v2 pages both replay the golden rows) and
+  `test_sgt_i_host.py` (nodes only with SGT-I on; a failing node read breaks nothing).
+  `test_sgt_*.py`: 322 passed. Next: needs SGT-I on for a real session so the corpus mode check
+  (#4) stops reporting 0 comparable; that tool then gates the Core adopting the node reader.
+
+- **W3-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/pairs.py` - `pairs_from_page(PageMap)` turns
+  each page-map pair into a `ValuePair(container, type, shape, method, zone, row)`; no field can
+  hold a value. `container_path()` = section headings + the pair's own label. `classify_type()`:
+  a "choice" pair is typed structurally; else regex order yes/no > percentage > email > phone >
+  date > amount > code > number > text, tuned so a bank-account digit run never misreads as phone
+  and a plain decimal never misreads as amount. `mask_shape()` matches 14.9's own examples exactly
+  (`ABCDE1234F` -> `AAAAA9999A`, Aadhaar-shaped -> `9999 9999 9999`). Privacy test round-trips real
+  output through the one path SGT-I enrichment reaches disk by today (`raw_payload['sgt_i']` ->
+  `insert_tracker_dump` -> sqlite), then reads the file's own bytes for any fixture value. Tests:
+  `tests/test_sgt_i_pairs.py` (10, new). `test_sgt_*.py`: 332 passed. Next (step 3): pairs.py
+  gives it the (container, type, shape) stream; not wired into host.py yet (no component yet).
+
+- **W4-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/shapes.py` - shape grammar over many masked
+  shapes from one container. `mask_shape` re-exported from `pairs.py`, not redefined.
+  `induce_shape_grammar(shapes)`: collapses each shape into (class, run-length) runs, takes the
+  run structure the most shapes share, builds an anchored regex (fixed `{n}` when every matching
+  shape agrees on a run's length, `{min,max}` when they don't), counts shapes with a different
+  structure as exceptions rather than folding them in. `shape_grammar_confidence(n, exceptions,
+  confidence=0.95)`: rule of three, `-ln(1-confidence)/n`, only defined for zero exceptions (one
+  exception already disproves the pattern) - at 95% this is ~3/n, matching 14.4 step 3 exactly.
+  Not wired into a component or the atlas yet - pure functions over shape strings only, for W4-2/
+  W4-3 and step 4 (atlas) to call once they accumulate shapes per container over time. Tests:
+  `tests/test_sgt_i_shapes.py` (13, new). `test_sgt_*.py`: 345 passed.
+
+- **W4-2** (2026-09-28, claude-sonnet-5): `core/sgt_i/invariants.py` - the rest of step 3.
+  `discover_checksum(values)`: tests Luhn, Verhoeff, an ISBN-10-style mod-11 (blueprint names no
+  exact weighting) and a mod-36 generalising `sgt_toolbox.c_gstin_checksum` to any length; zero-
+  exception schemes get a chance-of-luck p-value, Bonferroni-corrected by the 4 schemes tried (the
+  WP's "multiple-testing bound"). `find_value_containment(outer, inner)`: paired samples from the
+  same observation; finds a fixed offset from the start (GSTIN chars 3-12 hold the PAN) or the end
+  (an ack's own trailing date via `format_ddmmyy`), rule-of-three confidence corrected by the
+  number of candidate offsets tried. `find_order_relation` (`<=`, corrected by 2 for the untried
+  `>=` direction) and `find_sum_relation` (`total == sum(rows)`) round out invariant mining. All
+  four functions are pure and stateless - the caller's value list is a "summary" passed in, used
+  once, never stored; result objects hold only counts/offsets/p-values, never a value (tested
+  explicitly). Tests: `tests/test_sgt_i_invariants.py` (19, new, fictional/generated values only,
+  vectors built with `gen_vectors.py`/`gen_vectors2.py` in the scratchpad - not checked in).
+  `test_sgt_*.py`: 364 passed. Decision recorded (mod-11 scheme choice, Bonferroni correction
+  factors) - see `sgt_overhaul_runs.csv`. Not wired into a component yet - for the atlas (step 4)
+  and W4-3 to call once containers accumulate value summaries over time.
+
+- **W4-3** (2026-09-28, claude-sonnet-5): `core/sgt_i/stats.py` - step 3's container-kind table,
+  the one SGT-I module that keeps state on disk (everything else in step 3 is a pure function).
+  `generate_salt()`/`salted_hash(value, salt, domain)`: a per-PC random salt (`secrets.token_hex`,
+  32 bytes) and an HMAC-SHA256 truncated to 24 hex chars, `domain` ("value"/"client") keeping a
+  container's values and its client-grouping keys in separate hash spaces. `ContainerStats`
+  (mirrors `sgt_health.SpecStats`'s debounced tmp+replace save): `observe(container, value,
+  client=)` stores only hash counts, capped (`MAX_TRACKED_VALUES`/`_CLIENTS` = 4096, per-client
+  hash list capped at 6 - enough to tell "stable" from "changed", never more); `classify(container)`
+  turns those counts into `classify_container`'s pure decision. `classify_container(n, distinct,
+  clients, stable_clients, changed_clients)` picks one row of 14.4 step 3's table or returns
+  kind=None rather than guess (fewer than `MIN_SUPPORT`=3 observations, or a single client's own
+  stability with no second client yet to confirm template vs. profile). **Decision recorded**
+  (precedence when counts fit more than one row: template > identifier > profile > dataset >
+  vocabulary - identifier, "never repeats anywhere", is more specific than dataset, "repeats
+  allowed, changes per client"). Persisted under `sgt_i_dir()` = `~/AmanAssociates_Sera/sgt_i/`
+  (`SGT_I_STATS_DIR` env override for tests): `salt` (plain hex) and `container_stats.json`
+  (counts and hashes only - a disk-scan test proves a fictional PAN/client id used in `observe()`
+  never appears in either file's bytes). Tests: `tests/test_sgt_i_stats.py` (19, new). `test_sgt_*.py`:
+  383 passed. Not wired into a component yet - for the atlas (step 4, a later WP) to call once it
+  accumulates a container's values across visits; `container` here is any string the caller likes
+  (pairs.py's `container_path()` joined however the atlas prefers) - this module never inspects it.
+
+- **W5-1** (2026-09-28, claude-opus-5-5): `core/sgt_i/atlas.py` - `PortalAtlas.merge(PageMap, url=, client=, session=)`
+  -> page id; `Atlas` opens one per portal. Two files, both tmp+replace: `sgt_i/atlas/<portal>.json` (public, may sync:
+  pages with fingerprint/regions views, elements, slots {container, type(s), shapes, seen, repeating/max_rows, kind},
+  url_hints, dates, retired, transitions, retired_pages) and `sgt_i/atlas_private/<portal>.json` (salted page tokens,
+  word/client counters - never syncs; salt shared via new `stats.load_or_create_salt`). Page identity = Jaccard of
+  structural (role, text) token hashes vs the page's core tokens (>= half its visits), 0.5, or 0.3 when the masked
+  URL path is known. Promotion is per word (decision recorded): same page/role/zone/position for >=3 clients and >=60%
+  of the page's clients, else masked shape; mixed text -> `Welcome, «text»` (generic type, not meaning). Parts age
+  against their page's last visit (fade 30 d, retire 90 d); pages against today. All thresholds in `DEFAULT_CONFIG`
+  (`config=` override). Not wired into a component (no step-1/2 component exists yet); `stats=` gives slots a kind.
+  Tests `tests/test_sgt_i_atlas.py` (15, incl. file-byte privacy scan and Core-never-imports); `test_sgt_*.py` 398 passed.
+  Next (GPS): read `transitions`; pass a stable `session` to `merge`; `claimed_by` not filled yet.
+
+- **W5-2** (2026-09-28, claude-sonnet-5): `tools/sgt_atlas.py` - read-only CLI over W5-1's atlas
+  files, never merges a page. `list` (portals with an atlas), `show <portal> [--page ID]` (every
+  page's visits/clients/slots/fingerprint, or one page's slots/regions/retired in full), `coverage
+  <portal>` (slots claimed/unclaimed - reads whatever `claimed_by` already holds, so it needs no
+  change once a later WP starts filling it), `diff old.json new.json` (pages added/removed, and for
+  a page in both, fingerprint tokens and slot containers gained/lost - matched by page id, which is
+  salt-free and stable across saves/syncs). `diff`'s second arg may be a directory + `--portal`
+  instead of a file, for comparing two live installs. Learned while testing: a page's `slots` dict
+  has no floor filter like `fingerprint` does, so a relabelled field's old slot stays until it ages
+  out (90 d) even once its fingerprint token has dropped out - `slots_removed` reflects that (mostly
+  empty in practice) rather than being a mirror of `fingerprint_removed`. Tests `tests/test_sgt_atlas.py`
+  (10). `pytest tests/test_sgt_*.py`: 408 passed (was 398). Next (miner, step 11): `coverage`'s
+  unclaimed list is the raw material for "what SGT-I found that nobody registered".
+
+- **W6-1** (2026-09-28, claude-sonnet-5): `core/sgt_i/gps.py` - step 5. `build_routes(atlas)`:
+  starts/confirmations are pages with in/out-degree 0 in the atlas's own transitions (step 6's page
+  kinds don't exist yet - build order puts them after the GPS); a route is the highest-bottleneck
+  simple path from a start to a confirmation (bounded DFS, edges below `min_support` excluded),
+  named from the confirmation page's own heading. `identify_page()` matches a live read to a page
+  by `url_hint` alone (Observation carries lines, not nodes - the shared read isn't adopted); a
+  hint shared by several pages is settled by the session's lookback, else no guess (14.4 step 5).
+  `Gps.visit()`: position, route, `step n of m`, `dead_reckoning()` when the page can't be told,
+  odd-jump (landing straight on another route's confirmation - closes the route and drops any
+  carried context), and the form/period second opinion (the session's own earlier `obs.draft`
+  values only, never the atlas's text, never persisted). `GpsComponent` (`name="gps"`) is now in
+  `default_components()` - it owns a read-only `atlas.Atlas()` (never merges) and enriches via
+  `ctx.enrich`: `{"route", "step", "position": "reached <page>[, not submitted]", "context"?,
+  "note"? on an odd jump}`. Four decisions recorded (`tools/sgt_overhaul.py show W6-1`): start/
+  confirmation from transition topology; wire the component in now (a no-op while the atlas is
+  empty, 14.6); odd-jump = a different route's confirmation only; context sourced from the Core's
+  own draft, not the atlas. Tests `tests/test_sgt_i_gps.py` (11, incl. the shared-dashboard/no-
+  chimera-route fixture and a shared-address-settled-by-lookback case for `identify_page`).
+  `pytest tests/test_sgt_*.py`: 419 passed (was 408), none pre-existing failing. Next (W6-2, "read
+  harder near the finish line"): needs `Position.step`/`steps_total`/`at_confirmation` from here to
+  decide when to call `ctx.ask_more_reads()`; nothing in `Gps` calls it today. Also worth knowing:
+  a portal whose routes fully reconverge then fan back out (no page in between) is genuinely
+  unresolvable from pairwise transition counts alone - `Gps` correctly reports no route rather than
+  guessing; that's why the test fixture keeps its two routes apart after the shared dashboard.
+
+- **W6-2** (2026-09-28, claude-opus-5-5): read harder near the finish line. `host.py`: new `ctx.read_harder(seconds)`
+  opens a per-session window (capped `READ_HARDER_MAX_SEC` = 30 s, user's answer) during which `wants_read` is True
+  on every call, uncounted; a later ask only extends it, never shortens; Off / tripped / switch-off = no window.
+  The Core is unchanged - `sgt_shadow._observe` already asks `wants_read` only when the change gate would skip, so it
+  can only ADD reads. Worker tick (0.35 s) untouched (decision recorded). `gps.py`: `Position.confirmation_next`
+  (next page on the route - or, off-route, the usual transition - is a route's confirmation); `GpsComponent` asks
+  once per ARRIVAL on such a page (per-session last page, capped 64), so staying does not keep the window open;
+  lookback no longer appends a re-read of the same page (the window makes re-reads common). Tests: host (bounded,
+  never shortened, inert off/tripped; Core reads with window ⊇ plain gate, Off identical), gps (flag, once per
+  arrival, no route = inert). `test_sgt_*.py`: 425 passed; one run had a flaky ordering failure in
+  `test_sgt_tracker_rows::test_same_arn_seconds_apart...` that passes on re-run (untouched by this WP).
+
+- **W7-1** (2026-09-28, claude-sonnet-5): the assertion checker, step 6's first half. New
+  `core/sgt_i/assertions.py`: `classify(text, config=None) -> Assertion(cls, trigger)`, one of
+  `negated` / `reference_to_past` / `future_conditional` / `happened`, or `(None, None)`. Trigger
+  words live in `core/sgt_i/sgt_i_config.json`'s new `"assertions"` section (`self` phrases that
+  decide a class outright; `negated.pre`/`.post` are generic negators whose scope runs to the next
+  `terminators` entry or the text's end - a `happened` trigger inside that scope reads negated, the
+  NegEx idea). Priority: negated > reference_to_past > future_conditional > happened. Pure,
+  stateless, no Component registered yet - this only classifies wording; combining it with page
+  kinds (a stepper's un-reached step still reading "happened" from its own text) is step 6's other
+  half, for a later WP. `tests/test_sgt_i_assertions.py`: all four step-6 classes, both 14.1 bug-
+  table cases, the real wordings/examples from `sgt_fields.json`'s `submit_rules`/`dataset_rules`,
+  priority ordering, and the NegEx scope mechanism (a synthetic config, since no real wording needs
+  a `post` trigger yet - `negated.post` ships empty). `test_sgt_*.py`: 442 passed (pre-existing
+  flaky ordering failure noted in W6-2 not seen this run).
+
+- **W7-2** (2026-09-28, claude-sonnet-5): step 6's other half. New `core/sgt_i/page_kinds.py`:
+  `classify(page, config=, atlas_hint=) -> PageKind(kind, evidence)`, one of `PAGE_KINDS` (login,
+  dashboard, profile, list, wizard_step, confirmation, error, payment) or `None` (abstain).
+  Priority (most-structural first): stepper-current -> wizard_step; negated assertion / error
+  vocab -> error; an identifier (`code`/`number` pair, masked shape >= 6 chars) + `happened`
+  assertion, both in dialog/main -> confirmation; amount pair + payment vocab -> payment;
+  input-dominant (by node count, not pairs - an empty field never becomes a pair, page_map.py's
+  own rule) + login vocab -> login; a table with >=2 rows -> list; repeated sibling blocks sharing
+  a child-role signature (>=3, atlas.py's own "3 cards = 14 cards" idea applied to whole blocks)
+  -> list (data-shaped children) or dashboard (link/button-shaped); profile vocab + an identity-
+  typed pair -> profile; else abstain. `atlas_hint={"in_degree": int}` is an optional last-resort
+  tie-break only (an unvocabbed input-dominant page nothing else leads to reads as login) - two
+  decisions recorded (`tools/sgt_overhaul.py show W7-2`: why atlas_hint stays this thin, why
+  repeated-blocks is detected this way), since atlas.py stores no page-level kind today. New
+  `sgt_i_config.json` `"page_kinds"` section: login/payment/profile/error vocabulary, generic
+  across portals. Vocab is matched only against headings, free text and pair *labels* in
+  dialog/main, never a pair's value or a control's typed-in text. Pure, stateless, no Component
+  registered yet (step 7 wires evidence/second-opinion; a later WP). Tests
+  `tests/test_sgt_i_page_kinds.py` (18): both 14.1 bug-table cases (a stepper's un-reached step
+  reading "happened" text stays wizard_step; the original-return ack reads reference_to_past, not
+  confirmation), error beating confirmation when both an identifier and negated wording are
+  present, payment/login requiring vocab (an amount or input count alone never fires), the
+  atlas-tie-break bounds, and both repeated-block outcomes. `test_sgt_*.py`: 460 passed (was 442).
+  Next: no component yet: step 7 (evidence ledger) is the WP that calls `page_kinds.classify()`
+  and `assertions.classify()` together and puts kind + assertion on the row.
+
+- **W8-1** (2026-09-28, claude-opus-5-5): step 7. New `core/sgt_i/ledger.py`: `Ledger` (in memory, per session, keyed
+  by salted hash) of `Belief`s with `Sighting`s (page no., page kind, assertion class + trigger in a +-3/2-line window
+  around the value, source, GPS route via new `GpsComponent.last_route()`, client `field:hash`, Core confidence);
+  weight = source x kind x assertion x confidence, score = 1-prod(1-w). `retract()` = truth maintenance (status
+  depends on its dataset's ack; repeats until stable) - fires when the profile's PAN/GSTIN changes or a card names
+  another PAN. `explain()` one line; `second_opinions()`: reference_ack, form_vs_pan, form_vs_period, identifier_date,
+  form_portal - all tables in new `sgt_i_config.json` `"ledger"` section. `LedgerComponent` (`name="ledger"`) runs
+  after the GPS in `default_components()`; row gets `{"datasets":[{dataset, explanation, confidence, second_opinions?}],
+  "retracted"?}` (<=6 datasets, <=3.8 KB; never a PAN or whole value - only the ack's DDMMYY tail). Page kind is built
+  from the Core's lines as stacked nodes (no nodes in Observation yet). 3 decisions recorded. Tests
+  `tests/test_sgt_i_ledger.py` (17) + ledger in host's golden On/Off byte-identical test; `test_sgt_*.py` 477 passed.
+  Next: step 11 can count second opinions that keep being right (graduation); weights still hand-set.
+
+- **W9-1** (2026-09-28, claude-sonnet-5): step 8. New `core/sgt_i/sera_data.py`: `SeraData`, a
+  cached, read-only accessor to master.db (clients: PAN/GSTIN/name via the same `mcl_columns`
+  label conventions `database.py` uses - word-boundary PAN/GSTIN, excluding password/company
+  columns) and rawPayload.db (`tracker_dump` filed rows, `client_services` "due" rows). Each
+  connection is opened `mode=ro` plus `PRAGMA query_only = ON` - two independent guarantees against
+  ever writing. Not a host.py component yet (no `observe()`); it is called, not wired in. Pure
+  functions: `correct_shape()` (OCR confusion candidates only at positions that violate a PAN/GSTIN
+  shape, cartesian product when a glyph is ambiguous, e.g. '0' from O/D/Q), `gstin_checksum_ok()`
+  (mod-36, re-derived locally so sgt_i has no dependency on `core.sgt`), `recover_gstin()`/
+  `recover_pan()` (unique-survivor only: GSTIN by checksum first, a known-client match breaks a
+  remaining tie; PAN has no checksum so a known-client match is required outright; an
+  already-shape-valid value is never touched), `name_pan_mismatch()` (no shared significant word
+  between a read name and the PAN's known client name), `masked_confirms()` ("98XXXXXX12" vs a
+  candidate, unmasked characters only, neither value ever stored). Tests
+  `tests/test_sgt_i_sera_data.py` (15) build a temp SQLCipher-encrypted master.db/rawPayload.db
+  pair with the real table shapes and prove a write through the accessor's own connection is
+  rejected. `test_sgt_*.py`: 492 passed (was 477).
+  Next (W9-2): wire this into a component that reads the tracker's due/filed rows to build
+  expectations ("client X, GSTR-3B, August, not submitted") and self-healing (known-value
+  anchoring finds a new label wording when a value Sera already holds turns up unclaimed);
+  `due_services()` gives the "due" universe (no due-date schedule exists in the schema, so "due" =
+  services the client is subscribed to via `client_services`), `tracker_rows()` gives "filed".
+
+- **W9-2** (2026-09-28, claude-sonnet-5): step 8, the component. Extended `sera_data.py` with
+  `SeraData.known_values(client_id)` - every client_values entry keyed by the office's own column
+  label (not just PAN/GSTIN/name), password columns excluded, cached alongside `clients()`.
+  New `core/sgt_i/expectations.py`, `ExpectationsComponent` (not yet in `default_components()` -
+  see below): identifies the session's client by PAN/GSTIN (`sgt_i_config.json`'s new
+  "expectations" section), then (a) **expectations** - `classify_dataset()` matches each dataset's
+  form against the client's due services (`service_form_aliases` config, default: normalised-name
+  equality) and its tracker rows filtered to this portal by period label: nothing filed yet ->
+  "prime_candidate", already filed -> "revision" (wording in `revision_wording` matches) or
+  "duplicate"; (b) **self-healing** - `find_synonyms()` builds one page map from the Observation's
+  lines (no nodes yet, same trick as `ledger._page_kind`) and compares every pair's actual value
+  (in memory only) against everything `known_values()` + PAN/GSTIN + the client's own seen acks
+  hold; a match under a label that does not already read as that field (`label_is_known()`: shared
+  word, or a `known_field_labels` config pattern) is reported as `{"field", "container"}` - never
+  the value - deduped per session. Both are second opinion only (14.2); enrichment is `{
+  "expectations": [...], "synonyms": [...]}`. Tests `tests/test_sgt_i_expectations.py` (15,
+  includes a raw-value-never-in-output check); `test_sgt_*.py`: 507 passed (was 492).
+  **Decision (recorded):** left OUT of `default_components()` - it needs a real `SeraData` built
+  from `db_path`/`hex_key`/`raw_db_path`, which only main.py's `Database` instance holds today;
+  threading those through `VSDCRouter._apply_sgt_i` is a separate app-wiring change that needs a
+  real app run to verify, and is not needed for this WP's tests (check-list item added: wire
+  `ExpectationsComponent(sera)` into `default_components()`). Next: step 11 (the miner) is the
+  natural consumer of `synonyms` once graduation exists; `service_form_aliases` is empty by
+  default - an office whose service names don't already match their form's own wording needs an
+  entry there, never a code change.
+
+- **W10-1** (2026-09-28, claude-opus-5-5): step 9 without Downloads (user: out of scope). New `core/sgt_i/uia_events.py`:
+  `FlashWatcher` listens for live-region-changed, window-opened and (IUIAutomation5, needs `CUIAutomation8`) notification
+  events on the Documents of the window the Core just read, re-registering when its URL changes; handlers read only the
+  sender's cached subtree (W2-1's CacheRequest) into a bounded, deduped per-window buffer. **Own MTA thread** (decision:
+  the read worker is an STA without a message loop and gets replaced on hangs); a registration hung > 10 s switches
+  listening off for the run. comtypes must be imported before that thread starts (first import makes a thread STA).
+  Host: `flashes=` + `window_seen(hwnd, obs)` (the Core calls it via getattr from `_hand_to_sgt_i`, which now gets hwnd)
+  queues each flash as an Observation (`source="uia_event"`, new field `event`) before the page; `wants_read` is True while
+  a flash waits; Off/trip stops the listener. New `core/sgt_i/page_diff.py`: pure `diff()` (node-key multiset, a new dialog
+  = event) + `FlashComponent` ("flashes", in `default_components()`; salted hashes, counts only: flashes by kind,
+  `missed_by_polling`, `flash_claims`, `last_appeared()` in memory); GPS and ledger skip event observations. Router wires
+  `FlashWatcher()`. Tests `tests/test_sgt_i_flashes.py` (11); `test_sgt_*.py` 518 passed. COM add/remove verified on this PC;
+  real Edge delivery NOT (launching Edge needed approval) - check-list item + `tools/sgt_i_flash_probe.py` / `sgt_i_flash_page.html`.
+
+- **W11-1** (2026-09-28, claude-haiku-4-5-20251001): step 10, tracking unclaimed containers/typed values (residues).
+  Modified `core/sgt/sgt_health.py`: added `"residues"` key to data structure, `record_residues(portal, page_kind, {shape: count})`
+  method, and updated `summary()` to include residues per page kind. Added residue helpers: `compute_residues(lines, result, url, title)`
+  -> `(page_kind, residues)` or None; uses domain patterns (PAN, ARN, GSTIN, Aadhaar). Core calls `compute_residues` after
+  `resolve_page()` in `sgt_shadow.py:observe()`. Pure functions detect shaped values in text, extract claimed shapes from
+  PageResult, compute difference. Page kind heuristics: URL/title/content keywords (gst_*/itr_*/form_page/list_page/other).
+  Created `core/sgt_i/residues.py` (component, not registered yet - for step 11 learning). Tests `tests/test_sgt_residues.py` (19);
+  `test_sgt_{residues,reliability,replay}.py` 67 passed. Decision: Core tracks residues directly for health (not SGT-I enrichment),
+  preserving 14.2 passivity contract. W12+ will use residues for proposals.
+
+- **W12-1** (2026-09-28, claude-opus-5-5): step 11's miner, `core/sgt_i/miner.py` (offline, not a host component). Five
+  sources: `from_atlas` (unclaimed slots -> profile/current_dataset field by slot `kind`; repeating slots under one heading ->
+  a card record, start = first label, require = fields on >=90% of cards), `from_synonyms` (step 8 synonyms in rows'
+  `raw_payload.sgt_i` -> donor Core spec's pattern/checks under the new label), `from_status_phrases` (corpus lines just before
+  a settled ARN; `needs:["level"]`, map output null until `spec_for_accept(p, level)`), `from_second_opinions` (needs a
+  `verdict` callable - none exists yet, so it proposes nothing by default). `draft_field`: regex from `shapes` grammar
+  (positional fallback for GSTIN-like shapes), checks from proven rules (`mod36`->gstin_checksum, `date_tail`), fictional
+  examples (`fictional_pan/gstin/ack/date`, `fill_shape`). Gates: clients >= 3, type share >= 0.98, zone/placeholder/masked
+  label, not already claimed, `check_spec` (Core `load_registry` self-tests), `replay_diff` (counts only; red = any change).
+  `mine()` -> `write_proposals()` (`sgt_i/proposals.json`, keeps the user's accepted/rejected). Config: `sgt_i_config.json`
+  "miner". `atlas.py` now counts clients per slot (`slots[].clients`). Tests `tests/test_sgt_i_miner.py` (27); `test_sgt_*.py`
+  564 passed. Next (W12-2 lab): Accept = write `spec_for_accept()` into the override file under `p["section"]`; rename field.
+
+- **W12-2** (2026-09-28, claude-sonnet-5): the SGT lab. `core/sgt_i/lab.py` (no Qt, tested on its own):
+  `accept(proposal, level=, rename=)` calls `miner.spec_for_accept`, optionally renames the field (a record's
+  first field only), merges it into `sgt_specs.override_path()` by `section` (profile/records: a list keyed by
+  `name`; current_dataset: `{"fields":[...]}`) replacing any earlier mined spec of the same name and leaving
+  every other key untouched, then marks the proposal `"accepted"` in `proposals.json`. `reject(id)` only marks
+  `"rejected"` - the override file is never touched. Decision (this WP): accepted datapoints stay in the lab
+  and the override file only, no tracker column added. `ui/dialogs/sgt_lab_dialog.py` (`SgtLabDialog`): one
+  card per pending proposal (container, page kind, type, support, proven rules, drafted spec as JSON, replay
+  diff, red flag), a field-name box, a ladder-level picker for `needs:["level"]` proposals (pre-picks the most
+  common settled level), Accept/Reject buttons calling `lab.py` and dropping the card from the list; proposals
+  with `needs:["developer"]` (graduation candidates, no spec) show Reject only. Wired at Settings -> Tracker ->
+  "Open SGT lab" (`unified_settings_dialog.py`, next to the SGT-I row). Manually smoke-tested the dialog against
+  a fake proposals.json (profile/current_dataset/graduation cards): renders, Accept writes the merged spec and
+  Reject drops the card with no file write - see check-list. Tests `tests/test_sgt_i_lab.py` (13, accept/reject/
+  rename/section-shape/level-gate/no-spec-raises). `pytest tests/test_sgt_*.py`: 577 passed. Next: nobody yet
+  reads `proposals.json`'s `"dropped"` counts anywhere in the UI (only the miner's own return value) - a future
+  WP may want that visible too. A developer still promotes an accepted override spec into the shipped file by
+  hand (unchanged from W12-1).
+
+- **W12-R** (2026-09-28, claude-opus-5-5): final review vs 14.2/14.5. **Fixed:** (1) W11-1 put residues in the Core
+  (`sgt_health`/`sgt_shadow`, GST/ITR words in code, ran with SGT-I Off). Reverted; step 10 is now `sgt_i/residues.py`
+  `ResiduesComponent`: generic type + mask shape per page kind (step 6), counts only in `sgt_i/residues.json`, shown in the lab.
+  (2) Nothing fed the atlas, so GPS/read-harder/atlas proposals were inert: new `atlas.AtlasComponent`, first in
+  `default_components()`, shares its `Atlas` with the GPS. (3) Nothing ran the miner: user chose a lab button
+  ("Look for new datapoints", `lab.run_miner`, background thread, 14-day corpus). (4) `lab.merge_into_override` rewrote an
+  unreadable override file from `{}`, which wiped hand-made Core specs; it now raises. Tests: `test_sgt_*`: 574 pass. Non-SGT
+  suite: 94 failed, 43 errors (sync/clipboard/startup/audit/Gemini), all in files this branch does not touch = pre-existing.
+  **Merge-readiness:** safe to merge. The Core's diff is only the Off-safe hooks (`_hand_to_sgt_i`, `wants_read`, `raw_payload['sgt_i']`),
+  corpus v2 and the recorder echo, and SGT-I defaults Off. Check by hand before turning SGT-I On: #1, #9-#11. Open: #6 (Expectations
+  unwired); with SGT-I On, the corpus node dump is read inside the Core's tick (W2-4, 30-530 ms/page).
+
+- **Field test fixes** (2026-09-28, claude-opus-5-5, with the user, after W12-R; first real SGT-I On session, ITR + GST).
+  (1) **Page kinds:** 373/495 recorded pages read as `error` - the ITR menu marks disabled items "<item> unavailable";
+  also bare "Error :" slots, "error icon" alt text, help sentences with "rejected". Fixed in config (`page_kinds.error`,
+  `profile` skips avatar alt text, new `statement` list) + `page_kinds.py` (a negated/happened line counts only as a short
+  message <= 12 words or in a dialog; several same-shape identifiers outside a dialog = `list`, not `confirmation`).
+  (2) **Residues** count once per page VISIT (same session + URL), not per read - one visit was dozens of reads.
+  (3) **Atlas had no container stats** in the live wiring (`AtlasComponent()` built `Atlas()` without `stats=`), so every
+  slot was kind-less and the miner dropped all as "kind unknown" - fixed; test asserts the live atlas has stats.
+  (4) **Portal furniture** (user asked: "the atlas recognising repeated page noise and ignoring it"). Two layers, SGT-I only:
+  (a) `Observation.nodes` carries the node tree the Core ALREADY read for the corpus (recording on; no extra read ever),
+  and new `sgt_i/page_view.page_for()` builds every component's map from it (real navigation/footer zones), else from the
+  lines; (b) the atlas counts each text's distinct pages, reads and clients (`atlas_private` `texts`, salted hashes; clear
+  text only when identical for 3+ clients and never a pair's value) and `furniture_test()` says which are furniture-shaped
+  (>= 5 pages, >= 40% of reads, >= 2 clients, portal >= 10 pages; `sgt_i_config.json` "atlas"); `page_map.mark_furniture`
+  moves only RUNS of >= 3 such texts to navigation, so a lone shared label ("Acknowledgement No", "Status:") stays data.
+  Measured on the corpus: identity must NOT use the furniture-free map (it split 13 pages into 23) - the atlas merges the
+  map as read; share must be of READS not pages (plain-line reads split one screen into many pages). Result on 657 records:
+  `profile` 117 -> 51 (structure; all on the profile page or the dashboard's profile card) / 89 (lines only); 104
+  `dashboard` and 84 `list` now recognised. Node maps capped at 1,500 nodes (0.4 s at 2,000). Lab + `tools/sgt_atlas.py
+  furniture` list it. Core diff: `sgt_shadow` passes the recorder's nodes to `_hand_to_sgt_i` (8 lines); replay diff on 717
+  pages: only new sessions, no changed/removed row. `test_sgt_*`: 588 pass. **Before using:** delete
+  `~/AmanAssociates_Sera/sgt_i/` (old atlas has no text counts or container stats; residues were per read) and keep
+  Settings -> Tracker -> "Record pages for SGT testing" on (that is what gives SGT-I the structure).
