@@ -1,20 +1,20 @@
-# Autofill tweaks — report (2026-09-28 22:46)
+# Autofill tweaks — report (2026-09-28 22:58)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 25 |
+| Not started | 24 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 0 |
+| Done | 1 |
 | Blocked | 0 |
 
-Runs: 0   output tokens: 0   API-equivalent cost: $0.00
+Runs: 1   output tokens: 11268   API-equivalent cost: $0.35
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W0-1 | Not started | haiku |  | Baseline: tests before any change |  |
+| W0-1 | Done | haiku | ec6e0dd | Baseline: tests before any change | Part H confirmed; test files verified; sgt_replay blocked by permissions |
 | W0-2 | Not started | sonnet |  | Password guard in both UIA readers (finding #17) |  |
 | W1-1 | Not started | sonnet |  | Part A: remove all tracking and the cookie wipe from the extension |  |
 | W1-2 | Not started | sonnet |  | Part A, desktop side: stop serving extension tracking |  |

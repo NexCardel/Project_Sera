@@ -1,1 +1,2 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
+20260928-225847,W0-1,claude-haiku-4-5-20251001,1,2026-09-28 22:55,2.9,Done,315,11268,1768004,57629,0.34871339999999995,40,## W0-1 Baseline Work Complete ✓  **Summary:**  I've completed the W0-1 baseline work package verification. Here's what was accomplished:  **Part H Verification:** - ✅ `automation.service_action_mode` exists in `automation.py` (lines 73-80) - ✅ All required Part H files present and tracked  **Test F
