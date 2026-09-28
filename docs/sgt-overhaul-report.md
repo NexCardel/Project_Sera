@@ -1,16 +1,16 @@
-# SGT overhaul — report (2026-09-28 03:14)
+# SGT overhaul — report (2026-09-28 03:24)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 2 |
+| Not started | 0 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 25 |
+| Retry | 1 |
+| Done | 26 |
 | Blocked | 0 |
 
-Runs: 32   output tokens: 1077949   API-equivalent cost: $49.08
+Runs: 35   output tokens: 1121602   API-equivalent cost: $52.00
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -39,8 +39,8 @@ Runs: 32   output tokens: 1077949   API-equivalent cost: $49.08
 | W10-1 | Done | opus | 0e1794c | UIA events for short-lived messages + page diffing | FlashWatcher (MTA, doc-scoped UIA events) -> uia_event Observations; page_diff FlashComponent; 518 SGT tests pass; live Edge delivery is check-list |
 | W11-1 | Done | haiku | 4a6451f | 'Not understood' residue report | Core tracks residues directly via compute_residues (PAN/ARN/GSTIN/Aadhaar patterns); record_residues adds to daily health report per page kind; core/sgt_i/resid |
 | W12-1 | Done | opus | 2aef1b7 | The miner: proposals from the atlas, maths and anchoring | core/sgt_i/miner.py: 5 sources, drafted specs pass Core self-tests, fictional examples, gates + replay red flag, proposals.json; 564 sgt tests pass |
-| W12-2 | Not started | sonnet |  | SGT lab screen |  |
-| W12-R | Not started | opus |  | Final review and merge-readiness report |  |
+| W12-2 | Done | sonnet | 5b131ba | SGT lab screen | SGT lab dialog: core/sgt_i/lab.py accept/reject logic + ui/dialogs/sgt_lab_dialog.py, wired at Settings->Tracker. 13 new tests, 577 total pass. |
+| W12-R | Retry | opus |  | Final review and merge-readiness report | stopped by usage limit, resumes after 05:10 |
 
 ## Decisions taken for you
 
@@ -81,3 +81,4 @@ Runs: 32   output tokens: 1077949   API-equivalent cost: $49.08
 - #5 (W6-2) With SGT-I On and a learned atlas, reach a filing's last page before the confirmation on a real portal: the Core should read every tick for 30 s (SGT reads count rises), then fall back to the change gate; CPU stays reasonable. — Not run
 - #6 (W9-2) Wire ExpectationsComponent into core/sgt_i/__init__.py's default_components() for real: thread db_path/hex_key/raw_db_path from main.py's Database through VSDCRouter (_apply_sgt_i) into a SeraData instance, then add ExpectationsComponent(sera) to the list. Needs a real app run to verify SGT-I stays Off/On-safe with a live master.db/rawPayload.db. — Not run
 - #7 (W10-1) Live UIA events: with SGT-I On, open a local page with a role=status toast shown for 1 s (e.g. scratch toast.html from W10-1) in Edge on an allowed-portal-like session, or run a real portal submission; confirm the row's raw_payload.sgt_i.flashes counts a live_region/notification flash and missed_by_polling. The COM plumbing (CUIAutomation8, IUIAutomation5 notification + live-region/window-opened add/remove on the MTA thread) was verified; real event delivery from Edge was not (launching Edge needed approval). — Not run
+- #8 (W12-2) Open Settings -> Tracker -> SGT lab in the real app with a real proposals.json and confirm the dialog looks right and Accept/Reject behave (only smoke-tested headlessly here). — Not run

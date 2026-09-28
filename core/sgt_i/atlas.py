@@ -45,7 +45,9 @@ from . import page_map as pm
 from .pairs import classify_type, mask_shape
 from .stats import load_or_create_salt, salted_hash, sgt_i_dir
 
-__all__ = ["DEFAULT_CONFIG", "atlas_dir", "url_hint", "PortalAtlas", "Atlas"]
+__all__ = ["DEFAULT_CONFIG", "atlas_dir", "url_hint", "PortalAtlas", "Atlas", "AtlasComponent"]
+
+MAX_MERGE_LINES = 400                # the ledger's bound: a huge table is not worth mapping per read
 
 ATLAS_DIR = "atlas"                  # public: structure, counts, shapes (may sync)
 PRIVATE_DIR = "atlas_private"        # salted hashes (never leaves this PC)
@@ -589,3 +591,29 @@ class Atlas:
     def save(self) -> None:
         for a in self._portals.values():
             a.save()
+
+
+class AtlasComponent:
+    """The step-4 SGT-I component: every page the Core read is folded into its portal's atlas -
+    each read captures part of the portal. Shares one `Atlas` with the GPS, so a page merged here
+    is known to the GPS on its next visit. The client key is the session's identity (the ledger's
+    `client_fields`: PAN, GSTIN...), only ever hashed; with none, text is never promoted. The page
+    map is built from the Core's lines (no nodes in an Observation yet), as the ledger does."""
+
+    name = "atlas"
+
+    def __init__(self, atlas: Optional[Atlas] = None, client_fields: Optional[Tuple[str, ...]] = None) -> None:
+        self.atlas = atlas if atlas is not None else Atlas()
+        if client_fields is None:
+            from .ledger import load_config
+            client_fields = tuple(load_config().get("client_fields") or ())
+        self._client_fields = client_fields
+
+    def observe(self, obs: Any, ctx: Any) -> None:
+        if getattr(obs, "event", "") or obs.source == "uia_event":
+            return            # a message that flashed (step 9) is part of a page, not a page
+        from .page_diff import map_from_lines
+        profile = dict(obs.profile)
+        client = next((f"{f}:{profile[f]}" for f in self._client_fields if profile.get(f)), None)
+        self.atlas.merge(obs.portal, map_from_lines([ln for ln in obs.lines if ln][:MAX_MERGE_LINES]),
+                         url=obs.url, client=client, session=obs.session_id)

@@ -10,16 +10,18 @@ from .observation import Observation, make_observation
 
 
 def default_components() -> list:
-    """The SGT-I components the app runs: the GPS (step 5; costs nothing while its atlas is
-    empty, 14.6), the evidence ledger (step 7), which reads the GPS's route - so it runs
-    after it - and page diffing / what flashed (step 9). Step 10 (residues) is tracked by
-    the Core's health module directly for live health tracking."""
+    """The SGT-I components the app runs: the atlas, fed every page read (step 4), then the GPS
+    reading that same atlas (step 5; costs nothing while it is empty, 14.6), the evidence ledger (step 7), which reads the GPS's route - so it runs
+    after it - page diffing / what flashed (step 9) and what no spec claimed (step 10)."""
+    from .atlas import AtlasComponent
     from .gps import GpsComponent
     from .ledger import LedgerComponent
     from .page_diff import FlashComponent
+    from .residues import ResiduesComponent
 
-    gps = GpsComponent()
-    return [gps, LedgerComponent(gps=gps), FlashComponent()]
+    atlas = AtlasComponent()
+    gps = GpsComponent(atlas=atlas.atlas)
+    return [atlas, gps, LedgerComponent(gps=gps), FlashComponent(), ResiduesComponent()]
 
 
 __all__ = ["SgtIntelligence", "Observation", "make_observation", "default_components"]

@@ -16,9 +16,10 @@ no tracker column is added here. A developer wires a column by hand once it has 
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -35,6 +36,9 @@ from PySide6.QtWidgets import (
 
 from core.sgt.sgt_toolbox import SUBMIT_LEVELS
 from core.sgt_i import lab, miner
+from core.sgt_i.residues import ResidueCounts
+
+BLIND_SPOTS_SHOWN = 8
 
 try:
     import qtawesome as qta
@@ -246,7 +250,28 @@ class SgtLabDialog(QDialog):
         layout.addWidget(scroll, 1)
         layout.addWidget(self._empty_label)
 
+        # Step 10: where SGT-I is blind - typed values no spec claimed, worst first (counts only)
+        blind = ResidueCounts().report()[:BLIND_SPOTS_SHOWN]
+        if blind:
+            blind_label = QLabel("Not understood yet (seen on pages, claimed by no spec):\n"
+                                 + "\n".join(blind))
+            blind_label.setWordWrap(True)
+            blind_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            blind_label.setStyleSheet("font-size: 11px; color: #9AA0A6;")
+            layout.addWidget(blind_label)
+
         close_row = QHBoxLayout()
+        # Decision 2026-09-28 (W12-R): the miner runs only when asked, from here, off the UI thread.
+        self._mine_btn = QPushButton("Look for new datapoints")
+        self._mine_btn.setToolTip("Runs the miner over this PC's atlas and recent page recordings "
+                                  "(counting and maths only). Can take a minute.")
+        self._mine_btn.clicked.connect(self._on_mine)
+        close_row.addWidget(self._mine_btn)
+        self._mine_status = QLabel("")
+        self._mine_status.setStyleSheet("font-size: 11px; color: #9AA0A6;")
+        close_row.addWidget(self._mine_status)
+        self._mined = _MinerSignal()
+        self._mined.done.connect(self._on_mined)
         close_row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
@@ -271,3 +296,27 @@ class SgtLabDialog(QDialog):
 
     def _on_decided(self, proposal_id: str, status: str) -> None:
         self._reload()
+
+    def _on_mine(self) -> None:
+        self._mine_btn.setEnabled(False)
+        self._mine_status.setText("Looking...")
+        signal = self._mined
+
+        def work() -> None:
+            try:
+                got = lab.run_miner()
+                signal.done.emit(f"{got['proposals']} pending proposal(s).")
+            except Exception as e:
+                signal.done.emit(f"The miner stopped: {e}")
+
+        threading.Thread(target=work, name="sgt-lab-miner", daemon=True).start()
+
+    def _on_mined(self, message: str) -> None:
+        self._mine_btn.setEnabled(True)
+        self._mine_status.setText(message)
+        self._reload()
+
+
+class _MinerSignal(QObject):
+    """Carries the miner's result from its worker thread back to the dialog's (UI) thread."""
+    done = Signal(str)

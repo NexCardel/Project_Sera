@@ -61,6 +61,41 @@ def test_accept_preserves_existing_override_content(tmp_path):
     assert "existing.field" in names and "mined.example.trade_name" in names
 
 
+def test_accept_never_overwrites_an_unreadable_override_file(tmp_path):
+    override = tmp_path / "sgt_fields.json"
+    override.write_text('{"profile": [{"name": "hand.made"}', encoding="utf-8")   # a broken hand edit
+    proposals = _proposals_file(tmp_path, _proposal())
+
+    with pytest.raises(ValueError):
+        lab.accept(_proposal(), override_path=override, proposals_file=proposals)
+
+    assert override.read_text(encoding="utf-8") == '{"profile": [{"name": "hand.made"}'
+    assert json.loads(proposals.read_text(encoding="utf-8"))["proposals"][0]["status"] == "pending"
+
+
+def test_run_miner_writes_proposals_and_keeps_earlier_decisions(tmp_path):
+    proposals = _proposals_file(tmp_path, _proposal(status="rejected"))
+    got = lab.run_miner(atlas_dir=tmp_path / "sgt_i", corpus_dir=tmp_path / "corpus",
+                        proposals_file=proposals)
+    assert got["proposals"] == 0                       # an empty atlas and corpus propose nothing
+    assert json.loads(proposals.read_text(encoding="utf-8"))["format"] == miner.FORMAT
+
+
+def test_the_lab_dialog_builds_offscreen(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(miner, "proposals_path", lambda: _proposals_file(tmp_path, _proposal()))
+    from PySide6.QtWidgets import QApplication
+    from ui.dialogs import sgt_lab_dialog
+    monkeypatch.setattr(sgt_lab_dialog, "ResidueCounts", lambda: type("C", (), {"report": lambda s: []})())
+    app = QApplication.instance() or QApplication([])
+    dlg = sgt_lab_dialog.SgtLabDialog()
+    assert dlg._mine_btn.isEnabled() and not dlg._empty_label.isVisibleTo(dlg)
+    dlg._on_mined("0 pending proposal(s).")
+    assert dlg._mine_status.text() == "0 pending proposal(s)."
+    dlg.deleteLater()
+    app.processEvents()
+
+
 def test_accept_replaces_earlier_mined_spec_of_the_same_name(tmp_path):
     override = tmp_path / "sgt_fields.json"
     p1 = _proposal(pid="p1")

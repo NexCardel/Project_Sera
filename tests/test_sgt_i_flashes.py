@@ -125,7 +125,7 @@ def test_gps_and_ledger_do_not_take_a_flash_for_a_page():
         ctx = Ctx()
         comp.observe(obs([TOAST], source="uia_event", event="live_region"), ctx)
         assert ctx.data is None and ctx.harder == 0
-    assert [c.name for c in default_components()][-1] == "flashes"
+    assert "flashes" in [c.name for c in default_components()]
 
 
 # ── the listener (fake backend) ───────────────────────────────────────────────────────────────

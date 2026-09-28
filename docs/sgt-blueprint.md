@@ -1747,3 +1747,15 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   reads `proposals.json`'s `"dropped"` counts anywhere in the UI (only the miner's own return value) - a future
   WP may want that visible too. A developer still promotes an accepted override spec into the shipped file by
   hand (unchanged from W12-1).
+
+- **W12-R** (2026-09-28, claude-opus-5-5): final review vs 14.2/14.5. **Fixed:** (1) W11-1 put residues in the Core
+  (`sgt_health`/`sgt_shadow`, GST/ITR words in code, ran with SGT-I Off). Reverted; step 10 is now `sgt_i/residues.py`
+  `ResiduesComponent`: generic type + mask shape per page kind (step 6), counts only in `sgt_i/residues.json`, shown in the lab.
+  (2) Nothing fed the atlas, so GPS/read-harder/atlas proposals were inert: new `atlas.AtlasComponent`, first in
+  `default_components()`, shares its `Atlas` with the GPS. (3) Nothing ran the miner: user chose a lab button
+  ("Look for new datapoints", `lab.run_miner`, background thread, 14-day corpus). (4) `lab.merge_into_override` rewrote an
+  unreadable override file from `{}`, which wiped hand-made Core specs; it now raises. Tests: `test_sgt_*`: 574 pass. Non-SGT
+  suite: 94 failed, 43 errors (sync/clipboard/startup/audit/Gemini), all in files this branch does not touch = pre-existing.
+  **Merge-readiness:** safe to merge. The Core's diff is only the Off-safe hooks (`_hand_to_sgt_i`, `wants_read`, `raw_payload['sgt_i']`),
+  corpus v2 and the recorder echo, and SGT-I defaults Off. Check by hand before turning SGT-I On: #1, #9-#11. Open: #6 (Expectations
+  unwired); with SGT-I On, the corpus node dump is read inside the Core's tick (W2-4, 30-530 ms/page).

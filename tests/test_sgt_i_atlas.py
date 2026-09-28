@@ -243,6 +243,34 @@ def test_no_client_value_ever_reaches_either_atlas_file(tmp_path):
     assert not re.search(r"[0-9a-f]{24}", public)               # no salted hash leaves the private file
 
 
+def test_the_component_feeds_every_page_read_and_shares_the_atlas_with_the_gps(tmp_path):
+    from types import SimpleNamespace
+    from core.sgt_i import default_components
+    from core.sgt_i.gps import GpsComponent
+
+    comp = at.AtlasComponent(at.Atlas(directory=tmp_path, clock=Clock()), client_fields=("pan",))
+
+    def read(name, pan, source="uia", event=""):
+        lines = ("Welcome, %s" % name, "Returns Dashboard", "Financial Year:", "2025-26", "PAN:", pan, "Search")
+        return SimpleNamespace(source=source, event=event, lines=lines, portal="Portal.Example.Test",
+                               url="https://portal.example.test/dashboard", session_id="s-" + pan,
+                               profile={"pan": pan})
+
+    comp.observe(read(*CLIENTS[0], source="uia_event", event="live_region"), None)
+    assert comp.atlas.portal("portal.example.test").pages == {}          # a flash is not a page
+    for n, p in CLIENTS[:3]:
+        comp.observe(read(n, p), None)
+    a = comp.atlas.portal("portal.example.test")
+    assert len(a.pages) == 1 and only_page(a)["visits"] == 3 and only_page(a)["clients"] == 3
+    a.save()
+    for f in tmp_path.rglob("*.json"):
+        text = f.read_text(encoding="utf-8")
+        assert not any(s in text for n, p in CLIENTS for s in [p] + n.split())
+    comps = default_components()
+    gps = next(c for c in comps if isinstance(c, GpsComponent))
+    assert comps[0].name == "atlas" and gps._atlas is comps[0].atlas
+
+
 def test_the_core_never_imports_the_atlas():
     root = Path(__file__).resolve().parents[1] / "core" / "sgt"
     for f in root.glob("*.py"):

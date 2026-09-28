@@ -1,171 +1,187 @@
 """
-core/sgt_i/residues.py - tracking unclaimed containers/typed values (step 10)
-==============================================================================
-Blueprint 14.4 step 10. Every page leaves a residue: containers and typed values
-that no spec claimed. Only counts and shapes are kept (privacy rule 1, 14.5).
+core/sgt_i/residues.py - what no spec claimed (step 10)
+=======================================================
+Blueprint 14.4 step 10: SGT-I tells you where it is blind. Every page leaves a residue: typed
+values that no Core spec claimed. The report then reads, for example, "confirmation pages: code
+AAAAA9999A seen 4x, claimed 0x" - silent misses made visible, each one a lead for the miner.
 
-A ResiduesComponent identifies:
-1. Containers with specific domain types (PAN, ARN, GSTIN, etc.) - known to be important
-2. Which ones the Core's specs claimed (profile, datasets, current)
-3. Counts the unclaimed ones by masked shape
+Runs on SGT-I's own thread like every component (14.2 rule 5), so the Core does no extra work and
+SGT-I Off = no residues at all. Generic throughout (rule: global, config-free of portal wording):
+the page kind is step 6's (page_kinds.classify), the type and shape are step 2's (pairs.py), over
+the same line-stacked page map ledger.py and page_diff.py build.
 
-The health report then says, for example: "GST confirmation pages: ARN-shaped value
-seen 4×, claimed 0×" (or more generally, shape-to-count mapping per page kind).
-
-Pure functions over page text and PageResult.
+Privacy (14.5 rule 1): a value is held only long enough to compare it with the Core's captured
+values and mask it. The file `sgt_i/residues.json` keeps portal -> page kind -> "type shape" ->
+{"seen", "claimed"} counts, nothing else.
 """
 
-import re
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+import json
+import time
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-from .pairs import mask_shape
+from . import page_kinds
+from .page_diff import map_from_lines
+from .pairs import classify_type, mask_shape
+from .stats import sgt_i_dir
 
-# Patterns for specific domain types that are important to track
-# Format: (name, regex_pattern) - these are the types we monitor for unclaimed residues
-_DOMAIN_PATTERNS: Tuple[Tuple[str, re.Pattern], ...] = (
-    # PAN: 10-char alphanumeric (ABCPD1234E style)
-    ("PAN", re.compile(r"(?<![0-9A-Za-z])([A-Z]{5}[0-9]{4}[A-Z]{1})(?![0-9A-Za-z])", re.IGNORECASE)),
-    # ARN: 15-digit (may have OCR confusion with O/0, I/1, S/5, B/8)
-    ("ARN", re.compile(r"(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])")),
-    # GSTIN: 15-char code (2 digits, 10-digit PAN-like, 3 entity code, 1 char, 1 digit)
-    ("GSTIN", re.compile(r"(?<![0-9A-Za-z])([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9]{1}[Z]{1}[0-9]{1})(?![0-9A-Za-z])", re.IGNORECASE)),
-    # Aadhaar: 12 digits, often formatted with spaces
-    ("Aadhaar", re.compile(r"(?<![0-9])(\d{4}\s?\d{4}\s?\d{4})(?![0-9])")),
-)
-
-
-@dataclass(frozen=True)
-class ShapedValue:
-    """A found value with its type and masked shape, never the value itself."""
-    value_type: str      # PAN, ARN, GSTIN, Aadhaar, etc.
-    shape: str           # masked: letters -> A, digits -> 9
+RESIDUES_FILE = "residues.json"
+SAVE_EVERY_SEC = 60.0
+MAX_LINES = 400                  # same bound as ledger's page kind: a huge table is not worth mapping
+MAX_SHAPE_LEN = 40               # a longer "value" is prose, not a typed value
+MAX_KEYS_PER_KIND = 256          # bounds the file; a new key past it is dropped, counts go on
+UNTYPED = frozenset({"text", "choice", "yes/no"})   # not typed values: nothing a spec would miss
+UNKNOWN_KIND = "unknown"
 
 
-def find_shaped_values(text: str) -> Dict[str, int]:
-    """Find all domain-typed values in text, return {shape: count}."""
-    shaped: Dict[str, int] = {}
-    for type_name, pattern in _DOMAIN_PATTERNS:
-        for match in pattern.finditer(text or ""):
-            value = match.group(1)
-            shape = mask_shape(value)
-            key = f"{type_name}:{shape}"
-            shaped[key] = shaped.get(key, 0) + 1
-    return shaped
+def _norm(value: Any) -> str:
+    return "".join(str(value or "").split()).casefold()
 
 
-def extract_claimed_shapes(result: Dict) -> Dict[str, int]:
-    """Extract shapes of values claimed by Core specs from PageResult.as_dict()."""
-    claimed: Dict[str, int] = {}
-    if not isinstance(result, dict):
-        return claimed
-
-    # Check profile hits
-    for field, hit in (result.get("profile") or {}).items():
-        if isinstance(hit, dict) and "value" in hit:
-            value = str(hit.get("value", ""))
-            for type_name, pattern in _DOMAIN_PATTERNS:
-                if pattern.search(value):
-                    shape = mask_shape(value)
-                    key = f"{type_name}:{shape}"
-                    claimed[key] = claimed.get(key, 0) + 1
-                    break
-
-    # Check current hits
-    for field, hit in (result.get("current") or {}).items():
-        if isinstance(hit, dict) and "value" in hit:
-            value = str(hit.get("value", ""))
-            for type_name, pattern in _DOMAIN_PATTERNS:
-                if pattern.search(value):
-                    shape = mask_shape(value)
-                    key = f"{type_name}:{shape}"
-                    claimed[key] = claimed.get(key, 0) + 1
-                    break
-
-    # Check datasets
-    for dataset in (result.get("datasets") or []):
-        if isinstance(dataset, dict):
-            for field, hit in (dataset.get("values") or {}).items():
-                if hit:
-                    value = str(hit)
-                    for type_name, pattern in _DOMAIN_PATTERNS:
-                        if pattern.search(value):
-                            shape = mask_shape(value)
-                            key = f"{type_name}:{shape}"
-                            claimed[key] = claimed.get(key, 0) + 1
-                            break
-
-    return claimed
+def claimed_values(result: Any) -> Set[str]:
+    """Every value the Core captured on the page (PageResult.as_dict()), normalised."""
+    out: Set[str] = set()
+    result = result or {}
+    for section in ("profile", "current"):
+        for hit in (result.get(section) or {}).values():
+            if hasattr(hit, "get") and hit.get("value"):
+                out.add(_norm(hit.get("value")))
+    for ds in result.get("datasets") or ():
+        for v in ((ds.get("values") if hasattr(ds, "get") else None) or {}).values():
+            if v:
+                out.add(_norm(v))
+    out.discard("")
+    return out
 
 
-def detect_page_kind(url: str, title: str, lines: Tuple[str, ...]) -> Optional[str]:
-    """Guess the page kind from URL, title, or content. Returns a short label or None."""
-    text = f"{url} {title} {' '.join(lines[:10])}".lower()
+def _is_claimed(value: str, claimed: Set[str]) -> bool:
+    """Claimed when the Core holds the same value - or one inside the other, since a spec's
+    transforms may trim a prefix or a date tail. Short values only match exactly."""
+    v = _norm(value)
+    if v in claimed:
+        return True
+    return len(v) >= 6 and any(len(c) >= 6 and (c in v or v in c) for c in claimed)
 
-    # Simple heuristics for common page kinds
-    if "gst" in text and ("confirmation" in text or "ack" in text or "acknowledgement" in text):
-        return "gst_confirmation"
-    if "gst" in text and ("return" in text or "filing" in text):
-        return "gst_return"
-    if "gst" in text and "dashboard" in text:
-        return "gst_dashboard"
 
-    if "itr" in text and ("filing" in text or "ack" in text or "acknowledgement" in text):
-        return "itr_ack"
-    if "itr" in text and ("return" in text or "form" in text):
-        return "itr_return"
-    if "itr" in text and ("profile" in text or "dashboard" in text):
-        return "itr_profile"
+def split_inline_labels(lines: Iterable[str]) -> List[str]:
+    """"Label: value" on one line -> "Label:" and "value" stacked, so the page map pairs them the
+    same way it pairs a label above its value. A line with nothing after the colon is kept."""
+    out: List[str] = []
+    for ln in lines:
+        head, sep, tail = str(ln).partition(":")
+        if sep and any(c.isalpha() for c in head) and tail.strip() and not tail.startswith("//"):
+            out.extend((head.strip() + ":", tail.strip()))
+        else:
+            out.append(str(ln))
+    return out
 
-    # Generic fallback based on content type
-    if "form" in text or "input" in text:
-        return "form_page"
-    if "list" in text or "table" in text or "record" in text:
-        return "list_page"
-    if "confirmation" in text or "success" in text or "submitted" in text:
-        return "confirmation_page"
 
-    return "other"
+def page_residue(lines: Sequence[str], result: Any) -> Optional[Dict[str, Any]]:
+    """One page -> {"kind": page kind, "seen": {"type shape": n}, "claimed": {...}}, or None when
+    the page holds no typed value. Pure; no value leaves this function."""
+    lines = [ln for ln in lines if ln][:MAX_LINES]
+    if not lines:
+        return None
+    page = map_from_lines(split_inline_labels(lines))
+    claimed = claimed_values(result)
+    seen: Dict[str, int] = {}
+    got: Dict[str, int] = {}
+    for p in page.pairs:
+        typ = classify_type(p.value, p.method)
+        shape = mask_shape(p.value.strip())
+        if typ in UNTYPED or not shape or len(shape) > MAX_SHAPE_LEN:
+            continue
+        key = f"{typ} {shape}"
+        seen[key] = seen.get(key, 0) + 1
+        if _is_claimed(p.value, claimed):
+            got[key] = got.get(key, 0) + 1
+    if not seen:
+        return None
+    return {"kind": page_kinds.classify(page).kind or UNKNOWN_KIND, "seen": seen, "claimed": got}
+
+
+class ResidueCounts:
+    """The counts on disk, under sgt_i_dir(). Debounced tmp+replace save, like stats.py."""
+
+    def __init__(self, directory: Optional[Path] = None, clock=None) -> None:
+        self._dir = directory
+        self._clock = clock or time.time
+        self._dirty = False
+        self._last_save = 0.0
+        self.data: Dict[str, Any] = {}
+        self._load()
+
+    @property
+    def directory(self) -> Path:
+        return self._dir or sgt_i_dir()
+
+    def add(self, portal: str, residue: Dict[str, Any]) -> None:
+        cell = self.data.setdefault(portal or "?", {}).setdefault(residue["kind"], {})
+        for key, n in residue["seen"].items():
+            c = cell.get(key)
+            if c is None:
+                if len(cell) >= MAX_KEYS_PER_KIND:
+                    continue
+                c = cell[key] = {"seen": 0, "claimed": 0}
+            c["seen"] += n
+            c["claimed"] += residue["claimed"].get(key, 0)
+        self._dirty = True
+        if self._clock() - self._last_save >= SAVE_EVERY_SEC:
+            self.save()
+
+    def report(self, portal: Optional[str] = None) -> List[str]:
+        """The blind spots, worst first: "<portal> <kind> pages: <type shape> seen Nx, claimed Mx"."""
+        rows = []
+        for p, kinds in self.data.items():
+            if portal and p != portal:
+                continue
+            for kind, cell in kinds.items():
+                for key, c in cell.items():
+                    missed = c["seen"] - c["claimed"]
+                    if missed > 0:
+                        rows.append((-missed, f"{p} {kind} pages: {key} seen {c['seen']}x, claimed {c['claimed']}x"))
+        return [text for _, text in sorted(rows)]
+
+    def save(self) -> None:
+        if not self._dirty:
+            return
+        try:
+            self.directory.mkdir(parents=True, exist_ok=True)
+            path = self.directory / RESIDUES_FILE
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data), encoding="utf-8")
+            tmp.replace(path)
+            self._dirty = False
+            self._last_save = self._clock()
+        except OSError:
+            pass
+
+    def _load(self) -> None:
+        try:
+            loaded = json.loads((self.directory / RESIDUES_FILE).read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                self.data = loaded
+        except (OSError, ValueError):
+            pass
 
 
 class ResiduesComponent:
-    """Step 10: track unclaimed domain-typed values per portal and page kind."""
+    """The step-10 SGT-I component. It counts; it never enriches a row or asks for a read."""
 
     name = "residues"
 
-    def observe(self, obs, ctx) -> None:
-        """Find unclaimed values and report their counts and shapes."""
+    def __init__(self, counts: Optional[ResidueCounts] = None) -> None:
+        self._counts = counts
+
+    @property
+    def counts(self) -> ResidueCounts:
+        if self._counts is None:
+            self._counts = ResidueCounts()
+        return self._counts
+
+    def observe(self, obs: Any, ctx: Any) -> None:
         if obs.source == "uia_event":
-            return  # skip event observations
-
-        # Find all typed values in the page
-        text = " ".join(obs.lines)
-        found = find_shaped_values(text)
-        if not found:
-            return
-
-        # Find which ones were claimed by Core specs
-        claimed = extract_claimed_shapes(obs.result)
-
-        # Calculate residues: found but not claimed
-        residues: Dict[str, int] = {}
-        for shape_key, count in found.items():
-            claimed_count = claimed.get(shape_key, 0)
-            if claimed_count < count:
-                residues[shape_key] = count - claimed_count
-
-        if not residues:
-            return
-
-        # Determine page kind
-        page_kind = detect_page_kind(obs.url, obs.title, obs.lines)
-        if not page_kind:
-            return
-
-        # Enrich with counts and shapes of unclaimed values
-        # Format: {page_kind: {shape: count}}
-        ctx.enrich({
-            "residues": {
-                page_kind: residues
-            }
-        })
+            return                       # a flash is part of a page, not a page
+        residue = page_residue(obs.lines, obs.result)
+        if residue is not None:
+            self.counts.add(obs.portal, residue)

@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional
 from ..sgt import sgt_specs
 from . import miner
 
-__all__ = ["load_proposals", "set_status", "accept", "reject", "merge_into_override"]
+__all__ = ["load_proposals", "set_status", "accept", "reject", "merge_into_override", "run_miner"]
 
 
 # ── proposals.json: load and remember a decision ─────────────────────────────────
@@ -70,25 +70,29 @@ def set_status(proposal_id: str, status: str, path: Optional[Path] = None) -> bo
 # ── Accept: the drafted spec into the local override file ───────────────────────
 def merge_into_override(section: str, spec: Dict[str, Any], path: Optional[Path] = None) -> Path:
     """Writes `spec` into the override file's `section`, replacing any earlier spec of the
-    same name there; every other section and top-level key is left exactly as it was."""
+    same name there; every other section and top-level key is left exactly as it was. An override
+    file that exists but cannot be read raises ValueError: it may hold hand-made Core specs, and
+    rewriting it from nothing would silently remove them."""
     path = path or sgt_specs.override_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
+    data: Any = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise ValueError(f"{path.name} could not be read ({e}) - fix it first, nothing was written")
+        if not isinstance(data, dict):
+            raise ValueError(f"{path.name} is not a JSON object - fix it first, nothing was written")
     name = spec.get("name") or spec.get("field")
     if section == miner.CURRENT:
         current = data.get("current_dataset")
         if not isinstance(current, dict):
             current = {}
-        fields = [f for f in (current.get("fields") or []) if f.get("name") != name]
+        fields = [f for f in (current.get("fields") or []) if not isinstance(f, dict) or f.get("name") != name]
         fields.append(spec)
         current["fields"] = fields
         data["current_dataset"] = current
     else:
-        items = [s for s in (data.get(section) or []) if s.get("name") != name]
+        items = [s for s in (data.get(section) or []) if not isinstance(s, dict) or s.get("name") != name]
         items.append(spec)
         data[section] = items
     _write_json_atomic(data, path)
@@ -126,6 +130,25 @@ def accept(proposal: Dict[str, Any], level: Optional[str] = None, rename: Option
     merge_into_override(section, spec, override_path)
     set_status(proposal["id"], "accepted", proposals_file)
     return spec
+
+
+MINE_CORPUS_DAYS = 14      # the corpus pages the miner reads and replays (the Core's own 30-day files)
+
+
+def run_miner(atlas_dir: Optional[Path] = None, corpus_dir: Optional[Path] = None,
+              proposals_file: Optional[Path] = None, days: int = MINE_CORPUS_DAYS) -> Dict[str, Any]:
+    """The lab's "Look for new datapoints" (decision 2026-09-28, W12-R): one offline miner run over
+    the atlas and the recent corpus, written to proposals.json (keeping earlier decisions). Slow -
+    it replays the corpus per proposal - so the dialog runs it off the UI thread. Returns
+    {"proposals": n pending, "dropped": {...}}."""
+    from ..sgt.sgt_corpus import load_pages
+    from .atlas import Atlas
+
+    result = miner.mine(atlas=Atlas(atlas_dir), pages=load_pages(corpus_dir, days=days))
+    miner.write_proposals(result, proposals_file)
+    pending = [p for p in load_proposals(proposals_file)["proposals"]
+               if (p.get("status") or "pending") == "pending"]
+    return {"proposals": len(pending), "dropped": result.get("dropped") or {}}
 
 
 def reject(proposal_id: str, proposals_file: Optional[Path] = None) -> bool:
