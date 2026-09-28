@@ -657,13 +657,6 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Launch at Windows startup",
             "Automatically starts Project Sera in the background when Windows boots.", self.autostart_check))
 
-        lay.addWidget(_sub_header("File Submission Tracker (FST) Daemons"))
-
-        self.fst_check = QCheckBox()
-        lay.addWidget(_setting_row("Sera SDC \u2014 DOM Crosshair (FST)",
-            "DOM Crosshair engine that watches on-screen confirmation messages and elements on web pages.",
-            self.fst_check))
-
         self.sca_check = QCheckBox()
         lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
             "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
@@ -701,7 +694,6 @@ class UnifiedSettingsDialog(QDialog):
         self.quick_copy_check.toggled.connect(self._on_control_changed)
         self.run_in_bg_check.toggled.connect(self._on_control_changed)
         self.autostart_check.toggled.connect(self._on_control_changed)
-        self.fst_check.toggled.connect(self._on_control_changed)
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
@@ -1279,7 +1271,6 @@ class UnifiedSettingsDialog(QDialog):
             state["quick_copy"] = self.quick_copy_check.isChecked()
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
-            state["fst"] = self.fst_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
@@ -1346,7 +1337,6 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
-            self.fst_check.setChecked(g("sdc_enabled", g("fst_enabled", "1")) == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
@@ -1411,12 +1401,9 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
-                bulk_settings["sdc_enabled"]                = b(self.fst_check)
-                bulk_settings["fst_enabled"]                = b(self.fst_check)
                 bulk_settings["sca_enabled"]                = b(self.sca_check)
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-                bulk_settings["tracker_enabled"]            = "1" if self.fst_check.isChecked() else "0"
 
                 try:
                     from automation import update_extension_settings
@@ -1432,16 +1419,12 @@ class UnifiedSettingsDialog(QDialog):
                         "opt4_fixed_str": self.scc_opt4_str_edit.text() if hasattr(self, "scc_opt4_str_edit") else "",
                     }
                     update_extension_settings(
-                        fst_enabled=self.fst_check.isChecked(),
-                        sdc_enabled=self.fst_check.isChecked(),
-                        tracker_enabled=self.fst_check.isChecked(),
                         sca_enabled=self.sca_check.isChecked(),
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
                         sca_max_uses=self.sca_max_uses_spin.value(),
                         allowed_services=self.db.get_services(),
                         registered_pans=self.db.get_all_registered_pans(),
                         scc_settings=scc_payload,
-                        vsdc_enabled=self.vsdc_check.isChecked() if hasattr(self, "vsdc_check") else True,
                     )
                 except Exception:
                     pass

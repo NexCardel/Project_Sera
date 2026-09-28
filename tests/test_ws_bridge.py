@@ -90,32 +90,30 @@ def test_chrome_id_override_file_wins(tmp_path, monkeypatch):
 def test_dispatch_routes_each_message_type(bridge):
     got = {}
     for sig, kind in [
-        (bridge.filing_result_received, "filing_result"),
-        (bridge.uncertain_result_received, "uncertain_result"),
         (bridge.sca_state_received, "SCA_STATE"),
         (bridge.sca_error_received, "SCA_ERROR"),
         (bridge.sca_fill_result_received, "SCA_FILL_RESULT"),
         (bridge.sca_password_requested, "SCA_PASSWORD_REQUEST"),
-        (bridge.session_started_received, "session_start"),
         (bridge.scc_password_verified_received, "scc_password_verified"),
-        (bridge.sdc_timeline_received, "sdc_session_timeline"),
-        (bridge.sudr_capture_received, "sudr_capture"),
         (bridge.extension_settings_updated_received, "extension_settings_updated"),
     ]:
         sig.connect(lambda m, k=kind: got.setdefault(k, m))
         bridge.dispatch({"type": kind})
     assert set(got) == {
-        "filing_result", "uncertain_result", "SCA_STATE", "SCA_ERROR", "SCA_FILL_RESULT",
-        "SCA_PASSWORD_REQUEST", "session_start", "scc_password_verified", "sdc_session_timeline",
-        "sudr_capture", "extension_settings_updated",
+        "SCA_STATE", "SCA_ERROR", "SCA_FILL_RESULT",
+        "SCA_PASSWORD_REQUEST", "scc_password_verified", "extension_settings_updated",
     }
 
 
-def test_audit_event_routes_like_filing_result(bridge):
+def test_extension_tracking_message_types_are_no_longer_routed(bridge):
+    """Part A removed all tracking from the extension (autofill-tweaks W1-1); these message
+    types can no longer arrive from it, so the bridge no longer acts on them (W1-2)."""
     got = []
     bridge.filing_result_received.connect(got.append)
-    bridge.dispatch({"type": "audit_event", "x": 1})
-    assert len(got) == 1
+    for kind in ("filing_result", "audit_event", "uncertain_result", "session_start",
+                 "sdc_session_timeline", "sudr_capture"):
+        assert bridge.dispatch({"type": kind}) is None
+    assert got == []
 
 
 def test_request_settings_replies_with_the_provided_payload(bridge):
@@ -308,15 +306,6 @@ def test_no_extension_code_stores_or_broadcasts_passwords_for_sca(ext):
     login = (ROOT / ext / "content_scripts" / "login.js").read_text(encoding="utf-8")
     assert "sera_sca_filled" not in login.replace("// Removed 2026-09-22: the per-tab \"sera_sca_filled\"", "")
     assert "armedSCAPayload" not in login
-
-
-@pytest.mark.parametrize("ext", ["sera_extension", "sera_extension_firefox"])
-def test_no_extension_code_talks_to_the_app_directly_except_background(ext):
-    """Only background.js may open the WebSocket to the app - a content script or the SDC page
-    script must always go through it (chrome.runtime.sendMessage), never straight to 127.0.0.1."""
-    sdc = (ROOT / ext / "sdc" / "sdc_core.js").read_text(encoding="utf-8")
-    assert "fetch('http://127.0.0.1" not in sdc
-    assert "new WebSocket" not in sdc
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

@@ -327,15 +327,9 @@ class SeraApp:
             self._backup_scheduler.start()
             self.app.aboutToQuit.connect(self._backup_scheduler.stop)
 
-            # Ensure FST, SDC, SCA, and tracker settings are initialized
-            if self.db.get_setting("sdc_enabled") is None:
-                self.db.set_setting("sdc_enabled", "1")
-            if self.db.get_setting("fst_enabled") is None:
-                self.db.set_setting("fst_enabled", "1")
+            # Ensure SCA, SCC, and VSDC settings are initialized
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
-            if self.db.get_setting("tracker_enabled") is None:
-                self.db.set_setting("tracker_enabled", "1")
             if self.db.get_setting("scc_enabled") is None:
                 self.db.set_setting("scc_enabled", "1")
             if self.db.get_setting("vsdc_enabled") is None:
@@ -568,12 +562,7 @@ class SeraApp:
         # own background page may connect - see that module for how the origin is checked.
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
-        self.bridge.filing_result_received.connect(self._handle_extension_result)
-        self.bridge.uncertain_result_received.connect(self._handle_extension_result)
-        self.bridge.session_started_received.connect(self._handle_session_started)
         self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
-        self.bridge.sdc_timeline_received.connect(self._handle_sdc_timeline)
-        self.bridge.sudr_capture_received.connect(self._handle_sudr_capture)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -683,24 +672,9 @@ class SeraApp:
                 print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
     def _handle_extension_settings_updated(self, msg: dict):
-        """Persists extension settings toggled from browser popup into SQLite database and controls VSDC worker."""
+        """Persists extension settings toggled from browser popup into SQLite database."""
         try:
             to_set = {}
-            if "vsdc_enabled" in msg:
-                vsdc_on = bool(msg["vsdc_enabled"])
-                to_set["vsdc_enabled"] = "1" if vsdc_on else "0"
-                if hasattr(self, "vsdc_worker") and self.vsdc_worker:
-                    if vsdc_on:
-                        self.vsdc_worker.resume()
-                    else:
-                        self.vsdc_worker.pause()
-                    print(f"[main] VSDC Worker {'resumed' if vsdc_on else 'paused'} via extension popup toggle")
-            if "sdc_enabled" in msg:
-                to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
-            if "fst_enabled" in msg:
-                to_set["fst_enabled"] = "1" if msg["fst_enabled"] else "0"
-            if "tracker_enabled" in msg:
-                to_set["tracker_enabled"] = "1" if msg["tracker_enabled"] else "0"
             if "sca_enabled" in msg:
                 to_set["sca_enabled"] = "1" if msg["sca_enabled"] else "0"
             if to_set:
@@ -712,9 +686,6 @@ class SeraApp:
     def _get_extension_settings_payload(self) -> dict:
         """Packages current services, settings, registered PANs and SCC configuration."""
         try:
-            sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
-            fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
-            vsdc = self.db.get_setting("vsdc_enabled", "1") in ("1", "true", "True")
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
             sca_mode = self.db.get_setting("sca_action_mode", "autofill")
             try:
@@ -726,10 +697,6 @@ class SeraApp:
             svcs = self.db.get_services()
             return {
                 "status": "ok",
-                "sdc_enabled": sdc,
-                "fst_enabled": fst or sdc,
-                "vsdc_enabled": vsdc,
-                "tracker_enabled": sdc or fst or vsdc,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
@@ -748,10 +715,6 @@ class SeraApp:
             payload = self._get_extension_settings_payload()
             if payload.get("status") == "ok":
                 update_extension_settings(
-                    fst_enabled=payload.get("fst_enabled", True),
-                    sdc_enabled=payload.get("sdc_enabled", True),
-                    vsdc_enabled=payload.get("vsdc_enabled", True),
-                    tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),
                     sca_mode=payload.get("sca_mode", "autofill"),
                     allowed_services=payload.get("allowed_services", []),
@@ -853,34 +816,12 @@ class SeraApp:
             self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
 
     def _handle_extension_result(self, msg: dict):
-        # Queue all extension captures; the database/report pipeline is too
-        # expensive to execute in the Qt signal handler during burst traffic.
-        if msg.get("type") != "audit_event":
-            self._capture_queue.put(msg)
-            return
-        self._process_extension_result(msg)
+        # Queue all captures (SGT/VSDC, via vsdc_worker.filing_captured); the database/report
+        # pipeline is too expensive to execute in the Qt signal handler during burst traffic.
+        self._capture_queue.put(msg)
 
     def _process_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
-        if msg.get("type") == "audit_event":
-            try:
-                cid = msg.get("client_id")
-                action_name = msg.get("action", "SCA autofill triggered")
-                short_act = "SCA Auto" if "autofill" in action_name.lower() else ("SCA Widget" if "widget" in action_name.lower() else "SCA")
-                self.db.log_action(
-                    actor=self.actor,
-                    action=action_name,
-                    client_id=cid,
-                    detail=msg.get("detail", "")
-                )
-                if cid:
-                    self.db.record_client_activity(int(cid), short_act, msg.get("detail", ""))
-                    if hasattr(self, "search_win"):
-                        self.search_win._on_search_changed()
-            except Exception as e:
-                print(f"[main] audit_event error: {e}")
-            return
-
         # Every stored capture says which PC produced it (the name from this PC's
         # device_identity.txt), inside its own payload.
         try:
@@ -1125,24 +1066,6 @@ class SeraApp:
             print(f"[Tracker Dump Error] {e}")
             return None
 
-    def _handle_session_started(self, msg: dict):
-        """Displays a toast notification when a new client session starts and processes SCC verification if attached."""
-        portal = msg.get("portal", "Income Tax")
-        pan = str(msg.get("pan") or "").strip()
-        name = str(msg.get("client_name") or "").strip()
-        
-        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-            self.tray_icon.showMessage(
-                "Sera SDC Tracking Active", 
-                f"Live tracking started for {name} ({pan}) on {portal.upper()}.", 
-                QSystemTrayIcon.Information, 
-                3000
-            )
-
-        # If session_start included an active SCC verified password from link mutation
-        if msg.get("scc_verified_password"):
-            self._handle_scc_password_verified(msg)
-
     def _handle_scc_password_verified(self, msg: dict):
         """Persists the verified password from SCC link mutation to master.db."""
         password = str(msg.get("password") or msg.get("scc_verified_password") or "").strip()
@@ -1300,54 +1223,6 @@ class SeraApp:
             self._sync_extension_settings()
         except Exception as e:
             print(f"[main._handle_scc_password_verified error] {e}")
-
-    def _handle_sdc_timeline(self, msg: dict):
-        """Persists SDC session timeline updates from browser into SQLite database."""
-        try:
-            res = self.db.upsert_sdc_session_timeline(msg)
-            print(f"[main._handle_sdc_timeline] Timeline synced for session {msg.get('session_id')}: {res}")
-        except Exception as e:
-            print(f"[main._handle_sdc_timeline Error] {e}")
-
-    def _handle_sudr_capture(self, msg: dict):
-        """
-        Handles the SUDR canonical envelope (see sdcClaude.md §6). Portal-agnostic
-        by design: reads only msg['event']['type'] and msg['identity'] — never
-        branches on msg['source']['protocol']. This one function is meant to work
-        unchanged for ITR, GST, TRACES, or any future portal, as long as that
-        portal's protocol.js calls SDC.emit() with the standard envelope shape.
-
-        Stores into the existing tracker_dump table (no schema migration needed):
-        raw_payload_json holds the full envelope for now; canonical columns
-        (event_type, capture_id) can be promoted later per the migration plan.
-        """
-        try:
-            event = msg.get("event", {}) or {}
-            identity = msg.get("identity", {}) or {}
-            source = msg.get("source", {}) or {}
-
-            event_type = event.get("type", "UNKNOWN")
-            status = event.get("status", "pending")
-            portal = source.get("protocol", "unknown")
-
-            # insert_tracker_dump() already does identity resolution internally
-            # (pan + raw_payload_json -> candidate matching against master.db) —
-            # no need to duplicate that logic here. gstin/tan currently ride
-            # along inside raw_payload_json until _extract_identity_candidates_from_payload
-            # is extended to also key off them directly (see sdcClaude.md §6.6 step 3).
-            self.db.insert_tracker_dump(
-                portal=portal,
-                arn_number=None,
-                capture_method=f"SUDR_{source.get('crosshair_id', '')}",
-                status=status,
-                raw_payload_json=json.dumps(msg),
-                captured_by="sudr",
-                pan=identity.get("pan"),
-                session_id=msg.get("session_id"),
-            )
-            print(f"[main._handle_sudr_capture] {portal} :: {event_type} ({status}) capture_id={msg.get('capture_id')}")
-        except Exception as e:
-            print(f"[main._handle_sudr_capture Error] {e}")
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
