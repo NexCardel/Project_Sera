@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sgt_i.atlas import ATLAS_DIR, PortalAtlas    # noqa: E402
+from core.sgt_i.atlas import ATLAS_DIR, PortalAtlas, load_config    # noqa: E402
 from core.sgt_i.stats import sgt_i_dir                  # noqa: E402
 
 
@@ -163,6 +163,10 @@ def main(argv=None) -> int:
     p_cov.add_argument("--dir", type=Path, default=None)
     p_cov.add_argument("--json", action="store_true")
 
+    p_furn = sub.add_parser("furniture", help="texts treated as portal furniture (menus, headers, footers)")
+    p_furn.add_argument("portal")
+    p_furn.add_argument("--dir", type=Path, default=None)
+
     p_diff = sub.add_parser("diff", help="what appeared / disappeared between two atlas files")
     p_diff.add_argument("old")
     p_diff.add_argument("new")
@@ -206,6 +210,19 @@ def main(argv=None) -> int:
             for p in cov["by_page"]:
                 print("  %-8s slots=%-3d claimed=%-3d unclaimed=%-3d (visits=%d clients=%d)" %
                       (p["id"], p["slots"], p["claimed"], p["unclaimed"], p["visits"], p["clients"]))
+        return 0
+
+    if args.command == "furniture":
+        entries = PortalAtlas(args.portal, directory=base, config=load_config()).furniture()
+        if not entries:
+            print("Nothing is furniture on %r yet (needs %d+ known pages and 2+ clients)." %
+                  (args.portal, load_config().get("furniture_min_known_pages", 10)))
+            return 0
+        print("%s: %d furniture-shaped text(s); only runs of 3+ of them are left out of a page" %
+              (args.portal, len(entries)))
+        for e in entries:
+            print("  pages=%-3d clients=%-2d last=%s  %s" %
+                  (e["pages"], e["clients"], e["last_seen"], e["text"] or "[%s]" % e["shape"]))
         return 0
 
     if args.command == "diff":

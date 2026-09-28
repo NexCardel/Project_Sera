@@ -12,7 +12,7 @@ from core.sgt_i.residues import (
     split_inline_labels,
 )
 
-PAGE = ["Filing confirmation", "Reference No: ABCPD1234E", "Date of filing: 12-08-2026",
+PAGE = ["Filing confirmation", "Your return has been filed successfully", "Reference No: ABCPD1234E", "Date of filing: 12-08-2026",
         "Acknowledgement Number", "123456789150726", "Status", "Filed"]
 
 
@@ -85,6 +85,31 @@ def test_component_ignores_flash_events_and_counts_pages(tmp_path: Path):
     assert comp.counts.data == {}
     comp.observe(SimpleNamespace(source="tick", lines=PAGE, result=_result(), portal="Portal A"), None)
     assert "Portal A" in comp.counts.data
+
+
+def test_counts_once_per_page_visit_not_per_read(tmp_path: Path):
+    # Field test 2026-09-28: 3-4 clients gave 291 reads, because every changed line is a new
+    # read. Rereads of one visit must not multiply the counts; a new visit counts again.
+    comp = ResiduesComponent(ResidueCounts(directory=tmp_path, clock=_Clock()))
+
+    def read(url, lines, sid="s1", ack=None):
+        comp.observe(SimpleNamespace(source="uia", lines=lines, result=_result(ack), portal="Portal A",
+                                     url=url, session_id=sid), None)
+
+    cell = lambda: comp.counts.data["Portal A"]["confirmation"]
+    for _ in range(5):
+        read("https://x.test/#/done", PAGE)                             # same visit, reread
+    assert cell()["code AAAAA9999A"] == {"seen": 1, "claimed": 0}
+    read("https://x.test/#/done", PAGE, ack="123456789150726")          # the Core caught up
+    assert cell()["number 999999999999999"] == {"seen": 1, "claimed": 1}
+    read("https://x.test/#/done", PAGE + ["Due date: 31-12-2026"])      # a second date appeared
+    assert cell()["date 99-99-9999"]["seen"] == 2
+    assert cell()["code AAAAA9999A"]["seen"] == 1
+    read("https://x.test/#/home", PAGE)                                 # left the page ...
+    read("https://x.test/#/done", PAGE)                                 # ... and came back
+    assert cell()["code AAAAA9999A"]["seen"] == 3
+    read("https://x.test/#/done", PAGE, sid="s2")                       # another window's visit
+    assert cell()["code AAAAA9999A"]["seen"] == 4
 
 
 def test_residues_run_in_sgt_i_only():

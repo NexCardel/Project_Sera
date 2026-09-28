@@ -1,4 +1,4 @@
-# SGT overhaul — report (2026-09-28 03:24)
+# SGT overhaul — report (2026-09-28 05:35)
 
 Deadline: 2026-09-29T01:30:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-09-29T01:30:00+05:30
 | :--- | ---: |
 | Not started | 0 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 26 |
+| Retry | 0 |
+| Done | 27 |
 | Blocked | 0 |
 
-Runs: 35   output tokens: 1121602   API-equivalent cost: $52.00
+Runs: 36   output tokens: 1156354   API-equivalent cost: $55.44
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -40,7 +40,7 @@ Runs: 35   output tokens: 1121602   API-equivalent cost: $52.00
 | W11-1 | Done | haiku | 4a6451f | 'Not understood' residue report | Core tracks residues directly via compute_residues (PAN/ARN/GSTIN/Aadhaar patterns); record_residues adds to daily health report per page kind; core/sgt_i/resid |
 | W12-1 | Done | opus | 2aef1b7 | The miner: proposals from the atlas, maths and anchoring | core/sgt_i/miner.py: 5 sources, drafted specs pass Core self-tests, fictional examples, gates + replay red flag, proposals.json; 564 sgt tests pass |
 | W12-2 | Done | sonnet | 5b131ba | SGT lab screen | SGT lab dialog: core/sgt_i/lab.py accept/reject logic + ui/dialogs/sgt_lab_dialog.py, wired at Settings->Tracker. 13 new tests, 577 total pass. |
-| W12-R | Retry | opus |  | Final review and merge-readiness report | stopped by usage limit, resumes after 05:10 |
+| W12-R | Done | opus | 67d75bb | Final review and merge-readiness report | Merge-ready (SGT-I Off by default). Fixed: residues moved out of Core into SGT-I, atlas now fed live, miner button in lab, override merge never wipes. 574 SGT t |
 
 ## Decisions taken for you
 
@@ -71,6 +71,9 @@ Runs: 35   output tokens: 1121602   API-equivalent cost: $52.00
 - **W10-1** Where are the event handlers registered (scope)? → On the Document elements of the window the Core has just read (already scope-gated), re-registered when its URL changes; never desktop-wide or on browser chrome (Keeps other tabs/apps out (privacy + portal allowlist); a JS alert() outside the page document is not caught by events, but page diffing sees in-page dialogs.)
 - **W12-1** Where does the miner's support gate (>= N clients per slot) get its client count, and what reaches proposals.json from the replay diff? → atlas.py now keeps salted client hashes per slot (private file) and a public slots[].clients count; the replay diff is stored as counts only (added/changed/removed/held/adds, red) (the atlas only counted clients per page; replay diff lines name real values (PAN, ARN) so they must never be written to a file that may sync)
 - **W12-1** Graduation candidates and proven checksum rules have no stored source yet - how does the miner get them? → Caller supplies them: mine(verdict=callable(row, opinion)->True/False/None, proven={container: {checksum, date_tail}}) or a slot's own 'proven' key; with no verdict source 5 proposes nothing (no component records whether a second opinion was right or which checksum a container proved; guessing would violate 'never wrong'; W12-2/lab can wire a replay-based verdict)
+- **W12-R** Nothing ever runs the SGT-I miner today, so the SGT lab is always empty. How should it run? A = a 'Look for new datapoints' button in the SGT lab (runs in the background, seconds to a minute); B = a command-line tool only (tools/sgt_mine.py), for a developer; C = automatically once a day while SGT-I is on. → A (asked as Q2)
+- **W12-R** The atlas (step 4) was built but nothing fed it, so the GPS and the miner's main source were inert. Wire it? → Yes: AtlasComponent first in default_components(), sharing one Atlas with the GPS; client key = the ledger's client_fields, hashed (Step 4 says each page read captures part of the portal; without it SGT-I On gives no route, no read-harder and no atlas proposals. Costs ~0.1 s per 400-line page on SGT-I's own thread; the Core is untouched.)
+- **W12-R** Where does step 10's residue tracking live? W11-1 put it in the Core (sgt_health/sgt_shadow) with GST/ITR words in code. → Moved to SGT-I: core/sgt_i/residues.py ResiduesComponent, generic types and page kinds, counts in sgt_i/residues.json; shown in the SGT lab (14.2/14.3 put the not-understood report in SGT-I; the Core version ran with SGT-I Off (breaking Off = unchanged) and held portal wording in code.)
 
 ## Checks waiting for you
 
@@ -82,3 +85,6 @@ Runs: 35   output tokens: 1121602   API-equivalent cost: $52.00
 - #6 (W9-2) Wire ExpectationsComponent into core/sgt_i/__init__.py's default_components() for real: thread db_path/hex_key/raw_db_path from main.py's Database through VSDCRouter (_apply_sgt_i) into a SeraData instance, then add ExpectationsComponent(sera) to the list. Needs a real app run to verify SGT-I stays Off/On-safe with a live master.db/rawPayload.db. — Not run
 - #7 (W10-1) Live UIA events: with SGT-I On, open a local page with a role=status toast shown for 1 s (e.g. scratch toast.html from W10-1) in Edge on an allowed-portal-like session, or run a real portal submission; confirm the row's raw_payload.sgt_i.flashes counts a live_region/notification flash and missed_by_polling. The COM plumbing (CUIAutomation8, IUIAutomation5 notification + live-region/window-opened add/remove on the MTA thread) was verified; real event delivery from Edge was not (launching Edge needed approval). — Not run
 - #8 (W12-2) Open Settings -> Tracker -> SGT lab in the real app with a real proposals.json and confirm the dialog looks right and Accept/Reject behave (only smoke-tested headlessly here). — Not run
+- #9 (W12-R) SGT-I Off = unchanged: on the merged build with SGT-I Off (the default), work one real GST and one ITR filing and confirm the tracker rows match what the same work gave before the merge, and that no folder ~/AmanAssociates_Sera/sgt_i/ is created. — Not run
+- #10 (W12-R) SGT-I On for a working day: the console never prints an SGT-I trip ('switched off' / budget / hung); ~/AmanAssociates_Sera/sgt_i/atlas/<portal>.json and residues.json appear and grow; open both and confirm they hold no client name, PAN, GSTIN or ack number (only shapes like AAAAA9999A and counts). — Not run
+- #11 (W12-R) After some days with SGT-I On: Settings -> Tracker -> Open SGT lab -> 'Look for new datapoints'. Note how long it takes and that the app stays responsive; check the 'Not understood yet' list reads sensibly; Accept one proposal and confirm sgt_fields.json beside the app gained it and SGT still captures normally after a restart. — Not run

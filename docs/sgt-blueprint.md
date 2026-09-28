@@ -1759,3 +1759,27 @@ Each step starts in a fresh session from this section and ends with a hand-off n
   **Merge-readiness:** safe to merge. The Core's diff is only the Off-safe hooks (`_hand_to_sgt_i`, `wants_read`, `raw_payload['sgt_i']`),
   corpus v2 and the recorder echo, and SGT-I defaults Off. Check by hand before turning SGT-I On: #1, #9-#11. Open: #6 (Expectations
   unwired); with SGT-I On, the corpus node dump is read inside the Core's tick (W2-4, 30-530 ms/page).
+
+- **Field test fixes** (2026-09-28, claude-opus-5-5, with the user, after W12-R; first real SGT-I On session, ITR + GST).
+  (1) **Page kinds:** 373/495 recorded pages read as `error` - the ITR menu marks disabled items "<item> unavailable";
+  also bare "Error :" slots, "error icon" alt text, help sentences with "rejected". Fixed in config (`page_kinds.error`,
+  `profile` skips avatar alt text, new `statement` list) + `page_kinds.py` (a negated/happened line counts only as a short
+  message <= 12 words or in a dialog; several same-shape identifiers outside a dialog = `list`, not `confirmation`).
+  (2) **Residues** count once per page VISIT (same session + URL), not per read - one visit was dozens of reads.
+  (3) **Atlas had no container stats** in the live wiring (`AtlasComponent()` built `Atlas()` without `stats=`), so every
+  slot was kind-less and the miner dropped all as "kind unknown" - fixed; test asserts the live atlas has stats.
+  (4) **Portal furniture** (user asked: "the atlas recognising repeated page noise and ignoring it"). Two layers, SGT-I only:
+  (a) `Observation.nodes` carries the node tree the Core ALREADY read for the corpus (recording on; no extra read ever),
+  and new `sgt_i/page_view.page_for()` builds every component's map from it (real navigation/footer zones), else from the
+  lines; (b) the atlas counts each text's distinct pages, reads and clients (`atlas_private` `texts`, salted hashes; clear
+  text only when identical for 3+ clients and never a pair's value) and `furniture_test()` says which are furniture-shaped
+  (>= 5 pages, >= 40% of reads, >= 2 clients, portal >= 10 pages; `sgt_i_config.json` "atlas"); `page_map.mark_furniture`
+  moves only RUNS of >= 3 such texts to navigation, so a lone shared label ("Acknowledgement No", "Status:") stays data.
+  Measured on the corpus: identity must NOT use the furniture-free map (it split 13 pages into 23) - the atlas merges the
+  map as read; share must be of READS not pages (plain-line reads split one screen into many pages). Result on 657 records:
+  `profile` 117 -> 51 (structure; all on the profile page or the dashboard's profile card) / 89 (lines only); 104
+  `dashboard` and 84 `list` now recognised. Node maps capped at 1,500 nodes (0.4 s at 2,000). Lab + `tools/sgt_atlas.py
+  furniture` list it. Core diff: `sgt_shadow` passes the recorder's nodes to `_hand_to_sgt_i` (8 lines); replay diff on 717
+  pages: only new sessions, no changed/removed row. `test_sgt_*`: 588 pass. **Before using:** delete
+  `~/AmanAssociates_Sera/sgt_i/` (old atlas has no text counts or container stats; residues were per read) and keep
+  Settings -> Tracker -> "Record pages for SGT testing" on (that is what gives SGT-I the structure).

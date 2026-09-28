@@ -260,6 +260,16 @@ class SgtLabDialog(QDialog):
             blind_label.setStyleSheet("font-size: 11px; color: #9AA0A6;")
             layout.addWidget(blind_label)
 
+        # Portal furniture SGT-I learnt and leaves out of its page maps (read-only, 2026-09-28)
+        furniture = lab.furniture_summary()
+        if furniture:
+            furniture_label = QLabel("Treated as page furniture (menus, headers, footers - ignored by "
+                                     "SGT-I, still read by SGT):\n" + "\n".join(furniture))
+            furniture_label.setWordWrap(True)
+            furniture_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            furniture_label.setStyleSheet("font-size: 11px; color: #9AA0A6;")
+            layout.addWidget(furniture_label)
+
         close_row = QHBoxLayout()
         # Decision 2026-09-28 (W12-R): the miner runs only when asked, from here, off the UI thread.
         self._mine_btn = QPushButton("Look for new datapoints")

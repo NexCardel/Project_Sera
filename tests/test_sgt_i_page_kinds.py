@@ -106,6 +106,72 @@ def test_error_vocab_without_any_assertion_trigger():
     assert result.evidence[0] == "vocab:error"
 
 
+def test_disabled_menu_items_placeholders_and_help_text_are_not_errors():
+    # Field test 2026-09-28: 373 of 495 recorded ITR pages read as "error". The menu on every
+    # page names disabled items "<item> unavailable"; forms carry an empty "Error :" slot and an
+    # "error icon" image; help text mentions a return being "rejected". None is an error.
+    d = Doc()
+    main = _main(d)
+    for i, item in enumerate(("e-file unavailable", "Dashboard unavailable", "My Profile unavailable")):
+        d.add(item, (20 + i * 200, 160, 180, 20), LINK, parent=main)
+    d.add("Error :", (20, 200, 80, 20), parent=main)
+    d.add("error icon", (20, 230, 80, 20), parent=main)
+    d.add("After filing your return, please check its processing status in View Filed Returns "
+          "to see whether it was accepted or rejected.", (20, 260, 900, 20), parent=main)
+    assert pk.classify(d.map()).kind != "error"
+
+
+def test_real_error_messages_still_read_as_errors():
+    for text in ("Invalid Password, Please retry.", "Service temporarily unavailable",
+                 "Error : PAN does not exist"):
+        d = Doc()
+        main = _main(d)
+        d.add(text, (20, 200, 600, 20), parent=main)
+        assert pk.classify(d.map()).kind == "error", text
+
+
+def test_dashboard_menu_labels_with_an_ack_are_not_a_confirmation():
+    # Same field test: "View Filed Returns" / "Recent Forms Filed" on a dashboard beside a listed
+    # ack number read as confirmation on 112 pages; an avatar's alt text read as profile on 300.
+    d = Doc()
+    main = _main(d)
+    d.add("User profile picture", (1100, 160, 40, 40), parent=main)
+    d.add("View Filed Returns", (20, 200, 200, 20), LINK, parent=main)
+    d.add("Recent Forms Filed", (20, 240, 200, 20), parent=main, heading=2)
+    d.add("Acknowledgement No.", (20, 280, 180, 20), parent=main)
+    d.add("123456789012345", (220, 280, 180, 20), parent=main)
+    assert pk.classify(d.map()).kind not in ("confirmation", "profile")
+
+
+def test_statement_on_the_main_page_with_an_ack_is_a_confirmation():
+    d = Doc()
+    main = _main(d)
+    d.add("Your return has been filed successfully", (20, 200, 500, 30), parent=main, heading=1)
+    d.add("Acknowledgement No.", (20, 260, 180, 20), parent=main)
+    d.add("123456789012345", (220, 260, 180, 20), parent=main)
+    assert pk.classify(d.map()).kind == "confirmation"
+
+
+def test_filed_returns_list_with_a_status_per_ack_is_a_list_not_a_confirmation():
+    d = Doc()
+    main = _main(d)
+    for i, ack in enumerate(("123456789012345", "223456789012345")):
+        y = 200 + i * 80
+        d.add("Successfully e-verified", (20, y, 300, 20), parent=main, heading=3)
+        d.add("Acknowledgement No.", (20, y + 30, 180, 20), parent=main)
+        d.add(ack, (220, y + 30, 180, 20), parent=main)
+    assert pk.classify(d.map()).kind == "list"
+
+
+def test_long_negated_sentence_in_a_dialog_is_still_an_error():
+    d = Doc()
+    _main(d)
+    dlg = d.add("", (300, 200, 500, 200), role="dialog")
+    d.add("The registration process is not yet complete and hence the applicant cannot proceed "
+          "with filing until the pending steps are done.", (320, 210, 460, 60), parent=dlg)
+    assert pk.classify(d.map()).kind == "error"
+
+
 # ── payment: an amount plus payment vocabulary, both required ──────────────────────────────────
 def test_amount_with_payment_vocab_is_payment():
     d = Doc()

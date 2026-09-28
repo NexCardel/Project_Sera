@@ -372,15 +372,15 @@ def explain(led: Ledger, dataset: str, cfg: Optional[Dict[str, Any]] = None) -> 
 
 # ── The component ──────────────────────────────────────────────────────────────────────────────
 
-def _page_kind(lines: Sequence[str], cfg: Dict[str, Any]) -> page_kinds.PageKind:
-    """Step 6's page kind from the Core's lines: the Observation carries lines, not nodes (the
-    shared read is not adopted yet, 14.2), so each line becomes a node stacked in reading order.
-    Lines carry no geometry, so no header band: every line counts as main content."""
-    if not lines or len(lines) > int(cfg.get("max_lines_for_page_kind", 400)):
+def _page_kind_of(obs: Any, cfg: Dict[str, Any], atlas: Any = None) -> page_kinds.PageKind:
+    """Step 6's page kind from page_view's map: the node tree when the Core read one (real zones,
+    so the menu and footer are not evidence), else the lines; learnt furniture left out either way."""
+    from .page_view import page_for
+    cap = int(cfg.get("max_lines_for_page_kind", 400))
+    if not getattr(obs, "nodes", None) and (not obs.lines or len(obs.lines) > cap):
         return page_kinds.PageKind(None, ())
-    boxes = [{"text": t, "x": 20, "y": 24 * i, "width": 8 * max(1, len(t)), "height": 18}
-             for i, t in enumerate(lines)]
-    return page_kinds.classify(pm.build_page_map(pm.nodes_from_ocr(boxes), header_band_px=0))
+    page = page_for(obs, atlas, max_lines=cap)
+    return page_kinds.classify(page) if page is not None else page_kinds.PageKind(None, ())
 
 
 def _assertion_near(lines: Sequence[str], value: str, cfg: Dict[str, Any]) -> assertions.Assertion:
@@ -428,9 +428,10 @@ class LedgerComponent:
 
     name = "ledger"
 
-    def __init__(self, gps: Any = None, config: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(self, gps: Any = None, config: Optional[Dict[str, Any]] = None, atlas: Any = None) -> None:
         self._gps = gps
         self._cfg = config
+        self._atlas = atlas                               # learnt furniture (shared with the atlas step)
         self._sessions: Dict[str, _Session] = {}
 
     def _session(self, sid: str) -> _Session:
@@ -482,7 +483,7 @@ class LedgerComponent:
             pieces.append((_dataset_label({**draft, **vals}, "dataset in progress"), vals, conf))
 
         if pieces:
-            kind = _page_kind(obs.lines, cfg).kind
+            kind = _page_kind_of(obs, cfg, self._atlas).kind
             route = self._gps.last_route(obs.session_id) if self._gps is not None else None
             for label, vals, conf in pieces:
                 # A card naming another client than the session's is another client's evidence.

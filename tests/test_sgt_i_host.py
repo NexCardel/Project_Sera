@@ -384,6 +384,30 @@ def test_recorder_gets_nodes_only_while_sgt_i_is_on(tmp_path):
     assert pages["https://example.test/sgt-i-on"]["nodes"] == fake_nodes
 
 
+def test_sgt_i_gets_the_node_tree_the_recorder_already_read_and_no_extra_read(tmp_path):
+    # 2026-09-28: SGT-I's page maps get real zones (menu / footer) from the nodes the Core read
+    # for the corpus. With recording off there is no node read at all, and SGT-I gets lines only.
+    from core.sgt.sgt_corpus import PageRecorder
+    lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]
+    fake_nodes = [[{"parent": -1, "depth": 0, "ctype": 50020, "name": "x"}]]
+    reads, got = [], []
+
+    def read_nodes(h):
+        reads.append(h)
+        return {"docs": fake_nodes}
+
+    for recording in (True, False):
+        rec = PageRecorder(tmp_path / str(recording), echo=lambda m: None)
+        rec.enabled = recording
+        on = host(Comp(lambda o, c: got.append(o.nodes)))
+        SgtShadow(store=STORE, read_uia=lambda h: {"lines": lines}, read_nodes=read_nodes, recorder=rec,
+                  log_dir=tmp_path, echo=lambda m: None, intelligence=on
+                  ).observe(1, "itr", "https://example.test/rec-%s" % recording, frame=Frame())
+        assert wait_for(lambda: len(got) == (1 if recording else 2))
+    assert len(reads) == 1                                  # only the recorder's own read
+    assert got[0][0][0]["name"] == "x" and got[1] == ()
+
+
 def test_a_failing_node_read_never_breaks_recording_or_capture(tmp_path):
     from core.sgt.sgt_corpus import PageRecorder, load_pages
     lines = json.loads(SCENARIOS[0].read_text(encoding="utf-8"))["pages"][0]["lines"]

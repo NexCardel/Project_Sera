@@ -21,7 +21,9 @@ def default_components() -> list:
 
     atlas = AtlasComponent()
     gps = GpsComponent(atlas=atlas.atlas)
-    return [atlas, gps, LedgerComponent(gps=gps), FlashComponent(), ResiduesComponent()]
+    shared = atlas.atlas              # one atlas: its learnt furniture is left out of every page map
+    return [atlas, gps, LedgerComponent(gps=gps, atlas=shared), FlashComponent(atlas=shared),
+            ResiduesComponent(atlas=shared)]
 
 
 __all__ = ["SgtIntelligence", "Observation", "make_observation", "default_components"]

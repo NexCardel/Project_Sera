@@ -68,13 +68,10 @@ def diff(prev: Optional[Counter], page: pm.PageMap, key: Callable[[pm.Node], Has
     return PageDiff(tuple(appeared), sum(v for v in left.values() if v > 0), new_dialog)
 
 
-def map_from_lines(lines: Sequence[str]) -> pm.PageMap:
-    """A page map from the Core's lines (the Observation carries lines, not nodes, until the
-    shared read is adopted - 14.2): each line a node stacked in reading order, as ledger.py does.
-    Lines carry no geometry or roles, so a dialog only shows once nodes reach the Observation."""
-    boxes = [{"text": t, "x": 20, "y": 24 * i, "width": 8 * max(1, len(t)), "height": 18}
-             for i, t in enumerate(lines)]
-    return pm.build_page_map(pm.nodes_from_ocr(boxes), header_band_px=0)
+# The shared plain-line page map lives in page_view (with learnt furniture); kept here by name for
+# the modules and tests that import it from page_diff.
+from .page_view import map_from_lines, page_for  # noqa: E402,F401
+_FURNITURE_ZONES = frozenset({pm.NAVIGATION, pm.FOOTER})
 
 
 class _Session:
@@ -100,7 +97,8 @@ class FlashComponent:
 
     name = "flashes"
 
-    def __init__(self, max_lines: int = 400) -> None:
+    def __init__(self, max_lines: int = 400, atlas: Any = None) -> None:
+        self._atlas = atlas                               # learnt furniture (shared with the atlas step)
         self._salt = os.urandom(16)
         self._max_lines = max_lines
         self._sessions: Dict[str, _Session] = {}
@@ -138,11 +136,14 @@ class FlashComponent:
                 st.waiting.append(texts)          # the read before did not have it - did the next?
             st.last = tuple(lines)
         else:
-            page = map_from_lines(lines)
+            page = page_for(obs, self._atlas, max_lines=self._max_lines)
+            if page is None:
+                return
             d = diff(st.keys, page, self._key)
             st.keys, st.texts = page_keys(page, self._key), texts
             st.pages += 1
-            st.appeared = sum(1 for n in d.appeared if n.is_content)
+            # A menu opening or the header changing is not something that happened on the page.
+            st.appeared = sum(1 for n in d.appeared if n.is_content and n.zone not in _FURNITURE_ZONES)
             st.dialogs += int(d.new_dialog)
             if d.appeared:
                 st.last = tuple(n.text for n in d.appeared)

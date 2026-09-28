@@ -269,6 +269,9 @@ def test_the_component_feeds_every_page_read_and_shares_the_atlas_with_the_gps(t
     comps = default_components()
     gps = next(c for c in comps if isinstance(c, GpsComponent))
     assert comps[0].name == "atlas" and gps._atlas is comps[0].atlas
+    # Field test 2026-09-28: the live atlas had no container stats, so no slot ever got a kind
+    # and the miner dropped every one as "kind unknown".
+    assert comps[0].atlas._stats is not None
 
 
 def test_the_core_never_imports_the_atlas():

@@ -62,12 +62,23 @@
       ]
     }
   },
+  "atlas": {
+    "note": "Portal furniture (atlas.py furniture_test, page_map.mark_furniture): menus, headers and footers the page markup did not label. A text is furniture-shaped when seen on >= furniture_min_pages different pages AND in >= furniture_read_share of the portal's page reads, for >= furniture_min_clients clients; only a run of >= furniture_min_run such texts in reading order is treated as furniture (a lone shared label such as 'Acknowledgement No' never is). Nothing is furniture until the portal has furniture_min_known_pages pages. Used by SGT-I only; the Core reads everything.",
+    "furniture_min_known_pages": 10,
+    "furniture_min_pages": 5,
+    "furniture_read_share": 0.4,
+    "furniture_min_clients": 2,
+    "furniture_min_run": 3
+  },
   "page_kinds": {
     "note": "Blueprint 14.4 step 6, second half: generic vocabulary for core/sgt_i/page_kinds.py. These are login/payment/profile/error words shared by many portals ('log in', 'otp', 'pay now', ...), never one portal's own field names - a new portal's wording is a change here, never a code change. Matched case-insensitively as whole words/phrases against heading, dialog and label text.",
     "login": ["log\\s*in", "sign\\s*in", "\\busername\\b", "\\bpassword\\b", "\\botp\\b", "\\bcaptcha\\b", "\\bpin\\b"],
     "payment": ["\\bpayment\\b", "\\bpay\\s*now\\b", "amount\\s+due", "amount\\s+payable", "\\bchallan\\b", "net\\s*banking", "\\bupi\\b", "\\bcheckout\\b"],
-    "profile": ["\\bprofile\\b", "my\\s+account", "personal\\s+details", "\\bmy\\s+profile\\b", "update\\s+profile", "account\\s+details"],
-    "error": ["\\berror\\b", "something\\s+went\\s+wrong", "\\btry\\s+again\\b", "\\bunable\\s+to\\b", "page\\s+not\\s+found", "\\bunavailable\\b"]
+    "profile": ["\\bprofile\\b(?!\\s+(?:image|picture|photo|pic|icon)\\b)","my\\s+account", "personal\\s+details", "\\bmy\\s+profile\\b", "update\\s+profile", "account\\s+details"],
+    "statement_note": "A confirmation's 'happened' wording must be a statement, not a menu or column label ('View Filed Returns', 'Recent Forms Filed', 'Filed u/s' carry the same words on every dashboard). Outside a dialog a line needs one of these; inside a dialog anything counts. The profile word skips an avatar's alt text ('User profile picture').",
+    "statement": ["\\b(?:has|have|had)\\s+(?:been\\s+)?(?:successfully\\s+)?\\w+(?:ed|en)\\b", "\\b(?:is|was|were)\\s+(?:successfully\\s+)?\\w+(?:ed|en)\\b", "\\bsuccessful(?:ly)?\\b"],
+    "error_note":"'error' alone skips an empty placeholder ('Error :' with nothing after it - a hidden validation slot many forms carry on every page) and an image's alt text ('error icon'). A bare 'unavailable' is a menu item's disabled state ('e-file unavailable' on the ITR portal's menu, which is on nearly every page), so only a service/page being unavailable counts.",
+    "error": ["\\berror\\b(?!\\s*:?\\s*$)(?!\\s+icon\\b)", "something\\s+went\\s+wrong", "\\btry\\s+again\\b", "\\bunable\\s+to\\b", "page\\s+not\\s+found", "(?:service|server|site|page|portal|system|website)\\s+(?:is\\s+)?(?:temporarily\\s+|currently\\s+)?unavailable", "(?:temporarily|currently)\\s+unavailable"]
   },
   "ledger": {
     "note": "Blueprint 14.4 step 7: weights and dataset constraints for the evidence ledger (core/sgt_i/ledger.py). Weights are hand-set; they are to be tuned by counting on the corpus, never learned by a model. A sighting's weight is source x page kind x assertion x the Core's own confidence; a belief's score combines its sightings as 1 - product(1 - w). Constraints only ever produce a second opinion on the row - the Core's value stands (14.2). A new form, portal or period wording is a change here, never a code change.",

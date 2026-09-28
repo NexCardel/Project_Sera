@@ -151,6 +151,26 @@ def run_miner(atlas_dir: Optional[Path] = None, corpus_dir: Optional[Path] = Non
     return {"proposals": len(pending), "dropped": result.get("dropped") or {}}
 
 
+def furniture_summary(base: Optional[Path] = None, shown: int = 12) -> List[str]:
+    """One line per portal: what SGT-I leaves out of its page maps as furniture (menus, headers,
+    footers it learnt by counting). Read-only - the Core still reads everything. Text appears only
+    once it is template (identical for 3+ clients, never a value); the rest are counted."""
+    from .atlas import ATLAS_DIR, PortalAtlas, load_config
+    from .stats import sgt_i_dir
+    base = base or sgt_i_dir()
+    out: List[str] = []
+    for f in sorted((base / ATLAS_DIR).glob("*.json")) if (base / ATLAS_DIR).is_dir() else ():
+        entries = PortalAtlas(f.stem, directory=base, config=load_config()).furniture()
+        if not entries:
+            continue
+        named = [e["text"] for e in entries if e["text"]]
+        rest = len(entries) - len(named)
+        text = ", ".join(named[:shown]) + (" ..." if len(named) > shown else "")
+        more = " (+%d not yet template)" % rest if rest else ""
+        out.append("%s: %d texts. %s%s" % (f.stem, len(entries), text or "-", more))
+    return out
+
+
 def reject(proposal_id: str, proposals_file: Optional[Path] = None) -> bool:
     """Reject: remembers the decision only. The override file is never touched, so a rejected
     proposal leaves no trace outside the lab."""

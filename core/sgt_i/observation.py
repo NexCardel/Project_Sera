@@ -40,13 +40,15 @@ class Observation:
     ts: float                        # the Core's clock when the page was read
     today: str                       # ISO date the Core used
     event: str = ""                  # for source "uia_event": live_region / notification / window_opened
+    nodes: Tuple[Any, ...] = ()      # the page's UIA node tree (uia_nodes "docs"), only when the Core
+                                     # had already read it (page recording on); else () - never an extra read
 
 
 def make_observation(*, session_id: str, portal: str, url: str, title: str, source: str,
                      lines: Any, result: Any, profile: Any, draft: Any, ts: float,
-                     today: Any) -> Observation:
+                     today: Any, nodes: Any = None) -> Observation:
     as_dict = result.as_dict() if hasattr(result, "as_dict") else (result or {})
     return Observation(session_id=str(session_id), portal=portal or "", url=url or "", title=title or "",
                        source=source or "", lines=tuple(str(x) for x in (lines or ())),
                        result=freeze(as_dict), profile=freeze(profile or {}), draft=freeze(draft or {}),
-                       ts=float(ts or 0.0), today=str(today or ""))
+                       ts=float(ts or 0.0), today=str(today or ""), nodes=freeze(nodes or ()))

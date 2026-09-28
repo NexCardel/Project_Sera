@@ -53,6 +53,7 @@ _MIN_IDENTIFIER_LEN = 6              # digits/letters in the masked shape, space
 _REPEAT_MIN = 3                      # sibling containers needed to call a pattern "repeated"
 _INPUT_MIN_COUNT = 2
 _INPUT_MIN_RATIO = 0.6
+_MESSAGE_MAX_WORDS = 12              # longer than this, outside a dialog = help text, not an error
 
 _lock = threading.Lock()
 _cache: Optional[Dict[str, List[str]]] = None
@@ -123,6 +124,12 @@ def _content_texts(page: pm.PageMap, zones: Sequence[str] = _TRUSTED) -> List[pm
 def _assertions(page: pm.PageMap, cfg: Optional[Dict[str, Any]] = None,
                 zones: Sequence[str] = _TRUSTED) -> List[Assertion]:
     return [classify_assertion(n.text, cfg) for n in _content_texts(page, zones)]
+
+
+def _is_message(n: pm.Node) -> bool:
+    """A line that can speak for the page: anything in a dialog, else a short line. Longer text
+    outside a dialog is help or instructions."""
+    return n.zone == pm.DIALOG or len(n.text.split()) <= _MESSAGE_MAX_WORDS
 
 
 def _identifier_pairs(pairs: Sequence[ValuePair]) -> List[ValuePair]:
@@ -199,10 +206,14 @@ def classify(page: pm.PageMap, config: Optional[Dict[str, Any]] = None,
     # 2. error - a negated assertion, or error vocabulary, in a trusted zone. Checked before
     #    confirmation so "payment failed for TXN123" (identifier + negated) reads as an error,
     #    not a confirmation, even though an identifier is present.
+    #    Only a negated MESSAGE counts: a short line, or anything in a dialog. A long sentence is
+    #    help or instructions ("please check whether your return was rejected in ...") and a
+    #    negative word inside it says nothing about this page having failed.
+    content = _content_texts(page)
     asserts = _assertions(page, config)
-    if any(a.cls == "negated" for a in asserts):
-        trig = next(a.trigger for a in asserts if a.cls == "negated")
-        return PageKind("error", ("negated", trig))
+    negated = [a for n, a in zip(content, asserts) if a.cls == "negated" and _is_message(n)]
+    if negated:
+        return PageKind("error", ("negated", negated[0].trigger))
     err_hit = _vocab_hit(texts, vocab.get("error", []))
     if err_hit:
         return PageKind("error", ("vocab:error", err_hit))
@@ -210,10 +221,21 @@ def classify(page: pm.PageMap, config: Optional[Dict[str, Any]] = None,
     # 3. confirmation - an identifier (an ack/reference number, not a value SGT-I keeps) beside
     #    "happened" wording, both in a trusted zone (dialog/main - never the stepper, so a
     #    stepper's own un-reached-step text can never win this, 14.1's bug table).
+    #    Outside a dialog the wording must read as a statement ("has been filed", "submitted
+    #    successfully"), not a menu or column label that merely holds the word ("View Filed Returns"),
+    #    and a short message, not help text. Outside a dialog, several identifiers of one shape are
+    #    a list of earlier records each carrying its own status ("Successfully e-verified" beside
+    #    every filed return), not one confirmation.
     ids = _identifier_pairs(pairs)
-    happened = [a for a in asserts if a.cls == "happened"]
+    statement = vocab.get("statement") or []
+    happened = [(n, a) for n, a in zip(content, asserts) if a.cls == "happened" and _is_message(n)
+                and (n.zone == pm.DIALOG or not statement or _matches(n.text, statement))]
     if ids and happened:
-        return PageKind("confirmation", ("identifier", "happened", happened[0].trigger))
+        in_dialog = any(n.zone == pm.DIALOG for n, _a in happened)
+        records = max(Counter(p.shape for p in ids).values())
+        if not in_dialog and records >= 2:
+            return PageKind("list", ("records", str(records)))
+        return PageKind("confirmation", ("identifier", "happened", happened[0][1].trigger))
 
     # 4. payment - an amount plus payment vocabulary, both required so a salary field on some
     #    other page never reads as a payment screen on its own.
@@ -243,7 +265,8 @@ def classify(page: pm.PageMap, config: Optional[Dict[str, Any]] = None,
 
     # 8. profile - an identity-shaped value under profile wording; vocab is required here too
     #    (an identifier alone is too common a shape to mean "this is a profile page" by itself).
-    profile_hit = _vocab_hit(texts, vocab.get("profile", []))
+    profile_hit = _vocab_hit([t for t in texts if len(t.split()) <= _MESSAGE_MAX_WORDS],
+                             vocab.get("profile", []))
     identity_types = {p.type for p in pairs if p.zone in _TRUSTED}
     if profile_hit and identity_types & {"code", "email", "phone", "date"}:
         return PageKind("profile", ("vocab:profile", profile_hit))

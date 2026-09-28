@@ -14,6 +14,8 @@ uses:
 * pairs      - label -> value by layout: an input's own label, the chosen option of a choice
                group, the column header over a table cell, then the nearest text to the right
                or directly below. Never by line order.
+* furniture  - optional: runs of text the portal shows on many different pages (learnt by the
+               atlas) join the navigation zone, for menus and headers the markup did not label.
 
 Pure functions over plain data: no UIA, no I/O, no state. Portal-neutral: the only words used
 are generic UI words, overridable through `vocab` (portal wording belongs in config).
@@ -21,7 +23,7 @@ are generic UI words, overridable through `vocab` (portal wording belongs in con
 
 import re
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 Box = Tuple[int, int, int, int]      # left, top, width, height (UIA BoundingRectangle order)
 
@@ -470,9 +472,45 @@ def pair_by_layout(nodes: Sequence[Node], max_right_gap: int = 500) -> List[Pair
     return pairs
 
 
+def mark_furniture(nodes: Sequence[Node], frequent: Callable[[str], bool],
+                   min_run: int = 3) -> List[Node]:
+    """Portal furniture the page's markup did not label (a menu with no navigation landmark, a
+    header drawn in the main area, any page read as plain lines) moves to the navigation zone, so
+    it is never a pair, never page-kind evidence and never a fingerprint. `frequent(text)` says
+    whether a text is one the portal shows on many different pages (the atlas counts that).
+
+    Only a RUN of at least `min_run` frequent texts in reading order is furniture: a menu, a footer,
+    a header strip. A lone frequent line ("Acknowledgement No", "Status") is a data label that
+    many pages share and stays where it is. Empty container nodes do not break a run; any other
+    zone does. Dialogs and steppers are never touched."""
+    out = list(nodes)
+    run: List[int] = []
+
+    def close() -> None:
+        if len(run) >= min_run:
+            for i in run:
+                out[i] = replace(out[i], zone=NAVIGATION)
+        run.clear()
+
+    for i, n in enumerate(out):
+        if not n.text.strip():
+            continue
+        if n.zone in (MAIN, HEADER) and frequent(n.text):
+            run.append(i)
+        else:
+            close()
+    close()
+    return out
+
+
 def build_page_map(nodes: Sequence[Node], vocab: Optional[Dict[str, Tuple[str, ...]]] = None,
-                   header_band_px: int = 100, max_right_gap: int = 500) -> PageMap:
-    """Zones -> sections (and help) -> pairs, over nodes from nodes_from_uia / nodes_from_ocr."""
+                   header_band_px: int = 100, max_right_gap: int = 500,
+                   furniture: Optional[Callable[[str], bool]] = None,
+                   furniture_min_run: int = 3) -> PageMap:
+    """Zones -> furniture -> sections (and help) -> pairs, over nodes from nodes_from_uia /
+    nodes_from_ocr. `furniture` is the atlas's "shown on many pages" test (see mark_furniture)."""
     zoned = classify_zones(nodes, vocab, header_band_px)
+    if furniture is not None:
+        zoned = mark_furniture(zoned, furniture, furniture_min_run)
     scoped, sections = scope_sections(zoned, vocab)
     return PageMap(tuple(scoped), tuple(sections), tuple(pair_by_layout(scoped, max_right_gap)))

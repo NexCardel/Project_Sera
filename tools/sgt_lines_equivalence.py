@@ -306,6 +306,10 @@ def _report(label: str, diffs: List[Diff]) -> None:
 
 
 def main(argv=None) -> int:
+    try:
+        sys.stdout.reconfigure(errors="replace")   # portal text (e.g. an emoji) must not crash the report on cp1252
+    except AttributeError:
+        pass
     ap = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     ap.add_argument("--corpus", type=Path, default=None, help="corpus directory (default: the real one)")
     ap.add_argument("--skip-corpus", action="store_true", help="skip the corpus check")

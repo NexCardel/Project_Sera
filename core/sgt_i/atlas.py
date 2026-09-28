@@ -38,7 +38,7 @@ import secrets
 import time
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from . import page_map as pm
@@ -70,7 +70,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "max_shapes": 5,
     "max_retired": 50,
     "save_every_sec": 30.0,
+    # Portal furniture (menus, headers, footers the markup did not label) - see furniture_test().
+    "furniture_min_known_pages": 10, # below this the portal is too new to tell furniture apart
+    "furniture_min_pages": 5,        # a text on at least this many different pages...
+    "furniture_read_share": 0.4,     # ...and in at least this share of the portal's page reads
+    "furniture_min_clients": 2,      # ...seen for 2+ clients (one client's name on every page is not)
+    "furniture_min_run": 3,          # only a run of such texts is furniture; a lone label is not
+    "max_texts": 6000,               # per portal, private text counters
 }
+FURNITURE_MAX_LEN = 120              # longer text is a sentence, not a menu item or header strip
 
 MAX_CLIENTS = 1024                   # client hashes kept per page
 WORD_CLIENT_CAP = 64                 # client hashes kept per word counter
@@ -171,6 +179,7 @@ class PortalAtlas:
         self._last_page: Dict[str, str] = {}
         self._dirty = False
         self._last_save = 0.0
+        self._furniture: Optional[frozenset] = None
         self._load()
 
     # ── paths, hashing ──────────────────────────────────────────────────────────
@@ -232,6 +241,7 @@ class PortalAtlas:
         if client_hash and client_hash not in priv["clients"] and len(priv["clients"]) < MAX_CLIENTS:
             priv["clients"].append(client_hash)
             pub["clients"] += 1
+        self._count_texts(page, pid, client_hash, today)
         self._count_words(priv, elements, client_hash)
         self._merge_elements(pub, priv, elements, today)
         self._merge_slots(pub, priv, page, today, client)
@@ -263,6 +273,85 @@ class PortalAtlas:
                            "retired": [], "next": 1}
         self.private["pages"][pid] = _new_private_page()
         return pid
+
+    # ── furniture ──────────────────────────────────────────────────────────────
+    def _count_texts(self, page: pm.PageMap, pid: str, client_hash: Optional[str], today: str) -> None:
+        """On how many different pages, for how many clients, each text appears (salted hashes,
+        private file). Dialog and stepper text is a message or progress, never furniture. A text
+        seen for enough clients to be template text also keeps its words, for the lab to show -
+        unless it was ever a pair's VALUE: a value never enters the atlas in the clear (14.5), so
+        such a text is counted by hash and shown only as its masked shape."""
+        cfg = self.config
+        texts = self.private.setdefault("texts", {})
+        keep_clients = max(cfg["furniture_min_clients"], cfg["template_min_clients"])
+        done: Set[str] = set()
+        values = {p.value_node for p in page.pairs}
+        self.private["reads"] = int(self.private.get("reads") or 0) + 1
+        for n in page.nodes:
+            t = " ".join(n.text.split())
+            if not t or len(t) > FURNITURE_MAX_LEN or n.zone in (pm.DIALOG, pm.STEPPER):
+                continue
+            h = self._h("atlas-text", t)
+            if h in done:
+                continue
+            done.add(h)
+            e = texts.get(h)
+            if e is None:
+                if len(texts) >= cfg["max_texts"]:
+                    for dead in [k for k, v in texts.items() if len(v["p"]) <= 1]:
+                        del texts[dead]                   # one-page texts: never furniture yet
+                    if len(texts) >= cfg["max_texts"]:
+                        continue
+                e = texts[h] = {"p": [], "c": [], "n": 0, "last": today, "s": mask_shape(t)[:SHAPE_MAX_LEN]}
+            e["n"] = int(e.get("n") or 0) + 1
+            if pid not in e["p"]:
+                e["p"].append(pid)
+            if client_hash and client_hash not in e["c"] and len(e["c"]) < keep_clients:
+                e["c"].append(client_hash)
+            if n.index in values:
+                e["v"] = True                             # a pair's value: never kept in the clear
+                e.pop("t", None)
+            elif len(e["c"]) >= cfg["template_min_clients"] and not e.get("v"):
+                e["t"] = t                                # identical for 3+ clients: template text
+            e["last"] = today
+        self._furniture = None
+
+    def _furniture_entries(self) -> List[Dict[str, Any]]:
+        cfg = self.config
+        if len(self.pages) < cfg["furniture_min_known_pages"]:
+            return []
+        # A share of READS, not of pages: how finely the atlas splits a portal into pages must not
+        # decide it (plain-line reads split one screen into several pages). A menu is on nearly
+        # every read; a data label only on its own screens.
+        need_reads = cfg["furniture_read_share"] * int(self.private.get("reads") or 0)
+        today = self._today()
+        out = []
+        for h, e in (self.private.get("texts") or {}).items():
+            pages = sum(1 for p in e["p"] if p in self.pages)
+            if pages >= cfg["furniture_min_pages"] and int(e.get("n") or 0) >= need_reads \
+                    and len(e["c"]) >= cfg["furniture_min_clients"] \
+                    and _days(e["last"], today) <= cfg["fade_days"]:
+                out.append({"hash": h, "pages": pages, "clients": len(e["c"]),
+                            "text": e.get("t") or "", "shape": e.get("s", ""), "last_seen": e["last"]})
+        return out
+
+    def furniture_test(self) -> Optional[Callable[[str], bool]]:
+        """Whether a text is one this portal shows on many different pages, or None while the
+        portal is too new to tell (then nothing is furniture - exactly the behaviour before).
+        page_map.mark_furniture only acts on RUNS of such texts."""
+        if self._furniture is None:
+            self._furniture = frozenset(e["hash"] for e in self._furniture_entries())
+        hashes = self._furniture
+        if not hashes:
+            return None
+        return lambda text: self._h("atlas-text", " ".join(text.split())) in hashes
+
+    def furniture(self) -> List[Dict[str, Any]]:
+        """What this portal treats as furniture-shaped, for the lab and the atlas tool: the text
+        once it is template (identical for 3+ clients, never a pair's value), else its masked shape.
+        Only RUNS of these are furniture on a page (page_map.mark_furniture)."""
+        return sorted(({k: v for k, v in e.items() if k != "hash"} for e in self._furniture_entries()),
+                      key=lambda e: (-e["pages"], e["text"] or e["shape"]))
 
     # ── template promotion ─────────────────────────────────────────────────────
     def _word_key(self, role: str, zone: str, i: int, word: str) -> str:
@@ -426,6 +515,10 @@ class PortalAtlas:
         visit (only a visit can show a part is gone); pages age against today."""
         cfg = self.config
         today = today or self._today()
+        texts = self.private.get("texts") or {}
+        for h in [h for h, e in texts.items() if _days(e["last"], today) > cfg["retire_days"]]:
+            del texts[h]                                  # furniture a redesign removed
+            self._furniture = None
         for pid in list(self.pages):
             pub = self.pages[pid]
             if _days(pub["last_seen"], today) > cfg["retire_days"]:
@@ -488,6 +581,7 @@ class PortalAtlas:
             pages.append(view)
         out = {k: v for k, v in self.data.items() if k != "pages"}
         out["pages"] = pages
+        out["furniture"] = self.furniture()
         return out
 
     # ── persistence ────────────────────────────────────────────────────────────
@@ -537,6 +631,9 @@ class PortalAtlas:
         if isinstance(private, dict) and isinstance(private.get("pages"), dict):
             self.private = {"pages": {pid: {**_new_private_page(), **v}
                                       for pid, v in private["pages"].items() if pid in self.pages}}
+            if isinstance(private.get("texts"), dict):
+                self.private["texts"] = private["texts"]
+                self.private["reads"] = int(private.get("reads") or 0)
 
     def _set_aside(self, path: Path) -> None:
         """A corrupt atlas is kept for inspection and replaced by an empty one."""
@@ -568,13 +665,24 @@ def _write_atomic(path: Path, data: Dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def load_config() -> Dict[str, Any]:
+    """The "atlas" section of sgt_i_config.json (tunable thresholds, e.g. the furniture ones);
+    {} when missing or unreadable - DEFAULT_CONFIG then stands."""
+    try:
+        loaded = json.loads(Path(__file__).with_name("sgt_i_config.json").read_text(encoding="utf-8"))
+        section = loaded.get("atlas") if isinstance(loaded, dict) else None
+        return {k: v for k, v in section.items() if k in DEFAULT_CONFIG} if isinstance(section, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 class Atlas:
     """Every portal's atlas, opened on first use."""
 
     def __init__(self, directory: Optional[Path] = None, config: Optional[Dict[str, Any]] = None,
                  clock=None, stats=None) -> None:
         self._dir = directory
-        self._config = config
+        self._config = config if config is not None else load_config()
         self._clock = clock
         self._stats = stats
         self._portals: Dict[str, PortalAtlas] = {}
@@ -598,12 +706,20 @@ class AtlasComponent:
     each read captures part of the portal. Shares one `Atlas` with the GPS, so a page merged here
     is known to the GPS on its next visit. The client key is the session's identity (the ledger's
     `client_fields`: PAN, GSTIN...), only ever hashed; with none, text is never promoted. The page
-    map is built from the Core's lines (no nodes in an Observation yet), as the ledger does."""
+    map is page_view's: the node tree when the Core read one (the markup's navigation and footer
+    left out), else the lines. Learnt furniture is counted here but not left out here - the other
+    components leave it out; page identity must not shift as the furniture is learnt."""
 
     name = "atlas"
 
     def __init__(self, atlas: Optional[Atlas] = None, client_fields: Optional[Tuple[str, ...]] = None) -> None:
-        self.atlas = atlas if atlas is not None else Atlas()
+        if atlas is None:
+            # The container stats give each slot its kind (profile / dataset / identifier). Without
+            # them every slot stays kind-less and the miner drops them all as "kind unknown" - the
+            # live atlas ran that way until 2026-09-28 (found in the field test, 974 slots, 0 kinds).
+            from .stats import ContainerStats
+            atlas = Atlas(stats=ContainerStats())
+        self.atlas = atlas
         if client_fields is None:
             from .ledger import load_config
             client_fields = tuple(load_config().get("client_fields") or ())
@@ -612,8 +728,12 @@ class AtlasComponent:
     def observe(self, obs: Any, ctx: Any) -> None:
         if getattr(obs, "event", "") or obs.source == "uia_event":
             return            # a message that flashed (step 9) is part of a page, not a page
-        from .page_diff import map_from_lines
+        from .page_view import page_for
         profile = dict(obs.profile)
         client = next((f"{f}:{profile[f]}" for f in self._client_fields if profile.get(f)), None)
-        self.atlas.merge(obs.portal, map_from_lines([ln for ln in obs.lines if ln][:MAX_MERGE_LINES]),
-                         url=obs.url, client=client, session=obs.session_id)
+        # The atlas maps the page as read - learnt furniture NOT left out: which page this is must
+        # not change as the atlas learns what its furniture is (measured on the recorded corpus:
+        # leaving it out split 13 pages into 23). The markup's own navigation / footer still is.
+        page = page_for(obs, None, max_lines=MAX_MERGE_LINES)
+        if page is not None:
+            self.atlas.merge(obs.portal, page, url=obs.url, client=client, session=obs.session_id)

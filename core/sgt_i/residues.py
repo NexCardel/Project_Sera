@@ -12,7 +12,8 @@ the same line-stacked page map ledger.py and page_diff.py build.
 
 Privacy (14.5 rule 1): a value is held only long enough to compare it with the Core's captured
 values and mask it. The file `sgt_i/residues.json` keeps portal -> page kind -> "type shape" ->
-{"seen", "claimed"} counts, nothing else.
+{"seen", "claimed"} counts, nothing else. Counts are per page visit, not per read (see
+ResiduesComponent._visit_increment); the in-memory visit state holds masked keys only.
 """
 
 import json
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
 from . import page_kinds
-from .page_diff import map_from_lines
+from .page_view import map_from_lines, page_for, split_inline_labels  # noqa: F401 (re-exported)
 from .pairs import classify_type, mask_shape
 from .stats import sgt_i_dir
 
@@ -32,6 +33,8 @@ MAX_SHAPE_LEN = 40               # a longer "value" is prose, not a typed value
 MAX_KEYS_PER_KIND = 256          # bounds the file; a new key past it is dropped, counts go on
 UNTYPED = frozenset({"text", "choice", "yes/no"})   # not typed values: nothing a spec would miss
 UNKNOWN_KIND = "unknown"
+_COUNTED_ZONES = frozenset({"main", "dialog", "header"})   # never navigation / footer / furniture
+MAX_OPEN_VISITS = 16             # sessions whose current page visit is remembered (in memory only)
 
 
 def _norm(value: Any) -> str:
@@ -63,30 +66,24 @@ def _is_claimed(value: str, claimed: Set[str]) -> bool:
     return len(v) >= 6 and any(len(c) >= 6 and (c in v or v in c) for c in claimed)
 
 
-def split_inline_labels(lines: Iterable[str]) -> List[str]:
-    """"Label: value" on one line -> "Label:" and "value" stacked, so the page map pairs them the
-    same way it pairs a label above its value. A line with nothing after the colon is kept."""
-    out: List[str] = []
-    for ln in lines:
-        head, sep, tail = str(ln).partition(":")
-        if sep and any(c.isalpha() for c in head) and tail.strip() and not tail.startswith("//"):
-            out.extend((head.strip() + ":", tail.strip()))
-        else:
-            out.append(str(ln))
-    return out
-
-
 def page_residue(lines: Sequence[str], result: Any) -> Optional[Dict[str, Any]]:
     """One page -> {"kind": page kind, "seen": {"type shape": n}, "claimed": {...}}, or None when
     the page holds no typed value. Pure; no value leaves this function."""
     lines = [ln for ln in lines if ln][:MAX_LINES]
     if not lines:
         return None
-    page = map_from_lines(split_inline_labels(lines))
+    return residue_of_map(map_from_lines(split_inline_labels(lines)), result)
+
+
+def residue_of_map(page: Any, result: Any) -> Optional[Dict[str, Any]]:
+    """page_residue over a page map already built (page_view: nodes or lines, minus furniture) -
+    values in the menu, header strip or footer are not residues."""
     claimed = claimed_values(result)
     seen: Dict[str, int] = {}
     got: Dict[str, int] = {}
     for p in page.pairs:
+        if p.zone not in _COUNTED_ZONES:
+            continue
         typ = classify_type(p.value, p.method)
         shape = mask_shape(p.value.strip())
         if typ in UNTYPED or not shape or len(shape) > MAX_SHAPE_LEN:
@@ -170,8 +167,10 @@ class ResiduesComponent:
 
     name = "residues"
 
-    def __init__(self, counts: Optional[ResidueCounts] = None) -> None:
+    def __init__(self, counts: Optional[ResidueCounts] = None, atlas: Any = None) -> None:
         self._counts = counts
+        self._atlas = atlas                               # learnt furniture (shared with the atlas step)
+        self._visits: Dict[str, Dict[str, Any]] = {}     # session id -> the page visit in progress
 
     @property
     def counts(self) -> ResidueCounts:
@@ -182,6 +181,39 @@ class ResiduesComponent:
     def observe(self, obs: Any, ctx: Any) -> None:
         if obs.source == "uia_event":
             return                       # a flash is part of a page, not a page
-        residue = page_residue(obs.lines, obs.result)
-        if residue is not None:
+        page = page_for(obs, self._atlas, split_labels=True, max_lines=MAX_LINES)
+        residue = residue_of_map(page, obs.result) if page is not None else None
+        if residue is None:
+            return
+        residue = self._visit_increment(obs, residue)
+        if residue["seen"]:
             self.counts.add(obs.portal, residue)
+
+    def _visit_increment(self, obs: Any, residue: Dict[str, Any]) -> Dict[str, Any]:
+        """Count once per page VISIT, not per read. The Core hands over a new read whenever any
+        line changes (a menu opens, another year's card, a clock), so one visit can be dozens of
+        reads. A visit = consecutive reads with the same session and URL; within it each
+        "kind + type shape" counts at its highest number seen on any read, so 40 reads of a list
+        of 5 acks add 5, not 200. Leaving the URL and coming back is a new visit."""
+        sid = getattr(obs, "session_id", "")
+        where = (obs.portal, getattr(obs, "url", ""))
+        visit = self._visits.get(sid)
+        if visit is None or visit["where"] != where:
+            visit = self._visits[sid] = {"where": where, "seen": {}, "claimed": {}}
+            while len(self._visits) > MAX_OPEN_VISITS:
+                self._visits.pop(next(iter(self._visits)))
+        kind = residue["kind"]
+        seen: Dict[str, int] = {}
+        claimed: Dict[str, int] = {}
+        for key, n in residue["seen"].items():
+            mark = (kind, key)
+            add_seen = n - visit["seen"].get(mark, 0)
+            add_claimed = residue["claimed"].get(key, 0) - visit["claimed"].get(mark, 0)
+            if add_seen > 0:
+                seen[key] = add_seen
+                visit["seen"][mark] = n
+            if add_claimed > 0:
+                claimed[key] = add_claimed
+                visit["claimed"][mark] = residue["claimed"][key]
+                seen.setdefault(key, 0)
+        return {"kind": kind, "seen": seen, "claimed": claimed}
