@@ -671,6 +671,11 @@ class ClientDetailWindow(QWidget):
 
 
 
+    def _suppress_sca_for_client(self):
+        # MECP/SMTI hand staff this client's ids to copy; those copies must not arm SCA (#15).
+        import clipboard_watch
+        clipboard_watch.suppress_client(self.client["id"], seconds=300)
+
     def _launch_manual_copy(self, service: dict):
         uid, pwd = self._get_credentials(service)
         is_itr = automation.is_itr_service(service)
@@ -703,6 +708,7 @@ class ClientDetailWindow(QWidget):
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
         service["_client_name"] = self._get_identity_label(self.client)
+        self._suppress_sca_for_client()
         automation.trigger_mecp(
             service, uid, pwd or "", self.client["id"],
             on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg),
@@ -727,6 +733,7 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
         service["_client_name"] = self._get_identity_label(self.client)
+        self._suppress_sca_for_client()
         automation.trigger_manual_assist(
             service, uid, pwd, self.client["id"],
             on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)

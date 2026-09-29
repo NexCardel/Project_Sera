@@ -44,6 +44,28 @@ IDENTITY_LABEL_TERMS = ("pan", "gstin", "user id", "userid", "username", "login 
 REPEAT_COPY_S = 2.0          # Excel fires dataChanged more than once per copy
 UNUSED_ARMS_BEFORE_PAUSE = 5  # guardrail: a client armed this often without a fill is paused
 
+_suppressed_until: Dict[int, float] = {}   # client_id -> time.time() deadline
+
+
+def suppress_client(client_id, seconds: float = 300):
+    """Client Detail launched MECP/SMTI for this client: copying its ids from that card must not
+    also arm SCA (#15). Copies of this client's ids are ignored until the time runs out."""
+    try:
+        cid = int(client_id)
+    except (TypeError, ValueError):
+        return
+    _suppressed_until[cid] = time.time() + max(0.0, float(seconds))
+
+
+def is_suppressed(client_id) -> bool:
+    until = _suppressed_until.get(client_id)
+    if until is None:
+        return False
+    if time.time() >= until:
+        _suppressed_until.pop(client_id, None)
+        return False
+    return True
+
 
 def is_allowed_clipboard_identifier(value: str) -> bool:
     """Shape gate for PAN/GSTIN and configured service user IDs."""
@@ -176,6 +198,9 @@ class ClipboardWatchService(QObject):
             return
         client_id = self._uid_index.get(candidate)
         if not client_id:
+            return
+        if is_suppressed(client_id):
+            print(f"[SCA] Client {client_id} has a Manual Copy/Assist open - not arming.")
             return
         last_uid, last_t = self._last_copy
         now = time.time()

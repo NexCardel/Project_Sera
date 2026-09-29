@@ -29,7 +29,7 @@ function makeEnv(settings = {}) {
     postNative: (m) => { native.push(m); return true; },
     postDesktop: (m) => desktop.push(m),
     getSettings: async () => Object.assign({ scaEnabled: true, scaMode: "autofill",
-      allowedDomains: ["incometax.gov.in", "gst.gov.in"], manualAssistActive: false }, settings),
+      allowedDomains: ["incometax.gov.in", "gst.gov.in"], assistTabs: {} }, settings),
     executeScript: async (d) => { scripts.push(d); return [{ result: d.func === SCA.fillPasswordInPage ? env.fillResult : undefined }]; },
     sessionStore: null,
   };
@@ -186,10 +186,20 @@ test("widget mode shows a card that holds no password", async () => {
   assert.strictEqual(r, "password-requested");
 });
 
-test("manual assist running on the tab blocks SCA", async () => {
-  const env = makeEnv({ manualAssistActive: true });
+test("an SMTI or MECP card open in the tab keeps SCA quiet in that tab", async () => {
+  for (const kind of ["smti", "mecp"]) {
+    const env = makeEnv({ assistTabs: { 5: kind } });
+    const c = await armed(env);
+    assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "assist-open-in-tab");
+    assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  }
+});
+
+test("the assist lock is per tab: another tab still gets SCA", async () => {
+  const env = makeEnv({ assistTabs: { 9: "smti" } });
   const c = await armed(env);
-  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "manual-assist-active");
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
+  assert.ok(env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
 });
 
 test("an Income Tax password SCC has not verified is explained once, not silently skipped", async () => {

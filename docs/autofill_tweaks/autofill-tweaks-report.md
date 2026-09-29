@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:11)
+# Autofill tweaks — report (2026-09-29 13:18)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 16 |
+| Not started | 15 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 9 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 12   output tokens: 252001   API-equivalent cost: $17.78
+Runs: 13   output tokens: 290146   API-equivalent cost: $20.34
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 12   output tokens: 252001   API-equivalent cost: $17.78
 | W2-2 | Done | sonnet | 61ddae6 | Part B2: one openPortalTab helper (#3, #4) | openPortalTab helper in both builds; reuse only login-page tabs (D5); listener before navigate, inject once, no reload, 30 s cleanup; JS test added |
 | W3-1 | Done | haiku | 7a54db4 | Part C: Fast Autofill on the helper; decision D8 | Removed auto-click; D8 user decision. Tests pass. |
 | W3-2 | Done | sonnet | 02c0b88 | Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9) | Part D: shared sera_dom.js visibility/field rules, Username never types into password box, re-inject only in SMTI's own tab with a visible login form, SCA disar |
-| W3-3 | Not started | sonnet |  | Part E: MECP card (#5, #16) and clipboard clearing (B3) |  |
+| W3-3 | Done | sonnet | 4719072 | Part E: MECP card (#5, #16) and clipboard clearing (B3) | MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_second |
 | W4-1 | Not started | opus |  | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) |  |
 | W4-2 | Not started | sonnet |  | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) |  |
 | W4-3 | Not started | sonnet |  | Part F: SCA scope (decision D7) |  |
@@ -47,8 +47,12 @@ Runs: 12   output tokens: 252001   API-equivalent cost: $17.78
 - **W2-2** When Sera opens a portal login, should it reuse an already open tab of that portal? → Reuse only a tab showing the login page (asked as Q1)
 - **W3-1** Fast Autofill clicks the portal's Continue/Login button after filling. Keep that? → Stop after filling (asked as Q2)
 - **W3-1** D8: Fast Autofill auto-click removed per user decision 'Stop after filling' → Stop after filling (User chose to stop after filling instead of auto-clicking the Continue/Login button)
+- **W3-3** When should the MECP card close by itself? → After both User ID and password are copied (asked as Q3)
+- **W3-3** SCC card behaviour in the MECP card change → Timeout and both-copied send MECP_CLOSED (clears mecpPayload only); only the x sends MECP_DISMISSED (also ends an SCC attempt); SCC card gets no auto-close and no clipboard clearing (Part G owns SCC; a timeout must not stop SCC verifying)
 
 ## Checks waiting for you
 
 - #1 (W2-2) Real browser (Chrome and Firefox): with a portal login tab already open, Fast Autofill/SMTI/MECP reuse it, inject once (MECP card stays up, no flash); with only a logged-in page of that portal open, a NEW tab opens and the logged-in tab is untouched. — Not run
 - #2 (W3-2) SMTI on the ITR password step: Username puts nothing into the password box — Not run
+- #3 (W3-3) MECP on an already open GST login tab stays on screen (card does not flash away), and after copying User ID and password it closes by itself — Not run
+- #4 (W3-3) In real Chrome and Firefox: copy a password from the MECP card and from SMTI, wait the clipboard-clear seconds, and confirm the clipboard is emptied (and that no clipboard-read permission prompt appears on the portal; the manifests have no clipboardRead permission) — Not run

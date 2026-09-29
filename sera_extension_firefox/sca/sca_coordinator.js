@@ -238,7 +238,8 @@
   // ---------------------------------------------------------------- coordinator
   function createCoordinator(env) {
     // env: { postNative(msg) -> bool, postDesktop(msg), getSettings() -> Promise<{scaEnabled,
-    //        scaMode, allowedDomains, manualAssistActive}>, executeScript(details) -> Promise,
+    //        scaMode, allowedDomains, assistTabs: {tabId: "smti"|"mecp"}}>,
+    //        executeScript(details) -> Promise,
     //        sessionStore (chrome.storage.session or null), now() }
     const now = env.now || (() => Date.now());
     let arm = null;
@@ -388,7 +389,8 @@
       if (!sender || !sender.tab || typeof sender.tab.id !== "number") return "no-tab";
       const settings = await env.getSettings();
       if (settings.scaEnabled === false) return "disabled";
-      if (settings.manualAssistActive) return "manual-assist-active";
+      // An SMTI/MECP card open in THIS tab keeps SCA quiet here only; other tabs work normally.
+      if (settings.assistTabs && settings.assistTabs[sender.tab.id]) return "assist-open-in-tab";
       const a = await loadArm();
       if (!a) return "not-armed";
       if (!candidateMatches(a, req.candidate)) return "not-this-client";

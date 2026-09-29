@@ -62,20 +62,59 @@ const scaCoordinator = self.SeraSCA.createCoordinator({
   postDesktop: (msg) => { sendToDesktop(msg); },
   getSettings: () => new Promise((resolve) => {
     chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains"], (d) => {
-      _passwordStore.get(["manualAssistPayload"], (pd) => {
-        const ma = pd.manualAssistPayload;
-        resolve({
-          scaEnabled: d.scaEnabled,
-          scaMode: d.scaMode,
-          allowedDomains: d.allowedDomains || [],
-          manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
-        });
-      });
+      _liveAssistTabs().then(assistTabs => resolve({
+        scaEnabled: d.scaEnabled,
+        scaMode: d.scaMode,
+        allowedDomains: d.allowedDomains || [],
+        assistTabs,
+      }));
     });
   }),
   executeScript: (details) => chrome.scripting.executeScript(details),
   sessionStore: (chrome.storage && chrome.storage.session) || null,
 });
+
+// Per-tab assist lock (B4): tabId -> {kind: 'smti'|'mecp', expiresAt} for each open SMTI/MECP
+// card. SCA stays quiet in that tab only. Set on inject, cleared on dismiss/timeout/tab close;
+// kept in _passwordStore (memory) so a background restart does not drop it.
+const ASSIST_LOCK_MS = 5 * 60 * 1000;
+let _assistTabs = null;
+function _withAssistTabs(change) {
+  const apply = () => {
+    const before = JSON.stringify(_assistTabs);
+    const t = Date.now();
+    Object.keys(_assistTabs).forEach(id => { if (!(_assistTabs[id].expiresAt > t)) delete _assistTabs[id]; });
+    if (change) change(_assistTabs);
+    if (JSON.stringify(_assistTabs) !== before) _passwordStore.set({ assistTabs: _assistTabs });
+    return _assistTabs;
+  };
+  if (_assistTabs) return Promise.resolve(apply());
+  return new Promise(resolve => _passwordStore.get(['assistTabs'], d => {
+    if (!_assistTabs) _assistTabs = Object.assign({}, d && d.assistTabs);
+    resolve(apply());
+  }));
+}
+function _lockAssistTab(tabId, kind) {
+  if (typeof tabId !== 'number') return;
+  _withAssistTabs(tabs => { tabs[tabId] = { kind, expiresAt: Date.now() + ASSIST_LOCK_MS }; });
+}
+// kind given: only that assist's lock (an SMTI dismiss must not unlock a MECP card).
+// tabId missing: every lock of that kind.
+function _unlockAssistTab(tabId, kind) {
+  _withAssistTabs(tabs => {
+    Object.keys(tabs).forEach(id => {
+      if ((typeof tabId !== 'number' || Number(id) === tabId) && (!kind || tabs[id].kind === kind)) delete tabs[id];
+    });
+  });
+}
+function _liveAssistTabs() {
+  return _withAssistTabs().then(tabs => {
+    const out = {};
+    Object.keys(tabs).forEach(id => { out[id] = tabs[id].kind; });
+    return out;
+  });
+}
+chrome.tabs.onRemoved.addListener(tabId => _unlockAssistTab(tabId));
 
 function _wsMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1052,6 +1091,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   }
 
   let dismiss = () => {
+    // As in Chrome: the background clears the payload and this tab's assist lock (B4).
+    try { chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" }); } catch (_) {}
     card.style.transform = "translateX(120%)";
     card.style.opacity = "0";
     setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
@@ -1188,6 +1229,7 @@ function clipboardClearSeconds() {
 }
 
 function injectManualAssist(tabId, message) {
+  _lockAssistTab(tabId, 'smti');
   clipboardClearSeconds()
     .then(clearSecs => injectWithDom({ tabId, allFrames: true }, manualAssistWidget,
       [message.userid, message.password, message.username_selector, message.password_selector,
@@ -1205,6 +1247,12 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   console.log("Sera background: received runtime message:", msg);
+  if (msg.type === "MANUAL_ASSIST_CLEAR") {
+    _passwordStore.remove(['manualAssistPayload']);
+    _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'smti');
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type === "CHECK_NATIVE_STATUS") {
     sendResponse({ connected: !!(ws && ws.readyState === WebSocket.OPEN), mode: "ws" });
     return true;
@@ -1225,6 +1273,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
     _passwordStore.remove(['mecpPayload']);
+    _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
     sendResponse({ status: "ok" });
     return true;
   }
@@ -1525,6 +1574,7 @@ function handleMECPTab(message) {
 }
 
 function injectMECP(tabId, message) {
+  _lockAssistTab(tabId, 'mecp');
   clipboardClearSeconds().then(clearSecs => injectWithDom({ tabId }, mecpWidget,
     [message.userid, message.password, message.client_name || message.portal, 90000, clearSecs]
   )).then(() => console.log("Sera: MECP widget injected"))
