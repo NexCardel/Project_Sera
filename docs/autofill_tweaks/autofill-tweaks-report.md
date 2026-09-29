@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:23)
+# Autofill tweaks — report (2026-09-29 13:25)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 14 |
+| Not started | 13 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 11 |
+| Done | 12 |
 | Blocked | 0 |
 
-Runs: 14   output tokens: 314417   API-equivalent cost: $22.13
+Runs: 15   output tokens: 325992   API-equivalent cost: $23.13
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -25,7 +25,7 @@ Runs: 14   output tokens: 314417   API-equivalent cost: $22.13
 | W3-2 | Done | sonnet | 02c0b88 | Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9) | Part D: shared sera_dom.js visibility/field rules, Username never types into password box, re-inject only in SMTI's own tab with a visible login form, SCA disar |
 | W3-3 | Done | sonnet | 4719072 | Part E: MECP card (#5, #16) and clipboard clearing (B3) | MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_second |
 | W4-1 | Done | opus | 1592504 | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) | Per-tab assistTabs lock replaces manualAssistActive (both builds, sca/ identical); clipboard_watch.suppress_client(300s) called by Client Detail MECP/SMTI launc |
-| W4-2 | Not started | sonnet |  | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) |  |
+| W4-2 | Done | sonnet | 3b061fc | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) | SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (p |
 | W4-3 | Not started | sonnet |  | Part F: SCA scope (decision D7) |  |
 | W4-R | Not started | opus |  | Review Parts B-F |  |
 | W5-1 | Not started | opus |  | Part G frame: core/scc host, _hand_to_scc hook, setting |  |

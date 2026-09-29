@@ -11,7 +11,7 @@ W3-2,3,"Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",Don
 W3-3,3,"Part E: MECP card (#5, #16) and clipboard clearing (B3)",Done,claude-sonnet-5-5,1,4719072,"MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_seconds; tests added",2026-09-29 13:18
 W4-1,4,"Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15)",Done,claude-opus-5-5,1,1592504,"Per-tab assistTabs lock replaces manualAssistActive (both builds, sca/ identical); clipboard_watch.suppress_client(300s) called by Client Detail MECP/SMTI launches; coordinator 19/19, new test_sca_suppress_client 7/7",2026-09-29 13:23
 W4-2,4,"Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14)",Done,claude-sonnet-5-5,1,3b061fc,"SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (pre-existing), logic checked by scratch script.",2026-09-29 13:25
-W4-3,4,Part F: SCA scope (decision D7),Not started,gemini-3.8-flash-high,0,,,
+W4-3,4,Part F: SCA scope (decision D7),In progress,claude-sonnet-5-5,1,,,2026-09-29 13:25
 W4-R,4,Review Parts B-F,Not started,claude-opus-5-5,0,,,
 W5-1,5,"Part G frame: core/scc host, _hand_to_scc hook, setting",Not started,claude-opus-5-5,0,,,
 W5-2,5,"Part G steps 1-2, scc_rules.json and its loader",Not started,gemini-3.8-flash-high,0,,,

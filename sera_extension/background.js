@@ -320,6 +320,9 @@ async function syncSettingsFromDesktop() {
     if (data.allowed_services && Array.isArray(data.allowed_services)) {
       storageObj.allowedServices = data.allowed_services;
     }
+    if (Array.isArray(data.allowed_domains) && data.allowed_domains.length > 0) {
+      storageObj.allowedDomains = data.allowed_domains;
+    }
     if (data.sca_mode) {
       storageObj.scaMode = data.sca_mode;
     }
@@ -411,6 +414,61 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 ensureConnected();
+
+// SCA scope (decision D7): login.js + sca_adapters.js (paste / typing watching) run only on the
+// approved portal hosts, registered here instead of in the manifest's content_scripts. Nothing on
+// other websites watches typing. host_permissions stay broad on purpose: Autofill, SMTI and MECP
+// inject on demand into custom services' pages and need them.
+const SCA_SCRIPT_ID = 'sera-sca-login';
+const SCA_SCRIPT_FILES = ['content_scripts/sca_adapters.js', 'content_scripts/login.js'];
+const SCA_BASE_DOMAINS = ['incometax.gov.in', 'incometaxindiaefiling.gov.in', 'gst.gov.in', 'tdscpc.gov.in', 'mca.gov.in'];
+let _scaScopeChain = Promise.resolve();
+let _scaScopeKey = null;
+let _scaLegacyHandle = null;
+
+function scaScopeMatches(domains) {
+  const hosts = new Set(SCA_BASE_DOMAINS);
+  for (const d of domains || []) {
+    const h = String(d || '').trim().toLowerCase();
+    if (/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(h)) hosts.add(h);
+  }
+  const matches = [];
+  for (const h of hosts) matches.push(`https://${h}/*`, `https://*.${h}/*`);
+  return matches;
+}
+
+async function registerScaScripts(domains) {
+  const matches = scaScopeMatches(domains);
+  const key = matches.join('|');
+  if (key === _scaScopeKey) return;
+  const scripting = chrome.scripting;
+  if (scripting && scripting.registerContentScripts) {
+    try { await scripting.unregisterContentScripts({ ids: [SCA_SCRIPT_ID] }); } catch (_) {}
+    await scripting.registerContentScripts([{
+      id: SCA_SCRIPT_ID, matches, js: SCA_SCRIPT_FILES, runAt: 'document_end', allFrames: true,
+    }]);
+  } else if (typeof browser !== 'undefined' && browser.contentScripts && browser.contentScripts.register) {
+    if (_scaLegacyHandle) { try { await _scaLegacyHandle.unregister(); } catch (_) {} _scaLegacyHandle = null; }
+    _scaLegacyHandle = await browser.contentScripts.register({
+      matches, js: SCA_SCRIPT_FILES.map(file => ({ file })), runAt: 'document_end', allFrames: true,
+    });
+  } else {
+    return;
+  }
+  _scaScopeKey = key;
+}
+
+function applyScaScope() {
+  _scaScopeChain = _scaScopeChain
+    .then(() => chrome.storage.local.get(['allowedDomains']))
+    .then(d => registerScaScripts(d && d.allowedDomains))
+    .catch(err => console.warn('Sera background: SCA scope registration failed:', err));
+}
+
+applyScaScope();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.allowedDomains) applyScaScope();
+});
 
 if (SERA_DEBUG) console.log('Sera: background.js module loaded, registering listeners.');
 

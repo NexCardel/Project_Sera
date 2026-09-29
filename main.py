@@ -699,8 +699,10 @@ class SeraApp:
                 clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
             except (ValueError, TypeError):
                 clip_secs = 30
+            from automation import allowed_portal_domains
             return {
                 "status": "ok",
+                "allowed_domains": allowed_portal_domains(svcs),
                 "clipboard_clear_seconds": clip_secs,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,

@@ -41,20 +41,5 @@
     },
     "default_title": "Project Sera Companion",
     "default_popup": "popup.html"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*",
-        "file://*/*"
-      ],
-      "js": [
-        "content_scripts/sca_adapters.js",
-        "content_scripts/login.js"
-      ],
-      "run_at": "document_end",
-      "all_frames": true
-    }
-  ]
+  }
 }
