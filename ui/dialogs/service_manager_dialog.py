@@ -391,7 +391,8 @@ class ServiceManagerDialog(QDialog):
             from automation import update_extension_settings
             update_extension_settings(
                 sca_enabled=(self.db.get_setting("sca_enabled", "1") == "1"),
-                allowed_services=self.db.get_services()
+                allowed_services=self.db.get_services(),
+                clipboard_clear_seconds=int(self.db.get_setting("clipboard_clear_seconds", "30")),
             )
         except Exception:
             pass

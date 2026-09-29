@@ -1425,6 +1425,7 @@ class UnifiedSettingsDialog(QDialog):
                         allowed_services=self.db.get_services(),
                         registered_pans=self.db.get_all_registered_pans(),
                         scc_settings=scc_payload,
+                        clipboard_clear_seconds=self.clipboard_spin.value(),
                     )
                 except Exception:
                     pass

@@ -4,3 +4,5 @@ W1-2,"sera_extension's fst_check/tracker settings analog in the dead legacy ui/d
 W2-2,"When Sera opens a portal login, should it reuse an already open tab of that portal?",Reuse only a tab showing the login page,user,asked as Q1,2026-09-29 12:59
 W3-1,Fast Autofill clicks the portal's Continue/Login button after filling. Keep that?,Stop after filling,user,asked as Q2,2026-09-29 13:02
 W3-1,D8: Fast Autofill auto-click removed per user decision 'Stop after filling',Stop after filling,agent,User chose to stop after filling instead of auto-clicking the Continue/Login button,2026-09-29 13:03
+W3-3,When should the MECP card close by itself?,After both User ID and password are copied,user,asked as Q3,2026-09-29 13:12
+W3-3,SCC card behaviour in the MECP card change,Timeout and both-copied send MECP_CLOSED (clears mecpPayload only); only the x sends MECP_DISMISSED (also ends an SCC attempt); SCC card gets no auto-close and no clipboard clearing,agent,Part G owns SCC; a timeout must not stop SCC verifying,2026-09-29 13:18

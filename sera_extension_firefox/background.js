@@ -202,6 +202,9 @@ function handleDesktopMessage(message) {
       scaEnabled: sca,
       scaMode: scaMode
     };
+    if (Number(message.clipboard_clear_seconds) > 0) {
+      storageObj.clipboardClearSeconds = Number(message.clipboard_clear_seconds);
+    }
     if (allowedDomains && allowedDomains.length > 0) {
       storageObj.allowedDomains = allowedDomains;
     }
@@ -549,7 +552,7 @@ function handleAutofillTab(message) {
   });
 }
 
-function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
+function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, clearSeconds) {
   // sera_dom.js (shared visibility + field rules) is injected just before this function.
   const seraDom = window.__seraDom;
   if (!seraDom) return;
@@ -886,8 +889,9 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return true;
   }
 
-  function copyText(text) {
+  function copyText(text, secret) {
     if (!text) return;
+    if (secret) seraDom.scheduleClipboardClear(text, clearSeconds);
     try {
       navigator.clipboard.writeText(text);
     } catch (_) {
@@ -915,12 +919,13 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
       if (fill(fltEl, value)) return "filled";
     }
 
+    const secret = kind === "pass";
     if (isFlutterPage()) {
-      copyText(value);
+      copyText(value, secret);
       return "flutter_no_focus";
     }
 
-    copyText(value);
+    copyText(value, secret);
     return "copied";
   }
 
@@ -1170,10 +1175,23 @@ function injectWithDom(target, func, args) {
     .then(() => chrome.scripting.executeScript({ target, func, args }));
 }
 
+// Seconds after which a copied password is wiped from the clipboard (the desktop's setting; 30 until it syncs).
+function clipboardClearSeconds() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get(['clipboardClearSeconds'], d => {
+        const n = Number(d && d.clipboardClearSeconds);
+        resolve(n > 0 ? n : 30);
+      });
+    } catch (_) { resolve(30); }
+  });
+}
+
 function injectManualAssist(tabId, message) {
-  injectWithDom({ tabId, allFrames: true }, manualAssistWidget,
-    [message.userid, message.password, message.username_selector, message.password_selector,
-      message.client_name || message.portal, 30000])
+  clipboardClearSeconds()
+    .then(clearSecs => injectWithDom({ tabId, allFrames: true }, manualAssistWidget,
+      [message.userid, message.password, message.username_selector, message.password_selector,
+        message.client_name || message.portal, 30000, clearSecs]))
     .then(() => console.log("Sera: Manual Assist widget injected"))
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }
@@ -1205,6 +1223,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
+  if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
+    _passwordStore.remove(['mecpPayload']);
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.type === "TRIGGER_MANUAL_ASSIST_FOR_TAB") {
     if (msg.tabId) {
       _passwordStore.get(['manualAssistPayload', 'mecpPayload'], data => {
@@ -1226,7 +1249,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function mecpWidget(userid, password, clientName, expiresMs) {
+function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
+  // sera_dom.js (shared clipboard clearing) is injected just before this function.
+  const seraDom = window.__seraDom;
+  if (!seraDom) return;
+
   const hostId = "sera-mecp-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -1235,7 +1262,7 @@ function mecpWidget(userid, password, clientName, expiresMs) {
 
   const host = document.createElement("div");
   host.id = hostId;
-  const shadow = host.attachShadow({ mode: "open" });
+  const shadow = host.attachShadow({ mode: "closed" });
 
   const style = document.createElement("style");
   style.textContent = `
@@ -1283,6 +1310,13 @@ function mecpWidget(userid, password, clientName, expiresMs) {
       flex-shrink: 0; min-width: 32px; height: 28px;
     }
     .eye-btn:hover { background: #21262D; border-color: #8B949E; }
+    .timer-container {
+      margin-top: 12px; height: 3.5px; background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px; overflow: hidden;
+    }
+    .timer-bar {
+      height: 100%; width: 100%; background: #2E9B5F; transform-origin: left;
+    }
     .toast {
       display: none; position: absolute; bottom: 6px; left: 16px; right: 16px;
       background: #238636; color: #FFF; padding: 5px 10px; border-radius: 4px;
@@ -1322,16 +1356,31 @@ function mecpWidget(userid, password, clientName, expiresMs) {
     setTimeout(() => { toast.style.display = "none"; }, 2500);
   }
 
+  // The x, the timeout and "both copied" all end here; the background clears mecpPayload.
+  let timerTimeout = null;
+  function closeCard(messageType) {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = null;
+    try { chrome.runtime.sendMessage({ type: messageType }); } catch (_) {}
+    if (host.isConnected) host.remove();
+  }
+  close.onclick = () => closeCard("MECP_DISMISSED");
+
+  // D6: the card closes once both the User ID and the password are copied.
+  let userIdCopied = false;
+  let passwordCopied = false;
+  let finishing = false;
+  function closeWhenBothCopied() {
+    if (finishing || !userIdCopied || !passwordCopied) return;
+    finishing = true;
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = null;
+    setTimeout(() => closeCard("MECP_CLOSED"), 1200);
+  }
+
   function copyCredential(val, label) {
     navigator.clipboard.writeText(val).then(() => {
-      showToast(`${label} copied! Clipboard auto-clears in 45s.`);
-      setTimeout(() => {
-        navigator.clipboard.readText().then(current => {
-          if (current === val) {
-            navigator.clipboard.writeText("");
-          }
-        }).catch(() => {});
-      }, 45000);
+      showToast(`${label} copied!`);
     }).catch(err => {
       const ta = document.createElement("textarea");
       ta.value = val;
@@ -1360,6 +1409,8 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   uidCopy.innerHTML = "📋 Copy";
   uidCopy.onclick = () => {
     copyCredential(userid, "User ID");
+    userIdCopied = true;
+    closeWhenBothCopied();
     uidCopy.classList.add("copied");
     uidCopy.innerHTML = "✓ Copied";
     setTimeout(() => {
@@ -1402,6 +1453,9 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   passCopy.innerHTML = "📋 Copy";
   passCopy.onclick = () => {
     copyCredential(password, "Password");
+    seraDom.scheduleClipboardClear(password, clearSeconds);
+    passwordCopied = true;
+    closeWhenBothCopied();
     passCopy.classList.add("copied");
     passCopy.innerHTML = "✓ Copied";
     setTimeout(() => {
@@ -1413,12 +1467,52 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   passRight.append(eyeToggleBtn, passCopy);
   passRow.append(passLeft, passRight);
 
-  box.append(header, uidRow, passRow, toast);
+  // Countdown bar: pauses while the pointer is over the card, like SMTI's.
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+
+  let timerStartTime = 0;
+  let remainingMs = expiresMs || 90000;
+  let isTimerPaused = false;
+
+  function startCountdown() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerStartTime = Date.now();
+    isTimerPaused = false;
+    timerBar.style.transition = `transform ${remainingMs}ms linear`;
+    timerBar.style.transform = "scaleX(0)";
+    timerTimeout = setTimeout(() => closeCard("MECP_CLOSED"), remainingMs);
+  }
+
+  function pauseTimer() {
+    if (finishing || isTimerPaused || !timerTimeout) return;
+    isTimerPaused = true;
+    clearTimeout(timerTimeout);
+    timerTimeout = null;
+    remainingMs = Math.max(0, remainingMs - (Date.now() - timerStartTime));
+    try {
+      const cur = window.getComputedStyle(timerBar).transform;
+      timerBar.style.transition = "none";
+      timerBar.style.transform = cur;
+    } catch (_) {}
+  }
+
+  function resumeTimer() {
+    if (finishing || !isTimerPaused) return;
+    if (remainingMs <= 500) { closeCard("MECP_CLOSED"); return; }
+    startCountdown();
+  }
+
+  box.addEventListener("mouseenter", pauseTimer);
+  box.addEventListener("mouseleave", resumeTimer);
+
+  box.append(header, uidRow, passRow, timerContainer, toast);
   shadow.appendChild(box);
   document.documentElement.appendChild(host);
-
-  close.onclick = () => host.remove();
-  setTimeout(() => { if (host.isConnected) host.remove(); }, expiresMs || 60000);
+  startCountdown();
 }
 
 function handleMECPTab(message) {
@@ -1431,11 +1525,9 @@ function handleMECPTab(message) {
 }
 
 function injectMECP(tabId, message) {
-  chrome.scripting.executeScript({
-    target: { tabId },
-    func: mecpWidget,
-    args: [message.userid, message.password, message.client_name || message.portal, 60000]
-  }).then(() => console.log("Sera: MECP widget injected"))
+  clipboardClearSeconds().then(clearSecs => injectWithDom({ tabId }, mecpWidget,
+    [message.userid, message.password, message.client_name || message.portal, 90000, clearSecs]
+  )).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }
 

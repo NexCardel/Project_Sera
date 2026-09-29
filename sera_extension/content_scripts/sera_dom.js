@@ -84,5 +84,25 @@
     return !!usernameSelector && queryVisible(doc, cleanSelector(usernameSelector), (el) => el.tagName === 'INPUT' && !isPasswordInput(el)).length > 0;
   }
 
-  window.__seraDom = { isVisible, isPasswordInput, findField, hasLoginForm };
+  // Best effort: after `seconds`, empty the clipboard only if it still holds `text`. A page that
+  // is not focused cannot read the clipboard, so a failed try is repeated once when it gains focus.
+  function scheduleClipboardClear(text, seconds) {
+    if (!text || !(seconds > 0)) return;
+    const attempt = async () => {
+      try {
+        if ((await navigator.clipboard.readText()) === text) await navigator.clipboard.writeText('');
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+    setTimeout(async () => {
+      if (await attempt()) return;
+      const retry = () => { window.removeEventListener('focus', retry); attempt(); };
+      window.addEventListener('focus', retry);
+      setTimeout(() => window.removeEventListener('focus', retry), 120000);
+    }, seconds * 1000);
+  }
+
+  window.__seraDom = { isVisible, isPasswordInput, findField, hasLoginForm, scheduleClipboardClear };
 })();

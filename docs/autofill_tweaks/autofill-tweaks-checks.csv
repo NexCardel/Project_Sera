@@ -1,3 +1,5 @@
 Check,WP,Text,Result,Date,Notes
 1,W2-2,"Real browser (Chrome and Firefox): with a portal login tab already open, Fast Autofill/SMTI/MECP reuse it, inject once (MECP card stays up, no flash); with only a logged-in page of that portal open, a NEW tab opens and the logged-in tab is untouched.",Not run,2026-09-29 13:01,
 2,W3-2,SMTI on the ITR password step: Username puts nothing into the password box,Not run,2026-09-29 13:09,
+3,W3-3,"MECP on an already open GST login tab stays on screen (card does not flash away), and after copying User ID and password it closes by itself",Not run,2026-09-29 13:18,
+4,W3-3,"In real Chrome and Firefox: copy a password from the MECP card and from SMTI, wait the clipboard-clear seconds, and confirm the clipboard is emptied (and that no clipboard-read permission prompt appears on the portal; the manifests have no clipboardRead permission)",Not run,2026-09-29 13:18,

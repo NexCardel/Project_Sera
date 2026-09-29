@@ -695,8 +695,13 @@ class SeraApp:
             reg_pans = self.db.get_all_registered_pans()
             scc_cfg = self.db.get_scc_settings()
             svcs = self.db.get_services()
+            try:
+                clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
+            except (ValueError, TypeError):
+                clip_secs = 30
             return {
                 "status": "ok",
+                "clipboard_clear_seconds": clip_secs,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
@@ -721,6 +726,7 @@ class SeraApp:
                     sca_max_uses=payload.get("sca_max_uses", 1),
                     registered_pans=payload.get("registered_pans", []),
                     scc_settings=payload.get("scc_settings", {}),
+                    clipboard_clear_seconds=payload.get("clipboard_clear_seconds"),
                 )
         except Exception as e:
             print(f"[main] Failed to sync extension settings: {e}")

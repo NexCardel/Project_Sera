@@ -1,0 +1,231 @@
+// MECP card (Part E): closed shadow root, timer bar with pause on hover, x / timeout / both-copied
+// all close it and clear the payload, clipboard clearing. Fake DOM and fake timers. Test data is fictional.
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const assert = require('assert');
+
+const ROOT = path.join(__dirname, '..', '..');
+const BUILDS = ['sera_extension', 'sera_extension_firefox'];
+const PASSWORD = 'Test#Pass-123';
+const USERID = 'ABCDE1234F';
+
+function widgetSource(build) {
+  const src = fs.readFileSync(path.join(ROOT, build, 'background.js'), 'utf8');
+  const start = src.indexOf('function mecpWidget(');
+  const end = src.indexOf('function handleMECPTab(');
+  assert(start > 0 && end > start, build + ': mecpWidget not found');
+  return src.slice(start, end);
+}
+
+function makeWorld(build) {
+  let now = 0;
+  let seq = 0;
+  const timers = new Map();
+  const messages = [];
+  const clip = { text: '' };
+  const state = { host: null, shadowMode: null, shadowChildren: [] };
+
+  function fakeEl(tag) {
+    const e = {
+      tag, id: '', className: '', textContent: '', innerHTML: '', style: {}, children: [], listeners: {},
+      classList: { add() {}, remove() {} }, isConnected: false,
+      append(...c) { e.children.push(...c); },
+      appendChild(c) { e.children.push(c); return c; },
+      insertBefore(c) { e.children.push(c); },
+      addEventListener(t, f) { (e.listeners[t] = e.listeners[t] || []).push(f); },
+      setAttribute() {},
+      remove() { e.isConnected = false; },
+      attachShadow(init) {
+        state.host = e;
+        state.shadowMode = init.mode;
+        return { appendChild(c) { state.shadowChildren.push(c); return c; } };
+      },
+    };
+    return e;
+  }
+
+  const documentElement = { appendChild(c) { c.isConnected = true; return c; } };
+  const win = {
+    document: {
+      getElementById: () => null,
+      createElement: fakeEl,
+      documentElement,
+      body: fakeEl('body'),
+      execCommand() { return true; },
+    },
+    navigator: { clipboard: {
+      writeText: async (v) => { clip.text = v; },
+      readText: async () => clip.text,
+    } },
+    chrome: { runtime: { sendMessage: (m) => { messages.push(m.type); } } },
+    getComputedStyle: () => ({ transform: 'matrix(0.5, 0, 0, 1, 0, 0)' }),
+    addEventListener() {}, removeEventListener() {},
+    Date: { now: () => now },
+    setTimeout: (f, ms) => { const id = ++seq; timers.set(id, { f, at: now + ms }); return id; },
+    clearTimeout: (id) => { timers.delete(id); },
+  };
+  win.window = win;
+  vm.createContext(win);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, build, 'content_scripts', 'sera_dom.js'), 'utf8'), win);
+
+  async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
+  async function advance(ms) {
+    const target = now + ms;
+    for (;;) {
+      let next = null;
+      for (const [id, t] of timers) if (t.at <= target && (!next || t.at < next.t.at)) next = { id, t };
+      if (!next) break;
+      now = next.t.at;
+      timers.delete(next.id);
+      next.t.f();
+      await flush();
+    }
+    now = target;
+    await flush();
+  }
+
+  function find(node, cls, out) {
+    out = out || [];
+    if (node && node.className === cls) out.push(node);
+    for (const c of (node && node.children) || []) find(c, cls, out);
+    return out;
+  }
+  const query = (cls) => state.shadowChildren.flatMap(c => find(c, cls));
+
+  function open(args) {
+    vm.runInContext(widgetSource(build), win);
+    win.mecpWidget(...args);
+  }
+  return { win, state, messages, clip, advance, flush, query, open };
+}
+
+const argsFor = (userid, clearSeconds) => [userid, PASSWORD, 'Test Client', 90000, false, [], null, 'GST', '', clearSeconds];
+const ffArgs = (clearSeconds) => [USERID, PASSWORD, 'Test Client', 90000, clearSeconds];
+
+(async () => {
+  for (const build of BUILDS) {
+    const label = build + ': ';
+    const isFf = build.endsWith('firefox');
+    const open = (w, userid, clearSeconds) => w.open(isFf ? ffArgs(clearSeconds) : argsFor(userid, clearSeconds));
+
+    // closed shadow root, card is up
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      assert.strictEqual(w.state.shadowMode, 'closed', label + 'shadow root must be closed');
+      assert(w.state.host.isConnected, label + 'card is on screen');
+      assert(w.query('timer-bar').length === 1, label + 'timer bar present');
+    }
+
+    // timeout closes and clears the payload (MECP_CLOSED, not the SCC-ending message)
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      await w.advance(89000);
+      assert(w.state.host.isConnected, label + 'still up before 90 s');
+      await w.advance(1500);
+      assert(!w.state.host.isConnected, label + 'closed at 90 s');
+      assert.deepStrictEqual(w.messages, ['MECP_CLOSED'], label + 'timeout tells the background to clear');
+    }
+
+    // x closes and clears
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      w.query('close-btn')[0].onclick();
+      assert(!w.state.host.isConnected, label + 'x closes');
+      assert.deepStrictEqual(w.messages, ['MECP_DISMISSED'], label + 'x tells the background to clear');
+    }
+
+    // hovering pauses the timer, leaving resumes it with the time that was left
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      const box = w.query('box')[0];
+      await w.advance(30000);
+      box.listeners.mouseenter.forEach(f => f());
+      await w.advance(200000);
+      assert(w.state.host.isConnected, label + 'paused card stays');
+      box.listeners.mouseleave.forEach(f => f());
+      await w.advance(59000);
+      assert(w.state.host.isConnected, label + 'resumed card has ~60 s left');
+      await w.advance(2000);
+      assert(!w.state.host.isConnected, label + 'closes when the remaining time is used');
+    }
+
+    // D6: closes only after both User ID and password are copied
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      const [uidCopy, passCopy] = w.query('copy-btn');
+      passCopy.onclick();
+      await w.advance(5000);
+      assert(w.state.host.isConnected, label + 'password alone does not close the card');
+      uidCopy.onclick();
+      await w.advance(1300);
+      assert(!w.state.host.isConnected, label + 'both copied closes the card');
+      assert.deepStrictEqual(w.messages, ['MECP_CLOSED'], label + 'both copied clears the payload');
+    }
+
+    // a hover while both-copied is closing must not bring the full countdown back
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 30);
+      const box = w.query('box')[0];
+      const [uidCopy, passCopy] = w.query('copy-btn');
+      box.listeners.mouseenter.forEach(f => f());
+      uidCopy.onclick();
+      passCopy.onclick();
+      box.listeners.mouseleave.forEach(f => f());
+      await w.advance(1300);
+      assert(!w.state.host.isConnected, label + 'leaving after the last copy still closes');
+    }
+
+    // clipboard cleared after the desktop's seconds, only while it still holds the password
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 20);
+      w.query('copy-btn')[1].onclick();
+      await w.flush();
+      assert.strictEqual(w.clip.text, PASSWORD, label + 'password copied');
+      await w.advance(19000);
+      assert.strictEqual(w.clip.text, PASSWORD, label + 'not cleared early');
+      await w.advance(1500);
+      assert.strictEqual(w.clip.text, '', label + 'cleared after clipboard_clear_seconds');
+    }
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 20);
+      w.query('copy-btn')[1].onclick();
+      await w.flush();
+      w.clip.text = 'something the staff copied since';
+      await w.advance(21000);
+      assert.strictEqual(w.clip.text, 'something the staff copied since', label + 'other clipboard text is left alone');
+    }
+    {
+      const w = makeWorld(build);
+      open(w, USERID, 20);
+      w.query('copy-btn')[1].onclick();
+      w.win.navigator.clipboard.readText = async () => { throw new Error('not focused'); };
+      await w.advance(21000);
+      assert.strictEqual(w.clip.text, PASSWORD, label + 'a refused read is swallowed (best effort)');
+    }
+
+    // Chrome only: no User ID row -> the password copy alone closes the card; SCC card never auto-closes on copy
+    if (!isFf) {
+      const w = makeWorld(build);
+      open(w, '', 30);
+      w.query('copy-btn')[0].onclick();
+      await w.advance(1300);
+      assert(!w.state.host.isConnected, label + 'no User ID: password copy closes the card');
+
+      const s = makeWorld(build);
+      s.open([USERID, '', 'Test Client', 90000, true, [{ id: 1, label: 'Combo 1', value: 'Combo#1' }], 7, 'Income Tax', '', 30]);
+      s.query('copy-btn').forEach(b => b.onclick());
+      await s.advance(5000);
+      assert(s.state.host.isConnected, label + 'SCC card is untouched by the both-copied rule');
+    }
+  }
+  console.log('MECP card tests passed');
+})().catch(e => { console.error(e); process.exit(1); });

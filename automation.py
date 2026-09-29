@@ -266,7 +266,7 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
+def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None, clipboard_clear_seconds: Optional[int] = None):
     """Sends immediate setting updates to every connected browser's background.js."""
     from ui import ws_bridge
 
@@ -283,6 +283,8 @@ def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofil
         payload["registered_pans"] = registered_pans
     if scc_settings is not None:
         payload["scc_settings"] = scc_settings
+    if clipboard_clear_seconds is not None:
+        payload["clipboard_clear_seconds"] = max(5, min(int(clipboard_clear_seconds), 300))
 
     def _do_send():
         for _ in range(5):
