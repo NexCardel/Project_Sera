@@ -22,5 +22,5 @@ W5-6,5,Part G step 6: the guarded save,Done,claude-sonnet-5-5,1,ddc0369,"core/sc
 W5-7,5,Part G step 7: close-out and counts,Done,claude-haiku-4-5-20251001,1,0401e21,core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pass,2026-09-29 20:15
 W5-8,5,Part G: Client Detail opens the SCC card,Done,claude-sonnet-5-5,1,5de4f6d,Client Detail MECP opens the SCC card: manual attempt (adopted by SGT if it sees the PAN) or SGT's attempt; open_tab flag in both extension builds; works with SCC-U Off,2026-09-29 20:13
 W5-9,5,Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays),Done,claude-sonnet-5-5,1,9e4bac0,"Extension SCC tracking (login.js watchers, sccActiveAttempt, tab observer, SCC_LOGIN_DETECTED, registered_pans/scc_settings sync) and desktop scc_password_verified handler removed in both builds; card SCC mode kept; parity test guards it",2026-09-29 20:17
-W6-1,6,Docs and extension version,In progress,claude-haiku-4-5-20251001,1,,,2026-09-29 20:17
+W6-1,6,Docs and extension version,Done,claude-haiku-4-5-20251001,1,14edfdc,"Docs updated for new behavior (no tracking, per-tab assist, SCC-U); extension versions bumped to 2.12.0",2026-09-29 20:19
 W6-R,6,Final review,Not started,claude-opus-5-5,0,,,
