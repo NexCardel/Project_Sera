@@ -135,6 +135,11 @@ class SccCard:
             att = self._attempts.get(attempt_id)
             return list(att.ledger) if att else []
 
+    def row_text(self, attempt_id: str, label: str) -> Optional[str]:
+        """A row's text, from memory, for the guarded save (core/scc/save.py). Never stored or logged."""
+        with self._lock:
+            return next((t for lb, t in self._rows.get(attempt_id, []) if lb == label), None)
+
     def failed(self, attempt_id: str) -> List[str]:
         """Labels the portal refused in this attempt (x on the card)."""
         with self._lock:

@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 19:50)
+# Autofill tweaks — report (2026-09-29 19:56)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 18 |
+| Done | 19 |
 | Blocked | 0 |
 
-Runs: 24   output tokens: 545470   API-equivalent cost: $40.78
+Runs: 25   output tokens: 577897   API-equivalent cost: $42.88
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ Runs: 24   output tokens: 545470   API-equivalent cost: $40.78
 | W5-2 | Done | sonnet | b54fbe7 | Part G steps 1-2, scc_rules.json and its loader | scc_rules.json + loader (self-tests, refuses failing rules), AttemptOpener steps 1-2 (D3 Yes); wording unconfirmed except header; not wired to router yet; 45 ne |
 | W5-3 | Done | sonnet | efd4537 | Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop | SCC card fed by desktop (core/scc/card.py, ws_bridge scc_row_worked), both extension builds render given combos with This one worked, ledger by label, PAN copy  |
 | W5-4 | Done | opus | 09e3a2b | Part G step 4: the outcome reader | Outcome reader core/scc/outcome.py: worked/wrong_password/locked/neutral/no_conclusion from scc_rules.json; card x+next-row marks; both builds render marks. tes |
-| W5-5 | Not started | opus |  | Part G step 5: which password worked |  |
+| W5-5 | Done | opus | 3901faf | Part G step 5: which password worked | Step 5 WhichOne: one row since last refusal credited, else card asks with None - I typed my own; x rows never credited; 13 new tests |
 | W5-6 | Not started | sonnet |  | Part G step 6: the guarded save |  |
 | W5-7 | Not started | haiku |  | Part G step 7: close-out and counts |  |
 | W5-8 | Not started | sonnet |  | Part G: Client Detail opens the SCC card |  |
@@ -57,6 +57,7 @@ Runs: 24   output tokens: 545470   API-equivalent cost: $40.78
 - **W5-1** SCC-U host: handler interface and how a copy opens the read window → handlers implement observe(obs, hwnd, ctx); SccHost.open_read_window(session_id, seconds<=30) callable from any thread (the card's copy); ctx.read_harder for handlers; page budget 1 s, hang 15 s, queue 8; trip reason logs exception type only (mirrors SGT-I host; hwnd is needed for the card and outcome matching; exception text could carry page content so it is not logged)
 - **W5-2** Show the client's saved (unverified) IT password as a row on the SCC card, so it can be verified too? → Yes (asked as Q5)
 - **W5-3** Where should SCC's password combinations appear? → Keep them in the extension MECP card (asked as Q6)
+- **W5-5** When the card asks which password worked because SEVERAL were copied, offer 'None - I typed my own' too? → Yes: the None button shows whenever the card asks; exactly one copy is still credited without asking (Staff may have typed their own after copying two; forcing a pick would save a wrong password. Costs one button already needed for the none case.)
 
 ## Checks waiting for you
 

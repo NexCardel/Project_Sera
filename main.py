@@ -58,6 +58,8 @@ class SyncSignalBridge(QObject):
     engine_synced_signal = Signal(list)
     # A message from the sync engine's thread for the toast (text, level); stays until dismissed.
     engine_alert_signal = Signal(str, str)
+    # An SCC save (core/scc/save.py) from SCC-U's thread: client id, client name, PAN, outcome.
+    scc_saved_signal = Signal(int, str, str, str)
 
 import security
 from database import SeraDatabase
@@ -199,6 +201,7 @@ class SeraApp:
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
+        self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
         self.sync_bridge.engine_alert_signal.connect(
             lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
@@ -1084,7 +1087,7 @@ class SeraApp:
         ledger reads the clipboard through clipboard_watch; each copy opens the host's read window."""
         import automation
         import clipboard_watch
-        from core.scc import AttemptOpener, OutcomeReader, SccCard, WhichOne, db_client_names, db_lookup
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup
         opener = AttemptOpener(db_lookup(self.db), on_open=lambda att: self._scc_card.open(att),
                                on_end=lambda att, reason: self._scc_card.end(att, reason))
         self._scc_opener = opener
@@ -1102,8 +1105,10 @@ class SeraApp:
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
             update_card=automation.update_scc_card, on_copy=read_harder,
-            on_none=lambda att: opener.end(att.hwnd, "typed own"))
-        # Step 5: which row gets the login's credit (W5-6 saves it through on_worked).
+            on_none=lambda att: opener.end(att.hwnd, "typed own"),
+            on_worked=SccSaver(self.db, lambda aid, label: self._scc_card.row_text(aid, label),
+                               lambda: getattr(self, "actor", "Staff"), after=self._scc_saved).on_worked)
+        # Step 5: which row gets the login's credit (SccCard.credit -> the guarded save).
         which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att))
         self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db),
                                           on_outcome=which.on_outcome)
@@ -1115,7 +1120,7 @@ class SeraApp:
     def _handle_scc_row_worked(self, msg: dict):
         card = getattr(self, "_scc_card", None)
         if card is not None:
-            card.row_worked(msg.get("attempt_id"), msg.get("row_label"))    # W5-6 saves from here
+            card.row_worked(msg.get("attempt_id"), msg.get("row_label"))    # credit -> the guarded save
 
     def _handle_scc_card_closed(self, msg: dict):
         card = getattr(self, "_scc_card", None)
@@ -1128,162 +1133,45 @@ class SeraApp:
             card.none_typed(msg.get("attempt_id"))
 
     def _handle_scc_password_verified(self, msg: dict):
-        """Persists the verified password from SCC link mutation to master.db."""
-        password = str(msg.get("password") or msg.get("scc_verified_password") or "").strip()
-        if not password:
-            return
-
-        client_id = msg.get("client_id")
-        service_id = msg.get("service_id")
-        userid = str(msg.get("userid") or msg.get("pan") or "").strip().upper()
-        combo_label = str(msg.get("combo_label") or "SCC").strip()
-        portal = str(msg.get("portal") or "Income Tax").strip()
-        portal_clean = portal.lower()
-        # Strictly enforce: SCC is exclusively an ITR-only one-time utility. Ignore any non-ITR portal attempts.
-        if "gst" in portal_clean or not any(k in portal_clean for k in ("income", "itr", "tax")):
-            print(f"[main.SCC] Ignored non-ITR SCC verification attempt for portal: {portal}")
-            return
-
+        """Persists a verified SCC password to master.db (the guarded save, core/scc/save.py)."""
+        from core.scc import save_verified
         try:
-            actor = getattr(self, "actor", "Staff")
+            result = save_verified(
+                self.db, msg.get("password") or msg.get("scc_verified_password"),
+                pan=msg.get("userid") or msg.get("pan"), client_id=msg.get("client_id"),
+                service_id=msg.get("service_id"), row_label=msg.get("combo_label"),
+                portal=msg.get("portal") or "Income Tax", client_name=msg.get("client_name"),
+                actor=getattr(self, "actor", "Staff"))
+            if result is not None:
+                self._after_scc_save(result.client_id, result.client_name, result.pan, result.outcome)
+        except Exception as e:
+            print(f"[main._handle_scc_password_verified error] {type(e).__name__}")
 
-            try:
-                client_id = int(client_id) if client_id is not None else None
-            except (ValueError, TypeError):
-                client_id = None
+    def _scc_saved(self, result):
+        """SccSaver's `after`: SCC-U's thread or the Qt thread - the refresh always runs on the Qt thread."""
+        self.sync_bridge.scc_saved_signal.emit(result.client_id, result.client_name, result.pan, result.outcome)
 
-            try:
-                service_id = int(service_id) if service_id is not None else None
-            except (ValueError, TypeError):
-                service_id = None
-
-            # Resolve client if client_id is None
-            if not client_id and userid:
-                client = self.db.get_client_by_pan(userid)
-                client_id = client.get("id") if client else None
-
-            # Resolve service & password column
-            pwd_col_id = None
-            if service_id:
-                svc = self.db.get_service(service_id)
-                if svc:
-                    pwd_col_id = svc.get("password_column_id")
-
-            if not pwd_col_id:
-                svc = self.db.get_service_for_portal(portal)
-                if svc:
-                    service_id = svc.get("id")
-                    pwd_col_id = svc.get("password_column_id")
-
-            # Fallback: search MCL columns for ITR password column
-            if not pwd_col_id:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").strip().lower()
-                    if ("itr" in lbl or "income" in lbl) and "pass" in lbl:
-                        pwd_col_id = c["id"]
-                        break
-
-            client_name_val = str(msg.get("client_name") or "").strip()
-
-            if not client_id:
-                # Unregistered client: auto-create in master.db
-                mcl = self.db.get_mcl_columns()
-                # 1. Resolve PAN column: check is_internal_pk first, or exact 'pan' in tokens
-                pan_col_id = next((c["id"] for c in mcl if c.get("is_internal_pk")), None)
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl_tokens = (c.get("label") or "").lower().split()
-                        if "pan" in lbl_tokens:
-                            pan_col_id = c["id"]
-                            break
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl = (c.get("label") or "").lower()
-                        if "pan" in lbl and "pass" not in lbl and "company" not in lbl:
-                            pan_col_id = c["id"]
-                            break
-
-                # 2. Resolve Name column
-                name_col_id = None
-                for c in mcl:
-                    lbl = (c.get("label") or "").lower()
-                    if c["id"] != pan_col_id and any(k in lbl for k in ("company", "name", "client", "proprietor")):
-                        name_col_id = c["id"]
-                        break
-
-                values = {}
-                # Ensure all internal PK columns are populated
-                for c in mcl:
-                    if c.get("is_internal_pk") and userid:
-                        values[c["id"]] = userid
-
-                if pan_col_id and userid:
-                    values[pan_col_id] = userid
-                if name_col_id:
-                    values[name_col_id] = client_name_val or f"Client ({userid})"
-                if pwd_col_id:
-                    values[pwd_col_id] = password
-
-                svc = self.db.get_service_for_portal(portal)
-                svc_ids = [svc["id"]] if svc else []
-
-                client_id = self.db.add_client(
-                    values=values,
-                    notes="Password verified via SCC",
-                    service_ids=svc_ids,
-                    actor=actor
-                )
-                print(f"[main.SCC] Auto-created client record #{client_id} with verified password ({combo_label})")
-            else:
-                # Existing client: update single password field if column is known
-                if pwd_col_id:
-                    self.db.update_client_single_field(
-                        client_id=client_id,
-                        column_id=pwd_col_id,
-                        value=password,
-                        actor=actor,
-                        log_action=True
-                    )
-                self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
-                print(f"[main.SCC] Updated client #{client_id} password via {combo_label} and marked 'Password verified via SCC'")
-
-            # Resolve client name for toast
-            client = self.db.get_client(client_id)
-            if not client_name_val and client:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").lower()
-                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
-                        val = str(client.get("values", {}).get(c["id"]) or "").strip()
-                        if val:
-                            client_name_val = val
-                            break
-            if not client_name_val:
-                client_name_val = "Client"
-
+    def _after_scc_save(self, client_id: int, client_name: str, pan: str, outcome: str):
+        """UI refresh after an SCC save: toast, Client Detail, grid, search, extension settings."""
+        try:
             if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-                self.tray_icon.showMessage(
-                    "Password Verified via SCC",
-                    f"Permanent password saved for {client_name_val} ({userid}).",
-                    QSystemTrayIcon.Information,
-                    5000
-                )
+                what = {"created": "Client added with the verified password", "replaced": "Saved password replaced",
+                        "verified": "Marked verified"}.get(outcome, "Permanent password saved")
+                self.tray_icon.showMessage("Password Verified via SCC", f"{what} for {client_name} ({pan}).",
+                                           QSystemTrayIcon.Information, 5000)
 
-            # Refresh client detail window if currently open for this client
             if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
                 cur_c = getattr(self.client_detail_win, "client", None)
                 if cur_c and cur_c.get("id") == client_id:
-                    refreshed = self.db.get_client(client_id)
-                    self.client_detail_win.set_client(refreshed)
+                    self.client_detail_win.set_client(self.db.get_client(client_id))
 
-            # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
                 self.shell.refresh_clients()
             if hasattr(self, "search_win") and self.search_win:
                 self.search_win._on_search_changed()
-            # Push updated registered PANs to extension so newly verified client won't trigger unregistered pop-in
             self._sync_extension_settings()
         except Exception as e:
-            print(f"[main._handle_scc_password_verified error] {e}")
+            print(f"[main._after_scc_save error] {type(e).__name__}")
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
