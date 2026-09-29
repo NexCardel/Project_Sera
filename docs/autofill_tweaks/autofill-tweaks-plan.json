@@ -323,8 +323,8 @@
    "deps": [
     "W5-2"
    ],
-   "what": "Part G step 3: the SCC card and its copies",
-   "focus": "Ask D1 first: `../APP/venv/Scripts/python.exe tools/autofill_tweaks.py ask W5-3 --question \"Where should SCC's password combinations appear?\" --options \"Desktop card beside the browser|Keep them in the extension MECP card\" --default \"Desktop card beside the browser\"` (if the extension card is chosen: record it, block this WP with that reason, stop). Qt card pinned to the browser window's top-right (from hwnd), shown without activation, closed with the window. Rows from db.generate_scc_passwords (no empty rows), the saved password per D3; Copy and 'This one worked' per row. Copies set the text plus MIME application/x-sera-scc; clipboard_watch skips that marker; cleared after clipboard_clear_seconds if still ours. In-memory ledger of copies; clipboard_watch compares other clipboard text in memory with the active attempt's rows and records 'copied: <row>' - never store or log text. Offscreen Qt tests."
+   "what": "Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop",
+   "focus": "D1 is ANSWERED (user, 2026-09-29): SCC combinations stay in the extension's MECP card. Do NOT ask it again and do NOT build a desktop Qt card. Build: (1) desktop -> extension: when a W5-2 attempt opens (SGT read the PAN on the Income Tax password page) and SCC applies, the desktop sends the existing MECP message (automation.trigger_mecp path, mode 'mecp', scc_mode true) with combos from db.generate_scc_passwords only (no empty rows) plus the saved password row per D3=Yes, and the attempt id; it goes to the portal tab already open (openPortalTab must NOT navigate when the tab is on that portal). In sera_extension/ and sera_extension_firefox/ (same behaviour in both; sca/ byte-identical): mecpWidget's SCC mode renders the combos it is given (delete generateSccCombos use and its hardcoded defaults), keeps the closed shadow root, and adds a 'This one worked' button per row that sends {type:'scc_row_worked', attempt_id, row_label} to the desktop - a staff click, not tracking. Copy buttons no longer send SCC_PASSWORD_COPIED and nothing SCC is written to any storage. The card closes per D6 (after both User ID and password copied) except in SCC mode, where it stays until a save, x or the attempt ends (the desktop may send a close). (2) Desktop ledger: clipboard_watch compares clipboard text in memory with the active attempt's rows and records 'copied: <row>' in the attempt ledger - never store or log text; a PAN copied from the card does not arm SCA while its attempt is open (reuse W4-1's suppress_client). (3) ws_bridge handler for scc_row_worked -> the attempt (W5-6 wires it to the save). Tests: python for the ledger and the message, node for the card rendering given combos. check-add: 'On the Income Tax password page the MECP SCC card appears in the open tab with Sera's combinations'."
   },
   {
    "wp": "W5-4",
@@ -384,7 +384,7 @@
     "W5-7"
    ],
    "what": "Part G: Client Detail opens the SCC card",
-   "focus": "client_detail_window: MECP on an unverified Income Tax client (today's scc_mode path in _launch_manual_copy) opens the SCC card for that PAN instead of sending scc_mode to the extension; MECP itself always sends the plain card. The card works with SCC-U Off (manual button only)."
+   "focus": "client_detail_window: MECP on an unverified Income Tax client opens the MECP card in SCC mode with desktop-generated combos (the W5-3 message) and registers an SCC-U attempt for that PAN/window if SGT has one, else a manual attempt whose only save path is the card's 'This one worked'. Plain MECP for everyone else. Works with SCC-U Off (manual button only)."
   },
   {
    "wp": "W5-9",
@@ -395,8 +395,8 @@
    "deps": [
     "W5-8"
    ],
-   "what": "Part G: remove SCC from the extension and the old desktop handler",
-   "focus": "Blueprint G.3, in sera_extension/ and sera_extension_firefox/ (keep both identical in behaviour; sca/ must stay byte-identical, tests/test_sca_v2.py checks it): remove mecpWidget's SCC mode, generateSccCombos, sccActiveAttempt, the tab-URL observer, SCC_LOGIN_DETECTED / SCC_PASSWORD_COPIED / SCC_PASSWORD_INJECTED / TRIGGER_UNREGISTERED_SCC_MECP, checkSccLoginSuccess, checkUnregisteredSccTrigger, and registered_pans / scc_settings in the settings sync. Desktop: remove the scc_password_verified bridge handler and main's SCC-from-extension paths (scc_verified_password in session_start / results); keep core/scc/save.py; automation.trigger_mecp drops scc_mode. Update tests/test_scc_vault_tagger.py to the new flow. A grep proves nothing SCC is left in the extension."
+   "what": "Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays)",
+   "focus": "Blueprint G.3 as re-planned for D1 = extension card. In sera_extension/ and sera_extension_firefox/ (same behaviour in both; sca/ byte-identical) REMOVE: generateSccCombos, sccActiveAttempt, the tab-URL observer, SCC_LOGIN_DETECTED, SCC_PASSWORD_COPIED, SCC_PASSWORD_INJECTED, TRIGGER_UNREGISTERED_SCC_MECP, checkSccLoginSuccess, checkUnregisteredSccTrigger, registered_pans / scc_settings sync. KEEP mecpWidget's SCC mode (desktop-fed rows + 'This one worked') from W5-3. Desktop: remove the scc_password_verified bridge handler and main's SCC-from-extension paths (scc_verified_password in session_start / results); keep core/scc/save.py. Update tests/test_scc_vault_tagger.py. A grep proves the extension no longer watches anything for SCC."
   },
   {
    "wp": "W6-1",
