@@ -4,6 +4,11 @@
 
   "precedence": ["locked", "wrong_password", "worked", "neutral", "no_conclusion"],
 
+  "messages": {
+    "wrong_password": "The portal did not accept that password (marked ✗). The highlighted row is next.",
+    "locked": "The portal says this account is locked. Stop here: do not try any more passwords."
+  },
+
   "rules": [
     {
       "name": "itr_logged_in_header",

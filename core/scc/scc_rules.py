@@ -35,6 +35,7 @@ class Outcome:
     rule: str                # the rule that matched
     unconfirmed: bool = False
     name: str = ""           # the captured name (worked: the header's "<NAME>")
+    line: str = ""           # the page line that matched ("" for an address-only rule); memory only
 
 
 @dataclass(frozen=True)
@@ -51,19 +52,24 @@ class Rule:
 
     def match(self, lines: Sequence[str], url: str = "", portal: str = "") -> Optional[str]:
         """None = no match; otherwise the captured group (or "" when the rule captures nothing)."""
+        got = self.match_line(lines, url, portal)
+        return None if got is None else got[0]
+
+    def match_line(self, lines: Sequence[str], url: str = "", portal: str = "") -> Optional[Tuple[str, str]]:
+        """None = no match; otherwise (captured group or "", the line that matched or "")."""
         if self.portals and portal and portal.strip().lower() not in {p.lower() for p in self.portals}:
             return None
         if self.urls and not any(u.search(url or "") for u in self.urls):
             return None
         if not self.patterns:
-            return ""
+            return "", ""
         for line in lines:
             if len(line) > MAX_LINE_LEN:
                 continue
             for rx in self.patterns:
                 m = rx.search(line)
                 if m:
-                    return (m.group(self.group) or "").strip() if self.group else ""
+                    return ((m.group(self.group) or "").strip() if self.group else ""), line
         return None
 
 
@@ -72,16 +78,21 @@ class RuleSet:
     rules: Tuple[Rule, ...] = ()
     precedence: Tuple[str, ...] = DEFAULT_PRECEDENCE
     errors: Tuple[str, ...] = ()
+    messages: Tuple[Tuple[str, str], ...] = ()     # what the card tells staff, per outcome ("messages" in the file)
+
+    def message(self, kind: str) -> str:
+        """The staff wording for an outcome, from scc_rules.json only ("" when the file has none)."""
+        return dict(self.messages).get(kind, "")
 
     def classify(self, lines: Sequence[str], url: str = "", portal: str = "") -> Optional[Outcome]:
         best: Optional[Tuple[int, Outcome]] = None
         for rule in self.rules:
-            got = rule.match(lines, url, portal)
+            got = rule.match_line(lines, url, portal)
             if got is None:
                 continue
             rank = self.precedence.index(rule.outcome)
             if best is None or rank < best[0]:
-                best = (rank, Outcome(rule.outcome, rule.name, rule.unconfirmed, got))
+                best = (rank, Outcome(rule.outcome, rule.name, rule.unconfirmed, got[0], got[1]))
         return best[1] if best else None
 
     @property
@@ -184,11 +195,20 @@ def load_rules(path: Optional[Path] = None, previous: Optional[RuleSet] = None) 
         data = _read(Path(path) if path else RULES_PATH)
     except SpecError as e:
         base = previous or RuleSet()
-        return RuleSet(base.rules, base.precedence, tuple(base.errors) + (str(e),))
+        return RuleSet(base.rules, base.precedence, tuple(base.errors) + (str(e),), base.messages)
     precedence = tuple(data.get("precedence") or DEFAULT_PRECEDENCE)
     if sorted(precedence) != sorted(OUTCOMES):
         errors.append(f"'precedence' must list each of {list(OUTCOMES)} once - the default order is used")
         precedence = DEFAULT_PRECEDENCE
+    raw_msgs = data.get("messages") or {}
+    if not isinstance(raw_msgs, dict):
+        errors.append("'messages' must be an object of outcome -> text")
+        raw_msgs = {}
+    messages = tuple((k, v.strip()) for k, v in raw_msgs.items()
+                     if k in OUTCOMES and isinstance(v, str) and v.strip())
+    for k in raw_msgs:
+        if k not in OUTCOMES:
+            errors.append(f"'messages' has {k!r}, which is not an outcome")
 
     built: Dict[str, Rule] = {}
     for i, raw in enumerate(data["rules"]):
@@ -211,7 +231,7 @@ def load_rules(path: Optional[Path] = None, previous: Optional[RuleSet] = None) 
     for outcome in OUTCOMES:
         if not any(r.outcome == outcome for r in rules.rules):
             errors.append(f"no rule left for '{outcome}' - SCC-U will never report it")
-    return RuleSet(rules.rules, precedence, tuple(errors))
+    return RuleSet(rules.rules, precedence, tuple(errors), messages)
 
 
 def _cross_check(rs: RuleSet, errors: List[str]) -> RuleSet:

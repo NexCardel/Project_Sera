@@ -22,6 +22,7 @@ SAVED_ROW_LABEL = "Saved password"
 REPEAT_COPY_S = 2.0          # the clipboard fires dataChanged more than once per copy
 
 OpenCard = Callable[[dict, str, list, str, Optional[int], str], bool]   # service, pan, rows, title, client_id, attempt_id
+UpdateCard = Callable[[str, list, Optional[str], str, bool], Any]      # attempt_id, failed labels, next label, message, stop
 
 
 class SccCard:
@@ -30,6 +31,8 @@ class SccCard:
                  release: Optional[Callable[[int], Any]] = None,
                  on_worked: Optional[Callable[[Attempt, str], Any]] = None,
                  on_closed: Optional[Callable[[Attempt], Any]] = None,
+                 update_card: Optional[UpdateCard] = None,
+                 on_copy: Optional[Callable[[Attempt, str], Any]] = None,
                  echo: Callable[[str], Any] = print, clock: Callable[[], float] = time.monotonic) -> None:
         self._db = db
         self._open_card = open_card
@@ -38,12 +41,15 @@ class SccCard:
         self._release = release
         self._on_worked = on_worked
         self._on_closed = on_closed
+        self._update_card = update_card
+        self._on_copy = on_copy          # step 4: a copy opens SCC-U's read window for the attempt's session
         self._echo = echo
         self._now = clock
         self._lock = threading.Lock()
         self._attempts: Dict[str, Attempt] = {}
         self._rows: Dict[str, List[Tuple[str, str]]] = {}     # attempt id -> [(label, text)]
         self._last_copy: Dict[str, Tuple[str, float]] = {}    # attempt id -> (label, time)
+        self._failed: Dict[str, List[str]] = {}               # attempt id -> labels the portal refused (x)
 
     # ── AttemptOpener callbacks (SCC-U's thread) ─────────────────────────────────
     def open(self, att: Attempt) -> bool:
@@ -79,6 +85,7 @@ class SccCard:
             known = self._attempts.pop(att.attempt_id, None)
             self._rows.pop(att.attempt_id, None)
             self._last_copy.pop(att.attempt_id, None)
+            self._failed.pop(att.attempt_id, None)
         if known is None:
             return
         if self._release and att.client_id is not None:
@@ -95,6 +102,7 @@ class SccCard:
         "copied: <label>" in that attempt's ledger. Returns the label, or None. Nothing is stored."""
         if not text:
             return None
+        hit: Optional[Tuple[Attempt, str]] = None
         with self._lock:
             for aid, rows in self._rows.items():
                 for label, value in rows:
@@ -105,13 +113,61 @@ class SccCard:
                             return label
                         self._last_copy[aid] = (label, now)
                         self._attempts[aid].ledger.append(f"copied: {label}")
-                        return label
-        return None
+                        hit = (self._attempts[aid], label)
+                        break
+                if hit:
+                    break
+        if hit is None:
+            return None
+        if self._on_copy:
+            try:
+                self._on_copy(*hit)
+            except Exception as e:
+                self._echo(f"[SCC] Read window failed: {type(e).__name__}")
+        return hit[1]
 
     def ledger(self, attempt_id: str) -> List[str]:
         with self._lock:
             att = self._attempts.get(attempt_id)
             return list(att.ledger) if att else []
+
+    def failed(self, attempt_id: str) -> List[str]:
+        """Labels the portal refused in this attempt (x on the card)."""
+        with self._lock:
+            return list(self._failed.get(attempt_id, []))
+
+    # ── Outcomes (SCC-U's thread, core/scc/outcome.py) ───────────────────────────
+    def mark_failed(self, att: Attempt, label: str, message: str = "") -> Optional[str]:
+        """The portal refused `label`: x on that row, highlight the next row not yet refused (in card
+        order, wrapping round). Returns the next row's label, or None when every row has failed."""
+        with self._lock:
+            rows = [lb for lb, _ in self._rows.get(att.attempt_id, [])]
+            if label not in rows:
+                return None
+            failed = self._failed.setdefault(att.attempt_id, [])
+            if label not in failed:
+                failed.append(label)
+            i = rows.index(label)
+            nxt = next((lb for lb in rows[i + 1:] + rows[:i] if lb not in failed), None)
+            marks = list(failed)
+        self._send_update(att.attempt_id, marks, nxt, message, False)
+        return nxt
+
+    def show_stop(self, att: Attempt, message: str) -> None:
+        """Locked out: say so on the card and suggest no row."""
+        with self._lock:
+            if att.attempt_id not in self._rows:
+                return
+            marks = list(self._failed.get(att.attempt_id, []))
+        self._send_update(att.attempt_id, marks, None, message, True)
+
+    def _send_update(self, attempt_id: str, failed: list, nxt: Optional[str], message: str, stop: bool) -> None:
+        if not self._update_card:
+            return
+        try:
+            self._update_card(attempt_id, failed, nxt, message, stop)
+        except Exception as e:
+            self._echo(f"[SCC] Card update failed: {type(e).__name__}")
 
     # ── Messages from the card (Qt thread) ───────────────────────────────────────
     def row_worked(self, attempt_id: str, row_label: str) -> Optional[Attempt]:

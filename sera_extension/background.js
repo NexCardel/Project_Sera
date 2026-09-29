@@ -259,6 +259,8 @@ function handleDesktopMessage(message) {
     else handleAutofillTab(message);
   } else if (message.type === "scc_card_close") {
     closeSccCard(message.attempt_id);
+  } else if (message.type === "scc_card_update") {
+    updateSccCard(message);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -1809,6 +1811,24 @@ function closeSccCard(attemptId) {
   } catch (_) {}
 }
 
+// SCC-U's outcome on the card (desktop -> the card's own tab): row labels and a message only.
+function updateSccCard(message) {
+  const attemptId = String(message.attempt_id || "");
+  const tabId = sccCardTabs.get(attemptId);
+  if (tabId === undefined) return;
+  const update = {
+    type: "SERA_SCC_CARD_UPDATE",
+    attempt_id: attemptId,
+    failed: Array.isArray(message.failed) ? message.failed.map(String) : [],
+    next: message.stop || !message.next ? null : String(message.next),
+    message: String(message.message || ""),
+    stop: !!message.stop
+  };
+  try {
+    chrome.tabs.sendMessage(tabId, update, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
+}
+
 function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId) {
   // sera_dom.js (shared clipboard clearing) is injected just before this function.
   const seraDom = window.__seraDom;
@@ -1888,6 +1908,14 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     .worked-btn:disabled { opacity: 0.6; cursor: default; }
     .copy-btn:hover { background: #2EA043; }
     .copy-btn.copied { background: #1F6FEB; }
+    .copy-btn:disabled { opacity: 0.5; cursor: default; }
+    .field-row.failed { opacity: 0.55; border-color: #6E2B2B; }
+    .field-row.next { border-color: #D29922; box-shadow: 0 0 0 1px #D29922; }
+    .scc-note {
+      display: none; margin: 0 0 8px; padding: 7px 10px; border-radius: 6px; background: #2B2111;
+      border: 1px solid #D29922; color: #F0F6FC; font-size: 12px; line-height: 1.35;
+    }
+    .scc-note.stop { background: #3A1515; border-color: #F85149; }
     .timer-container {
       margin-top: 12px; height: 3.5px; background: rgba(255, 255, 255, 0.08);
       border-radius: 2px; overflow: hidden;
@@ -2021,6 +2049,10 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     secTitle.className = "section-title";
     secTitle.textContent = "Password Combinations (Unverified)";
     box.appendChild(secTitle);
+    const note = document.createElement("div");
+    note.className = "scc-note";
+    box.appendChild(note);
+    const sccRows = new Map();   // row label -> its elements, for the desktop's outcome marks
 
     sccCombos.forEach((combo) => {
       const cRow = document.createElement("div");
@@ -2071,7 +2103,27 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
       cActions.append(cCopy, cWorked);
       cRow.append(cLeft, cActions);
       box.appendChild(cRow);
+      sccRows.set(combo.label || `Combo ${combo.id}`, { row: cRow, label: cLbl, copy: cCopy, worked: cWorked });
     });
+
+    // The desktop's reading of the portal's answer (sent by background.js, never read from the page).
+    const onUpdate = (msg) => {
+      if (!msg || msg.type !== "SERA_SCC_CARD_UPDATE" || msg.attempt_id !== (attemptId || "")) return;
+      if (!host.isConnected) { chrome.runtime.onMessage.removeListener(onUpdate); return; }
+      const failed = new Set(msg.failed || []);
+      sccRows.forEach((els, label) => {
+        const isFailed = failed.has(label);
+        els.row.classList.toggle("failed", isFailed);
+        els.row.classList.toggle("next", !msg.stop && msg.next === label);
+        els.label.textContent = isFailed ? `✗ ${label}` : label;
+        els.copy.disabled = !!msg.stop;
+        if (msg.stop) els.worked.disabled = true;
+      });
+      note.textContent = msg.message || "";
+      note.classList.toggle("stop", !!msg.stop);
+      note.style.display = msg.message ? "block" : "none";
+    };
+    chrome.runtime.onMessage.addListener(onUpdate);
   } else {
     // Single Password Row (cleartext)
     const passRow = document.createElement("div");

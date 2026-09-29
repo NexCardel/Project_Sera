@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:50)
+# Autofill tweaks — report (2026-09-29 14:21)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 8 |
+| Not started | 7 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 16 |
-| Blocked | 1 |
+| Retry | 1 |
+| Done | 17 |
+| Blocked | 0 |
 
-Runs: 20   output tokens: 436648   API-equivalent cost: $31.42
+Runs: 23   output tokens: 527986   API-equivalent cost: $38.18
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,13 +30,13 @@ Runs: 20   output tokens: 436648   API-equivalent cost: $31.42
 | W4-R | Done | opus | 2fe7cba | Review Parts B-F | 6 defects fixed: Fast Autofill off-portal ReferenceError, password-bearing message logs, URL-substring tab match, stale SMTI tab, Firefox SMTI parity, SCA scope |
 | W5-1 | Done | opus | 4b893bf | Part G frame: core/scc host, _hand_to_scc hook, setting | core/scc SccHost + _hand_to_scc hook + 30 s read window + scc_detect_mode setting (default off); SGT tests pass, replay no changed rows |
 | W5-2 | Done | sonnet | b54fbe7 | Part G steps 1-2, scc_rules.json and its loader | scc_rules.json + loader (self-tests, refuses failing rules), AttemptOpener steps 1-2 (D3 Yes); wording unconfirmed except header; not wired to router yet; 45 ne |
-| W5-3 | Blocked | sonnet |  | Part G step 3: the SCC card and its copies | D1 answered: keep SCC password combinations in the extension MECP card, not a desktop card. This WP (Qt card, clipboard marker/ledger) is not needed as specifie |
-| W5-4 | Not started | opus |  | Part G step 4: the outcome reader |  |
+| W5-3 | Done | sonnet | efd4537 | Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop | SCC card fed by desktop (core/scc/card.py, ws_bridge scc_row_worked), both extension builds render given combos with This one worked, ledger by label, PAN copy  |
+| W5-4 | Retry | opus |  | Part G step 4: the outcome reader | stopped by usage limit, resumes after 17:40 |
 | W5-5 | Not started | opus |  | Part G step 5: which password worked |  |
 | W5-6 | Not started | sonnet |  | Part G step 6: the guarded save |  |
 | W5-7 | Not started | haiku |  | Part G step 7: close-out and counts |  |
 | W5-8 | Not started | sonnet |  | Part G: Client Detail opens the SCC card |  |
-| W5-9 | Not started | sonnet |  | Part G: remove SCC from the extension and the old desktop handler |  |
+| W5-9 | Not started | sonnet |  | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) |  |
 | W6-1 | Not started | haiku |  | Docs and extension version |  |
 | W6-R | Not started | opus |  | Final review |  |
 
@@ -68,3 +68,4 @@ Runs: 20   output tokens: 436648   API-equivalent cost: $31.42
 - #6 (W4-3) Load both extension builds in a real Chrome and Firefox: confirm login.js/SCA runs on gst.gov.in / incometax.gov.in and a configured custom-service host, and does NOT run on an unrelated https site; confirm Autofill/SMTI/MECP still work on a custom service. — Not run
 - #7 (W4-R) Firefox: SMTI now uses Chrome's widget (top frame only) and re-appears after a failed login in its own tab; check both on a real Firefox with the extension loaded. Chrome: Fast Autofill fills a custom service whose host is NOT in the SCA portal list. — Not run
 - #8 (W5-2) Run tools/vsdc_uia_probe.py once on ONE real Income Tax wrong-password attempt (a single mistyped password, never repeated, NEVER to a lock-out) on the password page, and once on the OTP / secure-access page if you meet it. Then compare the wording with core/scc/scc_rules.json: rules marked unconfirmed (wrong password, locked, OTP/secure access, forgot/reset) should be replaced with the real text and lose the flag. — Not run
+- #9 (W5-3) On the Income Tax password page the MECP SCC card appears in the open tab with Sera's combinations — Not run

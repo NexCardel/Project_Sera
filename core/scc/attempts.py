@@ -95,6 +95,10 @@ class AttemptOpener:
         with self._lock:
             return self._open.get(hwnd)
 
+    def open_attempts(self) -> List[Attempt]:
+        with self._lock:
+            return list(self._open.values())
+
     # ── Handler (SCC-U's thread) ─────────────────────────────────────────────────
     def observe(self, obs: Any, hwnd: int, ctx: Any = None) -> Optional[str]:
         """Returns what it did, for tests: opened / verified / kept / closed_before / ended /

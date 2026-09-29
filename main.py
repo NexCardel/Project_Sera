@@ -1078,25 +1078,34 @@ class SeraApp:
             return None
 
     def _make_scc_handlers(self):
-        """SCC-U's handlers (once, when its host is created): the attempt opener and the MECP SCC card
-        it feeds (core/scc/card.py). The card's copy ledger reads the clipboard through clipboard_watch."""
+        """SCC-U's handlers (once, when its host is created): the attempt opener, the MECP SCC card
+        it feeds (core/scc/card.py) and the outcome reader (core/scc/outcome.py). The card's copy
+        ledger reads the clipboard through clipboard_watch; each copy opens the host's read window."""
         import automation
         import clipboard_watch
-        from core.scc import AttemptOpener, SccCard, db_lookup
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, db_client_names, db_lookup
         opener = AttemptOpener(db_lookup(self.db), on_open=lambda att: self._scc_card.open(att),
                                on_end=lambda att, reason: self._scc_card.end(att, reason))
         self._scc_opener = opener
+
+        def read_harder(att, _label):
+            host = getattr(getattr(self.vsdc_worker, "router", None), "_scc_host", None)
+            if host is not None:
+                host.open_read_window(att.session_id)
+
         self._scc_card = SccCard(
             self.db,
             open_card=lambda service, pan, rows, title, client_id, attempt_id:
                 automation.send_scc_card(service, pan, rows, title, client_id, attempt_id),
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
-            on_closed=lambda att: opener.close(att.hwnd))
+            on_closed=lambda att: opener.close(att.hwnd),
+            update_card=automation.update_scc_card, on_copy=read_harder)
+        self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db))
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
-        return [opener]
+        return [opener, self._scc_outcome]
 
     def _handle_scc_row_worked(self, msg: dict):
         card = getattr(self, "_scc_card", None)
