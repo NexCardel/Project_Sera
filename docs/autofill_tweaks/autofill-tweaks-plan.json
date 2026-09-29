@@ -1,6 +1,6 @@
 {
  "about": "Autofill tweaks work packages (blueprint docs/autofill_tweaks/autofill-tweaks-blueprint.md). Fixed data: edit by hand only to re-plan. Live status is in autofill-tweaks-status.csv, written only by tools/autofill_tweaks.py.",
- "deadline": "2026-09-29T23:00:00+05:30",
+ "deadline": "2026-09-30T23:00:00+05:30",
  "models": {
   "sonnet": {
    "runner": "claude",
