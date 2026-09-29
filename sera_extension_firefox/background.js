@@ -1583,6 +1583,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
+  // A staff click on "None - I typed my own" when the SCC card asks which password worked.
+  if (msg.type === "scc_row_none" && msg.attempt_id) {
+    sendToDesktop({ type: "scc_row_none", attempt_id: String(msg.attempt_id) }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.type === "TRIGGER_MANUAL_ASSIST_FOR_TAB") {
     if (msg.tabId) {
       _passwordStore.get(['manualAssistPayload', 'mecpPayload'], data => {
@@ -1632,7 +1638,8 @@ function updateSccCard(message) {
     failed: Array.isArray(message.failed) ? message.failed.map(String) : [],
     next: message.stop || !message.next ? null : String(message.next),
     message: String(message.message || ""),
-    stop: !!message.stop
+    stop: !!message.stop,
+    ask: !message.stop && Array.isArray(message.ask) ? message.ask.map(String) : null
   };
   try {
     chrome.tabs.sendMessage(tabId, update, () => { if (chrome.runtime.lastError) {} });
@@ -1726,6 +1733,13 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
       border: 1px solid #D29922; color: #F0F6FC; font-size: 12px; line-height: 1.35;
     }
     .scc-note.stop { background: #3A1515; border-color: #F85149; }
+    .field-row.ask { border-color: #4CF9B7; box-shadow: 0 0 0 1px #4CF9B7; }
+    .none-btn {
+      display: none; width: 100%; margin: 0 0 8px; background: transparent; color: #C9D1D9;
+      border: 1px solid #484F58; border-radius: 5px; padding: 5px 10px;
+      font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer;
+    }
+    .none-btn:hover { background: #21262D; }
     .timer-container {
       margin-top: 12px; height: 3.5px; background: rgba(255, 255, 255, 0.08);
       border-radius: 2px; overflow: hidden;
@@ -1862,6 +1876,16 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
     const note = document.createElement("div");
     note.className = "scc-note";
     box.appendChild(note);
+    // Shown only while the desktop asks which password worked (step 5); saves nothing.
+    const noneBtn = document.createElement("button");
+    noneBtn.className = "none-btn";
+    noneBtn.textContent = "None - I typed my own";
+    noneBtn.onclick = () => {
+      try { chrome.runtime.sendMessage({ type: "scc_row_none", attempt_id: attemptId || "" }); } catch (_) {}
+      noneBtn.textContent = "✓ Sent";
+      noneBtn.disabled = true;
+    };
+    box.appendChild(noneBtn);
     const sccRows = new Map();   // row label -> its elements, for the desktop's outcome marks
 
     sccCombos.forEach((combo) => {
@@ -1921,14 +1945,17 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
       if (!msg || msg.type !== "SERA_SCC_CARD_UPDATE" || msg.attempt_id !== (attemptId || "")) return;
       if (!host.isConnected) { chrome.runtime.onMessage.removeListener(onUpdate); return; }
       const failed = new Set(msg.failed || []);
+      const ask = Array.isArray(msg.ask) ? new Set(msg.ask) : null;
       sccRows.forEach((els, label) => {
         const isFailed = failed.has(label);
         els.row.classList.toggle("failed", isFailed);
         els.row.classList.toggle("next", !msg.stop && msg.next === label);
+        els.row.classList.toggle("ask", !!ask && ask.has(label));
         els.label.textContent = isFailed ? `✗ ${label}` : label;
         els.copy.disabled = !!msg.stop;
-        if (msg.stop) els.worked.disabled = true;
+        if (msg.stop || isFailed) els.worked.disabled = true;   // a ✗ row is never credited
       });
+      noneBtn.style.display = ask ? "block" : "none";
       note.textContent = msg.message || "";
       note.classList.toggle("stop", !!msg.stop);
       note.style.display = msg.message ? "block" : "none";

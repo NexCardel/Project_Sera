@@ -239,17 +239,22 @@ def close_scc_card(attempt_id: str) -> bool:
     return bridge.broadcast({"type": "scc_card_close", "attempt_id": attempt_id}) > 0
 
 
-def update_scc_card(attempt_id: str, failed: list, next_label, message: str, stop: bool) -> bool:
+def update_scc_card(attempt_id: str, failed: list, next_label, message: str, stop: bool, ask=None) -> bool:
     """SCC-U step 4: x on the rows the portal refused, highlight `next_label`, show `message`; `stop`
-    (locked out) greys every row and highlights none. Row labels only - never a password."""
+    (locked out) greys every row and highlights none. Step 5: `ask` (a list, maybe empty) = the card
+    asks which row worked, highlighting those and offering "None - I typed my own". Row labels only -
+    never a password."""
     from ui import ws_bridge
     bridge = ws_bridge.get_active_bridge()
     if not bridge or not attempt_id:
         return False
-    return bridge.broadcast({"type": "scc_card_update", "attempt_id": attempt_id,
-                             "failed": [str(x) for x in failed or []],
-                             "next": None if stop or not next_label else str(next_label),
-                             "message": str(message or ""), "stop": bool(stop)}) > 0
+    msg = {"type": "scc_card_update", "attempt_id": attempt_id,
+           "failed": [str(x) for x in failed or []],
+           "next": None if stop or not next_label else str(next_label),
+           "message": str(message or ""), "stop": bool(stop)}
+    if ask is not None and not stop:
+        msg["ask"] = [str(x) for x in ask]
+    return bridge.broadcast(msg) > 0
 
 
 def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):

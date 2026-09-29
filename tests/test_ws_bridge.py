@@ -128,6 +128,15 @@ def test_a_malformed_scc_row_worked_is_dropped(bridge, msg):
     assert got == []
 
 
+def test_scc_row_none_reaches_the_desktop_with_only_the_attempt(bridge):
+    got = []
+    bridge.scc_row_none_received.connect(got.append)
+    bridge.dispatch({"type": "scc_row_none", "attempt_id": "att-1", "row_label": "Combo 2"})
+    bridge.dispatch({"type": "scc_row_none"})
+    bridge.dispatch({"type": "scc_row_none", "attempt_id": "a" * 65})
+    assert got == [{"type": "scc_row_none", "attempt_id": "att-1"}]
+
+
 def test_scc_card_closed_reaches_the_desktop(bridge):
     got = []
     bridge.scc_card_closed_received.connect(got.append)

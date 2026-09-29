@@ -11,6 +11,7 @@ from .card import SccCard
 from .host import SccHost
 from .outcome import OutcomeReader, db_client_names
 from .scc_rules import RuleSet, get_rules, load_rules
+from .which import WhichOne, pick_rows
 
-__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "OutcomeReader", "RuleSet", "SccCard", "SccHost", "db_client_names",
-           "db_lookup", "get_rules", "load_rules"]
+__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "OutcomeReader", "RuleSet", "SccCard", "SccHost", "WhichOne",
+           "db_client_names", "db_lookup", "get_rules", "load_rules", "pick_rows"]

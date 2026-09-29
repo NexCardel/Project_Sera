@@ -24,6 +24,7 @@ RULES_PATH = Path(__file__).resolve().parent / "scc_rules.json"
 
 OUTCOMES = ("worked", "wrong_password", "locked", "neutral", "no_conclusion")
 DEFAULT_PRECEDENCE = OUTCOMES
+MESSAGE_KEYS = OUTCOMES + ("ask_which",)    # "ask_which": step 5, the card asks which password worked
 
 _RULE_KEYS = {"name", "outcome", "portals", "urls", "patterns", "case", "group", "unconfirmed", "note",
               "examples", "counter_examples", "disabled"}
@@ -205,9 +206,9 @@ def load_rules(path: Optional[Path] = None, previous: Optional[RuleSet] = None) 
         errors.append("'messages' must be an object of outcome -> text")
         raw_msgs = {}
     messages = tuple((k, v.strip()) for k, v in raw_msgs.items()
-                     if k in OUTCOMES and isinstance(v, str) and v.strip())
+                     if k in MESSAGE_KEYS and isinstance(v, str) and v.strip())
     for k in raw_msgs:
-        if k not in OUTCOMES:
+        if k not in MESSAGE_KEYS:
             errors.append(f"'messages' has {k!r}, which is not an outcome")
 
     built: Dict[str, Rule] = {}

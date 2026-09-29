@@ -6,7 +6,8 @@
 
   "messages": {
     "wrong_password": "The portal did not accept that password (marked ✗). The highlighted row is next.",
-    "locked": "The portal says this account is locked. Stop here: do not try any more passwords."
+    "locked": "The portal says this account is locked. Stop here: do not try any more passwords.",
+    "ask_which": "Logged in. Which password did you use? Press \"This one worked\" on it, or \"None - I typed my own\"."
   },
 
   "rules": [

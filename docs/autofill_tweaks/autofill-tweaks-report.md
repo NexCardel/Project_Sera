@@ -1,4 +1,4 @@
-# Autofill tweaks — report (2026-09-29 14:21)
+# Autofill tweaks — report (2026-09-29 19:50)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-09-29T23:00:00+05:30
 | :--- | ---: |
 | Not started | 7 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 17 |
+| Retry | 0 |
+| Done | 18 |
 | Blocked | 0 |
 
-Runs: 23   output tokens: 527986   API-equivalent cost: $38.18
+Runs: 24   output tokens: 545470   API-equivalent cost: $40.78
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -31,7 +31,7 @@ Runs: 23   output tokens: 527986   API-equivalent cost: $38.18
 | W5-1 | Done | opus | 4b893bf | Part G frame: core/scc host, _hand_to_scc hook, setting | core/scc SccHost + _hand_to_scc hook + 30 s read window + scc_detect_mode setting (default off); SGT tests pass, replay no changed rows |
 | W5-2 | Done | sonnet | b54fbe7 | Part G steps 1-2, scc_rules.json and its loader | scc_rules.json + loader (self-tests, refuses failing rules), AttemptOpener steps 1-2 (D3 Yes); wording unconfirmed except header; not wired to router yet; 45 ne |
 | W5-3 | Done | sonnet | efd4537 | Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop | SCC card fed by desktop (core/scc/card.py, ws_bridge scc_row_worked), both extension builds render given combos with This one worked, ledger by label, PAN copy  |
-| W5-4 | Retry | opus |  | Part G step 4: the outcome reader | stopped by usage limit, resumes after 17:40 |
+| W5-4 | Done | opus | 09e3a2b | Part G step 4: the outcome reader | Outcome reader core/scc/outcome.py: worked/wrong_password/locked/neutral/no_conclusion from scc_rules.json; card x+next-row marks; both builds render marks. tes |
 | W5-5 | Not started | opus |  | Part G step 5: which password worked |  |
 | W5-6 | Not started | sonnet |  | Part G step 6: the guarded save |  |
 | W5-7 | Not started | haiku |  | Part G step 7: close-out and counts |  |

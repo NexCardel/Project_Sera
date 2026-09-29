@@ -25,12 +25,13 @@ function makeWorld(build) {
   const messages = [];
   const sent = [];
   const clip = { text: '' };
+  const listeners = [];   // chrome.runtime.onMessage listeners (the SCC card's desktop updates)
   const state = { host: null, shadowMode: null, shadowChildren: [] };
 
   function fakeEl(tag) {
     const e = {
       tag, id: '', className: '', textContent: '', innerHTML: '', style: {}, children: [], listeners: {},
-      classList: { add() {}, remove() {} }, isConnected: false,
+      classes: new Set(), isConnected: false,
       append(...c) { e.children.push(...c); },
       appendChild(c) { e.children.push(c); return c; },
       insertBefore(c) { e.children.push(c); },
@@ -42,6 +43,10 @@ function makeWorld(build) {
         state.shadowMode = init.mode;
         return { appendChild(c) { state.shadowChildren.push(c); return c; } };
       },
+    };
+    e.classList = {
+      add(c) { e.classes.add(c); }, remove(c) { e.classes.delete(c); }, contains(c) { return e.classes.has(c); },
+      toggle(c, on) { if (on === undefined ? !e.classes.has(c) : on) e.classes.add(c); else e.classes.delete(c); },
     };
     return e;
   }
@@ -59,7 +64,10 @@ function makeWorld(build) {
       writeText: async (v) => { clip.text = v; },
       readText: async () => clip.text,
     } },
-    chrome: { runtime: { sendMessage: (m) => { messages.push(m.type); sent.push(m); } } },
+    chrome: { runtime: {
+      sendMessage: (m) => { messages.push(m.type); sent.push(m); },
+      onMessage: { addListener: (f) => listeners.push(f), removeListener: (f) => listeners.splice(listeners.indexOf(f), 1) },
+    } },
     getComputedStyle: () => ({ transform: 'matrix(0.5, 0, 0, 1, 0, 0)' }),
     addEventListener() {}, removeEventListener() {},
     Date: { now: () => now },
@@ -98,7 +106,8 @@ function makeWorld(build) {
     vm.runInContext(widgetSource(build), win);
     win.mecpWidget(...args);
   }
-  return { win, state, messages, sent, clip, advance, flush, query, open };
+  const deliver = (msg) => listeners.slice().forEach(f => f(msg));
+  return { win, state, messages, sent, clip, advance, flush, query, open, deliver };
 }
 
 const argsFor = (userid, clearSeconds) => [userid, PASSWORD, 'Test Client', 90000, false, [], clearSeconds, ''];
@@ -264,6 +273,29 @@ const COMBOS = [
       assert.strictEqual(s.clip.text, 'Combo#2', label + 'row copied');
       await s.advance(21000);
       assert.strictEqual(s.clip.text, '', label + 'row cleared from the clipboard');
+    }
+
+    // Step 5: the desktop asks which row worked; the None button shows only then; a ✗ row can't be credited
+    {
+      const s = makeWorld(build);
+      s.open(sccArgs(COMBOS, 30));
+      const none = s.query('none-btn')[0];
+      assert(none, label + 'the card has a None button');
+      assert.notStrictEqual(none.style.display, 'block', label + 'hidden until the desktop asks');
+      s.deliver({ type: 'SERA_SCC_CARD_UPDATE', attempt_id: 'att-1', failed: ['Combo 1'], next: 'Combo 2', message: 'm', stop: false, ask: null });
+      assert.notStrictEqual(none.style.display, 'block', label + 'a step-4 update does not show it');
+      const worked = s.query('worked-btn');
+      assert(worked[0].disabled, label + 'a ✗ row\'s worked button is disabled');
+      s.deliver({ type: 'SERA_SCC_CARD_UPDATE', attempt_id: 'att-1', failed: ['Combo 1'], next: null, message: 'which?', stop: false, ask: ['Combo 2', 'Saved password'] });
+      assert.strictEqual(none.style.display, 'block', label + 'asking shows None');
+      const rows = s.query('field-row').filter(r => r.classes.has('ask'));
+      assert.strictEqual(rows.length, 2, label + 'the asked-about rows are highlighted');
+      s.deliver({ type: 'SERA_SCC_CARD_UPDATE', attempt_id: 'other', failed: [], next: null, message: '', stop: false, ask: null });
+      assert.strictEqual(none.style.display, 'block', label + 'another attempt\'s update is ignored');
+      none.onclick();
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(s.sent[s.sent.length - 1])), { type: 'scc_row_none', attempt_id: 'att-1' },
+        label + 'None names the attempt only');
+      assert(none.disabled, label + 'None is sent once');
     }
 
     // SCC mode with no rows is the plain card

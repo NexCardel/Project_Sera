@@ -32,9 +32,10 @@ for (const b of BUILDS) {
     for (const g of ['SERA_DEBUG', 'SMTI_DEBUG']) {
       if (body.includes(g)) assert(body.includes(`const ${g}`), `${b}: ${name} uses ${g} without declaring it`);
     }
-    for (const g of ['_passwordStore', 'scaCoordinator', 'sendToDesktop', 'ws.']) {
+    for (const g of ['_passwordStore', 'scaCoordinator', 'sendToDesktop']) {
       assert(!body.includes(g), `${b}: ${name} uses background-only ${g}`);
     }
+    assert(!/(^|[^\w$])ws\./.test(body), `${b}: ${name} uses background-only ws.`);   // not e.g. sccRows.set
   }
   ok(`${b}: injected page functions use no background-only globals`);
 

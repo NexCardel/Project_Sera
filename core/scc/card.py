@@ -22,7 +22,7 @@ SAVED_ROW_LABEL = "Saved password"
 REPEAT_COPY_S = 2.0          # the clipboard fires dataChanged more than once per copy
 
 OpenCard = Callable[[dict, str, list, str, Optional[int], str], bool]   # service, pan, rows, title, client_id, attempt_id
-UpdateCard = Callable[[str, list, Optional[str], str, bool], Any]      # attempt_id, failed labels, next label, message, stop
+UpdateCard = Callable[..., Any]      # attempt_id, failed labels, next label, message, stop[, ask=labels]
 
 
 class SccCard:
@@ -33,6 +33,7 @@ class SccCard:
                  on_closed: Optional[Callable[[Attempt], Any]] = None,
                  update_card: Optional[UpdateCard] = None,
                  on_copy: Optional[Callable[[Attempt, str], Any]] = None,
+                 on_none: Optional[Callable[[Attempt], Any]] = None,
                  echo: Callable[[str], Any] = print, clock: Callable[[], float] = time.monotonic) -> None:
         self._db = db
         self._open_card = open_card
@@ -43,6 +44,7 @@ class SccCard:
         self._on_closed = on_closed
         self._update_card = update_card
         self._on_copy = on_copy          # step 4: a copy opens SCC-U's read window for the attempt's session
+        self._on_none = on_none          # step 5: staff answered "None - I typed my own" (nothing is saved)
         self._echo = echo
         self._now = clock
         self._lock = threading.Lock()
@@ -50,6 +52,7 @@ class SccCard:
         self._rows: Dict[str, List[Tuple[str, str]]] = {}     # attempt id -> [(label, text)]
         self._last_copy: Dict[str, Tuple[str, float]] = {}    # attempt id -> (label, time)
         self._failed: Dict[str, List[str]] = {}               # attempt id -> labels the portal refused (x)
+        self._asking: Dict[str, List[str]] = {}               # attempt id -> rows the card asks about (step 5)
 
     # ── AttemptOpener callbacks (SCC-U's thread) ─────────────────────────────────
     def open(self, att: Attempt) -> bool:
@@ -86,6 +89,7 @@ class SccCard:
             self._rows.pop(att.attempt_id, None)
             self._last_copy.pop(att.attempt_id, None)
             self._failed.pop(att.attempt_id, None)
+            self._asking.pop(att.attempt_id, None)
         if known is None:
             return
         if self._release and att.client_id is not None:
@@ -161,24 +165,73 @@ class SccCard:
             marks = list(self._failed.get(att.attempt_id, []))
         self._send_update(att.attempt_id, marks, None, message, True)
 
-    def _send_update(self, attempt_id: str, failed: list, nxt: Optional[str], message: str, stop: bool) -> None:
+    def ask_which(self, att: Attempt, candidates: List[str], message: str) -> bool:
+        """Step 5: the login worked but the copies don't say which row. The card highlights
+        `candidates` (none when nothing was copied) and offers "None - I typed my own"; staff answer
+        with "This one worked" on a row (row_worked) or that button (none_typed). Returns whether it asked."""
+        with self._lock:
+            rows = [lb for lb, _ in self._rows.get(att.attempt_id, [])]
+            if not rows:
+                return False
+            failed = self._failed.get(att.attempt_id, [])
+            ask = [lb for lb in candidates if lb in rows and lb not in failed]
+            self._asking[att.attempt_id] = ask
+            marks = list(failed)
+        self._send_update(att.attempt_id, marks, None, message, False, ask)
+        return True
+
+    def asking(self, attempt_id: str) -> Optional[List[str]]:
+        """The rows the card is asking about, or None when it is not asking."""
+        with self._lock:
+            ask = self._asking.get(attempt_id)
+            return list(ask) if ask is not None else None
+
+    def _send_update(self, attempt_id: str, failed: list, nxt: Optional[str], message: str, stop: bool,
+                     ask: Optional[List[str]] = None) -> None:
         if not self._update_card:
             return
         try:
-            self._update_card(attempt_id, failed, nxt, message, stop)
+            if ask is None:
+                self._update_card(attempt_id, failed, nxt, message, stop)
+            else:
+                self._update_card(attempt_id, failed, nxt, message, stop, ask=ask)
         except Exception as e:
             self._echo(f"[SCC] Card update failed: {type(e).__name__}")
+
+    # ── Crediting a row (step 5) ─────────────────────────────────────────────────
+    def credit(self, att: Attempt, row_label: str) -> bool:
+        """Credit `row_label` with the login: "worked: <label>" in the ledger, then on_worked (the save,
+        W5-6). Only an open attempt's own row counts, and never a row the portal refused (x) in this
+        attempt. Used by step 5's automatic pick and by the "This one worked" button."""
+        with self._lock:
+            if self._attempts.get(att.attempt_id) is not att \
+                    or row_label not in [lb for lb, _ in self._rows.get(att.attempt_id, [])] \
+                    or row_label in self._failed.get(att.attempt_id, []):
+                return False
+            self._asking.pop(att.attempt_id, None)
+            att.ledger.append(f"worked: {row_label}")
+        if self._on_worked:
+            self._on_worked(att, row_label)
+        return True
 
     # ── Messages from the card (Qt thread) ───────────────────────────────────────
     def row_worked(self, attempt_id: str, row_label: str) -> Optional[Attempt]:
         """Staff pressed "This one worked" on a row. Only an open attempt and one of its own rows count."""
         with self._lock:
             att = self._attempts.get(attempt_id)
-            if att is None or row_label not in [lb for lb, _ in self._rows.get(attempt_id, [])]:
+        if att is None or not self.credit(att, row_label):
+            return None
+        return att
+
+    def none_typed(self, attempt_id: str) -> Optional[Attempt]:
+        """Staff answered "None - I typed my own": nothing is credited or saved; on_none ends the attempt."""
+        with self._lock:
+            att = self._attempts.get(attempt_id)
+            if att is None or self._asking.pop(attempt_id, None) is None:
                 return None
-            att.ledger.append(f"worked: {row_label}")
-        if self._on_worked:
-            self._on_worked(att, row_label)
+            att.ledger.append("typed own")
+        if self._on_none:
+            self._on_none(att)
         return att
 
     def card_closed(self, attempt_id: str) -> Optional[Attempt]:

@@ -17,7 +17,7 @@ W5-1,5,"Part G frame: core/scc host, _hand_to_scc hook, setting",Done,claude-opu
 W5-2,5,"Part G steps 1-2, scc_rules.json and its loader",Done,claude-sonnet-5-5,1,b54fbe7,"scc_rules.json + loader (self-tests, refuses failing rules), AttemptOpener steps 1-2 (D3 Yes); wording unconfirmed except header; not wired to router yet; 45 new tests pass",2026-09-29 13:49
 W5-3,5,"Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop",Done,claude-sonnet-5-5,1,efd4537,"SCC card fed by desktop (core/scc/card.py, ws_bridge scc_row_worked), both extension builds render given combos with This one worked, ledger by label, PAN copy suppressed; tests pass, sgt_replay diff no changes",2026-09-29 14:15
 W5-4,5,Part G step 4: the outcome reader,Done,claude-opus-5-5,2,09e3a2b,Outcome reader core/scc/outcome.py: worked/wrong_password/locked/neutral/no_conclusion from scc_rules.json; card x+next-row marks; both builds render marks. tests/test_scc_outcome.py 22 pass.,2026-09-29 19:49
-W5-5,5,Part G step 5: which password worked,Not started,claude-opus-5-5,0,,,
+W5-5,5,Part G step 5: which password worked,In progress,claude-opus-5-5,1,,,2026-09-29 19:50
 W5-6,5,Part G step 6: the guarded save,Not started,gemini-3.8-flash-high,0,,,
 W5-7,5,Part G step 7: close-out and counts,Not started,gemini-3.8-flash-high,0,,,
 W5-8,5,Part G: Client Detail opens the SCC card,Not started,gemini-3.8-flash-high,0,,,

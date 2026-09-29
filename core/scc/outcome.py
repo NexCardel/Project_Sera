@@ -95,6 +95,14 @@ class OutcomeReader:
             st = self._states.get(attempt_id)
             return list(st.failed) if st else []
 
+    def copied_since_refusal(self, att: Attempt) -> List[str]:
+        """Row labels copied since the last wrong-password message (all copies when none came yet),
+        in ledger order, repeats kept. Step 5 picks the credited row from these."""
+        with self._lock:
+            st = self._states.get(att.attempt_id)
+            start = st.consumed if st else 0
+        return [e[len("copied: "):] for e in list(att.ledger)[start:] if e.startswith("copied: ")]
+
     # ── Handler (SCC-U's thread) ─────────────────────────────────────────────────
     def observe(self, obs: Any, hwnd: int, ctx: Any = None) -> Optional[str]:
         """Returns what it concluded, for tests: worked / wrong_password / wrong_password_typed /

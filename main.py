@@ -565,6 +565,7 @@ class SeraApp:
         self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
         self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
         self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
+        self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -1083,7 +1084,7 @@ class SeraApp:
         ledger reads the clipboard through clipboard_watch; each copy opens the host's read window."""
         import automation
         import clipboard_watch
-        from core.scc import AttemptOpener, OutcomeReader, SccCard, db_client_names, db_lookup
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, WhichOne, db_client_names, db_lookup
         opener = AttemptOpener(db_lookup(self.db), on_open=lambda att: self._scc_card.open(att),
                                on_end=lambda att, reason: self._scc_card.end(att, reason))
         self._scc_opener = opener
@@ -1100,8 +1101,12 @@ class SeraApp:
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
-            update_card=automation.update_scc_card, on_copy=read_harder)
-        self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db))
+            update_card=automation.update_scc_card, on_copy=read_harder,
+            on_none=lambda att: opener.end(att.hwnd, "typed own"))
+        # Step 5: which row gets the login's credit (W5-6 saves it through on_worked).
+        which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att))
+        self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db),
+                                          on_outcome=which.on_outcome)
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
@@ -1116,6 +1121,11 @@ class SeraApp:
         card = getattr(self, "_scc_card", None)
         if card is not None:
             card.card_closed(msg.get("attempt_id"))
+
+    def _handle_scc_row_none(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.none_typed(msg.get("attempt_id"))
 
     def _handle_scc_password_verified(self, msg: dict):
         """Persists the verified password from SCC link mutation to master.db."""
