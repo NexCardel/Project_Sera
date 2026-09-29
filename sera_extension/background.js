@@ -517,32 +517,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     } catch (_) {}
   }
 
-  // Auto-click Continue/Login button after password fill
-  function autoClickContinue() {
-    const btnSelectors = [
-      "button[type='submit']",
-      "button.mat-primary",
-      "button.mat-raised-button",
-      "button.btn-primary",
-      "#loginButton",
-      "button:not([disabled])"
-    ];
-    for (const sel of btnSelectors) {
-      try {
-        const btns = document.querySelectorAll(sel);
-        for (const btn of btns) {
-          const text = (btn.textContent || '').trim().toLowerCase();
-          if (isVisible(btn) && (text.includes('continue') || text.includes('login') || text.includes('sign in') || text.includes('submit'))) {
-            if (SERA_DEBUG) console.log("Sera: Auto-clicking Continue/Login button:", text);
-            setTimeout(() => btn.click(), 300);
-            return true;
-          }
-        }
-      } catch (e) {}
-    }
-    return false;
-  }
-
   let panDone = false;
   let passDone = false;
 
@@ -665,11 +639,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
         if (SERA_DEBUG) console.log("Sera: Password filled");
-
-        // Auto-click Continue/Login after a delay for Angular to process
-        setTimeout(() => {
-          autoClickContinue();
-        }, 600);
 
         clearInterval(passInterval);
         passDone = true;

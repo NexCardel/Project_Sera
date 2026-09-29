@@ -1,2 +1,3 @@
 Q,WP,Question,Options,Default,Answer,By,Asked,Answered
 1,W2-2,"When Sera opens a portal login, should it reuse an already open tab of that portal?",Reuse only a tab showing the login page | Always open a new tab,Reuse only a tab showing the login page,Reuse only a tab showing the login page,user,2026-09-29 12:59,2026-09-29 12:59
+2,W3-1,Fast Autofill clicks the portal's Continue/Login button after filling. Keep that?,Keep the click | Stop after filling,Keep the click,Stop after filling,user,2026-09-29 13:02,2026-09-29 13:02
