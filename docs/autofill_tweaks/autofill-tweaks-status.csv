@@ -8,7 +8,7 @@ W2-1,2,Part B1: passwords off disk in the extension (#2),Done,claude-sonnet-5,1,
 W2-2,2,"Part B2: one openPortalTab helper (#3, #4)",Done,claude-sonnet-5-5,2,61ddae6,"openPortalTab helper in both builds; reuse only login-page tabs (D5); listener before navigate, inject once, no reload, 30 s cleanup; JS test added",2026-09-29 13:01
 W3-1,3,Part C: Fast Autofill on the helper; decision D8,Done,claude-haiku-4-5-20251001,1,7a54db4,Removed auto-click; D8 user decision. Tests pass.,2026-09-29 13:04
 W3-2,3,"Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",Done,claude-sonnet-5-5,1,02c0b88,"Part D: shared sera_dom.js visibility/field rules, Username never types into password box, re-inject only in SMTI's own tab with a visible login form, SCA disarm/sca_fill_completed removed; node fake-DOM tests pass",2026-09-29 13:09
-W3-3,3,"Part E: MECP card (#5, #16) and clipboard clearing (B3)",In progress,claude-sonnet-5-5,1,,,2026-09-29 13:11
+W3-3,3,"Part E: MECP card (#5, #16) and clipboard clearing (B3)",Done,claude-sonnet-5-5,1,4719072,"MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_seconds; tests added",2026-09-29 13:18
 W4-1,4,"Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15)",Not started,claude-opus-5-5,0,,,
 W4-2,4,"Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14)",Not started,gemini-3.8-flash-high,0,,,
 W4-3,4,Part F: SCA scope (decision D7),Not started,gemini-3.8-flash-high,0,,,
