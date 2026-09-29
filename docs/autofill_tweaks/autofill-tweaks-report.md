@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 20:13)
+# Autofill tweaks — report (2026-09-29 20:17)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 3 |
+| Not started | 2 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 22 |
+| Done | 23 |
 | Blocked | 0 |
 
-Runs: 28   output tokens: 656331   API-equivalent cost: $47.62
+Runs: 29   output tokens: 679926   API-equivalent cost: $49.44
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -36,7 +36,7 @@ Runs: 28   output tokens: 656331   API-equivalent cost: $47.62
 | W5-6 | Done | sonnet | ddc0369 | Part G step 6: the guarded save | core/scc/save.py guarded save; D2 replace automatically, D4 add automatically; 11 new tests pass |
 | W5-7 | Done | haiku | 0401e21 | Part G step 7: close-out and counts | core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pas |
 | W5-8 | Done | sonnet | 5de4f6d | Part G: Client Detail opens the SCC card | Client Detail MECP opens the SCC card: manual attempt (adopted by SGT if it sees the PAN) or SGT's attempt; open_tab flag in both extension builds; works with S |
-| W5-9 | Not started | sonnet |  | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) |  |
+| W5-9 | Done | sonnet | 9e4bac0 | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) | Extension SCC tracking (login.js watchers, sccActiveAttempt, tab observer, SCC_LOGIN_DETECTED, registered_pans/scc_settings sync) and desktop scc_password_verif |
 | W6-1 | Not started | haiku |  | Docs and extension version |  |
 | W6-R | Not started | opus |  | Final review |  |
 
@@ -74,3 +74,4 @@ Runs: 28   output tokens: 656331   API-equivalent cost: $47.62
 - #8 (W5-2) Run tools/vsdc_uia_probe.py once on ONE real Income Tax wrong-password attempt (a single mistyped password, never repeated, NEVER to a lock-out) on the password page, and once on the OTP / secure-access page if you meet it. Then compare the wording with core/scc/scc_rules.json: rules marked unconfirmed (wrong password, locked, OTP/secure access, forgot/reset) should be replaced with the real text and lose the flag. — Not run
 - #9 (W5-3) On the Income Tax password page the MECP SCC card appears in the open tab with Sera's combinations — Not run
 - #10 (W5-8) Real browser: press MECP in Client Detail on an unverified Income Tax client with the login page closed, then open - the SCC card (PAN, combinations, Saved password) appears on the login page; copy a combo, log in yourself, press 'This one worked' - the password is saved. Repeat with Settings -> SCC 'Detect login automatically' Off. Never test a lock-out on a real account. — Not run
+- #11 (W5-9) Reload both extensions in a real browser: Client Detail MECP for an unverified Income Tax client still opens the SCC card, and nothing pops up on the portal by itself when a PAN password page is opened. — Not run
