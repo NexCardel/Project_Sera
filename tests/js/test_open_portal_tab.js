@@ -95,6 +95,16 @@ for (const build of ['sera_extension', 'sera_extension_firefox']) {
     e.ctx.openPortalTab(LOGIN, () => {});
     assert(e.log.includes('update:nav') && !e.log.includes('create'), build + ': password-box tab reused');
   }
+  // a non-portal tab whose URL only mentions the portal host: never probed, never navigated
+  {
+    const e = makeEnv(build, [
+      { id: 9, windowId: 1, url: 'https://search.test/?q=portal.example.test', status: 'complete' },
+      { id: 10, windowId: 1, url: 'https://portal.example.test.evil.test/login', status: 'complete' },
+    ], [9, 10]);
+    e.ctx.openPortalTab(LOGIN, () => {});
+    assert(!e.log.some(l => l.startsWith('probe:')), build + ': URL-substring tabs not probed');
+    assert(e.log.includes('create') && !e.log.includes('update:nav'), build + ': new tab opened instead');
+  }
   // listener removed after 30 s when the page never finishes
   {
     const e = makeEnv(build, [], []);

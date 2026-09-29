@@ -183,7 +183,7 @@ function connectWS() {
       if (SMTI_DEBUG) console.warn('[SMTI DEBUG] onmessage: non-JSON payload:', event.data);
       return;
     }
-    if (SMTI_DEBUG) console.log('[SMTI DEBUG] onmessage: received', message.type, message.mode ? `(mode=${message.mode})` : '', message);
+    if (SMTI_DEBUG) console.log('[SMTI DEBUG] onmessage: received', message.type, message.mode ? `(mode=${message.mode})` : '');
     handleDesktopMessage(message);
   };
   socket.onerror = (event) => {
@@ -237,7 +237,8 @@ function waitForConnection(timeoutMs = 5000) {
 
 
 function handleDesktopMessage(message) {
-  if (SERA_DEBUG) console.log("Received from Sera desktop:", message);
+  // Never log the message itself: autofill / SMTI / MECP messages carry a plain-text password.
+  if (SERA_DEBUG) console.log("Received from Sera desktop:", message.type);
 
   // A reply to a message this background page itself sent (a generic ack, or a settings_response).
   if ((message.type === '_ack' || message.type === 'settings_response') && message._id && _pendingWsRequests.has(message._id)) {
@@ -443,6 +444,17 @@ async function registerScaScripts(domains) {
   if (key === _scaScopeKey) return;
   const scripting = chrome.scripting;
   if (scripting && scripting.registerContentScripts) {
+    // Registrations persist across service-worker restarts: keep an identical one rather than
+    // leaving a moment with no SCA script on every wake-up.
+    if (_scaScopeKey === null && scripting.getRegisteredContentScripts) {
+      try {
+        const [cur] = await scripting.getRegisteredContentScripts({ ids: [SCA_SCRIPT_ID] });
+        if (cur && (cur.matches || []).join('|') === key && (cur.js || []).join('|') === SCA_SCRIPT_FILES.join('|')) {
+          _scaScopeKey = key;
+          return;
+        }
+      } catch (_) {}
+    }
     try { await scripting.unregisterContentScripts({ ids: [SCA_SCRIPT_ID] }); } catch (_) {}
     await scripting.registerContentScripts([{
       id: SCA_SCRIPT_ID, matches, js: SCA_SCRIPT_FILES, runAt: 'document_end', allFrames: true,
@@ -542,6 +554,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
+  // Runs in the page: the background's SERA_DEBUG does not exist here (login.js, which also
+  // declares one, runs only on the SCA portals since D7).
+  const SERA_DEBUG = false;
   if (window.__seraFillActive) return; // prevent duplicate runs
   // sera_dom.js (shared visibility rule) is injected just before this function; without it, fill nothing.
   if (!window.__seraDom) return;
@@ -819,10 +834,14 @@ function openPortalTab(url, onReady) {
   };
 
   chrome.tabs.query({}, tabs => {
+    // Match on the tab's own host (or a subdomain of it), never a substring of its URL: a search
+    // result or redirect link that merely mentions the portal is not a portal tab.
+    const onHost = (h, base) => h === base || h.endsWith('.' + base);
     const candidates = (tabs || []).filter(t => {
-      if (!t.url) return false;
-      if (t.url.includes(hostname)) return true;
-      return hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in');
+      let h;
+      try { h = new URL(t.url).hostname; } catch (_) { return false; }
+      if (onHost(h, hostname)) return true;
+      return onHost(hostname, 'tdscpc.gov.in') && onHost(h, 'tdscpc.gov.in');
     });
     _findLoginTab(candidates, url, existing => {
       if (existing) { run(existing, false); return; }
@@ -1621,7 +1640,8 @@ function maybeReinjectManualAssist(tabId) {
 
 function handleManualAssistTab(message) {
   try { new URL(message.url); } catch (_) { return; }
-  _passwordStore.remove(['mecpPayload']);
+  // A previous client's SMTI tab must not be re-injected with this client's payload.
+  _passwordStore.remove(['mecpPayload', 'smtiTabIds']);
   _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
@@ -1672,7 +1692,7 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg);
+  if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg.type);
   if (msg.type === "MANUAL_ASSIST_CLEAR" || msg.type === "MANUAL_ASSIST_DONE" || msg.type === "MANUAL_ASSIST_DISMISSED") {
     _passwordStore.remove(['manualAssistPayload', 'smtiTabIds']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'smti');
@@ -1712,7 +1732,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           _rememberSmtiTab(msg.tabId);
           injectManualAssist(msg.tabId, payload);
         } else if (SMTI_DEBUG) {
-          console.warn('[SMTI DEBUG] TRIGGER_MANUAL_ASSIST_FOR_TAB: no active manualAssistPayload/mecpPayload in storage for this tab', data);
+          console.warn('[SMTI DEBUG] TRIGGER_MANUAL_ASSIST_FOR_TAB: no active manualAssistPayload/mecpPayload in storage for this tab');
         }
       });
     }

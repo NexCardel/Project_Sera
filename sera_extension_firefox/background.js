@@ -1,3 +1,6 @@
+// Production debug gate — set to true only during local development
+const SERA_DEBUG = false;
+
 // ---------------- WebSocket bridge to the desktop app (ui/ws_bridge.py) ----------------
 // 2026-09-22: replaces Firefox Native Messaging (a registry key + host manifest that routinely
 // failed to register on a fresh PC) and the direct HTTP fallback to port 49152 (which sat
@@ -164,6 +167,7 @@ function connectWS() {
     // Notify any callers awaiting connection
     _wsOpenCallbacks.forEach(cb => { try { cb(); } catch (_) {} });
     _wsOpenCallbacks.length = 0;
+    syncSettingsFromDesktop();
   };
   socket.onmessage = (event) => {
     let message;
@@ -214,14 +218,15 @@ function waitForConnection(timeoutMs = 5000) {
 }
 
 function handleDesktopMessage(message) {
-  console.log("Received from Sera desktop:", message);
+  // Never log the message itself: autofill / SMTI / MECP messages carry a plain-text password.
+  if (SERA_DEBUG) console.log("Received from Sera desktop:", message.type);
 
-  // A reply to a message this background page itself sent (a generic ack).
-  if (message.type === '_ack' && message._id && _pendingWsRequests.has(message._id)) {
+  // A reply to a message this background page itself sent (a generic ack, or a settings_response).
+  if ((message.type === '_ack' || message.type === 'settings_response') && message._id && _pendingWsRequests.has(message._id)) {
     const pending = _pendingWsRequests.get(message._id);
     clearTimeout(pending.timer);
     _pendingWsRequests.delete(message._id);
-    pending.resolve(true);
+    pending.resolve(message.type === 'settings_response' ? message : true);
     return;
   }
 
@@ -248,6 +253,43 @@ function handleDesktopMessage(message) {
       storageObj.allowedDomains = allowedDomains;
     }
     chrome.storage.local.set(storageObj);
+  }
+}
+
+async function requestSettingsOverWS() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return null;
+  return new Promise((resolve) => {
+    const id = _wsMessageId();
+    try {
+      ws.send(JSON.stringify({ type: 'request_settings', _id: id }));
+    } catch (_) {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => { _pendingWsRequests.delete(id); resolve(null); }, 4000);
+    _pendingWsRequests.set(id, { resolve, timer });
+  });
+}
+
+// As in Chrome: pull the settings once the socket opens, so the SCA scope (allowedDomains), SCA
+// switches and the clipboard-clear seconds do not wait for the next update_settings push.
+async function syncSettingsFromDesktop() {
+  try {
+    const data = await requestSettingsOverWS();
+    if (!data || data.status !== 'ok') return null;
+    const storageObj = {};
+    if (Array.isArray(data.allowed_domains) && data.allowed_domains.length > 0) {
+      storageObj.allowedDomains = data.allowed_domains;
+    }
+    if (data.sca_mode) storageObj.scaMode = data.sca_mode;
+    if (data.sca_enabled !== undefined) storageObj.scaEnabled = !!data.sca_enabled;
+    if (Number(data.clipboard_clear_seconds) > 0) {
+      storageObj.clipboardClearSeconds = Number(data.clipboard_clear_seconds);
+    }
+    if (Object.keys(storageObj).length > 0) await chrome.storage.local.set(storageObj);
+    return storageObj;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -323,6 +365,17 @@ async function registerScaScripts(domains) {
   if (key === _scaScopeKey) return;
   const scripting = chrome.scripting;
   if (scripting && scripting.registerContentScripts) {
+    // Registrations persist across service-worker restarts: keep an identical one rather than
+    // leaving a moment with no SCA script on every wake-up.
+    if (_scaScopeKey === null && scripting.getRegisteredContentScripts) {
+      try {
+        const [cur] = await scripting.getRegisteredContentScripts({ ids: [SCA_SCRIPT_ID] });
+        if (cur && (cur.matches || []).join('|') === key && (cur.js || []).join('|') === SCA_SCRIPT_FILES.join('|')) {
+          _scaScopeKey = key;
+          return;
+        }
+      } catch (_) {}
+    }
     try { await scripting.unregisterContentScripts({ ids: [SCA_SCRIPT_ID] }); } catch (_) {}
     await scripting.registerContentScripts([{
       id: SCA_SCRIPT_ID, matches, js: SCA_SCRIPT_FILES, runAt: 'document_end', allFrames: true,
@@ -625,10 +678,14 @@ function openPortalTab(url, onReady) {
   };
 
   chrome.tabs.query({}, tabs => {
+    // Match on the tab's own host (or a subdomain of it), never a substring of its URL: a search
+    // result or redirect link that merely mentions the portal is not a portal tab.
+    const onHost = (h, base) => h === base || h.endsWith('.' + base);
     const candidates = (tabs || []).filter(t => {
-      if (!t.url) return false;
-      if (t.url.includes(hostname)) return true;
-      return hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in');
+      let h;
+      try { h = new URL(t.url).hostname; } catch (_) { return false; }
+      if (onHost(h, hostname)) return true;
+      return onHost(hostname, 'tdscpc.gov.in') && onHost(h, 'tdscpc.gov.in');
     });
     _findLoginTab(candidates, url, existing => {
       if (existing) { run(existing, false); return; }
@@ -647,19 +704,33 @@ function handleAutofillTab(message) {
 }
 
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, clearSeconds) {
+  try {
+    if (window.self !== window.top) return;
+  } catch (_) {
+    return;
+  }
+
   // sera_dom.js (shared visibility + field rules) is injected just before this function.
   const seraDom = window.__seraDom;
   if (!seraDom) return;
 
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
-  if (old) old.remove();
+  if (old) {
+    const curCid = old.getAttribute("data-client-id");
+    if (curCid === String(userid)) {
+      // Widget is already active and displayed on this page
+      return;
+    }
+    old.remove();
+  }
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
   const duration = expiresMs || 30000;
   const host = document.createElement("div");
   host.id = hostId;
+  host.setAttribute("data-client-id", String(userid));
   host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
 
   const shadow = host.attachShadow({ mode: "closed" });
@@ -875,10 +946,104 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   badge.className = "badge";
   badge.innerHTML = "⚡ Sera Assist";
 
+  let dismiss = () => {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+        chrome.storage.session.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+    } catch (_) {}
+    card.style.transform = "translateX(120%)";
+    card.style.opacity = "0";
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+  };
+
+  function setBtn(btn, state, text) {
+    if (!btn) return;
+    if (state === "done") {
+      btn.className = "btn done";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    } else if (state === "warn") {
+      btn.className = "btn";
+      btn.style.borderColor = "#E8A040";
+      btn.style.color = "#F5C97A";
+    } else {
+      btn.className = "btn primary";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    }
+    btn.innerHTML = text;
+  }
+
+  // Countdown timer bar
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+
+  let timerTimeout = null;
+  let timerStartTime = 0;
+  let remainingMs = duration;
+  let isTimerPaused = false;
+
+  function startCountdown() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerStartTime = Date.now();
+    isTimerPaused = false;
+    timerBar.style.transition = `transform ${remainingMs}ms linear`;
+    timerBar.style.transform = "scaleX(0)";
+    timerTimeout = setTimeout(() => {
+      if (host.isConnected) dismiss();
+    }, remainingMs);
+  }
+
+  function pauseTimer() {
+    if (isTimerPaused || !timerTimeout) return;
+    isTimerPaused = true;
+    clearTimeout(timerTimeout);
+    timerTimeout = null;
+    const elapsed = Date.now() - timerStartTime;
+    remainingMs = Math.max(0, remainingMs - elapsed);
+    try {
+      const computed = window.getComputedStyle(timerBar);
+      const curMatrix = computed.transform;
+      timerBar.style.transition = "none";
+      timerBar.style.transform = curMatrix;
+    } catch (_) {}
+  }
+
+  function resumeTimer() {
+    if (!isTimerPaused) return;
+    if (remainingMs <= 500) {
+      dismiss();
+      return;
+    }
+    startCountdown();
+  }
+
+  function resetTimer() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    remainingMs = duration;
+    isTimerPaused = false;
+    timerBar.style.transition = "none";
+    timerBar.style.transform = "scaleX(1)";
+    void timerBar.offsetWidth; // force reflow
+    startCountdown();
+  }
+
+  card.addEventListener("mouseenter", pauseTimer);
+  card.addEventListener("mouseleave", resumeTimer);
+
   const closeBtn = document.createElement("button");
   closeBtn.className = "close-btn";
   closeBtn.innerHTML = "✕";
   closeBtn.title = "Dismiss";
+  closeBtn.onclick = dismiss;
 
   header.append(badge, closeBtn);
 
@@ -887,6 +1052,20 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   title.className = "client-title";
   title.textContent = clientName || "Client Profile";
 
+  const userFallbacks = [
+    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
+    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
+    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
+    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
+    "input[name='username']", "input[name='user']"
+  ];
+
+  const passFallbacks = [
+    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
+    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
+    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
+  ];
+
   // Action Buttons
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -894,19 +1073,33 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
   uidBtn.innerHTML = "👤  Username";
+  uidBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(userid, "user", usernameSelector, userFallbacks, passwordSelector);
+    if (result === "filled") {
+      setBtn(uidBtn, "done", "✓  Username Injected");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
+    } else {
+      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
+    }
+  };
 
   const passBtn = document.createElement("button");
   passBtn.className = "btn primary";
   passBtn.innerHTML = "🔑  Password";
+  passBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(password, "pass", passwordSelector, passFallbacks);
+    if (result === "filled") {
+      dismiss();
+    } else {
+      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
+      setTimeout(dismiss, 1200);
+    }
+  };
 
   actions.append(uidBtn, passBtn);
-
-  // Countdown timer bar
-  const timerContainer = document.createElement("div");
-  timerContainer.className = "timer-container";
-  const timerBar = document.createElement("div");
-  timerBar.className = "timer-bar";
-  timerContainer.appendChild(timerBar);
 
   card.append(header, title, actions, timerContainer);
   shadow.appendChild(card);
@@ -916,8 +1109,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   setTimeout(() => {
     card.style.transform = "translateX(0)";
     card.style.opacity = "1";
-    timerBar.style.transitionDuration = `${duration}ms`;
-    timerBar.style.transform = "scaleX(0)";
+    startCountdown();
   }, 30);
 
   // kind is "user" or "pass"; otherSelector is the other field's configured selector.
@@ -961,25 +1153,80 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return false;
   }
 
-  function fill(el, value) {
+  function fill(el, value, refind) {
     if (!el || !value) return false;
-    try {
-      if (el.disabled) { el.removeAttribute("disabled"); el.disabled = false; }
-      if (el.readOnly) { el.removeAttribute("readonly"); el.readOnly = false; }
-      el.focus();
-    } catch (_) {}
-    try {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      setter.call(el, value);
-    } catch (_) {
-      el.value = value;
-    }
-    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    const applyValue = (targetEl, val) => {
+      if (!targetEl) return false;
+      try {
+        if (targetEl.disabled) { targetEl.removeAttribute("disabled"); targetEl.disabled = false; }
+        if (targetEl.readOnly) { targetEl.removeAttribute("readonly"); targetEl.readOnly = false; }
+        targetEl.focus();
+      } catch (_) {}
+
+      let replaced = false;
+      // 1. Native browser replacement via execCommand: cleanly replaces any existing combo
+      try {
+        if (typeof targetEl.select === "function") {
+          targetEl.select();
+        }
+        replaced = document.execCommand("insertText", false, val);
+      } catch (_) {}
+
+      // 2. Direct descriptor setter fallback if execCommand was not supported or didn't update value
+      if (!replaced || targetEl.value !== val) {
+        try {
+          const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(targetEl);
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          if (desc && desc.set) {
+            desc.set.call(targetEl, val);
+          } else {
+            targetEl.value = val;
+          }
+        } catch (_) {
+          targetEl.value = val;
+        }
+
+        try {
+          targetEl.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: val }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (_) {}
+      }
+
+      // 3. Keep cursor cleanly at the end without leaving text highlighted
+      try {
+        const len = (val || "").length;
+        if (typeof targetEl.setSelectionRange === "function") {
+          targetEl.setSelectionRange(len, len);
+        }
+      } catch (_) {}
+
+      return true;
+    };
+
+    applyValue(el, value);
+
+    // Asynchronous re-sync: guards against Angular change detection resets
+    // (e.g. when mat-checkbox is clicked or an invalid attempt is dismissed and Angular enables the control on the next tick)
+    setTimeout(() => {
+      try {
+        const freshEl = (refind && refind()) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 60);
+
+    setTimeout(() => {
+      try {
+        const freshEl = (refind && refind()) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 180);
+
     return true;
   }
 
@@ -1004,13 +1251,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 
   // A Username with no visible non-password input is copied, never typed into the password box.
   function smartFill(value, kind, selector, fallbacks, otherSelector) {
+    const refind = selector ? () => findField(kind, selector, fallbacks, otherSelector) : null;
     const el = findField(kind, selector, fallbacks, otherSelector);
-    if (el && fill(el, value)) return "filled";
+    if (el && fill(el, value, refind)) return "filled";
 
     const fltEl = getFlutterActiveInput();
     if (fltEl) {
       if (execInsert(fltEl, value)) return "filled";
-      if (fill(fltEl, value)) return "filled";
+      if (fill(fltEl, value, refind)) return "filled";
     }
 
     const secret = kind === "pass";
@@ -1022,20 +1270,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     copyText(value, secret);
     return "copied";
   }
-
-  const userFallbacks = [
-    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
-    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
-    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
-    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
-    "input[name='username']", "input[name='user']"
-  ];
-
-  const passFallbacks = [
-    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
-    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
-    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
-  ];
 
   const isFlutter = isFlutterPage();
 
@@ -1108,6 +1342,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
           flutterFillStep = 2;
           updateFlutterUI(2);
           stopFlutterObserver();
+          try {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+              chrome.storage.session.remove(['manualAssistPayload']);
+            }
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+              chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+            }
+          } catch (_) {}
           setTimeout(dismiss, 400);
         }
       }
@@ -1144,14 +1386,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   function stopFlutterObserver() {
     if (flutterObserver) { flutterObserver.disconnect(); flutterObserver = null; }
   }
-
-  let dismiss = () => {
-    // As in Chrome: the background clears the payload and this tab's assist lock (B4).
-    try { chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" }); } catch (_) {}
-    card.style.transform = "translateX(120%)";
-    card.style.opacity = "0";
-    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
-  };
 
   if (isFlutter) {
     // Hide buttons on Flutter sites as requested — replace with child-friendly step cards
@@ -1204,53 +1438,12 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     const baseDismiss = dismiss;
     dismiss = () => { stopFlutterObserver(); baseDismiss(); };
   }
-
-  function setBtn(btn, state, text) {
-    if (state === "done") {
-      btn.className = "btn done";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    } else if (state === "warn") {
-      btn.className = "btn";
-      btn.style.borderColor = "#E8A040";
-      btn.style.color = "#F5C97A";
-    } else {
-      btn.className = "btn primary";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    }
-    btn.innerHTML = text;
-  }
-
-  uidBtn.onclick = () => {
-    const result = smartFill(userid, "user", usernameSelector, userFallbacks, passwordSelector);
-    if (result === "filled") {
-      setBtn(uidBtn, "done", "✓  Username Injected");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
-    } else {
-      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
-    }
-  };
-
-  passBtn.onclick = () => {
-    const result = smartFill(password, "pass", passwordSelector, passFallbacks);
-    if (result === "filled") {
-      setBtn(passBtn, "done", "✓  Password Injected");
-      setTimeout(dismiss, 400);
-    } else {
-      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
-      setTimeout(dismiss, 1200);
-    }
-  };
-
-  closeBtn.onclick = dismiss;
-  setTimeout(() => { if (host.isConnected) dismiss(); }, duration);
 }
 
 function handleManualAssistTab(message) {
   try { new URL(message.url); } catch (_) { return; }
-  _passwordStore.remove(['mecpPayload']);
+  // A previous client's SMTI tab must not be re-injected with this client's payload.
+  _passwordStore.remove(['mecpPayload', 'smtiTabIds']);
   _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
@@ -1260,7 +1453,10 @@ function handleManualAssistTab(message) {
   const isFlutterUrl = /tdscpc\.gov\.in|traces\.gov\.in|flutter/i.test(message.url || "");
   const injectDelay = isFlutterUrl ? 3000 : 0;
 
-  openPortalTab(message.url, tabId => setTimeout(() => injectManualAssist(tabId, message), injectDelay));
+  openPortalTab(message.url, tabId => {
+    _rememberSmtiTab(tabId);
+    setTimeout(() => injectManualAssist(tabId, message, true), injectDelay);
+  });
 }
 
 const SERA_DOM_FILE = 'content_scripts/sera_dom.js';
@@ -1283,10 +1479,43 @@ function clipboardClearSeconds() {
   });
 }
 
-function injectManualAssist(tabId, message) {
+// The one tab SMTI opened (or the staff member pressed it in). Only that tab is ever re-injected.
+function _rememberSmtiTab(tabId) {
+  _passwordStore.set({ smtiTabIds: [tabId] });
+}
+
+// After a page load in SMTI's tab: show the widget again only while the payload is live and
+// the page shows a login form (a password box or the configured username field).
+function maybeReinjectManualAssist(tabId) {
+  _passwordStore.get(['manualAssistPayload', 'smtiTabIds'], data => {
+    const p = data.manualAssistPayload;
+    if (!p || !(p.expiresAt > Date.now())) return;
+    if (!Array.isArray(data.smtiTabIds) || !data.smtiTabIds.includes(tabId)) return;
+    setTimeout(() => {
+      injectWithDom({ tabId }, (sel) => window.__seraDom.hasLoginForm(document, sel), [p.username_selector])
+        .then(results => {
+          if (results && results.some(r => r && r.result === true)) injectManualAssist(tabId, p);
+        })
+        .catch(() => {});
+    }, 700);
+  });
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tab.url || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension://')) return;
+  // Show Manual Assist again after a reload (e.g. invalid password) in the tab SMTI opened only.
+  if (changeInfo.status === 'complete') maybeReinjectManualAssist(tabId);
+});
+
+const _lastManualAssistInject = {};
+function injectManualAssist(tabId, message, force = false) {
+  if (!tabId) return;
+  const now = Date.now();
+  if (!force && _lastManualAssistInject[tabId] && (now - _lastManualAssistInject[tabId]) < 1000) return;
+  _lastManualAssistInject[tabId] = now;
   _lockAssistTab(tabId, 'smti');
   clipboardClearSeconds()
-    .then(clearSecs => injectWithDom({ tabId, allFrames: true }, manualAssistWidget,
+    .then(clearSecs => injectWithDom({ tabId }, manualAssistWidget,
       [message.userid, message.password, message.username_selector, message.password_selector,
         message.client_name || message.portal, 30000, clearSecs]))
     .then(() => console.log("Sera: Manual Assist widget injected"))
@@ -1301,9 +1530,9 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  console.log("Sera background: received runtime message:", msg);
+  if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg.type);
   if (msg.type === "MANUAL_ASSIST_CLEAR") {
-    _passwordStore.remove(['manualAssistPayload']);
+    _passwordStore.remove(['manualAssistPayload', 'smtiTabIds']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'smti');
     sendResponse({ ok: true });
     return true;
@@ -1342,6 +1571,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const payload = data.manualAssistPayload;
         if (payload && payload.expiresAt && payload.expiresAt >= Date.now()) {
+          _rememberSmtiTab(msg.tabId);
           injectManualAssist(msg.tabId, payload);
         }
       });

@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:25)
+# Autofill tweaks — report (2026-09-29 13:30)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 13 |
+| Not started | 12 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 12 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 15   output tokens: 325992   API-equivalent cost: $23.13
+Runs: 16   output tokens: 343989   API-equivalent cost: $24.42
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Runs: 15   output tokens: 325992   API-equivalent cost: $23.13
 | W3-3 | Done | sonnet | 4719072 | Part E: MECP card (#5, #16) and clipboard clearing (B3) | MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_second |
 | W4-1 | Done | opus | 1592504 | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) | Per-tab assistTabs lock replaces manualAssistActive (both builds, sca/ identical); clipboard_watch.suppress_client(300s) called by Client Detail MECP/SMTI launc |
 | W4-2 | Done | sonnet | 3b061fc | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) | SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (p |
-| W4-3 | Not started | sonnet |  | Part F: SCA scope (decision D7) |  |
+| W4-3 | Done | sonnet | c169294 | Part F: SCA scope (decision D7) | SCA login.js/sca_adapters.js registered only on approved portal domains via scripting API (D7: portals only); both builds; main.py sends allowed_domains; test_s |
 | W4-R | Not started | opus |  | Review Parts B-F |  |
 | W5-1 | Not started | opus |  | Part G frame: core/scc host, _hand_to_scc hook, setting |  |
 | W5-2 | Not started | sonnet |  | Part G steps 1-2, scc_rules.json and its loader |  |
@@ -52,6 +52,7 @@ Runs: 15   output tokens: 325992   API-equivalent cost: $23.13
 - **W4-1** Where does the per-tab assist lock live and when does it end? → In _passwordStore (storage.session / memory) as tabId->{kind,expiresAt}, with an in-memory mirror; locked on every SMTI/MECP inject (incl. re-inject), cleared on MANUAL_ASSIST_CLEAR / MECP_DISMISSED / MECP_CLOSED for the sender's tab and kind, on tab close, and after 5 min (MV3 service worker can die while a card is open; session storage survives that without touching disk. 5 min matches the payload lifetime as a safety cap.)
 - **W4-1** How does Client Detail reach clipboard_watch to suppress a client? → Module-level clipboard_watch.suppress_client(client_id, seconds=300) / is_suppressed(); the service checks it in _on_clipboard_changed (ClientDetailWindow has no reference to the running ClipboardWatchService; module state needs no new wiring through main.py.)
 - **W4-1** Firefox SMTI widget sent nothing on dismiss; how to clear its lock? → Its dismiss now sends MANUAL_ASSIST_CLEAR like Chrome; Firefox background clears manualAssistPayload and the tab's smti lock (Parity with Chrome; without it the Firefox lock would only end at the 5 min cap.)
+- **W4-3** SCA watches paste and typing to spot a client id. Where should it run? → Only on approved portals (asked as Q4)
 
 ## Checks waiting for you
 
@@ -60,3 +61,4 @@ Runs: 15   output tokens: 325992   API-equivalent cost: $23.13
 - #3 (W3-3) MECP on an already open GST login tab stays on screen (card does not flash away), and after copying User ID and password it closes by itself — Not run
 - #4 (W3-3) In real Chrome and Firefox: copy a password from the MECP card and from SMTI, wait the clipboard-clear seconds, and confirm the clipboard is emptied (and that no clipboard-read permission prompt appears on the portal; the manifests have no clipboardRead permission) — Not run
 - #5 (W4-1) Real browser (Chrome and Firefox), SCA armed: open SMTI or MECP for client A in tab 1 and type A's id there - no SCA fill; in tab 2 on the same portal SCA still fills; close the card (x or timeout) and SCA works again in tab 1. Also: Client Detail > Manual Copy, copy the User ID from the card - desktop log shows 'not arming' for 5 min, another client's id still arms. — Not run
+- #6 (W4-3) Load both extension builds in a real Chrome and Firefox: confirm login.js/SCA runs on gst.gov.in / incometax.gov.in and a configured custom-service host, and does NOT run on an unrelated https site; confirm Autofill/SMTI/MECP still work on a custom service. — Not run
