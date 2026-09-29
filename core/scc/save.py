@@ -2,7 +2,7 @@
 core/scc/save.py - SCC-U step 6: the guarded save
 ==================================================
 Autofill-tweaks blueprint G.2 step 6. The one way a working SCC password reaches master.db (it was
-main._handle_scc_password_verified). Called when the card credits a row: the automatic pick (step 5)
+the extension's scc_password_verified handler, removed in W5-9). Called when the card credits a row: the automatic pick (step 5)
 and the "This one worked" button both come through SccCard.credit -> SccSaver.on_worked.
 
   password equal to the saved one   -> mark "Password verified via SCC" only

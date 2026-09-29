@@ -565,7 +565,6 @@ class SeraApp:
         # own background page may connect - see that module for how the origin is checked.
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
-        self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
         self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
         self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
         self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
@@ -693,7 +692,7 @@ class SeraApp:
             print(f"[main] Error handling extension_settings_updated: {e}")
 
     def _get_extension_settings_payload(self) -> dict:
-        """Packages current services, settings, registered PANs and SCC configuration."""
+        """Packages current services and settings for the extension."""
         try:
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
             sca_mode = self.db.get_setting("sca_action_mode", "autofill")
@@ -701,8 +700,6 @@ class SeraApp:
                 sca_max = int(self.db.get_setting("sca_max_uses", "1"))
             except (ValueError, TypeError):
                 sca_max = 1
-            reg_pans = self.db.get_all_registered_pans()
-            scc_cfg = self.db.get_scc_settings()
             svcs = self.db.get_services()
             try:
                 clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
@@ -717,15 +714,13 @@ class SeraApp:
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,
-                "registered_pans": reg_pans,
-                "scc_settings": scc_cfg,
             }
         except Exception as e:
             print(f"[main] Failed to get extension settings payload: {e}")
             return {"status": "error", "message": str(e)}
 
     def _sync_extension_settings(self):
-        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+        """Pushes current services and settings to the extension."""
         try:
             from automation import update_extension_settings
             payload = self._get_extension_settings_payload()
@@ -735,8 +730,6 @@ class SeraApp:
                     sca_mode=payload.get("sca_mode", "autofill"),
                     allowed_services=payload.get("allowed_services", []),
                     sca_max_uses=payload.get("sca_max_uses", 1),
-                    registered_pans=payload.get("registered_pans", []),
-                    scc_settings=payload.get("scc_settings", {}),
                     clipboard_clear_seconds=payload.get("clipboard_clear_seconds"),
                 )
         except Exception as e:
@@ -1071,13 +1064,6 @@ class SeraApp:
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
 
-            # If payload carried an SCC verified password, ensure client/password is synced/auto-created
-            scc_pwd = msg.get("scc_verified_password") or (msg.get("raw_payload", {}).get("scc_verified_password") if isinstance(msg.get("raw_payload"), dict) else None)
-            if scc_pwd:
-                scc_msg = dict(msg)
-                scc_msg["password"] = scc_pwd
-                self._handle_scc_password_verified(scc_msg)
-
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
@@ -1180,21 +1166,6 @@ class SeraApp:
         card = getattr(self, "_scc_card", None)
         if card is not None:
             card.none_typed(msg.get("attempt_id"))
-
-    def _handle_scc_password_verified(self, msg: dict):
-        """Persists a verified SCC password to master.db (the guarded save, core/scc/save.py)."""
-        from core.scc import save_verified
-        try:
-            result = save_verified(
-                self.db, msg.get("password") or msg.get("scc_verified_password"),
-                pan=msg.get("userid") or msg.get("pan"), client_id=msg.get("client_id"),
-                service_id=msg.get("service_id"), row_label=msg.get("combo_label"),
-                portal=msg.get("portal") or "Income Tax", client_name=msg.get("client_name"),
-                actor=getattr(self, "actor", "Staff"))
-            if result is not None:
-                self._after_scc_save(result.client_id, result.client_name, result.pan, result.outcome)
-        except Exception as e:
-            print(f"[main._handle_scc_password_verified error] {type(e).__name__}")
 
     def _scc_saved(self, result):
         """SccSaver's `after`: SCC-U's thread or the Qt thread - the refresh always runs on the Qt thread."""

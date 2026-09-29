@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 20:09)
+# Autofill tweaks — report (2026-09-29 20:13)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 4 |
+| Not started | 3 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 21 |
+| Done | 22 |
 | Blocked | 0 |
 
-Runs: 27   output tokens: 627777   API-equivalent cost: $45.53
+Runs: 28   output tokens: 656331   API-equivalent cost: $47.62
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -35,7 +35,7 @@ Runs: 27   output tokens: 627777   API-equivalent cost: $45.53
 | W5-5 | Done | opus | 3901faf | Part G step 5: which password worked | Step 5 WhichOne: one row since last refusal credited, else card asks with None - I typed my own; x rows never credited; 13 new tests |
 | W5-6 | Done | sonnet | ddc0369 | Part G step 6: the guarded save | core/scc/save.py guarded save; D2 replace automatically, D4 add automatically; 11 new tests pass |
 | W5-7 | Done | haiku | 0401e21 | Part G step 7: close-out and counts | core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pas |
-| W5-8 | Not started | sonnet |  | Part G: Client Detail opens the SCC card |  |
+| W5-8 | Done | sonnet | 5de4f6d | Part G: Client Detail opens the SCC card | Client Detail MECP opens the SCC card: manual attempt (adopted by SGT if it sees the PAN) or SGT's attempt; open_tab flag in both extension builds; works with S |
 | W5-9 | Not started | sonnet |  | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) |  |
 | W6-1 | Not started | haiku |  | Docs and extension version |  |
 | W6-R | Not started | opus |  | Final review |  |
@@ -60,6 +60,7 @@ Runs: 27   output tokens: 627777   API-equivalent cost: $45.53
 - **W5-5** When the card asks which password worked because SEVERAL were copied, offer 'None - I typed my own' too? → Yes: the None button shows whenever the card asks; exactly one copy is still credited without asking (Staff may have typed their own after copying two; forcing a pick would save a wrong password. Costs one button already needed for the none case.)
 - **W5-6** SCC confirmed a login, but the client already has a DIFFERENT IT password saved. What should Sera do? → Replace automatically (asked as Q7)
 - **W5-6** A PAN that is not in Sera logs in with an SCC combination. What should Sera do? → Add the client automatically (asked as Q8)
+- **W5-8** How does a Client Detail click with no SGT window register its attempt? → Manual attempt under a negative window id; SGT adopts it if it later reads that PAN's password page (Keeps one card per PAN, reuses SGT's outcome reader once a window is known, and needs no new key in the opener; without SGT only This one worked saves.)
 
 ## Checks waiting for you
 
@@ -72,3 +73,4 @@ Runs: 27   output tokens: 627777   API-equivalent cost: $45.53
 - #7 (W4-R) Firefox: SMTI now uses Chrome's widget (top frame only) and re-appears after a failed login in its own tab; check both on a real Firefox with the extension loaded. Chrome: Fast Autofill fills a custom service whose host is NOT in the SCA portal list. — Not run
 - #8 (W5-2) Run tools/vsdc_uia_probe.py once on ONE real Income Tax wrong-password attempt (a single mistyped password, never repeated, NEVER to a lock-out) on the password page, and once on the OTP / secure-access page if you meet it. Then compare the wording with core/scc/scc_rules.json: rules marked unconfirmed (wrong password, locked, OTP/secure access, forgot/reset) should be replaced with the real text and lose the flag. — Not run
 - #9 (W5-3) On the Income Tax password page the MECP SCC card appears in the open tab with Sera's combinations — Not run
+- #10 (W5-8) Real browser: press MECP in Client Detail on an unverified Income Tax client with the login page closed, then open - the SCC card (PAN, combinations, Saved password) appears on the login page; copy a combo, log in yourself, press 'This one worked' - the password is saved. Repeat with Settings -> SCC 'Detect login automatically' Off. Never test a lock-out on a real account. — Not run

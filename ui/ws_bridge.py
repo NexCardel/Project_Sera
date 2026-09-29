@@ -97,7 +97,6 @@ class WSBridge(QObject):
     sca_error_received = Signal(dict)
     sca_fill_result_received = Signal(dict)
     sca_password_requested = Signal(dict)   # reply with WSBridge.reply(msg, payload)
-    scc_password_verified_received = Signal(dict)
     # Staff clicks on the MECP SCC card (SCC-U step 3): {attempt_id, row_label}. Labels only.
     scc_row_worked_received = Signal(dict)
     scc_card_closed_received = Signal(dict)     # {attempt_id}
@@ -317,8 +316,6 @@ class WSBridge(QObject):
             self.sca_fill_result_received.emit(msg)
         elif mtype == "SCA_PASSWORD_REQUEST":
             self.sca_password_requested.emit(msg)
-        elif mtype == "scc_password_verified":
-            self.scc_password_verified_received.emit(msg)
         elif mtype == "scc_row_worked":
             attempt_id, label = msg.get("attempt_id"), msg.get("row_label")
             if isinstance(attempt_id, str) and isinstance(label, str) and 0 < len(attempt_id) <= 64 and 0 < len(label) <= 100:

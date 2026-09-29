@@ -226,32 +226,9 @@ class TestSccVaultTagger(unittest.TestCase):
         client = self.db.get_client(cid)
         self.assertIn("Password verified via SCC", client["notes"])
 
-    def test_automation_manual_assist_payload_with_scc(self):
-        service = {
-            "id": self.svc_id,
-            "name": "Income Tax",
-            "login_page_link": "https://eportal.incometax.gov.in/iec/foservices/#/login",
-            "username_selector": "#panAdhaarUserId",
-            "password_selector": "#passwordInput",
-        }
-        combos = [
-            {"label": "Combo 1", "value": "Income@2024"},
-            {"label": "Combo 2", "value": "Aman@123"},
-        ]
-
-        captured_payloads = []
-        with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
-            automation.trigger_mecp(
-                service, "ABCDE1234F", "", 123,
-                scc_mode=True, scc_combos=combos
-            )
-
-        self.assertEqual(len(captured_payloads), 1)
-        args, kwargs = captured_payloads[0]
-        self.assertEqual(args[0]["name"], "Income Tax")
-        self.assertEqual(args[1], "ABCDE1234F")
-        self.assertEqual(kwargs.get("scc_mode"), True)
-        self.assertEqual(kwargs.get("scc_combos"), combos)
+    def test_trigger_mecp_takes_no_scc_arguments(self):
+        with self.assertRaises(TypeError):
+            automation.trigger_mecp({"name": "Income Tax"}, "ABCDE1234F", "", 123, scc_mode=True, scc_combos=[{"label": "Combo 1"}])
 
     def test_unified_settings_dialog_general_page(self):
         from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
@@ -317,45 +294,6 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertEqual(dlg2.scc_opt4_str_edit.text(), "OldFirm@123")
         dlg2.close()
 
-    def test_handle_scc_password_verified_saves_and_marks_notes(self):
-        pan = "TESTP9999Z"
-        cid = self.db.add_client(
-            values={
-                self.pan_col_id: pan,
-                self.name_col_id: "Wasil Taxpayer",
-            },
-            notes="Active client.",
-            service_ids=[self.svc_id]
-        )
-
-        import main
-        mock_app = MagicMock()
-        mock_app.db = self.db
-        mock_app.actor = "Operator"
-        mock_app.tray_icon = None
-        mock_app.client_detail_win = None
-        mock_app.shell = None
-
-        # Simulate message received from extension link mutation
-        msg = {
-            "type": "scc_password_verified",
-            "client_id": cid,
-            "service_id": self.svc_id,
-            "userid": pan,
-            "password": "CorrectWorkingPass#2026",
-            "combo_label": "Combo 3",
-            "portal": "Income Tax"
-        }
-
-        main.SeraApp._handle_scc_password_verified(mock_app, msg)
-
-        # Verify client password and notes updated in database
-        updated_client = self.db.get_client(cid)
-        self.assertEqual(updated_client["values"].get(self.pwd_col_id), "CorrectWorkingPass#2026")
-        self.assertIn("Password verified via SCC", updated_client["notes"])
-        self.assertTrue(self.db.is_client_scc_verified(pan=pan))
-        self.assertTrue(self.db.is_client_scc_verified(client_id=cid))
-
     def test_get_client_pan_avoids_company_name_collision(self):
         # Client where 'NAME OF COMPANY' contains 'PAN' substring (e.g. 'Panchayat Dresses' or any company)
         cid = self.db.add_client(
@@ -385,113 +323,19 @@ class TestSccVaultTagger(unittest.TestCase):
         self.assertTrue(automation.is_gst_service(gst_svc))
         self.assertFalse(automation.is_gst_service(itr_svc))
 
-    def test_gst_manual_assist_never_activates_scc(self):
-        """Verify that triggering manual assist for GST never passes scc_mode=True or scc_combos."""
-        gst_svc = {
-            "id": 99,
-            "name": "GST Portal",
-            "login_page_link": "https://services.gst.gov.in/services/login",
-            "username_selector": "#username",
-            "password_selector": "#user_pass"
-        }
-        captured_payloads = []
-        with patch.object(automation, "_send_to_extension", side_effect=lambda *args, **kwargs: captured_payloads.append((args, kwargs))):
-            # Even if scc_mode=True is accidentally requested for GST, automation must disarm it
-            automation.trigger_mecp(
-                gst_svc, "27ABCDE1234F1Z5", "GstPass#2026", 456,
-                scc_mode=True, scc_combos=[{"value": "combo1"}]
-            )
+    def test_trigger_mecp_sends_a_plain_card(self):
+        """trigger_mecp (Client Detail's plain MECP) never asks the extension for SCC rows."""
+        itr = {"id": 1, "name": "Income Tax", "login_page_link": "https://eportal.incometax.gov.in/iec/foservices/#/login"}
+        sent = []
+        with patch.object(automation, "_deliver_to_extension", side_effect=lambda payload, *a, **k: sent.append(payload)):
+            automation.trigger_mecp(itr, "ABCDE1234F", "SavedPass#2026", 456)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["mode"], "mecp")
+        self.assertFalse(sent[0]["scc_mode"])
+        self.assertEqual(sent[0]["scc_combos"], [])
 
-        self.assertEqual(len(captured_payloads), 1)
-        args, kwargs = captured_payloads[0]
-        self.assertEqual(args[0]["name"], "GST Portal")
-        self.assertEqual(args[1], "27ABCDE1234F1Z5")
-        self.assertEqual(args[2], "GstPass#2026")
-        self.assertEqual(kwargs.get("scc_mode"), False, "scc_mode must be False for GST")
-        self.assertIsNone(kwargs.get("scc_combos"), "scc_combos must be None for GST")
-
-    def test_handle_scc_password_verified_rejects_gst(self):
-        """Verify that _handle_scc_password_verified ignores non-ITR / GST verification attempts."""
-        cid = self.db.add_client(
-            values={
-                self.name_col_id: "GST Client Test",
-                self.pan_col_id: "ABCDE9999Z",
-                self.pwd_col_id: "OriginalPassword"
-            },
-            notes="",
-            service_ids=[self.svc_id]
-        )
-
-        import main
-        mock_app = MagicMock()
-        mock_app.db = self.db
-        mock_app.actor = "Operator"
-        mock_app.tray_icon = None
-
-        msg = {
-            "type": "scc_password_verified",
-            "client_id": cid,
-            "service_id": self.svc_id,
-            "userid": "ABCDE9999Z",
-            "password": "FakeInjectedGSTPass",
-            "combo_label": "Combo 1",
-            "portal": "GST"
-        }
-
-        main.SeraApp._handle_scc_password_verified(mock_app, msg)
-
-        # Database must NOT be updated
-        client = self.db.get_client(cid)
-        self.assertEqual(client["values"].get(self.pwd_col_id), "OriginalPassword")
-        self.assertNotIn("Password verified via SCC", client.get("notes") or "")
-
-    def test_unregistered_client_auto_creation_on_scc_verification(self):
-        """Verify that an unregistered client (client_id=None) is auto-created in master.db when SCC verifies password."""
-        import main
-        mock_app = MagicMock()
-        mock_app.db = self.db
-        mock_app.actor = "Operator"
-        mock_app.tray_icon = None
-
-        unreg_pan = "XYZAB5678C"
-        # Confirm client does not exist
-        self.assertIsNone(self.db.get_client_by_pan(unreg_pan))
-
-        msg = {
-            "type": "scc_password_verified",
-            "client_id": None,
-            "service_id": None,
-            "userid": unreg_pan,
-            "password": "xyzab@5678",
-            "combo_label": "Combo 1",
-            "portal": "Income Tax",
-            "client_name": "ABC Enterprises"
-        }
-
-        main.SeraApp._handle_scc_password_verified(mock_app, msg)
-
-        # Client must now exist in master.db with verified password and SCC note
-        new_client = self.db.get_client_by_pan(unreg_pan)
-        self.assertIsNotNone(new_client, "Unregistered client must be auto-created in master.db")
-        self.assertEqual(new_client["values"].get(self.pan_col_id), unreg_pan)
-        self.assertEqual(new_client["values"].get(self.pwd_col_id), "xyzab@5678")
-        self.assertEqual(new_client["values"].get(self.name_col_id), "ABC Enterprises")
-        self.assertIn("Password verified via SCC", new_client.get("notes") or "")
-
-    def test_database_get_all_registered_pans(self):
-        """Verify get_all_registered_pans returns active client PANs and derived GSTINs, excluding archived."""
-        # Active client with direct PAN
-        self.db.add_client(values={self.pan_col_id: "ABCDE1234F"}, notes="", service_ids=[])
-        # Archived client with PAN
-        archived_id = self.db.add_client(values={self.pan_col_id: "XYZAB9999K"}, notes="", service_ids=[])
-        self.db.archive_client(archived_id)
-
-        pans = self.db.get_all_registered_pans()
-        self.assertIn("ABCDE1234F", pans)
-        self.assertNotIn("XYZAB9999K", pans)
-
-    def test_automation_update_extension_settings_includes_registered_pans_and_scc(self):
-        """Verify update_extension_settings formats payload with registered_pans and scc_settings."""
+    def test_extension_settings_carry_no_scc_or_pan_lists(self):
+        """The extension gets no SCC settings and no registered-PAN list: it watches nothing for SCC."""
         from ui import ws_bridge
         from automation import update_extension_settings
 
@@ -504,55 +348,24 @@ class TestSccVaultTagger(unittest.TestCase):
 
         ws_bridge.set_active_bridge(_FakeBridge())
         try:
-            update_extension_settings(
-                registered_pans=["ABCDE1234F", "ZZZZZ9999Z"],
-                scc_settings={"enabled": True, "opt1_label": "Combo 1", "opt1_fixed_str": "@"}
-            )
-            # Give the background send thread a brief moment
+            update_extension_settings()
             import time
             time.sleep(0.3)
-
             self.assertTrue(len(broadcasts) > 0)
-            sent_payload = broadcasts[0]
-            self.assertIn("registered_pans", sent_payload)
-            self.assertEqual(sent_payload["registered_pans"], ["ABCDE1234F", "ZZZZZ9999Z"])
-            self.assertIn("scc_settings", sent_payload)
-            self.assertTrue(sent_payload["scc_settings"]["enabled"])
+            self.assertNotIn("registered_pans", broadcasts[0])
+            self.assertNotIn("scc_settings", broadcasts[0])
         finally:
             ws_bridge.set_active_bridge(None)
 
-    def test_extension_listener_settings_provider_response(self):
-        """Verify WSBridge's settings_provider callback returns expected payload."""
-        from ui.ws_bridge import WSBridge
-        mock_app = MagicMock()
-        listener = WSBridge(mock_app)
-        listener.settings_provider = lambda: {
-            "status": "ok",
-            "registered_pans": ["ABCDE1234F"],
-            "scc_settings": {
-                "opt1_fixed_str": "@",
-                "opt2_fixed_str": "Link@",
-                "opt3_fixed_str": "Income@2014",
-                "opt4_fixed_str": "income@2014"
-            }
-        }
-        payload = listener.settings_provider()
-        self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["scc_settings"]["opt2_fixed_str"], "Link@")
-        self.assertEqual(payload["scc_settings"]["opt3_fixed_str"], "Income@2014")
-        self.assertEqual(payload["scc_settings"]["opt4_fixed_str"], "income@2014")
-        self.assertIn("ABCDE1234F", payload["registered_pans"])
-
     def test_sera_app_get_extension_settings_payload(self):
-        """Verify SeraApp._get_extension_settings_payload formats complete settings dict."""
+        """SeraApp._get_extension_settings_payload has no registered PANs or SCC settings."""
         import main
         mock_app = MagicMock(spec=main.SeraApp)
         mock_app.db = self.db
         payload = main.SeraApp._get_extension_settings_payload(mock_app)
         self.assertEqual(payload["status"], "ok")
-        self.assertIn("registered_pans", payload)
-        self.assertIn("scc_settings", payload)
-        self.assertIn("opt1_fixed_str", payload["scc_settings"])
+        self.assertNotIn("registered_pans", payload)
+        self.assertNotIn("scc_settings", payload)
 
 
 if __name__ == "__main__":

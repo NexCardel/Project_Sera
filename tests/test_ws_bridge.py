@@ -94,15 +94,19 @@ def test_dispatch_routes_each_message_type(bridge):
         (bridge.sca_error_received, "SCA_ERROR"),
         (bridge.sca_fill_result_received, "SCA_FILL_RESULT"),
         (bridge.sca_password_requested, "SCA_PASSWORD_REQUEST"),
-        (bridge.scc_password_verified_received, "scc_password_verified"),
         (bridge.extension_settings_updated_received, "extension_settings_updated"),
     ]:
         sig.connect(lambda m, k=kind: got.setdefault(k, m))
         bridge.dispatch({"type": kind})
     assert set(got) == {
         "SCA_STATE", "SCA_ERROR", "SCA_FILL_RESULT",
-        "SCA_PASSWORD_REQUEST", "scc_password_verified", "extension_settings_updated",
+        "SCA_PASSWORD_REQUEST", "extension_settings_updated",
     }
+
+
+def test_scc_password_verified_from_a_browser_is_not_a_message_any_more(bridge):
+    assert not hasattr(bridge, "scc_password_verified_received")
+    assert bridge.dispatch({"type": "scc_password_verified", "password": "x"}) is None
 
 
 def test_scc_row_worked_reaches_the_desktop_with_only_the_attempt_and_the_label(bridge):

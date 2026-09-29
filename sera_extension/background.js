@@ -32,7 +32,7 @@ if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") 
 try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
 
 // ---------------- Session-only storage for password payloads (finding #2) ----------------
-// manualAssistPayload / mecpPayload / sccActiveAttempt carry a plaintext password and must never
+// manualAssistPayload / mecpPayload carry a plaintext password and must never
 // touch disk. chrome.storage.session is memory-only, cleared when the browser closes. On a
 // Firefox build old enough to lack it (< 115), fall back to a plain in-memory store of the same
 // shape - these are only ever read back from this same background context.
@@ -60,9 +60,10 @@ const _passwordStore = (chrome.storage && chrome.storage.session) ? chrome.stora
 })();
 
 // Older installs kept these in chrome.storage.local (on disk); clear any leftovers from before
-// the upgrade, plus the tracking payload Part A removed.
+// the upgrade, plus the tracking payloads and SCC page-watching settings that were removed.
 try {
-  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload']);
+  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload',
+    'registeredPans', 'sccSettings', 'sccEnabled']);
 } catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),
@@ -275,15 +276,6 @@ function handleDesktopMessage(message) {
     if (allowedDomains && allowedDomains.length > 0) {
       storageObj.allowedDomains = allowedDomains;
     }
-    if (message.registered_pans && Array.isArray(message.registered_pans)) {
-      storageObj.registeredPans = message.registered_pans;
-    }
-    if (message.scc_settings && typeof message.scc_settings === 'object') {
-      storageObj.sccSettings = message.scc_settings;
-      if (message.scc_settings.enabled !== undefined) {
-        storageObj.sccEnabled = !!message.scc_settings.enabled;
-      }
-    }
     chrome.storage.local.set(storageObj);
   }
 }
@@ -313,15 +305,6 @@ async function syncSettingsFromDesktop() {
     if (!data || data.status !== 'ok') return null;
 
     const storageObj = {};
-    if (data.registered_pans && Array.isArray(data.registered_pans)) {
-      storageObj.registeredPans = data.registered_pans;
-    }
-    if (data.scc_settings && typeof data.scc_settings === 'object') {
-      storageObj.sccSettings = data.scc_settings;
-      if (data.scc_settings.enabled !== undefined) {
-        storageObj.sccEnabled = !!data.scc_settings.enabled;
-      }
-    }
     if (data.allowed_services && Array.isArray(data.allowed_services)) {
       storageObj.allowedServices = data.allowed_services;
     }
@@ -488,72 +471,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 if (SERA_DEBUG) console.log('Sera: background.js module loaded, registering listeners.');
 
-let sccActiveAttempt = null;
-_passwordStore.get(['sccActiveAttempt'], d => {
-  if (d && d.sccActiveAttempt) sccActiveAttempt = d.sccActiveAttempt;
-});
-
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
-  if (changeInfo.status === 'complete') {
-    // Show Manual Assist again after a reload (e.g. invalid password) in the tab SMTI opened only.
-    maybeReinjectManualAssist(tabId);
-  }
-
-  // ── SCC Webpage Link Mutation Observer (Income Tax / ITR Only) ───────────
-  _passwordStore.get(['sccActiveAttempt'], (data) => {
-    const attempt = data.sccActiveAttempt || sccActiveAttempt;
-    if (!attempt || !attempt.password) return;
-
-    const now = Date.now();
-    if (now - (attempt.timestamp || 0) > 10 * 60 * 1000) {
-      sccActiveAttempt = null;
-      _passwordStore.remove(['sccActiveAttempt']);
-      return;
-    }
-
-    if (attempt.tabId && attempt.tabId !== tabId) return;
-
-    const curUrl = changeInfo.url || (tab && tab.url) || '';
-    if (!curUrl) return;
-
-    const initUrl = attempt.initial_url || '';
-    const isItrDomain = curUrl.includes('incometax.gov.in') || (initUrl && initUrl.includes('incometax.gov.in'));
-    if (!isItrDomain) return;
-
-    const isLoginUrl = curUrl.toLowerCase().includes('/login') || curUrl.toLowerCase().includes('/auth');
-    const urlChanged = initUrl ? (curUrl !== initUrl) : true;
-    const isPostLoginRoute = urlChanged && !isLoginUrl;
-
-    if (isPostLoginRoute) {
-      if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
-      sccActiveAttempt = null;
-      _passwordStore.remove(['sccActiveAttempt', 'mecpPayload']);
-
-      try {
-        chrome.scripting.executeScript({
-          target: { tabId },
-          func: () => {
-            const el = document.getElementById("sera-mecp-host");
-            if (el) el.remove();
-          }
-        }).catch(() => {});
-      } catch (_) {}
-
-      sendToDesktop({
-        type: "scc_password_verified",
-        client_id: attempt.client_id,
-        service_id: attempt.service_id,
-        userid: attempt.userid || attempt.pan || "",
-        pan: attempt.pan || attempt.userid || "",
-        password: attempt.password,
-        combo_label: attempt.combo_label,
-        portal: "Income Tax",
-        destination_url: curUrl,
-        timestamp: new Date().toISOString()
-      }, false);
-    }
-  });
+  // Show Manual Assist again after a reload (e.g. invalid password) in the tab SMTI opened only.
+  if (changeInfo.status === 'complete') maybeReinjectManualAssist(tabId);
 });
 
 // Fill function injected into the page
@@ -1754,10 +1675,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
     _passwordStore.remove(['mecpPayload']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
-    if (msg.type === "MECP_DISMISSED") {
-      _passwordStore.remove(['sccActiveAttempt']);
-      sccActiveAttempt = null;
-    }
     if (msg.attempt_id) {
       sccCardTabs.delete(String(msg.attempt_id));
       if (msg.type === "MECP_DISMISSED") sendToDesktop({ type: "scc_card_closed", attempt_id: String(msg.attempt_id) }, false);
@@ -1774,26 +1691,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // A staff click on "None - I typed my own" when the SCC card asks which password worked.
   if (msg.type === "scc_row_none" && msg.attempt_id) {
     sendToDesktop({ type: "scc_row_none", attempt_id: String(msg.attempt_id) }, false);
-    sendResponse({ status: "ok" });
-    return true;
-  }
-  if (msg.type === "SCC_LOGIN_DETECTED" && msg.attempt) {
-    const attempt = msg.attempt;
-    sccActiveAttempt = null;
-    _passwordStore.remove(['sccActiveAttempt']);
-    if (SERA_DEBUG) console.log(`⚡ Sera SCC: In-page DOM login detected for ${attempt.userid} (${attempt.combo_label})`);
-    sendToDesktop({
-      type: "scc_password_verified",
-      client_id: attempt.client_id,
-      service_id: attempt.service_id,
-      userid: attempt.userid || attempt.pan || "",
-      pan: attempt.pan || attempt.userid || "",
-      password: attempt.password,
-      combo_label: attempt.combo_label,
-      portal: "Income Tax",
-      destination_url: msg.destination_url || "",
-      timestamp: new Date().toISOString()
-    }, false);
     sendResponse({ status: "ok" });
     return true;
   }

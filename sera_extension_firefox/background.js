@@ -28,7 +28,7 @@ if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") 
 try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
 
 // ---------------- Session-only storage for password payloads (finding #2) ----------------
-// manualAssistPayload / mecpPayload / sccActiveAttempt carry a plaintext password and must never
+// manualAssistPayload / mecpPayload carry a plaintext password and must never
 // touch disk. chrome.storage.session is memory-only, cleared when the browser closes. On a
 // Firefox build old enough to lack it (< 115), fall back to a plain in-memory store of the same
 // shape - these are only ever read back from this same background context.
@@ -56,9 +56,10 @@ const _passwordStore = (chrome.storage && chrome.storage.session) ? chrome.stora
 })();
 
 // Older installs kept these in chrome.storage.local (on disk); clear any leftovers from before
-// the upgrade, plus the tracking payload Part A removed.
+// the upgrade, plus the tracking payloads and SCC page-watching settings that were removed.
 try {
-  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload']);
+  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload',
+    'registeredPans', 'sccSettings', 'sccEnabled']);
 } catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),

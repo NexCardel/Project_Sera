@@ -52,5 +52,14 @@ for (const b of BUILDS) {
   assert(/_passwordStore\.remove\(\['mecpPayload', 'smtiTabIds'\]\)/.test(fn(src[b], 'handleManualAssistTab')),
     `${b}: a new SMTI launch must forget the previous SMTI tab`);
   ok(`${b}: SMTI re-inject + settings sync present`);
+
+  // 5. Part G: the extension watches nothing for SCC (the card, fed by the desktop, is all that is left).
+  const login = fs.readFileSync(path.join(ROOT, b, 'content_scripts', 'login.js'), 'utf8');
+  const gone = /generateSccCombos|SCC_LOGIN_DETECTED|SCC_PASSWORD_COPIED|SCC_PASSWORD_INJECTED|TRIGGER_UNREGISTERED_SCC_MECP|checkSccLoginSuccess|checkUnregisteredSccTrigger|scc_password_verified|registered_pans|scc_settings/;
+  assert(!gone.test(src[b]) && !gone.test(login), `${b}: SCC page watching or sync is back`);
+  assert(!/sccActiveAttempt|sccEnabled|registeredPans|sccSettings/.test(src[b].replace(/chrome\.storage\.local\.remove\(\[[^\]]*\]\)/g, '')),
+    `${b}: SCC state kept outside the one-time storage clean-up`);
+  assert(!/incometax/.test(login) && !/setInterval|hashchange|popstate/.test(login), `${b}: login.js watches the page`);
+  ok(`${b}: no SCC tracking or page watching`);
 }
 console.log(`${n}/${n} passed`);

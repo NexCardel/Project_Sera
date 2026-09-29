@@ -126,12 +126,9 @@ def trigger_manual_assist(service: dict, user_id: str, password: str, client_id:
     _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
 
 
-def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
+def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
     """Open the portal and ask the companion extension to show the MECP floating card widget."""
-    if scc_mode and not is_itr_service(service):
-        scc_mode = False
-        scc_combos = None
-    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp", scc_mode=scc_mode, scc_combos=scc_combos)
+    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
 
 
 def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
@@ -266,14 +263,9 @@ def update_scc_card(attempt_id: str, failed: list, next_label, message: str, sto
     return bridge.broadcast(msg) > 0
 
 
-def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
+def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
     """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
-    # Defense-in-depth: SCC is strictly an ITR-only one-time utility
-    if scc_mode and not is_itr_service(service):
-        scc_mode = False
-        scc_combos = []
-
-    payload = _extension_payload(service, user_id, password, client_id, mode, scc_mode, scc_combos)
+    payload = _extension_payload(service, user_id, password, client_id, mode)
     _deliver_to_extension(payload, service, on_error)
 
 
@@ -328,7 +320,7 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None, clipboard_clear_seconds: Optional[int] = None):
+def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, clipboard_clear_seconds: Optional[int] = None):
     """Sends immediate setting updates to every connected browser's background.js."""
     from ui import ws_bridge
 
@@ -341,10 +333,6 @@ def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofil
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,
     }
-    if registered_pans is not None:
-        payload["registered_pans"] = registered_pans
-    if scc_settings is not None:
-        payload["scc_settings"] = scc_settings
     if clipboard_clear_seconds is not None:
         payload["clipboard_clear_seconds"] = max(5, min(int(clipboard_clear_seconds), 300))
 
