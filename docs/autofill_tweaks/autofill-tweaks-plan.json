@@ -4,7 +4,7 @@
  "models": {
   "sonnet": {
    "runner": "claude",
-   "id": "claude-sonnet-5"
+   "id": "claude-sonnet-5-5"
   },
   "opus": {
    "runner": "claude",

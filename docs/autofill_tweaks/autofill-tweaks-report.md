@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 12:48)
+# Autofill tweaks — report (2026-09-29 12:55)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 20 |
+| Not started | 19 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 5 |
+| Done | 6 |
 | Blocked | 0 |
 
-Runs: 8   output tokens: 153595   API-equivalent cost: $11.47
+Runs: 9   output tokens: 192577   API-equivalent cost: $13.90
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -19,7 +19,7 @@ Runs: 8   output tokens: 153595   API-equivalent cost: $11.47
 | W1-1 | Done | sonnet | e3027bb | Part A: remove all tracking and the cookie wipe from the extension | Removed tracking/cookie-wipe from both extension builds; sca/ unchanged, mirrored firefox to chrome |
 | W1-2 | Done | sonnet | 59e4f02 | Part A, desktop side: stop serving extension tracking | Desktop side stops serving extension tracking; SGT/VSDC capture pipeline confirmed unchanged |
 | W1-R | Done | opus | 3fda16f | Review Part A | Part A passes review; fixed dead settings_dialog tracker kwargs, manifest description, stale comment; passwords in storage.local left for W2-1/Part G |
-| W2-1 | Not started | sonnet |  | Part B1: passwords off disk in the extension (#2) |  |
+| W2-1 | Done | sonnet | 8cc2b00 | Part B1: passwords off disk in the extension (#2) | Passwords moved from storage.local to storage.session (memory fallback for old Firefox) in both extension builds; startup wipe of stale local copies; new scan t |
 | W2-2 | Not started | sonnet |  | Part B2: one openPortalTab helper (#3, #4) |  |
 | W3-1 | Not started | haiku |  | Part C: Fast Autofill on the helper; decision D8 |  |
 | W3-2 | Not started | sonnet |  | Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9) |  |
