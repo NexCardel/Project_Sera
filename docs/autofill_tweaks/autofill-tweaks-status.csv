@@ -13,7 +13,7 @@ W4-1,4,"Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15
 W4-2,4,"Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14)",Done,claude-sonnet-5-5,1,3b061fc,"SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (pre-existing), logic checked by scratch script.",2026-09-29 13:25
 W4-3,4,Part F: SCA scope (decision D7),Done,claude-sonnet-5-5,1,c169294,SCA login.js/sca_adapters.js registered only on approved portal domains via scripting API (D7: portals only); both builds; main.py sends allowed_domains; test_sca_scope.js 8/8,2026-09-29 13:29
 W4-R,4,Review Parts B-F,Done,claude-opus-5-5,1,2fe7cba,"6 defects fixed: Fast Autofill off-portal ReferenceError, password-bearing message logs, URL-substring tab match, stale SMTI tab, Firefox SMTI parity, SCA scope restart gap",2026-09-29 13:36
-W5-1,5,"Part G frame: core/scc host, _hand_to_scc hook, setting",Not started,claude-opus-5-5,0,,,
+W5-1,5,"Part G frame: core/scc host, _hand_to_scc hook, setting",In progress,claude-opus-5-5,1,,,2026-09-29 13:36
 W5-2,5,"Part G steps 1-2, scc_rules.json and its loader",Not started,gemini-3.8-flash-high,0,,,
 W5-3,5,Part G step 3: the SCC card and its copies,Not started,gemini-3.8-flash-high,0,,,
 W5-4,5,Part G step 4: the outcome reader,Not started,claude-opus-5-5,0,,,

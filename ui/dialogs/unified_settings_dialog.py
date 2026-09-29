@@ -735,6 +735,14 @@ class UnifiedSettingsDialog(QDialog):
             "When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
 
+        self.scc_detect_combo = QComboBox()
+        self.scc_detect_combo.addItem("Off", "off")
+        self.scc_detect_combo.addItem("On", "on")
+        lay.addWidget(_setting_row("Detect login automatically",
+            "Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never "
+            "changes what SGT captures. If it ever fails or runs slow it switches itself off until the app "
+            "restarts. Needs SGT on.", self.scc_detect_combo))
+
         # ── Option 1 Card ───────────────────────────────────────────────────
         lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
 
@@ -945,6 +953,7 @@ class UnifiedSettingsDialog(QDialog):
         self.scc_opt4_str_edit.textChanged.connect(_update_previews)
 
         self.scc_check.toggled.connect(self._on_control_changed)
+        self.scc_detect_combo.currentIndexChanged.connect(self._on_control_changed)
         self.scc_opt1_label_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt1_str_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt2_label_edit.textChanged.connect(self._on_control_changed)
@@ -1278,6 +1287,7 @@ class UnifiedSettingsDialog(QDialog):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
+            state["scc_detect_mode"] = self.scc_detect_combo.currentData()
             state["scc_opt1_label"] = getattr(self, "scc_opt1_label_edit", QLineEdit()).text()
             state["scc_opt1_str"] = getattr(self, "scc_opt1_str_edit", QLineEdit()).text()
             state["scc_opt2_label"] = getattr(self, "scc_opt2_label_edit", QLineEdit()).text()
@@ -1356,6 +1366,7 @@ class UnifiedSettingsDialog(QDialog):
 
         if hasattr(self, "scc_check"):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
+            _set(self.scc_detect_combo, g("scc_detect_mode", "off"))
             if hasattr(self, "scc_opt1_label_edit"):
                 self.scc_opt1_label_edit.setText(g("scc_opt1_label", "Combo 1"))
             if hasattr(self, "scc_opt1_str_edit"):
@@ -1438,6 +1449,7 @@ class UnifiedSettingsDialog(QDialog):
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)
+                bulk_settings["scc_detect_mode"] = self.scc_detect_combo.currentData() or "off"
                 if hasattr(self, "scc_opt1_label_edit"):
                     bulk_settings["scc_opt1_label"] = self.scc_opt1_label_edit.text().strip() or "Combo 1"
                 if hasattr(self, "scc_opt1_str_edit"):

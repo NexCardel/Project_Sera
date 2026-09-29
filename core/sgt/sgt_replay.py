@@ -37,10 +37,10 @@ class _FakeOcr:
 
 
 def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = None,
-                   intelligence: Any = None, keep_payloads: bool = False) -> Dict[str, Any]:
+                   intelligence: Any = None, keep_payloads: bool = False, scc: Any = None) -> Dict[str, Any]:
     """One recorded session -> {"rows": {dataset_key: {...}}, "sessions": [...], "held": [...]}.
-    intelligence: an SGT-I host to run beside the Core. keep_payloads: also "payloads", every
-    tracker row handed out, in full and in order."""
+    intelligence: an SGT-I host to run beside the Core; scc: an SCC-U host, likewise.
+    keep_payloads: also "payloads", every tracker row handed out, in full and in order."""
     store = store or SpecStore()
     state = {"uia": [], "ts": float(pages[0].get("ts") or 0) if pages else 0.0,
              "today": date.fromisoformat(pages[0]["today"]) if pages and pages[0].get("today") else date.today()}
@@ -48,7 +48,7 @@ def replay_session(pages: List[Dict[str, Any]], store: Optional[SpecStore] = Non
     with tempfile.TemporaryDirectory() as tmp:
         sgt = SgtShadow(store=store, read_uia=lambda h: {"lines": list(state["uia"])}, log_dir=Path(tmp),
                         clock=lambda: state["ts"], today=lambda: state["today"], echo=lambda m: None,
-                        intelligence=intelligence)
+                        intelligence=intelligence, scc=scc)
         rows: Dict[str, Dict[str, Any]] = {}
         payloads: List[Dict[str, Any]] = []
 

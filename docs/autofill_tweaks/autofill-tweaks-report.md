@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:30)
+# Autofill tweaks — report (2026-09-29 13:36)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 12 |
+| Not started | 11 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 16   output tokens: 343989   API-equivalent cost: $24.42
+Runs: 17   output tokens: 379949   API-equivalent cost: $27.55
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 16   output tokens: 343989   API-equivalent cost: $24.42
 | W4-1 | Done | opus | 1592504 | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) | Per-tab assistTabs lock replaces manualAssistActive (both builds, sca/ identical); clipboard_watch.suppress_client(300s) called by Client Detail MECP/SMTI launc |
 | W4-2 | Done | sonnet | 3b061fc | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) | SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (p |
 | W4-3 | Done | sonnet | c169294 | Part F: SCA scope (decision D7) | SCA login.js/sca_adapters.js registered only on approved portal domains via scripting API (D7: portals only); both builds; main.py sends allowed_domains; test_s |
-| W4-R | Not started | opus |  | Review Parts B-F |  |
+| W4-R | Done | opus | 2fe7cba | Review Parts B-F | 6 defects fixed: Fast Autofill off-portal ReferenceError, password-bearing message logs, URL-substring tab match, stale SMTI tab, Firefox SMTI parity, SCA scope |
 | W5-1 | Not started | opus |  | Part G frame: core/scc host, _hand_to_scc hook, setting |  |
 | W5-2 | Not started | sonnet |  | Part G steps 1-2, scc_rules.json and its loader |  |
 | W5-3 | Not started | sonnet |  | Part G step 3: the SCC card and its copies |  |
@@ -53,6 +53,7 @@ Runs: 16   output tokens: 343989   API-equivalent cost: $24.42
 - **W4-1** How does Client Detail reach clipboard_watch to suppress a client? → Module-level clipboard_watch.suppress_client(client_id, seconds=300) / is_suppressed(); the service checks it in _on_clipboard_changed (ClientDetailWindow has no reference to the running ClipboardWatchService; module state needs no new wiring through main.py.)
 - **W4-1** Firefox SMTI widget sent nothing on dismiss; how to clear its lock? → Its dismiss now sends MANUAL_ASSIST_CLEAR like Chrome; Firefox background clears manualAssistPayload and the tab's smti lock (Parity with Chrome; without it the Firefox lock would only end at the 5 min cap.)
 - **W4-3** SCA watches paste and typing to spot a client id. Where should it run? → Only on approved portals (asked as Q4)
+- **W4-R** Firefox SMTI widget differed from Chrome (every frame, no Angular re-sync, no re-inject, no settings pull) → Copy Chrome's manualAssistWidget verbatim into Firefox and port re-inject + request_settings sync (Rule 0.4 builds identical; Chrome's widget uses no Chrome-only API; smallest way to make behaviour identical)
 
 ## Checks waiting for you
 
@@ -62,3 +63,4 @@ Runs: 16   output tokens: 343989   API-equivalent cost: $24.42
 - #4 (W3-3) In real Chrome and Firefox: copy a password from the MECP card and from SMTI, wait the clipboard-clear seconds, and confirm the clipboard is emptied (and that no clipboard-read permission prompt appears on the portal; the manifests have no clipboardRead permission) — Not run
 - #5 (W4-1) Real browser (Chrome and Firefox), SCA armed: open SMTI or MECP for client A in tab 1 and type A's id there - no SCA fill; in tab 2 on the same portal SCA still fills; close the card (x or timeout) and SCA works again in tab 1. Also: Client Detail > Manual Copy, copy the User ID from the card - desktop log shows 'not arming' for 5 min, another client's id still arms. — Not run
 - #6 (W4-3) Load both extension builds in a real Chrome and Firefox: confirm login.js/SCA runs on gst.gov.in / incometax.gov.in and a configured custom-service host, and does NOT run on an unrelated https site; confirm Autofill/SMTI/MECP still work on a custom service. — Not run
+- #7 (W4-R) Firefox: SMTI now uses Chrome's widget (top frame only) and re-appears after a failed login in its own tab; check both on a real Firefox with the extension loaded. Chrome: Fast Autofill fills a custom service whose host is NOT in the SCA portal list. — Not run

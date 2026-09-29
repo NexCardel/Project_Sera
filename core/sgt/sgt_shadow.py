@@ -241,10 +241,13 @@ class SgtShadow:
         mode: str = MODE_SHADOW,
         alert_unattributed: Optional[Callable[[str, str], Any]] = None,
         intelligence: Any = None,
+        scc: Any = None,
     ) -> None:
         self.mode = MODE_SHADOW
         # SGT-I (core.sgt_i.SgtIntelligence), or None. It only ever gets copies; see _hand_to_sgt_i.
         self._sgt_i = intelligence
+        # SCC-U (core.scc.SccHost), or None. Copies only, like SGT-I; see _hand_to_scc.
+        self._scc = scc
         self.set_mode(mode)
         # live: (form, page) of a submission written with no client - the phone alert
         self._alert_unattributed = alert_unattributed
@@ -296,6 +299,10 @@ class SgtShadow:
     def set_intelligence(self, host: Any) -> None:
         """Attaches SGT-I's host (or None). It never changes what the Core captures."""
         self._sgt_i = host
+
+    def set_scc(self, host: Any) -> None:
+        """Attaches SCC-U's host (or None). It never changes what the Core captures."""
+        self._scc = host
 
     @property
     def live(self) -> bool:
@@ -371,6 +378,9 @@ class SgtShadow:
         sgt_i = self._sgt_i    # one read: Settings may detach it from another thread mid-tick
         if not changed and sgt_i is not None:
             changed = sgt_i.wants_read(s.session_id)   # SGT-I may only ask for MORE reads
+        scc = self._scc        # one read, as sgt_i; also the host the page is handed to below
+        if not changed and scc is not None:
+            changed = scc.wants_read(s.session_id)     # SCC-U too: at most 30 s after a copy
         s.last_hash = h
         if not changed:
             return None
@@ -429,6 +439,8 @@ class SgtShadow:
             # period the earlier pages supplied.
             self._update_draft(s, res, url, source, registry.current_rules)
         self._absorb(s, res, url, source, registry)
+        if scc is not None:    # the one read above: Settings may detach it mid-tick
+            self._hand_to_scc(scc, s, portal, url, title, source, lines, res, registry, now, today, hwnd)
         self._save_state()
         if self._sgt_i is not None:
             self._hand_to_sgt_i(s, portal, url, title, source, lines, res, registry, now, today, hwnd,
@@ -464,6 +476,23 @@ class SgtShadow:
             self._sgt_i.submit(obs)
         except Exception as e:
             self._echo(f"[SGT-I] page not handed over: {e}")
+
+    def _hand_to_scc(self, scc: Any, s: _Session, portal: str, url: str, title: str, source: str,
+                     lines: List[str], res: PageResult, registry: Any, now: float, today: date,
+                     hwnd: int) -> None:
+        """SCC-U (core/scc) gets a frozen copy of the page the Core has just absorbed, with the
+        window and SGT session it belongs to (obs.session_id). Nothing comes back (G.1 rule 1)."""
+        try:
+            if not scc.active:
+                return
+            from core.sgt_i.observation import make_observation
+            obs = make_observation(
+                session_id=s.session_id, portal=portal, url=url, title=title, source=source, lines=lines,
+                result=res, profile={k: p.get("value", "") for k, p in s.profile.items()},
+                draft=s.draft.values(registry.current_rules), ts=now, today=today.isoformat())
+            scc.submit(obs, hwnd)
+        except Exception as e:
+            self._echo(f"[SCC-U] page not handed over: {type(e).__name__}")
 
     # ── The dataset being worked on ──────────────────────────────────────────────
     def _update_draft(self, s: _Session, res: PageResult, url: str, source: str, rules: Any) -> None:
