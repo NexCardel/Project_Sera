@@ -26,6 +26,17 @@ UpdateCard = Callable[..., Any]      # attempt_id, failed labels, next label, me
 
 
 class SccCard:
+    """The card's ledger and UI (step 3), failed rows (step 4), and asking/crediting (step 5).
+
+    Callbacks:
+      on_worked: staff pressed "This one worked" or automatic pick (both -> the guarded save)
+      on_closed: staff pressed x on the card
+      on_none: staff answered "None - I typed my own"
+      on_asking: card asked which row (step 5)
+      on_copy: a Sera password was copied (opens the host's read window)
+      update_card: update the UI with failed/next/message/ask rows
+      suppress/release: clipboard_watch.suppress_client / release_client for SCA
+    """
     def __init__(self, db: Any, open_card: OpenCard, close_card: Callable[[str], Any],
                  suppress: Optional[Callable[[int, float], Any]] = None,
                  release: Optional[Callable[[int], Any]] = None,
@@ -34,6 +45,7 @@ class SccCard:
                  update_card: Optional[UpdateCard] = None,
                  on_copy: Optional[Callable[[Attempt, str], Any]] = None,
                  on_none: Optional[Callable[[Attempt], Any]] = None,
+                 on_asking: Optional[Callable[[], Any]] = None,
                  echo: Callable[[str], Any] = print, clock: Callable[[], float] = time.monotonic) -> None:
         self._db = db
         self._open_card = open_card
@@ -45,6 +57,7 @@ class SccCard:
         self._update_card = update_card
         self._on_copy = on_copy          # step 4: a copy opens SCC-U's read window for the attempt's session
         self._on_none = on_none          # step 5: staff answered "None - I typed my own" (nothing is saved)
+        self._on_asking = on_asking      # step 5: card asked which row
         self._echo = echo
         self._now = clock
         self._lock = threading.Lock()
@@ -183,6 +196,11 @@ class SccCard:
             self._asking[att.attempt_id] = ask
             marks = list(failed)
         self._send_update(att.attempt_id, marks, None, message, False, ask)
+        if self._on_asking:
+            try:
+                self._on_asking()
+            except Exception as e:
+                self._echo(f"[SCC] Asking callback failed: {type(e).__name__}")
         return True
 
     def asking(self, attempt_id: str) -> Optional[List[str]]:

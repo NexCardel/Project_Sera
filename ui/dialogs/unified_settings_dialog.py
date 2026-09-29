@@ -743,6 +743,15 @@ class UnifiedSettingsDialog(QDialog):
             "changes what SGT captures. If it ever fails or runs slow it switches itself off until the app "
             "restarts. Needs SGT on.", self.scc_detect_combo))
 
+        # ── Counts ──────────────────────────────────────────────────────────
+        self.scc_counts_label = QLabel()
+        self._update_scc_counts_display()
+        lay.addWidget(_setting_row("Counts (local, this session and earlier)",
+            "Attempts: attempts opened. Worked: login succeeded. Failed: wrong password. Locked: locked out. "
+            "No conclusion: other outcome. Asked: card asked which row. Saved: password saved. "
+            "Not understood: portal wording not recognized.",
+            self.scc_counts_label))
+
         # ── Option 1 Card ───────────────────────────────────────────────────
         lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
 
@@ -1329,6 +1338,19 @@ class UnifiedSettingsDialog(QDialog):
         else:
             self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
             self._btn_save.setCursor(Qt.ArrowCursor)
+
+    def _update_scc_counts_display(self):
+        """Update the SCC counts display in the UI."""
+        try:
+            from core.scc.counts import load_counts
+            counts = load_counts()
+            text = f"Attempts: {counts.attempts}  •  Worked: {counts.worked}  •  Failed: {counts.failed}  •  Locked: {counts.locked}  •  No conclusion: {counts.no_conclusion}  •  Asked: {counts.asked}  •  Saved: {counts.saved}  •  Not understood: {counts.not_understood}"
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText(text)
+                self.scc_counts_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #999999;")
+        except Exception:
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText("(counts not available)")
 
     # ── Load settings into controls ───────────────────────────────────────────
     def _load_settings(self):

@@ -1087,8 +1087,15 @@ class SeraApp:
         ledger reads the clipboard through clipboard_watch; each copy opens the host's read window."""
         import automation
         import clipboard_watch
-        from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup
-        opener = AttemptOpener(db_lookup(self.db), on_open=lambda att: self._scc_card.open(att),
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup, SccCounter
+        counter = SccCounter()
+        self._scc_counter = counter
+
+        def on_attempt_opened(att):
+            counter.on_attempt_opened()
+            self._scc_card.open(att)
+
+        opener = AttemptOpener(db_lookup(self.db), on_open=on_attempt_opened,
                                on_end=lambda att, reason: self._scc_card.end(att, reason))
         self._scc_opener = opener
 
@@ -1096,6 +1103,17 @@ class SeraApp:
             host = getattr(getattr(self.vsdc_worker, "router", None), "_scc_host", None)
             if host is not None:
                 host.open_read_window(att.session_id)
+
+        def on_worked_with_close_and_count(att, row_label):
+            saver = SccSaver(self.db, lambda aid, label: self._scc_card.row_text(aid, label),
+                           lambda: getattr(self, "actor", "Staff"), after=self._scc_saved)
+            result = saver.on_worked(att, row_label)
+            if result is not None:
+                counter.on_password_saved()
+                # Close the card and mark the attempt as closed in the opener
+                automation.close_scc_card(att.attempt_id)
+                opener.close(att.hwnd)
+            return result
 
         self._scc_card = SccCard(
             self.db,
@@ -1106,10 +1124,14 @@ class SeraApp:
             on_closed=lambda att: opener.close(att.hwnd),
             update_card=automation.update_scc_card, on_copy=read_harder,
             on_none=lambda att: opener.end(att.hwnd, "typed own"),
-            on_worked=SccSaver(self.db, lambda aid, label: self._scc_card.row_text(aid, label),
-                               lambda: getattr(self, "actor", "Staff"), after=self._scc_saved).on_worked)
+            on_asking=lambda: counter.on_card_asked(),
+            on_worked=on_worked_with_close_and_count)
         # Step 5: which row gets the login's credit (SccCard.credit -> the guarded save).
-        which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att))
+        def on_outcome_with_counter(att, kind, detail):
+            counter.on_outcome(kind)
+
+        which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att),
+                        then=on_outcome_with_counter)
         self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db),
                                           on_outcome=which.on_outcome)
         watcher = getattr(self, "clipboard_watcher", None)

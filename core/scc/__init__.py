@@ -8,12 +8,13 @@ captures: see host.py for the contract. Switched by Settings -> SCC -> Detect lo
 
 from .attempts import Attempt, AttemptOpener, ClientInfo, db_lookup
 from .card import SccCard
+from .counts import SccCounter
 from .host import SccHost
 from .outcome import OutcomeReader, db_client_names
 from .save import SaveResult, SccSaver, save_verified
 from .scc_rules import RuleSet, get_rules, load_rules
 from .which import WhichOne, pick_rows
 
-__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "OutcomeReader", "RuleSet", "SaveResult", "SccCard", "SccHost",
+__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "OutcomeReader", "RuleSet", "SaveResult", "SccCard", "SccCounter", "SccHost",
            "SccSaver", "WhichOne", "db_client_names", "db_lookup", "get_rules", "load_rules", "pick_rows",
            "save_verified"]
