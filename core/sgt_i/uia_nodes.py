@@ -25,6 +25,7 @@ PID_CONTROL_TYPE = 30003
 PID_NAME = 30005
 PID_AUTOMATION_ID = 30011
 PID_IS_OFFSCREEN = 30022
+PID_IS_PASSWORD = 30019
 PID_VALUE = 30045
 PID_GRID_ROW = 30064
 PID_GRID_COLUMN = 30065
@@ -35,8 +36,8 @@ PID_LANDMARK_TYPE = 30157
 PID_HEADING_LEVEL = 30173
 
 _CACHED_PROPERTIES = (
-    PID_BOUNDING_RECT, PID_CONTROL_TYPE, PID_NAME, PID_AUTOMATION_ID, PID_IS_OFFSCREEN, PID_VALUE,
-    PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
+    PID_BOUNDING_RECT, PID_CONTROL_TYPE, PID_NAME, PID_AUTOMATION_ID, PID_IS_OFFSCREEN, PID_IS_PASSWORD,
+    PID_VALUE, PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
     PID_LANDMARK_TYPE, PID_HEADING_LEVEL,
 )
 
@@ -93,7 +94,10 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
     if role:
         node["role"] = role
     if ctype in _VALUE_BEARING:
-        node["value"] = (_cached(el, PID_VALUE) or "").strip()
+        # A password field's content must never reach a node, the corpus, or a log - the label
+        # (name, above) is kept, the value simply isn't cached.
+        if not _cached(el, PID_IS_PASSWORD):
+            node["value"] = (_cached(el, PID_VALUE) or "").strip()
     elif ctype in (CT_RADIOBUTTON, CT_TABITEM):     # a tab item's selection = the current step
         node["selected"] = bool(_cached(el, PID_SELECTION_IS_SELECTED))
     elif ctype == CT_CHECKBOX:

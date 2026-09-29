@@ -1,3 +1,6 @@
+// Production debug gate — set to true only during local development
+const SERA_DEBUG = false;
+
 // ---------------- WebSocket bridge to the desktop app (ui/ws_bridge.py) ----------------
 // 2026-09-22: replaces Firefox Native Messaging (a registry key + host manifest that routinely
 // failed to register on a fresh PC) and the direct HTTP fallback to port 49152 (which sat
@@ -23,23 +26,99 @@ if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") 
 // SCA v1 kept every armed client password in chrome.storage.local (written to disk). Remove
 // anything it left behind.
 try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
+
+// ---------------- Session-only storage for password payloads (finding #2) ----------------
+// manualAssistPayload / mecpPayload carry a plaintext password and must never
+// touch disk. chrome.storage.session is memory-only, cleared when the browser closes. On a
+// Firefox build old enough to lack it (< 115), fall back to a plain in-memory store of the same
+// shape - these are only ever read back from this same background context.
+const _passwordStore = (chrome.storage && chrome.storage.session) ? chrome.storage.session : (() => {
+  const mem = {};
+  const keysOf = (k) => Array.isArray(k) ? k : [k];
+  return {
+    get: (keys, cb) => {
+      const out = {};
+      keysOf(keys).forEach(k => { if (mem[k] !== undefined) out[k] = mem[k]; });
+      if (cb) { cb(out); return; }
+      return Promise.resolve(out);
+    },
+    set: (obj, cb) => {
+      Object.assign(mem, obj);
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    },
+    remove: (keys, cb) => {
+      keysOf(keys).forEach(k => { delete mem[k]; });
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    }
+  };
+})();
+
+// Older installs kept these in chrome.storage.local (on disk); clear any leftovers from before
+// the upgrade, plus the tracking payloads and SCC page-watching settings that were removed.
+try {
+  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload',
+    'registeredPans', 'sccSettings', 'sccEnabled']);
+} catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),
   postDesktop: (msg) => { sendToDesktop(msg); },
   getSettings: () => new Promise((resolve) => {
-    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains", "manualAssistPayload"], (d) => {
-      const ma = d.manualAssistPayload;
-      resolve({
+    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains"], (d) => {
+      _liveAssistTabs().then(assistTabs => resolve({
         scaEnabled: d.scaEnabled,
         scaMode: d.scaMode,
         allowedDomains: d.allowedDomains || [],
-        manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
-      });
+        assistTabs,
+      }));
     });
   }),
   executeScript: (details) => chrome.scripting.executeScript(details),
   sessionStore: (chrome.storage && chrome.storage.session) || null,
 });
+
+// Per-tab assist lock (B4): tabId -> {kind: 'smti'|'mecp', expiresAt} for each open SMTI/MECP
+// card. SCA stays quiet in that tab only. Set on inject, cleared on dismiss/timeout/tab close;
+// kept in _passwordStore (memory) so a background restart does not drop it.
+const ASSIST_LOCK_MS = 5 * 60 * 1000;
+let _assistTabs = null;
+function _withAssistTabs(change) {
+  const apply = () => {
+    const before = JSON.stringify(_assistTabs);
+    const t = Date.now();
+    Object.keys(_assistTabs).forEach(id => { if (!(_assistTabs[id].expiresAt > t)) delete _assistTabs[id]; });
+    if (change) change(_assistTabs);
+    if (JSON.stringify(_assistTabs) !== before) _passwordStore.set({ assistTabs: _assistTabs });
+    return _assistTabs;
+  };
+  if (_assistTabs) return Promise.resolve(apply());
+  return new Promise(resolve => _passwordStore.get(['assistTabs'], d => {
+    if (!_assistTabs) _assistTabs = Object.assign({}, d && d.assistTabs);
+    resolve(apply());
+  }));
+}
+function _lockAssistTab(tabId, kind) {
+  if (typeof tabId !== 'number') return;
+  _withAssistTabs(tabs => { tabs[tabId] = { kind, expiresAt: Date.now() + ASSIST_LOCK_MS }; });
+}
+// kind given: only that assist's lock (an SMTI dismiss must not unlock a MECP card).
+// tabId missing: every lock of that kind.
+function _unlockAssistTab(tabId, kind) {
+  _withAssistTabs(tabs => {
+    Object.keys(tabs).forEach(id => {
+      if ((typeof tabId !== 'number' || Number(id) === tabId) && (!kind || tabs[id].kind === kind)) delete tabs[id];
+    });
+  });
+}
+function _liveAssistTabs() {
+  return _withAssistTabs().then(tabs => {
+    const out = {};
+    Object.keys(tabs).forEach(id => { out[id] = tabs[id].kind; });
+    return out;
+  });
+}
+chrome.tabs.onRemoved.addListener(tabId => _unlockAssistTab(tabId));
 
 function _wsMessageId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -89,6 +168,7 @@ function connectWS() {
     // Notify any callers awaiting connection
     _wsOpenCallbacks.forEach(cb => { try { cb(); } catch (_) {} });
     _wsOpenCallbacks.length = 0;
+    syncSettingsFromDesktop();
   };
   socket.onmessage = (event) => {
     let message;
@@ -139,14 +219,15 @@ function waitForConnection(timeoutMs = 5000) {
 }
 
 function handleDesktopMessage(message) {
-  console.log("Received from Sera desktop:", message);
+  // Never log the message itself: autofill / SMTI / MECP messages carry a plain-text password.
+  if (SERA_DEBUG) console.log("Received from Sera desktop:", message.type);
 
-  // A reply to a message this background page itself sent (a generic ack).
-  if (message.type === '_ack' && message._id && _pendingWsRequests.has(message._id)) {
+  // A reply to a message this background page itself sent (a generic ack, or a settings_response).
+  if ((message.type === '_ack' || message.type === 'settings_response') && message._id && _pendingWsRequests.has(message._id)) {
     const pending = _pendingWsRequests.get(message._id);
     clearTimeout(pending.timer);
     _pendingWsRequests.delete(message._id);
-    pending.resolve(true);
+    pending.resolve(message.type === 'settings_response' ? message : true);
     return;
   }
 
@@ -158,31 +239,62 @@ function handleDesktopMessage(message) {
     if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
     else if (message.mode === "manual_assist") handleManualAssistTab(message);
     else handleAutofillTab(message);
+  } else if (message.type === "scc_card_close") {
+    closeSccCard(message.attempt_id);
+  } else if (message.type === "scc_card_update") {
+    updateSccCard(message);
   } else if (message.type === "update_settings") {
-    const fst = message.fst_enabled !== false && message.tracker_enabled !== false;
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
     const allowedDomains = message.allowed_domains || [];
-    const overallTracker = fst;
     const storageObj = {
-      trackerEnabled: overallTracker,
-      fstEnabled: fst,
       scaEnabled: sca,
       scaMode: scaMode
     };
+    if (Number(message.clipboard_clear_seconds) > 0) {
+      storageObj.clipboardClearSeconds = Number(message.clipboard_clear_seconds);
+    }
     if (allowedDomains && allowedDomains.length > 0) {
       storageObj.allowedDomains = allowedDomains;
     }
-    if (!overallTracker) {
-      storageObj.activeAutofillPayload = null;
+    chrome.storage.local.set(storageObj);
+  }
+}
+
+async function requestSettingsOverWS() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return null;
+  return new Promise((resolve) => {
+    const id = _wsMessageId();
+    try {
+      ws.send(JSON.stringify({ type: 'request_settings', _id: id }));
+    } catch (_) {
+      resolve(null);
+      return;
     }
-    chrome.storage.local.set(storageObj, () => {
-      if (overallTracker) {
-        injectAllOpenTabs('desktop-settings-enabled');
-      } else {
-        broadcastTrackerState(false);
-      }
-    });
+    const timer = setTimeout(() => { _pendingWsRequests.delete(id); resolve(null); }, 4000);
+    _pendingWsRequests.set(id, { resolve, timer });
+  });
+}
+
+// As in Chrome: pull the settings once the socket opens, so the SCA scope (allowedDomains), SCA
+// switches and the clipboard-clear seconds do not wait for the next update_settings push.
+async function syncSettingsFromDesktop() {
+  try {
+    const data = await requestSettingsOverWS();
+    if (!data || data.status !== 'ok') return null;
+    const storageObj = {};
+    if (Array.isArray(data.allowed_domains) && data.allowed_domains.length > 0) {
+      storageObj.allowedDomains = data.allowed_domains;
+    }
+    if (data.sca_mode) storageObj.scaMode = data.sca_mode;
+    if (data.sca_enabled !== undefined) storageObj.scaEnabled = !!data.sca_enabled;
+    if (Number(data.clipboard_clear_seconds) > 0) {
+      storageObj.clipboardClearSeconds = Number(data.clipboard_clear_seconds);
+    }
+    if (Object.keys(storageObj).length > 0) await chrome.storage.local.set(storageObj);
+    return storageObj;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -191,8 +303,7 @@ function ensureConnected() {
 }
 
 // Sends one message over the bridge. With waitForAck=true, resolves only once the app has
-// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
-// final SDC flush, which needs to know for certain before it clears its durable outbox.
+// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give.
 // Awaits the connection for up to 5s if the bridge is reconnecting.
 async function sendToDesktop(msg, waitForAck = false) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -217,32 +328,6 @@ async function sendToDesktop(msg, waitForAck = false) {
 }
 
 
-// Reopen the last Manual Assist widget from the browser toolbar if clicked directly
-if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener((tab) => {
-    chrome.storage.local.get(['manualAssistPayload', 'mecpPayload'], data => {
-      const mecp = data.mecpPayload;
-      if (mecp && mecp.expiresAt && mecp.expiresAt >= Date.now()) {
-        let targetHost = '';
-        try { targetHost = new URL(mecp.url).hostname; } catch (_) {}
-        if (tab.url && targetHost && tab.url.includes(targetHost)) {
-          injectMECP(tab.id, mecp);
-          return;
-        }
-      }
-      const payload = data.manualAssistPayload;
-      if (!payload || !payload.expiresAt || payload.expiresAt < Date.now()) {
-        chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload']);
-        return;
-      }
-      let targetHost = '';
-      try { targetHost = new URL(payload.url).hostname; } catch (_) { return; }
-      if (!tab.url || !tab.url.includes(targetHost)) return;
-      injectManualAssist(tab.id, payload);
-    });
-  });
-}
-
 try {
   chrome.alarms.create("sera_keep_alive", { periodInMinutes: 0.5 });
   chrome.alarms.onAlarm.addListener((alarm) => {
@@ -252,117 +337,90 @@ try {
 
 chrome.runtime.onStartup.addListener(ensureConnected);
 chrome.runtime.onInstalled.addListener(() => {
-  // Ensure native connection
   ensureConnected();
-  // Enable tracker by default the first time the extension is installed
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled'], (data) => {
-    const update = {};
-    if (data.trackerEnabled === undefined) update.trackerEnabled = true;
-    if (data.fstEnabled === undefined) update.fstEnabled = true;
-    if (Object.keys(update).length > 0) {
-      chrome.storage.local.set(update);
-    }
-  });
-});
-
-// Broadcast changes to open tabs whenever settings change in storage
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes.trackerEnabled || changes.fstEnabled || changes.sdcEnabled) {
-    chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
-      const trackerEnabled = data.trackerEnabled !== false;
-      const sdcEnabled = data.sdcEnabled !== false && trackerEnabled;
-      const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-      broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled);
-    });
-  }
 });
 
 ensureConnected();
 
-console.log('Sera SDC: background.js module loaded, registering listeners.');
+// SCA scope (decision D7): login.js + sca_adapters.js (paste / typing watching) run only on the
+// approved portal hosts, registered here instead of in the manifest's content_scripts. Nothing on
+// other websites watches typing. host_permissions stay broad on purpose: Autofill, SMTI and MECP
+// inject on demand into custom services' pages and need them.
+const SCA_SCRIPT_ID = 'sera-sca-login';
+const SCA_SCRIPT_FILES = ['content_scripts/sca_adapters.js', 'content_scripts/login.js'];
+const SCA_BASE_DOMAINS = ['incometax.gov.in', 'incometaxindiaefiling.gov.in', 'gst.gov.in', 'tdscpc.gov.in', 'mca.gov.in'];
+let _scaScopeChain = Promise.resolve();
+let _scaScopeKey = null;
+let _scaLegacyHandle = null;
 
-// Helper to broadcast tracker & SDC state changes to open tabs
-function broadcastTrackerState(trackerEnabled, sdcEnabled, fstEnabled) {
-  const tOn = trackerEnabled !== false;
-  const sOn = (sdcEnabled !== undefined ? (sdcEnabled !== false) : tOn) && tOn;
-  const fOn = (fstEnabled !== undefined ? (fstEnabled !== false) : tOn) && tOn;
-  chrome.tabs.query({}, (tabs) => {
-    for (const tab of tabs) {
-      if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
+function scaScopeMatches(domains) {
+  const hosts = new Set(SCA_BASE_DOMAINS);
+  for (const d of domains || []) {
+    const h = String(d || '').trim().toLowerCase();
+    if (/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(h)) hosts.add(h);
+  }
+  const matches = [];
+  for (const h of hosts) matches.push(`https://${h}/*`, `https://*.${h}/*`);
+  return matches;
+}
+
+async function registerScaScripts(domains) {
+  const matches = scaScopeMatches(domains);
+  const key = matches.join('|');
+  if (key === _scaScopeKey) return;
+  const scripting = chrome.scripting;
+  if (scripting && scripting.registerContentScripts) {
+    // Registrations persist across service-worker restarts: keep an identical one rather than
+    // leaving a moment with no SCA script on every wake-up.
+    if (_scaScopeKey === null && scripting.getRegisteredContentScripts) {
       try {
-        chrome.tabs.sendMessage(tab.id, {
-          type: "SERA_TRACKER_STATE_CHANGED",
-          trackerEnabled: tOn,
-          sdcEnabled: sOn,
-          fstEnabled: fOn
-        }).catch(() => {});
+        const [cur] = await scripting.getRegisteredContentScripts({ ids: [SCA_SCRIPT_ID] });
+        if (cur && (cur.matches || []).join('|') === key && (cur.js || []).join('|') === SCA_SCRIPT_FILES.join('|')) {
+          _scaScopeKey = key;
+          return;
+        }
       } catch (_) {}
     }
-  });
-}
-
-// SDC (Sera DOM Crosshair): Inject scripts with zero network tampering
-function injectSDC(tabId, reason) {
-  chrome.storage.local.get(['trackerEnabled', 'fstEnabled', 'sdcEnabled'], (data) => {
-    const trackerEnabled = data.trackerEnabled !== false;
-    const fstEnabled = data.fstEnabled !== false && trackerEnabled;
-    const sdcEnabled = (data.sdcEnabled !== false) && fstEnabled;
-
-    if (!trackerEnabled || !sdcEnabled) {
-      return; // All visual and DOM scanning disabled
-    }
-
-    console.log(`⚡ Sera SDC: Injecting pure isolated DOM Crosshair engine into tab ${tabId} | reason: ${reason}`);
-
-    // Pure isolated-world crosshair scripts (NO network hooking, NO main world injection)
-    const sdcFiles = [
-      'sdc/sdc_toast.js',
-      'sdc/sdc_core.js',
-      'sdc/protocols/itr_protocol.js',
-      'sdc/protocols/gst_protocol.js',
-      'sdc/protocols/traces_protocol.js',
-      'sdc/protocols/mca_protocol.js'
-    ];
-
-    chrome.scripting.executeScript({
-      target: { tabId: tabId, allFrames: false }, // top frame only for SDC
-      files: sdcFiles
-    }).catch(err => {
-      // Ignored for non-matching or restricted URLs
+    try { await scripting.unregisterContentScripts({ ids: [SCA_SCRIPT_ID] }); } catch (_) {}
+    await scripting.registerContentScripts([{
+      id: SCA_SCRIPT_ID, matches, js: SCA_SCRIPT_FILES, runAt: 'document_end', allFrames: true,
+    }]);
+  } else if (typeof browser !== 'undefined' && browser.contentScripts && browser.contentScripts.register) {
+    if (_scaLegacyHandle) { try { await _scaLegacyHandle.unregister(); } catch (_) {} _scaLegacyHandle = null; }
+    _scaLegacyHandle = await browser.contentScripts.register({
+      matches, js: SCA_SCRIPT_FILES.map(file => ({ file })), runAt: 'document_end', allFrames: true,
     });
-  });
-}
-
-// Inject into ALL open tabs
-function injectAllOpenTabs(reason) {
-  chrome.tabs.query({}, (tabs) => {
-    console.log('Sera SDC: tab scan for injection, found', tabs.length, 'tabs | reason:', reason);
-    for (const tab of tabs) {
-      if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) continue;
-      if (tab.status === 'complete') injectSDC(tab.id, reason || 'startup-scan');
-    }
-  });
-}
-
-// Inject into every tab that finishes loading or updates its SPA URL
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
-  if (changeInfo.status === 'complete' || changeInfo.url) {
-    injectSDC(tabId, changeInfo.url ? 'onUpdated-spa-url' : 'onUpdated-complete');
+  } else {
+    return;
   }
+  _scaScopeKey = key;
+}
+
+function applyScaScope() {
+  _scaScopeChain = _scaScopeChain
+    .then(() => chrome.storage.local.get(['allowedDomains']))
+    .then(d => registerScaScripts(d && d.allowedDomains))
+    .catch(err => console.warn('Sera background: SCA scope registration failed:', err));
+}
+
+applyScaScope();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.allowedDomains) applyScaScope();
 });
 
-// Also scan open tabs on worker startup
-injectAllOpenTabs('service-worker-startup');
-
-
+console.log('Sera: background.js module loaded, registering listeners.');
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
+  // Runs in the page: the background's SERA_DEBUG does not exist here (login.js, which also
+  // declares one, runs only on the SCA portals since D7).
+  const SERA_DEBUG = false;
   if (window.__seraFillActive) return; // prevent duplicate runs
+  // sera_dom.js (shared visibility rule) is injected just before this function; without it, fill nothing.
+  if (!window.__seraDom) return;
+  const isVisible = window.__seraDom.isVisible;
   window.__seraFillActive = true;
-  console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
+  if (SERA_DEBUG) console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
 
   function cleanSelector(sel) {
     if (!sel) return "";
@@ -383,20 +441,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     return null;
   }
 
-  function isVisible(el) {
-    if (!el) return false;
-    if (el.name === 'hiddenPassword' || el.getAttribute('tabindex') === '-1' || el.getAttribute('aria-hidden') === 'true' || el.closest('[aria-hidden="true"]')) return false;
-    if (el.type === 'hidden') return false;
-    try {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    } catch (e) {
-      return true;
-    }
-  }
-
 
   function simulateType(el, value) {
     if (!el) return;
@@ -411,32 +455,14 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-  }
 
-  // Auto-click Continue/Login button after password fill
-  function autoClickContinue() {
-    const btnSelectors = [
-      "button[type='submit']",
-      "button.mat-primary",
-      "button.mat-raised-button",
-      "button.btn-primary",
-      "#loginButton",
-      "button:not([disabled])"
-    ];
-    for (const sel of btnSelectors) {
-      try {
-        const btns = document.querySelectorAll(sel);
-        for (const btn of btns) {
-          const text = (btn.textContent || '').trim().toLowerCase();
-          if (isVisible(btn) && (text.includes('continue') || text.includes('login') || text.includes('sign in') || text.includes('submit'))) {
-            console.log("Sera: Auto-clicking Continue/Login button:", text);
-            setTimeout(() => btn.click(), 300);
-            return true;
-          }
-        }
-      } catch (e) {}
-    }
-    return false;
+    // Position cursor cleanly at the end without leaving text selected
+    try {
+      const len = (value || "").length;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
+    } catch (_) {}
   }
 
   let panDone = false;
@@ -445,7 +471,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   function checkDone() {
     if (panDone && passDone) {
       window.__seraFillActive = false;
-      console.log("Sera: Autofill finished");
+      if (SERA_DEBUG) console.log("Sera: Autofill finished");
     }
   }
 
@@ -498,9 +524,9 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       if (userField && userid) {
         if (userField.value !== userid) {
           simulateType(userField, userid);
-          console.log("Sera: Username/Email filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email filled");
         } else {
-          console.log("Sera: Username/Email already filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email already filled");
         }
         clearInterval(panInterval);
         panDone = true;
@@ -508,7 +534,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         checkDone();
       } else if (panAttempts >= 60) {
         clearInterval(panInterval);
-        console.warn("Sera: Username/Email field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Username/Email field not found after timeout");
         panDone = true;
         if (callback) callback();
         checkDone();
@@ -560,19 +586,14 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       if (passField && password) {
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
-        console.log("Sera: Password filled");
-
-        // Auto-click Continue/Login after a delay for Angular to process
-        setTimeout(() => {
-          autoClickContinue();
-        }, 600);
+        if (SERA_DEBUG) console.log("Sera: Password filled");
 
         clearInterval(passInterval);
         passDone = true;
         checkDone();
       } else if (passAttempts >= 90) { // 45 seconds poll for 2-step logins
         clearInterval(passInterval);
-        console.warn("Sera: Password field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Password field not found after timeout");
         passDone = true;
         checkDone();
       }
@@ -590,67 +611,148 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   }
 }
 
-function handleAutofillTab(message) {
-  let targetHostname;
-  try { targetHostname = new URL(message.url).hostname; } catch (e) { console.error("Invalid URL", message.url); return; }
-
-  // Store payload  // Keep the active payload around for the content scripts
-  const isTrackerEnabled = message.tracker_enabled === true;
-  const isFstEnabled = message.fst_enabled !== false && isTrackerEnabled;
-  chrome.storage.local.set({
-    activeAutofillPayload: { ...message, tracker_enabled: isTrackerEnabled, fst_enabled: isFstEnabled, ts: Date.now() },
-    trackerEnabled: isTrackerEnabled,
-    fstEnabled: isFstEnabled
-  });
-
-  chrome.tabs.query({}, (tabs) => {
-    const existing = tabs.find(t => {
-      if (!t.url) return false;
-      if (t.url.includes(targetHostname)) return true;
-      if (targetHostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
-      return false;
-    });
-    
-    if (existing) {
-      chrome.windows.update(existing.windowId, { focused: true }, () => {
-        if (chrome.runtime.lastError) {}
-        chrome.storage.local.set({ trackingTabId: existing.id });
-        chrome.tabs.update(existing.id, { url: message.url, active: true }, () => {
-          if (chrome.runtime.lastError) {}
-          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-            if (tabId === existing.id && info.status === 'complete') {
-              chrome.tabs.onUpdated.removeListener(listener);
-              injectFillScript(existing.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
-            }
-          });
-        });
-      });
-    } else {
-      chrome.tabs.create({ url: message.url }, (newTab) => {
-        if (chrome.runtime.lastError || !newTab) return;
-        chrome.storage.local.set({ trackingTabId: newTab.id });
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-          if (tabId === newTab.id && info.status === 'complete') {
-            chrome.tabs.onUpdated.removeListener(listener);
-            injectFillScript(newTab.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
-          }
-        });
-      });
-    }
-
+// Read-only probe run inside a tab: is a password box visible? (never reads a value)
+function _seesPasswordBox() {
+  return Array.from(document.querySelectorAll('input[type="password"]')).some(el => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
   });
 }
 
-function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
+function _loginUrlKey(u) {
+  try {
+    const p = new URL(u);
+    return (p.origin + p.pathname).replace(/\/+$/, '').toLowerCase();
+  } catch (_) { return ''; }
+}
+
+// Calls done(tab) with the first candidate tab that shows the login page, else done(null).
+function _findLoginTab(candidates, url, done) {
+  const wanted = _loginUrlKey(url);
+  const byUrl = candidates.find(t => _loginUrlKey(t.url) === wanted);
+  if (byUrl) { done(byUrl); return; }
+  const rest = candidates.filter(t => t.id !== undefined && /^https?:/i.test(t.url || ''));
+  const next = (i) => {
+    if (i >= rest.length) { done(null); return; }
+    let answered = false;
+    const answer = (yes) => {
+      if (answered) return;
+      answered = true;
+      if (yes) done(rest[i]); else next(i + 1);
+    };
+    try {
+      chrome.scripting.executeScript({ target: { tabId: rest[i].id, allFrames: true }, func: _seesPasswordBox }, results => {
+        if (chrome.runtime.lastError) { answer(false); return; }
+        answer(Array.isArray(results) && results.some(r => r && r.result === true));
+      });
+    } catch (_) { answer(false); }
+  };
+  next(0);
+}
+
+// Opens the portal's login page and calls onReady(tabId) exactly once, after it has loaded.
+// Reuses an open tab of the portal only when it shows the login page (decision D5); otherwise
+// a new tab is opened, so work in other tabs of that portal is never navigated away.
+// opts.stay: only ever use a portal tab that is already open on the password page (SCC card).
+function openPortalTab(url, onReady, opts) {
+  let hostname;
+  try { hostname = new URL(url).hostname; } catch (_) { return; }
+  const wantedUrl = String(url).split('#')[0].toLowerCase();
+
+  const run = (tab, isNew) => {
+    if (!tab || tab.id === undefined) return;
+    chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
+    const alreadyOnUrl = !isNew && tab.url && tab.url.split('#')[0].toLowerCase() === wantedUrl;
+    if (alreadyOnUrl && tab.status === 'complete') {
+      chrome.tabs.update(tab.id, { active: true }, () => { if (chrome.runtime.lastError) {} });
+      onReady(tab.id);
+      return;
+    }
+
+    let done = false;
+    // 'complete' only counts after this tab has started loading, so a stale 'complete'
+    // from the page being replaced cannot trigger an early injection.
+    let started = isNew || alreadyOnUrl;
+    let timer = null;
+    const cleanup = () => {
+      done = true;
+      clearTimeout(timer);
+      try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
+    };
+    const listener = (tabId, info) => {
+      if (tabId !== tab.id || done) return;
+      if (info.status === 'loading') { started = true; return; }
+      if (info.status === 'complete' && started) { cleanup(); onReady(tab.id); }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    timer = setTimeout(cleanup, 30000);
+
+    if (isNew || alreadyOnUrl) return;
+    chrome.tabs.update(tab.id, { url, active: true }, () => { if (chrome.runtime.lastError) {} });
+  };
+
+  chrome.tabs.query({}, tabs => {
+    // Match on the tab's own host (or a subdomain of it), never a substring of its URL: a search
+    // result or redirect link that merely mentions the portal is not a portal tab.
+    const onHost = (h, base) => h === base || h.endsWith('.' + base);
+    const candidates = (tabs || []).filter(t => {
+      let h;
+      try { h = new URL(t.url).hostname; } catch (_) { return false; }
+      if (onHost(h, hostname)) return true;
+      return onHost(hostname, 'tdscpc.gov.in') && onHost(h, 'tdscpc.gov.in');
+    });
+    if (opts && opts.stay) {
+      // Already-open tab only: the one on the Income Tax password page. No navigation, no new tab,
+      // no focus change - if there is no such tab, nothing happens.
+      const open = candidates.find(t => t.id !== undefined && /#\/login\/password/i.test(t.url || ''));
+      if (open) onReady(open.id);
+      return;
+    }
+    _findLoginTab(candidates, url, existing => {
+      if (existing) { run(existing, false); return; }
+      chrome.tabs.create({ url }, newTab => {
+        if (chrome.runtime.lastError || !newTab) return;
+        run(newTab, true);
+      });
+    });
+  });
+}
+
+function handleAutofillTab(message) {
+  openPortalTab(message.url, tabId => {
+    injectFillScript(tabId, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
+  });
+}
+
+function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs, clearSeconds) {
+  try {
+    if (window.self !== window.top) return;
+  } catch (_) {
+    return;
+  }
+
+  // sera_dom.js (shared visibility + field rules) is injected just before this function.
+  const seraDom = window.__seraDom;
+  if (!seraDom) return;
+
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
-  if (old) old.remove();
+  if (old) {
+    const curCid = old.getAttribute("data-client-id");
+    if (curCid === String(userid)) {
+      // Widget is already active and displayed on this page
+      return;
+    }
+    old.remove();
+  }
   const mecpOld = document.getElementById("sera-mecp-host");
   if (mecpOld) mecpOld.remove();
 
   const duration = expiresMs || 30000;
   const host = document.createElement("div");
   host.id = hostId;
+  host.setAttribute("data-client-id", String(userid));
   host.style.cssText = "position: fixed; top: 18px; right: 24px; z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: auto;";
 
   const shadow = host.attachShadow({ mode: "closed" });
@@ -866,10 +968,104 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   badge.className = "badge";
   badge.innerHTML = "⚡ Sera Assist";
 
+  let dismiss = () => {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+        chrome.storage.session.remove(['manualAssistPayload']);
+      }
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+      }
+    } catch (_) {}
+    card.style.transform = "translateX(120%)";
+    card.style.opacity = "0";
+    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
+  };
+
+  function setBtn(btn, state, text) {
+    if (!btn) return;
+    if (state === "done") {
+      btn.className = "btn done";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    } else if (state === "warn") {
+      btn.className = "btn";
+      btn.style.borderColor = "#E8A040";
+      btn.style.color = "#F5C97A";
+    } else {
+      btn.className = "btn primary";
+      btn.style.removeProperty("border-color");
+      btn.style.removeProperty("color");
+    }
+    btn.innerHTML = text;
+  }
+
+  // Countdown timer bar
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+
+  let timerTimeout = null;
+  let timerStartTime = 0;
+  let remainingMs = duration;
+  let isTimerPaused = false;
+
+  function startCountdown() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerStartTime = Date.now();
+    isTimerPaused = false;
+    timerBar.style.transition = `transform ${remainingMs}ms linear`;
+    timerBar.style.transform = "scaleX(0)";
+    timerTimeout = setTimeout(() => {
+      if (host.isConnected) dismiss();
+    }, remainingMs);
+  }
+
+  function pauseTimer() {
+    if (isTimerPaused || !timerTimeout) return;
+    isTimerPaused = true;
+    clearTimeout(timerTimeout);
+    timerTimeout = null;
+    const elapsed = Date.now() - timerStartTime;
+    remainingMs = Math.max(0, remainingMs - elapsed);
+    try {
+      const computed = window.getComputedStyle(timerBar);
+      const curMatrix = computed.transform;
+      timerBar.style.transition = "none";
+      timerBar.style.transform = curMatrix;
+    } catch (_) {}
+  }
+
+  function resumeTimer() {
+    if (!isTimerPaused) return;
+    if (remainingMs <= 500) {
+      dismiss();
+      return;
+    }
+    startCountdown();
+  }
+
+  function resetTimer() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    remainingMs = duration;
+    isTimerPaused = false;
+    timerBar.style.transition = "none";
+    timerBar.style.transform = "scaleX(1)";
+    void timerBar.offsetWidth; // force reflow
+    startCountdown();
+  }
+
+  card.addEventListener("mouseenter", pauseTimer);
+  card.addEventListener("mouseleave", resumeTimer);
+
   const closeBtn = document.createElement("button");
   closeBtn.className = "close-btn";
   closeBtn.innerHTML = "✕";
   closeBtn.title = "Dismiss";
+  closeBtn.onclick = dismiss;
 
   header.append(badge, closeBtn);
 
@@ -878,6 +1074,20 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   title.className = "client-title";
   title.textContent = clientName || "Client Profile";
 
+  const userFallbacks = [
+    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
+    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
+    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
+    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
+    "input[name='username']", "input[name='user']"
+  ];
+
+  const passFallbacks = [
+    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
+    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
+    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
+  ];
+
   // Action Buttons
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -885,19 +1095,33 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   const uidBtn = document.createElement("button");
   uidBtn.className = "btn primary";
   uidBtn.innerHTML = "👤  Username";
+  uidBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(userid, "user", usernameSelector, userFallbacks, passwordSelector);
+    if (result === "filled") {
+      setBtn(uidBtn, "done", "✓  Username Injected");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
+    } else {
+      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
+      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
+    }
+  };
 
   const passBtn = document.createElement("button");
   passBtn.className = "btn primary";
   passBtn.innerHTML = "🔑  Password";
+  passBtn.onclick = () => {
+    resetTimer();
+    const result = smartFill(password, "pass", passwordSelector, passFallbacks);
+    if (result === "filled") {
+      dismiss();
+    } else {
+      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
+      setTimeout(dismiss, 1200);
+    }
+  };
 
   actions.append(uidBtn, passBtn);
-
-  // Countdown timer bar
-  const timerContainer = document.createElement("div");
-  timerContainer.className = "timer-container";
-  const timerBar = document.createElement("div");
-  timerBar.className = "timer-bar";
-  timerContainer.appendChild(timerBar);
 
   card.append(header, title, actions, timerContainer);
   shadow.appendChild(card);
@@ -907,57 +1131,12 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   setTimeout(() => {
     card.style.transform = "translateX(0)";
     card.style.opacity = "1";
-    timerBar.style.transitionDuration = `${duration}ms`;
-    timerBar.style.transform = "scaleX(0)";
+    startCountdown();
   }, 30);
 
-  function clean(sel) {
-    return (sel || "").trim().replace(/\s+\[/g, "[").replace(/input\s+/g, "input");
-  }
-
-  function visible(el) {
-    if (!el || el.type === "hidden") return false;
-    try {
-      const style = window.getComputedStyle(el);
-      if (style.display === "none" || style.visibility === "hidden") return false;
-      return true;
-    } catch (_) {
-      return true;
-    }
-  }
-
-  function queryAll(selectorStr) {
-    if (!selectorStr) return [];
-    const results = [];
-    const parts = selectorStr.split(',').map(s => s.trim()).filter(Boolean);
-    for (const p of parts) {
-      try {
-        const els = document.querySelectorAll(p);
-        for (const el of els) {
-          if (visible(el) && !results.includes(el)) results.push(el);
-        }
-      } catch (_) {}
-    }
-    return results;
-  }
-
-  function findField(selector, fallbacks) {
-    if (selector) {
-      const matches = queryAll(clean(selector));
-      if (matches.length > 0) return matches[0];
-    }
-    const fbs = Array.isArray(fallbacks) ? fallbacks : [];
-    for (const sel of fbs) {
-      const matches = queryAll(sel);
-      if (matches.length > 0) return matches[0];
-    }
-    try {
-      const active = document.activeElement;
-      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA") && visible(active)) {
-        return active;
-      }
-    } catch (_) {}
-    return null;
+  // kind is "user" or "pass"; otherSelector is the other field's configured selector.
+  function findField(kind, selector, fallbacks, otherSelector) {
+    return seraDom.findField(document, kind, selector, fallbacks, otherSelector);
   }
 
   function isFlutterPage() {
@@ -996,30 +1175,86 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     return false;
   }
 
-  function fill(el, value) {
+  function fill(el, value, refind) {
     if (!el || !value) return false;
-    try {
-      if (el.disabled) { el.removeAttribute("disabled"); el.disabled = false; }
-      if (el.readOnly) { el.removeAttribute("readonly"); el.readOnly = false; }
-      el.focus();
-    } catch (_) {}
-    try {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      setter.call(el, value);
-    } catch (_) {
-      el.value = value;
-    }
-    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: value.slice(-1) }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+
+    const applyValue = (targetEl, val) => {
+      if (!targetEl) return false;
+      try {
+        if (targetEl.disabled) { targetEl.removeAttribute("disabled"); targetEl.disabled = false; }
+        if (targetEl.readOnly) { targetEl.removeAttribute("readonly"); targetEl.readOnly = false; }
+        targetEl.focus();
+      } catch (_) {}
+
+      let replaced = false;
+      // 1. Native browser replacement via execCommand: cleanly replaces any existing combo
+      try {
+        if (typeof targetEl.select === "function") {
+          targetEl.select();
+        }
+        replaced = document.execCommand("insertText", false, val);
+      } catch (_) {}
+
+      // 2. Direct descriptor setter fallback if execCommand was not supported or didn't update value
+      if (!replaced || targetEl.value !== val) {
+        try {
+          const proto = window.HTMLInputElement ? window.HTMLInputElement.prototype : Object.getPrototypeOf(targetEl);
+          const desc = Object.getOwnPropertyDescriptor(proto, "value");
+          if (desc && desc.set) {
+            desc.set.call(targetEl, val);
+          } else {
+            targetEl.value = val;
+          }
+        } catch (_) {
+          targetEl.value = val;
+        }
+
+        try {
+          targetEl.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: val }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+        } catch (_) {}
+      }
+
+      // 3. Keep cursor cleanly at the end without leaving text highlighted
+      try {
+        const len = (val || "").length;
+        if (typeof targetEl.setSelectionRange === "function") {
+          targetEl.setSelectionRange(len, len);
+        }
+      } catch (_) {}
+
+      return true;
+    };
+
+    applyValue(el, value);
+
+    // Asynchronous re-sync: guards against Angular change detection resets
+    // (e.g. when mat-checkbox is clicked or an invalid attempt is dismissed and Angular enables the control on the next tick)
+    setTimeout(() => {
+      try {
+        const freshEl = (refind && refind()) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 60);
+
+    setTimeout(() => {
+      try {
+        const freshEl = (refind && refind()) || el;
+        if (freshEl && freshEl.value !== value) {
+          applyValue(freshEl, value);
+        }
+      } catch (_) {}
+    }, 180);
+
     return true;
   }
 
-  function copyText(text) {
+  function copyText(text, secret) {
     if (!text) return;
+    if (secret) seraDom.scheduleClipboardClear(text, clearSeconds);
     try {
       navigator.clipboard.writeText(text);
     } catch (_) {
@@ -1036,38 +1271,27 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     }
   }
 
-  function smartFill(value, selector, fallbacks) {
-    const el = findField(selector, fallbacks);
-    if (el && fill(el, value)) return "filled";
+  // A Username with no visible non-password input is copied, never typed into the password box.
+  function smartFill(value, kind, selector, fallbacks, otherSelector) {
+    const refind = selector ? () => findField(kind, selector, fallbacks, otherSelector) : null;
+    const el = findField(kind, selector, fallbacks, otherSelector);
+    if (el && fill(el, value, refind)) return "filled";
 
     const fltEl = getFlutterActiveInput();
     if (fltEl) {
       if (execInsert(fltEl, value)) return "filled";
-      if (fill(fltEl, value)) return "filled";
+      if (fill(fltEl, value, refind)) return "filled";
     }
 
+    const secret = kind === "pass";
     if (isFlutterPage()) {
-      copyText(value);
+      copyText(value, secret);
       return "flutter_no_focus";
     }
 
-    copyText(value);
+    copyText(value, secret);
     return "copied";
   }
-
-  const userFallbacks = [
-    "input[id*='userId']", "input[name*='userId']", "input[id$='userId']", "input[name$='userId']",
-    "#userId", "input[name='userId']", "input[id*='txtUserId']", "input[name*='txtUserId']", "input[id*='USER_ID']",
-    "#identifierId", "input[type='email']", "#panAdhaarUserId", "#username", "#userName",
-    "input[name='pan']", "input[id*='pan']", "input[name='tan']", "input[id*='tan']",
-    "input[name='username']", "input[name='user']"
-  ];
-
-  const passFallbacks = [
-    "input[id*='psw']", "input[name*='psw']", "input[id$='psw']", "input[name$='psw']",
-    "input[name='psw']", "#psw", "input[type='password']", "input[id*='password']", "input[name*='password']",
-    "input[name='Passwd']", "#password", "#passwordInput", "#user_pass", "input[name='passwd']"
-  ];
 
   const isFlutter = isFlutterPage();
 
@@ -1140,6 +1364,14 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
           flutterFillStep = 2;
           updateFlutterUI(2);
           stopFlutterObserver();
+          try {
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+              chrome.storage.session.remove(['manualAssistPayload']);
+            }
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+              chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
+            }
+          } catch (_) {}
           setTimeout(dismiss, 400);
         }
       }
@@ -1176,12 +1408,6 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   function stopFlutterObserver() {
     if (flutterObserver) { flutterObserver.disconnect(); flutterObserver = null; }
   }
-
-  let dismiss = () => {
-    card.style.transform = "translateX(120%)";
-    card.style.opacity = "0";
-    setTimeout(() => { if (host.isConnected) host.remove(); }, 380);
-  };
 
   if (isFlutter) {
     // Hide buttons on Flutter sites as requested — replace with child-friendly step cards
@@ -1234,55 +1460,13 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     const baseDismiss = dismiss;
     dismiss = () => { stopFlutterObserver(); baseDismiss(); };
   }
-
-  function setBtn(btn, state, text) {
-    if (state === "done") {
-      btn.className = "btn done";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    } else if (state === "warn") {
-      btn.className = "btn";
-      btn.style.borderColor = "#E8A040";
-      btn.style.color = "#F5C97A";
-    } else {
-      btn.className = "btn primary";
-      btn.style.removeProperty("border-color");
-      btn.style.removeProperty("color");
-    }
-    btn.innerHTML = text;
-  }
-
-  uidBtn.onclick = () => {
-    const result = smartFill(userid, usernameSelector, userFallbacks);
-    if (result === "filled") {
-      setBtn(uidBtn, "done", "✓  Username Injected");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
-    } else {
-      setBtn(uidBtn, "done", "📋  Copied Username (Ctrl+V)");
-      setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2500);
-    }
-  };
-
-  passBtn.onclick = () => {
-    const result = smartFill(password, passwordSelector, passFallbacks);
-    if (result === "filled") {
-      setBtn(passBtn, "done", "✓  Password Injected");
-      setTimeout(dismiss, 400);
-    } else {
-      setBtn(passBtn, "done", "📋  Copied Password (Ctrl+V)");
-      setTimeout(dismiss, 1200);
-    }
-  };
-
-  closeBtn.onclick = dismiss;
-  setTimeout(() => { if (host.isConnected) dismiss(); }, duration);
 }
 
 function handleManualAssistTab(message) {
-  let hostname;
-  try { hostname = new URL(message.url).hostname; } catch (_) { return; }
-  chrome.storage.local.remove(['mecpPayload']);
-  chrome.storage.local.set({
+  try { new URL(message.url); } catch (_) { return; }
+  // A previous client's SMTI tab must not be re-injected with this client's payload.
+  _passwordStore.remove(['mecpPayload', 'smtiTabIds']);
+  _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
 
@@ -1291,126 +1475,90 @@ function handleManualAssistTab(message) {
   const isFlutterUrl = /tdscpc\.gov\.in|traces\.gov\.in|flutter/i.test(message.url || "");
   const injectDelay = isFlutterUrl ? 3000 : 0;
 
-  chrome.tabs.query({}, tabs => {
-    const existing = tabs.find(t => {
-      if (!t.url) return false;
-      if (t.url.includes(hostname)) return true;
-      if (hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
-      return false;
-    });
-    const open = tab => {
-      if (!tab) return;
-      chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === tab.id && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          setTimeout(() => injectManualAssist(tab.id, message), injectDelay);
-        }
-      });
-      chrome.tabs.update(tab.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
-    };
-    if (existing) open(existing); else chrome.tabs.create({ url: message.url }, open);
-
+  openPortalTab(message.url, tabId => {
+    _rememberSmtiTab(tabId);
+    setTimeout(() => injectManualAssist(tabId, message, true), injectDelay);
   });
 }
 
-function recordInjectionAndClearCookiesIfNeeded() {
-  chrome.storage.local.get({ injectionCount: 0 }, (data) => {
-    let newCount = (data.injectionCount || 0) + 1;
-    console.log(`Sera: Extension injection count = ${newCount}/5`);
-    
-    if (newCount >= 5) {
-      console.log("Sera: Reached 5 extension injections. Clearing browser cookies...");
-      clearBrowserCookies(() => {
-        console.log("Sera: Browser cookies cleared successfully after 5 injections.");
+const SERA_DOM_FILE = 'content_scripts/sera_dom.js';
+
+// Injects the shared DOM rules, then the function, into the same target.
+function injectWithDom(target, func, args) {
+  return chrome.scripting.executeScript({ target, files: [SERA_DOM_FILE] })
+    .then(() => chrome.scripting.executeScript({ target, func, args }));
+}
+
+// Seconds after which a copied password is wiped from the clipboard (the desktop's setting; 30 until it syncs).
+function clipboardClearSeconds() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get(['clipboardClearSeconds'], d => {
+        const n = Number(d && d.clipboardClearSeconds);
+        resolve(n > 0 ? n : 30);
       });
-      chrome.storage.local.set({ injectionCount: 0 });
-    } else {
-      chrome.storage.local.set({ injectionCount: newCount });
-    }
+    } catch (_) { resolve(30); }
   });
 }
 
-function clearBrowserCookies(callback) {
-  let done = false;
-  const finish = () => {
-    if (!done) {
-      done = true;
-      if (callback) callback();
-    }
-  };
-
-  if (chrome.browsingData && chrome.browsingData.removeCookies) {
-    chrome.browsingData.removeCookies({ "since": 0 }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn("Sera: removeCookies error:", chrome.runtime.lastError.message);
-      }
-      finish();
-    });
-  } else if (chrome.browsingData && chrome.browsingData.remove) {
-    chrome.browsingData.remove({ "since": 0 }, { "cookies": true }, () => {
-      finish();
-    });
-  } else if (chrome.cookies) {
-    chrome.cookies.getAll({}, (cookies) => {
-      if (!cookies || cookies.length === 0) {
-        finish();
-        return;
-      }
-      let pending = cookies.length;
-      cookies.forEach((cookie) => {
-        const protocol = cookie.secure ? "https:" : "http:";
-        const url = `${protocol}//${cookie.domain.replace(/^\./, "")}${cookie.path}`;
-        chrome.cookies.remove({ url: url, name: cookie.name }, () => {
-          pending--;
-          if (pending <= 0) finish();
-        });
-      });
-    });
-  } else {
-    finish();
-  }
+// The one tab SMTI opened (or the staff member pressed it in). Only that tab is ever re-injected.
+function _rememberSmtiTab(tabId) {
+  _passwordStore.set({ smtiTabIds: [tabId] });
 }
 
-function injectManualAssist(tabId, message) {
-  recordInjectionAndClearCookiesIfNeeded();
-  // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
-  scaCoordinator.disarm("manual assist started");
-  chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
-    args:[message.userid, message.password, message.username_selector, message.password_selector,
-      message.client_name || message.portal, 30000] })
+// After a page load in SMTI's tab: show the widget again only while the payload is live and
+// the page shows a login form (a password box or the configured username field).
+function maybeReinjectManualAssist(tabId) {
+  _passwordStore.get(['manualAssistPayload', 'smtiTabIds'], data => {
+    const p = data.manualAssistPayload;
+    if (!p || !(p.expiresAt > Date.now())) return;
+    if (!Array.isArray(data.smtiTabIds) || !data.smtiTabIds.includes(tabId)) return;
+    setTimeout(() => {
+      injectWithDom({ tabId }, (sel) => window.__seraDom.hasLoginForm(document, sel), [p.username_selector])
+        .then(results => {
+          if (results && results.some(r => r && r.result === true)) injectManualAssist(tabId, p);
+        })
+        .catch(() => {});
+    }, 700);
+  });
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!tab.url || tab.url.startsWith('about:') || tab.url.startsWith('moz-extension://')) return;
+  // Show Manual Assist again after a reload (e.g. invalid password) in the tab SMTI opened only.
+  if (changeInfo.status === 'complete') maybeReinjectManualAssist(tabId);
+});
+
+const _lastManualAssistInject = {};
+function injectManualAssist(tabId, message, force = false) {
+  if (!tabId) return;
+  const now = Date.now();
+  if (!force && _lastManualAssistInject[tabId] && (now - _lastManualAssistInject[tabId]) < 1000) return;
+  _lastManualAssistInject[tabId] = now;
+  _lockAssistTab(tabId, 'smti');
+  clipboardClearSeconds()
+    .then(clearSecs => injectWithDom({ tabId }, manualAssistWidget,
+      [message.userid, message.password, message.username_selector, message.password_selector,
+        message.client_name || message.portal, 30000, clearSecs]))
     .then(() => console.log("Sera: Manual Assist widget injected"))
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }
 
-// Track tab closure for Tier 2 fallback
-chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
-  chrome.storage.local.get(['trackingTabId', 'activeAutofillPayload'], (data) => {
-    if (data.trackingTabId === tabId && data.activeAutofillPayload) {
-      // The tracked tab was closed. Send uncertain_result to desktop app
-      sendToDesktop({
-        type: "uncertain_result",
-        client_id: data.activeAutofillPayload.client_id,
-        portal: data.activeAutofillPayload.portal
-      });
-      // Clear tracking state
-      chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-    }
-  });
-});
-
 function injectFillScript(tabId, userid, password, usernameSelector, passwordSelector, extensionFlow) {
-  recordInjectionAndClearCookiesIfNeeded();
-  chrome.scripting.executeScript({
-    target: { tabId: tabId, allFrames: true },
-    func: fillCredentialsInPage,
-    args: [userid, password, usernameSelector, passwordSelector, extensionFlow]
-  }).then(() => console.log("Sera: fill script injected"))
+  injectWithDom({ tabId: tabId, allFrames: true }, fillCredentialsInPage,
+    [userid, password, usernameSelector, passwordSelector, extensionFlow]
+  ).then(() => console.log("Sera: fill script injected"))
     .catch(err => console.error("Sera: inject failed", err));
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  console.log("Sera background: received runtime message:", msg);
+  if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg.type);
+  if (msg.type === "MANUAL_ASSIST_CLEAR") {
+    _passwordStore.remove(['manualAssistPayload', 'smtiTabIds']);
+    _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'smti');
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type === "CHECK_NATIVE_STATUS") {
     sendResponse({ connected: !!(ws && ws.readyState === WebSocket.OPEN), mode: "ws" });
     return true;
@@ -1422,23 +1570,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "SETTINGS_CHANGED_FROM_POPUP") {
     const s = msg.settings || {};
-    if (s.trackerEnabled && s.fstEnabled) {
-      injectAllOpenTabs('popup-settings-enabled');
-    } else {
-      broadcastTrackerState(false);
-    }
     sendToDesktop({
       type: "extension_settings_updated",
-      fst_enabled: s.fstEnabled,
-      tracker_enabled: s.trackerEnabled,
       sca_enabled: s.scaEnabled
     });
     sendResponse({ status: "ok" });
     return true;
   }
+  if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
+    _passwordStore.remove(['mecpPayload']);
+    _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
+    if (msg.attempt_id) {
+      sccCardTabs.delete(String(msg.attempt_id));
+      if (msg.type === "MECP_DISMISSED") sendToDesktop({ type: "scc_card_closed", attempt_id: String(msg.attempt_id) }, false);
+    }
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  // A staff click on "This one worked" on the SCC card; the label is the row's name, never its text.
+  if (msg.type === "scc_row_worked" && msg.attempt_id && msg.row_label) {
+    sendToDesktop({ type: "scc_row_worked", attempt_id: String(msg.attempt_id), row_label: String(msg.row_label) }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  // A staff click on "None - I typed my own" when the SCC card asks which password worked.
+  if (msg.type === "scc_row_none" && msg.attempt_id) {
+    sendToDesktop({ type: "scc_row_none", attempt_id: String(msg.attempt_id) }, false);
+    sendResponse({ status: "ok" });
+    return true;
+  }
   if (msg.type === "TRIGGER_MANUAL_ASSIST_FOR_TAB") {
     if (msg.tabId) {
-      chrome.storage.local.get(['manualAssistPayload', 'mecpPayload'], data => {
+      _passwordStore.get(['manualAssistPayload', 'mecpPayload'], data => {
         const mecp = data.mecpPayload;
         if (mecp && mecp.expiresAt && mecp.expiresAt >= Date.now()) {
           injectMECP(msg.tabId, mecp);
@@ -1446,6 +1609,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         const payload = data.manualAssistPayload;
         if (payload && payload.expiresAt && payload.expiresAt >= Date.now()) {
+          _rememberSmtiTab(msg.tabId);
           injectManualAssist(msg.tabId, payload);
         }
       });
@@ -1453,37 +1617,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if (msg.type === "filing_result" || msg.type === "filing_result_compressed") {
-    console.log("Sera background: handling filing_result, sending to desktop...");
-    sendToDesktop(msg, true).then((sent) => {
-      if (sent) chrome.storage.local.remove(['trackingTabId', 'activeAutofillPayload']);
-      sendResponse({ status: sent ? "accepted" : "failed" });
-    }).catch((err) => {
-      console.warn("Sera background: filing_result delivery error:", err);
-      sendResponse({ status: "failed" });
-    });
-    return true;
-  }
-  // sudr_capture / sdc_session_timeline / session_start / audit_event: SDC's page script
-  // (sdc_core.js) hands every capture to this background page over chrome.runtime.sendMessage
-  // now (it never talks to the app directly - see that file's _emitDual). 2026-09-22: this
-  // listener used to only recognise filing_result, so a capture with any other type silently
-  // reached here and was dropped (no case matched it, no reply was ever sent).
-  if (["sudr_capture", "sdc_session_timeline", "session_start", "audit_event", "uncertain_result"].includes(msg.type)) {
-    sendToDesktop(msg, true).then((sent) => {
-      if (!sent) console.warn(`Sera background: ${msg.type} was not delivered to desktop.`);
-      sendResponse({ status: sent ? "accepted" : "failed" });
-    }).catch((err) => {
-      console.warn(`Sera background: ${msg.type} delivery error:`, err);
-      sendResponse({ status: "failed" });
-    });
-    return true;
-  }
 });
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function mecpWidget(userid, password, clientName, expiresMs) {
+// The SCC card's tab per attempt, in memory only: nothing about an SCC card goes into any storage.
+const sccCardTabs = new Map();
+
+function closeSccCard(attemptId) {
+  const tabId = sccCardTabs.get(String(attemptId));
+  sccCardTabs.delete(String(attemptId));
+  if (tabId === undefined) return;
+  _unlockAssistTab(tabId, 'mecp');
+  try {
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { const h = document.getElementById("sera-mecp-host"); if (h) h.remove(); }
+    }, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
+}
+
+// SCC-U's outcome on the card (desktop -> the card's own tab): row labels and a message only.
+function updateSccCard(message) {
+  const attemptId = String(message.attempt_id || "");
+  const tabId = sccCardTabs.get(attemptId);
+  if (tabId === undefined) return;
+  const update = {
+    type: "SERA_SCC_CARD_UPDATE",
+    attempt_id: attemptId,
+    failed: Array.isArray(message.failed) ? message.failed.map(String) : [],
+    next: message.stop || !message.next ? null : String(message.next),
+    message: String(message.message || ""),
+    stop: !!message.stop,
+    ask: !message.stop && Array.isArray(message.ask) ? message.ask.map(String) : null
+  };
+  try {
+    chrome.tabs.sendMessage(tabId, update, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
+}
+
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId) {
+  // sera_dom.js (shared clipboard clearing) is injected just before this function.
+  const seraDom = window.__seraDom;
+  if (!seraDom) return;
+
   const hostId = "sera-mecp-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -1492,58 +1669,98 @@ function mecpWidget(userid, password, clientName, expiresMs) {
 
   const host = document.createElement("div");
   host.id = hostId;
-  const shadow = host.attachShadow({ mode: "open" });
+  const shadow = host.attachShadow({ mode: "closed" });
+
+  const isSCC = !!(sccMode && sccCombos && sccCombos.length > 0);
 
   const style = document.createElement("style");
   style.textContent = `
     .box {
       position: fixed; top: 18px; right: 18px; z-index: 2147483647;
-      width: 310px; padding: 14px 16px; background: #161B22; border: 1.5px solid #30363D;
+      width: ${isSCC ? "360px" : "320px"}; padding: 14px 16px; background: #161B22; border: 1.5px solid ${isSCC ? "#2E9B5F" : "#30363D"};
       border-radius: 10px; color: #F0F6FC; box-shadow: 0 10px 32px rgba(0,0,0,.5);
-      font: 13px Segoe UI, Arial, sans-serif;
+      font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
     .header {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #30363D;
     }
+    .badge-wrap {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .badge-tag {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #4CF9B7;
+    }
     .client-title {
-      font-weight: 700; color: #7EE787; font-size: 13px; word-break: break-word; line-height: 1.3;
+      font-weight: 700; color: #F0F6FC; font-size: 13px; word-break: break-word; line-height: 1.3;
     }
     .close-btn {
       background: transparent; border: none; color: #8B949E; font-size: 18px;
       cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px;
     }
     .close-btn:hover { color: #F0F6FC; background: #21262D; }
+    .section-title {
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #8B949E; margin: 10px 0 6px 2px;
+    }
     .field-row {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      margin-bottom: 10px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin-bottom: 8px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
       border: 1px solid #21262D;
     }
+    .field-left {
+      display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1;
+    }
     .field-label {
-      font-size: 11px; color: #8B949E; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      font-size: 10px; color: #8B949E; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
     }
     .field-value {
-      font-family: monospace; font-size: 13px; color: #C9D1D9; letter-spacing: 2px; margin-top: 2px;
+      font-family: Consolas, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #E6EDF3;
+      word-break: break-all; font-weight: 600; line-height: 1.3;
     }
     .copy-btn {
       display: flex; align-items: center; justify-content: center; gap: 4px;
       background: #238636; color: #FFFFFF; border: none; border-radius: 5px;
-      padding: 6px 12px; font: 600 12px Segoe UI, Arial, sans-serif; cursor: pointer;
-      transition: background 0.15s ease; flex-shrink: 0;
+      padding: 6px 12px; font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; transition: background 0.15s ease; flex-shrink: 0; white-space: nowrap;
     }
+    .field-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; flex-shrink: 0; }
+    .worked-btn {
+      background: transparent; color: #4CF9B7; border: 1px solid #2E9B5F; border-radius: 5px;
+      padding: 4px 10px; font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; white-space: nowrap;
+    }
+    .worked-btn:hover { background: #12261D; }
+    .worked-btn:disabled { opacity: 0.6; cursor: default; }
     .copy-btn:hover { background: #2EA043; }
     .copy-btn.copied { background: #1F6FEB; }
-    .eye-btn {
-      background: transparent; border: 1px solid #30363D; color: #C9D1D9; border-radius: 5px;
-      padding: 5px 7px; font-size: 13px; cursor: pointer; display: flex; align-items: center;
-      justify-content: center; transition: background 0.15s ease, border-color 0.15s ease;
-      flex-shrink: 0; min-width: 32px; height: 28px;
+    .copy-btn:disabled { opacity: 0.5; cursor: default; }
+    .field-row.failed { opacity: 0.55; border-color: #6E2B2B; }
+    .field-row.next { border-color: #D29922; box-shadow: 0 0 0 1px #D29922; }
+    .scc-note {
+      display: none; margin: 0 0 8px; padding: 7px 10px; border-radius: 6px; background: #2B2111;
+      border: 1px solid #D29922; color: #F0F6FC; font-size: 12px; line-height: 1.35;
     }
-    .eye-btn:hover { background: #21262D; border-color: #8B949E; }
+    .scc-note.stop { background: #3A1515; border-color: #F85149; }
+    .field-row.ask { border-color: #4CF9B7; box-shadow: 0 0 0 1px #4CF9B7; }
+    .none-btn {
+      display: none; width: 100%; margin: 0 0 8px; background: transparent; color: #C9D1D9;
+      border: 1px solid #484F58; border-radius: 5px; padding: 5px 10px;
+      font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer;
+    }
+    .none-btn:hover { background: #21262D; }
+    .timer-container {
+      margin-top: 12px; height: 3.5px; background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px; overflow: hidden;
+    }
+    .timer-bar {
+      height: 100%; width: 100%; background: #2E9B5F; transform-origin: left;
+    }
     .toast {
       display: none; position: absolute; bottom: 6px; left: 16px; right: 16px;
       background: #238636; color: #FFF; padding: 5px 10px; border-radius: 4px;
-      font-size: 11px; text-align: center; font-weight: 600;
+      font-size: 11px; text-align: center; font-weight: 600; z-index: 10;
     }
   `;
 
@@ -1554,20 +1771,35 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   // Header
   const header = document.createElement("div");
   header.className = "header";
+
+  const badgeWrap = document.createElement("div");
+  badgeWrap.className = "badge-wrap";
+  if (isSCC) {
+    const bTag = document.createElement("div");
+    bTag.className = "badge-tag";
+    bTag.textContent = "⚡ Sera Assist (SCC)";
+    badgeWrap.appendChild(bTag);
+  }
   const title = document.createElement("div");
   title.className = "client-title";
-  title.textContent = clientName || "MECP - Client Credentials";
+  title.textContent = clientName || (isSCC ? "Verify Password" : "Client Credentials");
+  badgeWrap.appendChild(title);
+
   const close = document.createElement("button");
   close.className = "close-btn";
   close.textContent = "×";
-  header.append(title, close);
-
-  // Helper function to create masked text
-  function maskText(str) {
-    if (!str) return "••••••••";
-    if (str.length <= 3) return "•".repeat(str.length);
-    return str.substring(0, 1) + "•".repeat(Math.max(4, str.length - 2)) + str.substring(str.length - 1);
+  close.title = "Dismiss";
+  // The x, the timeout and "both copied" all end here; the background clears mecpPayload.
+  // The SCC card has no timeout: it stays until the x (which tells the desktop) or the desktop closes it.
+  let timerTimeout = null;
+  function closeCard(messageType) {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = null;
+    try { chrome.runtime.sendMessage({ type: messageType, attempt_id: attemptId || "" }); } catch (_) {}
+    if (host.isConnected) host.remove();
   }
+  close.onclick = () => closeCard("MECP_DISMISSED");
+  header.append(badgeWrap, close);
 
   // Toast banner
   const toast = document.createElement("div");
@@ -1580,153 +1812,279 @@ function mecpWidget(userid, password, clientName, expiresMs) {
   }
 
   function copyCredential(val, label) {
-    navigator.clipboard.writeText(val).then(() => {
-      showToast(`${label} copied! Clipboard auto-clears in 45s.`);
-      setTimeout(() => {
-        navigator.clipboard.readText().then(current => {
-          if (current === val) {
-            navigator.clipboard.writeText("");
-          }
-        }).catch(() => {});
-      }, 45000);
-    }).catch(err => {
-      const ta = document.createElement("textarea");
-      ta.value = val;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
+    if (!val) return;
+    try {
+      navigator.clipboard.writeText(val);
       showToast(`${label} copied!`);
-    });
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = val;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast(`${label} copied!`);
+      } catch (_) {}
+    }
   }
 
-  // User ID Row
-  const uidRow = document.createElement("div");
-  uidRow.className = "field-row";
-  const uidLeft = document.createElement("div");
-  const uidLbl = document.createElement("div");
-  uidLbl.className = "field-label";
-  uidLbl.textContent = "User ID";
-  const uidVal = document.createElement("div");
-  uidVal.className = "field-value";
-  uidVal.textContent = maskText(userid);
-  uidLeft.append(uidLbl, uidVal);
+  // D6: a plain card closes once both the User ID (when shown) and the password are copied.
+  // The SCC card stays up until a save, the x, or the desktop ends the attempt.
+  const hasUserId = !!(userid && String(userid).trim());
+  let userIdCopied = false;
+  let passwordCopied = false;
+  let finishing = false;
+  function closeWhenBothCopied() {
+    if (finishing || isSCC || !passwordCopied || (hasUserId && !userIdCopied)) return;
+    finishing = true;
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = null;
+    setTimeout(() => closeCard("MECP_CLOSED"), 1200);
+  }
 
-  const uidCopy = document.createElement("button");
-  uidCopy.className = "copy-btn";
-  uidCopy.innerHTML = "📋 Copy";
-  uidCopy.onclick = () => {
-    copyCredential(userid, "User ID");
-    uidCopy.classList.add("copied");
-    uidCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      uidCopy.classList.remove("copied");
-      uidCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
-  uidRow.append(uidLeft, uidCopy);
+  // User ID Row (rendered only if userid is provided)
+  if (hasUserId) {
+    const uidRow = document.createElement("div");
+    uidRow.className = "field-row";
+    const uidLeft = document.createElement("div");
+    uidLeft.className = "field-left";
+    const uidLbl = document.createElement("div");
+    uidLbl.className = "field-label";
+    uidLbl.textContent = "User ID (PAN)";
+    const uidVal = document.createElement("div");
+    uidVal.className = "field-value";
+    uidVal.textContent = userid || "";
+    uidLeft.append(uidLbl, uidVal);
 
-  // Password Row
-  const passRow = document.createElement("div");
-  passRow.className = "field-row";
-  const passLeft = document.createElement("div");
-  const passLbl = document.createElement("div");
-  passLbl.className = "field-label";
-  passLbl.textContent = "Password";
-  const passVal = document.createElement("div");
-  passVal.className = "field-value";
-  let isPassRevealed = false;
-  passVal.textContent = maskText(password);
-  passLeft.append(passLbl, passVal);
+    const uidCopy = document.createElement("button");
+    uidCopy.className = "copy-btn";
+    uidCopy.innerHTML = "📋 Copy";
+    uidCopy.onclick = () => {
+      copyCredential(userid, "User ID");
+      userIdCopied = true;
+      closeWhenBothCopied();
+      uidCopy.classList.add("copied");
+      uidCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        uidCopy.classList.remove("copied");
+        uidCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+    uidRow.append(uidLeft, uidCopy);
+    box.append(header, uidRow);
+  } else {
+    box.append(header);
+  }
 
-  const passRight = document.createElement("div");
-  passRight.style.display = "flex";
-  passRight.style.alignItems = "center";
-  passRight.style.gap = "6px";
+  if (isSCC) {
+    // Password Combinations Section
+    const secTitle = document.createElement("div");
+    secTitle.className = "section-title";
+    secTitle.textContent = "Password Combinations (Unverified)";
+    box.appendChild(secTitle);
+    const note = document.createElement("div");
+    note.className = "scc-note";
+    box.appendChild(note);
+    // Shown only while the desktop asks which password worked (step 5); saves nothing.
+    const noneBtn = document.createElement("button");
+    noneBtn.className = "none-btn";
+    noneBtn.textContent = "None - I typed my own";
+    noneBtn.onclick = () => {
+      try { chrome.runtime.sendMessage({ type: "scc_row_none", attempt_id: attemptId || "" }); } catch (_) {}
+      noneBtn.textContent = "✓ Sent";
+      noneBtn.disabled = true;
+    };
+    box.appendChild(noneBtn);
+    const sccRows = new Map();   // row label -> its elements, for the desktop's outcome marks
 
-  const eyeToggleBtn = document.createElement("button");
-  eyeToggleBtn.className = "eye-btn";
-  eyeToggleBtn.title = "Show / Hide Password";
-  eyeToggleBtn.innerHTML = "👁️";
-  eyeToggleBtn.onclick = () => {
-    isPassRevealed = !isPassRevealed;
-    passVal.textContent = isPassRevealed ? (password || "") : maskText(password);
-    eyeToggleBtn.innerHTML = isPassRevealed ? "🙈" : "👁️";
-  };
+    sccCombos.forEach((combo) => {
+      const cRow = document.createElement("div");
+      cRow.className = "field-row";
 
-  const passCopy = document.createElement("button");
-  passCopy.className = "copy-btn";
-  passCopy.innerHTML = "📋 Copy";
-  passCopy.onclick = () => {
-    copyCredential(password, "Password");
-    passCopy.classList.add("copied");
-    passCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      passCopy.classList.remove("copied");
-      passCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
+      const cLeft = document.createElement("div");
+      cLeft.className = "field-left";
+      const cLbl = document.createElement("div");
+      cLbl.className = "field-label";
+      cLbl.textContent = combo.label || `Combo ${combo.id}`;
+      const cVal = document.createElement("div");
+      cVal.className = "field-value";
+      cVal.textContent = combo.value || "";
+      cLeft.append(cLbl, cVal);
 
-  passRight.append(eyeToggleBtn, passCopy);
-  passRow.append(passLeft, passRight);
+      const cCopy = document.createElement("button");
+      cCopy.className = "copy-btn";
+      cCopy.innerHTML = "📋 Copy";
+      cCopy.onclick = () => {
+        copyCredential(combo.value, combo.label || "Password");
+        seraDom.scheduleClipboardClear(combo.value, clearSeconds);
+        cCopy.classList.add("copied");
+        cCopy.innerHTML = "✓ Copied";
+        setTimeout(() => {
+          cCopy.classList.remove("copied");
+          cCopy.innerHTML = "📋 Copy";
+        }, 2000);
+      };
 
-  box.append(header, uidRow, passRow, toast);
+      // A staff click, sent to the desktop with the row's label only.
+      const cWorked = document.createElement("button");
+      cWorked.className = "worked-btn";
+      cWorked.textContent = "This one worked";
+      cWorked.onclick = () => {
+        try {
+          chrome.runtime.sendMessage({
+            type: "scc_row_worked",
+            attempt_id: attemptId || "",
+            row_label: combo.label || `Combo ${combo.id}`
+          });
+        } catch (_) {}
+        cWorked.textContent = "✓ Sent";
+        cWorked.disabled = true;
+      };
+
+      const cActions = document.createElement("div");
+      cActions.className = "field-actions";
+      cActions.append(cCopy, cWorked);
+      cRow.append(cLeft, cActions);
+      box.appendChild(cRow);
+      sccRows.set(combo.label || `Combo ${combo.id}`, { row: cRow, label: cLbl, copy: cCopy, worked: cWorked });
+    });
+
+    // The desktop's reading of the portal's answer (sent by background.js, never read from the page).
+    const onUpdate = (msg) => {
+      if (!msg || msg.type !== "SERA_SCC_CARD_UPDATE" || msg.attempt_id !== (attemptId || "")) return;
+      if (!host.isConnected) { chrome.runtime.onMessage.removeListener(onUpdate); return; }
+      const failed = new Set(msg.failed || []);
+      const ask = Array.isArray(msg.ask) ? new Set(msg.ask) : null;
+      sccRows.forEach((els, label) => {
+        const isFailed = failed.has(label);
+        els.row.classList.toggle("failed", isFailed);
+        els.row.classList.toggle("next", !msg.stop && msg.next === label);
+        els.row.classList.toggle("ask", !!ask && ask.has(label));
+        els.label.textContent = isFailed ? `✗ ${label}` : label;
+        els.copy.disabled = !!msg.stop;
+        if (msg.stop || isFailed) els.worked.disabled = true;   // a ✗ row is never credited
+      });
+      noneBtn.style.display = ask ? "block" : "none";
+      note.textContent = msg.message || "";
+      note.classList.toggle("stop", !!msg.stop);
+      note.style.display = msg.message ? "block" : "none";
+    };
+    chrome.runtime.onMessage.addListener(onUpdate);
+  } else {
+    // Single Password Row (cleartext)
+    const passRow = document.createElement("div");
+    passRow.className = "field-row";
+    const passLeft = document.createElement("div");
+    passLeft.className = "field-left";
+    const passLbl = document.createElement("div");
+    passLbl.className = "field-label";
+    passLbl.textContent = "Password";
+    const passVal = document.createElement("div");
+    passVal.className = "field-value";
+    passVal.textContent = password || "";
+    passLeft.append(passLbl, passVal);
+
+    const passCopy = document.createElement("button");
+    passCopy.className = "copy-btn";
+    passCopy.innerHTML = "📋 Copy";
+    passCopy.onclick = () => {
+      copyCredential(password, "Password");
+      seraDom.scheduleClipboardClear(password, clearSeconds);
+      passwordCopied = true;
+      closeWhenBothCopied();
+      passCopy.classList.add("copied");
+      passCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        passCopy.classList.remove("copied");
+        passCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+
+    passRow.append(passLeft, passCopy);
+    box.appendChild(passRow);
+  }
+
+  // Countdown bar: pauses while the pointer is over the card, like SMTI's.
+  const timerContainer = document.createElement("div");
+  timerContainer.className = "timer-container";
+  const timerBar = document.createElement("div");
+  timerBar.className = "timer-bar";
+  timerContainer.appendChild(timerBar);
+  if (!isSCC) box.appendChild(timerContainer);
+
+  let timerStartTime = 0;
+  let remainingMs = expiresMs || 90000;
+  let isTimerPaused = false;
+
+  function startCountdown() {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerStartTime = Date.now();
+    isTimerPaused = false;
+    timerBar.style.transition = `transform ${remainingMs}ms linear`;
+    timerBar.style.transform = "scaleX(0)";
+    timerTimeout = setTimeout(() => closeCard("MECP_CLOSED"), remainingMs);
+  }
+
+  function pauseTimer() {
+    if (finishing || isTimerPaused || !timerTimeout) return;
+    isTimerPaused = true;
+    clearTimeout(timerTimeout);
+    timerTimeout = null;
+    remainingMs = Math.max(0, remainingMs - (Date.now() - timerStartTime));
+    try {
+      const cur = window.getComputedStyle(timerBar).transform;
+      timerBar.style.transition = "none";
+      timerBar.style.transform = cur;
+    } catch (_) {}
+  }
+
+  function resumeTimer() {
+    if (finishing || !isTimerPaused) return;
+    if (remainingMs <= 500) { closeCard("MECP_CLOSED"); return; }
+    startCountdown();
+  }
+
+  box.addEventListener("mouseenter", pauseTimer);
+  box.addEventListener("mouseleave", resumeTimer);
+
+  box.appendChild(toast);
   shadow.appendChild(box);
   document.documentElement.appendChild(host);
-
-  close.onclick = () => host.remove();
-  setTimeout(() => { if (host.isConnected) host.remove(); }, expiresMs || 60000);
+  if (!isSCC) startCountdown();
 }
 
 function handleMECPTab(message) {
-  let hostname;
-  try { hostname = new URL(message.url).hostname; } catch (_) { return; }
-  chrome.storage.local.remove(['manualAssistPayload']);
-  chrome.storage.local.set({
+  try { new URL(message.url); } catch (_) { return; }
+  if (message.scc_mode === true) {
+    // SCC card, nothing stored. Fed by the desktop when SGT reads the password page: it goes into the
+    // portal tab that is already open - never a navigation, never a new tab. When staff pressed MECP
+    // in Client Detail (open_tab) it opens the login page like any MECP.
+    openPortalTab(message.url, tabId => {
+      if (message.attempt_id) sccCardTabs.set(String(message.attempt_id), tabId);
+      injectMECP(tabId, message);
+    }, message.open_tab === true ? undefined : { stay: true });
+    return;
+  }
+  _passwordStore.remove(['manualAssistPayload']);
+  _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
-  chrome.tabs.query({}, tabs => {
-    const existing = tabs.find(t => t.url && t.url.includes(hostname));
-    if (existing) {
-      chrome.windows.update(existing.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
-      chrome.tabs.update(existing.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
-      
-      let injected = false;
-      if (existing.status === "complete") {
-        injected = true;
-        injectMECP(existing.id, message);
-      }
-      
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === existing.id && info.status === "complete" && !injected) {
-          injected = true;
-          chrome.tabs.onUpdated.removeListener(listener);
-          injectMECP(existing.id, message);
-        }
-      });
-    } else {
-      chrome.tabs.create({ url: message.url }, (newTab) => {
-        if (chrome.runtime.lastError || !newTab) return;
-        let injected = false;
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-          if (tabId === newTab.id && info.status === "complete" && !injected) {
-            injected = true;
-            chrome.tabs.onUpdated.removeListener(listener);
-            injectMECP(newTab.id, message);
-          }
-        });
-      });
-    }
-  });
+  openPortalTab(message.url, tabId => injectMECP(tabId, message));
 }
 
 function injectMECP(tabId, message) {
-  recordInjectionAndClearCookiesIfNeeded();
-  chrome.scripting.executeScript({
-    target: { tabId },
-    func: mecpWidget,
-    args: [message.userid, message.password, message.client_name || message.portal, 60000]
-  }).then(() => console.log("Sera: MECP widget injected"))
+  _lockAssistTab(tabId, 'mecp');
+  clipboardClearSeconds().then(clearSecs => injectWithDom({ tabId }, mecpWidget, [
+    message.userid || "",
+    message.password || "",
+    message.client_name || message.portal,
+    90000,
+    message.scc_mode === true,
+    message.scc_combos || [],
+    clearSecs,
+    message.attempt_id || ""
+  ])).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }
 

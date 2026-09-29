@@ -58,6 +58,8 @@ class SyncSignalBridge(QObject):
     engine_synced_signal = Signal(list)
     # A message from the sync engine's thread for the toast (text, level); stays until dismissed.
     engine_alert_signal = Signal(str, str)
+    # An SCC save (core/scc/save.py) from SCC-U's thread: client id, client name, PAN, outcome.
+    scc_saved_signal = Signal(int, str, str, str)
 
 import security
 from database import SeraDatabase
@@ -199,6 +201,7 @@ class SeraApp:
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
+        self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
         self.sync_bridge.engine_alert_signal.connect(
             lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
@@ -327,15 +330,9 @@ class SeraApp:
             self._backup_scheduler.start()
             self.app.aboutToQuit.connect(self._backup_scheduler.stop)
 
-            # Ensure FST, SDC, SCA, and tracker settings are initialized
-            if self.db.get_setting("sdc_enabled") is None:
-                self.db.set_setting("sdc_enabled", "1")
-            if self.db.get_setting("fst_enabled") is None:
-                self.db.set_setting("fst_enabled", "1")
+            # Ensure SCA, SCC, and VSDC settings are initialized
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
-            if self.db.get_setting("tracker_enabled") is None:
-                self.db.set_setting("tracker_enabled", "1")
             if self.db.get_setting("scc_enabled") is None:
                 self.db.set_setting("scc_enabled", "1")
             if self.db.get_setting("vsdc_enabled") is None:
@@ -568,12 +565,9 @@ class SeraApp:
         # own background page may connect - see that module for how the origin is checked.
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
-        self.bridge.filing_result_received.connect(self._handle_extension_result)
-        self.bridge.uncertain_result_received.connect(self._handle_extension_result)
-        self.bridge.session_started_received.connect(self._handle_session_started)
-        self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
-        self.bridge.sdc_timeline_received.connect(self._handle_sdc_timeline)
-        self.bridge.sudr_capture_received.connect(self._handle_sudr_capture)
+        self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
+        self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
+        self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -639,6 +633,9 @@ class SeraApp:
             self.app.aboutToQuit.connect(self._flush_capture_queue_on_quit)
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
+            self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            from core.scc import manual as scc_manual
+            scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
             memory_mark("start-up: capture engines ready")
         except Exception as vsdc_exc:
@@ -683,24 +680,9 @@ class SeraApp:
                 print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
     def _handle_extension_settings_updated(self, msg: dict):
-        """Persists extension settings toggled from browser popup into SQLite database and controls VSDC worker."""
+        """Persists extension settings toggled from browser popup into SQLite database."""
         try:
             to_set = {}
-            if "vsdc_enabled" in msg:
-                vsdc_on = bool(msg["vsdc_enabled"])
-                to_set["vsdc_enabled"] = "1" if vsdc_on else "0"
-                if hasattr(self, "vsdc_worker") and self.vsdc_worker:
-                    if vsdc_on:
-                        self.vsdc_worker.resume()
-                    else:
-                        self.vsdc_worker.pause()
-                    print(f"[main] VSDC Worker {'resumed' if vsdc_on else 'paused'} via extension popup toggle")
-            if "sdc_enabled" in msg:
-                to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
-            if "fst_enabled" in msg:
-                to_set["fst_enabled"] = "1" if msg["fst_enabled"] else "0"
-            if "tracker_enabled" in msg:
-                to_set["tracker_enabled"] = "1" if msg["tracker_enabled"] else "0"
             if "sca_enabled" in msg:
                 to_set["sca_enabled"] = "1" if msg["sca_enabled"] else "0"
             if to_set:
@@ -710,54 +692,45 @@ class SeraApp:
             print(f"[main] Error handling extension_settings_updated: {e}")
 
     def _get_extension_settings_payload(self) -> dict:
-        """Packages current services, settings, registered PANs and SCC configuration."""
+        """Packages current services and settings for the extension."""
         try:
-            sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
-            fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
-            vsdc = self.db.get_setting("vsdc_enabled", "1") in ("1", "true", "True")
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
             sca_mode = self.db.get_setting("sca_action_mode", "autofill")
             try:
                 sca_max = int(self.db.get_setting("sca_max_uses", "1"))
             except (ValueError, TypeError):
                 sca_max = 1
-            reg_pans = self.db.get_all_registered_pans()
-            scc_cfg = self.db.get_scc_settings()
             svcs = self.db.get_services()
+            try:
+                clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
+            except (ValueError, TypeError):
+                clip_secs = 30
+            from automation import allowed_portal_domains
             return {
                 "status": "ok",
-                "sdc_enabled": sdc,
-                "fst_enabled": fst or sdc,
-                "vsdc_enabled": vsdc,
-                "tracker_enabled": sdc or fst or vsdc,
+                "allowed_domains": allowed_portal_domains(svcs),
+                "clipboard_clear_seconds": clip_secs,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,
-                "registered_pans": reg_pans,
-                "scc_settings": scc_cfg,
             }
         except Exception as e:
             print(f"[main] Failed to get extension settings payload: {e}")
             return {"status": "error", "message": str(e)}
 
     def _sync_extension_settings(self):
-        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+        """Pushes current services and settings to the extension."""
         try:
             from automation import update_extension_settings
             payload = self._get_extension_settings_payload()
             if payload.get("status") == "ok":
                 update_extension_settings(
-                    fst_enabled=payload.get("fst_enabled", True),
-                    sdc_enabled=payload.get("sdc_enabled", True),
-                    vsdc_enabled=payload.get("vsdc_enabled", True),
-                    tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),
                     sca_mode=payload.get("sca_mode", "autofill"),
                     allowed_services=payload.get("allowed_services", []),
                     sca_max_uses=payload.get("sca_max_uses", 1),
-                    registered_pans=payload.get("registered_pans", []),
-                    scc_settings=payload.get("scc_settings", {}),
+                    clipboard_clear_seconds=payload.get("clipboard_clear_seconds"),
                 )
         except Exception as e:
             print(f"[main] Failed to sync extension settings: {e}")
@@ -853,34 +826,12 @@ class SeraApp:
             self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
 
     def _handle_extension_result(self, msg: dict):
-        # Queue all extension captures; the database/report pipeline is too
-        # expensive to execute in the Qt signal handler during burst traffic.
-        if msg.get("type") != "audit_event":
-            self._capture_queue.put(msg)
-            return
-        self._process_extension_result(msg)
+        # Queue all captures (SGT/VSDC, via vsdc_worker.filing_captured); the database/report
+        # pipeline is too expensive to execute in the Qt signal handler during burst traffic.
+        self._capture_queue.put(msg)
 
     def _process_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
-        if msg.get("type") == "audit_event":
-            try:
-                cid = msg.get("client_id")
-                action_name = msg.get("action", "SCA autofill triggered")
-                short_act = "SCA Auto" if "autofill" in action_name.lower() else ("SCA Widget" if "widget" in action_name.lower() else "SCA")
-                self.db.log_action(
-                    actor=self.actor,
-                    action=action_name,
-                    client_id=cid,
-                    detail=msg.get("detail", "")
-                )
-                if cid:
-                    self.db.record_client_activity(int(cid), short_act, msg.get("detail", ""))
-                    if hasattr(self, "search_win"):
-                        self.search_win._on_search_changed()
-            except Exception as e:
-                print(f"[main] audit_event error: {e}")
-            return
-
         # Every stored capture says which PC produced it (the name from this PC's
         # device_identity.txt), inside its own payload.
         try:
@@ -1113,241 +1064,134 @@ class SeraApp:
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
 
-            # If payload carried an SCC verified password, ensure client/password is synced/auto-created
-            scc_pwd = msg.get("scc_verified_password") or (msg.get("raw_payload", {}).get("scc_verified_password") if isinstance(msg.get("raw_payload"), dict) else None)
-            if scc_pwd:
-                scc_msg = dict(msg)
-                scc_msg["password"] = scc_pwd
-                self._handle_scc_password_verified(scc_msg)
-
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
 
-    def _handle_session_started(self, msg: dict):
-        """Displays a toast notification when a new client session starts and processes SCC verification if attached."""
-        portal = msg.get("portal", "Income Tax")
-        pan = str(msg.get("pan") or "").strip()
-        name = str(msg.get("client_name") or "").strip()
-        
-        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-            self.tray_icon.showMessage(
-                "Sera SDC Tracking Active", 
-                f"Live tracking started for {name} ({pan}) on {portal.upper()}.", 
-                QSystemTrayIcon.Information, 
-                3000
-            )
+    def _make_scc_handlers(self):
+        """SCC-U's handlers (once, when its host is created)."""
+        return self._ensure_scc()
 
-        # If session_start included an active SCC verified password from link mutation
-        if msg.get("scc_verified_password"):
-            self._handle_scc_password_verified(msg)
+    def _open_scc_manual(self, pan: str, client_id, on_error=None) -> bool:
+        """Client Detail's MECP on an unverified Income Tax client (core/scc/manual.py): the card, with
+        desktop-generated rows, in the portal's login page. An attempt SGT already has for this PAN is
+        reused; otherwise a manual one is registered (SGT adopts it if it reads the password page, else
+        only "This one worked" saves). Works with Detect login automatically Off."""
+        opener, _outcome = self._ensure_scc()
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        att, is_new = opener.register_manual(pan, client_id)
+        if is_new:
+            self._scc_counter.on_attempt_opened()
+        sent = self._scc_card.open(att, open_tab=att.manual, on_error=on_error)
+        if not sent and is_new:
+            opener.end(att.hwnd, "closed")
+        return sent
 
-    def _handle_scc_password_verified(self, msg: dict):
-        """Persists the verified password from SCC link mutation to master.db."""
-        password = str(msg.get("password") or msg.get("scc_verified_password") or "").strip()
-        if not password:
-            return
+    def _ensure_scc(self):
+        """Builds SCC-U's objects once: the attempt opener, the MECP SCC card it feeds (core/scc/card.py)
+        and the outcome reader (core/scc/outcome.py). The card's copy ledger reads the clipboard through
+        clipboard_watch; each copy opens the host's read window. Returns [opener, outcome reader]."""
+        existing = getattr(self, "_scc_parts", None)
+        if existing is not None:
+            return existing
+        import automation
+        import clipboard_watch
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup, SccCounter
+        counter = SccCounter()
+        self._scc_counter = counter
 
-        client_id = msg.get("client_id")
-        service_id = msg.get("service_id")
-        userid = str(msg.get("userid") or msg.get("pan") or "").strip().upper()
-        combo_label = str(msg.get("combo_label") or "SCC").strip()
-        portal = str(msg.get("portal") or "Income Tax").strip()
-        portal_clean = portal.lower()
-        # Strictly enforce: SCC is exclusively an ITR-only one-time utility. Ignore any non-ITR portal attempts.
-        if "gst" in portal_clean or not any(k in portal_clean for k in ("income", "itr", "tax")):
-            print(f"[main.SCC] Ignored non-ITR SCC verification attempt for portal: {portal}")
-            return
+        def on_attempt_opened(att):
+            counter.on_attempt_opened()
+            self._scc_card.open(att)
 
+        opener = AttemptOpener(db_lookup(self.db), on_open=on_attempt_opened,
+                               on_end=lambda att, reason: self._scc_card.end(att, reason))
+        self._scc_opener = opener
+
+        def read_harder(att, _label):
+            host = getattr(getattr(self.vsdc_worker, "router", None), "_scc_host", None)
+            if host is not None and att.session_id:
+                host.open_read_window(att.session_id)
+
+        def on_worked_with_close_and_count(att, row_label):
+            saver = SccSaver(self.db, lambda aid, label: self._scc_card.row_text(aid, label),
+                           lambda: getattr(self, "actor", "Staff"), after=self._scc_saved)
+            result = saver.on_worked(att, row_label)
+            if result is not None:
+                counter.on_password_saved()
+                # Close the card and mark the attempt as closed in the opener
+                automation.close_scc_card(att.attempt_id)
+                opener.close(att.hwnd)
+            return result
+
+        self._scc_card = SccCard(
+            self.db,
+            open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
+            close_card=automation.close_scc_card,
+            suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
+            on_closed=lambda att: opener.close(att.hwnd),
+            update_card=automation.update_scc_card, on_copy=read_harder,
+            on_none=lambda att: opener.end(att.hwnd, "typed own"),
+            on_asking=lambda: counter.on_card_asked(),
+            on_worked=on_worked_with_close_and_count)
+        # Step 5: which row gets the login's credit (SccCard.credit -> the guarded save).
+        def on_outcome_with_counter(att, kind, detail):
+            counter.on_outcome(kind)
+
+        which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att),
+                        then=on_outcome_with_counter)
+        self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db),
+                                          on_outcome=which.on_outcome)
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        self._scc_parts = [opener, self._scc_outcome]
+        return self._scc_parts
+
+    def _handle_scc_row_worked(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.row_worked(msg.get("attempt_id"), msg.get("row_label"))    # credit -> the guarded save
+
+    def _handle_scc_card_closed(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.card_closed(msg.get("attempt_id"))
+
+    def _handle_scc_row_none(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.none_typed(msg.get("attempt_id"))
+
+    def _scc_saved(self, result):
+        """SccSaver's `after`: SCC-U's thread or the Qt thread - the refresh always runs on the Qt thread."""
+        self.sync_bridge.scc_saved_signal.emit(result.client_id, result.client_name, result.pan, result.outcome)
+
+    def _after_scc_save(self, client_id: int, client_name: str, pan: str, outcome: str):
+        """UI refresh after an SCC save: toast, Client Detail, grid, search, extension settings."""
         try:
-            actor = getattr(self, "actor", "Staff")
-
-            try:
-                client_id = int(client_id) if client_id is not None else None
-            except (ValueError, TypeError):
-                client_id = None
-
-            try:
-                service_id = int(service_id) if service_id is not None else None
-            except (ValueError, TypeError):
-                service_id = None
-
-            # Resolve client if client_id is None
-            if not client_id and userid:
-                client = self.db.get_client_by_pan(userid)
-                client_id = client.get("id") if client else None
-
-            # Resolve service & password column
-            pwd_col_id = None
-            if service_id:
-                svc = self.db.get_service(service_id)
-                if svc:
-                    pwd_col_id = svc.get("password_column_id")
-
-            if not pwd_col_id:
-                svc = self.db.get_service_for_portal(portal)
-                if svc:
-                    service_id = svc.get("id")
-                    pwd_col_id = svc.get("password_column_id")
-
-            # Fallback: search MCL columns for ITR password column
-            if not pwd_col_id:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").strip().lower()
-                    if ("itr" in lbl or "income" in lbl) and "pass" in lbl:
-                        pwd_col_id = c["id"]
-                        break
-
-            client_name_val = str(msg.get("client_name") or "").strip()
-
-            if not client_id:
-                # Unregistered client: auto-create in master.db
-                mcl = self.db.get_mcl_columns()
-                # 1. Resolve PAN column: check is_internal_pk first, or exact 'pan' in tokens
-                pan_col_id = next((c["id"] for c in mcl if c.get("is_internal_pk")), None)
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl_tokens = (c.get("label") or "").lower().split()
-                        if "pan" in lbl_tokens:
-                            pan_col_id = c["id"]
-                            break
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl = (c.get("label") or "").lower()
-                        if "pan" in lbl and "pass" not in lbl and "company" not in lbl:
-                            pan_col_id = c["id"]
-                            break
-
-                # 2. Resolve Name column
-                name_col_id = None
-                for c in mcl:
-                    lbl = (c.get("label") or "").lower()
-                    if c["id"] != pan_col_id and any(k in lbl for k in ("company", "name", "client", "proprietor")):
-                        name_col_id = c["id"]
-                        break
-
-                values = {}
-                # Ensure all internal PK columns are populated
-                for c in mcl:
-                    if c.get("is_internal_pk") and userid:
-                        values[c["id"]] = userid
-
-                if pan_col_id and userid:
-                    values[pan_col_id] = userid
-                if name_col_id:
-                    values[name_col_id] = client_name_val or f"Client ({userid})"
-                if pwd_col_id:
-                    values[pwd_col_id] = password
-
-                svc = self.db.get_service_for_portal(portal)
-                svc_ids = [svc["id"]] if svc else []
-
-                client_id = self.db.add_client(
-                    values=values,
-                    notes="Password verified via SCC",
-                    service_ids=svc_ids,
-                    actor=actor
-                )
-                print(f"[main.SCC] Auto-created client record #{client_id} with verified password ({combo_label})")
-            else:
-                # Existing client: update single password field if column is known
-                if pwd_col_id:
-                    self.db.update_client_single_field(
-                        client_id=client_id,
-                        column_id=pwd_col_id,
-                        value=password,
-                        actor=actor,
-                        log_action=True
-                    )
-                self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
-                print(f"[main.SCC] Updated client #{client_id} password via {combo_label} and marked 'Password verified via SCC'")
-
-            # Resolve client name for toast
-            client = self.db.get_client(client_id)
-            if not client_name_val and client:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").lower()
-                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
-                        val = str(client.get("values", {}).get(c["id"]) or "").strip()
-                        if val:
-                            client_name_val = val
-                            break
-            if not client_name_val:
-                client_name_val = "Client"
-
             if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-                self.tray_icon.showMessage(
-                    "Password Verified via SCC",
-                    f"Permanent password saved for {client_name_val} ({userid}).",
-                    QSystemTrayIcon.Information,
-                    5000
-                )
+                what = {"created": "Client added with the verified password", "replaced": "Saved password replaced",
+                        "verified": "Marked verified"}.get(outcome, "Permanent password saved")
+                self.tray_icon.showMessage("Password Verified via SCC", f"{what} for {client_name} ({pan}).",
+                                           QSystemTrayIcon.Information, 5000)
 
-            # Refresh client detail window if currently open for this client
             if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
                 cur_c = getattr(self.client_detail_win, "client", None)
                 if cur_c and cur_c.get("id") == client_id:
-                    refreshed = self.db.get_client(client_id)
-                    self.client_detail_win.set_client(refreshed)
+                    self.client_detail_win.set_client(self.db.get_client(client_id))
 
-            # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
                 self.shell.refresh_clients()
             if hasattr(self, "search_win") and self.search_win:
                 self.search_win._on_search_changed()
-            # Push updated registered PANs to extension so newly verified client won't trigger unregistered pop-in
             self._sync_extension_settings()
         except Exception as e:
-            print(f"[main._handle_scc_password_verified error] {e}")
-
-    def _handle_sdc_timeline(self, msg: dict):
-        """Persists SDC session timeline updates from browser into SQLite database."""
-        try:
-            res = self.db.upsert_sdc_session_timeline(msg)
-            print(f"[main._handle_sdc_timeline] Timeline synced for session {msg.get('session_id')}: {res}")
-        except Exception as e:
-            print(f"[main._handle_sdc_timeline Error] {e}")
-
-    def _handle_sudr_capture(self, msg: dict):
-        """
-        Handles the SUDR canonical envelope (see sdcClaude.md §6). Portal-agnostic
-        by design: reads only msg['event']['type'] and msg['identity'] — never
-        branches on msg['source']['protocol']. This one function is meant to work
-        unchanged for ITR, GST, TRACES, or any future portal, as long as that
-        portal's protocol.js calls SDC.emit() with the standard envelope shape.
-
-        Stores into the existing tracker_dump table (no schema migration needed):
-        raw_payload_json holds the full envelope for now; canonical columns
-        (event_type, capture_id) can be promoted later per the migration plan.
-        """
-        try:
-            event = msg.get("event", {}) or {}
-            identity = msg.get("identity", {}) or {}
-            source = msg.get("source", {}) or {}
-
-            event_type = event.get("type", "UNKNOWN")
-            status = event.get("status", "pending")
-            portal = source.get("protocol", "unknown")
-
-            # insert_tracker_dump() already does identity resolution internally
-            # (pan + raw_payload_json -> candidate matching against master.db) —
-            # no need to duplicate that logic here. gstin/tan currently ride
-            # along inside raw_payload_json until _extract_identity_candidates_from_payload
-            # is extended to also key off them directly (see sdcClaude.md §6.6 step 3).
-            self.db.insert_tracker_dump(
-                portal=portal,
-                arn_number=None,
-                capture_method=f"SUDR_{source.get('crosshair_id', '')}",
-                status=status,
-                raw_payload_json=json.dumps(msg),
-                captured_by="sudr",
-                pan=identity.get("pan"),
-                session_id=msg.get("session_id"),
-            )
-            print(f"[main._handle_sudr_capture] {portal} :: {event_type} ({status}) capture_id={msg.get('capture_id')}")
-        except Exception as e:
-            print(f"[main._handle_sudr_capture Error] {e}")
+            print(f"[main._after_scc_save error] {type(e).__name__}")
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
@@ -1809,7 +1653,8 @@ class SeraApp:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
             from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
-                                                read_sgt_i_mode, read_sgt_mode, read_sgt_record_pages)
+                                                read_scc_detect_mode, read_sgt_i_mode, read_sgt_mode,
+                                                read_sgt_record_pages)
             # Once per office: SGT live becomes the capture engine, the other three go off.
             apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
@@ -1822,7 +1667,8 @@ class SeraApp:
             sgt = read_sgt_mode(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
-                                                sgt_i=read_sgt_i_mode(self.db.get_setting) == "on")
+                                                sgt_i=read_sgt_i_mode(self.db.get_setting) == "on",
+                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on")
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "

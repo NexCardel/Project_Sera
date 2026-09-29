@@ -369,7 +369,7 @@ class VSDCRouter:
         return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
-                              sgt_record: bool = True, sgt_i: bool = False) -> None:
+                              sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -389,7 +389,8 @@ class VSDCRouter:
         runs alone (the other three off): it reads every in-scope page with no crosshair
         routing, the same way VSDC247 works alone. Shadow keeps its rows apart from the other
         engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
-        Intelligence half: it only watches what SGT reads and never changes a capture.
+        Intelligence half: it only watches what SGT reads and never changes a capture. SCC-U
+        (scc_detect) likewise only watches SGT's reads, for Income Tax logins.
         """
         wanted = str(sgt).strip().lower()
         sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
@@ -398,6 +399,8 @@ class VSDCRouter:
             self._sgt._recorder.enabled = self._sgt_record
         self._sgt_i_on = bool(sgt_i)
         self._apply_sgt_i()
+        self._scc_on = bool(scc_detect)
+        self._apply_scc()
         if sgt_mode != self._sgt_mode and self._sgt is not None:
             # Open sessions end under the mode they were read in, so no dataset is keyed half
             # one way and half the other.
@@ -438,6 +441,27 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
 
+    def set_scc_handlers(self, factory) -> None:
+        """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
+        self._scc_handlers = factory
+
+    def _apply_scc(self) -> None:
+        """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
+        one that switched itself off after a failure stays off."""
+        if self._sgt is None:
+            return
+        on = getattr(self, "_scc_on", False)
+        host = getattr(self, "_scc_host", None)
+        if on and host is None:
+            from core.scc import SccHost
+            host = self._scc_host = SccHost()
+            factory = getattr(self, "_scc_handlers", None)
+            for handler in (factory() if factory else []):
+                host.register(handler)
+        if host is not None:
+            host.set_enabled(on)
+            self._sgt.set_scc(host if on else None)
+
     def _run_sgt(self, hwnd: int, title: str = "") -> None:
         """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
         hands them out one per tick), never through this tick's result."""
@@ -454,6 +478,7 @@ class VSDCRouter:
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
             self._apply_sgt_i()
+            self._apply_scc()
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
                           frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
 

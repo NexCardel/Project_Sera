@@ -431,8 +431,6 @@ class SettingsDialog(QDialog):
             # Update extension daemon settings
             from automation import update_extension_settings
             update_extension_settings(
-                fst_enabled=(fst_val == "1"),
-                tracker_enabled=(tracker_val == "1"),
                 sca_enabled=(sca_val == "1"),
                 sca_mode=sca_mode_val,
                 sca_max_uses=sca_max_uses_val

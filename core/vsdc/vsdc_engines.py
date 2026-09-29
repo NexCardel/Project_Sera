@@ -46,6 +46,11 @@ SGT_RECORD_DEFAULT = "1"
 SGT_I_SETTING = "sgt_i_mode"
 SGT_I_DEFAULT = "off"
 SGT_I_MODES = ("off", "on")
+# SCC-U - Income Tax login detection on SGT's reads (core/scc, autofill-tweaks blueprint Part G):
+# "off" or "on" (Settings -> SCC -> Detect login automatically). Off = SGT exactly as before.
+SCC_DETECT_SETTING = "scc_detect_mode"
+SCC_DETECT_DEFAULT = "off"
+SCC_DETECT_MODES = ("off", "on")
 
 _TRUE = ("1", "true", "yes", "on")
 
@@ -103,6 +108,15 @@ def read_sgt_i_mode(get_setting: Callable[..., object]) -> str:
     except Exception:
         return SGT_I_DEFAULT
     return value if value in SGT_I_MODES else SGT_I_DEFAULT
+
+
+def read_scc_detect_mode(get_setting: Callable[..., object]) -> str:
+    """SCC-U's mode: "off" or "on". Anything unrecognised reads as off."""
+    try:
+        value = str(get_setting(SCC_DETECT_SETTING, SCC_DETECT_DEFAULT) or SCC_DETECT_DEFAULT).strip().lower()
+    except Exception:
+        return SCC_DETECT_DEFAULT
+    return value if value in SCC_DETECT_MODES else SCC_DETECT_DEFAULT
 
 
 def read_hud_enabled(get_setting: Callable[..., object]) -> bool:

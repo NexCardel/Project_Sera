@@ -657,13 +657,6 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Launch at Windows startup",
             "Automatically starts Project Sera in the background when Windows boots.", self.autostart_check))
 
-        lay.addWidget(_sub_header("File Submission Tracker (FST) Daemons"))
-
-        self.fst_check = QCheckBox()
-        lay.addWidget(_setting_row("Sera SDC \u2014 DOM Crosshair (FST)",
-            "DOM Crosshair engine that watches on-screen confirmation messages and elements on web pages.",
-            self.fst_check))
-
         self.sca_check = QCheckBox()
         lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
             "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
@@ -701,7 +694,6 @@ class UnifiedSettingsDialog(QDialog):
         self.quick_copy_check.toggled.connect(self._on_control_changed)
         self.run_in_bg_check.toggled.connect(self._on_control_changed)
         self.autostart_check.toggled.connect(self._on_control_changed)
-        self.fst_check.toggled.connect(self._on_control_changed)
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
@@ -742,6 +734,23 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Enable SCC One-Time Verification",
             "When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
+
+        self.scc_detect_combo = QComboBox()
+        self.scc_detect_combo.addItem("Off", "off")
+        self.scc_detect_combo.addItem("On", "on")
+        lay.addWidget(_setting_row("Detect login automatically",
+            "Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never "
+            "changes what SGT captures. If it ever fails or runs slow it switches itself off until the app "
+            "restarts. Needs SGT on.", self.scc_detect_combo))
+
+        # ── Counts ──────────────────────────────────────────────────────────
+        self.scc_counts_label = QLabel()
+        self._update_scc_counts_display()
+        lay.addWidget(_setting_row("Counts (local, this session and earlier)",
+            "Attempts: attempts opened. Worked: login succeeded. Failed: wrong password. Locked: locked out. "
+            "No conclusion: other outcome. Asked: card asked which row. Saved: password saved. "
+            "Not understood: portal wording not recognized.",
+            self.scc_counts_label))
 
         # ── Option 1 Card ───────────────────────────────────────────────────
         lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
@@ -953,6 +962,7 @@ class UnifiedSettingsDialog(QDialog):
         self.scc_opt4_str_edit.textChanged.connect(_update_previews)
 
         self.scc_check.toggled.connect(self._on_control_changed)
+        self.scc_detect_combo.currentIndexChanged.connect(self._on_control_changed)
         self.scc_opt1_label_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt1_str_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt2_label_edit.textChanged.connect(self._on_control_changed)
@@ -1279,7 +1289,6 @@ class UnifiedSettingsDialog(QDialog):
             state["quick_copy"] = self.quick_copy_check.isChecked()
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
-            state["fst"] = self.fst_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
@@ -1287,6 +1296,7 @@ class UnifiedSettingsDialog(QDialog):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
+            state["scc_detect_mode"] = self.scc_detect_combo.currentData()
             state["scc_opt1_label"] = getattr(self, "scc_opt1_label_edit", QLineEdit()).text()
             state["scc_opt1_str"] = getattr(self, "scc_opt1_str_edit", QLineEdit()).text()
             state["scc_opt2_label"] = getattr(self, "scc_opt2_label_edit", QLineEdit()).text()
@@ -1329,6 +1339,19 @@ class UnifiedSettingsDialog(QDialog):
             self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
             self._btn_save.setCursor(Qt.ArrowCursor)
 
+    def _update_scc_counts_display(self):
+        """Update the SCC counts display in the UI."""
+        try:
+            from core.scc.counts import load_counts
+            counts = load_counts()
+            text = f"Attempts: {counts.attempts}  •  Worked: {counts.worked}  •  Failed: {counts.failed}  •  Locked: {counts.locked}  •  No conclusion: {counts.no_conclusion}  •  Asked: {counts.asked}  •  Saved: {counts.saved}  •  Not understood: {counts.not_understood}"
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText(text)
+                self.scc_counts_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #999999;")
+        except Exception:
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText("(counts not available)")
+
     # ── Load settings into controls ───────────────────────────────────────────
     def _load_settings(self):
         g = self.db.get_setting
@@ -1346,7 +1369,6 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
-            self.fst_check.setChecked(g("sdc_enabled", g("fst_enabled", "1")) == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
@@ -1366,6 +1388,7 @@ class UnifiedSettingsDialog(QDialog):
 
         if hasattr(self, "scc_check"):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
+            _set(self.scc_detect_combo, g("scc_detect_mode", "off"))
             if hasattr(self, "scc_opt1_label_edit"):
                 self.scc_opt1_label_edit.setText(g("scc_opt1_label", "Combo 1"))
             if hasattr(self, "scc_opt1_str_edit"):
@@ -1411,37 +1434,18 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
-                bulk_settings["sdc_enabled"]                = b(self.fst_check)
-                bulk_settings["fst_enabled"]                = b(self.fst_check)
                 bulk_settings["sca_enabled"]                = b(self.sca_check)
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-                bulk_settings["tracker_enabled"]            = "1" if self.fst_check.isChecked() else "0"
 
                 try:
                     from automation import update_extension_settings
-                    scc_payload = {
-                        "enabled": self.scc_check.isChecked() if hasattr(self, "scc_check") else True,
-                        "opt1_label": self.scc_opt1_label_edit.text().strip() if hasattr(self, "scc_opt1_label_edit") else "Combo 1",
-                        "opt1_fixed_str": self.scc_opt1_str_edit.text() if hasattr(self, "scc_opt1_str_edit") else "@",
-                        "opt2_label": self.scc_opt2_label_edit.text().strip() if hasattr(self, "scc_opt2_label_edit") else "Combo 2",
-                        "opt2_fixed_str": self.scc_opt2_str_edit.text() if hasattr(self, "scc_opt2_str_edit") else "",
-                        "opt3_label": self.scc_opt3_label_edit.text().strip() if hasattr(self, "scc_opt3_label_edit") else "Combo 3",
-                        "opt3_fixed_str": self.scc_opt3_str_edit.text() if hasattr(self, "scc_opt3_str_edit") else "",
-                        "opt4_label": self.scc_opt4_label_edit.text().strip() if hasattr(self, "scc_opt4_label_edit") else "Combo 4",
-                        "opt4_fixed_str": self.scc_opt4_str_edit.text() if hasattr(self, "scc_opt4_str_edit") else "",
-                    }
                     update_extension_settings(
-                        fst_enabled=self.fst_check.isChecked(),
-                        sdc_enabled=self.fst_check.isChecked(),
-                        tracker_enabled=self.fst_check.isChecked(),
                         sca_enabled=self.sca_check.isChecked(),
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
                         sca_max_uses=self.sca_max_uses_spin.value(),
                         allowed_services=self.db.get_services(),
-                        registered_pans=self.db.get_all_registered_pans(),
-                        scc_settings=scc_payload,
-                        vsdc_enabled=self.vsdc_check.isChecked() if hasattr(self, "vsdc_check") else True,
+                        clipboard_clear_seconds=self.clipboard_spin.value(),
                     )
                 except Exception:
                     pass
@@ -1454,6 +1458,7 @@ class UnifiedSettingsDialog(QDialog):
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)
+                bulk_settings["scc_detect_mode"] = self.scc_detect_combo.currentData() or "off"
                 if hasattr(self, "scc_opt1_label_edit"):
                     bulk_settings["scc_opt1_label"] = self.scc_opt1_label_edit.text().strip() or "Combo 1"
                 if hasattr(self, "scc_opt1_str_edit"):

@@ -167,6 +167,16 @@ def _find_document_elements(uia, uia_client, root_element) -> List[Any]:
     return [found.GetElement(i) for i in range(found.Length)] if found else []
 
 
+def _is_password(uia_client, element) -> bool:
+    """True when UIA marks this element a password field (UIA_IsPasswordPropertyId). Checked
+    before any ValuePattern read - a password's content must never reach a line, the corpus, or
+    a log, even masked."""
+    try:
+        return bool(element.GetCurrentPropertyValue(uia_client.UIA_IsPasswordPropertyId))
+    except Exception:
+        return False
+
+
 def _read_value_pattern(uia_client, element) -> str:
     """Reads an element's ValuePattern text, or "" if it exposes none. Strictly
     a property read — never SetValue — so this stays as passive as the rest of
@@ -226,7 +236,7 @@ def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional
             ctype = None
             try:
                 ctype = el.CurrentControlType
-                if ctype in _VALUE_BEARING_CONTROL_TYPES:
+                if ctype in _VALUE_BEARING_CONTROL_TYPES and not _is_password(uia_client, el):
                     value = _read_value_pattern(uia_client, el)
             except Exception:
                 value = ""

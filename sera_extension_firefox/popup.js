@@ -1,8 +1,6 @@
 // popup.js - Project Sera Extension Companion Toolbar UI Logic
 
 document.addEventListener('DOMContentLoaded', () => {
-  const toggleFst = document.getElementById('toggle-fst');
-  const toggleToast = document.getElementById('toggle-toast');
   const toggleSca = document.getElementById('toggle-sca');
   const statusDot = document.getElementById('status-dot');
   const statusLabel = document.getElementById('status-label');
@@ -21,26 +19,15 @@ document.addEventListener('DOMContentLoaded', () => {
   } catch (_) {}
 
   // 1. Load current extension settings from storage
+  // manualAssistPayload / mecpPayload carry a password and live in chrome.storage.session, not
+  // .local (finding #2). No session storage (old Firefox) -> just show the "no queue" state.
   function loadSettings() {
-    chrome.storage.local.get([
-      'trackerEnabled',
-      'fstEnabled',
-      'sdcEnabled',
-      'sdcToastEnabled',
-      'scaEnabled',
-      'manualAssistPayload',
-      'mecpPayload'
-    ], (data) => {
-      const tracker = data.trackerEnabled !== false;
-      const fst = data.fstEnabled !== false && tracker;
-      const toast = data.sdcToastEnabled !== false;
+    chrome.storage.local.get(['scaEnabled'], (data) => {
       const sca = data.scaEnabled !== false;
-
-      if (toggleFst) toggleFst.checked = fst;
-      if (toggleToast) toggleToast.checked = toast;
       if (toggleSca) toggleSca.checked = sca;
+    });
 
-      // Update manual assist button status
+    const showAssistStatus = (data) => {
       const hasPendingAssist = (data.manualAssistPayload && data.manualAssistPayload.expiresAt > Date.now()) ||
                                (data.mecpPayload && data.mecpPayload.expiresAt > Date.now());
       if (btnManualAssist) {
@@ -52,7 +39,12 @@ document.addEventListener('DOMContentLoaded', () => {
           btnManualAssist.title = 'No active assistant queue. Trigger manual login assist.';
         }
       }
-    });
+    };
+    if (chrome.storage.session) {
+      chrome.storage.session.get(['manualAssistPayload', 'mecpPayload'], showAssistStatus);
+    } else {
+      showAssistStatus({});
+    }
   }
 
   // 2. Check Host Connection
@@ -79,15 +71,9 @@ document.addEventListener('DOMContentLoaded', () => {
     syncStatus.textContent = 'Saving...';
     syncStatus.style.color = '#f59e0b';
 
-    const fstVal = toggleFst ? toggleFst.checked : true;
-    const toastVal = toggleToast ? toggleToast.checked : true;
     const scaVal = toggleSca ? toggleSca.checked : true;
 
     const storageUpdate = {
-      fstEnabled: fstVal,
-      sdcEnabled: fstVal,
-      sdcToastEnabled: toastVal,
-      trackerEnabled: fstVal,
       scaEnabled: scaVal
     };
 
@@ -109,8 +95,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Attach toggle change listeners
-  if (toggleFst) toggleFst.addEventListener('change', () => saveSettings('fstEnabled'));
-  if (toggleToast) toggleToast.addEventListener('change', () => saveSettings('sdcToastEnabled'));
   if (toggleSca) toggleSca.addEventListener('change', () => saveSettings('scaEnabled'));
 
   // Reconnect button

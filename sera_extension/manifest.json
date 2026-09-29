@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Project Sera Companion",
-  "version": "2.11.0",
-  "description": "Autofill and filing confirmation tracking for Aman Associates.",
+  "version": "2.12.0",
+  "description": "Portal login autofill for Aman Associates.",
   "browser_specific_settings": {
     "gecko": {
       "id": "sera-companion@amanassociates.com",
@@ -15,9 +15,7 @@
     "activeTab",
     "scripting",
     "tabs",
-    "alarms",
-    "browsingData",
-    "cookies"
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",
@@ -42,39 +40,5 @@
     },
     "default_title": "Project Sera Companion",
     "default_popup": "popup.html"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*",
-        "file://*/*"
-      ],
-      "js": [
-        "content_scripts/sca_adapters.js",
-        "content_scripts/login.js"
-      ],
-      "run_at": "document_end",
-      "all_frames": true
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "config.json",
-        "event_types.json",
-        "content_scripts/filing_detector.js",
-        "tracker.js",
-        "sdc/sdc_toast.js",
-        "sdc/sdc_core.js",
-        "sdc/protocols/itr_protocol.js",
-        "sdc/protocols/gst_protocol.js",
-        "sdc/protocols/traces_protocol.js",
-        "sdc/protocols/mca_protocol.js"
-      ],
-      "matches": [
-        "<all_urls>"
-      ]
-    }
-  ]
+  }
 }

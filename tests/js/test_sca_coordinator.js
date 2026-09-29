@@ -29,7 +29,7 @@ function makeEnv(settings = {}) {
     postNative: (m) => { native.push(m); return true; },
     postDesktop: (m) => desktop.push(m),
     getSettings: async () => Object.assign({ scaEnabled: true, scaMode: "autofill",
-      allowedDomains: ["incometax.gov.in", "gst.gov.in"], manualAssistActive: false }, settings),
+      allowedDomains: ["incometax.gov.in", "gst.gov.in"], assistTabs: {} }, settings),
     executeScript: async (d) => { scripts.push(d); return [{ result: d.func === SCA.fillPasswordInPage ? env.fillResult : undefined }]; },
     sessionStore: null,
   };
@@ -156,6 +156,23 @@ test("a failed fill can be retried; a grant for someone else's request is ignore
   assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
 });
 
+test("a desktop denial is reported as a failed fill with its reason, and can be retried", async () => {
+  const env = makeEnv();
+  const c = await armed(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  const req = env.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  await c.handleDesktopMessage({ type: "SCA_PASSWORD_DENIED", request_id: req.request_id, arm_id: "arm_1",
+                                 reason: "the arm expired" });
+  const res = env.desktop.filter(m => m.type === "SCA_FILL_RESULT");
+  assert.strictEqual(res.length, 1);
+  assert.deepStrictEqual([res[0].arm_id, res[0].service_id, res[0].result, res[0].reason],
+                         ["arm_1", 1, "failed", "the arm expired"]);
+  assert.strictEqual(env.scripts.length, 0);
+  await c.handleDesktopMessage({ type: "SCA_PASSWORD_DENIED", request_id: "req_not_ours", reason: "x" });
+  assert.strictEqual(env.desktop.filter(m => m.type === "SCA_FILL_RESULT").length, 1);
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
+});
+
 test("repeated input events for one paste ask only once", async () => {
   const env = makeEnv();
   const c = await armed(env);
@@ -186,10 +203,20 @@ test("widget mode shows a card that holds no password", async () => {
   assert.strictEqual(r, "password-requested");
 });
 
-test("manual assist running on the tab blocks SCA", async () => {
-  const env = makeEnv({ manualAssistActive: true });
+test("an SMTI or MECP card open in the tab keeps SCA quiet in that tab", async () => {
+  for (const kind of ["smti", "mecp"]) {
+    const env = makeEnv({ assistTabs: { 5: kind } });
+    const c = await armed(env);
+    assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "assist-open-in-tab");
+    assert.ok(!env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
+  }
+});
+
+test("the assist lock is per tab: another tab still gets SCA", async () => {
+  const env = makeEnv({ assistTabs: { 9: "smti" } });
   const c = await armed(env);
-  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "manual-assist-active");
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
+  assert.ok(env.native.some(m => m.type === "SCA_PASSWORD_REQUEST"));
 });
 
 test("an Income Tax password SCC has not verified is explained once, not silently skipped", async () => {

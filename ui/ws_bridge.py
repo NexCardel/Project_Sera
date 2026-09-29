@@ -88,16 +88,19 @@ def _load_chrome_extension_id(manifest_path: Path) -> Optional[str]:
 
 
 class WSBridge(QObject):
+    # Fed only by core/vsdc's filing_captured signal (SGT/VSDC desktop capture), connected
+    # directly to main.py's _handle_extension_result - not by anything over this websocket.
+    # The extension used to also feed it via "filing_result"/"audit_event" messages; that
+    # tracking was removed (autofill-tweaks Part A/W1-1), so dispatch() below no longer emits it.
     filing_result_received = Signal(dict)
-    uncertain_result_received = Signal(dict)
     sca_state_received = Signal(dict)
     sca_error_received = Signal(dict)
     sca_fill_result_received = Signal(dict)
     sca_password_requested = Signal(dict)   # reply with WSBridge.reply(msg, payload)
-    session_started_received = Signal(dict)
-    scc_password_verified_received = Signal(dict)
-    sdc_timeline_received = Signal(dict)
-    sudr_capture_received = Signal(dict)  # SUDR canonical envelope
+    # Staff clicks on the MECP SCC card (SCC-U step 3): {attempt_id, row_label}. Labels only.
+    scc_row_worked_received = Signal(dict)
+    scc_card_closed_received = Signal(dict)     # {attempt_id}
+    scc_row_none_received = Signal(dict)        # {attempt_id}: "None - I typed my own" (step 5)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill
@@ -300,11 +303,7 @@ class WSBridge(QObject):
 
     def dispatch(self, msg: dict):
         mtype = msg.get("type")
-        if mtype in ("filing_result", "audit_event"):
-            self.filing_result_received.emit(msg)
-        elif mtype == "uncertain_result":
-            self.uncertain_result_received.emit(msg)
-        elif mtype == "SCA_ACK":
+        if mtype == "SCA_ACK":
             cmd_id = msg.get("command_id")
             if cmd_id:
                 import automation
@@ -317,14 +316,18 @@ class WSBridge(QObject):
             self.sca_fill_result_received.emit(msg)
         elif mtype == "SCA_PASSWORD_REQUEST":
             self.sca_password_requested.emit(msg)
-        elif mtype == "session_start":
-            self.session_started_received.emit(msg)
-        elif mtype == "scc_password_verified":
-            self.scc_password_verified_received.emit(msg)
-        elif mtype == "sdc_session_timeline":
-            self.sdc_timeline_received.emit(msg)
-        elif mtype == "sudr_capture":
-            self.sudr_capture_received.emit(msg)
+        elif mtype == "scc_row_worked":
+            attempt_id, label = msg.get("attempt_id"), msg.get("row_label")
+            if isinstance(attempt_id, str) and isinstance(label, str) and 0 < len(attempt_id) <= 64 and 0 < len(label) <= 100:
+                self.scc_row_worked_received.emit({"type": mtype, "attempt_id": attempt_id, "row_label": label})
+        elif mtype == "scc_card_closed":
+            attempt_id = msg.get("attempt_id")
+            if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
+                self.scc_card_closed_received.emit({"type": mtype, "attempt_id": attempt_id})
+        elif mtype == "scc_row_none":
+            attempt_id = msg.get("attempt_id")
+            if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
+                self.scc_row_none_received.emit({"type": mtype, "attempt_id": attempt_id})
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):

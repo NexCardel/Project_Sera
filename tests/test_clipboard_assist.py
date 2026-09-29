@@ -128,10 +128,31 @@ class TestClipboardAssist(unittest.TestCase):
             self.assertEqual(reply["type"], sca_protocol.MSG_SCA_PASSWORD_DENIED, host)
             self.assertNotIn("password", reply)
 
+    def fill(self, arm, service_id, result="filled", reason=""):
+        self.watch.handle_fill_result({"arm_id": arm["arm_id"], "service_id": service_id,
+                                       "result": result, "reason": reason})
+
     def test_uses_run_out(self):
         arm = self.arm()
         self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["type"], "SCA_PASSWORD_GRANT")
+        self.fill(arm, self.gst)
         self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["reason"], "no uses left for this copy")
+
+    def test_a_use_is_counted_on_fill_not_on_grant(self):
+        arm = self.arm()
+        self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["type"], "SCA_PASSWORD_GRANT")
+        self.assertEqual(self.watch._arm.uses_remaining, 1)
+        self.fill(arm, self.gst, "failed", "no visible password field")
+        self.assertEqual(self.watch._arm.uses_remaining, 1)
+        self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["type"], "SCA_PASSWORD_GRANT")
+
+    def test_grants_are_capped_at_max_uses_plus_two(self):
+        arm = self.arm()
+        for _ in range(self.watch._arm.max_uses + 2):
+            self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["type"], "SCA_PASSWORD_GRANT")
+        reply = self.request(arm, self.gst, "services.gst.gov.in")
+        self.assertEqual((reply["type"], reply["reason"]),
+                         ("SCA_PASSWORD_DENIED", "too many password requests for this copy"))
 
     def test_an_old_or_expired_arm_gets_nothing(self):
         first = self.arm()
@@ -172,7 +193,7 @@ class TestClipboardAssist(unittest.TestCase):
                          ("Pw#X", ""))
         no_col = {"name": "GST Portal", "login_page_link": GST_URL}
         self.assertEqual(self.watch._password_status(no_col, self.client, {1: "GSTUSER01", 2: "Pw#Y"}, cols),
-                         ("Pw#Y", ""))                       # labelled "pass" columns only
+                         ("", "no_password"))                # no 'pass'-label fallback
 
     def test_a_failed_fill_tells_staff_why(self):
         notices = []

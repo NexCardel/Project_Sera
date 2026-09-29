@@ -126,12 +126,9 @@ def trigger_manual_assist(service: dict, user_id: str, password: str, client_id:
     _send_to_extension(service, user_id, password, client_id, on_error, mode="manual_assist")
 
 
-def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None, scc_mode: bool = False, scc_combos: list | None = None):
+def trigger_mecp(service: dict, user_id: str, password: str, client_id: int, on_error=None):
     """Open the portal and ask the companion extension to show the MECP floating card widget."""
-    if scc_mode and not is_itr_service(service):
-        scc_mode = False
-        scc_combos = None
-    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp", scc_mode=scc_mode, scc_combos=scc_combos)
+    _send_to_extension(service, user_id, password, client_id, on_error, mode="mecp")
 
 
 def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
@@ -189,13 +186,8 @@ def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
         pass
 
 
-def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
-    """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
-    # Defense-in-depth: SCC is strictly an ITR-only one-time utility
-    if scc_mode and not is_itr_service(service):
-        scc_mode = False
-        scc_combos = []
-
+def _extension_payload(service: dict, user_id: str, password: str, client_id, mode: str,
+                       scc_mode: bool = False, scc_combos: list | None = None, attempt_id: str = "") -> dict:
     u_sel = (service.get("username_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     p_sel = (service.get("password_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     payload = {
@@ -213,12 +205,72 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "arn_selector": service.get("arn_selector", ""),
         "client_id": client_id,
         "client_name": service.get("_client_name", service.get("name", "Client")),
-        "tracker_enabled": service.get("_tracker_enabled", True),
-        "fst_enabled": service.get("_fst_enabled", True),
         "scc_mode": scc_mode,
         "scc_combos": scc_combos or [],
     }
+    if attempt_id:
+        payload["attempt_id"] = attempt_id
+    return payload
 
+
+def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str,
+                  open_tab: bool = False, on_error=None) -> bool:
+    """SCC-U: shows the MECP card's SCC mode in the portal tab that is already open (the extension
+    never navigates or opens a tab for it). Sent to every connected browser - only one that has
+    the portal open shows it. No retry and no browser launch: SGT just saw the page, so a browser
+    is there. `rows` are {id, label, value}; returns whether any browser was reached.
+    open_tab (Client Detail's MECP, staff pressed the button): the extension may open or reuse the
+    login page like any MECP, so it goes to one browser with the usual retry / browser launch."""
+    from ui import ws_bridge
+    if not rows:
+        return False
+    svc = {**service, "_client_name": client_name}
+    payload = _extension_payload(svc, pan, "", client_id, "mecp", scc_mode=True, scc_combos=rows, attempt_id=attempt_id)
+    if open_tab:
+        payload["open_tab"] = True
+        _deliver_to_extension(payload, svc, on_error)
+        return True
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge:
+        return False
+    return bridge.broadcast(payload) > 0
+
+
+def close_scc_card(attempt_id: str) -> bool:
+    """SCC-U: asks the browser to take the SCC card of this attempt down (a save, or the attempt ended)."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or not attempt_id:
+        return False
+    return bridge.broadcast({"type": "scc_card_close", "attempt_id": attempt_id}) > 0
+
+
+def update_scc_card(attempt_id: str, failed: list, next_label, message: str, stop: bool, ask=None) -> bool:
+    """SCC-U step 4: x on the rows the portal refused, highlight `next_label`, show `message`; `stop`
+    (locked out) greys every row and highlights none. Step 5: `ask` (a list, maybe empty) = the card
+    asks which row worked, highlighting those and offering "None - I typed my own". Row labels only -
+    never a password."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or not attempt_id:
+        return False
+    msg = {"type": "scc_card_update", "attempt_id": attempt_id,
+           "failed": [str(x) for x in failed or []],
+           "next": None if stop or not next_label else str(next_label),
+           "message": str(message or ""), "stop": bool(stop)}
+    if ask is not None and not stop:
+        msg["ask"] = [str(x) for x in ask]
+    return bridge.broadcast(msg) > 0
+
+
+def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill"):
+    """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
+    payload = _extension_payload(service, user_id, password, client_id, mode)
+    _deliver_to_extension(payload, service, on_error)
+
+
+def _deliver_to_extension(payload: dict, service: dict, on_error=None):
+    """Sends `payload` to one connected browser (retrying up to 10 s, launching the browser once)."""
     def _attempt_send():
         from ui import ws_bridge
         max_attempts = 20
@@ -268,29 +320,21 @@ def arm_sca(arm_request: dict, attempts_s: int = 35):
     threading.Thread(target=_do_send, daemon=True).start()
 
 
-def update_extension_settings(fst_enabled: bool = True, sdc_enabled: bool = True, vsdc_enabled: bool = True, tracker_enabled: Optional[bool] = None, sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, registered_pans: Optional[list[str]] = None, scc_settings: Optional[dict] = None):
+def update_extension_settings(sca_enabled: bool = True, sca_mode: str = "autofill", allowed_services: Optional[list[dict]] = None, sca_max_uses: int = 1, clipboard_clear_seconds: Optional[int] = None):
     """Sends immediate setting updates to every connected browser's background.js."""
     from ui import ws_bridge
-    if tracker_enabled is None:
-        tracker_enabled = sdc_enabled or fst_enabled or vsdc_enabled
 
     allowed_domains = allowed_portal_domains(allowed_services)
 
     payload = {
         "type": "update_settings",
-        "tracker_enabled": tracker_enabled,
-        "sdc_enabled": sdc_enabled,
-        "vsdc_enabled": vsdc_enabled,
-        "fst_enabled": fst_enabled,
         "sca_enabled": sca_enabled,
         "sca_mode": sca_mode,
         "sca_max_uses": max(1, min(int(sca_max_uses), 20)),
         "allowed_domains": allowed_domains,
     }
-    if registered_pans is not None:
-        payload["registered_pans"] = registered_pans
-    if scc_settings is not None:
-        payload["scc_settings"] = scc_settings
+    if clipboard_clear_seconds is not None:
+        payload["clipboard_clear_seconds"] = max(5, min(int(clipboard_clear_seconds), 300))
 
     def _do_send():
         for _ in range(5):
