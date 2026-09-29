@@ -7,7 +7,7 @@ W1-R,1,Review Part A,Done,claude-opus-5-5,1,3fda16f,"Part A passes review; fixed
 W2-1,2,Part B1: passwords off disk in the extension (#2),Done,claude-sonnet-5,1,8cc2b00,Passwords moved from storage.local to storage.session (memory fallback for old Firefox) in both extension builds; startup wipe of stale local copies; new scan test.,2026-09-29 12:55
 W2-2,2,"Part B2: one openPortalTab helper (#3, #4)",Done,claude-sonnet-5-5,2,61ddae6,"openPortalTab helper in both builds; reuse only login-page tabs (D5); listener before navigate, inject once, no reload, 30 s cleanup; JS test added",2026-09-29 13:01
 W3-1,3,Part C: Fast Autofill on the helper; decision D8,Done,claude-haiku-4-5-20251001,1,7a54db4,Removed auto-click; D8 user decision. Tests pass.,2026-09-29 13:04
-W3-2,3,"Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",Not started,gemini-3.8-flash-high,0,,,
+W3-2,3,"Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",In progress,claude-sonnet-5-5,1,,,2026-09-29 13:05
 W3-3,3,"Part E: MECP card (#5, #16) and clipboard clearing (B3)",Not started,gemini-3.8-flash-high,0,,,
 W4-1,4,"Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15)",Not started,claude-opus-5-5,0,,,
 W4-2,4,"Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14)",Not started,gemini-3.8-flash-high,0,,,

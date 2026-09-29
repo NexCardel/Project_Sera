@@ -258,6 +258,9 @@ console.log('Sera: background.js module loaded, registering listeners.');
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
   if (window.__seraFillActive) return; // prevent duplicate runs
+  // sera_dom.js (shared visibility rule) is injected just before this function; without it, fill nothing.
+  if (!window.__seraDom) return;
+  const isVisible = window.__seraDom.isVisible;
   window.__seraFillActive = true;
   console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
 
@@ -280,19 +283,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     return null;
   }
 
-  function isVisible(el) {
-    if (!el) return false;
-    if (el.name === 'hiddenPassword' || el.getAttribute('tabindex') === '-1' || el.getAttribute('aria-hidden') === 'true' || el.closest('[aria-hidden="true"]')) return false;
-    if (el.type === 'hidden') return false;
-    try {
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity || '1') === 0) return false;
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    } catch (e) {
-      return true;
-    }
-  }
 
 
   function simulateType(el, value) {
@@ -560,6 +550,10 @@ function handleAutofillTab(message) {
 }
 
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
+  // sera_dom.js (shared visibility + field rules) is injected just before this function.
+  const seraDom = window.__seraDom;
+  if (!seraDom) return;
+
   const hostId = "sera-manual-assist-host";
   const old = document.getElementById(hostId);
   if (old) old.remove();
@@ -829,53 +823,9 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     timerBar.style.transform = "scaleX(0)";
   }, 30);
 
-  function clean(sel) {
-    return (sel || "").trim().replace(/\s+\[/g, "[").replace(/input\s+/g, "input");
-  }
-
-  function visible(el) {
-    if (!el || el.type === "hidden") return false;
-    try {
-      const style = window.getComputedStyle(el);
-      if (style.display === "none" || style.visibility === "hidden") return false;
-      return true;
-    } catch (_) {
-      return true;
-    }
-  }
-
-  function queryAll(selectorStr) {
-    if (!selectorStr) return [];
-    const results = [];
-    const parts = selectorStr.split(',').map(s => s.trim()).filter(Boolean);
-    for (const p of parts) {
-      try {
-        const els = document.querySelectorAll(p);
-        for (const el of els) {
-          if (visible(el) && !results.includes(el)) results.push(el);
-        }
-      } catch (_) {}
-    }
-    return results;
-  }
-
-  function findField(selector, fallbacks) {
-    if (selector) {
-      const matches = queryAll(clean(selector));
-      if (matches.length > 0) return matches[0];
-    }
-    const fbs = Array.isArray(fallbacks) ? fallbacks : [];
-    for (const sel of fbs) {
-      const matches = queryAll(sel);
-      if (matches.length > 0) return matches[0];
-    }
-    try {
-      const active = document.activeElement;
-      if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA") && visible(active)) {
-        return active;
-      }
-    } catch (_) {}
-    return null;
+  // kind is "user" or "pass"; otherSelector is the other field's configured selector.
+  function findField(kind, selector, fallbacks, otherSelector) {
+    return seraDom.findField(document, kind, selector, fallbacks, otherSelector);
   }
 
   function isFlutterPage() {
@@ -954,8 +904,9 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     }
   }
 
-  function smartFill(value, selector, fallbacks) {
-    const el = findField(selector, fallbacks);
+  // A Username with no visible non-password input is copied, never typed into the password box.
+  function smartFill(value, kind, selector, fallbacks, otherSelector) {
+    const el = findField(kind, selector, fallbacks, otherSelector);
     if (el && fill(el, value)) return "filled";
 
     const fltEl = getFlutterActiveInput();
@@ -1171,7 +1122,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   }
 
   uidBtn.onclick = () => {
-    const result = smartFill(userid, usernameSelector, userFallbacks);
+    const result = smartFill(userid, "user", usernameSelector, userFallbacks, passwordSelector);
     if (result === "filled") {
       setBtn(uidBtn, "done", "✓  Username Injected");
       setTimeout(() => setBtn(uidBtn, "", "👤  Username"), 2000);
@@ -1182,7 +1133,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   };
 
   passBtn.onclick = () => {
-    const result = smartFill(password, passwordSelector, passFallbacks);
+    const result = smartFill(password, "pass", passwordSelector, passFallbacks);
     if (result === "filled") {
       setBtn(passBtn, "done", "✓  Password Injected");
       setTimeout(dismiss, 400);
@@ -1211,22 +1162,26 @@ function handleManualAssistTab(message) {
   openPortalTab(message.url, tabId => setTimeout(() => injectManualAssist(tabId, message), injectDelay));
 }
 
+const SERA_DOM_FILE = 'content_scripts/sera_dom.js';
+
+// Injects the shared DOM rules, then the function, into the same target.
+function injectWithDom(target, func, args) {
+  return chrome.scripting.executeScript({ target, files: [SERA_DOM_FILE] })
+    .then(() => chrome.scripting.executeScript({ target, func, args }));
+}
+
 function injectManualAssist(tabId, message) {
-  // Disarm SCA so it doesn't trigger on the same tab simultaneously as SMTI
-  scaCoordinator.disarm("manual assist started");
-  chrome.scripting.executeScript({ target:{tabId, allFrames: true}, func:manualAssistWidget,
-    args:[message.userid, message.password, message.username_selector, message.password_selector,
-      message.client_name || message.portal, 30000] })
+  injectWithDom({ tabId, allFrames: true }, manualAssistWidget,
+    [message.userid, message.password, message.username_selector, message.password_selector,
+      message.client_name || message.portal, 30000])
     .then(() => console.log("Sera: Manual Assist widget injected"))
     .catch(err => console.error("Sera: Manual Assist injection failed", err));
 }
 
 function injectFillScript(tabId, userid, password, usernameSelector, passwordSelector, extensionFlow) {
-  chrome.scripting.executeScript({
-    target: { tabId: tabId, allFrames: true },
-    func: fillCredentialsInPage,
-    args: [userid, password, usernameSelector, passwordSelector, extensionFlow]
-  }).then(() => console.log("Sera: fill script injected"))
+  injectWithDom({ tabId: tabId, allFrames: true }, fillCredentialsInPage,
+    [userid, password, usernameSelector, passwordSelector, extensionFlow]
+  ).then(() => console.log("Sera: fill script injected"))
     .catch(err => console.error("Sera: inject failed", err));
 }
 
