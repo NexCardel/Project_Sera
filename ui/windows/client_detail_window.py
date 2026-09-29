@@ -684,15 +684,23 @@ class ClientDetailWindow(QWidget):
         client_id = self.client.get("id") if self.client else None
         is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
 
-        scc_mode = False
-        scc_combos = None
-        if is_itr and uid and scc_enabled and not is_scc_verified:
-            scc_combos = self.db.generate_scc_passwords(uid)
-            scc_mode = True
+        scc_mode = bool(is_itr and uid and scc_enabled and not is_scc_verified)
 
         if not uid or (not pwd and not scc_mode):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
+
+        service["_client_name"] = self._get_identity_label(self.client)
+        on_error = lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
+        self._suppress_sca_for_client()
+        if scc_mode:
+            # The desktop builds the combinations and the SCC-U attempt; the card is the MECP card in SCC mode.
+            from core.scc import manual as scc_manual
+            scc_mode = scc_manual.open_card(uid, client_id, on_error)
+            if not scc_mode and not pwd:
+                QMessageBox.warning(self, "Missing credentials", f"Could not open the SCC card for {service['name']}: "
+                                    "no password combinations to show and no saved password.")
+                return
 
         try:
             self.db.record_client_activity(self.client["id"], service["name"], "Manual Copy (SCC)" if scc_mode else "Manual Copy")
@@ -707,14 +715,8 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
-        service["_client_name"] = self._get_identity_label(self.client)
-        self._suppress_sca_for_client()
-        automation.trigger_mecp(
-            service, uid, pwd or "", self.client["id"],
-            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg),
-            scc_mode=scc_mode,
-            scc_combos=scc_combos
-        )
+        if not scc_mode:
+            automation.trigger_mecp(service, uid, pwd or "", self.client["id"], on_error=on_error)
         self.window().showMinimized()
 
     def _launch_manual_assist(self, service: dict):

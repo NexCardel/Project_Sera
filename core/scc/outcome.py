@@ -180,7 +180,7 @@ class OutcomeReader:
         """Ends attempts whose browser window has closed and forgets finished attempts."""
         live = self._opener.open_attempts()
         for att in live:
-            if not self._is_window(att.hwnd):
+            if not att.manual and not self._is_window(att.hwnd):
                 self._end(att, "no_conclusion", "window closed")
         ids = {a.attempt_id for a in self._opener.open_attempts()}
         with self._lock:

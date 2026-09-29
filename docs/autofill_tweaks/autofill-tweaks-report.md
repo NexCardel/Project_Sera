@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 19:56)
+# Autofill tweaks — report (2026-09-29 20:09)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 19 |
+| Done | 21 |
 | Blocked | 0 |
 
-Runs: 25   output tokens: 577897   API-equivalent cost: $42.88
+Runs: 27   output tokens: 627777   API-equivalent cost: $45.53
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -33,8 +33,8 @@ Runs: 25   output tokens: 577897   API-equivalent cost: $42.88
 | W5-3 | Done | sonnet | efd4537 | Part G step 3 (D1 = extension card): SCC combinations in the MECP card, fed by the desktop | SCC card fed by desktop (core/scc/card.py, ws_bridge scc_row_worked), both extension builds render given combos with This one worked, ledger by label, PAN copy  |
 | W5-4 | Done | opus | 09e3a2b | Part G step 4: the outcome reader | Outcome reader core/scc/outcome.py: worked/wrong_password/locked/neutral/no_conclusion from scc_rules.json; card x+next-row marks; both builds render marks. tes |
 | W5-5 | Done | opus | 3901faf | Part G step 5: which password worked | Step 5 WhichOne: one row since last refusal credited, else card asks with None - I typed my own; x rows never credited; 13 new tests |
-| W5-6 | Not started | sonnet |  | Part G step 6: the guarded save |  |
-| W5-7 | Not started | haiku |  | Part G step 7: close-out and counts |  |
+| W5-6 | Done | sonnet | ddc0369 | Part G step 6: the guarded save | core/scc/save.py guarded save; D2 replace automatically, D4 add automatically; 11 new tests pass |
+| W5-7 | Done | haiku | 0401e21 | Part G step 7: close-out and counts | core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pas |
 | W5-8 | Not started | sonnet |  | Part G: Client Detail opens the SCC card |  |
 | W5-9 | Not started | sonnet |  | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) |  |
 | W6-1 | Not started | haiku |  | Docs and extension version |  |
@@ -58,6 +58,8 @@ Runs: 25   output tokens: 577897   API-equivalent cost: $42.88
 - **W5-2** Show the client's saved (unverified) IT password as a row on the SCC card, so it can be verified too? → Yes (asked as Q5)
 - **W5-3** Where should SCC's password combinations appear? → Keep them in the extension MECP card (asked as Q6)
 - **W5-5** When the card asks which password worked because SEVERAL were copied, offer 'None - I typed my own' too? → Yes: the None button shows whenever the card asks; exactly one copy is still credited without asking (Staff may have typed their own after copying two; forcing a pick would save a wrong password. Costs one button already needed for the none case.)
+- **W5-6** SCC confirmed a login, but the client already has a DIFFERENT IT password saved. What should Sera do? → Replace automatically (asked as Q7)
+- **W5-6** A PAN that is not in Sera logs in with an SCC combination. What should Sera do? → Add the client automatically (asked as Q8)
 
 ## Checks waiting for you
 

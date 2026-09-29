@@ -48,6 +48,7 @@ class Attempt:
     opened_at: float
     attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     ledger: List[str] = field(default_factory=list)   # "copied: <row label>" - labels only, never text
+    manual: bool = False            # opened from Client Detail with no SGT window: hwnd < 0, only "This one worked" saves
 
 
 Lookup = Callable[[str], Optional[ClientInfo]]
@@ -86,7 +87,8 @@ class AttemptOpener:
         self._ttl = float(ttl_sec)
         self._now = monotonic
         self._lock = threading.Lock()
-        self._open: Dict[int, Attempt] = {}          # hwnd -> its attempt
+        self._open: Dict[int, Attempt] = {}          # hwnd -> its attempt (manual ones: a negative id)
+        self._manual_seq = 0
         self._closed: Set[Tuple[int, str]] = set()   # (hwnd, pan) the card was closed for
         self._verified: Set[Tuple[int, str, str]] = set()   # (hwnd, pan, session) already looked up as verified
 
@@ -98,6 +100,32 @@ class AttemptOpener:
     def open_attempts(self) -> List[Attempt]:
         with self._lock:
             return list(self._open.values())
+
+    def register_manual(self, pan: str, client_id: Optional[int]) -> Tuple[Attempt, bool]:
+        """Client Detail's MECP on an unverified Income Tax client. (attempt, is_new). If SGT already
+        has an attempt for this PAN in a window, that one is returned (its card is up: is_new False).
+        Otherwise a manual attempt is registered under a made-up negative window id; SGT adopts it
+        if it later reads this PAN's password page (observe), else it lives ATTEMPT_TTL_SEC and only
+        the card's "This one worked" can save. A second manual click replaces the first."""
+        pan = str(pan or "").strip().upper()
+        self.expire()
+        replaced = None
+        with self._lock:
+            same = next((a for a in self._open.values() if a.pan == pan), None)
+            if same is not None and not same.manual:
+                return same, False
+            if same is not None:
+                replaced = self._open.pop(same.hwnd)
+            self._manual_seq += 1
+            att = Attempt(pan=pan, hwnd=-self._manual_seq, session_id="", client_id=client_id,
+                          saved_row=client_id is not None, opened_at=self._now(), manual=True)
+            self._open[att.hwnd] = att
+        if replaced:
+            self._ended(replaced, "no_conclusion")
+        timer = threading.Timer(self._ttl + 1.0, self.expire)
+        timer.daemon = True
+        timer.start()
+        return att, True
 
     # ── Handler (SCC-U's thread) ─────────────────────────────────────────────────
     def observe(self, obs: Any, hwnd: int, ctx: Any = None) -> Optional[str]:
@@ -122,6 +150,14 @@ class AttemptOpener:
         if not pan:
             return "ended" if ended else None
         with self._lock:
+            manual = next((a for a in self._open.values() if a.manual and a.pan == pan), None)
+            if manual is not None:
+                # Client Detail's card is already up for this PAN: SGT now has its window, so it
+                # becomes this window's attempt (the outcome reader follows it) - no second card.
+                del self._open[manual.hwnd]
+                manual.hwnd, manual.session_id, manual.manual = hwnd, obs.session_id, False
+                self._open[hwnd] = manual
+                return "adopted"
             if (hwnd, pan) in self._closed:
                 return "closed_before"
             if (hwnd, pan, obs.session_id) in self._verified:

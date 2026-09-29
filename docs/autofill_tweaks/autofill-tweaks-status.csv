@@ -19,8 +19,8 @@ W5-3,5,"Part G step 3 (D1 = extension card): SCC combinations in the MECP card, 
 W5-4,5,Part G step 4: the outcome reader,Done,claude-opus-5-5,2,09e3a2b,Outcome reader core/scc/outcome.py: worked/wrong_password/locked/neutral/no_conclusion from scc_rules.json; card x+next-row marks; both builds render marks. tests/test_scc_outcome.py 22 pass.,2026-09-29 19:49
 W5-5,5,Part G step 5: which password worked,Done,claude-opus-5-5,1,3901faf,"Step 5 WhichOne: one row since last refusal credited, else card asks with None - I typed my own; x rows never credited; 13 new tests",2026-09-29 19:56
 W5-6,5,Part G step 6: the guarded save,Done,claude-sonnet-5-5,1,ddc0369,"core/scc/save.py guarded save; D2 replace automatically, D4 add automatically; 11 new tests pass",2026-09-29 20:02
-W5-7,5,Part G step 7: close-out and counts,Done,claude-haiku-4-5-20251001,1,0401e21,"core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pass",2026-09-29 20:15
-W5-8,5,Part G: Client Detail opens the SCC card,Not started,gemini-3.8-flash-high,0,,,
+W5-7,5,Part G step 7: close-out and counts,Done,claude-haiku-4-5-20251001,1,0401e21,core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pass,2026-09-29 20:15
+W5-8,5,Part G: Client Detail opens the SCC card,In progress,claude-sonnet-5-5,1,,,2026-09-29 20:09
 W5-9,5,Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays),Not started,gemini-3.8-flash-high,0,,,
 W6-1,6,Docs and extension version,Not started,gemini-3.8-flash-high,0,,,
 W6-R,6,Final review,Not started,claude-opus-5-5,0,,,

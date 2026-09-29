@@ -10,6 +10,7 @@ from .attempts import Attempt, AttemptOpener, ClientInfo, db_lookup
 from .card import SccCard
 from .counts import SccCounter
 from .host import SccHost
+from . import manual
 from .outcome import OutcomeReader, db_client_names
 from .save import SaveResult, SccSaver, save_verified
 from .scc_rules import RuleSet, get_rules, load_rules

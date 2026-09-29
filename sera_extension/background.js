@@ -2237,12 +2237,13 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
 function handleMECPTab(message) {
   try { new URL(message.url); } catch (_) { return; }
   if (message.scc_mode === true) {
-    // SCC card (fed by the desktop when SGT reads the password page): it goes into the portal tab
-    // that is already open - never a navigation, never a new tab - and nothing is stored.
+    // SCC card, nothing stored. Fed by the desktop when SGT reads the password page: it goes into the
+    // portal tab that is already open - never a navigation, never a new tab. When staff pressed MECP
+    // in Client Detail (open_tab) it opens the login page like any MECP.
     openPortalTab(message.url, tabId => {
       if (message.attempt_id) sccCardTabs.set(String(message.attempt_id), tabId);
       injectMECP(tabId, message);
-    }, { stay: true });
+    }, message.open_tab === true ? undefined : { stay: true });
     return;
   }
   _passwordStore.remove(['manualAssistPayload']);

@@ -68,8 +68,9 @@ class SccCard:
         self._asking: Dict[str, List[str]] = {}               # attempt id -> rows the card asks about (step 5)
 
     # ── AttemptOpener callbacks (SCC-U's thread) ─────────────────────────────────
-    def open(self, att: Attempt) -> bool:
-        """on_open: build the rows, keep them in memory, push the card. Returns whether a browser got it."""
+    def open(self, att: Attempt, **send_opts: Any) -> bool:
+        """on_open: build the rows, keep them in memory, push the card. Returns whether a browser got it.
+        send_opts (Client Detail: open_tab, on_error) go to open_card as they are."""
         try:
             service = self._itr_service()
             if service is None:
@@ -87,7 +88,7 @@ class SccCard:
             title = f"PAN: {att.pan}" + ("" if att.client_id is not None else " (Unregistered)")
             sent = bool(self._open_card(service, att.pan, [
                 {"id": i + 1, "label": label, "value": text} for i, (label, text) in enumerate(rows)
-            ], title, att.client_id, att.attempt_id))
+            ], title, att.client_id, att.attempt_id, **send_opts))
             if not sent:
                 self._echo("[SCC] No browser connected - the card was not shown.")
             return sent

@@ -635,6 +635,8 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            from core.scc import manual as scc_manual
+            scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
             memory_mark("start-up: capture engines ready")
         except Exception as vsdc_exc:
@@ -1082,9 +1084,33 @@ class SeraApp:
             return None
 
     def _make_scc_handlers(self):
-        """SCC-U's handlers (once, when its host is created): the attempt opener, the MECP SCC card
-        it feeds (core/scc/card.py) and the outcome reader (core/scc/outcome.py). The card's copy
-        ledger reads the clipboard through clipboard_watch; each copy opens the host's read window."""
+        """SCC-U's handlers (once, when its host is created)."""
+        return self._ensure_scc()
+
+    def _open_scc_manual(self, pan: str, client_id, on_error=None) -> bool:
+        """Client Detail's MECP on an unverified Income Tax client (core/scc/manual.py): the card, with
+        desktop-generated rows, in the portal's login page. An attempt SGT already has for this PAN is
+        reused; otherwise a manual one is registered (SGT adopts it if it reads the password page, else
+        only "This one worked" saves). Works with Detect login automatically Off."""
+        opener, _outcome = self._ensure_scc()
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        att, is_new = opener.register_manual(pan, client_id)
+        if is_new:
+            self._scc_counter.on_attempt_opened()
+        sent = self._scc_card.open(att, open_tab=att.manual, on_error=on_error)
+        if not sent and is_new:
+            opener.end(att.hwnd, "closed")
+        return sent
+
+    def _ensure_scc(self):
+        """Builds SCC-U's objects once: the attempt opener, the MECP SCC card it feeds (core/scc/card.py)
+        and the outcome reader (core/scc/outcome.py). The card's copy ledger reads the clipboard through
+        clipboard_watch; each copy opens the host's read window. Returns [opener, outcome reader]."""
+        existing = getattr(self, "_scc_parts", None)
+        if existing is not None:
+            return existing
         import automation
         import clipboard_watch
         from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup, SccCounter
@@ -1101,7 +1127,7 @@ class SeraApp:
 
         def read_harder(att, _label):
             host = getattr(getattr(self.vsdc_worker, "router", None), "_scc_host", None)
-            if host is not None:
+            if host is not None and att.session_id:
                 host.open_read_window(att.session_id)
 
         def on_worked_with_close_and_count(att, row_label):
@@ -1117,8 +1143,8 @@ class SeraApp:
 
         self._scc_card = SccCard(
             self.db,
-            open_card=lambda service, pan, rows, title, client_id, attempt_id:
-                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id),
+            open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
             close_card=automation.close_scc_card,
             suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
             on_closed=lambda att: opener.close(att.hwnd),
@@ -1137,7 +1163,8 @@ class SeraApp:
         watcher = getattr(self, "clipboard_watcher", None)
         if watcher is not None:
             watcher.scc_ledger = self._scc_card.note_clipboard
-        return [opener, self._scc_outcome]
+        self._scc_parts = [opener, self._scc_outcome]
+        return self._scc_parts
 
     def _handle_scc_row_worked(self, msg: dict):
         card = getattr(self, "_scc_card", None)

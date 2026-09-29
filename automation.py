@@ -216,17 +216,26 @@ def _extension_payload(service: dict, user_id: str, password: str, client_id, mo
     return payload
 
 
-def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str) -> bool:
+def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str,
+                  open_tab: bool = False, on_error=None) -> bool:
     """SCC-U: shows the MECP card's SCC mode in the portal tab that is already open (the extension
     never navigates or opens a tab for it). Sent to every connected browser - only one that has
     the portal open shows it. No retry and no browser launch: SGT just saw the page, so a browser
-    is there. `rows` are {id, label, value}; returns whether any browser was reached."""
+    is there. `rows` are {id, label, value}; returns whether any browser was reached.
+    open_tab (Client Detail's MECP, staff pressed the button): the extension may open or reuse the
+    login page like any MECP, so it goes to one browser with the usual retry / browser launch."""
     from ui import ws_bridge
-    bridge = ws_bridge.get_active_bridge()
-    if not bridge or not rows:
+    if not rows:
         return False
     svc = {**service, "_client_name": client_name}
     payload = _extension_payload(svc, pan, "", client_id, "mecp", scc_mode=True, scc_combos=rows, attempt_id=attempt_id)
+    if open_tab:
+        payload["open_tab"] = True
+        _deliver_to_extension(payload, svc, on_error)
+        return True
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge:
+        return False
     return bridge.broadcast(payload) > 0
 
 
@@ -265,7 +274,11 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         scc_combos = []
 
     payload = _extension_payload(service, user_id, password, client_id, mode, scc_mode, scc_combos)
+    _deliver_to_extension(payload, service, on_error)
 
+
+def _deliver_to_extension(payload: dict, service: dict, on_error=None):
+    """Sends `payload` to one connected browser (retrying up to 10 s, launching the browser once)."""
     def _attempt_send():
         from ui import ws_bridge
         max_attempts = 20
