@@ -178,8 +178,7 @@ function ensureConnected() {
 }
 
 // Sends one message over the bridge. With waitForAck=true, resolves only once the app has
-// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
-// final SDC flush, which needs to know for certain before it clears its durable outbox.
+// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give.
 // Awaits the connection for up to 5s if the bridge is reconnecting.
 async function sendToDesktop(msg, waitForAck = false) {
   if (!ws || ws.readyState !== WebSocket.OPEN) {

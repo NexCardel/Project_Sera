@@ -288,8 +288,7 @@ if (chrome.runtime && chrome.runtime.onInstalled) {
 }
 
 // Sends one message over the bridge. With waitForAck=true, resolves only once the app has
-// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give the
-// final SDC flush, which needs to know for certain before it clears its durable outbox.
+// confirmed receipt (a generic "_ack" reply) - the same guarantee an HTTP 200 used to give.
 // If the socket is not yet OPEN (e.g. service worker just woke up mid-reconnect), this waits
 // up to 5 s for the connection to establish rather than silently dropping the message.
 async function sendToDesktop(msg, waitForAck = false) {
