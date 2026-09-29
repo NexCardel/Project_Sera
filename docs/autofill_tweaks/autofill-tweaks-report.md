@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:18)
+# Autofill tweaks — report (2026-09-29 13:23)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 10 |
+| Done | 11 |
 | Blocked | 0 |
 
-Runs: 13   output tokens: 290146   API-equivalent cost: $20.34
+Runs: 14   output tokens: 314417   API-equivalent cost: $22.13
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -24,7 +24,7 @@ Runs: 13   output tokens: 290146   API-equivalent cost: $20.34
 | W3-1 | Done | haiku | 7a54db4 | Part C: Fast Autofill on the helper; decision D8 | Removed auto-click; D8 user decision. Tests pass. |
 | W3-2 | Done | sonnet | 02c0b88 | Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9) | Part D: shared sera_dom.js visibility/field rules, Username never types into password box, re-inject only in SMTI's own tab with a visible login form, SCA disar |
 | W3-3 | Done | sonnet | 4719072 | Part E: MECP card (#5, #16) and clipboard clearing (B3) | MECP card: closed shadow, timer bar, closes after both copied (D6), MECP_CLOSED clears payload; clipboard clear via sera_dom.js + desktop clipboard_clear_second |
-| W4-1 | Not started | opus |  | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) |  |
+| W4-1 | Done | opus | 1592504 | Part B4: per-tab assist lock; MECP/SMTI launches don't arm SCA (#13, #15) | Per-tab assistTabs lock replaces manualAssistActive (both builds, sca/ identical); clipboard_watch.suppress_client(300s) called by Client Detail MECP/SMTI launc |
 | W4-2 | Not started | sonnet |  | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) |  |
 | W4-3 | Not started | sonnet |  | Part F: SCA scope (decision D7) |  |
 | W4-R | Not started | opus |  | Review Parts B-F |  |
@@ -49,6 +49,9 @@ Runs: 13   output tokens: 290146   API-equivalent cost: $20.34
 - **W3-1** D8: Fast Autofill auto-click removed per user decision 'Stop after filling' → Stop after filling (User chose to stop after filling instead of auto-clicking the Continue/Login button)
 - **W3-3** When should the MECP card close by itself? → After both User ID and password are copied (asked as Q3)
 - **W3-3** SCC card behaviour in the MECP card change → Timeout and both-copied send MECP_CLOSED (clears mecpPayload only); only the x sends MECP_DISMISSED (also ends an SCC attempt); SCC card gets no auto-close and no clipboard clearing (Part G owns SCC; a timeout must not stop SCC verifying)
+- **W4-1** Where does the per-tab assist lock live and when does it end? → In _passwordStore (storage.session / memory) as tabId->{kind,expiresAt}, with an in-memory mirror; locked on every SMTI/MECP inject (incl. re-inject), cleared on MANUAL_ASSIST_CLEAR / MECP_DISMISSED / MECP_CLOSED for the sender's tab and kind, on tab close, and after 5 min (MV3 service worker can die while a card is open; session storage survives that without touching disk. 5 min matches the payload lifetime as a safety cap.)
+- **W4-1** How does Client Detail reach clipboard_watch to suppress a client? → Module-level clipboard_watch.suppress_client(client_id, seconds=300) / is_suppressed(); the service checks it in _on_clipboard_changed (ClientDetailWindow has no reference to the running ClipboardWatchService; module state needs no new wiring through main.py.)
+- **W4-1** Firefox SMTI widget sent nothing on dismiss; how to clear its lock? → Its dismiss now sends MANUAL_ASSIST_CLEAR like Chrome; Firefox background clears manualAssistPayload and the tab's smti lock (Parity with Chrome; without it the Firefox lock would only end at the 5 min cap.)
 
 ## Checks waiting for you
 
@@ -56,3 +59,4 @@ Runs: 13   output tokens: 290146   API-equivalent cost: $20.34
 - #2 (W3-2) SMTI on the ITR password step: Username puts nothing into the password box — Not run
 - #3 (W3-3) MECP on an already open GST login tab stays on screen (card does not flash away), and after copying User ID and password it closes by itself — Not run
 - #4 (W3-3) In real Chrome and Firefox: copy a password from the MECP card and from SMTI, wait the clipboard-clear seconds, and confirm the clipboard is emptied (and that no clipboard-read permission prompt appears on the portal; the manifests have no clipboardRead permission) — Not run
+- #5 (W4-1) Real browser (Chrome and Firefox), SCA armed: open SMTI or MECP for client A in tab 1 and type A's id there - no SCA fill; in tab 2 on the same portal SCA still fills; close the card (x or timeout) and SCA works again in tab 1. Also: Client Detail > Manual Copy, copy the User ID from the card - desktop log shows 'not arming' for 5 min, another client's id still arms. — Not run

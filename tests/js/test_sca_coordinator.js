@@ -156,6 +156,23 @@ test("a failed fill can be retried; a grant for someone else's request is ignore
   assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
 });
 
+test("a desktop denial is reported as a failed fill with its reason, and can be retried", async () => {
+  const env = makeEnv();
+  const c = await armed(env);
+  await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab());
+  const req = env.native.find(m => m.type === "SCA_PASSWORD_REQUEST");
+  await c.handleDesktopMessage({ type: "SCA_PASSWORD_DENIED", request_id: req.request_id, arm_id: "arm_1",
+                                 reason: "the arm expired" });
+  const res = env.desktop.filter(m => m.type === "SCA_FILL_RESULT");
+  assert.strictEqual(res.length, 1);
+  assert.deepStrictEqual([res[0].arm_id, res[0].service_id, res[0].result, res[0].reason],
+                         ["arm_1", 1, "failed", "the arm expired"]);
+  assert.strictEqual(env.scripts.length, 0);
+  await c.handleDesktopMessage({ type: "SCA_PASSWORD_DENIED", request_id: "req_not_ours", reason: "x" });
+  assert.strictEqual(env.desktop.filter(m => m.type === "SCA_FILL_RESULT").length, 1);
+  assert.strictEqual(await c.onCandidate({ candidate: "ABCPD1234E" }, portalTab()), "password-requested");
+});
+
 test("repeated input events for one paste ask only once", async () => {
   const env = makeEnv();
   const c = await armed(env);

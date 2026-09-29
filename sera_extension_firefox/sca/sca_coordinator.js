@@ -327,6 +327,8 @@
             clearTimeout(p.timer);
             pending.delete(msg.request_id);
             busy.delete(p.key);
+            report({ type: "SCA_FILL_RESULT", arm_id: p.armId, service_id: p.service.service_id,
+                     result: "failed", reason: String(msg.reason || "the desktop app refused") });
           }
           return true;
         }

@@ -94,6 +94,7 @@ class Arm:
     uses_remaining: int
     grants: int = 0
     fills: List[str] = field(default_factory=list)
+    max_uses: int = 1
 
 
 class ClipboardWatchService(QObject):
@@ -228,15 +229,11 @@ class ClipboardWatchService(QObject):
                              2026-09-22 - before, it was never given, so SCA did nothing on the
                              IT portal for 468 of 521 clients).
 
-        A portal with its own password column uses ONLY that column. The old "general password"
-        fallback took the first column typed as password - USER ID, EMAIL and TAN are typed that
-        way here - so an empty IT_Password would have typed the GST user id into the box."""
+        Only the portal's own password column is used. Falling back to "any column with pass in
+        its label" (or the first column typed as password - USER ID, EMAIL and TAN are typed that
+        way here) could type another portal's password, or the GST user id, into the box."""
         pwd_col_id = svc.get("password_column_id")
-        if pwd_col_id:
-            password = str(values.get(pwd_col_id) or "").strip()
-        else:
-            labelled = [c["id"] for c in mcl_cols.values() if "pass" in c.get("label", "").lower()]
-            password = next((str(values[p]).strip() for p in labelled if values.get(p)), "")
+        password = str(values.get(pwd_col_id) or "").strip() if pwd_col_id else ""
         if not password:
             return "", "no_password"
         if automation.is_itr_service(svc) and not self.db.is_client_scc_verified(client_id=client_id):
@@ -320,7 +317,8 @@ class ClipboardWatchService(QObject):
             arm = request["arm"]
             self._arm = Arm(arm_id=arm["arm_id"], client_id=client_id, client_token=client_token,
                             matched_uid=matched_uid, services=arm_services,
-                            expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses)
+                            expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
+                            max_uses=max_uses)
             print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}]")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
@@ -348,6 +346,8 @@ class ClipboardWatchService(QObject):
             return denied("the arm expired")
         if arm.uses_remaining <= 0:
             return denied("no uses left for this copy")
+        if arm.grants >= arm.max_uses + 2:
+            return denied("too many password requests for this copy")
         svc_id = msg.get("service_id")
         svc = arm.services.get(svc_id)
         if svc is None:
@@ -365,7 +365,6 @@ class ClipboardWatchService(QObject):
             return denied("no password SCA may use for that portal")
         if caveat == "scc_unverified" and msg.get("confirmed") is not True:
             return denied("this Income Tax password is not SCC-verified - it needs a click on the page card")
-        arm.uses_remaining -= 1
         arm.grants += 1
         self._unused_streak.pop(arm.client_id, None)
         return {"type": sca_protocol.MSG_SCA_PASSWORD_GRANT, "request_id": request_id,
@@ -373,7 +372,9 @@ class ClipboardWatchService(QObject):
                 "password_selector": svc.get("password_selector", "")}
 
     def handle_fill_result(self, msg: dict) -> None:
-        """SCA_FILL_RESULT {arm_id, service_id, result: filled|failed, reason} - audit only."""
+        """SCA_FILL_RESULT {arm_id, service_id, result: filled|failed, reason}: a use is spent only
+        when the password was really filled; failures (and desktop denials, which the extension
+        reports as failures) reach staff through sca_notice."""
         arm = self._arm
         client_id = arm.client_id if arm and arm.arm_id == msg.get("arm_id") else None
         portal = (arm.services.get(msg.get("service_id"), {}).get("name") if client_id else None) or "portal"
@@ -381,6 +382,7 @@ class ClipboardWatchService(QObject):
             print(f"[SCA] Password filled on {portal}")
             if client_id:
                 arm.fills.append(portal)
+                arm.uses_remaining = max(0, arm.uses_remaining - 1)
                 try:
                     self.db.record_client_activity(client_id, "SCA", f"Password filled on {portal}")
                 except Exception:
