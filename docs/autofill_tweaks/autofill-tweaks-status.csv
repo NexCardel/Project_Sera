@@ -3,7 +3,7 @@ W0-1,0,Baseline: tests before any change,Done,claude-haiku-4-5-20251001,1,ec6e0d
 W0-2,0,Password guard in both UIA readers (finding #17),Done,claude-sonnet-5,1,b8f7fa5,"Password guard added to vsdc_uia_text and uia_nodes; both UIA readers now skip ValuePattern reads for IsPassword elements; 982 tests pass, 6 pre-existing unrelated Gemini failures",2026-09-28 23:06
 W1-1,1,Part A: remove all tracking and the cookie wipe from the extension,Done,claude-sonnet-5,1,e3027bb,"Removed tracking/cookie-wipe from both extension builds; sca/ unchanged, mirrored firefox to chrome",2026-09-29 00:37
 W1-2,1,"Part A, desktop side: stop serving extension tracking",Done,gemini-3.8-flash-high,0,59e4f02,Desktop side stops serving extension tracking; SGT/VSDC capture pipeline confirmed unchanged,2026-09-29 01:02
-W1-R,1,Review Part A,In progress,claude-opus-5-5,1,,,2026-09-29 12:43
+W1-R,1,Review Part A,Done,claude-opus-5-5,1,3fda16f,"Part A passes review; fixed dead settings_dialog tracker kwargs, manifest description, stale comment; passwords in storage.local left for W2-1/Part G",2026-09-29 12:48
 W2-1,2,Part B1: passwords off disk in the extension (#2),Not started,gemini-3.8-flash-high,0,,,
 W2-2,2,"Part B2: one openPortalTab helper (#3, #4)",Not started,gemini-3.8-flash-high,0,,,
 W3-1,3,Part C: Fast Autofill on the helper; decision D8,Not started,gemini-3.8-flash-high,0,,,
