@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:44)
+# Autofill tweaks — report (2026-09-29 13:49)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 10 |
+| Not started | 9 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 18   output tokens: 402788   API-equivalent cost: $29.31
+Runs: 19   output tokens: 435918   API-equivalent cost: $31.27
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 18   output tokens: 402788   API-equivalent cost: $29.31
 | W4-3 | Done | sonnet | c169294 | Part F: SCA scope (decision D7) | SCA login.js/sca_adapters.js registered only on approved portal domains via scripting API (D7: portals only); both builds; main.py sends allowed_domains; test_s |
 | W4-R | Done | opus | 2fe7cba | Review Parts B-F | 6 defects fixed: Fast Autofill off-portal ReferenceError, password-bearing message logs, URL-substring tab match, stale SMTI tab, Firefox SMTI parity, SCA scope |
 | W5-1 | Done | opus | 4b893bf | Part G frame: core/scc host, _hand_to_scc hook, setting | core/scc SccHost + _hand_to_scc hook + 30 s read window + scc_detect_mode setting (default off); SGT tests pass, replay no changed rows |
-| W5-2 | Not started | sonnet |  | Part G steps 1-2, scc_rules.json and its loader |  |
+| W5-2 | Done | sonnet | b54fbe7 | Part G steps 1-2, scc_rules.json and its loader | scc_rules.json + loader (self-tests, refuses failing rules), AttemptOpener steps 1-2 (D3 Yes); wording unconfirmed except header; not wired to router yet; 45 ne |
 | W5-3 | Not started | sonnet |  | Part G step 3: the SCC card and its copies |  |
 | W5-4 | Not started | opus |  | Part G step 4: the outcome reader |  |
 | W5-5 | Not started | opus |  | Part G step 5: which password worked |  |
@@ -55,6 +55,7 @@ Runs: 18   output tokens: 402788   API-equivalent cost: $29.31
 - **W4-3** SCA watches paste and typing to spot a client id. Where should it run? → Only on approved portals (asked as Q4)
 - **W4-R** Firefox SMTI widget differed from Chrome (every frame, no Angular re-sync, no re-inject, no settings pull) → Copy Chrome's manualAssistWidget verbatim into Firefox and port re-inject + request_settings sync (Rule 0.4 builds identical; Chrome's widget uses no Chrome-only API; smallest way to make behaviour identical)
 - **W5-1** SCC-U host: handler interface and how a copy opens the read window → handlers implement observe(obs, hwnd, ctx); SccHost.open_read_window(session_id, seconds<=30) callable from any thread (the card's copy); ctx.read_harder for handlers; page budget 1 s, hang 15 s, queue 8; trip reason logs exception type only (mirrors SGT-I host; hwnd is needed for the card and outcome matching; exception text could carry page content so it is not logged)
+- **W5-2** Show the client's saved (unverified) IT password as a row on the SCC card, so it can be verified too? → Yes (asked as Q5)
 
 ## Checks waiting for you
 
@@ -65,3 +66,4 @@ Runs: 18   output tokens: 402788   API-equivalent cost: $29.31
 - #5 (W4-1) Real browser (Chrome and Firefox), SCA armed: open SMTI or MECP for client A in tab 1 and type A's id there - no SCA fill; in tab 2 on the same portal SCA still fills; close the card (x or timeout) and SCA works again in tab 1. Also: Client Detail > Manual Copy, copy the User ID from the card - desktop log shows 'not arming' for 5 min, another client's id still arms. — Not run
 - #6 (W4-3) Load both extension builds in a real Chrome and Firefox: confirm login.js/SCA runs on gst.gov.in / incometax.gov.in and a configured custom-service host, and does NOT run on an unrelated https site; confirm Autofill/SMTI/MECP still work on a custom service. — Not run
 - #7 (W4-R) Firefox: SMTI now uses Chrome's widget (top frame only) and re-appears after a failed login in its own tab; check both on a real Firefox with the extension loaded. Chrome: Fast Autofill fills a custom service whose host is NOT in the SCA portal list. — Not run
+- #8 (W5-2) Run tools/vsdc_uia_probe.py once on ONE real Income Tax wrong-password attempt (a single mistyped password, never repeated, NEVER to a lock-out) on the password page, and once on the OTP / secure-access page if you meet it. Then compare the wording with core/scc/scc_rules.json: rules marked unconfirmed (wrong password, locked, OTP/secure access, forgot/reset) should be replaced with the real text and lose the flag. — Not run
