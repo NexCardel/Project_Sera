@@ -19,17 +19,15 @@ document.addEventListener('DOMContentLoaded', () => {
   } catch (_) {}
 
   // 1. Load current extension settings from storage
+  // manualAssistPayload / mecpPayload carry a password and live in chrome.storage.session, not
+  // .local (finding #2). No session storage (old Firefox) -> just show the "no queue" state.
   function loadSettings() {
-    chrome.storage.local.get([
-      'scaEnabled',
-      'manualAssistPayload',
-      'mecpPayload'
-    ], (data) => {
+    chrome.storage.local.get(['scaEnabled'], (data) => {
       const sca = data.scaEnabled !== false;
-
       if (toggleSca) toggleSca.checked = sca;
+    });
 
-      // Update manual assist button status
+    const showAssistStatus = (data) => {
       const hasPendingAssist = (data.manualAssistPayload && data.manualAssistPayload.expiresAt > Date.now()) ||
                                (data.mecpPayload && data.mecpPayload.expiresAt > Date.now());
       if (btnManualAssist) {
@@ -41,7 +39,12 @@ document.addEventListener('DOMContentLoaded', () => {
           btnManualAssist.title = 'No active assistant queue. Trigger manual login assist.';
         }
       }
-    });
+    };
+    if (chrome.storage.session) {
+      chrome.storage.session.get(['manualAssistPayload', 'mecpPayload'], showAssistStatus);
+    } else {
+      showAssistStatus({});
+    }
   }
 
   // 2. Check Host Connection

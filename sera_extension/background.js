@@ -30,17 +30,53 @@ if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") 
 // SCA v1 kept every armed client password in chrome.storage.local (written to disk). Remove
 // anything it left behind.
 try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
+
+// ---------------- Session-only storage for password payloads (finding #2) ----------------
+// manualAssistPayload / mecpPayload / sccActiveAttempt carry a plaintext password and must never
+// touch disk. chrome.storage.session is memory-only, cleared when the browser closes. On a
+// Firefox build old enough to lack it (< 115), fall back to a plain in-memory store of the same
+// shape - these are only ever read back from this same background context.
+const _passwordStore = (chrome.storage && chrome.storage.session) ? chrome.storage.session : (() => {
+  const mem = {};
+  const keysOf = (k) => Array.isArray(k) ? k : [k];
+  return {
+    get: (keys, cb) => {
+      const out = {};
+      keysOf(keys).forEach(k => { if (mem[k] !== undefined) out[k] = mem[k]; });
+      if (cb) { cb(out); return; }
+      return Promise.resolve(out);
+    },
+    set: (obj, cb) => {
+      Object.assign(mem, obj);
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    },
+    remove: (keys, cb) => {
+      keysOf(keys).forEach(k => { delete mem[k]; });
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    }
+  };
+})();
+
+// Older installs kept these in chrome.storage.local (on disk); clear any leftovers from before
+// the upgrade, plus the tracking payload Part A removed.
+try {
+  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload']);
+} catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),
   postDesktop: (msg) => { sendToDesktop(msg); },
   getSettings: () => new Promise((resolve) => {
-    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains", "manualAssistPayload"], (d) => {
-      const ma = d.manualAssistPayload;
-      resolve({
-        scaEnabled: d.scaEnabled,
-        scaMode: d.scaMode,
-        allowedDomains: d.allowedDomains || [],
-        manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
+    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains"], (d) => {
+      _passwordStore.get(["manualAssistPayload"], (pd) => {
+        const ma = pd.manualAssistPayload;
+        resolve({
+          scaEnabled: d.scaEnabled,
+          scaMode: d.scaMode,
+          allowedDomains: d.allowedDomains || [],
+          manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
+        });
       });
     });
   }),
@@ -334,7 +370,7 @@ ensureConnected();
 if (SERA_DEBUG) console.log('Sera: background.js module loaded, registering listeners.');
 
 let sccActiveAttempt = null;
-chrome.storage.local.get(['sccActiveAttempt'], d => {
+_passwordStore.get(['sccActiveAttempt'], d => {
   if (d && d.sccActiveAttempt) sccActiveAttempt = d.sccActiveAttempt;
 });
 
@@ -342,7 +378,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) return;
   if (changeInfo.status === 'complete') {
     // Re-inject Manual Assist if tab is on login page and assist is active (e.g. after invalid password page reload)
-    chrome.storage.local.get(['manualAssistPayload'], data => {
+    _passwordStore.get(['manualAssistPayload'], data => {
       const p = data.manualAssistPayload;
       if (p && p.expiresAt && p.expiresAt > Date.now()) {
         const curUrl = (tab.url || '').toLowerCase();
@@ -356,21 +392,21 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
             injectManualAssist(tabId, p);
           }, 700);
         } else if (matchesHost && isPostLogin && !isExplicitLogin) {
-          chrome.storage.local.remove(['manualAssistPayload']);
+          _passwordStore.remove(['manualAssistPayload']);
         }
       }
     });
   }
 
   // ── SCC Webpage Link Mutation Observer (Income Tax / ITR Only) ───────────
-  chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+  _passwordStore.get(['sccActiveAttempt'], (data) => {
     const attempt = data.sccActiveAttempt || sccActiveAttempt;
     if (!attempt || !attempt.password) return;
 
     const now = Date.now();
     if (now - (attempt.timestamp || 0) > 10 * 60 * 1000) {
       sccActiveAttempt = null;
-      chrome.storage.local.remove(['sccActiveAttempt']);
+      _passwordStore.remove(['sccActiveAttempt']);
       return;
     }
 
@@ -390,7 +426,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (isPostLoginRoute) {
       if (SERA_DEBUG) console.log(`⚡ Sera SCC: Link mutation observed away from login (${initUrl} -> ${curUrl})`);
       sccActiveAttempt = null;
-      chrome.storage.local.remove(['sccActiveAttempt', 'mecpPayload']);
+      _passwordStore.remove(['sccActiveAttempt', 'mecpPayload']);
 
       try {
         chrome.scripting.executeScript({
@@ -739,8 +775,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
     const isTrulyLoggedIn = (hasActiveDashboard || (logoutBtn && logoutBtn.offsetParent !== null)) && !isExplicitLoginUrl;
 
     if (isTrulyLoggedIn || (isPostLoginUrl && !isExplicitLoginUrl)) {
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.remove(['manualAssistPayload']);
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+        chrome.storage.session.remove(['manualAssistPayload']);
       }
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
         chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
@@ -984,8 +1020,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
   let dismiss = () => {
     if (timerTimeout) clearTimeout(timerTimeout);
     try {
-      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.remove(['manualAssistPayload']);
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+        chrome.storage.session.remove(['manualAssistPayload']);
       }
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
         chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
@@ -1437,8 +1473,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
           updateFlutterUI(2);
           stopFlutterObserver();
           try {
-            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-              chrome.storage.local.remove(['manualAssistPayload']);
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
+              chrome.storage.session.remove(['manualAssistPayload']);
             }
             if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
               chrome.runtime.sendMessage({ type: "MANUAL_ASSIST_CLEAR" });
@@ -1541,8 +1577,8 @@ function handleManualAssistTab(message) {
     if (SMTI_DEBUG) console.warn('[SMTI DEBUG] handleManualAssistTab: bad url, aborting', message.url);
     return;
   }
-  chrome.storage.local.remove(['mecpPayload']);
-  chrome.storage.local.set({
+  _passwordStore.remove(['mecpPayload']);
+  _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
 
@@ -1632,7 +1668,7 @@ function injectFillScript(tabId, userid, password, usernameSelector, passwordSel
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (SERA_DEBUG) console.log("Sera background: received runtime message:", msg);
   if (msg.type === "MANUAL_ASSIST_CLEAR" || msg.type === "MANUAL_ASSIST_DONE" || msg.type === "MANUAL_ASSIST_DISMISSED") {
-    chrome.storage.local.remove(['manualAssistPayload']);
+    _passwordStore.remove(['manualAssistPayload']);
     sendResponse({ ok: true });
     return true;
   }
@@ -1656,7 +1692,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "TRIGGER_MANUAL_ASSIST_FOR_TAB") {
     if (msg.tabId) {
-      chrome.storage.local.get(['manualAssistPayload', 'mecpPayload'], data => {
+      _passwordStore.get(['manualAssistPayload', 'mecpPayload'], data => {
         const mecp = data.mecpPayload;
         if (mecp && mecp.expiresAt && mecp.expiresAt >= Date.now()) {
           if (SMTI_DEBUG) console.log('[SMTI DEBUG] TRIGGER_MANUAL_ASSIST_FOR_TAB: found active mecpPayload, injecting MECP');
@@ -1684,12 +1720,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       initial_url: tUrl,
       timestamp: Date.now()
     };
-    chrome.storage.local.set({ sccActiveAttempt });
+    _passwordStore.set({ sccActiveAttempt });
     sendResponse({ status: "ok" });
     return true;
   }
   if (msg.type === "MECP_DISMISSED") {
-    chrome.storage.local.remove(['mecpPayload', 'sccActiveAttempt']);
+    _passwordStore.remove(['mecpPayload', 'sccActiveAttempt']);
     sccActiveAttempt = null;
     sendResponse({ status: "ok" });
     return true;
@@ -1697,7 +1733,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "SCC_LOGIN_DETECTED" && msg.attempt) {
     const attempt = msg.attempt;
     sccActiveAttempt = null;
-    chrome.storage.local.remove(['sccActiveAttempt']);
+    _passwordStore.remove(['sccActiveAttempt']);
     if (SERA_DEBUG) console.log(`⚡ Sera SCC: In-page DOM login detected for ${attempt.userid} (${attempt.combo_label})`);
     sendToDesktop({
       type: "scc_password_verified",
@@ -1893,7 +1929,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   close.textContent = "×";
   close.title = "Dismiss";
   close.onclick = () => {
-    try { chrome.storage.local.remove(['sccActiveAttempt', 'mecpPayload']); } catch (_) {}
+    try { chrome.storage.session.remove(['sccActiveAttempt', 'mecpPayload']); } catch (_) {}
     try { chrome.runtime.sendMessage({ type: "MECP_DISMISSED" }); } catch (_) {}
     if (host.isConnected) host.remove();
   };
@@ -2051,8 +2087,8 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
 function handleMECPTab(message) {
   let hostname;
   try { hostname = new URL(message.url).hostname; } catch (_) { return; }
-  chrome.storage.local.remove(['manualAssistPayload']);
-  chrome.storage.local.set({
+  _passwordStore.remove(['manualAssistPayload']);
+  _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
   chrome.tabs.query({}, tabs => {

@@ -23,17 +23,53 @@ if (typeof self.SeraSCA === "undefined" && typeof importScripts === "function") 
 // SCA v1 kept every armed client password in chrome.storage.local (written to disk). Remove
 // anything it left behind.
 try { chrome.storage.local.remove(["armedSCAPayload"]); } catch (_) {}
+
+// ---------------- Session-only storage for password payloads (finding #2) ----------------
+// manualAssistPayload / mecpPayload / sccActiveAttempt carry a plaintext password and must never
+// touch disk. chrome.storage.session is memory-only, cleared when the browser closes. On a
+// Firefox build old enough to lack it (< 115), fall back to a plain in-memory store of the same
+// shape - these are only ever read back from this same background context.
+const _passwordStore = (chrome.storage && chrome.storage.session) ? chrome.storage.session : (() => {
+  const mem = {};
+  const keysOf = (k) => Array.isArray(k) ? k : [k];
+  return {
+    get: (keys, cb) => {
+      const out = {};
+      keysOf(keys).forEach(k => { if (mem[k] !== undefined) out[k] = mem[k]; });
+      if (cb) { cb(out); return; }
+      return Promise.resolve(out);
+    },
+    set: (obj, cb) => {
+      Object.assign(mem, obj);
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    },
+    remove: (keys, cb) => {
+      keysOf(keys).forEach(k => { delete mem[k]; });
+      if (cb) { cb(); return; }
+      return Promise.resolve();
+    }
+  };
+})();
+
+// Older installs kept these in chrome.storage.local (on disk); clear any leftovers from before
+// the upgrade, plus the tracking payload Part A removed.
+try {
+  chrome.storage.local.remove(['manualAssistPayload', 'mecpPayload', 'sccActiveAttempt', 'activeAutofillPayload']);
+} catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),
   postDesktop: (msg) => { sendToDesktop(msg); },
   getSettings: () => new Promise((resolve) => {
-    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains", "manualAssistPayload"], (d) => {
-      const ma = d.manualAssistPayload;
-      resolve({
-        scaEnabled: d.scaEnabled,
-        scaMode: d.scaMode,
-        allowedDomains: d.allowedDomains || [],
-        manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
+    chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains"], (d) => {
+      _passwordStore.get(["manualAssistPayload"], (pd) => {
+        const ma = pd.manualAssistPayload;
+        resolve({
+          scaEnabled: d.scaEnabled,
+          scaMode: d.scaMode,
+          allowedDomains: d.allowedDomains || [],
+          manualAssistActive: !!(ma && ma.expiresAt && ma.expiresAt > Date.now()),
+        });
       });
     });
   }),
@@ -1131,8 +1167,8 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 function handleManualAssistTab(message) {
   let hostname;
   try { hostname = new URL(message.url).hostname; } catch (_) { return; }
-  chrome.storage.local.remove(['mecpPayload']);
-  chrome.storage.local.set({
+  _passwordStore.remove(['mecpPayload']);
+  _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
 
@@ -1205,7 +1241,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === "TRIGGER_MANUAL_ASSIST_FOR_TAB") {
     if (msg.tabId) {
-      chrome.storage.local.get(['manualAssistPayload', 'mecpPayload'], data => {
+      _passwordStore.get(['manualAssistPayload', 'mecpPayload'], data => {
         const mecp = data.mecpPayload;
         if (mecp && mecp.expiresAt && mecp.expiresAt >= Date.now()) {
           injectMECP(msg.tabId, mecp);
@@ -1422,8 +1458,8 @@ function mecpWidget(userid, password, clientName, expiresMs) {
 function handleMECPTab(message) {
   let hostname;
   try { hostname = new URL(message.url).hostname; } catch (_) { return; }
-  chrome.storage.local.remove(['manualAssistPayload']);
-  chrome.storage.local.set({
+  _passwordStore.remove(['manualAssistPayload']);
+  _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
   chrome.tabs.query({}, tabs => {

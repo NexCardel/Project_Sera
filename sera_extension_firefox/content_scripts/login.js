@@ -71,9 +71,9 @@ function checkSccLoginSuccess() {
     const href = window.location.href || "";
     if (!href.includes("incometax.gov.in")) return;
 
-    if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+    if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.session) return;
 
-    chrome.storage.local.get(['sccActiveAttempt'], (data) => {
+    chrome.storage.session.get(['sccActiveAttempt'], (data) => {
       const attempt = data && data.sccActiveAttempt;
       if (!attempt || !attempt.password) return;
 
@@ -85,7 +85,7 @@ function checkSccLoginSuccess() {
       );
 
       if (hasUserHeader || (isDashboard && !lowerHref.includes('/login'))) {
-        chrome.storage.local.remove(['sccActiveAttempt']);
+        chrome.storage.session.remove(['sccActiveAttempt']);
         chrome.runtime.sendMessage({
           type: "SCC_LOGIN_DETECTED",
           destination_url: href,
