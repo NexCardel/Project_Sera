@@ -4,7 +4,7 @@ W0-2,0,Password guard in both UIA readers (finding #17),Done,claude-sonnet-5,1,b
 W1-1,1,Part A: remove all tracking and the cookie wipe from the extension,Done,claude-sonnet-5,1,e3027bb,"Removed tracking/cookie-wipe from both extension builds; sca/ unchanged, mirrored firefox to chrome",2026-09-29 00:37
 W1-2,1,"Part A, desktop side: stop serving extension tracking",Done,gemini-3.8-flash-high,0,59e4f02,Desktop side stops serving extension tracking; SGT/VSDC capture pipeline confirmed unchanged,2026-09-29 01:02
 W1-R,1,Review Part A,Done,claude-opus-5-5,1,3fda16f,"Part A passes review; fixed dead settings_dialog tracker kwargs, manifest description, stale comment; passwords in storage.local left for W2-1/Part G",2026-09-29 12:48
-W2-1,2,Part B1: passwords off disk in the extension (#2),Not started,gemini-3.8-flash-high,0,,,
+W2-1,2,Part B1: passwords off disk in the extension (#2),Done,claude-sonnet-5,1,8cc2b00,Passwords moved from storage.local to storage.session (memory fallback for old Firefox) in both extension builds; startup wipe of stale local copies; new scan test.,2026-09-29 12:55
 W2-2,2,"Part B2: one openPortalTab helper (#3, #4)",Not started,gemini-3.8-flash-high,0,,,
 W3-1,3,Part C: Fast Autofill on the helper; decision D8,Not started,gemini-3.8-flash-high,0,,,
 W3-2,3,"Part D: SMTI field picking, visibility, re-inject rule (#7, #8, #9)",Not started,gemini-3.8-flash-high,0,,,

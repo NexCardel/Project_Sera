@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 01:03)
+# Autofill tweaks — report (2026-09-29 12:48)
 
-Deadline: 2026-09-29T01:30:00+05:30
+Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 21 |
+| Not started | 20 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 4 |
+| Done | 5 |
 | Blocked | 0 |
 
-Runs: 7   output tokens: 143318   API-equivalent cost: $10.22
+Runs: 8   output tokens: 153595   API-equivalent cost: $11.47
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -18,7 +18,7 @@ Runs: 7   output tokens: 143318   API-equivalent cost: $10.22
 | W0-2 | Done | sonnet | b8f7fa5 | Password guard in both UIA readers (finding #17) | Password guard added to vsdc_uia_text and uia_nodes; both UIA readers now skip ValuePattern reads for IsPassword elements; 982 tests pass, 6 pre-existing unrela |
 | W1-1 | Done | sonnet | e3027bb | Part A: remove all tracking and the cookie wipe from the extension | Removed tracking/cookie-wipe from both extension builds; sca/ unchanged, mirrored firefox to chrome |
 | W1-2 | Done | sonnet | 59e4f02 | Part A, desktop side: stop serving extension tracking | Desktop side stops serving extension tracking; SGT/VSDC capture pipeline confirmed unchanged |
-| W1-R | Not started | opus |  | Review Part A |  |
+| W1-R | Done | opus | 3fda16f | Review Part A | Part A passes review; fixed dead settings_dialog tracker kwargs, manifest description, stale comment; passwords in storage.local left for W2-1/Part G |
 | W2-1 | Not started | sonnet |  | Part B1: passwords off disk in the extension (#2) |  |
 | W2-2 | Not started | sonnet |  | Part B2: one openPortalTab helper (#3, #4) |  |
 | W3-1 | Not started | haiku |  | Part C: Fast Autofill on the helper; decision D8 |  |
