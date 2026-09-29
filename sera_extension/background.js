@@ -694,66 +694,106 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   }
 }
 
-function handleAutofillTab(message) {
-  let targetHostname;
-  try { targetHostname = new URL(message.url).hostname; } catch (e) { console.error("Invalid URL", message.url); return; }
+// Read-only probe run inside a tab: is a password box visible? (never reads a value)
+function _seesPasswordBox() {
+  return Array.from(document.querySelectorAll('input[type="password"]')).some(el => {
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+  });
+}
 
-  chrome.tabs.query({}, (tabs) => {
-    const existing = tabs.find(t => {
-      if (!t.url) return false;
-      if (t.url.includes(targetHostname)) return true;
-      if (targetHostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
-      return false;
-    });
+function _loginUrlKey(u) {
+  try {
+    const p = new URL(u);
+    return (p.origin + p.pathname).replace(/\/+$/, '').toLowerCase();
+  } catch (_) { return ''; }
+}
 
-    if (existing) {
-      chrome.windows.update(existing.windowId, { focused: true }, () => {
-        if (chrome.runtime.lastError) {}
-
-        // Check if the tab is already on the exact target URL and fully loaded –
-        // in that case onUpdated will never fire (no navigation happens), so we
-        // must inject immediately. Otherwise navigate then wait for 'complete'.
-        const alreadyOnUrl = existing.url &&
-          existing.url.split('#')[0].toLowerCase() === message.url.split('#')[0].toLowerCase();
-        if (alreadyOnUrl && existing.status === 'complete') {
-          injectFillScript(existing.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
-          return;
-        }
-
-        chrome.tabs.update(existing.id, { url: message.url, active: true }, () => {
-          if (chrome.runtime.lastError) {}
-          let injected = false;
-          const listener = function(tabId, info) {
-            if (tabId === existing.id && info.status === 'complete' && !injected) {
-              injected = true;
-              chrome.tabs.onUpdated.removeListener(listener);
-              injectFillScript(existing.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
-            }
-          };
-          chrome.tabs.onUpdated.addListener(listener);
-          // Safety cleanup – remove listener after 30s even if tab never reaches 'complete'
-          setTimeout(() => { try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {} }, 30000);
-        });
+// Calls done(tab) with the first candidate tab that shows the login page, else done(null).
+function _findLoginTab(candidates, url, done) {
+  const wanted = _loginUrlKey(url);
+  const byUrl = candidates.find(t => _loginUrlKey(t.url) === wanted);
+  if (byUrl) { done(byUrl); return; }
+  const rest = candidates.filter(t => t.id !== undefined && /^https?:/i.test(t.url || ''));
+  const next = (i) => {
+    if (i >= rest.length) { done(null); return; }
+    let answered = false;
+    const answer = (yes) => {
+      if (answered) return;
+      answered = true;
+      if (yes) done(rest[i]); else next(i + 1);
+    };
+    try {
+      chrome.scripting.executeScript({ target: { tabId: rest[i].id, allFrames: true }, func: _seesPasswordBox }, results => {
+        if (chrome.runtime.lastError) { answer(false); return; }
+        answer(Array.isArray(results) && results.some(r => r && r.result === true));
       });
-    } else {
-      chrome.tabs.create({ url: message.url }, (newTab) => {
-        if (chrome.runtime.lastError || !newTab) return;
-        let injected = false;
-        const listener = function(tabId, info) {
-          if (tabId === newTab.id && info.status === 'complete' && !injected) {
-            injected = true;
-            chrome.tabs.onUpdated.removeListener(listener);
-            injectFillScript(newTab.id, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
-          }
-        };
-        chrome.tabs.onUpdated.addListener(listener);
-        // Safety cleanup after 30s
-        setTimeout(() => { try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {} }, 30000);
-      });
+    } catch (_) { answer(false); }
+  };
+  next(0);
+}
+
+// Opens the portal's login page and calls onReady(tabId) exactly once, after it has loaded.
+// Reuses an open tab of the portal only when it shows the login page (decision D5); otherwise
+// a new tab is opened, so work in other tabs of that portal is never navigated away.
+function openPortalTab(url, onReady) {
+  let hostname;
+  try { hostname = new URL(url).hostname; } catch (_) { return; }
+  const wantedUrl = String(url).split('#')[0].toLowerCase();
+
+  const run = (tab, isNew) => {
+    if (!tab || tab.id === undefined) return;
+    chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
+    const alreadyOnUrl = !isNew && tab.url && tab.url.split('#')[0].toLowerCase() === wantedUrl;
+    if (alreadyOnUrl && tab.status === 'complete') {
+      chrome.tabs.update(tab.id, { active: true }, () => { if (chrome.runtime.lastError) {} });
+      onReady(tab.id);
+      return;
     }
 
-  });
+    let done = false;
+    // 'complete' only counts after this tab has started loading, so a stale 'complete'
+    // from the page being replaced cannot trigger an early injection.
+    let started = isNew || alreadyOnUrl;
+    let timer = null;
+    const cleanup = () => {
+      done = true;
+      clearTimeout(timer);
+      try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
+    };
+    const listener = (tabId, info) => {
+      if (tabId !== tab.id || done) return;
+      if (info.status === 'loading') { started = true; return; }
+      if (info.status === 'complete' && started) { cleanup(); onReady(tab.id); }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    timer = setTimeout(cleanup, 30000);
 
+    if (isNew || alreadyOnUrl) return;
+    chrome.tabs.update(tab.id, { url, active: true }, () => { if (chrome.runtime.lastError) {} });
+  };
+
+  chrome.tabs.query({}, tabs => {
+    const candidates = (tabs || []).filter(t => {
+      if (!t.url) return false;
+      if (t.url.includes(hostname)) return true;
+      return hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in');
+    });
+    _findLoginTab(candidates, url, existing => {
+      if (existing) { run(existing, false); return; }
+      chrome.tabs.create({ url }, newTab => {
+        if (chrome.runtime.lastError || !newTab) return;
+        run(newTab, true);
+      });
+    });
+  });
+}
+
+function handleAutofillTab(message) {
+  openPortalTab(message.url, tabId => {
+    injectFillScript(tabId, message.userid, message.password, message.username_selector, message.password_selector, message.extension_flow);
+  });
 }
 
 function manualAssistWidget(userid, password, usernameSelector, passwordSelector, clientName, expiresMs) {
@@ -1571,12 +1611,7 @@ function manualAssistWidget(userid, password, usernameSelector, passwordSelector
 }
 
 function handleManualAssistTab(message) {
-  if (SMTI_DEBUG) console.log('[SMTI DEBUG] handleManualAssistTab: entry', message);
-  let hostname;
-  try { hostname = new URL(message.url).hostname; } catch (_) {
-    if (SMTI_DEBUG) console.warn('[SMTI DEBUG] handleManualAssistTab: bad url, aborting', message.url);
-    return;
-  }
+  try { new URL(message.url); } catch (_) { return; }
   _passwordStore.remove(['mecpPayload']);
   _passwordStore.set({
     manualAssistPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
@@ -1587,45 +1622,7 @@ function handleManualAssistTab(message) {
   const isFlutterUrl = /tdscpc\.gov\.in|traces\.gov\.in|flutter/i.test(message.url || "");
   const injectDelay = isFlutterUrl ? 3000 : 0;
 
-  chrome.tabs.query({}, tabs => {
-    const existing = tabs.find(t => {
-      if (!t.url) return false;
-      if (t.url.includes(hostname)) return true;
-      if (hostname.includes('tdscpc.gov.in') && t.url.includes('tdscpc.gov.in')) return true;
-      return false;
-    });
-    if (SMTI_DEBUG) console.log(`[SMTI DEBUG] handleManualAssistTab: hostname=${hostname}, existing tab=${existing ? existing.id : 'none - will open new'}`);
-    const open = tab => {
-      if (!tab) {
-        if (SMTI_DEBUG) console.warn('[SMTI DEBUG] handleManualAssistTab: chrome.tabs.create/query gave no tab (permission blocked? tab closed immediately?)');
-        return;
-      }
-      chrome.windows.update(tab.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
-      const isAlreadyOnUrl = tab.url && (tab.url.split('#')[0].toLowerCase() === message.url.split('#')[0].toLowerCase());
-
-      let listenerFired = false;
-      const listener = (tabId, info) => {
-        if (tabId === tab.id && info.status === "complete" && !listenerFired) {
-          listenerFired = true;
-          chrome.tabs.onUpdated.removeListener(listener);
-          if (SMTI_DEBUG) console.log(`[SMTI DEBUG] handleManualAssistTab: tab ${tab.id} finished loading, injecting in ${injectDelay}ms`);
-          setTimeout(() => injectManualAssist(tab.id, message, true), injectDelay);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      setTimeout(() => {
-        try { chrome.tabs.onUpdated.removeListener(listener); } catch (_) {}
-      }, 30000);
-
-      if (isAlreadyOnUrl && tab.status === "complete") {
-        if (SMTI_DEBUG) console.log(`[SMTI DEBUG] handleManualAssistTab: tab ${tab.id} already on target URL and complete, injecting in ${injectDelay}ms`);
-        setTimeout(() => injectManualAssist(tab.id, message, true), injectDelay);
-      }
-      chrome.tabs.update(tab.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
-    };
-    if (existing) open(existing); else chrome.tabs.create({ url: message.url }, open);
-
-  });
+  openPortalTab(message.url, tabId => setTimeout(() => injectManualAssist(tabId, message, true), injectDelay));
 }
 
 const _lastManualAssistInject = {};
@@ -2085,45 +2082,12 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
 }
 
 function handleMECPTab(message) {
-  let hostname;
-  try { hostname = new URL(message.url).hostname; } catch (_) { return; }
+  try { new URL(message.url); } catch (_) { return; }
   _passwordStore.remove(['manualAssistPayload']);
   _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
   });
-  chrome.tabs.query({}, tabs => {
-    const existing = tabs.find(t => t.url && t.url.includes(hostname));
-    if (existing) {
-      chrome.windows.update(existing.windowId, { focused: true }, () => { if (chrome.runtime.lastError) {} });
-      chrome.tabs.update(existing.id, { url: message.url, active: true }, () => { if (chrome.runtime.lastError) {} });
-      
-      let injected = false;
-      if (existing.status === "complete") {
-        injected = true;
-        injectMECP(existing.id, message);
-      }
-      
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === existing.id && info.status === "complete" && !injected) {
-          injected = true;
-          chrome.tabs.onUpdated.removeListener(listener);
-          injectMECP(existing.id, message);
-        }
-      });
-    } else {
-      chrome.tabs.create({ url: message.url }, (newTab) => {
-        if (chrome.runtime.lastError || !newTab) return;
-        let injected = false;
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-          if (tabId === newTab.id && info.status === "complete" && !injected) {
-            injected = true;
-            chrome.tabs.onUpdated.removeListener(listener);
-            injectMECP(newTab.id, message);
-          }
-        });
-      });
-    }
-  });
+  openPortalTab(message.url, tabId => injectMECP(tabId, message));
 }
 
 function injectMECP(tabId, message) {

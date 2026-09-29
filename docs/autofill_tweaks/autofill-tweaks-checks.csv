@@ -1,1 +1,2 @@
 Check,WP,Text,Result,Date,Notes
+1,W2-2,"Real browser (Chrome and Firefox): with a portal login tab already open, Fast Autofill/SMTI/MECP reuse it, inject once (MECP card stays up, no flash); with only a logged-in page of that portal open, a NEW tab opens and the logged-in tab is untouched.",Not run,2026-09-29 13:01,
