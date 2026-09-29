@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 13:36)
+# Autofill tweaks — report (2026-09-29 13:44)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 11 |
+| Not started | 10 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 14 |
+| Done | 15 |
 | Blocked | 0 |
 
-Runs: 17   output tokens: 379949   API-equivalent cost: $27.55
+Runs: 18   output tokens: 402788   API-equivalent cost: $29.31
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ Runs: 17   output tokens: 379949   API-equivalent cost: $27.55
 | W4-2 | Done | sonnet | 3b061fc | Part F: SCA use counted on fill, denials shown, no 'pass' fallback (#12, #14) | SCA use counted on fill; grants capped max_uses+2; denials reported as failed fill; no pass-label fallback. JS 20/20; test_clipboard_assist setUp still fails (p |
 | W4-3 | Done | sonnet | c169294 | Part F: SCA scope (decision D7) | SCA login.js/sca_adapters.js registered only on approved portal domains via scripting API (D7: portals only); both builds; main.py sends allowed_domains; test_s |
 | W4-R | Done | opus | 2fe7cba | Review Parts B-F | 6 defects fixed: Fast Autofill off-portal ReferenceError, password-bearing message logs, URL-substring tab match, stale SMTI tab, Firefox SMTI parity, SCA scope |
-| W5-1 | Not started | opus |  | Part G frame: core/scc host, _hand_to_scc hook, setting |  |
+| W5-1 | Done | opus | 4b893bf | Part G frame: core/scc host, _hand_to_scc hook, setting | core/scc SccHost + _hand_to_scc hook + 30 s read window + scc_detect_mode setting (default off); SGT tests pass, replay no changed rows |
 | W5-2 | Not started | sonnet |  | Part G steps 1-2, scc_rules.json and its loader |  |
 | W5-3 | Not started | sonnet |  | Part G step 3: the SCC card and its copies |  |
 | W5-4 | Not started | opus |  | Part G step 4: the outcome reader |  |
@@ -54,6 +54,7 @@ Runs: 17   output tokens: 379949   API-equivalent cost: $27.55
 - **W4-1** Firefox SMTI widget sent nothing on dismiss; how to clear its lock? → Its dismiss now sends MANUAL_ASSIST_CLEAR like Chrome; Firefox background clears manualAssistPayload and the tab's smti lock (Parity with Chrome; without it the Firefox lock would only end at the 5 min cap.)
 - **W4-3** SCA watches paste and typing to spot a client id. Where should it run? → Only on approved portals (asked as Q4)
 - **W4-R** Firefox SMTI widget differed from Chrome (every frame, no Angular re-sync, no re-inject, no settings pull) → Copy Chrome's manualAssistWidget verbatim into Firefox and port re-inject + request_settings sync (Rule 0.4 builds identical; Chrome's widget uses no Chrome-only API; smallest way to make behaviour identical)
+- **W5-1** SCC-U host: handler interface and how a copy opens the read window → handlers implement observe(obs, hwnd, ctx); SccHost.open_read_window(session_id, seconds<=30) callable from any thread (the card's copy); ctx.read_harder for handlers; page budget 1 s, hang 15 s, queue 8; trip reason logs exception type only (mirrors SGT-I host; hwnd is needed for the card and outcome matching; exception text could carry page content so it is not logged)
 
 ## Checks waiting for you
 

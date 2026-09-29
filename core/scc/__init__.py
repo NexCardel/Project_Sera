@@ -6,6 +6,8 @@ captures: see host.py for the contract. Switched by Settings -> SCC -> Detect lo
 (scc_detect_mode).
 """
 
+from .attempts import Attempt, AttemptOpener, ClientInfo, db_lookup
 from .host import SccHost
+from .scc_rules import RuleSet, get_rules, load_rules
 
-__all__ = ["SccHost"]
+__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "RuleSet", "SccHost", "db_lookup", "get_rules", "load_rules"]

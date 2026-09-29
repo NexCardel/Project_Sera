@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "about": "SCC-U outcome wording for the Income Tax login (autofill-tweaks blueprint G.2 step 4). Every rule must carry examples and counter_examples; a rule that fails them, or whose example another rule of a different outcome claims first, is refused at load and the previous version of that rule keeps running. A rule matches a page when its 'urls' (regexes on the page address, if any) AND its 'patterns' (regexes on any one line, if any) both hold. Wording that no tools/vsdc_uia_probe_output/*.txt dump has shown yet carries \"unconfirmed\": true - it is a best reading, to be replaced by real wording from tools/vsdc_uia_probe.py, never widened by guessing. Precedence when a page matches several: locked, wrong_password, worked, neutral, no_conclusion.",
+
+  "precedence": ["locked", "wrong_password", "worked", "neutral", "no_conclusion"],
+
+  "rules": [
+    {
+      "name": "itr_logged_in_header",
+      "outcome": "worked",
+      "portals": ["Income Tax"],
+      "patterns": ["^([A-Z][A-Z .'&]*[A-Z.]) (?:Individual|HUF|Company|Firm|AOP|BOI|Trust|Local Authority|Artificial Juridical Person)$"],
+      "case": "sensitive",
+      "group": 1,
+      "note": "The profile menu button in the portal header, on every logged-in page: '<NAME> Individual' (the itr_header_name spec in core/sgt/sgt_fields.json). A CA/ERI login shows a role instead, which does not count. Group 1 is the name, for the 'must agree with the client' check.",
+      "examples": ["ASHOK KUMAR SEN Individual", "SEN TRADING CO Firm", {"lines": ["Dashboard", "ASHOK KUMAR SEN Individual", "e-File"]}],
+      "counter_examples": ["ASHOK KUMAR SEN Chartered Accountant", "Dashboard Individual", "Individual", {"lines": ["PAN", "ABCPD1234E", "Password", "Continue"]}]
+    },
+
+    {
+      "name": "itr_wrong_password",
+      "outcome": "wrong_password",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "patterns": ["\\b(?:invalid|incorrect|wrong) password\\b", "\\bpassword (?:is )?(?:invalid|incorrect|wrong)\\b", "\\bplease enter (?:a )?valid password\\b"],
+      "note": "The message on the password page after a wrong password. Unconfirmed: ask staff to run tools/vsdc_uia_probe.py on ONE real wrong-password attempt (never repeat it to a lock-out).",
+      "examples": ["Invalid Password. You have 4 attempts left.", "Incorrect password", "Password is incorrect", "Please enter a valid password"],
+      "counter_examples": ["Password", "Forgot Password?", "Enter your password", "Secure Access Message"]
+    },
+    {
+      "name": "itr_locked",
+      "outcome": "locked",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "patterns": ["\\baccount (?:has been |is )?(?:locked|blocked)\\b", "\\bmaximum (?:number of )?(?:login )?attempts\\b", "\\btoo many (?:failed |invalid |incorrect )?(?:login )?attempts\\b", "\\byour account is (?:temporarily )?(?:locked|blocked|disabled)\\b"],
+      "note": "The lock-out message. Unconfirmed, and it must never be produced on purpose on a real account: the wording will come from a taxpayer who was locked out by accident, if ever.",
+      "examples": ["Your account has been locked due to multiple invalid attempts.", "Your account is locked.", "You have exceeded the maximum number of login attempts", "Too many failed attempts"],
+      "counter_examples": ["Invalid Password. You have 4 attempts left.", "Invalid Password. Your account will be locked after 3 more attempts.", "Account Settings", "Unlock your account by Forgot Password", "Password"]
+    },
+
+    {
+      "name": "itr_otp_or_secure_access",
+      "outcome": "neutral",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "patterns": ["^(?:please )?enter (?:the )?(?:\\d+[- ]digit )?otp\\b", "\\botp (?:has been |is )?sent\\b", "\\bsecure access message\\b", "\\bvalidate (?:your )?(?:secure access|otp)\\b"],
+      "note": "Steps between the password and the dashboard that say nothing about the password: an OTP page, the secure access message page. The attempt goes on waiting.",
+      "examples": ["Enter 6 digit OTP", "OTP has been sent to your registered mobile", "Secure Access Message", "Please enter the OTP"],
+      "counter_examples": ["Invalid Password", "Login with OTP", "Password", "ASHOK KUMAR SEN Individual"]
+    },
+    {
+      "name": "itr_everify_steps",
+      "outcome": "neutral",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "urls": ["e-?verif"],
+      "note": "A portal address inside an e-verification flow. Address only: the menu item 'e-Verify' is in the header of every logged-in page, so the words alone prove nothing.",
+      "examples": [{"url": "https://example.test/#/e-verify/start", "lines": ["e-Verify"]}, {"url": "https://example.test/#/everify", "lines": ["Steps"]}],
+      "counter_examples": ["e-Verify", {"url": "https://example.test/#/login/password", "lines": ["e-Verify"]}]
+    },
+
+    {
+      "name": "itr_forgot_or_reset_page",
+      "outcome": "no_conclusion",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "urls": ["#/(?:login/)?(?:forgot|reset)", "forgot-?password", "reset-?password"],
+      "note": "The forgot / reset password pages, by address only: the password page itself carries a 'Forgot Password?' link, so those words alone prove nothing.",
+      "examples": [{"url": "https://example.test/#/forgot-password", "lines": ["Anything"]}, {"url": "https://example.test/#/login/reset", "lines": ["Anything"]}],
+      "counter_examples": ["Forgot Password?", {"url": "https://example.test/#/login/password", "lines": ["Forgot Password?"]}]
+    },
+    {
+      "name": "itr_reset_heading",
+      "outcome": "no_conclusion",
+      "portals": ["Income Tax"],
+      "unconfirmed": true,
+      "patterns": ["^(?:Reset|Forgot) (?:your )?Password$"],
+      "note": "A page whose heading is exactly this; the password page's link has a '?' after it.",
+      "examples": ["Reset Password", "Forgot your Password"],
+      "counter_examples": ["Forgot Password?", "Password", "Reset Password link sent"]
+    }
+  ]
+}

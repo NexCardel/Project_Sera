@@ -3,3 +3,4 @@ Q,WP,Question,Options,Default,Answer,By,Asked,Answered
 2,W3-1,Fast Autofill clicks the portal's Continue/Login button after filling. Keep that?,Keep the click | Stop after filling,Keep the click,Stop after filling,user,2026-09-29 13:02,2026-09-29 13:02
 3,W3-3,When should the MECP card close by itself?,After the password is copied | After both User ID and password are copied,After the password is copied,After both User ID and password are copied,user,2026-09-29 13:12,2026-09-29 13:12
 4,W4-3,SCA watches paste and typing to spot a client id. Where should it run?,Only on approved portals | Everywhere (as today) | Remove SCA,Only on approved portals,Only on approved portals,user,2026-09-29 13:26,2026-09-29 13:26
+5,W5-2,"Show the client's saved (unverified) IT password as a row on the SCC card, so it can be verified too?",Yes | No,Yes,Yes,user,2026-09-29 13:44,2026-09-29 13:45
