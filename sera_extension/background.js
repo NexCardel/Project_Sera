@@ -257,6 +257,8 @@ function handleDesktopMessage(message) {
     if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
     else if (message.mode === "manual_assist") handleManualAssistTab(message);
     else handleAutofillTab(message);
+  } else if (message.type === "scc_card_close") {
+    closeSccCard(message.attempt_id);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -796,7 +798,8 @@ function _findLoginTab(candidates, url, done) {
 // Opens the portal's login page and calls onReady(tabId) exactly once, after it has loaded.
 // Reuses an open tab of the portal only when it shows the login page (decision D5); otherwise
 // a new tab is opened, so work in other tabs of that portal is never navigated away.
-function openPortalTab(url, onReady) {
+// opts.stay: only ever use a portal tab that is already open on the password page (SCC card).
+function openPortalTab(url, onReady, opts) {
   let hostname;
   try { hostname = new URL(url).hostname; } catch (_) { return; }
   const wantedUrl = String(url).split('#')[0].toLowerCase();
@@ -843,6 +846,13 @@ function openPortalTab(url, onReady) {
       if (onHost(h, hostname)) return true;
       return onHost(hostname, 'tdscpc.gov.in') && onHost(h, 'tdscpc.gov.in');
     });
+    if (opts && opts.stay) {
+      // Already-open tab only: the one on the Income Tax password page. No navigation, no new tab,
+      // no focus change - if there is no such tab, nothing happens.
+      const open = candidates.find(t => t.id !== undefined && /#\/login\/password/i.test(t.url || ''));
+      if (open) onReady(open.id);
+      return;
+    }
     _findLoginTab(candidates, url, existing => {
       if (existing) { run(existing, false); return; }
       chrome.tabs.create({ url }, newTab => {
@@ -1739,19 +1749,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if ((msg.type === "SCC_PASSWORD_INJECTED" || msg.type === "SCC_PASSWORD_COPIED") && msg.payload) {
-    const tId = (sender && sender.tab) ? sender.tab.id : null;
-    const tUrl = (sender && sender.tab) ? sender.tab.url : "";
-    sccActiveAttempt = {
-      ...msg.payload,
-      tabId: tId,
-      initial_url: tUrl,
-      timestamp: Date.now()
-    };
-    _passwordStore.set({ sccActiveAttempt });
-    sendResponse({ status: "ok" });
-    return true;
-  }
   if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
     _passwordStore.remove(['mecpPayload']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
@@ -1759,6 +1756,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       _passwordStore.remove(['sccActiveAttempt']);
       sccActiveAttempt = null;
     }
+    if (msg.attempt_id) {
+      sccCardTabs.delete(String(msg.attempt_id));
+      if (msg.type === "MECP_DISMISSED") sendToDesktop({ type: "scc_card_closed", attempt_id: String(msg.attempt_id) }, false);
+    }
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  // A staff click on "This one worked" on the SCC card; the label is the row's name, never its text.
+  if (msg.type === "scc_row_worked" && msg.attempt_id && msg.row_label) {
+    sendToDesktop({ type: "scc_row_worked", attempt_id: String(msg.attempt_id), row_label: String(msg.row_label) }, false);
     sendResponse({ status: "ok" });
     return true;
   }
@@ -1782,86 +1789,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ status: "ok" });
     return true;
   }
-  if (msg.type === "TRIGGER_UNREGISTERED_SCC_MECP" && msg.pan) {
-    const pan = String(msg.pan).trim().toUpperCase();
-    const tabId = (sender && sender.tab) ? sender.tab.id : null;
-    if (!tabId) {
-      sendResponse({ status: "no_tab" });
-      return true;
-    }
-    chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], async (data) => {
-      let curData = data || {};
-      // If sccSettings or registeredPans is missing or lacks opt3_fixed_str, pull fresh from desktop!
-      if (!curData.registeredPans || !curData.sccSettings || curData.sccSettings.opt3_fixed_str === undefined) {
-        const fresh = await syncSettingsFromDesktop();
-        if (fresh) {
-          curData = await new Promise(resolve => chrome.storage.local.get(['registeredPans', 'sccSettings', 'sccEnabled'], resolve));
-        }
-      }
-      const regList = (curData.registeredPans || []).map(p => String(p).trim().toUpperCase());
-      // Strictly do NOT pop up for registered clients
-      if (regList.includes(pan)) {
-        if (SERA_DEBUG) console.log(`⚡ Sera SCC: Suppressing unregistered pop-in for registered PAN ${pan}`);
-        sendResponse({ status: "registered" });
-        return;
-      }
-      if (curData.sccEnabled === false) {
-        sendResponse({ status: "disabled" });
-        return;
-      }
-      const combos = generateSccCombos(pan, curData.sccSettings || {});
-      injectMECP(tabId, {
-        scc_mode: true,
-        scc_combos: combos,
-        userid: "",
-        client_name: `PAN: ${pan} (Unregistered)`,
-        client_id: null,
-        portal: msg.portal || "Income Tax",
-        unregistered_pan: pan
-      });
-      sendResponse({ status: "injected" });
-    });
-    return true;
-  }
 });
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function generateSccCombos(pan, sccSettings) {
-  const cleanPan = String(pan || "").trim().toUpperCase();
-  if (!cleanPan || cleanPan.length < 9) return [];
-  const chars = cleanPan.substring(0, 4).toLowerCase();
-  const digits = cleanPan.length === 10 ? cleanPan.substring(5, 9) : cleanPan.substring(4, 8);
-  const cfg = sccSettings || {};
-  const results = [];
-  for (let i = 1; i <= 4; i++) {
-    const lbl = cfg[`opt${i}_label`] || `Combo ${i}`;
-    let fixedStr = cfg[`opt${i}_fixed_str`];
-    if (fixedStr === undefined || fixedStr === null) {
-      if (i === 1) fixedStr = "@";
-      else if (i === 2) fixedStr = "Link@";
-      else if (i === 3) fixedStr = "Income@2014";
-      else if (i === 4) fixedStr = "income@2014";
-      else fixedStr = "";
-    }
-    let val = "";
-    if (i === 1) {
-      val = `${chars}${fixedStr || "@"}${digits}`;
-    } else if (i === 2) {
-      val = `${fixedStr}${digits}`;
-    } else if (i === 3 || i === 4) {
-      val = `${fixedStr}`;
-    }
-    results.push({
-      id: i,
-      label: lbl,
-      value: val
-    });
-  }
-  return results;
+// The SCC card's tab per attempt, in memory only: nothing about an SCC card goes into any storage.
+const sccCardTabs = new Map();
+
+function closeSccCard(attemptId) {
+  const tabId = sccCardTabs.get(String(attemptId));
+  sccCardTabs.delete(String(attemptId));
+  if (tabId === undefined) return;
+  _unlockAssistTab(tabId, 'mecp');
+  try {
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { const h = document.getElementById("sera-mecp-host"); if (h) h.remove(); }
+    }, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
 }
 
-function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clientId, portal, unregisteredPan, clearSeconds) {
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId) {
   // sera_dom.js (shared clipboard clearing) is injected just before this function.
   const seraDom = window.__seraDom;
   if (!seraDom) return;
@@ -1930,6 +1878,14 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
       padding: 6px 12px; font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       cursor: pointer; transition: background 0.15s ease; flex-shrink: 0; white-space: nowrap;
     }
+    .field-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; flex-shrink: 0; }
+    .worked-btn {
+      background: transparent; color: #4CF9B7; border: 1px solid #2E9B5F; border-radius: 5px;
+      padding: 4px 10px; font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; white-space: nowrap;
+    }
+    .worked-btn:hover { background: #12261D; }
+    .worked-btn:disabled { opacity: 0.6; cursor: default; }
     .copy-btn:hover { background: #2EA043; }
     .copy-btn.copied { background: #1F6FEB; }
     .timer-container {
@@ -1972,12 +1928,12 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   close.textContent = "×";
   close.title = "Dismiss";
   // The x, the timeout and "both copied" all end here; the background clears mecpPayload.
-  // Only the x also ends an SCC attempt (MECP_DISMISSED): a timeout must not stop SCC verifying.
+  // The SCC card has no timeout: it stays until the x (which tells the desktop) or the desktop closes it.
   let timerTimeout = null;
   function closeCard(messageType) {
     if (timerTimeout) clearTimeout(timerTimeout);
     timerTimeout = null;
-    try { chrome.runtime.sendMessage({ type: messageType }); } catch (_) {}
+    try { chrome.runtime.sendMessage({ type: messageType, attempt_id: attemptId || "" }); } catch (_) {}
     if (host.isConnected) host.remove();
   }
   close.onclick = () => closeCard("MECP_DISMISSED");
@@ -2012,7 +1968,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   }
 
   // D6: a plain card closes once both the User ID (when shown) and the password are copied.
-  // The SCC card has its own copy rules (Part G) and is left alone.
+  // The SCC card stays up until a save, the x, or the desktop ends the attempt.
   const hasUserId = !!(userid && String(userid).trim());
   let userIdCopied = false;
   let passwordCopied = false;
@@ -2085,29 +2041,35 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
       cCopy.innerHTML = "📋 Copy";
       cCopy.onclick = () => {
         copyCredential(combo.value, combo.label || "Password");
+        seraDom.scheduleClipboardClear(combo.value, clearSeconds);
         cCopy.classList.add("copied");
         cCopy.innerHTML = "✓ Copied";
         setTimeout(() => {
           cCopy.classList.remove("copied");
           cCopy.innerHTML = "📋 Copy";
         }, 2000);
-
-        try {
-          chrome.runtime.sendMessage({
-            type: "SCC_PASSWORD_COPIED",
-            payload: {
-              client_id: clientId,
-              userid: userid || unregisteredPan || "",
-              pan: unregisteredPan || userid || "",
-              password: combo.value,
-              combo_label: combo.label || `Combo ${combo.id}`,
-              portal: portal || "Income Tax"
-            }
-          });
-        } catch (_) {}
       };
 
-      cRow.append(cLeft, cCopy);
+      // A staff click, sent to the desktop with the row's label only.
+      const cWorked = document.createElement("button");
+      cWorked.className = "worked-btn";
+      cWorked.textContent = "This one worked";
+      cWorked.onclick = () => {
+        try {
+          chrome.runtime.sendMessage({
+            type: "scc_row_worked",
+            attempt_id: attemptId || "",
+            row_label: combo.label || `Combo ${combo.id}`
+          });
+        } catch (_) {}
+        cWorked.textContent = "✓ Sent";
+        cWorked.disabled = true;
+      };
+
+      const cActions = document.createElement("div");
+      cActions.className = "field-actions";
+      cActions.append(cCopy, cWorked);
+      cRow.append(cLeft, cActions);
       box.appendChild(cRow);
     });
   } else {
@@ -2150,7 +2112,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   const timerBar = document.createElement("div");
   timerBar.className = "timer-bar";
   timerContainer.appendChild(timerBar);
-  box.appendChild(timerContainer);
+  if (!isSCC) box.appendChild(timerContainer);
 
   let timerStartTime = 0;
   let remainingMs = expiresMs || 90000;
@@ -2190,11 +2152,20 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   box.appendChild(toast);
   shadow.appendChild(box);
   document.documentElement.appendChild(host);
-  startCountdown();
+  if (!isSCC) startCountdown();
 }
 
 function handleMECPTab(message) {
   try { new URL(message.url); } catch (_) { return; }
+  if (message.scc_mode === true) {
+    // SCC card (fed by the desktop when SGT reads the password page): it goes into the portal tab
+    // that is already open - never a navigation, never a new tab - and nothing is stored.
+    openPortalTab(message.url, tabId => {
+      if (message.attempt_id) sccCardTabs.set(String(message.attempt_id), tabId);
+      injectMECP(tabId, message);
+    }, { stay: true });
+    return;
+  }
   _passwordStore.remove(['manualAssistPayload']);
   _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
@@ -2211,10 +2182,8 @@ function injectMECP(tabId, message) {
     90000,
     message.scc_mode === true,
     message.scc_combos || [],
-    message.client_id || null,
-    message.portal || "Income Tax",
-    message.unregistered_pan || "",
-    clearSecs
+    clearSecs,
+    message.attempt_id || ""
   ])).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }

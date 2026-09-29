@@ -7,7 +7,9 @@ captures: see host.py for the contract. Switched by Settings -> SCC -> Detect lo
 """
 
 from .attempts import Attempt, AttemptOpener, ClientInfo, db_lookup
+from .card import SccCard
 from .host import SccHost
 from .scc_rules import RuleSet, get_rules, load_rules
 
-__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "RuleSet", "SccHost", "db_lookup", "get_rules", "load_rules"]
+__all__ = ["Attempt", "AttemptOpener", "ClientInfo", "RuleSet", "SccCard", "SccHost", "db_lookup", "get_rules",
+           "load_rules"]

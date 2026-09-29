@@ -105,6 +105,37 @@ def test_dispatch_routes_each_message_type(bridge):
     }
 
 
+def test_scc_row_worked_reaches_the_desktop_with_only_the_attempt_and_the_label(bridge):
+    got = []
+    bridge.scc_row_worked_received.connect(got.append)
+    bridge.dispatch({"type": "scc_row_worked", "attempt_id": "att-1", "row_label": "Combo 2", "extra": "x"})
+    assert got == [{"type": "scc_row_worked", "attempt_id": "att-1", "row_label": "Combo 2"}]
+
+
+@pytest.mark.parametrize("msg", [
+    {"type": "scc_row_worked"},
+    {"type": "scc_row_worked", "attempt_id": "", "row_label": "Combo 2"},
+    {"type": "scc_row_worked", "attempt_id": "att-1", "row_label": ""},
+    {"type": "scc_row_worked", "attempt_id": "att-1", "row_label": "x" * 101},
+    {"type": "scc_row_worked", "attempt_id": "a" * 65, "row_label": "Combo 2"},
+    {"type": "scc_row_worked", "attempt_id": 5, "row_label": "Combo 2"},
+    {"type": "scc_row_worked", "attempt_id": "att-1", "row_label": ["Combo 2"]},
+])
+def test_a_malformed_scc_row_worked_is_dropped(bridge, msg):
+    got = []
+    bridge.scc_row_worked_received.connect(got.append)
+    assert bridge.dispatch(msg) is None
+    assert got == []
+
+
+def test_scc_card_closed_reaches_the_desktop(bridge):
+    got = []
+    bridge.scc_card_closed_received.connect(got.append)
+    bridge.dispatch({"type": "scc_card_closed", "attempt_id": "att-1"})
+    bridge.dispatch({"type": "scc_card_closed"})
+    assert got == [{"type": "scc_card_closed", "attempt_id": "att-1"}]
+
+
 def test_extension_tracking_message_types_are_no_longer_routed(bridge):
     """Part A removed all tracking from the extension (autofill-tweaks W1-1); these message
     types can no longer arrive from it, so the bridge no longer acts on them (W1-2)."""

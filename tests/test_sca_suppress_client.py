@@ -81,6 +81,27 @@ class TestSuppressClient(unittest.TestCase):
         clipboard_watch.suppress_client(None)
         self.assertEqual(clipboard_watch._suppressed_until, {})
 
+    def test_release_lets_the_client_arm_again(self):
+        clipboard_watch.suppress_client(7, seconds=600)
+        self.assertEqual(self.copy("ABCPD1234E"), 0)
+        clipboard_watch.release_client("7")
+        clipboard_watch.release_client(None)
+        clipboard_watch.release_client(99)
+        self.assertEqual(self.copy("ABCPD1234E"), 1)
+
+    def test_scc_ledger_sees_the_copy_even_while_sca_is_off(self):
+        seen = []
+        self.watch.scc_ledger = seen.append
+        self.watch.enabled = False
+        self.copy("Fict#One1")
+        self.assertEqual(seen, ["Fict#One1"])
+
+    def test_a_failing_scc_ledger_never_stops_sca(self):
+        def boom(_t):
+            raise RuntimeError("x")
+        self.watch.scc_ledger = boom
+        self.assertEqual(self.copy("ABCPD1234E"), 1)
+
 
 class TestClientDetailSuppresses(unittest.TestCase):
     def tearDown(self):

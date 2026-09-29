@@ -20,8 +20,9 @@ No password is held here: the saved-password row is read by the card when it is 
 import re
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Set, Tuple
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 ATTEMPT_TTL_SEC = 600.0                     # G.2 step 4: no conclusion after 10 minutes
 PASSWORD_PAGE = re.compile(r"#/login/password", re.IGNORECASE)
@@ -45,6 +46,8 @@ class Attempt:
     client_id: Optional[int]        # None = the PAN is not a registered client (D4 on save)
     saved_row: bool                 # D3: the card shows the client's saved (unverified) password
     opened_at: float
+    attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    ledger: List[str] = field(default_factory=list)   # "copied: <row label>" - labels only, never text
 
 
 Lookup = Callable[[str], Optional[ClientInfo]]

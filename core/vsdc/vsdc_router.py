@@ -441,6 +441,10 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
 
+    def set_scc_handlers(self, factory) -> None:
+        """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
+        self._scc_handlers = factory
+
     def _apply_scc(self) -> None:
         """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
         one that switched itself off after a failure stays off."""
@@ -451,6 +455,9 @@ class VSDCRouter:
         if on and host is None:
             from core.scc import SccHost
             host = self._scc_host = SccHost()
+            factory = getattr(self, "_scc_handlers", None)
+            for handler in (factory() if factory else []):
+                host.register(handler)
         if host is not None:
             host.set_enabled(on)
             self._sgt.set_scc(host if on else None)

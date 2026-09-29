@@ -105,6 +105,30 @@ for (const build of ['sera_extension', 'sera_extension_firefox']) {
     assert(!e.log.some(l => l.startsWith('probe:')), build + ': URL-substring tabs not probed');
     assert(e.log.includes('create') && !e.log.includes('update:nav'), build + ': new tab opened instead');
   }
+  // stay (SCC card): only a tab already on the password page; never navigates, opens, focuses or activates
+  {
+    const PWD = 'https://portal.example.test/login#/login/password';
+    const e = makeEnv(build, [
+      { id: 11, windowId: 1, url: 'https://portal.example.test/dashboard', status: 'complete' },
+      { id: 12, windowId: 1, url: PWD, status: 'complete' },
+    ], []);
+    const ready = [];
+    e.ctx.openPortalTab(LOGIN, id => ready.push(id), { stay: true });
+    assert.deepStrictEqual(ready, [12], build + ': stay uses the tab on the password page');
+    assert(!e.log.includes('update:nav') && !e.log.includes('create') && !e.log.includes('focus') &&
+      !e.log.includes('update:activate') && !e.log.some(l => l.startsWith('probe:')), build + ': stay touches nothing');
+    assert.strictEqual(e.listeners.size, 0);
+  }
+  {
+    const e = makeEnv(build, [{ id: 13, windowId: 1, url: 'https://portal.example.test/login', status: 'complete' }], [13]);
+    e.ctx.openPortalTab(LOGIN, () => assert.fail('must not inject'), { stay: true });
+    assert(e.log.length === 0, build + ': stay with no password-page tab does nothing (no new tab, no reuse)');
+  }
+  {
+    const e = makeEnv(build, [{ id: 14, windowId: 1, url: 'https://search.test/?q=portal.example.test#/login/password', status: 'complete' }], []);
+    e.ctx.openPortalTab(LOGIN, () => assert.fail('must not inject'), { stay: true });
+    assert(e.log.length === 0, build + ': stay ignores tabs that only mention the portal');
+  }
   // listener removed after 30 s when the page never finishes
   {
     const e = makeEnv(build, [], []);

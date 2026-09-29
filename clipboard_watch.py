@@ -57,6 +57,14 @@ def suppress_client(client_id, seconds: float = 300):
     _suppressed_until[cid] = time.time() + max(0.0, float(seconds))
 
 
+def release_client(client_id) -> None:
+    """The SCC attempt that suppressed this client has ended: its ids arm SCA again."""
+    try:
+        _suppressed_until.pop(int(client_id), None)
+    except (TypeError, ValueError):
+        pass
+
+
 def is_suppressed(client_id) -> bool:
     until = _suppressed_until.get(client_id)
     if until is None:
@@ -110,6 +118,7 @@ class ClipboardWatchService(QObject):
         self._identity_column_ids: set = set()
         self._index_generation = None
         self._arm: Optional[Arm] = None
+        self.scc_ledger = None     # SccCard.note_clipboard, set by main: SCC attempt copy ledger
         self._last_copy = ("", 0.0)
         self._unused_streak: Dict[int, int] = {}
         self._paused_clients: set = set()
@@ -180,14 +189,21 @@ class ClipboardWatchService(QObject):
 
     # ------------------------------------------------------------------ copy -> arm
     def _on_clipboard_changed(self):
-        if not self.enabled:
-            return
         app = QApplication.instance()
         if not app:
             return
         clipboard = app.clipboard()
+        if not self.enabled and self.scc_ledger is None:
+            return
         text = clipboard.text()
         if not text:
+            return
+        if self.scc_ledger is not None:
+            try:
+                self.scc_ledger(text)      # in memory only; the text is never stored or printed
+            except Exception:
+                pass
+        if not self.enabled:
             return
         candidate = sca_protocol.normalize_uid(text)
         if not (3 <= len(candidate) <= 80) or not sca_protocol.looks_like_uid(candidate):

@@ -563,6 +563,8 @@ class SeraApp:
         from ui import ws_bridge as _ws_bridge_module
         self.bridge = WSBridge(self.app)
         self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
+        self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
+        self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
@@ -628,6 +630,7 @@ class SeraApp:
             self.app.aboutToQuit.connect(self._flush_capture_queue_on_quit)
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
+            self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
             self._apply_vsdc_engine_settings()
             memory_mark("start-up: capture engines ready")
         except Exception as vsdc_exc:
@@ -1073,6 +1076,37 @@ class SeraApp:
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
+
+    def _make_scc_handlers(self):
+        """SCC-U's handlers (once, when its host is created): the attempt opener and the MECP SCC card
+        it feeds (core/scc/card.py). The card's copy ledger reads the clipboard through clipboard_watch."""
+        import automation
+        import clipboard_watch
+        from core.scc import AttemptOpener, SccCard, db_lookup
+        opener = AttemptOpener(db_lookup(self.db), on_open=lambda att: self._scc_card.open(att),
+                               on_end=lambda att, reason: self._scc_card.end(att, reason))
+        self._scc_opener = opener
+        self._scc_card = SccCard(
+            self.db,
+            open_card=lambda service, pan, rows, title, client_id, attempt_id:
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id),
+            close_card=automation.close_scc_card,
+            suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
+            on_closed=lambda att: opener.close(att.hwnd))
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        return [opener]
+
+    def _handle_scc_row_worked(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.row_worked(msg.get("attempt_id"), msg.get("row_label"))    # W5-6 saves from here
+
+    def _handle_scc_card_closed(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.card_closed(msg.get("attempt_id"))
 
     def _handle_scc_password_verified(self, msg: dict):
         """Persists the verified password from SCC link mutation to master.db."""

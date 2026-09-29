@@ -23,6 +23,7 @@ function makeWorld(build) {
   let seq = 0;
   const timers = new Map();
   const messages = [];
+  const sent = [];
   const clip = { text: '' };
   const state = { host: null, shadowMode: null, shadowChildren: [] };
 
@@ -58,7 +59,7 @@ function makeWorld(build) {
       writeText: async (v) => { clip.text = v; },
       readText: async () => clip.text,
     } },
-    chrome: { runtime: { sendMessage: (m) => { messages.push(m.type); } } },
+    chrome: { runtime: { sendMessage: (m) => { messages.push(m.type); sent.push(m); } } },
     getComputedStyle: () => ({ transform: 'matrix(0.5, 0, 0, 1, 0, 0)' }),
     addEventListener() {}, removeEventListener() {},
     Date: { now: () => now },
@@ -97,17 +98,21 @@ function makeWorld(build) {
     vm.runInContext(widgetSource(build), win);
     win.mecpWidget(...args);
   }
-  return { win, state, messages, clip, advance, flush, query, open };
+  return { win, state, messages, sent, clip, advance, flush, query, open };
 }
 
-const argsFor = (userid, clearSeconds) => [userid, PASSWORD, 'Test Client', 90000, false, [], null, 'GST', '', clearSeconds];
-const ffArgs = (clearSeconds) => [USERID, PASSWORD, 'Test Client', 90000, clearSeconds];
+const argsFor = (userid, clearSeconds) => [userid, PASSWORD, 'Test Client', 90000, false, [], clearSeconds, ''];
+const sccArgs = (combos, clearSeconds) => [USERID, '', 'PAN: ' + USERID, 90000, true, combos, clearSeconds, 'att-1'];
+const COMBOS = [
+  { id: 1, label: 'Combo 1', value: 'Combo#1' },
+  { id: 2, label: 'Combo 2', value: 'Combo#2' },
+  { id: 3, label: 'Saved password', value: 'Saved#3' },
+];
 
 (async () => {
   for (const build of BUILDS) {
     const label = build + ': ';
-    const isFf = build.endsWith('firefox');
-    const open = (w, userid, clearSeconds) => w.open(isFf ? ffArgs(clearSeconds) : argsFor(userid, clearSeconds));
+    const open = (w, userid, clearSeconds) => w.open(argsFor(userid, clearSeconds));
 
     // closed shadow root, card is up
     {
@@ -212,19 +217,60 @@ const ffArgs = (clearSeconds) => [USERID, PASSWORD, 'Test Client', 90000, clearS
       assert.strictEqual(w.clip.text, PASSWORD, label + 'a refused read is swallowed (best effort)');
     }
 
-    // Chrome only: no User ID row -> the password copy alone closes the card; SCC card never auto-closes on copy
-    if (!isFf) {
+    // no User ID row -> the password copy alone closes the card
+    {
       const w = makeWorld(build);
       open(w, '', 30);
       w.query('copy-btn')[0].onclick();
       await w.advance(1300);
       assert(!w.state.host.isConnected, label + 'no User ID: password copy closes the card');
+    }
 
+    // SCC card (desktop-fed): renders exactly the combinations it is given, closed root, a
+    // 'This one worked' button per row, no timeout, no SCC_PASSWORD_COPIED, no storage
+    {
       const s = makeWorld(build);
-      s.open([USERID, '', 'Test Client', 90000, true, [{ id: 1, label: 'Combo 1', value: 'Combo#1' }], 7, 'Income Tax', '', 30]);
-      s.query('copy-btn').forEach(b => b.onclick());
-      await s.advance(5000);
-      assert(s.state.host.isConnected, label + 'SCC card is untouched by the both-copied rule');
+      s.open(sccArgs(COMBOS, 30));
+      assert.strictEqual(s.state.shadowMode, 'closed', label + 'SCC card keeps the closed shadow root');
+      const values = s.query('field-value').map(e => e.textContent);
+      assert.deepStrictEqual(values, [USERID, 'Combo#1', 'Combo#2', 'Saved#3'], label + 'PAN then the given rows only');
+      assert.strictEqual(s.query('worked-btn').length, COMBOS.length, label + 'one worked button per row');
+      assert.strictEqual(s.query('timer-container').length, 0, label + 'SCC card has no countdown');
+
+      const copies = s.query('copy-btn'); // PAN copy + one per row
+      assert.strictEqual(copies.length, COMBOS.length + 1);
+      copies.forEach(b => b.onclick());
+      await s.advance(200000);
+      assert(s.state.host.isConnected, label + 'copying everything or waiting does not close the SCC card');
+      assert.deepStrictEqual(s.messages, [], label + 'copies send nothing (no SCC_PASSWORD_COPIED)');
+
+      s.query('worked-btn')[1].onclick();
+      assert.deepStrictEqual(s.messages, ['scc_row_worked'], label + 'a click sends scc_row_worked');
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(s.sent[0])), { type: 'scc_row_worked', attempt_id: 'att-1', row_label: 'Combo 2' },
+        label + 'the message names the attempt and the row label only');
+      assert(s.state.host.isConnected, label + 'the card stays until the desktop closes it');
+
+      s.query('close-btn')[0].onclick();
+      assert(!s.state.host.isConnected, label + 'x closes the SCC card');
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(s.sent[1])), { type: 'MECP_DISMISSED', attempt_id: 'att-1' }, label + 'x names the attempt');
+    }
+
+    // SCC copy puts the row's text on the clipboard and clears it later
+    {
+      const s = makeWorld(build);
+      s.open(sccArgs(COMBOS, 20));
+      s.query('copy-btn')[2].onclick();
+      await s.flush();
+      assert.strictEqual(s.clip.text, 'Combo#2', label + 'row copied');
+      await s.advance(21000);
+      assert.strictEqual(s.clip.text, '', label + 'row cleared from the clipboard');
+    }
+
+    // SCC mode with no rows is the plain card
+    {
+      const s = makeWorld(build);
+      s.open(sccArgs([], 30));
+      assert.strictEqual(s.query('worked-btn').length, 0, label + 'no rows: no SCC card');
     }
   }
   console.log('MECP card tests passed');

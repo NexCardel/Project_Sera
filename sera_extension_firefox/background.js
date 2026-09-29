@@ -238,6 +238,8 @@ function handleDesktopMessage(message) {
     if (message.mode === "mecp" || message.mode === "manual_copy") handleMECPTab(message);
     else if (message.mode === "manual_assist") handleManualAssistTab(message);
     else handleAutofillTab(message);
+  } else if (message.type === "scc_card_close") {
+    closeSccCard(message.attempt_id);
   } else if (message.type === "update_settings") {
     const sca = message.sca_enabled !== false;
     const scaMode = message.sca_mode || "autofill";
@@ -640,7 +642,8 @@ function _findLoginTab(candidates, url, done) {
 // Opens the portal's login page and calls onReady(tabId) exactly once, after it has loaded.
 // Reuses an open tab of the portal only when it shows the login page (decision D5); otherwise
 // a new tab is opened, so work in other tabs of that portal is never navigated away.
-function openPortalTab(url, onReady) {
+// opts.stay: only ever use a portal tab that is already open on the password page (SCC card).
+function openPortalTab(url, onReady, opts) {
   let hostname;
   try { hostname = new URL(url).hostname; } catch (_) { return; }
   const wantedUrl = String(url).split('#')[0].toLowerCase();
@@ -687,6 +690,13 @@ function openPortalTab(url, onReady) {
       if (onHost(h, hostname)) return true;
       return onHost(hostname, 'tdscpc.gov.in') && onHost(h, 'tdscpc.gov.in');
     });
+    if (opts && opts.stay) {
+      // Already-open tab only: the one on the Income Tax password page. No navigation, no new tab,
+      // no focus change - if there is no such tab, nothing happens.
+      const open = candidates.find(t => t.id !== undefined && /#\/login\/password/i.test(t.url || ''));
+      if (open) onReady(open.id);
+      return;
+    }
     _findLoginTab(candidates, url, existing => {
       if (existing) { run(existing, false); return; }
       chrome.tabs.create({ url }, newTab => {
@@ -1558,6 +1568,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
     _passwordStore.remove(['mecpPayload']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
+    if (msg.attempt_id) {
+      sccCardTabs.delete(String(msg.attempt_id));
+      if (msg.type === "MECP_DISMISSED") sendToDesktop({ type: "scc_card_closed", attempt_id: String(msg.attempt_id) }, false);
+    }
+    sendResponse({ status: "ok" });
+    return true;
+  }
+  // A staff click on "This one worked" on the SCC card; the label is the row's name, never its text.
+  if (msg.type === "scc_row_worked" && msg.attempt_id && msg.row_label) {
+    sendToDesktop({ type: "scc_row_worked", attempt_id: String(msg.attempt_id), row_label: String(msg.row_label) }, false);
     sendResponse({ status: "ok" });
     return true;
   }
@@ -1583,7 +1603,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ---------------- MECP (Manual Extension Copy/Paste) Widget ----------------
 
-function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
+// The SCC card's tab per attempt, in memory only: nothing about an SCC card goes into any storage.
+const sccCardTabs = new Map();
+
+function closeSccCard(attemptId) {
+  const tabId = sccCardTabs.get(String(attemptId));
+  sccCardTabs.delete(String(attemptId));
+  if (tabId === undefined) return;
+  _unlockAssistTab(tabId, 'mecp');
+  try {
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => { const h = document.getElementById("sera-mecp-host"); if (h) h.remove(); }
+    }, () => { if (chrome.runtime.lastError) {} });
+  } catch (_) {}
+}
+
+function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos, clearSeconds, attemptId) {
   // sera_dom.js (shared clipboard clearing) is injected just before this function.
   const seraDom = window.__seraDom;
   if (!seraDom) return;
@@ -1598,52 +1634,70 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
   host.id = hostId;
   const shadow = host.attachShadow({ mode: "closed" });
 
+  const isSCC = !!(sccMode && sccCombos && sccCombos.length > 0);
+
   const style = document.createElement("style");
   style.textContent = `
     .box {
       position: fixed; top: 18px; right: 18px; z-index: 2147483647;
-      width: 310px; padding: 14px 16px; background: #161B22; border: 1.5px solid #30363D;
+      width: ${isSCC ? "360px" : "320px"}; padding: 14px 16px; background: #161B22; border: 1.5px solid ${isSCC ? "#2E9B5F" : "#30363D"};
       border-radius: 10px; color: #F0F6FC; box-shadow: 0 10px 32px rgba(0,0,0,.5);
-      font: 13px Segoe UI, Arial, sans-serif;
+      font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
     .header {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #30363D;
     }
+    .badge-wrap {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .badge-tag {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #4CF9B7;
+    }
     .client-title {
-      font-weight: 700; color: #7EE787; font-size: 13px; word-break: break-word; line-height: 1.3;
+      font-weight: 700; color: #F0F6FC; font-size: 13px; word-break: break-word; line-height: 1.3;
     }
     .close-btn {
       background: transparent; border: none; color: #8B949E; font-size: 18px;
       cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px;
     }
     .close-btn:hover { color: #F0F6FC; background: #21262D; }
+    .section-title {
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+      color: #8B949E; margin: 10px 0 6px 2px;
+    }
     .field-row {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      margin-bottom: 10px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin-bottom: 8px; background: #0D1117; padding: 8px 10px; border-radius: 6px;
       border: 1px solid #21262D;
     }
+    .field-left {
+      display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1;
+    }
     .field-label {
-      font-size: 11px; color: #8B949E; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      font-size: 10px; color: #8B949E; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
     }
     .field-value {
-      font-family: monospace; font-size: 13px; color: #C9D1D9; letter-spacing: 2px; margin-top: 2px;
+      font-family: Consolas, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #E6EDF3;
+      word-break: break-all; font-weight: 600; line-height: 1.3;
     }
     .copy-btn {
       display: flex; align-items: center; justify-content: center; gap: 4px;
       background: #238636; color: #FFFFFF; border: none; border-radius: 5px;
-      padding: 6px 12px; font: 600 12px Segoe UI, Arial, sans-serif; cursor: pointer;
-      transition: background 0.15s ease; flex-shrink: 0;
+      padding: 6px 12px; font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; transition: background 0.15s ease; flex-shrink: 0; white-space: nowrap;
     }
+    .field-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; flex-shrink: 0; }
+    .worked-btn {
+      background: transparent; color: #4CF9B7; border: 1px solid #2E9B5F; border-radius: 5px;
+      padding: 4px 10px; font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      cursor: pointer; white-space: nowrap;
+    }
+    .worked-btn:hover { background: #12261D; }
+    .worked-btn:disabled { opacity: 0.6; cursor: default; }
     .copy-btn:hover { background: #2EA043; }
     .copy-btn.copied { background: #1F6FEB; }
-    .eye-btn {
-      background: transparent; border: 1px solid #30363D; color: #C9D1D9; border-radius: 5px;
-      padding: 5px 7px; font-size: 13px; cursor: pointer; display: flex; align-items: center;
-      justify-content: center; transition: background 0.15s ease, border-color 0.15s ease;
-      flex-shrink: 0; min-width: 32px; height: 28px;
-    }
-    .eye-btn:hover { background: #21262D; border-color: #8B949E; }
     .timer-container {
       margin-top: 12px; height: 3.5px; background: rgba(255, 255, 255, 0.08);
       border-radius: 2px; overflow: hidden;
@@ -1654,7 +1708,7 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
     .toast {
       display: none; position: absolute; bottom: 6px; left: 16px; right: 16px;
       background: #238636; color: #FFF; padding: 5px 10px; border-radius: 4px;
-      font-size: 11px; text-align: center; font-weight: 600;
+      font-size: 11px; text-align: center; font-weight: 600; z-index: 10;
     }
   `;
 
@@ -1665,20 +1719,35 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
   // Header
   const header = document.createElement("div");
   header.className = "header";
+
+  const badgeWrap = document.createElement("div");
+  badgeWrap.className = "badge-wrap";
+  if (isSCC) {
+    const bTag = document.createElement("div");
+    bTag.className = "badge-tag";
+    bTag.textContent = "⚡ Sera Assist (SCC)";
+    badgeWrap.appendChild(bTag);
+  }
   const title = document.createElement("div");
   title.className = "client-title";
-  title.textContent = clientName || "MECP - Client Credentials";
+  title.textContent = clientName || (isSCC ? "Verify Password" : "Client Credentials");
+  badgeWrap.appendChild(title);
+
   const close = document.createElement("button");
   close.className = "close-btn";
   close.textContent = "×";
-  header.append(title, close);
-
-  // Helper function to create masked text
-  function maskText(str) {
-    if (!str) return "••••••••";
-    if (str.length <= 3) return "•".repeat(str.length);
-    return str.substring(0, 1) + "•".repeat(Math.max(4, str.length - 2)) + str.substring(str.length - 1);
+  close.title = "Dismiss";
+  // The x, the timeout and "both copied" all end here; the background clears mecpPayload.
+  // The SCC card has no timeout: it stays until the x (which tells the desktop) or the desktop closes it.
+  let timerTimeout = null;
+  function closeCard(messageType) {
+    if (timerTimeout) clearTimeout(timerTimeout);
+    timerTimeout = null;
+    try { chrome.runtime.sendMessage({ type: messageType, attempt_id: attemptId || "" }); } catch (_) {}
+    if (host.isConnected) host.remove();
   }
+  close.onclick = () => closeCard("MECP_DISMISSED");
+  header.append(badgeWrap, close);
 
   // Toast banner
   const toast = document.createElement("div");
@@ -1690,116 +1759,162 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
     setTimeout(() => { toast.style.display = "none"; }, 2500);
   }
 
-  // The x, the timeout and "both copied" all end here; the background clears mecpPayload.
-  let timerTimeout = null;
-  function closeCard(messageType) {
-    if (timerTimeout) clearTimeout(timerTimeout);
-    timerTimeout = null;
-    try { chrome.runtime.sendMessage({ type: messageType }); } catch (_) {}
-    if (host.isConnected) host.remove();
+  function copyCredential(val, label) {
+    if (!val) return;
+    try {
+      navigator.clipboard.writeText(val);
+      showToast(`${label} copied!`);
+    } catch (_) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = val;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast(`${label} copied!`);
+      } catch (_) {}
+    }
   }
-  close.onclick = () => closeCard("MECP_DISMISSED");
 
-  // D6: the card closes once both the User ID and the password are copied.
+  // D6: a plain card closes once both the User ID (when shown) and the password are copied.
+  // The SCC card stays up until a save, the x, or the desktop ends the attempt.
+  const hasUserId = !!(userid && String(userid).trim());
   let userIdCopied = false;
   let passwordCopied = false;
   let finishing = false;
   function closeWhenBothCopied() {
-    if (finishing || !userIdCopied || !passwordCopied) return;
+    if (finishing || isSCC || !passwordCopied || (hasUserId && !userIdCopied)) return;
     finishing = true;
     if (timerTimeout) clearTimeout(timerTimeout);
     timerTimeout = null;
     setTimeout(() => closeCard("MECP_CLOSED"), 1200);
   }
 
-  function copyCredential(val, label) {
-    navigator.clipboard.writeText(val).then(() => {
-      showToast(`${label} copied!`);
-    }).catch(err => {
-      const ta = document.createElement("textarea");
-      ta.value = val;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-      showToast(`${label} copied!`);
-    });
+  // User ID Row (rendered only if userid is provided)
+  if (hasUserId) {
+    const uidRow = document.createElement("div");
+    uidRow.className = "field-row";
+    const uidLeft = document.createElement("div");
+    uidLeft.className = "field-left";
+    const uidLbl = document.createElement("div");
+    uidLbl.className = "field-label";
+    uidLbl.textContent = "User ID (PAN)";
+    const uidVal = document.createElement("div");
+    uidVal.className = "field-value";
+    uidVal.textContent = userid || "";
+    uidLeft.append(uidLbl, uidVal);
+
+    const uidCopy = document.createElement("button");
+    uidCopy.className = "copy-btn";
+    uidCopy.innerHTML = "📋 Copy";
+    uidCopy.onclick = () => {
+      copyCredential(userid, "User ID");
+      userIdCopied = true;
+      closeWhenBothCopied();
+      uidCopy.classList.add("copied");
+      uidCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        uidCopy.classList.remove("copied");
+        uidCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+    uidRow.append(uidLeft, uidCopy);
+    box.append(header, uidRow);
+  } else {
+    box.append(header);
   }
 
-  // User ID Row
-  const uidRow = document.createElement("div");
-  uidRow.className = "field-row";
-  const uidLeft = document.createElement("div");
-  const uidLbl = document.createElement("div");
-  uidLbl.className = "field-label";
-  uidLbl.textContent = "User ID";
-  const uidVal = document.createElement("div");
-  uidVal.className = "field-value";
-  uidVal.textContent = maskText(userid);
-  uidLeft.append(uidLbl, uidVal);
+  if (isSCC) {
+    // Password Combinations Section
+    const secTitle = document.createElement("div");
+    secTitle.className = "section-title";
+    secTitle.textContent = "Password Combinations (Unverified)";
+    box.appendChild(secTitle);
 
-  const uidCopy = document.createElement("button");
-  uidCopy.className = "copy-btn";
-  uidCopy.innerHTML = "📋 Copy";
-  uidCopy.onclick = () => {
-    copyCredential(userid, "User ID");
-    userIdCopied = true;
-    closeWhenBothCopied();
-    uidCopy.classList.add("copied");
-    uidCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      uidCopy.classList.remove("copied");
-      uidCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
-  uidRow.append(uidLeft, uidCopy);
+    sccCombos.forEach((combo) => {
+      const cRow = document.createElement("div");
+      cRow.className = "field-row";
 
-  // Password Row
-  const passRow = document.createElement("div");
-  passRow.className = "field-row";
-  const passLeft = document.createElement("div");
-  const passLbl = document.createElement("div");
-  passLbl.className = "field-label";
-  passLbl.textContent = "Password";
-  const passVal = document.createElement("div");
-  passVal.className = "field-value";
-  let isPassRevealed = false;
-  passVal.textContent = maskText(password);
-  passLeft.append(passLbl, passVal);
+      const cLeft = document.createElement("div");
+      cLeft.className = "field-left";
+      const cLbl = document.createElement("div");
+      cLbl.className = "field-label";
+      cLbl.textContent = combo.label || `Combo ${combo.id}`;
+      const cVal = document.createElement("div");
+      cVal.className = "field-value";
+      cVal.textContent = combo.value || "";
+      cLeft.append(cLbl, cVal);
 
-  const passRight = document.createElement("div");
-  passRight.style.display = "flex";
-  passRight.style.alignItems = "center";
-  passRight.style.gap = "6px";
+      const cCopy = document.createElement("button");
+      cCopy.className = "copy-btn";
+      cCopy.innerHTML = "📋 Copy";
+      cCopy.onclick = () => {
+        copyCredential(combo.value, combo.label || "Password");
+        seraDom.scheduleClipboardClear(combo.value, clearSeconds);
+        cCopy.classList.add("copied");
+        cCopy.innerHTML = "✓ Copied";
+        setTimeout(() => {
+          cCopy.classList.remove("copied");
+          cCopy.innerHTML = "📋 Copy";
+        }, 2000);
+      };
 
-  const eyeToggleBtn = document.createElement("button");
-  eyeToggleBtn.className = "eye-btn";
-  eyeToggleBtn.title = "Show / Hide Password";
-  eyeToggleBtn.innerHTML = "👁️";
-  eyeToggleBtn.onclick = () => {
-    isPassRevealed = !isPassRevealed;
-    passVal.textContent = isPassRevealed ? (password || "") : maskText(password);
-    eyeToggleBtn.innerHTML = isPassRevealed ? "🙈" : "👁️";
-  };
+      // A staff click, sent to the desktop with the row's label only.
+      const cWorked = document.createElement("button");
+      cWorked.className = "worked-btn";
+      cWorked.textContent = "This one worked";
+      cWorked.onclick = () => {
+        try {
+          chrome.runtime.sendMessage({
+            type: "scc_row_worked",
+            attempt_id: attemptId || "",
+            row_label: combo.label || `Combo ${combo.id}`
+          });
+        } catch (_) {}
+        cWorked.textContent = "✓ Sent";
+        cWorked.disabled = true;
+      };
 
-  const passCopy = document.createElement("button");
-  passCopy.className = "copy-btn";
-  passCopy.innerHTML = "📋 Copy";
-  passCopy.onclick = () => {
-    copyCredential(password, "Password");
-    seraDom.scheduleClipboardClear(password, clearSeconds);
-    passwordCopied = true;
-    closeWhenBothCopied();
-    passCopy.classList.add("copied");
-    passCopy.innerHTML = "✓ Copied";
-    setTimeout(() => {
-      passCopy.classList.remove("copied");
-      passCopy.innerHTML = "📋 Copy";
-    }, 2000);
-  };
+      const cActions = document.createElement("div");
+      cActions.className = "field-actions";
+      cActions.append(cCopy, cWorked);
+      cRow.append(cLeft, cActions);
+      box.appendChild(cRow);
+    });
+  } else {
+    // Single Password Row (cleartext)
+    const passRow = document.createElement("div");
+    passRow.className = "field-row";
+    const passLeft = document.createElement("div");
+    passLeft.className = "field-left";
+    const passLbl = document.createElement("div");
+    passLbl.className = "field-label";
+    passLbl.textContent = "Password";
+    const passVal = document.createElement("div");
+    passVal.className = "field-value";
+    passVal.textContent = password || "";
+    passLeft.append(passLbl, passVal);
 
-  passRight.append(eyeToggleBtn, passCopy);
-  passRow.append(passLeft, passRight);
+    const passCopy = document.createElement("button");
+    passCopy.className = "copy-btn";
+    passCopy.innerHTML = "📋 Copy";
+    passCopy.onclick = () => {
+      copyCredential(password, "Password");
+      seraDom.scheduleClipboardClear(password, clearSeconds);
+      passwordCopied = true;
+      closeWhenBothCopied();
+      passCopy.classList.add("copied");
+      passCopy.innerHTML = "✓ Copied";
+      setTimeout(() => {
+        passCopy.classList.remove("copied");
+        passCopy.innerHTML = "📋 Copy";
+      }, 2000);
+    };
+
+    passRow.append(passLeft, passCopy);
+    box.appendChild(passRow);
+  }
 
   // Countdown bar: pauses while the pointer is over the card, like SMTI's.
   const timerContainer = document.createElement("div");
@@ -1807,6 +1922,7 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
   const timerBar = document.createElement("div");
   timerBar.className = "timer-bar";
   timerContainer.appendChild(timerBar);
+  if (!isSCC) box.appendChild(timerContainer);
 
   let timerStartTime = 0;
   let remainingMs = expiresMs || 90000;
@@ -1843,14 +1959,23 @@ function mecpWidget(userid, password, clientName, expiresMs, clearSeconds) {
   box.addEventListener("mouseenter", pauseTimer);
   box.addEventListener("mouseleave", resumeTimer);
 
-  box.append(header, uidRow, passRow, timerContainer, toast);
+  box.appendChild(toast);
   shadow.appendChild(box);
   document.documentElement.appendChild(host);
-  startCountdown();
+  if (!isSCC) startCountdown();
 }
 
 function handleMECPTab(message) {
   try { new URL(message.url); } catch (_) { return; }
+  if (message.scc_mode === true) {
+    // SCC card (fed by the desktop when SGT reads the password page): it goes into the portal tab
+    // that is already open - never a navigation, never a new tab - and nothing is stored.
+    openPortalTab(message.url, tabId => {
+      if (message.attempt_id) sccCardTabs.set(String(message.attempt_id), tabId);
+      injectMECP(tabId, message);
+    }, { stay: true });
+    return;
+  }
   _passwordStore.remove(['manualAssistPayload']);
   _passwordStore.set({
     mecpPayload: { ...message, expiresAt: Date.now() + (5 * 60 * 1000) }
@@ -1860,9 +1985,16 @@ function handleMECPTab(message) {
 
 function injectMECP(tabId, message) {
   _lockAssistTab(tabId, 'mecp');
-  clipboardClearSeconds().then(clearSecs => injectWithDom({ tabId }, mecpWidget,
-    [message.userid, message.password, message.client_name || message.portal, 90000, clearSecs]
-  )).then(() => console.log("Sera: MECP widget injected"))
+  clipboardClearSeconds().then(clearSecs => injectWithDom({ tabId }, mecpWidget, [
+    message.userid || "",
+    message.password || "",
+    message.client_name || message.portal,
+    90000,
+    message.scc_mode === true,
+    message.scc_combos || [],
+    clearSecs,
+    message.attempt_id || ""
+  ])).then(() => console.log("Sera: MECP widget injected"))
     .catch(err => console.error("Sera: MECP injection failed", err));
 }
 

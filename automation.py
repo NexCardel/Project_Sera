@@ -189,13 +189,8 @@ def open_in_default_browser(url: str, preferred_browser: Optional[str] = None):
         pass
 
 
-def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
-    """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
-    # Defense-in-depth: SCC is strictly an ITR-only one-time utility
-    if scc_mode and not is_itr_service(service):
-        scc_mode = False
-        scc_combos = []
-
+def _extension_payload(service: dict, user_id: str, password: str, client_id, mode: str,
+                       scc_mode: bool = False, scc_combos: list | None = None, attempt_id: str = "") -> dict:
     u_sel = (service.get("username_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     p_sel = (service.get("password_selector") or "").strip().replace("input [", "input[").replace("input ", "input")
     payload = {
@@ -216,6 +211,42 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
         "scc_mode": scc_mode,
         "scc_combos": scc_combos or [],
     }
+    if attempt_id:
+        payload["attempt_id"] = attempt_id
+    return payload
+
+
+def send_scc_card(service: dict, pan: str, rows: list, client_name: str, client_id, attempt_id: str) -> bool:
+    """SCC-U: shows the MECP card's SCC mode in the portal tab that is already open (the extension
+    never navigates or opens a tab for it). Sent to every connected browser - only one that has
+    the portal open shows it. No retry and no browser launch: SGT just saw the page, so a browser
+    is there. `rows` are {id, label, value}; returns whether any browser was reached."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or not rows:
+        return False
+    svc = {**service, "_client_name": client_name}
+    payload = _extension_payload(svc, pan, "", client_id, "mecp", scc_mode=True, scc_combos=rows, attempt_id=attempt_id)
+    return bridge.broadcast(payload) > 0
+
+
+def close_scc_card(attempt_id: str) -> bool:
+    """SCC-U: asks the browser to take the SCC card of this attempt down (a save, or the attempt ended)."""
+    from ui import ws_bridge
+    bridge = ws_bridge.get_active_bridge()
+    if not bridge or not attempt_id:
+        return False
+    return bridge.broadcast({"type": "scc_card_close", "attempt_id": attempt_id}) > 0
+
+
+def _send_to_extension(service: dict, user_id: str, password: str, client_id: int, on_error=None, mode="autofill", scc_mode: bool = False, scc_combos: list | None = None):
+    """Sends the autofill/SMTI/MECP payload to the extension via the WebSocket bridge, with retry & auto-launch fallback."""
+    # Defense-in-depth: SCC is strictly an ITR-only one-time utility
+    if scc_mode and not is_itr_service(service):
+        scc_mode = False
+        scc_combos = []
+
+    payload = _extension_payload(service, user_id, password, client_id, mode, scc_mode, scc_combos)
 
     def _attempt_send():
         from ui import ws_bridge
