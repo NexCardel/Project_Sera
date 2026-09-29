@@ -199,7 +199,8 @@ class TestRowWorked(unittest.TestCase):
     def test_asking_which_row_fires_the_on_asking_callback(self):
         asking_callback = MagicMock()
         h = Harness(on_asking=asking_callback)
-        h.card.ask_which(self.att, ["Combo 1", "Combo 3"], "Which one worked?")
+        h.card.open(self.att)
+        self.assertTrue(h.card.ask_which(self.att, ["Combo 1", "Combo 3"], "Which one worked?"))
         asking_callback.assert_called_once()
 
 

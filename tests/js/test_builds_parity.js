@@ -21,9 +21,11 @@ function fn(text, name) {
 let n = 0;
 const ok = (msg) => { n++; console.log('ok  ' + msg); };
 
-// 1. The SMTI widget is the same code in both builds.
-assert.strictEqual(fn(src.sera_extension, 'manualAssistWidget'), fn(src.sera_extension_firefox, 'manualAssistWidget'));
-ok('manualAssistWidget is identical in both builds');
+// 1. The SMTI widget, the MECP card and the Fast Autofill fill are the same code in both builds.
+for (const name of ['manualAssistWidget', 'mecpWidget', 'fillCredentialsInPage']) {
+  assert.strictEqual(fn(src.sera_extension, name), fn(src.sera_extension_firefox, name), `${name} differs between builds`);
+  ok(`${name} is identical in both builds`);
+}
 
 for (const b of BUILDS) {
   // 2. Functions injected into pages run without the background's globals.

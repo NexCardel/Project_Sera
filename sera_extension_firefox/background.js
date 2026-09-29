@@ -412,12 +412,15 @@ console.log('Sera: background.js module loaded, registering listeners.');
 
 // Fill function injected into the page
 function fillCredentialsInPage(userid, password, usernameSelector, passwordSelector, extensionFlow) {
+  // Runs in the page: the background's SERA_DEBUG does not exist here (login.js, which also
+  // declares one, runs only on the SCA portals since D7).
+  const SERA_DEBUG = false;
   if (window.__seraFillActive) return; // prevent duplicate runs
   // sera_dom.js (shared visibility rule) is injected just before this function; without it, fill nothing.
   if (!window.__seraDom) return;
   const isVisible = window.__seraDom.isVisible;
   window.__seraFillActive = true;
-  console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
+  if (SERA_DEBUG) console.log("Sera: fillCredentialsInPage started, flow:", extensionFlow);
 
   function cleanSelector(sel) {
     if (!sel) return "";
@@ -439,7 +442,6 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
   }
 
 
-
   function simulateType(el, value) {
     if (!el) return;
     try { el.focus(); } catch (e) {}
@@ -453,16 +455,23 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
     el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Position cursor cleanly at the end without leaving text selected
+    try {
+      const len = (value || "").length;
+      if (typeof el.setSelectionRange === "function") {
+        el.setSelectionRange(len, len);
+      }
+    } catch (_) {}
   }
 
-  // Auto-click Continue/Login button after password fill
   let panDone = false;
   let passDone = false;
 
   function checkDone() {
     if (panDone && passDone) {
       window.__seraFillActive = false;
-      console.log("Sera: Autofill finished");
+      if (SERA_DEBUG) console.log("Sera: Autofill finished");
     }
   }
 
@@ -515,9 +524,9 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       if (userField && userid) {
         if (userField.value !== userid) {
           simulateType(userField, userid);
-          console.log("Sera: Username/Email filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email filled");
         } else {
-          console.log("Sera: Username/Email already filled");
+          if (SERA_DEBUG) console.log("Sera: Username/Email already filled");
         }
         clearInterval(panInterval);
         panDone = true;
@@ -525,7 +534,7 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
         checkDone();
       } else if (panAttempts >= 60) {
         clearInterval(panInterval);
-        console.warn("Sera: Username/Email field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Username/Email field not found after timeout");
         panDone = true;
         if (callback) callback();
         checkDone();
@@ -577,14 +586,14 @@ function fillCredentialsInPage(userid, password, usernameSelector, passwordSelec
       if (passField && password) {
         if (passField.disabled) { passField.removeAttribute('disabled'); passField.disabled = false; }
         simulateType(passField, password);
-        console.log("Sera: Password filled");
+        if (SERA_DEBUG) console.log("Sera: Password filled");
 
         clearInterval(passInterval);
         passDone = true;
         checkDone();
       } else if (passAttempts >= 90) { // 45 seconds poll for 2-step logins
         clearInterval(passInterval);
-        console.warn("Sera: Password field not found after timeout");
+        if (SERA_DEBUG) console.warn("Sera: Password field not found after timeout");
         passDone = true;
         checkDone();
       }

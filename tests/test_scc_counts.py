@@ -15,6 +15,12 @@ from core.scc import SccCounter
 from core.scc.counts import Counts, load_counts, save_counts, _counts_file, _sera_scc_dir
 
 
+@pytest.fixture(autouse=True)
+def _private_counts_file(tmp_path, monkeypatch):
+    # Never read or write the real ~/AmanAssociates_Sera/scc/counts.json.
+    monkeypatch.setattr("core.scc.counts._counts_file", lambda: tmp_path / "counts.json")
+
+
 class TestCounts:
     """Test the Counts dataclass."""
 

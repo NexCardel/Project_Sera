@@ -1,16 +1,16 @@
-# Autofill tweaks — report (2026-09-29 20:17)
+# Autofill tweaks — report (2026-09-29 20:27)
 
 Deadline: 2026-09-29T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 2 |
+| Not started | 0 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 23 |
+| Retry | 1 |
+| Done | 24 |
 | Blocked | 0 |
 
-Runs: 29   output tokens: 679926   API-equivalent cost: $49.44
+Runs: 31   output tokens: 702568   API-equivalent cost: $51.28
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -37,8 +37,8 @@ Runs: 29   output tokens: 679926   API-equivalent cost: $49.44
 | W5-7 | Done | haiku | 0401e21 | Part G step 7: close-out and counts | core/scc/counts.py SccCounter: load/save ~/AmanAssociates_Sera/scc/counts.json; hooked to attempt/outcome/save flow; counts in Settings SCC UI; 14 new tests pas |
 | W5-8 | Done | sonnet | 5de4f6d | Part G: Client Detail opens the SCC card | Client Detail MECP opens the SCC card: manual attempt (adopted by SGT if it sees the PAN) or SGT's attempt; open_tab flag in both extension builds; works with S |
 | W5-9 | Done | sonnet | 9e4bac0 | Part G: remove the extension's SCC tracking and the old desktop handler (card SCC mode stays) | Extension SCC tracking (login.js watchers, sccActiveAttempt, tab observer, SCC_LOGIN_DETECTED, registered_pans/scc_settings sync) and desktop scc_password_verif |
-| W6-1 | Not started | haiku |  | Docs and extension version |  |
-| W6-R | Not started | opus |  | Final review |  |
+| W6-1 | Done | haiku | 14edfdc | Docs and extension version | Docs updated for new behavior (no tracking, per-tab assist, SCC-U); extension versions bumped to 2.12.0 |
+| W6-R | Retry | opus |  | Final review | stopped by usage limit, resumes after 00:40 |
 
 ## Decisions taken for you
 

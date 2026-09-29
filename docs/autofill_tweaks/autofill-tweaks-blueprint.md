@@ -365,6 +365,23 @@ sees the password page, recognises copies through the clipboard in memory, and r
 staff click (`scc_row_worked`). The extension still watches nothing; G.3 removes its SCC tracking but keeps the
 card's desktop-fed SCC mode. WPs W5-3, W5-8 and W5-9 were re-planned accordingly.
 
+### Merge readiness (W6-R, 2026-09-30)
+
+**Ready to merge once the hands-on checks below pass.** Rules §0 and §9 re-checked on the whole branch:
+no `chrome.storage.local` write holds a password (only SCA switches, domains, clipboard seconds); the only
+page listeners left are SMTI's re-inject in the tab SMTI opened, one-shot tab-load waits, and SCA's scripts
+on approved portals only; nothing clicks, submits, scrolls or dismisses; cards use closed shadow roots;
+`sca/` and `content_scripts/` byte-identical and the injected page functions (`fillCredentialsInPage`,
+`manualAssistWidget`, `mecpWidget`) identical in both builds; both manifests 2.12.0, `version.json` untouched.
+SGT: `sgt_replay.py diff` over 1937 pages shows only "newly written" rows, none changed or lost.
+Known test failure not from this branch: `test_vsdc247_integration.py::...still_a_duplicate` (database
+dedup code not touched by the branch). Older ones: `test_clipboard_assist.py` DB-fixture setUp.
+
+**Check by hand before merging** (`autofill-tweaks-checks.csv`, all "Not run"): 1-7 (tab reuse, SMTI
+fields, MECP stays/closes, clipboard clear, per-tab lock, SCA scope, Firefox SMTI), 8 (one real
+wrong-password wording probe, never a lock-out), 9-11 (SCC card from SGT and from Client Detail), 12
+(Firefox Fast Autofill), 13 (SCC-U automatic path on/off; confirm the vsdc247 failure also on `main`).
+
 ## 12. Hand-off notes
 
 - **W0-1** (2026-09-28, claude-haiku-4-5-20251001): Part H verified (automation.service_action_mode exists). Test files verified: 4 found (test_service_automation_mode.py, test_clipboard_assist.py, test_scc_vault_tagger.py, test_sca_coordinator.js), 28 SGT tests found; **test_sca_v2.py NOT FOUND** (only test_sca_protocol.py exists). sgt_replay.py baseline: blocked by tool approval (unattended worker). Tests require re-running in next session with approval. No code changes made. Status CSV updated.
@@ -422,3 +439,5 @@ card's desktop-fed SCC mode. WPs W5-3, W5-8 and W5-9 were re-planned accordingly
   Tests: `test_scc_vault_tagger.py` rewritten (save tests live in `test_scc_save.py`; new: no SCC/PAN in settings payload, `trigger_mecp` takes no SCC args, plain card payload), `test_ws_bridge.py` updated, `test_builds_parity.js` gained a "no SCC tracking or page watching" check per build. Passing: those + scc_save/card/manual/service_automation_mode/no_password_in_local_storage, `node --check`, mecp_card, open_portal_tab, sca_scope. Only failure: pre-existing `test_scc_card::test_asking_which_row_fires_the_on_asking_callback`. No core/sgt change. Human check: reload both extensions and confirm the MECP/SCC card still opens from Client Detail.
 
 - **W6-1** (2026-09-29, claude-haiku-4-5-20251001): Docs and extension version. Updated `docs/browser-automation-extension.md`: removed auto-click mention (D8 decision), updated SMTI/MECP description (per-tab assist lock, no SCC mode in extension), replaced entire FST/SDC section with brief note that filing capture is desktop-only, updated manifest permissions list (removed browsingData/cookies). Updated `docs/sera-clipboard-assist.md`: rewrote SCC section to document SCC-U (desktop-driven, no extension tracking). Bumped extension versions in both `sera_extension/manifest.json` and `sera_extension_firefox/manifest.json` from 2.11.0 to 2.12.0. No code changes; no tests to run beyond existing checks. Next WP (W6-R): final review before release.
+
+- **W6-R** (2026-09-30, claude-opus-5-5): Final review against §0 and §9; merge-readiness note above §12. **Defects fixed:** (1) Firefox `fillCredentialsInPage` logged to the portal page's console without a debug gate and lacked Chrome's cursor-end step - now identical to Chrome's; `test_builds_parity.js` now also asserts `mecpWidget` and `fillCredentialsInPage` are identical (11/11). (2) Firefox still had the old "Auto-click Continue/Login" comment (D8 removed the click). (3) `docs/browser-automation-extension.md` still said the extension clicks the secure-access checkbox and manages cookies. (4) `test_scc_counts.py` read/wrote the real `~/AmanAssociates_Sera/scc/counts.json` (now a tmp file per test); `test_scc_card` asking test never opened the card. Tests: all 6 `tests/js` pass; 16 SCC/SCA/bridge pytest files 253 passed/1 skipped; 8 SGT/VSDC files 118 passed, 1 failed (vsdc247 duplicate test, database dedup, not touched by the branch - check 13); `sgt_replay.py diff` no changed/lost rows. Checks 12-13 added. Nothing left for another WP: merge after the hands-on checks.
