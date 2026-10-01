@@ -1972,12 +1972,15 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_search_from_admin(self):
+        self.shell.dismiss_detail_on_outside = False
+        self.shell.set_current_page(0)
+        self.shell.slide_panel.slide_out()
+        QTimer.singleShot(0, self._refresh_search_after_switch)
+
+    def _refresh_search_after_switch(self):
         from core.memlog import timed
-        with timed("opening the search grid"):
-            self.shell.dismiss_detail_on_outside = False
+        with timed("loading the search grid"):
             self.search_win.refresh()
-            self.shell.set_current_page(0)
-            self.shell.slide_panel.slide_out()
 
     def _show_client_detail(self, client_id: int):
         self.shell.dismiss_detail_on_outside = True
@@ -2063,17 +2066,20 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_tracker_dump(self):
-        from core.memlog import timed
-        with timed("opening the tracker"):
-            self._show_tracker_dump_now()
+        self._show_tracker_dump_now()
 
     def _show_tracker_dump_now(self):
         self.shell.dismiss_detail_on_outside = False
         if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-            self.tracker_dump_win.load_data()
             self.shell.set_current_page(self.tracker_dump_win)
             self.shell.sidebar.set_active_navigation(self.shell.sidebar.btn_tracker_dump)
+            QTimer.singleShot(0, self._load_tracker_after_switch)
         self.shell.slide_panel.slide_out()
+
+    def _load_tracker_after_switch(self):
+        from core.memlog import timed
+        with timed("loading the tracker"):
+            self.tracker_dump_win.load_data_if_stale()
 
     def _open_in_slide_panel(self, widget, title: str):
         from PySide6.QtWidgets import QDialog

@@ -79,6 +79,37 @@ class TestTrackerRefresh(unittest.TestCase):
         label = self.win.table.cellWidget(0, tdw.TrackerDumpWindow.COL_STATUS).findChild(tdw.QLabel, "status_label")
         assert label is not None and label.text()
 
+    def test_raw_generation_increments_on_raw_write(self):
+        initial_gen = self.db.raw_generation()
+        self.db.insert_tracker_dump(portal="Income Tax (ITR-1)", period_label="AY 2026-27",
+                                    arn_number="99988877711122", capture_method="VSDC-X_itr_submitted",
+                                    status="Submitted", pan="AAAPB1234F", filing_type="ITR-1")
+        new_gen = self.db.raw_generation()
+        self.assertGreater(new_gen, initial_gen)
+
+    def test_load_data_if_stale_avoids_redundant_queries(self):
+        load_count = [0]
+        orig_load = self.win.load_data
+        def counting_load():
+            load_count[0] += 1
+            return orig_load()
+        self.win.load_data = counting_load
+
+        # Initial state from setUp is already fresh, so load_data_if_stale reuses cache
+        self.win.load_data_if_stale()
+        self.assertEqual(load_count[0], 0)
+
+        # Writing a new dump increments raw_generation, so load_data_if_stale triggers reload
+        self.db.insert_tracker_dump(portal="Income Tax (ITR-1)", period_label="AY 2026-27",
+                                    arn_number="88877766655544", capture_method="VSDC-X_itr_submitted",
+                                    status="Submitted", pan="BBBPC5678G", filing_type="ITR-1")
+        self.win.load_data_if_stale()
+        self.assertEqual(load_count[0], 1)
+
+        # Immediate next call within 60s without any new writes reuses cache
+        self.win.load_data_if_stale()
+        self.assertEqual(load_count[0], 1)
+
 
 def test_the_feed_imports_without_any_earlier_export_click():
     """The feed thread used `import sdc_parser`, which only worked after an export button had put

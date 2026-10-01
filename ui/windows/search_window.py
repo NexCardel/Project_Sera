@@ -119,6 +119,8 @@ class ActivityCellDelegate(QStyledItemDelegate):
 
 class SearchWindow(QWidget):
 
+    skip_page_fade = True
+
     client_selected = Signal(int)
     add_client_requested = Signal()
     edit_client_requested = Signal(int)

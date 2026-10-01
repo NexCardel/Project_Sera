@@ -193,12 +193,16 @@ class AppShell(QWidget):
             self.content_area.setCurrentIndex(index)
             return
 
+        if getattr(new_widget, "skip_page_fade", False):
+            self.content_area.setCurrentIndex(index)
+            return
+
         # Prepare smooth fade-in effect for the incoming page
         effect = QGraphicsOpacityEffect(new_widget)
         new_widget.setGraphicsEffect(effect)
         
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(180)
+        anim.setDuration(120)
         anim.setStartValue(0.15)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.OutCubic)

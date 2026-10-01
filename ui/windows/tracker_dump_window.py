@@ -10,6 +10,7 @@ import json
 import re
 import os
 import shutil
+import time
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
@@ -1428,6 +1429,8 @@ class PayloadInspectorDialog(QDialog):
 class TrackerDumpWindow(QWidget):
     """Full-featured workspace for inspecting client tracker dumps and SRPF unified containers."""
 
+    skip_page_fade = True
+
     service_action_requested = Signal(int, dict)
 
     # Table columns (same order in both views)
@@ -2148,6 +2151,8 @@ class TrackerDumpWindow(QWidget):
         """Fetch tracker dumps or SRPF unified containers from database."""
         self._first_load_pending = False
         try:
+            gen_at_start = self.db.data_generation() if hasattr(self.db, "data_generation") else None
+            raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
                 self._dumps_cache = self.db.get_srpf_containers(limit=200)
@@ -2160,11 +2165,28 @@ class TrackerDumpWindow(QWidget):
             self._current_page = 1
             self._update_summary()
             self._apply_filters()
+            self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
 
             # Automatically update the live CSV feed in the background so Excel Refresh is instant
             _request_live_feed_export()
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
+
+    REUSE_DATA_FOR_S = 60.0
+
+    def load_data_if_stale(self):
+        """Opening the tracker: reload only if something was written or the view changed."""
+        state = getattr(self, "_loaded_state", None)
+        if state is not None and not self._first_load_pending:
+            gen, raw_gen, view, when = state
+            db_gen = self.db.data_generation() if hasattr(self.db, "data_generation") else None
+            db_raw = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
+            if (db_gen is not None and db_raw is not None
+                    and gen == db_gen and raw_gen == db_raw
+                    and view == self.cmb_view_mode.currentIndex()
+                    and time.monotonic() - when < self.REUSE_DATA_FOR_S):
+                return
+        self.load_data()
 
     def _apply_filters(self):
         """Filter cached records and populate table."""

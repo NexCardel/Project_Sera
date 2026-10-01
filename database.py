@@ -496,6 +496,20 @@ class SeraDatabase:
         callers cap how long they trust it)."""
         return _WRITE_GENERATION.get(self._generation_key(), 0)
 
+    def _raw_generation_key(self) -> str:
+        return os.path.normcase(os.path.abspath(self.raw_db_path))
+
+    def _note_raw_write(self) -> None:
+        key = self._raw_generation_key()
+        with _WRITE_GENERATION_LOCK:
+            _WRITE_GENERATION[key] = _WRITE_GENERATION.get(key, 0) + 1
+
+    def raw_generation(self) -> int:
+        """Goes up after every committed change to rawPayload.db made in this process. Equal
+        numbers = nothing written in between (another program writing the file is not seen -
+        callers cap how long they trust it)."""
+        return _WRITE_GENERATION.get(self._raw_generation_key(), 0)
+
     @contextmanager
     def _connect_raw(self):
         """Dedicated connection for rawPayload.db."""
@@ -511,6 +525,7 @@ class SeraDatabase:
             yield conn
             conn.commit()
             if conn.total_changes:
+                self._note_raw_write()
                 self._mark_seal_needed("raw")
         except sqlite3.IntegrityError as e:
             conn.rollback()
