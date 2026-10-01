@@ -53,7 +53,8 @@ def test_show_prints_the_page_and_its_slots(tmp_path, capsys):
 
     assert tool.main(["show", "portal.example.test", "--dir", str(tmp_path), "--page", pid]) == 0
     out = capsys.readouterr().out
-    assert "Returns Dashboard › Financial Year" in out and "unclaimed" in out
+    # PAN and Financial Year are fields SGT's own specs already read: shown as claimed by them.
+    assert "Returns Dashboard › Financial Year" in out and " pan " in out
 
 
 def test_show_reports_an_unknown_portal_without_writing_anything(tmp_path, capsys):
@@ -63,21 +64,23 @@ def test_show_reports_an_unknown_portal_without_writing_anything(tmp_path, capsy
 
 
 # ── coverage ─────────────────────────────────────────────────────────────────────
-def test_coverage_counts_slots_as_unclaimed_until_claimed_by_is_set(tmp_path):
+def test_coverage_counts_slots_sgts_own_specs_already_read_as_claimed(tmp_path):
+    # 2026-09-28: nothing ever wrote `claimed_by`, so every slot read "unclaimed". The tool now
+    # asks SGT's field specs (the miner's own label test) - PAN and Financial Year are claimed.
     built_atlas(tmp_path)
     atlas = tool.load_portal("portal.example.test", tmp_path)
     cov = tool.coverage(atlas)
-    assert cov["pages"] == 1 and cov["slots"] == 2 and cov["claimed"] == 0 and cov["unclaimed"] == 2
-
-    atlas["pages"][0]["slots"][next(iter(atlas["pages"][0]["slots"]))]["claimed_by"] = "gst_fy"
+    assert cov["pages"] == 1 and cov["slots"] == 2 and cov["claimed"] == 2 and cov["unclaimed"] == 0
+    for slot in atlas["pages"][0]["slots"].values():
+        slot.pop("claimed_by")
     cov = tool.coverage(atlas)
-    assert cov["claimed"] == 1 and cov["unclaimed"] == 1
+    assert cov["claimed"] == 0 and cov["unclaimed"] == 2
 
 
 def test_coverage_cli_prints_totals(tmp_path, capsys):
     built_atlas(tmp_path)
     assert tool.main(["coverage", "portal.example.test", "--dir", str(tmp_path)]) == 0
-    assert "2 slot(s): 0 claimed, 2 unclaimed" in capsys.readouterr().out
+    assert "2 slot(s): 2 claimed, 0 unclaimed" in capsys.readouterr().out
 
 
 # ── diff: the portal-change alarm ─────────────────────────────────────────────────

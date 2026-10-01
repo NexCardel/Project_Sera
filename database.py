@@ -1123,6 +1123,7 @@ class SeraDatabase:
                     username_selector  TEXT,
                     password_selector  TEXT,
                     automation_mode    TEXT NOT NULL DEFAULT 'extension',
+                    automation_mode_2  TEXT DEFAULT '',
                     extension_flow     TEXT NOT NULL DEFAULT 'double',
                     success_selector   TEXT,
                     arn_selector       TEXT,
@@ -1132,6 +1133,7 @@ class SeraDatabase:
             self._ensure_column(conn, "services", "extension_flow", "TEXT NOT NULL DEFAULT 'double'")
             self._ensure_column(conn, "services", "success_selector", "TEXT")
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
+            self._ensure_column(conn, "services", "automation_mode_2", "TEXT DEFAULT ''")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)
@@ -1882,7 +1884,7 @@ class SeraDatabase:
             cur = conn.execute(
                 """SELECT id, name, login_page_link, userid_column_id, password_column_id,
                           username_selector, password_selector, automation_mode, extension_flow,
-                          success_selector, arn_selector, sort_order
+                          success_selector, arn_selector, sort_order, automation_mode_2
                    FROM services ORDER BY sort_order"""
             )
             return [
@@ -1892,7 +1894,8 @@ class SeraDatabase:
                     "username_selector": r[5], "password_selector": r[6],
                     "automation_mode": ("extension" if r[7] in ("automated", "playwright") or not r[7] else r[7]),
                     "extension_flow": r[8],
-                    "success_selector": r[9], "arn_selector": r[10], "sort_order": r[11]
+                    "success_selector": r[9], "arn_selector": r[10], "sort_order": r[11],
+                    "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
                 }
                 for r in cur.fetchall()
             ]
@@ -1907,7 +1910,8 @@ class SeraDatabase:
     def create_service(self, name: str, login_page_link: str, userid_column_id: int,
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
-                       success_selector: str = "", arn_selector: str = "") -> int:
+                       success_selector: str = "", arn_selector: str = "",
+                       automation_mode_2: str = "") -> int:
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -1939,11 +1943,11 @@ class SeraDatabase:
             next_order = cur.fetchone()[0]
             cur = conn.execute(
                 """INSERT INTO services (name, login_page_link, userid_column_id, password_column_id,
-                                         username_selector, password_selector, automation_mode, extension_flow,
-                                         success_selector, arn_selector, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                         username_selector, password_selector, automation_mode, automation_mode_2,
+                                         extension_flow, success_selector, arn_selector, sort_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (name.strip(), link, userid_column_id, password_column_id,
-                 u_sel, p_sel, automation_mode, extension_flow,
+                 u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
                  success_selector, arn_selector, next_order)
             )
             return cur.lastrowid
@@ -1951,7 +1955,8 @@ class SeraDatabase:
     def update_service(self, service_id: int, name: str, login_page_link: str, userid_column_id: int,
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
-                       success_selector: str = "", arn_selector: str = ""):
+                       success_selector: str = "", arn_selector: str = "",
+                       automation_mode_2: str = ""):
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -1982,9 +1987,10 @@ class SeraDatabase:
             conn.execute(
                 """UPDATE services SET name=?, login_page_link=?, userid_column_id=?,
                                        password_column_id=?, username_selector=?, password_selector=?,
-                                       automation_mode=?, extension_flow=?, success_selector=?, arn_selector=? WHERE id=?""",
+                                       automation_mode=?, automation_mode_2=?, extension_flow=?,
+                                       success_selector=?, arn_selector=? WHERE id=?""",
                 (name.strip(), link, userid_column_id, password_column_id,
-                 u_sel, p_sel, automation_mode, extension_flow,
+                 u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
                  success_selector, arn_selector, service_id)
             )
 
@@ -2289,7 +2295,8 @@ class SeraDatabase:
             cur = conn.execute(
                 """SELECT s.id, s.name, s.login_page_link, s.userid_column_id,
                           s.password_column_id, s.username_selector, s.password_selector,
-                          s.automation_mode, s.sort_order, s.extension_flow, s.success_selector, s.arn_selector
+                          s.automation_mode, s.sort_order, s.extension_flow, s.success_selector, s.arn_selector,
+                          s.automation_mode_2
                    FROM services s
                    INNER JOIN client_services cs ON s.id = cs.service_id
                    WHERE cs.client_id = ?
@@ -2304,7 +2311,8 @@ class SeraDatabase:
                     "sort_order": r[8],
                     "extension_flow": r[9] if len(r) > 9 else "double",
                     "success_selector": r[10] if len(r) > 10 else "",
-                    "arn_selector": r[11] if len(r) > 11 else ""
+                    "arn_selector": r[11] if len(r) > 11 else "",
+                    "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
                 }
                 for r in cur.fetchall()
             ]

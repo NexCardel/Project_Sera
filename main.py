@@ -190,7 +190,16 @@ class SeraApp:
         self.app.setFont(QFont("Segoe UI", 10))
         self.app.setQuitOnLastWindowClosed(False)
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        
+
+        # Bind the extension bridge port as early as possible, before the DB unlock and services,
+        # so an extension already waiting for the app connects within ~1 s of launch. Messages
+        # that arrive before the handlers are connected are held (see WSBridge.mark_ready).
+        from ui import ws_bridge as _ws_bridge_module
+        self.bridge = WSBridge(self.app)
+        self.app.aboutToQuit.connect(self.bridge.stop)
+        self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
+        _ws_bridge_module.set_active_bridge(self.bridge)
+
         self.sync_bridge = SyncSignalBridge()
         self.sync_bridge.sync_received_signal.connect(self._lock_and_force_restart)
         self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
@@ -563,8 +572,8 @@ class SeraApp:
 
         # Start the WebSocket bridge to the extension (ui/ws_bridge.py). Only the Sera extension's
         # own background page may connect - see that module for how the origin is checked.
-        from ui import ws_bridge as _ws_bridge_module
-        self.bridge = WSBridge(self.app)
+        # (The bridge itself was created and bound early in __init__; only the handlers connect here.)
+        self.bridge.filing_result_received.connect(self._handle_extension_result)
         self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
         self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
         self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
@@ -572,12 +581,9 @@ class SeraApp:
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
         self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
-        self.app.aboutToQuit.connect(self.bridge.stop)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
-        self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
-        # automation.py's module-level functions (autofill, SCA arm, settings push) reach this
-        # bridge through here - they have no object of their own to hold a reference on.
-        _ws_bridge_module.set_active_bridge(self.bridge)
+        # Handlers are wired: release any messages the extension sent while start-up was running.
+        self.bridge.mark_ready()
 
         # The capture engines start on the first turn of the event loop, i.e. right after the
         # window has painted: loading them (OCR, numpy, UI Automation) is ~0.5 s the window used
@@ -1592,6 +1598,7 @@ class SeraApp:
         self.detail_win.back_requested.connect(self._show_search_from_detail)
         self.detail_win.toast_requested.connect(self.shell.show_toast)
         self.detail_win.action_alert_requested.connect(self.shell.show_action_alert)
+        self.tracker_dump_win.service_action_requested.connect(self.detail_win.run_service_action)
         self.admin_win.back_requested.connect(self._show_search_from_admin)
         self.admin_win.request_slide_panel.connect(self._open_in_slide_panel)
         self.admin_win.toast_requested.connect(self.shell.show_toast)

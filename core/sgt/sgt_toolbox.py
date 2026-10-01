@@ -154,6 +154,7 @@ TRANSFORMS: Dict[str, Transform] = {
     "strip": lambda v: v.strip(),
     "collapse_spaces": lambda v: re.sub(r"\s+", " ", v).strip(),
     "strip_spaces": lambda v: re.sub(r"\s+", "", v),
+    "strip_commas": lambda v: v.replace(",", "").strip() or None,
     "digits_only": lambda v: re.sub(r"[^0-9]", "", v) or None,
     # OCR digit confusions (O->0, l->1, S->5 ...). Only for values that must be all digits.
     "ocr_digits": lambda v: "".join(DIGIT_FIX_MAP.get(c, c) for c in v),

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Sera</title>
+  <mask id="notches" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <rect width="64" height="64" fill="#fff"/>
+    <circle cx="32" cy="25.5" r="3" fill="#000"/>
+      <circle cx="32" cy="44.5" r="3.4" fill="#000"/>
+      <circle cx="32" cy="58.5" r="4.2" fill="#000"/>
+  </mask>
+  <g mask="url(#notches)" stroke-width="2.4" stroke-linejoin="round">
+      <path d="M32 7.5 41 20 23 20Z" fill="#2E9B5F" stroke="#2E9B5F"/>
+      <path d="M26.5 25.5 37.5 25.5 47.5 39 16.5 39Z" fill="#2E9B5F" stroke="#2E9B5F"/>
+      <path d="M23.5 44.5 40.5 44.5 51 57.5 13 57.5Z" fill="#2E9B5F" stroke="#2E9B5F"/>
+  </g>
+</svg>

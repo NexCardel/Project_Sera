@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>Sera</title>
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <rect width="64" height="64" fill="#fff"/>
+    <circle cx="10" cy="17" r="5.25" fill="#000"/>
+      <circle cx="10" cy="32" r="5.25" fill="#000"/>
+      <circle cx="10" cy="47" r="5.25" fill="#000"/>
+    <g transform="matrix(0.7240 0 0 0.7240 10.9567 8.4697)" stroke-width="2.4" stroke-linejoin="round">
+      <path d="M32 7.5 41 20 23 20Z" fill="#000" stroke="#000"/>
+      <path d="M26.5 25.5 37.5 25.5 47.5 39 16.5 39Z" fill="#000" stroke="#000"/>
+      <path d="M23.5 44.5 40.5 44.5 51 57.5 13 57.5Z" fill="#000" stroke="#000"/>
+      <circle cx="32" cy="25.5" r="3" fill="#fff"/>
+      <circle cx="32" cy="44.5" r="3.4" fill="#fff"/>
+      <circle cx="32" cy="58.5" r="4.2" fill="#fff"/>
+    </g>
+  </mask>
+  <rect x="10" y="4" width="44" height="56" rx="6.5" fill="#2E9B5F" mask="url(#cut)"/>
+</svg>

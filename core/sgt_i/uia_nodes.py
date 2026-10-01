@@ -51,6 +51,8 @@ CT_TABITEM = 50019
 CT_DATAITEM = 50029
 CT_DOCUMENT = 50030
 _VALUE_BEARING = frozenset({CT_COMBOBOX, CT_EDIT, CT_SPINNER})
+_CONTAINERS = frozenset({50025, 50026, 50033})      # Custom, Group, Pane: what a host <div> becomes
+OWN_ID_PREFIX = "sera-"                             # element ids Sera's browser extension gives its UI
 _CHOICE = frozenset({CT_RADIOBUTTON, CT_CHECKBOX})
 SELECTED_PREFIX = "Selected: "      # same as vsdc_uia_text.SELECTED_PREFIX
 
@@ -93,6 +95,12 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
     role = _cached(el, PID_ARIA_ROLE)
     if role:
         node["role"] = role
+    # The element's HTML id (Chromium's AutomationId), kept when the markup sets one: the corpus
+    # carries it so tools/sgt_i_id_census.py can measure whether portal ids are stable node keys.
+    aid = _cached(el, PID_AUTOMATION_ID)
+    aid = aid.strip() if isinstance(aid, str) else ""
+    if aid:
+        node["aid"] = aid
     if ctype in _VALUE_BEARING:
         # A password field's content must never reach a node, the corpus, or a log - the label
         # (name, above) is kept, the value simply isn't cached.
@@ -106,6 +114,11 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
         row, col = _cached(el, PID_GRID_ROW), _cached(el, PID_GRID_COLUMN)
         if isinstance(row, int) and isinstance(col, int):
             node["grid"] = (row, col)
+    elif ctype in _CONTAINERS:
+        # Sera's own extension panel injected into the portal page (sera-manual-assist-host,
+        # sera-mecp-host, ...): not the portal - page_map keeps it out of content and structure.
+        if aid.startswith(OWN_ID_PREFIX):
+            node["own"] = True
     return node
 
 

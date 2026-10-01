@@ -224,6 +224,30 @@
         "19ABCPD1234E1ZC",
         {"lines": ["19ABCPD1234E1ZB", "27AAACZ9876K1ZE"]}
       ]
+    },
+    {
+      "name": "gst_aggregate_turnover",
+      "field": "aggregate_turnover",
+      "portals": ["GST Portal"],
+      "labels": ["Turnover"],
+      "label_at": "anywhere",
+      "label_rest": "ignore",
+      "within": 3,
+      "pattern": "^(?:(?:₹|Rs\\.?|INR)\\s*)?([0-9][0-9,]*(?:\\.[0-9]{1,2})?)$",
+      "transforms": ["strip_commas"],
+      "confidence": 85,
+      "note": "The client's aggregate turnover as the portal prints it under any label containing the word 'Turnover' (Aggregate Turnover, Total Turnover, ...) (rupees, commas removed). Stored on the profile, not the dataset. If the page shows two different figures (e.g. previous FY and current FY) they are a conflict and neither is taken - add a more specific label if that happens.",
+      "examples": [
+        "₹ 12,34,56,789.00",
+        {"lines": ["Aggregate Turnover", "₹ 12,34,56,789.00", "Legal Name"], "expect": "123456789.00"},
+        {"lines": ["Aggregate Turnover", "Rs. 5,00,000"], "expect": "500000"},
+        {"lines": ["Turnover in the previous FY", "₹ 7,50,000"], "expect": "750000"}
+      ],
+      "counter_examples": [
+        "Aggregate Turnover",
+        "abc",
+        {"lines": ["Aggregate Turnover", "Not Available"]}
+      ]
     }
   ],
 

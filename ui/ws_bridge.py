@@ -137,6 +137,10 @@ class WSBridge(QObject):
         # sends carries one); the socket itself never goes into a message dict, so nothing here
         # risks being json.dumps()'d by a signal handler that logs/echoes the message it received.
         self._pending_replies: dict[str, QWebSocket] = {}
+        # The server may be started before the app has connected its signal handlers; messages
+        # received in that window are held here and replayed by mark_ready().
+        self._ready = False
+        self._held: list[tuple[QWebSocket, str]] = []
         # Explicit BlockingQueuedConnection (not the default AutoConnection) so this is a queued
         # hop even in the one case Qt's own thread-affinity check can't tell apart from "already
         # on the Qt thread": a connection made before this object's thread affinity is what it
@@ -280,7 +284,18 @@ class WSBridge(QObject):
         except RuntimeError:
             pass  # C++ object already deleted by Qt - harmless
 
+    def mark_ready(self):
+        """Call once every signal/settings_provider is connected; replays held messages."""
+        self._ready = True
+        held, self._held = self._held, []
+        for sock, text in held:
+            if sock in self._sockets:
+                self._on_text_message(sock, text)
+
     def _on_text_message(self, sock: QWebSocket, text: str):
+        if not self._ready:
+            self._held.append((sock, text))
+            return
         try:
             msg = json.loads(text)
         except (json.JSONDecodeError, TypeError):

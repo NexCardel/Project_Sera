@@ -35,11 +35,21 @@ MODE_CHOICES = (
     ("SMTI Manual Assist", automation.ACTION_SMTI),
     ("MECP Manual Copy", automation.ACTION_MECP),
 )
+MODE_CHOICES_2 = (
+    ("None", ""),
+    ("Fast Autofill", automation.ACTION_AUTOFILL),
+    ("SMTI Manual Assist", automation.ACTION_SMTI),
+    ("MECP Manual Copy", automation.ACTION_MECP),
+)
 MODE_HELP = (
     "What this service's button (and Alt+N) does in Client Detail:\n"
     "Fast Autofill - the extension fills and submits the login form.\n"
     "SMTI Manual Assist - an on-page widget to inject User ID / Password yourself.\n"
     "MECP Manual Copy - a floating card to copy credentials."
+)
+MODE_HELP_2 = (
+    "Optional secondary autofill button for this service in Client Detail.\n"
+    "Choose another method from the pool, or None if only one button is desired."
 )
 MODE_TAGS = {
     automation.ACTION_AUTOFILL: "Fast Autofill",
@@ -49,7 +59,12 @@ MODE_TAGS = {
 
 
 def service_mode_tag(service: dict) -> str:
-    return MODE_TAGS[automation.service_action_mode(service)]
+    m1 = automation.service_action_mode(service)
+    t1 = MODE_TAGS.get(m1, "Fast Autofill")
+    m2 = automation.service_secondary_action_mode(service)
+    if m2 and m2 in MODE_TAGS and m2 != m1:
+        return f"{t1} + {MODE_TAGS[m2]}"
+    return t1
 
 
 def _safe_icon(name, color=None):
@@ -160,6 +175,17 @@ class ServiceEditDialog(QDialog):
 
         form.addRow("Automation Mode:", self.mode_combo)
 
+        self.mode_2_combo = QComboBox()
+        for label, mode in MODE_CHOICES_2:
+            self.mode_2_combo.addItem(label, mode)
+        self.mode_2_combo.setToolTip(MODE_HELP_2)
+        if service_data:
+            sec_mode = service_data.get("automation_mode_2") or ""
+            idx_mode_2 = self.mode_2_combo.findData(sec_mode)
+            self.mode_2_combo.setCurrentIndex(max(idx_mode_2, 0))
+
+        form.addRow("Automation Mode 2:", self.mode_2_combo)
+
         self.ext_flow_combo = QComboBox()
         self.ext_flow_combo.addItem("Two-Step (Username first, then Password)", "double")
         self.ext_flow_combo.addItem("Single Page (Username & Password together)", "single")
@@ -172,6 +198,7 @@ class ServiceEditDialog(QDialog):
         main_layout.addWidget(form_frame)
 
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self.mode_2_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._on_mode_changed()
 
         # Wire real-time portal selector presets on typing
@@ -247,8 +274,9 @@ class ServiceEditDialog(QDialog):
             self._last_preset = None
 
     def _on_mode_changed(self):
-        # Only Fast Autofill drives the login form itself, so only it uses the login flow.
-        self.ext_flow_combo.setEnabled(self.mode_combo.currentData() == automation.ACTION_AUTOFILL)
+        # Only Fast Autofill drives the login form itself, so enable flow if either mode uses it.
+        has_ext = (self.mode_combo.currentData() == automation.ACTION_AUTOFILL) or (self.mode_2_combo.currentData() == automation.ACTION_AUTOFILL)
+        self.ext_flow_combo.setEnabled(has_ext)
 
     def _on_accept(self):
         if not self.name_input.text().strip():
@@ -267,6 +295,7 @@ class ServiceEditDialog(QDialog):
             "username_selector": old.get("username_selector") or "",
             "password_selector": old.get("password_selector") or "",
             "automation_mode": self.mode_combo.currentData() or automation.ACTION_AUTOFILL,
+            "automation_mode_2": self.mode_2_combo.currentData() or "",
             "extension_flow": self.ext_flow_combo.currentData(),
             "success_selector": old.get("success_selector") or "",
             "arn_selector": old.get("arn_selector") or "",

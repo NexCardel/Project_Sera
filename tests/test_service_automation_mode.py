@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 import tempfile
 import os
 import shutil
@@ -123,6 +123,50 @@ class TestServiceAutomationMode(unittest.TestCase):
         self.assertEqual((data["username_selector"], data["password_selector"],
                           data["success_selector"], data["arn_selector"]),
                          ("#u", "#p", ".ok", "#arn"))
+
+
+    def test_service_secondary_action_mode(self):
+        self.assertIsNone(automation.service_secondary_action_mode({}))
+        self.assertIsNone(automation.service_secondary_action_mode({"automation_mode_2": ""}))
+        self.assertIsNone(automation.service_secondary_action_mode({"automation_mode_2": "none"}))
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "extension"}), automation.ACTION_AUTOFILL)
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "smti"}), automation.ACTION_SMTI)
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "manual"}), automation.ACTION_MECP)
+
+    def test_automation_mode_2_round_trips_through_database(self):
+        sid = self.db.create_service(
+            name="Dual Mode Portal", login_page_link="https://example.com/login",
+            userid_column_id=1, password_column_id=2,
+            username_selector="", password_selector="",
+            automation_mode="smti", automation_mode_2="extension")
+        svc = self.db.get_service(sid)
+        self.assertEqual(svc["automation_mode"], "smti")
+        self.assertEqual(svc["automation_mode_2"], "extension")
+
+        self.db.update_service(
+            sid, name="Dual Mode Portal", login_page_link="https://example.com/login",
+            userid_column_id=1, password_column_id=2,
+            username_selector="", password_selector="",
+            automation_mode="extension", automation_mode_2="manual")
+        svc2 = self.db.get_service(sid)
+        self.assertEqual(svc2["automation_mode"], "extension")
+        self.assertEqual(svc2["automation_mode_2"], "manual")
+
+    def test_service_edit_dialog_mode_2_options_and_toggling(self):
+        dlg = ServiceEditDialog(self.db)
+        modes_2 = [dlg.mode_2_combo.itemData(i) for i in range(dlg.mode_2_combo.count())]
+        self.assertEqual(modes_2, ["", "extension", "smti", "manual"])
+
+        # When mode 1 is smti and mode 2 is None, ext_flow is disabled
+        dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("smti"))
+        dlg.mode_2_combo.setCurrentIndex(dlg.mode_2_combo.findData(""))
+        self.assertFalse(dlg.ext_flow_combo.isEnabled())
+        self.assertEqual(dlg.result_data()["automation_mode_2"], "")
+
+        # When mode 1 is smti but mode 2 is extension, ext_flow becomes enabled
+        dlg.mode_2_combo.setCurrentIndex(dlg.mode_2_combo.findData("extension"))
+        self.assertTrue(dlg.ext_flow_combo.isEnabled())
+        self.assertEqual(dlg.result_data()["automation_mode_2"], "extension")
 
 
 if __name__ == "__main__":

@@ -40,8 +40,24 @@ def list_portals(base: Path) -> List[str]:
 
 
 def load_portal(portal: str, base: Path) -> Dict[str, Any]:
-    """The public atlas for one portal - empty when it has none yet (never written to disk)."""
-    return PortalAtlas(portal, directory=base).to_json()
+    """The public atlas for one portal - empty when it has none yet (never written to disk). A slot
+    SGT's own field specs already read (same label test as the miner's) is marked `claimed_by`
+    with that field, for display only - nothing is written back."""
+    atlas = PortalAtlas(portal, directory=base, config=load_config()).to_json()
+    try:
+        from core.sgt.sgt_specs import load_registry
+        from core.sgt_i.atlas import SEP
+        from core.sgt_i.miner import _base_paths, claimed_field
+        registry = load_registry(_base_paths())
+        for page in atlas.get("pages", []):
+            for slot in (page.get("slots") or {}).values():
+                if not slot.get("claimed_by"):
+                    field = claimed_field(str(slot.get("container", "")).split(SEP)[-1], registry)
+                    if field:
+                        slot["claimed_by"] = field
+    except Exception:
+        pass                                  # no specs readable: show the atlas as it is
+    return atlas
 
 
 def _slots(page: Dict[str, Any]) -> List[Dict[str, Any]]:

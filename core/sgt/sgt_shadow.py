@@ -104,7 +104,8 @@ CURRENT_RECORD = "current_dataset"  # the record name a dataset built across pag
 # How the pill names the client datapoints it has just captured.
 PROFILE_LABELS = {"name": "name", "first_name": "first name", "middle_name": "middle name",
                   "last_name": "last name", "pan": "PAN", "gstin": "GSTIN", "dob": "date of birth",
-                  "email": "email", "phone": "phone", "tan": "TAN", "address": "address"}
+                  "email": "email", "phone": "phone", "tan": "TAN", "address": "address",
+                  "aggregate_turnover": "aggregate turnover"}
 # Fields a dataset may name that say WHOSE it is: checked against the session's client, never
 # stored as dataset fields.
 _CLIENT_KEYS = ("pan", "gstin")

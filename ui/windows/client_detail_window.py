@@ -474,7 +474,8 @@ class ClientDetailWindow(QWidget):
             shortcut_info = QLabel("ⓘ shortcuts: Alt+1..9")
             shortcut_info.setStyleSheet("color: #6E6D67; font-size: 10.5px;")
             shortcut_info.setToolTip(
-                "Alt+1..9 runs the Nth service's autofill\n"
+                "Alt+1..9 runs primary autofill (Mode 1)\n"
+                "Alt+Ctrl+1..9 runs secondary autofill (Mode 2, if set)\n"
                 "(Fast Autofill, SMTI Assist or MECP Copy, as set in its Automation Mode)."
             )
             svc_hdr.addWidget(shortcut_info)
@@ -488,12 +489,15 @@ class ClientDetailWindow(QWidget):
                 key_num = i + 1
                 has_shortcut = key_num <= 9
 
-                action_label, action_icon, action_fn = action_specs[automation.service_action_mode(s)]
+                mode_1 = automation.service_action_mode(s)
+                mode_2 = automation.service_secondary_action_mode(s)
+
+                action_label, action_icon, action_fn = action_specs[mode_1]
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(0, 5, 0, 5)
-                row_layout.setSpacing(10)
+                row_layout.setSpacing(6)
 
                 # Accent Color Dot / Icon
                 portal_color = _get_portal_accent_color(s["name"])
@@ -508,7 +512,7 @@ class ClientDetailWindow(QWidget):
                 svc_name.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
                 row_layout.addWidget(svc_name, stretch=1)
 
-                # The service's single autofill button (type set by its Automation Mode)
+                # Primary autofill button
                 btn_action = QPushButton()
                 btn_action.setFixedSize(36, 28)
                 btn_action.setCursor(Qt.PointingHandCursor)
@@ -523,6 +527,33 @@ class ClientDetailWindow(QWidget):
                 btn_action.clicked.connect(lambda _, svc=s, fn=action_fn: fn(svc))
                 row_layout.addWidget(btn_action)
 
+                if has_shortcut:
+                    sc_action = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
+                    sc_action.activated.connect(lambda svc=s, fn=action_fn: fn(svc))
+                    self._service_shortcuts.append(sc_action)
+
+                # Secondary autofill button (if Automation Mode 2 is set and different from Mode 1)
+                if mode_2 and mode_2 in action_specs and mode_2 != mode_1:
+                    action_label_2, action_icon_2, action_fn_2 = action_specs[mode_2]
+                    btn_action_2 = QPushButton()
+                    btn_action_2.setFixedSize(36, 28)
+                    btn_action_2.setCursor(Qt.PointingHandCursor)
+                    btn_action_2.setIconSize(QSize(18, 18))
+                    btn_action_2.setToolTip(f"{action_label_2}: {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
+                    if action_fn_2 == self._launch_extension_autofill:
+                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FFFFFF") if qta else QIcon())
+                        btn_action_2.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
+                    else:
+                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FF4D4D") if qta else QIcon())
+                        btn_action_2.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                    btn_action_2.clicked.connect(lambda _, svc=s, fn=action_fn_2: fn(svc))
+                    row_layout.addWidget(btn_action_2)
+
+                    if has_shortcut:
+                        sc_action_2 = QShortcut(QKeySequence(f"Alt+Ctrl+{key_num}"), self)
+                        sc_action_2.activated.connect(lambda svc=s, fn=action_fn_2: fn(svc))
+                        self._service_shortcuts.append(sc_action_2)
+
                 svc_list_layout.addWidget(row_widget)
 
                 if i < len(services) - 1:
@@ -530,11 +561,6 @@ class ClientDetailWindow(QWidget):
                     item_div.setFrameShape(QFrame.HLine)
                     item_div.setStyleSheet("background-color: #232323; min-height: 1px; max-height: 1px; border: none;")
                     svc_list_layout.addWidget(item_div)
-
-                if has_shortcut:
-                    sc_action = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
-                    sc_action.activated.connect(lambda svc=s, fn=action_fn: fn(svc))
-                    self._service_shortcuts.append(sc_action)
 
             self.scroll_layout.addLayout(svc_list_layout)
 
@@ -589,6 +615,25 @@ class ClientDetailWindow(QWidget):
         self.scroll_layout.addWidget(self.notes_edit)
 
         self.scroll_layout.addStretch()
+
+    def run_service_action(self, client_id: int, service: dict) -> None:
+        """Loads the client (without showing the window) and runs the service's Automation Mode 1 action."""
+        fresh = self.db.get_client(client_id)
+        if not fresh:
+            return
+        prev = self.client
+        self.client = fresh
+        try:
+            mode_1 = automation.service_action_mode(service)
+            action_map = {
+                automation.ACTION_AUTOFILL: self._launch_extension_autofill,
+                automation.ACTION_SMTI: self._launch_manual_assist,
+                automation.ACTION_MECP: self._launch_manual_copy,
+            }
+            fn = action_map.get(mode_1, self._launch_extension_autofill)
+            fn(service)
+        finally:
+            self.client = prev
 
     def _get_identity_parts(self, client):
         identity_cols = [c for c in self.db.get_mcl_columns() if c["is_identity"]]

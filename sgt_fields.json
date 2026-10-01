@@ -1,0 +1,119 @@
+{
+ "current_dataset": {
+  "fields": []
+ },
+ "profile": [
+  {
+   "field": "gender",
+   "labels": [
+    "Gender"
+   ],
+   "within": 2,
+   "pattern": "^([A-Za-z][A-Za-z0-9 .,&'()/-]{0,79})$",
+   "confidence": 70,
+   "portals": [
+    "Income Tax"
+   ],
+   "checks": [
+    "not_ui_chrome"
+   ],
+   "examples": [
+    "Sample Trading Co",
+    "Example Enterprises",
+    {
+     "lines": [
+      "Gender",
+      "Sample Trading Co"
+     ],
+     "expect": "Sample Trading Co"
+    }
+   ],
+   "note": "Drafted by the SGT-I miner; examples are fictional.",
+   "name": "mined.income_tax.gender"
+  },
+  {
+   "field": "address",
+   "labels": [
+    "Address"
+   ],
+   "within": 2,
+   "pattern": "^([A-Za-z][A-Za-z0-9 .,&'()/-]{0,79})$",
+   "confidence": 70,
+   "portals": [
+    "Income Tax"
+   ],
+   "checks": [
+    "not_ui_chrome"
+   ],
+   "examples": [
+    "Sample Trading Co",
+    "Example Enterprises",
+    {
+     "lines": [
+      "Address",
+      "Sample Trading Co"
+     ],
+     "expect": "Sample Trading Co"
+    }
+   ],
+   "note": "Drafted by the SGT-I miner; examples are fictional.",
+   "name": "mined.income_tax.address"
+  },
+  {
+   "field": "residential_status",
+   "labels": [
+    "Residential Status"
+   ],
+   "within": 2,
+   "pattern": "^([A-Za-z][A-Za-z0-9 .,&'()/-]{0,79})$",
+   "confidence": 70,
+   "portals": [
+    "Income Tax"
+   ],
+   "checks": [
+    "not_ui_chrome"
+   ],
+   "examples": [
+    "Sample Trading Co",
+    "Example Enterprises",
+    {
+     "lines": [
+      "Residential Status",
+      "Sample Trading Co"
+     ],
+     "expect": "Sample Trading Co"
+    }
+   ],
+   "note": "Drafted by the SGT-I miner; examples are fictional.",
+   "name": "mined.income_tax.residential_status"
+  },
+  {
+   "field": "aadhaar_number",
+   "labels": [
+    "Aadhaar Number"
+   ],
+   "within": 2,
+   "pattern": "(?<![A-Za-z0-9])([A-Za-z]{8}\\d{4})(?![A-Za-z0-9])",
+   "confidence": 70,
+   "portals": [
+    "Income Tax"
+   ],
+   "examples": [
+    "ABCDEFGH2345",
+    "FGHJKLMN5678",
+    {
+     "lines": [
+      "Aadhaar Number",
+      "ABCDEFGH2345"
+     ],
+     "expect": "ABCDEFGH2345"
+    }
+   ],
+   "counter_examples": [
+    "ABCDEFGH2345ABCDEFGH2345"
+   ],
+   "note": "Drafted by the SGT-I miner; examples are fictional.",
+   "name": "mined.income_tax.aadhaar_number"
+  }
+ ]
+}

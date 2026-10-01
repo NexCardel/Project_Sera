@@ -117,6 +117,33 @@ def test_url_hint_keeps_only_a_masked_path():
     assert at.url_hint("") == ""
 
 
+def test_url_hint_keeps_a_single_page_apps_route():
+    # Field test 2026-09-28: the ITR portal is one address + '#/route'; dropping the route gave
+    # every screen the same hint, and 12 different screens merged into one atlas page.
+    base = "https://eportal.incometax.gov.in/iec/foservices/"
+    assert at.url_hint(base + "#/dashboard/itrStatus") == "/iec/foservices#/dashboard/itrStatus"
+    assert at.url_hint(base + "#/foreturns-ay26/fo-itr4-ay2026/personal?x=ABCDE1234F") == \
+        "/iec/foservices#/AAAAAAAAA-AA99/AA-AAA9-AA9999/personal"
+    assert at.url_hint(base + "#!/login") == "/iec/foservices#/login"
+    assert at.url_hint(base + "#/dashboard/itrStatus") != at.url_hint(base + "#/dashboard/fileIncomeTaxReturn")
+
+
+def test_rereads_in_one_visit_count_once(tmp_path):
+    # One visit is many reads (the Core reads again whenever any line changes).
+    a = new_atlas(tmp_path)
+    n, p = CLIENTS[0]
+    a.merge(dashboard(n, p), client=p, session="s1")
+    once = only_page(a)
+    for _ in range(4):
+        a.merge(dashboard(n, p), client=p, session="s1")
+    page = only_page(a)
+    assert page["visits"] == 1
+    assert page["elements"] == once["elements"] and page["slots"] == once["slots"]
+    a.merge(profile(n), client=p, session="s1")                 # left the page...
+    a.merge(dashboard(n, p), client=p, session="s1")            # ...and came back: a second visit
+    assert next(pg for pg in a.to_json()["pages"] if pg["id"] == page["id"])["visits"] == 2
+
+
 # ── template promotion ───────────────────────────────────────────────────────────
 def test_text_becomes_structure_only_after_three_different_clients(tmp_path):
     a = new_atlas(tmp_path)

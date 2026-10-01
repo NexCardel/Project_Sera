@@ -41,6 +41,7 @@ winrt-Windows.Storage.Streams>=3.2
 pandas>=2.0
 numpy>=1.26
 lxml>=5.0
+nameparser>=1.1        # VSDC name split (core/vsdc/vsdc_name_parser.py)
 
 # --- Packaging ---
 pyinstaller>=6.10

@@ -16,7 +16,9 @@ before 2026-09-27) hold lines only. v2 adds an optional "nodes" field - the same
 (blueprint 14.2's "shared read" is not adopted yet, so this is an extra read, on SGT-I's own
 account). It is the fuel tools/sgt_lines_equivalence.py's corpus mode checks. load_pages() and
 sgt_replay.py read both versions unchanged - "nodes" is simply absent on v1 (and v2 pages read
-with SGT-I off) and on any page whose extra read failed.
+with SGT-I off) and on any page whose extra read failed. v3 (2026-09-30): the same, and a node
+carries "aid" (its HTML id) when the markup sets one - absent on v2 nodes even where the page had
+ids, so tools/sgt_i_id_census.py only counts v3 pages.
 
 Where: ~/AmanAssociates_Sera/sgt_corpus/pages_YYYY-MM-DD.jsonl - on this PC only, like the
 database. It holds client data (names, PANs, whatever the portal shows), so it is NEVER copied
@@ -40,7 +42,7 @@ CORPUS_DIR_ENV = "SGT_CORPUS_DIR"
 RETENTION_DAYS = 30
 MAX_DAY_BYTES = 50 * 1024 * 1024
 FILE_PREFIX = "pages_"
-CORPUS_VERSION = 2   # 1 = lines only (no "v" field); 2 = lines + an optional "nodes" field
+CORPUS_VERSION = 3   # 1 = lines only (no "v" field); 2 = lines + an optional "nodes" field; 3 = nodes carry "aid"
 
 
 def corpus_dir() -> Path:

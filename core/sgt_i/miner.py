@@ -64,6 +64,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "placeholder_words": [r"\bselect\b", r"\benter\b", r"\bsearch\b", r"\bchoose\b"],
     "field_aliases": {"ack": "arn"}, "status_window": 3, "status_phrase_words": [2, 8],
     "status_settled_level": 2, "require_share": 0.9, "max_proposals": 60,
+    # Never a datapoint, whatever the counts say (field test 2026-09-29: a "password" proposal was
+    # accepted). Matched against the label AND the headings above it.
+    "sensitive_labels": [r"pass\s*word", r"passcode", r"\bpin\b", r"\botp\b", r"one[\s-]*time\s+password",
+                         r"captcha", r"\bcvv\b", r"secret", r"security\s+(question|answer)",
+                         r"access\s+message"],
+    # Sera's own UI injected into the portal page (Sera Clipboard Assist, the manual-assist panel).
+    "own_ui_labels": [r"\bsca\b", r"username\s+injected", r"\bsera\b"],
 }
 
 # Section names as sgt_fields.json spells them.
@@ -347,6 +354,18 @@ def _placeholder(label: str, cfg: Dict[str, Any]) -> bool:
     return any(re.search(p, label, re.IGNORECASE) for p in cfg.get("placeholder_words") or ())
 
 
+def _blocked(label: str, path: str, cfg: Dict[str, Any]) -> Optional[str]:
+    """Why a label may never become a datapoint, whatever its support - or None. `path` is the
+    label with the headings above it ("Change Password > New" is blocked too)."""
+    if not re.search(r"[A-Za-z]", label):
+        return "placement: no words"              # "0", "1", "2": a counter or page number
+    if any(re.search(p, path, re.IGNORECASE) for p in cfg.get("sensitive_labels") or ()):
+        return "sensitive label"
+    if any(re.search(p, path, re.IGNORECASE) for p in cfg.get("own_ui_labels") or ()):
+        return "placement: Sera's own UI"
+    return None
+
+
 def _all_fields(registry: Any) -> List[Any]:
     out = list(registry.profile) + list(registry.current)
     for r in registry.records:
@@ -354,13 +373,18 @@ def _all_fields(registry: Any) -> List[Any]:
     return out
 
 
-def _claimed(label: str, registry: Any) -> bool:
-    """A Core spec already reads a value after exactly this label."""
+def claimed_field(label: str, registry: Any) -> Optional[str]:
+    """The Core field that already reads a value after exactly this label, or None."""
     for f in _all_fields(registry):
         m = f.label_re.search(label) if f.label_re is not None else None
         if m and not m.group("rest").strip():
-            return True
-    return False
+            return f.field
+    return None
+
+
+def _claimed(label: str, registry: Any) -> bool:
+    """A Core spec already reads a value after exactly this label."""
+    return claimed_field(label, registry) is not None
 
 
 def _pid(*parts: str) -> str:
@@ -388,13 +412,22 @@ def _proposal(source: str, portal: str, key: str, **kw: Any) -> Dict[str, Any]:
 
 
 # ── Source 1 and 3: the atlas ─────────────────────────────────────────────────────
-def _slot_gate(slot: Dict[str, Any], label: str, cfg: Dict[str, Any], registry: Any) -> Optional[str]:
+def _slot_gate(slot: Dict[str, Any], label: str, cfg: Dict[str, Any], registry: Any,
+               furniture: Optional[Callable[[str], bool]] = None) -> Optional[str]:
     if slot.get("fading"):
         return "fading"
     if slot.get("zone") not in cfg["zones"]:
         return "placement: zone"
     if _is_masked(label):
         return "label not template yet"
+    why = _blocked(label, str(slot.get("container") or label), cfg)
+    if why:
+        return why
+    if furniture is not None and furniture(label):
+        # The portal's menu / header / footer wording (the atlas's furniture test): "English",
+        # "Skip to main content", "CoBrowse Help". The atlas keeps it for page identity; it is
+        # never a datapoint.
+        return "placement: furniture"
     if _placeholder(label, cfg):
         return "placement: placeholder"
     if slot.get("claimed_by") or _claimed(label, registry):
@@ -420,12 +453,13 @@ def from_atlas(atlas: Atlas, portals: Iterable[str], registry: Any, cfg: Dict[st
     out: List[Dict[str, Any]] = []
     for portal in portals:
         pa = atlas.portal(portal)
+        furniture = pa.furniture_test()
         for pid, page in pa.pages.items():
             groups: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
             for sid, slot in (page.get("slots") or {}).items():
                 container = str(slot.get("container") or "")
                 label = container.split(SEP)[-1].strip()
-                why = _slot_gate(slot, label, cfg, registry)
+                why = _slot_gate(slot, label, cfg, registry, furniture)
                 if why:
                     dropped[why] += 1
                     continue
@@ -554,6 +588,10 @@ def from_synonyms(rows: Iterable[Dict[str, Any]], registry: Any, cfg: Dict[str, 
             continue
         if _placeholder(label, cfg) or re.search(r"\d{4}", label):
             dropped["placement: placeholder"] += 1
+            continue
+        why = _blocked(label, label, cfg)
+        if why:
+            dropped[why] += 1
             continue
         if _claimed(label, registry):
             dropped["already claimed"] += 1

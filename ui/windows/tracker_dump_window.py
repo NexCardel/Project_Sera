@@ -13,7 +13,7 @@ import shutil
 import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QSize
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
+import automation
 
 
 
@@ -444,6 +445,15 @@ def _safe_qta_icon(icon_name, color="#FFFFFF"):
     return QIcon()
 
 
+def _service_matches_portal(service_name: str, portal_name: str) -> bool:
+    """Matches a compliance service to a portal name using substring and keyword rules."""
+    s_name = (service_name or "").strip().lower()
+    p_name = (portal_name or "").strip().lower()
+    if not s_name or not p_name:
+        return False
+    return s_name in p_name or p_name in s_name or ("income" in p_name and "income" in s_name)
+
+
 class AddClientFromCaptureDialog(QDialog):
     """Modal dialog allowing quick 1-click creation of a client record directly from an unassigned capture."""
     def __init__(self, db, item_data: dict, parent=None):
@@ -591,7 +601,7 @@ class AddClientFromCaptureDialog(QDialog):
         for s in all_services:
             cb = QCheckBox(s["name"])
             # Auto-check matching portal service
-            if s["name"].lower() in portal_name or portal_name in s["name"].lower() or ("income" in portal_name and "income" in s["name"].lower()):
+            if _service_matches_portal(s["name"], portal_name):
                 cb.setChecked(True)
             self.svc_checkboxes[s["id"]] = cb
             svc_checks_box.addWidget(cb)
@@ -1418,6 +1428,8 @@ class PayloadInspectorDialog(QDialog):
 class TrackerDumpWindow(QWidget):
     """Full-featured workspace for inspecting client tracker dumps and SRPF unified containers."""
 
+    service_action_requested = Signal(int, dict)
+
     # Table columns (same order in both views)
     COL_CLIENT, COL_PORTAL, COL_PERIOD, COL_STATUS, COL_METHOD, COL_UPDATED, COL_ACTIONS = range(7)
     COLUMN_COUNT = 7
@@ -1934,7 +1946,7 @@ class TrackerDumpWindow(QWidget):
             self.COL_STATUS: 280,
             self.COL_METHOD: 130,
             self.COL_UPDATED: 150,
-            self.COL_ACTIONS: 100,
+            self.COL_ACTIONS: 120,
         }
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.COL_CLIENT, QHeaderView.Stretch)
@@ -2299,7 +2311,7 @@ class TrackerDumpWindow(QWidget):
         the row's current item up when clicked.
         """
         cell = self.table.cellWidget(row_idx, self.COL_ACTIONS)
-        if cell is None or cell.findChild(QPushButton, "act_view") is None:
+        if cell is None or cell.findChild(QPushButton, "act_view") is None or cell.findChild(QPushButton, "act_autofill") is None:
             cell = self._build_action_cell(item, is_grouped)
             self.table.setCellWidget(row_idx, self.COL_ACTIONS, cell)
         cell.setProperty("row", row_idx)
@@ -2314,11 +2326,93 @@ class TrackerDumpWindow(QWidget):
         btn_create = cell.findChild(QPushButton, "act_create")
         if btn_create is not None:
             btn_create.setVisible(bool(needs_create))
+        btn_autofill = cell.findChild(QPushButton, "act_autofill")
+        if btn_autofill is not None:
+            has_client = bool(item.get("client_id")) and not item.get("is_unassigned")
+            btn_autofill.setVisible(has_client)
+            if has_client:
+                service = self._service_for_row(item)
+                if service:
+                    mode_1 = automation.service_action_mode(service)
+                    action_specs = {
+                        automation.ACTION_AUTOFILL: (
+                            "Fast Autofill", "mdi.flash", "#FFFFFF",
+                            "QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }"
+                        ),
+                        automation.ACTION_SMTI: (
+                            "SMTI Manual Assist", "mdi.clipboard-account-outline", "#FF4D4D",
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                        ),
+                        automation.ACTION_MECP: (
+                            "MECP Manual Copy", "mdi.content-copy", "#FF4D4D",
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                        ),
+                    }
+                    action_label, action_icon, icon_color, btn_style = action_specs.get(mode_1, action_specs[automation.ACTION_AUTOFILL])
+                    btn_autofill.setIcon(_safe_qta_icon(action_icon, icon_color))
+                    btn_autofill.setStyleSheet(btn_style)
+                    btn_autofill.setToolTip(f"{action_label}: {service.get('name', 'Service')}")
+                else:
+                    portal_name = item.get("service_name") or item.get("portal") or "Portal"
+                    btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
+                    btn_autofill.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }")
+                    btn_autofill.setToolTip(f"Fast Autofill: {portal_name}")
 
     def _on_action_create(self, cell: QWidget) -> None:
         item = self._action_cell_item(cell)
         if item is not None:
             self._create_client_from_capture(item)
+
+    def _service_for_row(self, item: dict):
+        cid = item.get("client_id")
+        if not cid:
+            return None
+        cache = getattr(self, "_client_services_cache", None)
+        if cache is not None and cid in cache:
+            services = cache[cid]
+        else:
+            services = self.db.get_client_services(cid)
+            if cache is not None:
+                cache[cid] = services
+        if not services:
+            return None
+        portal_name = (item.get("service_name") or item.get("portal") or "").strip()
+        if not portal_name:
+            return None
+        p_lower = portal_name.lower()
+        for s in services:
+            if s.get("name", "").strip().lower() == p_lower:
+                return s
+        matched = [s for s in services if _service_matches_portal(s.get("name", ""), portal_name)]
+        if matched:
+            return matched[0]
+        return None
+
+    def _on_action_autofill(self, cell: QWidget) -> None:
+        item = self._action_cell_item(cell)
+        if item is None:
+            return
+        cid = item.get("client_id")
+        if not cid:
+            return
+        service = self._service_for_row(item)
+        if not service:
+            portal_name = item.get("service_name") or item.get("portal") or "Unknown portal"
+            client_name = (
+                item.get("display_name")
+                or item.get("client_name")
+                or item.get("company_name")
+                or item.get("proprietor_name")
+                or item.get("pan")
+                or f"Client #{cid}"
+            )
+            QMessageBox.information(
+                self,
+                "No matching service",
+                f"No service matching portal '{portal_name}' was found for {client_name}."
+            )
+            return
+        self.service_action_requested.emit(int(cid), service)
 
     def _action_cell_item(self, cell: QWidget):
         """The item currently shown in the action cell's row (None if the page changed under it)."""
@@ -2344,9 +2438,9 @@ class TrackerDumpWindow(QWidget):
 
     def _build_action_cell(self, item: dict, is_grouped: bool) -> QWidget:
         """
-        Builds the per-row Actions cell: a single primary Inspect/View button
-        plus a kebab (⋮) overflow menu for Create Client / Delete. Keeps every
-        action from the old 3-button layout, just not all visible at once.
+        Builds the per-row Actions cell: an Automation 1 autofill button,
+        a primary Inspect/View button, and a kebab (⋮) overflow menu for
+        Create Client / Delete.
         """
         widget = QWidget()
         widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
@@ -2357,6 +2451,27 @@ class TrackerDumpWindow(QWidget):
 
         # Built once per table row and reused (see _set_action_cell); the handlers find the
         # row's current item when clicked instead of holding a copy of it.
+        btn_autofill = QPushButton()
+        btn_autofill.setObjectName("act_autofill")
+        btn_autofill.setCursor(Qt.PointingHandCursor)
+        btn_autofill.setFixedSize(34, 26)
+        btn_autofill.setIconSize(QSize(16, 16))
+        btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
+        btn_autofill.setToolTip("Automation 1 (Fast Autofill)")
+        btn_autofill.setStyleSheet("""
+            QPushButton {
+                background-color: #FF4D4D;
+                border: none;
+                border-radius: 6px;
+                padding: 3px 0px;
+            }
+            QPushButton:hover {
+                background-color: #E63939;
+            }
+        """)
+        btn_autofill.clicked.connect(lambda _=False, c=widget: self._on_action_autofill(c))
+        layout.addWidget(btn_autofill)
+
         btn_view = QPushButton()
         btn_view.setObjectName("act_view")
         btn_view.clicked.connect(lambda _=False, c=widget: self._on_action_view(c))
@@ -2465,6 +2580,7 @@ class TrackerDumpWindow(QWidget):
 
     def _populate_grouped_table(self, containers: list[dict]):
         """Populates table in SRPF Grouped Container view: 1 row per unique client container."""
+        self._client_services_cache = {}
         self._prepare_columns(is_grouped=True)
         self.table.setRowCount(len(containers))
         self._update_token_meter()
@@ -2538,6 +2654,7 @@ class TrackerDumpWindow(QWidget):
 
     def _populate_raw_table(self, records: list[dict]):
         """Populates table in granular Individual Raw Captures view."""
+        self._client_services_cache = {}
         self._prepare_columns(is_grouped=False)
         self.table.setRowCount(len(records))
         self._update_token_meter()

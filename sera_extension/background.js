@@ -17,7 +17,7 @@ let ws = null;
 let wsConnecting = false;
 let wsPortIndex = 0;
 let wsReconnectDelay = 1000;
-const WS_RECONNECT_MAX_MS = 15000;
+const WS_RECONNECT_MAX_MS = 3000;
 const _pendingWsRequests = new Map(); // "_id" -> {resolve, timer}
 
 // ---------------- SCA (Sera Clipboard Assist) - protocol v2 ----------------
@@ -1673,7 +1673,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "MECP_DISMISSED" || msg.type === "MECP_CLOSED") {
-    _passwordStore.remove(['mecpPayload']);
+    // Only the x forgets the credentials. A card that finished (password copied) or timed out can be
+    // brought back from the popup until the payload's own 5-minute expiry.
+    if (msg.type === "MECP_DISMISSED") _passwordStore.remove(['mecpPayload']);
     _unlockAssistTab(sender && sender.tab ? sender.tab.id : null, 'mecp');
     if (msg.attempt_id) {
       sccCardTabs.delete(String(msg.attempt_id));
@@ -1913,7 +1915,7 @@ function mecpWidget(userid, password, clientName, expiresMs, sccMode, sccCombos,
   let passwordCopied = false;
   let finishing = false;
   function closeWhenBothCopied() {
-    if (finishing || isSCC || !passwordCopied || (hasUserId && !userIdCopied)) return;
+    if (finishing || isSCC || !passwordCopied) return;
     finishing = true;
     if (timerTimeout) clearTimeout(timerTimeout);
     timerTimeout = null;

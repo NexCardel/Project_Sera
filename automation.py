@@ -80,12 +80,24 @@ def service_action_mode(service: dict) -> str:
     return ACTION_AUTOFILL  # "extension", legacy "automated"/"playwright", or unset
 
 
+def service_secondary_action_mode(service: dict) -> Optional[str]:
+    """The secondary autofill type a service runs (if configured), or None."""
+    mode = str((service or {}).get("automation_mode_2") or "").strip().lower()
+    if mode in ("smti", "assist", "manual_assist"):
+        return ACTION_SMTI
+    if mode in ("manual", "mecp", "manual_copy"):
+        return ACTION_MECP
+    if mode in ("extension", "autofill", "fast_autofill"):
+        return ACTION_AUTOFILL
+    return None
+
+
 def is_manual_portal(service: dict) -> bool:
     return service_action_mode(service) != ACTION_AUTOFILL
 
 
 def is_extension_portal(service: dict) -> bool:
-    return service_action_mode(service) == ACTION_AUTOFILL
+    return service_action_mode(service) == ACTION_AUTOFILL or service_secondary_action_mode(service) == ACTION_AUTOFILL
 
 
 def is_itr_service(service: dict) -> bool:
