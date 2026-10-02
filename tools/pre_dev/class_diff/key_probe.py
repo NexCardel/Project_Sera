@@ -41,6 +41,13 @@ Usage:
     python tools/pre_dev/class_diff/key_probe.py --seconds 60    # a longer capture
     python tools/pre_dev/class_diff/key_probe.py --once          # one read only (the old behaviour)
     python tools/pre_dev/class_diff/key_probe.py --delay 15 --title "GST"
+    python tools/pre_dev/class_diff/key_probe.py --timing        # cost of SGT reading the raw view
+
+TIMING (--timing): reads the page with SGT's OWN reader (core/sgt_i/uia_nodes.read_page_nodes -
+the same properties production caches, not this probe's extra ones) --rounds times in each view,
+control and raw alternating so neither gets a warmer cache, and prints the milliseconds (median,
+90th percentile, worst), elements and texts per view and the raw/control ratio. Writes nothing.
+Run it on a light page and on the heaviest page you use (a long list): SGT reads every second.
 
 CAPTURE (default): like SGT, the probe keeps reading the page - every --interval (1 s) for
 --seconds (30 s) - while you use it normally. A read is kept only when the page's keys or texts
@@ -453,6 +460,48 @@ def capture_report(page: str, st: Dict[str, Any], started: datetime, seconds: fl
     return out
 
 
+TIMING_TIMEOUT = 30.0      # a heavy page in raw view may take seconds - measure it, don't cut it off
+
+
+def _percentile(values: List[float], q: float) -> float:
+    v = sorted(values)
+    return v[min(len(v) - 1, int(round(q * (len(v) - 1))))]
+
+
+def timing(hwnd: int, rounds: int) -> int:
+    """SGT's reader, control vs raw view, alternating. Prints ms and sizes; writes nothing."""
+    rounds = max(3, rounds)
+    ms: Dict[str, List[float]] = {"control": [], "raw": []}
+    size: Dict[str, tuple] = {}
+    for view in ("control", "raw"):                               # warm both once, uncounted
+        uia_nodes.read_page_nodes(hwnd, TIMING_TIMEOUT, raw_view=view == "raw")
+    _say(f"Timing SGT's reader: {rounds} reads per view, alternating...")
+    for r in range(rounds):
+        order = ("control", "raw") if r % 2 == 0 else ("raw", "control")
+        for view in order:
+            t0 = time.perf_counter()
+            res = uia_nodes.read_page_nodes(hwnd, TIMING_TIMEOUT, raw_view=view == "raw")
+            ms[view].append((time.perf_counter() - t0) * 1000)
+            docs = res.get("docs") or []
+            nodes = sum(len(d) for d in docs)
+            texts = sum(1 for d in docs for n in d if (n.get("name") or "").strip())
+            if not nodes:
+                _say(f"  {view} read came back empty (timed out or page changed) - try again on a settled page")
+                return 1
+            size[view] = (nodes, texts)
+    _say("")
+    _say(f"  {'view':8s} {'median':>9s} {'p90':>9s} {'worst':>9s} {'elements':>9s} {'texts':>7s}")
+    for view in ("control", "raw"):
+        v = ms[view]
+        _say(f"  {view:8s} {_percentile(v, 0.5):7.0f}ms {_percentile(v, 0.9):7.0f}ms {max(v):7.0f}ms "
+             f"{size[view][0]:9d} {size[view][1]:7d}")
+    ratio = _percentile(ms["raw"], 0.5) / max(0.001, _percentile(ms["control"], 0.5))
+    _say("")
+    _say(f"  raw view = {ratio:.1f}x the control view's time, {size['raw'][0] / max(1, size['control'][0]):.1f}x its elements")
+    _say("  (SGT reads once a second; a read above ~350 ms would use more than a third of that.)")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Show a page's HTML keys as SGT sees them (read-only).")
     ap.add_argument("--delay", type=int, default=8, help="seconds to switch to the browser (default 8)")
@@ -460,6 +509,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--seconds", type=float, default=30.0, help="how long to capture (default 30)")
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between reads while capturing (default 1)")
     ap.add_argument("--once", action="store_true", help="one read only (the old behaviour), no capture")
+    ap.add_argument("--timing", action="store_true", help="time SGT's reader in control vs raw view; writes nothing")
+    ap.add_argument("--rounds", type=int, default=15, help="reads per view for --timing (default 15)")
     args = ap.parse_args(argv)
 
     if args.title:
@@ -478,6 +529,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _say(f"The foreground window ({process or 'none'}) is not a browser. Focus the portal tab and re-run.")
             return 1
     _say(f"Window: {title!r}")
+    if args.timing:
+        return timing(hwnd, args.rounds)
     for _ in range(WARM_READS):
         read_keys(hwnd, False)
     os.makedirs(OUT_DIR, exist_ok=True)

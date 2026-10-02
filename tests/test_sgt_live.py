@@ -128,7 +128,6 @@ class TestDatabaseMerge(unittest.TestCase):
         key = security.derive_key_hex("testpass123", security.load_salt(salt_path))
         self.db = SeraDatabase(os.path.join(self.tmp.name, "m.db"), key,
                                raw_db_path=os.path.join(self.tmp.name, "rawPayload.db"))
-        self.db.rebuild_raw_payload_dumps_file = lambda: 0
 
     def tearDown(self):
         self.tmp.cleanup()

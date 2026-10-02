@@ -15,8 +15,18 @@ element types, stable ids and class names, counted per parent (card 1, card 2...
 (digit) and state (ng-valid, focused...) class names left out. Nothing here knows what any class
 name means, and nothing is portal-specific.
 
+View: by default only what SGT's control view sees (keys.VIEW = "sgt"); --view raw for every
+element the probe read.
+
 Label: for a variable element, the first fixed text inside the smallest box around it that has
-one ("Acknowledgement No :" inside the same .valueBox as the number).
+one ("Acknowledgement No :" inside the same .valueBox as the number). In a table (Table -> row ->
+cell) it is the row's first cell and the column's header cell instead: "Cash Ledger / IGST" - the
+column found by the browser's column number or the screen box, never by counting cells.
+A label is a text both clients show alike: a fixed text, or a shared text of words with digits
+("9B - Credit / Debit Notes"); never a bare number, date, code or amount. Never a label: a link, a button, an image (its name is the alt text, or the browser's own words
+when the page gave none), or a COMPOSITE - an element whose text is just its children's texts
+joined ("79,99,235.00 View/Update"). A composite row is kept but flagged in check: its parts are
+listed on their own.
 
     python tools/pre_dev/class_diff/compare.py                         # latest client vs previous client
     python tools/pre_dev/class_diff/compare.py --latest A.json --previous B.json   # two single reads
@@ -46,6 +56,7 @@ import json
 import re
 import sys
 from collections import Counter
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,18 +67,23 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.sgt_i.pairs import classify_type                     # noqa: E402
+from core.sgt.sgt_resolver import resolve_page                  # noqa: E402
+from core.sgt.sgt_specs import load_registry                    # noqa: E402
+from core.vsdc.vsdc_scope import portal_for_url                 # noqa: E402
 
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+import keys                                                      # noqa: E402
 from keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
 import link_map                                                  # noqa: E402
 
-# Only these value types can be FIXED (template). Any other type (date, period, code, alphanumeric,
-# amount, email, phone, percentage, yes/no, control) is data-shaped: when both sessions show the
+# Only these value types can be FIXED (template). Any other type (number, date, period, code,
+# alphanumeric, amount, email, phone, percentage, yes/no, control) is data-shaped: a bare number is
+# a count or balance two clients can share (0 = 0), never template. When both sessions show the
 # same value it is SEMI-VARIABLE - a value the clients compared so far happened to share - until a
 # session with a different value makes it variable. "control" = a choice the user makes (dropdown,
 # radio, checkbox - keys.CHOICE_CTYPES). Buttons are actions, not data: left out of the comparison.
-FIXABLE_TYPES = frozenset({"text", "number", "label", "sentence"})
+FIXABLE_TYPES = frozenset({"text", "label", "sentence"})
 SENTENCE_WORDS = 8
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
@@ -153,14 +169,127 @@ def _container(flat: List[Dict[str, Any]], i: int) -> str:
     return ""
 
 
+CT_HYPERLINK, CT_IMAGE, CT_TABLE = 50005, 50006, 50036
+NEVER_LABEL_CTYPES = frozenset({CT_HYPERLINK, CT_IMAGE}) | BUTTON_CTYPES
+
+
+def _end(flat: List[Dict[str, Any]], i: int) -> int:
+    """The index just past element i's subtree."""
+    j = i + 1
+    while j < len(flat) and flat[j]["depth"] > flat[i]["depth"]:
+        j += 1
+    return j
+
+
+def _children(flat: List[Dict[str, Any]], p: int) -> List[int]:
+    return [j for j in range(p + 1, _end(flat, p)) if flat[j]["parent"] == p]
+
+
+def composites(flat: List[Dict[str, Any]]) -> set:
+    """Elements whose text is only their descendants' texts joined - at least two of them -
+    ("<name> <GSTIN>", "79,99,235.00 View/Update"). Worked bottom-up, so a composite inside a
+    composite is not counted twice: its parts are."""
+    out: set = set()
+    for i in range(len(flat) - 1, -1, -1):
+        text = " ".join(flat[i]["text"].split())
+        if not text:
+            continue
+        parts = [flat[j]["text"] for j in range(i + 1, _end(flat, i)) if flat[j]["text"] and j not in out]
+        if len(parts) >= 2 and " ".join(" ".join(parts).split()) == text:
+            out.add(i)
+    return out
+
+
+def _first_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
+    """Element i's own text if it can be a label, else the first one inside it."""
+    for j in range(i, _end(flat, i)):
+        if j in labels and flat[j]["text"]:
+            return flat[j]["text"]
+    return ""
+
+
+def _same_column(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """How surely two cells sit in the same column: the browser's own column number when both
+    carry one (SGT's reader keeps it as "grid"), else how much their screen boxes overlap
+    sideways (0..1). Never the cell's count in its row: a view can drop a cell (SGT's control
+    view drops an empty corner cell), and counting would shift every column by one."""
+    ga, gb = a.get("grid"), b.get("grid")
+    if ga and gb:
+        return 1.0 if ga[1] == gb[1] else 0.0
+    ra, rb = a.get("rect"), b.get("rect")
+    if not ra or not rb or ra[2] <= 0 or rb[2] <= 0:
+        return 0.0
+    overlap = min(ra[0] + ra[2], rb[0] + rb[2]) - max(ra[0], rb[0])
+    return max(0.0, overlap) / min(ra[2], rb[2])
+
+
+def _table_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
+    """A table cell's label: its row's first cell and its column's header (the first earlier row
+    that holds a label in that column), "row / column". Structure only: Table -> row -> cell."""
+    a = i
+    while a >= 0:
+        r = flat[a]["parent"]
+        t = flat[r]["parent"] if r >= 0 else -1
+        if t >= 0 and flat[t]["node"].get("ctype") == CT_TABLE:
+            break
+        a = r
+    else:
+        return ""
+    cells = _children(flat, r)
+    row_label = _first_label(flat, cells[0], labels) if cells[0] != a else ""
+    col_label = ""
+    for other in _children(flat, t):
+        if other == r:
+            break
+        best, best_cell = 0.5, -1
+        for oc in _children(flat, other):
+            score = _same_column(flat[a]["node"], flat[oc]["node"])
+            if score > best:
+                best, best_cell = score, oc
+        if best_cell >= 0:
+            col_label = _first_label(flat, best_cell, labels)
+            if col_label:
+                break
+    return " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
+
+
+CLIENT_FIELDS = ("pan", "gstin")
+_registry = None
+
+
+def client_ids(m: "link_map.LinkMap") -> set:
+    """Who the client of one map is: the PAN / GSTIN that SGT-C's own specs (sgt_fields.json,
+    checksums included) find in the text SGT sees there, as {"gstin:...", "pan:..."}. Empty when
+    the page never shows them, or the link is no portal."""
+    global _registry
+    url = "https://" + m.page
+    portal = portal_for_url(url)
+    if not portal:
+        return set()
+    if _registry is None:
+        _registry = load_registry()
+    lines = [e["text"] for e in m.to_flat() if e["text"] and e["node"].get("sgt")]
+    res = resolve_page(_registry, lines, portal, url, date.today())
+    return {f"{k}:{h.value}" for k, h in res.profile.items() if k in CLIENT_FIELDS}
+
+
+def masked(ids: set) -> str:
+    """Client ids for the console: first and last 2 characters only."""
+    return ", ".join(sorted(f"{i.split(':', 1)[0]} {v[:2]}..{v[-2:]}" for i in ids for v in [i.split(":", 1)[1]])) or "unknown"
+
+
 LABEL_LOOKBACK = 6     # fallback: how many elements back a label may sit when no box holds one
 
 
 def _label(flat: List[Dict[str, Any]], i: int, fixed: set) -> str:
-    """The label of element i: inside the smallest box around it that holds a fixed text, the
+    """The label of element i (fixed = the indexes that may be labels): a table cell's row and
+    column (_table_label), else inside the smallest box around it that holds a fixed text, the
     fixed text NEAREST BEFORE it (else the first after it). When no box around it holds one - the
     browser can flatten a card, leaving "GSTIN OF TAXPAYER" and the value's box as plain siblings -
     the nearest fixed text at most LABEL_LOOKBACK elements before it in page order."""
+    in_table = _table_label(flat, i, fixed)
+    if in_table:
+        return in_table
     a = flat[i]["parent"]
     while a >= 0:
         before, after = "", ""
@@ -203,15 +332,23 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
         else:
             status[i] = FIXED if element_type(e) in FIXABLE_TYPES else SEMI_VARIABLE
     fixed = {i for i, s in status.items() if s == FIXED}
+    comp = {id(fl): composites(fl), id(fp): composites(fp)}
+    # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
+    # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
+    shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
+    # ...and holding a real letter: an icon-font glyph beside a count ("<bell> 0") is no label.
+    labels = {i for i in shared if i not in comp[id(fl)] and fl[i]["node"].get("ctype") not in NEVER_LABEL_CTYPES
+              and any(c.isalpha() for c in fl[i]["text"])}
 
     def row(flat, i, st, example):
         e, n = flat[i], flat[i]["node"]
         other = prev_by_key.get(e["key"]) if flat is fl else None
         vt = element_type(e)
         pt = element_type(other) if other else ""
-        label = _label(flat, i, fixed) if st != FIXED and flat is fl else ""
+        label = _label(flat, i, labels) if st != FIXED and flat is fl else ""
+        flag = "composite - its parts are listed on their own" if i in comp[id(flat)] else check(st, vt, pt, label)
         return {"status": st, "key_matched": "yes" if st in (FIXED, SEMI_VARIABLE, VARIABLE) else "no",
-                "value_type": vt, "previous_type": pt, "check": check(st, vt, pt, label),
+                "value_type": vt, "previous_type": pt, "check": flag,
                 "label": label,
                 "element": n.get("type_name") or n.get("ctype"), "classes": e["cls"],
                 "container": _container(flat, i), "id": n.get("id", ""),
@@ -268,7 +405,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Compare two clients' maps of the same page link (or two single reads).")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
+    ap.add_argument("--view", choices=("sgt", "raw"), default="sgt",
+                    help="sgt (default): only what SGT's control view sees - what production can use; "
+                         "raw: every element the probe read (to study how a joined text splits)")
     args = ap.parse_args(argv)
+    keys.VIEW = args.view
+    print(f"View     : {args.view}")
 
     # One comparison per page link: (page, latest side's name, other side's name, rows).
     results: List[Tuple[str, str, str, List[Dict[str, Any]]]] = []
@@ -286,16 +428,34 @@ def main(argv: Optional[List[str]] = None) -> int:
         last = max(maps.values(), key=lambda m: m.reads[-1])
         session = last.client
         stamp = session.split()[-1]
+        # One client per session: the PAN / GSTIN seen on ANY of its pages. Compared only with a
+        # session of ANOTHER client - the same client twice would make all its data look fixed.
+        ids: Dict[str, set] = {}
+        for m in maps.values():
+            ids.setdefault(m.client, set()).update(client_ids(m))
+        me = ids.get(session, set())
+        print(f"Client   : {masked(me)}")
+        if not me:
+            print("  WARNING: no PAN / GSTIN found in this capture - it cannot be told apart from the same")
+            print("  client's earlier captures; visit a page that shows it (dashboard, profile) next time.")
+        print()
         for lm in sorted((m for m in maps.values() if m.client == session), key=lambda m: m.reads[0]):
-            others = [m for m in maps.values() if m.page == lm.page and m.client != session]
+            same = [m for m in maps.values() if m.page == lm.page and m.client != session and ids[m.client] & me]
+            others = [m for m in maps.values() if m.page == lm.page and m.client != session
+                      and not (ids[m.client] & me)]
             if not others:
                 print(f"Page     : {lm.page}")
-                print("  only this session has it - capture it for another client to compare")
+                if same:
+                    print(f"  only the SAME client ({masked(me)}) has it in earlier captures - capture it for another client")
+                else:
+                    print("  only this session has it - capture it for another client to compare")
                 print()
                 continue
             pm = max(others, key=lambda m: m.reads[-1])
+            if same:
+                print(f"  (skipped {len(same)} earlier capture(s) of the same client on {lm.page})")
             results.append((lm.page, f"{lm.client}: {len(lm.reads)} snapshot(s) merged",
-                            f"{pm.client}: {len(pm.reads)} snapshot(s) merged",
+                            f"{pm.client} [{masked(ids[pm.client])}]: {len(pm.reads)} snapshot(s) merged",
                             compare_flat(lm.to_flat(), pm.to_flat())))
         if not results:
             raise SystemExit("Nothing to compare yet.")

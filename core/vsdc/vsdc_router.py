@@ -70,8 +70,6 @@ from .vsdc_name_parser import (
     is_better_taxpayer_name,
     extract_gst_welcome_name,
 )
-from .vsdc_beeper import PANBeeper
-from .vsdc_gemini_parser import parse_compliance_with_gemini
 
 # The e-Verify confirmation step is resolved from page content, never from the URL
 # (all three wizard steps share one Angular route) - see _route_itr_crosshair.
@@ -2210,8 +2208,6 @@ class VSDCRouter:
                 meta["period_label"] = None
             if not is_valid_gst_status(meta.get("status")):
                 meta["status"] = None
-
-            # Gemini API call removed to prevent synchronous thread blocking.
 
             legal_name = meta.get("legal_name")
             if not legal_name and not self._uia_only_mode:

@@ -28,6 +28,13 @@ ids (the ITR page used #itrVerticalStepper six times), so an id alone is not a s
 LOOSE key: the same address with element types and positions only (no ids, no classes). Two
 reads whose strict keys differ but whose loose keys match are the same element whose classes
 flipped - snapshot_diff.py uses it to tell "class flip" from "removed + added".
+
+VIEW: key_probe reads UIA's RAW view (every element Chromium exposes); SGT reads the CONTROL view,
+which leaves out some elements (an empty table corner cell, the text inside a cell or link - the
+cell / link carries it as its name). VIEW = "sgt" keeps only the elements SGT's view has (key_probe
+marks them "sgt"), re-parented to their nearest kept ancestor, so keys, labels and statistics
+describe what production can actually see. VIEW = "raw" keeps everything (for studying how a
+joined text splits). Reads from before the "sgt" mark existed are always raw.
 """
 
 import json
@@ -180,6 +187,27 @@ def text_of(n: Dict[str, Any]) -> str:
     return name
 
 
+VIEW = "raw"
+
+
+def sgt_view(doc: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Only the nodes SGT's control view has, each re-parented to its nearest kept ancestor.
+    A doc without any "sgt" mark (an old read) is returned unchanged."""
+    if not any("sgt" in n for n in doc):
+        return doc
+    new_index: Dict[int, int] = {}
+    out: List[Dict[str, Any]] = []
+    for i, n in enumerate(doc):
+        if not n.get("sgt"):
+            continue
+        p = n.get("parent", -1)
+        while p >= 0 and p not in new_index:
+            p = doc[p].get("parent", -1)
+        new_index[i] = len(out)
+        out.append(dict(n, parent=new_index[p] if p >= 0 else -1))
+    return out
+
+
 def flatten(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every raw-view node of a key_probe read, in page order, each with:
     key, loose (see module doc), parent (index into this list, -1 = none), depth, cls (the
@@ -187,6 +215,8 @@ def flatten(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
     a heading's text twice), node (the raw node)."""
     out: List[Dict[str, Any]] = []
     for d, doc in enumerate(rec.get("docs") or []):
+        if VIEW == "sgt":
+            doc = sgt_view(doc)
         base = len(out)
         strict_seen: Dict[int, Counter] = {}
         loose_seen: Dict[int, Counter] = {}

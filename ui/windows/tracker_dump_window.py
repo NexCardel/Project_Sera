@@ -11,7 +11,6 @@ import re
 import os
 import shutil
 import time
-import threading
 from pathlib import Path
 from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer, QSize
@@ -29,12 +28,6 @@ from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to
 import automation
 
 
-
-def get_token_usage_summary():
-    # Imported on use: importing anything under core.vsdc loads the whole capture-engine package
-    # (OCR, numpy, UI Automation, ~0.4 s), which then happened before the app's window appeared.
-    from core.vsdc.vsdc_token_tracker import get_token_usage_summary as summary
-    return summary()
 
 try:
     import qtawesome as qta
@@ -86,7 +79,7 @@ def _parse_record_datetime(ts_str: str) -> datetime | None:
 
 def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
     """
-    Evaluates raw record status via SDC_Parser logic into an authoritative
+    Evaluates raw record status into an authoritative
     human-readable LTT submission status and corresponding UI display theme.
     Returns: (status_text, theme_dict)
     """
@@ -115,29 +108,26 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         except Exception:
             pass
 
-    # Evaluate using SDC_Parser's standard logic
-    try:
-        from SDC_Parser.sdc_parser import evaluate_status
-        ltt_status = evaluate_status(raw_status)
-    except Exception:
-        raw_lower = str(raw_status).lower()
-        if "not filed" in raw_lower or "unfiled" in raw_lower or "to be filed" in raw_lower or "not submitted" in raw_lower:
-            ltt_status = "Not submitted"
-        elif "visited" in raw_lower or "in progress" in raw_lower or "form selected" in raw_lower or "draft" in raw_lower:
-            ltt_status = "Not submitted"
-        elif ("not e-verified" in raw_lower or "not verified" in raw_lower or "pending" in raw_lower
-              or "verify later" in raw_lower or "unverified" in raw_lower):
-            ltt_status = "Submitted (e-verification pending)"
-        elif "filed" in raw_lower or "portal confirmed" in raw_lower or "verified" in raw_lower:
-            ltt_status = "Submitted & E-verified"
-        elif "submitted" in raw_lower or "submit" in raw_lower or "success" in raw_lower:
-            ltt_status = "Submitted & E-verified"
-        elif "evc" in raw_lower:
-            ltt_status = "Other EVC"
-        elif "option expired" in raw_lower:
-            ltt_status = "Option Expired (NA)"
-        else:
-            ltt_status = "Not submitted"
+    raw_lower = str(raw_status).lower().strip()
+    if "not filed" in raw_lower or "unfiled" in raw_lower or "to be filed" in raw_lower or "not submitted" in raw_lower:
+        ltt_status = "Not submitted"
+    elif "visited" in raw_lower or "in progress" in raw_lower or "form selected" in raw_lower or "draft" in raw_lower:
+        ltt_status = "Not submitted"
+    elif ("not e-verified" in raw_lower or "not verified" in raw_lower or "pending" in raw_lower
+          or "verify later" in raw_lower or "unverified" in raw_lower):
+        ltt_status = "Submitted (e-verification pending)"
+    elif "filed" in raw_lower or "portal confirmed" in raw_lower or "verified" in raw_lower:
+        ltt_status = "Submitted & E-verified"
+    elif "submitted" in raw_lower or "submit" in raw_lower or "success" in raw_lower:
+        ltt_status = "Submitted & E-verified"
+    elif "evc" in raw_lower:
+        ltt_status = "Other EVC"
+    elif "option expired" in raw_lower:
+        ltt_status = "Option Expired (NA)"
+    elif re.search(r"\b(?:not applicable|na)\b", raw_lower):
+        ltt_status = "Not Applicable (NA)"
+    else:
+        ltt_status = "Not submitted"
 
     # Only promote if an ARN is present and status is "Not submitted",
     # but NEVER override pending verification!
@@ -207,39 +197,6 @@ def _get_status_theme(status_text: str) -> dict:
         "cell_bg": "#521414",
         "icon": "mdi.alert-circle"
     })
-
-
-_feed_lock = threading.Lock()
-_feed_state = {"running": False, "again": False}
-
-
-def _request_live_feed_export() -> None:
-    """
-    Rewrites the live CSV feed in the background - at most ONE export at a time. The tracker
-    refreshes after every capture; starting a thread per refresh piled up 14 concurrent exports
-    (+23 MB) over 100 quick refreshes (measured). A request that arrives while one is running
-    just marks it to run once more afterwards, which writes the latest data anyway.
-    """
-    with _feed_lock:
-        if _feed_state["running"]:
-            _feed_state["again"] = True
-            return
-        _feed_state["running"] = True
-
-    def _worker():
-        while True:
-            try:
-                from SDC_Parser import sdc_parser
-                sdc_parser.export_ltt_live_feed()
-            except Exception:
-                pass
-            with _feed_lock:
-                if not _feed_state["again"]:
-                    _feed_state["running"] = False
-                    return
-                _feed_state["again"] = False
-
-    threading.Thread(target=_worker, name="sera-live-feed", daemon=True).start()
 
 
 def _status_pill_style(status_text: str) -> str:
@@ -631,7 +588,7 @@ class AddClientFromCaptureDialog(QDialog):
         from ui.utils.profile_parser import extract_profile_from_payload
         unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
 
-        # Priority 1: Extract profile from current payload (prioritizes Gemini AI extraction)
+        # Priority 1: Extract profile from current payload 
         raw_str = self.item_data.get("raw_payload_json") or "{}"
         parsed = extract_profile_from_payload(raw_str)
 
@@ -705,10 +662,6 @@ class PayloadInspectorDialog(QDialog):
             QLabel#CardTitle { color: #8E8D88; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
             QLabel#FieldKey { color: #8E8D88; font-size: 11px; }
             QLabel#FieldVal { color: #F0F6FC; font-size: 13px; font-weight: 600; }
-            QLabel#AiBadge {
-                color: #58A6FF; background-color: #10233A; border: 1px solid #1F4F8F;
-                border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600;
-            }
             QLabel#UnregBadge {
                 color: #FFA657; background-color: #2E1D0E; border: 1px solid #6B4214;
                 border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600;
@@ -750,17 +703,9 @@ class PayloadInspectorDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(14)
 
-        # Extract profile from payload (prioritizes Gemini AI extraction)
+        # Extract profile from payload
         raw_json = item_data.get("raw_payload_json") or "{}"
         profile_data = extract_profile_from_payload(raw_json)
-
-        gemini_info = profile_data.get("gemini_extracted") or {}
-        if not gemini_info and isinstance(raw_json, str):
-            try:
-                pj = json.loads(raw_json)
-                gemini_info = pj.get("gemini_extracted") or (pj.get("raw_payload", {}).get("gemini_extracted") if isinstance(pj.get("raw_payload"), dict) else {})
-            except Exception:
-                pass
 
         # SGT-I's enrichment (blueprint 14.2 rule 4): its own key, beside the Core's values,
         # never in place of them - shown read-only, never editable from here.
@@ -773,23 +718,14 @@ class PayloadInspectorDialog(QDialog):
         except Exception:
             pass
 
-        # Give priority to Gemini-extracted details for display
-        prop_name = ""
-        comp_name = ""
-        if gemini_info:
-            if gemini_info.get("legal_name"):
-                prop_name = str(gemini_info["legal_name"]).strip()
-            if gemini_info.get("trade_name"):
-                comp_name = str(gemini_info["trade_name"]).strip()
-
-        comp_name = comp_name or item_data.get("company_name") or profile_data.get("company_name") or ""
-        prop_name = prop_name or item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
+        comp_name = item_data.get("company_name") or profile_data.get("company_name") or ""
+        prop_name = item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
         pan_val = item_data.get("pan") or profile_data.get("pan") or item_data.get("identity_key") or ""
         gstin_val = item_data.get("gstin") or profile_data.get("gstin") or ""
 
         # Resolve clean display name for header (kept as before: also used by Copy Summary)
         client_name = item_data.get('display_name')
-        if not client_name or client_name.startswith("Unregistered") or (gemini_info and (prop_name or comp_name)):
+        if not client_name or client_name.startswith("Unregistered"):
             if prop_name or comp_name:
                 client_name = f"{prop_name or comp_name} ({pan_val or gstin_val})"
             elif item_data.get('client_name') and not item_data.get('client_name').startswith("Unregistered"):
@@ -815,11 +751,6 @@ class PayloadInspectorDialog(QDialog):
         if is_unreg:
             b = QLabel("No matching client")
             b.setObjectName("UnregBadge")
-            name_row.addWidget(b)
-        if gemini_info:
-            b = QLabel("✨ Gemini AI verified")
-            b.setObjectName("AiBadge")
-            b.setToolTip("Client and filing details below were read by Gemini Flash AI (statutory priority applied)")
             name_row.addWidget(b)
         name_row.addStretch()
         head_text.addLayout(name_row)
@@ -912,19 +843,6 @@ class PayloadInspectorDialog(QDialog):
             client_v.addWidget(empty)
         client_v.addStretch()
         cards_row.addWidget(client_card, stretch=3)
-
-        if gemini_info:
-            ai_card, ai_v = _card("Filing — read by Gemini AI")
-            ai_card.setToolTip("Gemini AI Extraction Active (Statutory Priority Applied)")
-            grid, _ = _field_grid([
-                ("Form type", gemini_info.get("form_type")),
-                ("Financial year", gemini_info.get("fy")),
-                ("Tax period", gemini_info.get("tax_period")),
-                ("Filing status", gemini_info.get("status")),
-            ], cols=2)
-            ai_v.addLayout(grid)
-            ai_v.addStretch()
-            cards_row.addWidget(ai_card, stretch=2)
 
         if sgt_i_info:
             sgti_card, sgti_v = _card("SGT-I — advisory, read-only")
@@ -1042,85 +960,7 @@ class PayloadInspectorDialog(QDialog):
         json_layout.addWidget(self.txt_json)
         tabs.addTab(tab_json, "Raw JSON")
 
-        # Tab 3: Timeline (Session Interaction Flow Diagram)
-        from ui.utils.timeline_decoder import group_captures_into_sessions, format_timeline_flow_html, format_timeline_flow_plain
-
-        tab_timeline = QWidget()
-        tl_layout = QVBoxLayout(tab_timeline)
-        tl_layout.setContentsMargins(0, 14, 0, 0)
-
-        self.txt_timeline = QTextBrowser()
-        self.txt_timeline.setReadOnly(True)
-        self.txt_timeline.setOpenLinks(False)
-        self.expanded_repeats = set()
-
-        captures = []
-        if self.db and hasattr(self.db, "get_captures_for_container"):
-            cid = item_data.get("client_id")
-            pan_val = item_data.get("pan")
-            ikey = item_data.get("identity_key")
-            try:
-                captures = self.db.get_captures_for_container(identity_key=ikey, client_id=cid, pan=pan_val)
-            except Exception:
-                captures = []
-
-        # Also merge any dedicated SDC session timelines for this client/PAN
-        if self.db and hasattr(self.db, "get_sdc_session_timelines"):
-            try:
-                sdc_tls = self.db.get_sdc_session_timelines(client_id=item_data.get("client_id"), pan=item_data.get("pan"))
-                for st in sdc_tls:
-                    captures.append({
-                        "session_id": st.get("session_id"),
-                        "client_id": st.get("client_id"),
-                        "pan": st.get("pan"),
-                        "client_name": st.get("client_name"),
-                        "portal": st.get("portal"),
-                        "status": st.get("status"),
-                        "timestamp": st.get("start_time"),
-                        "created_at": st.get("start_time"),
-                        "timeline": st.get("timeline")
-                    })
-            except Exception:
-                pass
-
-        if not captures:
-            captures = [item_data]
-
-        decoded_sessions = group_captures_into_sessions(captures)
-        self.decoded_timeline_sessions = decoded_sessions
-        html_content = format_timeline_flow_html(decoded_sessions, title_tag, expanded_step_uids=self.expanded_repeats)
-        self.txt_timeline.setHtml(html_content)
-
-        def _on_timeline_anchor_clicked(url):
-            raw_url = url.toString()
-            frag = url.fragment()
-            full_target = frag if frag else raw_url
-            
-            if "toggle_repeat" in full_target:
-                uid = full_target.replace("#", "").replace("toggle_repeat:", "").replace("toggle_repeat_", "")
-                if uid in self.expanded_repeats:
-                    self.expanded_repeats.remove(uid)
-                else:
-                    self.expanded_repeats.add(uid)
-                
-                sb = self.txt_timeline.verticalScrollBar()
-                v_scroll = sb.value() if sb else 0
-                
-                new_html = format_timeline_flow_html(
-                    self.decoded_timeline_sessions,
-                    title_tag=title_tag,
-                    expanded_step_uids=self.expanded_repeats
-                )
-                self.txt_timeline.setHtml(new_html)
-                if sb:
-                    sb.setValue(v_scroll)
-
-        self.txt_timeline.anchorClicked.connect(_on_timeline_anchor_clicked)
-
-        tl_layout.addWidget(self.txt_timeline)
-        tabs.addTab(tab_timeline, "Timeline")
-
-        # Tab 4: Notes & Media
+        # Tab 3: Notes & Media
         tab_notes = QWidget()
         notes_layout = QVBoxLayout(tab_notes)
         notes_layout.setContentsMargins(0, 14, 0, 0)
@@ -1219,13 +1059,11 @@ class PayloadInspectorDialog(QDialog):
         btn_copy.setProperty("class", "SecondaryBtn")
 
         def _on_tab_changed(idx):
-            btn_copy.setVisible(idx != 3)
+            btn_copy.setVisible(idx != 2)
             if idx == 0:
                 btn_copy.setText("Copy Container Summary")
             elif idx == 1:
                 btn_copy.setText("Copy JSON")
-            elif idx == 2:
-                btn_copy.setText("Copy Timeline")
 
         tabs.currentChanged.connect(_on_tab_changed)
 
@@ -1255,14 +1093,6 @@ class PayloadInspectorDialog(QDialog):
                 self.txt_json.copy()
                 btn_copy.setText("✓ Copied JSON!")
                 QTimer.singleShot(1500, lambda: btn_copy.setText("Copy JSON"))
-            elif curr_tab == 2:
-                txt = format_timeline_flow_plain(self.decoded_timeline_sessions, title_tag)
-                try:
-                    QGuiApplication.clipboard().setText(txt)
-                except Exception:
-                    QApplication.clipboard().setText(txt)
-                btn_copy.setText("✓ Copied Timeline!")
-                QTimer.singleShot(1500, lambda: btn_copy.setText("Copy Timeline"))
 
         btn_copy.clicked.connect(_handle_bottom_copy)
 
@@ -1597,24 +1427,6 @@ class TrackerDumpWindow(QWidget):
                 background-color: #10231A;
                 font-weight: 600;
             }
-            QToolButton#LttBtn {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-                font-weight: 600;
-                border: none;
-                border-radius: 5px;
-                padding: 7px 26px 7px 12px;
-                font-size: 12px;
-            }
-            QToolButton#LttBtn:hover { background-color: #247C4C; }
-            QToolButton#LttBtn::menu-button {
-                border: none;
-                border-left: 1px solid #247C4C;
-                border-top-right-radius: 5px;
-                border-bottom-right-radius: 5px;
-                width: 22px;
-            }
-            QToolButton#LttBtn::menu-arrow { width: 8px; height: 8px; }
             QFrame#HeaderCard QLabel { background: transparent; }
             QFrame#StatusBar { background: transparent; border-top: 1px solid #333333; }
             QFrame#StatusBar QLabel { background: transparent; }
@@ -1660,26 +1472,10 @@ class TrackerDumpWindow(QWidget):
         self.btn_preferences = QPushButton("Tools  ▾")
         self.btn_preferences.setObjectName("ToolsBtn")
         self.btn_preferences.setIcon(_safe_qta_icon("mdi.cog-outline", "#C9D1D9"))
-        self.btn_preferences.setToolTip("Re-resolve identities, Gemini settings, reports, CSV export, clear captures")
+        self.btn_preferences.setToolTip("Re-resolve identities, reports, CSV export, clear captures")
         self.btn_preferences.setCursor(Qt.PointingHandCursor)
         self.btn_preferences.clicked.connect(self._show_preferences_menu)
         header_layout.addWidget(self.btn_preferences)
-
-        # Main click exports the LTT Excel report (as before); the arrow opens the other LTT actions.
-        self.btn_ltt_report = QToolButton()
-        self.btn_ltt_report.setObjectName("LttBtn")
-        self.btn_ltt_report.setText("Live Tracking Table")
-        self.btn_ltt_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
-        self.btn_ltt_report.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_ltt_report.setPopupMode(QToolButton.MenuButtonPopup)
-        self.btn_ltt_report.setCursor(Qt.PointingHandCursor)
-        self.btn_ltt_report.setToolTip("Generate and open the multi-sheet Live Tracking Table (LTT) Excel report. "
-                                       "Use the arrow for the LTT workspace and live-linked Excel.")
-        self.btn_ltt_report.clicked.connect(self._export_ltt_excel)
-        self.btn_ltt_report.setMenu(self._build_ltt_menu())
-        self.btn_ltt_report.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.btn_ltt_report.customContextMenuRequested.connect(self._show_ltt_menu)
-        header_layout.addWidget(self.btn_ltt_report)
 
         # ---- Summary strip: totals over everything loaded; each tile applies a filter ----
         tiles_row = QHBoxLayout()
@@ -1871,20 +1667,6 @@ class TrackerDumpWindow(QWidget):
         pagination_layout.setContentsMargins(4, 6, 4, 0)
         pagination_layout.setSpacing(10)
 
-        self.btn_gemini_ai = QPushButton("⚡ Gemini: 0 Calls | 1,500 Free Left")
-        self.btn_gemini_ai.setCursor(Qt.PointingHandCursor)
-        self.btn_gemini_ai.setFlat(True)
-        self.btn_gemini_ai.setStyleSheet(
-            "QPushButton { font-weight: 600; font-size: 12px; color: #58A6FF; border: none; background: transparent; padding: 0; }"
-            "QPushButton:hover { color: #79C0FF; text-decoration: underline; }"
-        )
-        self.btn_gemini_ai.setToolTip("Google AI Studio Gemini Flash Engine — Click to configure AI settings, multiple API keys, and model parameters")
-        self.btn_gemini_ai.clicked.connect(self._open_ai_settings_dialog)
-        pagination_layout.addWidget(self.btn_gemini_ai)
-        self.lbl_token_meter = self.btn_gemini_ai
-        if not self._defer_first_load:          # otherwise the first load_data() fills it
-            self._update_token_meter()
-
         pagination_layout.addStretch()
 
         self.lbl_page_info = QLabel("Showing 0 to 0 of 0 entries")
@@ -2035,16 +1817,6 @@ class TrackerDumpWindow(QWidget):
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
-    def _update_token_meter(self):
-        """Updates the Gemini Flash token usage meter badge and tooltip."""
-        if get_token_usage_summary and hasattr(self, "lbl_token_meter"):
-            try:
-                stats = get_token_usage_summary()
-                self.lbl_token_meter.setText(stats["badge_text"])
-                self.lbl_token_meter.setToolTip(stats["tooltip"])
-            except Exception:
-                pass
-
     def _reset_filters(self):
         """Resets all search and filter dropdowns to their default state."""
         self.txt_search.blockSignals(True)
@@ -2166,9 +1938,6 @@ class TrackerDumpWindow(QWidget):
             self._update_summary()
             self._apply_filters()
             self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
-
-            # Automatically update the live CSV feed in the background so Excel Refresh is instant
-            _request_live_feed_export()
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
 
@@ -2605,7 +2374,6 @@ class TrackerDumpWindow(QWidget):
         self._client_services_cache = {}
         self._prepare_columns(is_grouped=True)
         self.table.setRowCount(len(containers))
-        self._update_token_meter()
 
         for row_idx, r in enumerate(containers):
             def _get_item(col, color=None, align=None):
@@ -2636,8 +2404,6 @@ class TrackerDumpWindow(QWidget):
             tooltip_txt = f"{name}\n{subline}"
             if unassigned:
                 tooltip_txt += "\nUse the + button, ⋮ or right-click → Create Client to register this client."
-            if r.get("has_gemini"):
-                tooltip_txt += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
             c_item.setToolTip(tooltip_txt)
 
             portal_str = r.get("portal") or "Income Tax Portal"
@@ -2651,7 +2417,7 @@ class TrackerDumpWindow(QWidget):
             hist_item.setText(_filings_short(period_sum))
             hist_item.setToolTip(period_sum)
 
-            # Submission Status (Hooked to LTT / SDC_Parser)
+            # Submission Status
             status_text, status_theme = _resolve_ltt_submission_status(r)
             _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
             arn_val = r.get("latest_arn", "N/A")
@@ -2679,7 +2445,6 @@ class TrackerDumpWindow(QWidget):
         self._client_services_cache = {}
         self._prepare_columns(is_grouped=False)
         self.table.setRowCount(len(records))
-        self._update_token_meter()
 
         for row_idx, r in enumerate(records):
             def _get_item(col, color=None, align=None):
@@ -2704,8 +2469,6 @@ class TrackerDumpWindow(QWidget):
             c_item.setData(_SUBLINE_ROLE, subline)
             c_item.setData(_UNASSIGNED_ROLE, unassigned)
             raw_tooltip = f"{client_name}\n{subline}"
-            if r.get("has_gemini"):
-                raw_tooltip += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
             c_item.setToolTip(raw_tooltip)
 
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
@@ -2719,7 +2482,7 @@ class TrackerDumpWindow(QWidget):
             period_item.setText(re.sub(r"\bAssessment Year\b", "AY", period_val))
             period_item.setToolTip(period_val)
 
-            # Submission Status (Hooked to LTT / SDC_Parser)
+            # Submission Status
             status_text, status_theme = _resolve_ltt_submission_status(r)
             _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
             arn_val = r.get("arn_number", "N/A")
@@ -2842,78 +2605,6 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
 
-    def _open_fst_classifier_report(self):
-        """Generates and opens the latest FST Classification Excel report from FST_Classifier_1."""
-        import os, sys
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        classifier_dir = os.path.join(app_dir, "FST_Classifier_1")
-        report_path = os.path.join(classifier_dir, "payload_report.xlsx")
-        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
-        
-        target_dump = None
-        for p in dump_paths:
-            if os.path.exists(p) and os.path.getsize(p) > 100:
-                target_dump = p
-                break
-        if not target_dump and dump_paths:
-            self.db.rebuild_raw_payload_dumps_file()
-            target_dump = dump_paths[0]
-
-        try:
-            if classifier_dir not in sys.path:
-                sys.path.insert(0, classifier_dir)
-            import fst_classifier
-
-            os.makedirs(classifier_dir, exist_ok=True)
-            success = fst_classifier.process_data(target_dump, report_path)
-            if success and os.path.exists(report_path):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
-            else:
-                QMessageBox.warning(self, "Classification Notice", "Could not generate classification report from available payloads.")
-        except Exception as e:
-            QMessageBox.critical(self, "Classifier Error", f"Failed to run FST Classifier: {e}")
-
-    def _open_dom_parser_report(self):
-        """Generates and opens the latest DOM Parser 1 audit Excel report."""
-        import os, sys
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        app_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(base_dir))
-        parser_dir = os.path.join(app_dir, "DOM_Parser_1")
-        live_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
-        os.makedirs(live_dir, exist_ok=True)
-        report_path = os.path.join(live_dir, "dom_audit_report.xlsx")
-
-        live_db = os.path.join(live_dir, "rawPayload.db")
-        app_db = os.path.join(app_dir, "rawPayload.db")
-        db_path = live_db if os.path.exists(live_db) else app_db
-        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
-        target_dump = db_path if os.path.exists(db_path) else next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
-
-        try:
-            if parser_dir not in sys.path:
-                sys.path.insert(0, parser_dir)
-            try:
-                import dom_parser
-            except ImportError:
-                from DOM_Parser_1 import dom_parser
-
-            success = dom_parser.process_data(target_dump, report_path)
-            if success and os.path.exists(report_path):
-                try:
-                    os.startfile(report_path)
-                except Exception:
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
-            else:
-                QMessageBox.warning(self, "DOM Parser Notice", "Could not generate DOM audit report from available captures.")
-        except Exception as e:
-            QMessageBox.critical(self, "DOM Parser Error", f"Failed to run DOM Parser 1: {e}")
-
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
         from PySide6.QtWidgets import QMenu
@@ -2948,24 +2639,6 @@ class TrackerDumpWindow(QWidget):
 
         menu.addSeparator()
 
-        act_ai_config = menu.addAction(_safe_qta_icon("mdi.robot", "#58A6FF"), "Gemini AI Configuration")
-        act_ai_config.triggered.connect(self._open_ai_settings_dialog)
-
-        act_ltt_ws = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7"), "Live Tracking Table (LTT) Workspace")
-        act_ltt_ws.triggered.connect(self._open_ltt_workspace)
-
-        act_ltt_live = menu.addAction(_safe_qta_icon("mdi.autorenew", "#58A6FF"), "Open Live-Linked Excel (Power Query)")
-        act_ltt_live.triggered.connect(self._open_ltt_live_excel)
-
-        act_ltt_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Update Live Data Feed (CSV)")
-        act_ltt_feed.triggered.connect(self._update_ltt_data_feed)
-
-        act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
-        act_classifier.triggered.connect(self._open_fst_classifier_report)
-
-        act_dom_parser = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "SDC Audit Report (Excel)")
-        act_dom_parser.triggered.connect(self._open_dom_parser_report)
-
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
 
@@ -2980,152 +2653,4 @@ class TrackerDumpWindow(QWidget):
             menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
         else:
             menu.exec_(self.cursor().pos())
-
-    def _open_ai_settings_dialog(self):
-        """Opens the full Gemini AI Configuration dialog."""
-        try:
-            from ui.dialogs.ai_settings_dialog import AISettingsDialog
-            dlg = AISettingsDialog(self)
-            dlg.settings_changed.connect(self._update_token_meter)
-            dlg.exec()
-            self._update_token_meter()
-        except Exception as e:
-            QMessageBox.critical(self, "AI Settings Error", f"Could not launch AI Settings Dialog: {e}")
-
-
-    def _open_ltt_workspace(self):
-        """Opens the full-featured interactive Live Tracking Table (LTT) workspace."""
-        try:
-            from ui.windows.ltt_window import LttWorkspaceWindow
-            win = LttWorkspaceWindow(self)
-            win.exec_()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open LTT Workspace: {e}")
-
-    def _open_ltt_live_excel(self):
-        """Opens the permanent live-linked Excel workbook powered by Power Query / QueryTable."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-
-        live_xlsx = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_Live.xlsx")
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
-            target = xlsx_p if (xlsx_p and os.path.exists(xlsx_p)) else live_xlsx
-            QApplication.restoreOverrideCursor()
-
-            if os.path.exists(target):
-                try:
-                    os.startfile(target)
-                except Exception as e:
-                    QMessageBox.warning(self, "Notice", f"Could not launch Excel automatically: {e}")
-            else:
-                QMessageBox.warning(self, "Warning", f"Live workbook was not found at:\n{target}")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to initialize live Excel feed: {e}")
-
-    def _update_ltt_data_feed(self):
-        """Refreshes the backend CSV data feed without modifying or closing user's open Excel workbook."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
-            QApplication.restoreOverrideCursor()
-            if csv_p and os.path.exists(csv_p):
-                QMessageBox.information(
-                    self, "Data Feed Updated",
-                    f"Live CSV Data Feed updated successfully!\n\n"
-                    f"Saved to:\n{csv_p}\n\n"
-                    f"In Microsoft Excel, simply click:\n"
-                    f"• [Ctrl + Alt + F5]  or  Data -> 'Refresh All'\n"
-                    f"• Or right-click inside the table and click 'Refresh'.\n\n"
-                    f"All your custom columns, notes, and formulas will be preserved!"
-                )
-            else:
-                QMessageBox.warning(self, "Warning", "Data feed could not be generated.")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to update data feed: {e}")
-
-    def _generate_ltt(self):
-        """Backward-compatible alias for generating the LTT Excel report."""
-        self._export_ltt_excel()
-
-    def _show_ltt_menu(self, pos):
-        """Right-click on the LTT button: the same menu as its arrow."""
-        menu = self._build_ltt_menu()
-        btn = getattr(self, "btn_ltt_report", None)
-        if btn:
-            menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
-        else:
-            menu.exec_(self.cursor().pos())
-
-    def _build_ltt_menu(self) -> QMenu:
-        """LTT quick actions: workspace, live-linked Excel, feed update, Excel export."""
-        menu = QMenu(self)
-        act_open = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7") or "", "Open Interactive LTT Workspace")
-        act_open.triggered.connect(self._open_ltt_workspace)
-
-        act_live = menu.addAction(_safe_qta_icon("mdi.autorenew", "#58A6FF") or "", "Open Live-Linked Excel (Auto-Refresh)")
-        act_live.triggered.connect(self._open_ltt_live_excel)
-
-        act_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7") or "", "Update Live Data Feed (CSV)")
-        act_feed.triggered.connect(self._update_ltt_data_feed)
-
-        menu.addSeparator()
-
-        act_export = menu.addAction(_safe_qta_icon("mdi.file-excel", "#FFFFFF") or "", "Export Multi-Sheet Excel Report")
-        act_export.triggered.connect(self._export_ltt_excel)
-        return menu
-
-    def _export_ltt_excel(self):
-        """Generates and opens the enhanced multi-sheet LTT Excel file."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-            
-        ltt_output = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_LTT.xlsx")
-        
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            generated_path = sdc_parser.generate_ltt_excel()
-            target_file = generated_path if (generated_path and os.path.exists(generated_path)) else ltt_output
-            QApplication.restoreOverrideCursor()
-            if os.path.exists(target_file):
-                QMessageBox.information(self, "Success", f"Multi-Sheet Live Tracking Table (LTT) generated successfully!\n\nSaved to:\n{target_file}")
-                try:
-                    os.startfile(target_file)
-                except Exception: pass
-            else:
-                QMessageBox.warning(self, "Warning", "Parser ran, but the LTT Excel file was not found.")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to generate LTT Excel: {e}")
 

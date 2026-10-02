@@ -1033,13 +1033,6 @@ class SeraApp:
         try:
             results = []
             for dataset_msg in dataset_messages:
-                # Enrich payload with Gemini AI extraction on raw text before Tracker Dump insertion
-                try:
-                    from core.vsdc.vsdc_gemini_parser import enrich_payload_with_gemini
-                    enrich_payload_with_gemini(dataset_msg)
-                except Exception as gem_e:
-                    print(f"[main] Gemini enrichment notice: {gem_e}")
-
                 dataset_raw = dataset_msg.get("raw_payload") if isinstance(dataset_msg.get("raw_payload"), dict) else {}
                 dataset_pan = str(dataset_msg.get("pan") or pan or "").strip()
                 dataset_arn = dataset_msg.get("arn", "N/A")
@@ -2137,7 +2130,7 @@ class SeraApp:
 
             # Re-sync allied reports & workbooks in background thread
             threading.Thread(
-                target=lambda: (self.db.sync_fst_reports(), self.db.sync_dom_parser(), self.db.re_resolve_all_tracker_dumps()),
+                target=lambda: (self.db.re_resolve_all_tracker_dumps(),),
                 name="sync-live-allied-reports",
                 daemon=True
             ).start()

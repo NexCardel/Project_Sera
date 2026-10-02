@@ -45,17 +45,8 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         "email": "",
         "dob": "",
         "user_id": "",
-        "address": "",
-        "gemini_extracted": {}
+        "address": ""
     }
-
-    # Gemini AI structured extraction dictionary
-    gemini_data: Dict[str, Any] = {}
-    if isinstance(payload, dict):
-        if isinstance(payload.get("gemini_extracted"), dict) and payload.get("gemini_extracted"):
-            gemini_data = payload["gemini_extracted"]
-        elif isinstance(payload.get("raw_payload"), dict) and isinstance(payload["raw_payload"].get("gemini_extracted"), dict) and payload["raw_payload"].get("gemini_extracted"):
-            gemini_data = payload["raw_payload"]["gemini_extracted"]
 
     def _clean_str(v: Any) -> str:
         if v is None:
@@ -67,12 +58,9 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
     flat_kv: List[tuple[str, str]] = []
 
     def _collect(item, depth=6):
-        nonlocal gemini_data
         if depth <= 0 or not item:
             return
         if isinstance(item, dict):
-            if isinstance(item.get("gemini_extracted"), dict) and item.get("gemini_extracted") and not gemini_data:
-                gemini_data = item["gemini_extracted"]
             for k, v in item.items():
                 if k == "sgt_i":    # SGT-I's advisory notes are never profile data (blueprint 14.2 rule 4)
                     continue
@@ -161,16 +149,6 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
 
     # 6. Company / Firm Name Extraction
     # Specifically targets Trade Names and Business Names from ITR Schedule BP (natOfBus44AD, sec44AD, etc.) and GST
-    # PRIORITY 1: Gemini AI structured trade name (or legal name for corporate entities)
-    if gemini_data.get("trade_name"):
-        g_trade = _sanitize_name(str(gemini_data["trade_name"]))
-        if len(g_trade) >= 3:
-            extracted["company_name"] = g_trade
-    elif not is_individual and gemini_data.get("legal_name"):
-        g_legal = _sanitize_name(str(gemini_data["legal_name"]))
-        if len(g_legal) >= 3:
-            extracted["company_name"] = g_legal
-
     if not extracted["company_name"]:
         if is_individual:
             company_keys = (
@@ -206,14 +184,6 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
     middle_name = ""
     last_name = ""
     header_name = ""
-
-    # (0) ABSOLUTE HIGHEST PRIORITY: Gemini AI Structured Extraction (gemini_extracted)
-    #     Gemini parses full statutory legal_name directly from document text/screenshot,
-    #     immune to OCR truncations and portal header button noise.
-    if gemini_data.get("legal_name"):
-        g_legal = _sanitize_name(str(gemini_data["legal_name"]))
-        if len(g_legal) >= 3 and not any(part in g_legal.lower() for part in ("first name", "last name", "general information")):
-            extracted["proprietor_name"] = g_legal
 
     # (a) HIGHEST FALLBACK PRIORITY: client_name and taxpayer_name in the payload contain full legal name
     if not extracted["proprietor_name"]:
@@ -256,8 +226,8 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
         parts = [p for p in (first_name, middle_name, last_name) if p]
         full = " ".join(parts).strip()
         if full and len(full) >= 3:
-            # Override proprietor_name only if assembled name is longer (more complete) and not already set by Gemini
-            if not extracted["proprietor_name"] or (not gemini_data.get("legal_name") and len(full) > len(extracted["proprietor_name"])):
+            # Override proprietor_name only if assembled name is longer (more complete)
+            if not extracted["proprietor_name"] or len(full) > len(extracted["proprietor_name"]):
                 extracted["proprietor_name"] = full
 
     # Personal Info & Profile Page Name fallback:
@@ -287,7 +257,6 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
             extracted["user_id"] = v
             break
 
-    extracted["gemini_extracted"] = gemini_data
     return extracted
 
 

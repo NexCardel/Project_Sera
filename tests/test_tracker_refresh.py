@@ -31,20 +31,16 @@ class TestTrackerRefresh(unittest.TestCase):
         key = security.derive_key_hex("testpass123", security.load_salt(salt))
         self.db = SeraDatabase(os.path.join(self.tmp.name, "m.db"), key,
                                raw_db_path=os.path.join(self.tmp.name, "rawPayload.db"))
-        self.db.rebuild_raw_payload_dumps_file = lambda: 0
         for i, pan in enumerate(("ABCPD1234E", "XYZAB9876C", "PQRST4321K")):
             self.db.insert_tracker_dump(portal="Income Tax (ITR-4)", period_label=f"AY 202{i}-2{i + 1}",
                                         arn_number=f"12345678915092{i}", capture_method="VSDC-X_itr_submitted",
                                         status="Submitted", pan=pan, filing_type="ITR-4",
                                         raw_payload_json=json.dumps({"pan": pan}))
-        self.feed = patch.object(tdw, "_request_live_feed_export", lambda: None)
-        self.feed.start()
         self.win = tdw.TrackerDumpWindow(self.db)
         self.win.cmb_view_mode.setCurrentIndex(1)                     # raw rows
         APP.processEvents()
 
     def tearDown(self):
-        self.feed.stop()
         self.win.deleteLater()
         APP.processEvents()
         self.tmp.cleanup()
@@ -109,39 +105,3 @@ class TestTrackerRefresh(unittest.TestCase):
         # Immediate next call within 60s without any new writes reuses cache
         self.win.load_data_if_stale()
         self.assertEqual(load_count[0], 1)
-
-
-def test_the_feed_imports_without_any_earlier_export_click():
-    """The feed thread used `import sdc_parser`, which only worked after an export button had put
-    SDC_Parser on sys.path - until then every automatic refresh failed silently."""
-    import inspect
-    src = inspect.getsource(tdw._request_live_feed_export)
-    assert "from SDC_Parser import sdc_parser" in src
-    from SDC_Parser import sdc_parser
-    assert callable(sdc_parser.export_ltt_live_feed)
-
-
-def test_only_one_feed_export_runs_at_a_time():
-    running, peak, calls = [0], [0], [0]
-    lock = threading.Lock()
-
-    def slow_export(*a, **k):
-        with lock:
-            running[0] += 1
-            calls[0] += 1
-            peak[0] = max(peak[0], running[0])
-        time.sleep(0.15)
-        with lock:
-            running[0] -= 1
-        return None, None
-
-    with patch("SDC_Parser.sdc_parser.export_ltt_live_feed", slow_export):
-        for _ in range(20):
-            tdw._request_live_feed_export()
-            time.sleep(0.01)
-        deadline = time.time() + 5
-        while tdw._feed_state["running"] and time.time() < deadline:
-            time.sleep(0.05)
-    assert peak[0] == 1                       # never two at once
-    assert 2 <= calls[0] <= 4                 # 20 requests coalesced; the latest data still written
-    assert not tdw._feed_state["running"]

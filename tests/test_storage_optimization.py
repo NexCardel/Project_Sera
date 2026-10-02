@@ -3,7 +3,6 @@ import tempfile
 import shutil
 import time
 import datetime
-import gzip
 import unittest
 from pathlib import Path
 
@@ -31,50 +30,6 @@ class TestStorageOptimization(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_daily_dump_cleanup_and_compression(self):
-        """Dumps older than max_raw_days are compressed to .txt.gz; dumps older than max_archive_days are purged."""
-        now = datetime.datetime.now()
-        
-        # 1. Fresh dump (2 days old) -> should remain .txt
-        fresh_dump = os.path.join(self.temp_dir, "seraRawPayloadDump_fresh.txt")
-        with open(fresh_dump, "w", encoding="utf-8") as f:
-            f.write("Recent filing payload dump content " * 50)
-        t_fresh = (now - datetime.timedelta(days=2)).timestamp()
-        os.utime(fresh_dump, (t_fresh, t_fresh))
-
-        # 2. Medium dump (15 days old) -> should be compressed to .txt.gz
-        medium_dump = os.path.join(self.temp_dir, "seraRawPayloadDump_medium.txt")
-        with open(medium_dump, "w", encoding="utf-8") as f:
-            f.write("Medium age filing payload dump content " * 100)
-        t_med = (now - datetime.timedelta(days=15)).timestamp()
-        os.utime(medium_dump, (t_med, t_med))
-
-        # 3. Ancient dump (75 days old) -> should be purged
-        ancient_dump = os.path.join(self.temp_dir, "seraRawPayloadDump_ancient.txt.gz")
-        with gzip.open(ancient_dump, "wb") as f:
-            f.write(b"Ancient archive content")
-        t_ancient = (now - datetime.timedelta(days=75)).timestamp()
-        os.utime(ancient_dump, (t_ancient, t_ancient))
-
-        # Execute retention policy
-        self.db.cleanup_daily_dumps(max_raw_days=7, max_archive_days=60)
-
-        # Assert fresh dump is still .txt
-        self.assertTrue(os.path.exists(fresh_dump))
-        self.assertFalse(os.path.exists(fresh_dump + ".gz"))
-
-        # Assert medium dump was compressed to .gz and raw .txt deleted
-        self.assertFalse(os.path.exists(medium_dump))
-        self.assertTrue(os.path.exists(medium_dump + ".gz"))
-
-        # Verify gzipped content integrity
-        with gzip.open(medium_dump + ".gz", "rt", encoding="utf-8") as f:
-            content = f.read()
-            self.assertIn("Medium age filing payload dump content", content)
-
-        # Assert ancient dump was purged
-        self.assertFalse(os.path.exists(ancient_dump))
 
     def test_optimize_storage_checkpoints_wal(self):
         """optimize_storage flushes SQLite WAL pages into the database and truncates WAL."""

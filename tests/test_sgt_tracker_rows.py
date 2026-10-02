@@ -167,7 +167,6 @@ class TestDatabaseIsolation(unittest.TestCase):
         self.db = SeraDatabase(os.path.join(self.tmp.name, "m.db"), key,
                                raw_db_path=os.path.join(self.tmp.name, "rawPayload.db"))
         # A replacement rebuilds report files in project folders - not wanted from a test.
-        self.db.rebuild_raw_payload_dumps_file = lambda: 0
 
     def tearDown(self):
         self.tmp.cleanup()

@@ -18,8 +18,6 @@ import shutil
 import time
 import threading
 import re
-import gzip
-import glob
 from contextlib import contextmanager
 
 import security
@@ -105,7 +103,7 @@ class SeraDatabase:
         return sync_admin.get_token_letter(self.app_dir, conn=conn, device_id=self._device_id)
 
     def run_startup_maintenance(self):
-        """Runs background resequencing and FST report generation."""
+        """Runs background resequencing and storage maintenance."""
         # Data-rewriting maintenance runs ONLY on the admin PC (blueprint §5 P3-6)
         if self.is_admin_pc():
             try:
@@ -130,10 +128,6 @@ class SeraDatabase:
                 print(f"[-] Startup placeholder client name upgrade skipped: {e}")
 
         # Non-data rewriting tasks stay on all PCs
-        try:
-            self.sync_fst_reports()
-        except Exception as e:
-            print(f"[-] Startup FST report sync skipped: {e}")
         try:
             self.optimize_storage()
         except Exception as e:
@@ -1306,7 +1300,6 @@ class SeraDatabase:
                 return False
 
             import sync_schema
-            import sync_tables
             self._ensure_column(conn, "mcl_columns", "gid", "TEXT")
             self._ensure_column(conn, "services", "gid", "TEXT")
 
@@ -1669,56 +1662,6 @@ class SeraDatabase:
         except Exception as e:
             pass
 
-    def export_to_ini(self, ini_path: str):
-        """Exports current database settings, MCL columns, and services to a .ini file."""
-        import configparser
-        try:
-            config = configparser.ConfigParser()
-            config["AppSettings"] = self.get_all_settings()
-
-            mcl = self.get_mcl_columns()
-            mcl_sec = {}
-            id_to_lbl = {}
-            for idx, c in enumerate(mcl, 1):
-                id_to_lbl[c["id"]] = c["label"]
-                line = (
-                    f"{c['label']} | field_type={c.get('field_type','text')} | "
-                    f"is_identity={1 if c.get('is_identity') else 0} | "
-                    f"is_internal_pk={1 if c.get('is_internal_pk') else 0} | sort_order={c.get('sort_order',0)} | "
-                    f"show_in_search={1 if c.get('show_in_search') else 0} | "
-                    f"allow_quick_copy={1 if c.get('allow_quick_copy') else 0} | "
-                    f"admin_show_in_search={1 if c.get('admin_show_in_search') else 0}"
-                )
-                mcl_sec[f"col_{idx}"] = line
-            config["MCL_Columns"] = mcl_sec
-
-            services = self.get_services()
-            svc_sec = {}
-            for idx, s in enumerate(services, 1):
-                u_lbl = id_to_lbl.get(s.get("userid_column_id"), "")
-                p_lbl = id_to_lbl.get(s.get("password_column_id"), "")
-                line = (
-                    f"{s['name']} | login_link={s.get('login_page_link','')} | "
-                    f"user_col={u_lbl} | pass_col={p_lbl} | "
-                    f"user_sel={s.get('username_selector','')} | pass_sel={s.get('password_selector','')} | "
-                    f"mode={s.get('automation_mode','extension')} | flow={s.get('extension_flow','double')} | "
-                    f"sort_order={s.get('sort_order',1)}"
-                )
-                svc_sec[f"svc_{idx}"] = line
-            config["Services"] = svc_sec
-
-            with open(ini_path, "w", encoding="utf-8") as f:
-                config.write(f)
-        except Exception:
-            pass
-
-    # ---------------- Shared staff roster ----------------
-
-    def list_staff_users(self) -> list[str]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT name FROM staff_users ORDER BY id").fetchall()
-            return [row[0] for row in rows]
-
     def get_staff_matrix(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute("SELECT id, name, alias FROM staff_users ORDER BY id").fetchall()
@@ -1809,14 +1752,6 @@ class SeraDatabase:
             if col.get("field_type") == "id":
                 return col
         return None
-
-    def get_internal_pk_columns(self) -> list[dict]:
-        """Returns all MCL columns designated as mandatory Internal Primary Key Anchors."""
-        mcl = self.get_mcl_columns()
-        anchors = [c for c in mcl if c.get("is_internal_pk")]
-        if not anchors:
-            anchors = [c for c in mcl if any(k in c.get("label", "").lower() for k in ("pan", "tan", "gstin")) and "pass" not in c.get("label", "").lower()]
-        return anchors
 
     def get_identity_column(self) -> Optional[dict]:
         ignored_labels = {"no", "no.", "sl no", "sl. no.", "s.no.", "sno", "id", "#"}
@@ -3554,13 +3489,8 @@ class SeraDatabase:
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
             cid = client_id or existing[1]
-            has_gemini_new = bool(new_profile.get("gemini_extracted") and (new_profile["gemini_extracted"].get("legal_name") or new_profile["gemini_extracted"].get("trade_name")))
-            if has_gemini_new:
-                comp = new_profile.get("company_name") or existing[2] or ""
-                prop = new_profile.get("proprietor_name") or existing[3] or ""
-            else:
-                comp = existing[2] or new_profile.get("company_name") or ""
-                prop = existing[3] or new_profile.get("proprietor_name") or ""
+            comp = existing[2] or new_profile.get("company_name") or ""
+            prop = existing[3] or new_profile.get("proprietor_name") or ""
             pan_val = new_profile.get("pan") or existing[4] or ""
             gst_val = new_profile.get("gstin") or existing[5] or ""
             tan_val = new_profile.get("tan") or existing[6] or ""
@@ -3817,26 +3747,6 @@ class SeraDatabase:
             else:
                 period_summary = f"{len(filing_hist) or r[14] or 1} Capture(s)"
 
-            # Check for Gemini AI extraction in container history to ensure highest priority
-            container_gemini_name = ""
-            for fh in reversed(filing_hist):
-                fh_payload = fh.get("raw_payload_json") or ""
-                if fh_payload and "gemini_extracted" in fh_payload:
-                    try:
-                        p_data = json.loads(fh_payload) if isinstance(fh_payload, str) else fh_payload
-                        g_data = p_data.get("gemini_extracted") or (p_data.get("raw_payload", {}).get("gemini_extracted") if isinstance(p_data.get("raw_payload"), dict) else None)
-                        if isinstance(g_data, dict):
-                            g_cand = (g_data.get("legal_name") or g_data.get("trade_name") or "").strip()
-                            if g_cand and not SKELETON_NAME_REGEX.search(g_cand):
-                                container_gemini_name = g_cand
-                                if g_data.get("legal_name"):
-                                    prop_name = g_data["legal_name"].strip()
-                                if g_data.get("trade_name"):
-                                    comp_name = g_data["trade_name"].strip()
-                                break
-                    except Exception:
-                        pass
-
             is_unassigned = not bool(cid)
             if cid and cid in client_map:
                 c_info = client_map[cid]
@@ -3846,11 +3756,11 @@ class SeraDatabase:
                 display_name = f"{c_info['name']} ({c_pan or identity_key})"
                 display_pan = c_pan
                 id_token = c_info.get("client_id_token", f"CLI-{cid:05d}")
-            elif container_gemini_name or comp_name or prop_name:
+            elif comp_name or prop_name:
                 cand_pan = pan_val
                 if (not cand_pan or len(cand_pan) != 10) and gst_val and len(gst_val) >= 12:
                     cand_pan = gst_val[2:12]
-                chosen_nm = container_gemini_name or prop_name or comp_name
+                chosen_nm = prop_name or comp_name
                 display_name = f"{chosen_nm} ({cand_pan or gst_val or identity_key})"
                 display_pan = cand_pan or gst_val or identity_key
                 id_token = "Unregistered"
@@ -3867,7 +3777,6 @@ class SeraDatabase:
                 "client_id": cid,
                 "client_id_token": id_token,
                 "is_unassigned": is_unassigned,
-                "has_gemini": bool(container_gemini_name),
                 "display_name": display_name,
                 "company_name": comp_name,
                 "proprietor_name": prop_name,
@@ -3896,33 +3805,6 @@ class SeraDatabase:
         containers.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
         return containers
 
-    def get_captures_for_container(self, identity_key: str = None, client_id: int = None, pan: str = None) -> list[dict]:
-        """Fetches all raw tracker_dump records associated with a specific client, identity key, or PAN."""
-        with self._connect_raw() as r_conn:
-            sql = "SELECT id, client_id, unassigned_identity, service_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at FROM tracker_dump WHERE "
-            conditions = []
-            params = []
-            if client_id:
-                conditions.append("client_id = ?")
-                params.append(client_id)
-            if pan:
-                clean_p = pan.strip().upper()
-                conditions.append("(unassigned_identity = ? OR raw_payload_json LIKE ? OR arn_number LIKE ?)")
-                params.extend([clean_p, f'%"{clean_p}"%', f'%{clean_p}%'])
-            if identity_key and not client_id and not pan:
-                clean_k = identity_key.strip().upper()
-                conditions.append("(unassigned_identity = ? OR raw_payload_json LIKE ? OR arn_number LIKE ?)")
-                params.extend([clean_k, f'%"{clean_k}"%', f'%{clean_k}%'])
-
-            if not conditions:
-                sql += "1=1 ORDER BY created_at ASC LIMIT 100"
-            else:
-                sql += " OR ".join(conditions) + " ORDER BY created_at ASC"
-
-            cur = r_conn.execute(sql, params)
-            desc = [c[0] for c in cur.description]
-            return [dict(zip(desc, row)) for row in cur.fetchall()]
-
     def delete_srpf_container(self, identity_key: str) -> bool:
         """Deletes a container and its associated captures from rawPayload.db."""
         if not identity_key:
@@ -3936,7 +3818,6 @@ class SeraDatabase:
                    OR UPPER(TRIM(arn_number)) LIKE ?
                    OR UPPER(raw_payload_json) LIKE ?
             """, (clean, f"%{clean}%", f"%{clean}%"))
-        self.rebuild_raw_payload_dumps_file()
         return True
 
     def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None) -> Optional[str]:
@@ -3948,7 +3829,7 @@ class SeraDatabase:
         
         try:
             import re
-            from datetime import datetime, timezone
+            from datetime import datetime
             t0 = datetime.fromisoformat(timestamp_str)
             with self._connect_raw() as r_conn:
                 t_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
@@ -4369,47 +4250,6 @@ class SeraDatabase:
                 }
             )
 
-        if is_replaced:
-            # Synchronize text dump files after in-place replacement
-            self.rebuild_raw_payload_dumps_file()
-        else:
-            # Write/append organized raw payload entry to the date-partitioned daily dump.
-            self._append_raw_payload_dump_file(
-                dump_id=dump_id,
-                client_id=valid_id,
-                portal=portal,
-                period_label=period_label,
-                arn_number=arn_number,
-                capture_method=capture_method,
-                status=status,
-                raw_payload_json=raw_payload_json,
-                captured_by=captured_by,
-                created_at=now
-            )
-
-        # Auto-upsert SDC session timeline if present in payload
-        if raw_payload_json:
-            try:
-                p_dict = json.loads(raw_payload_json) if isinstance(raw_payload_json, str) else raw_payload_json
-                tl = p_dict.get("session_timeline") or (p_dict.get("raw_payload", {}).get("session_timeline") if isinstance(p_dict.get("raw_payload"), dict) else None)
-                sess_id = p_dict.get("session_id") or (p_dict.get("raw_payload", {}).get("session_id") if isinstance(p_dict.get("raw_payload"), dict) else None)
-                if sess_id and tl:
-                    self.upsert_sdc_session_timeline({
-                        "session_id": sess_id,
-                        "client_id": valid_id,
-                        "pan": pan or candidates[0] if candidates else "",
-                        "client_name": p_dict.get("client_name") or p_dict.get("name") or "",
-                        "portal": portal or "Income Tax",
-                        "status": p_dict.get("status") or "active",
-                        "start_time": p_dict.get("timestamp") or now,
-                        "timeline": tl
-                    })
-            except Exception as e:
-                print(f"[database] auto-upsert SDC timeline notice: {e}")
-
-        # Keep derived FST and SDC workbooks current after every new capture.
-        self.sync_fst_reports()
-        self.sync_dom_parser()
         self._bump_sync_revision_if_configured()
 
         return {
@@ -4689,7 +4529,6 @@ class SeraDatabase:
                 (session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, now)
             )
 
-        self.sync_dom_parser()
         self._bump_sync_revision_if_configured()
 
         return {
@@ -4700,75 +4539,6 @@ class SeraDatabase:
             "status": status,
             "total_steps": total_steps
         }
-
-    def get_sdc_session_timelines(self, client_id: int = None, pan: str = None, limit: int = 50) -> list:
-        """Retrieves chronological SDC session timelines from rawPayload.db."""
-        with self._connect_raw() as r_conn:
-            query = "SELECT session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, last_updated FROM sdc_session_timelines "
-            params = []
-            conditions = []
-            if client_id:
-                conditions.append("client_id = ?")
-                params.append(client_id)
-            if pan:
-                conditions.append("UPPER(pan) = ?")
-                params.append(pan.strip().upper())
-            if conditions:
-                query += "WHERE " + " AND ".join(conditions) + " "
-            query += "ORDER BY last_updated DESC LIMIT ?"
-            params.append(limit)
-
-            cur = r_conn.execute(query, params)
-            rows = []
-            for r in cur.fetchall():
-                try:
-                    tl_parsed = json.loads(r[9]) if r[9] else []
-                except Exception:
-                    tl_parsed = []
-                rows.append({
-                    "session_id": r[0],
-                    "client_id": r[1],
-                    "pan": r[2],
-                    "client_name": r[3],
-                    "portal": r[4],
-                    "status": r[5],
-                    "start_time": r[6],
-                    "end_time": r[7],
-                    "total_steps": r[8],
-                    "timeline": tl_parsed,
-                    "last_updated": r[10]
-                })
-            return rows
-
-    def get_sdc_timeline_by_session_id(self, session_id: str) -> dict:
-        """Retrieves a specific SDC session timeline by session_id."""
-        if not session_id:
-            return None
-        with self._connect_raw() as r_conn:
-            cur = r_conn.execute(
-                "SELECT session_id, client_id, pan, client_name, portal, status, start_time, end_time, total_steps, timeline_json, last_updated FROM sdc_session_timelines WHERE session_id = ?",
-                (session_id,)
-            )
-            r = cur.fetchone()
-            if not r:
-                return None
-            try:
-                tl_parsed = json.loads(r[9]) if r[9] else []
-            except Exception:
-                tl_parsed = []
-            return {
-                "session_id": r[0],
-                "client_id": r[1],
-                "pan": r[2],
-                "client_name": r[3],
-                "portal": r[4],
-                "status": r[5],
-                "start_time": r[6],
-                "end_time": r[7],
-                "total_steps": r[8],
-                "timeline": tl_parsed,
-                "last_updated": r[10]
-            }
 
     def link_unassigned_tracker_dumps(self, client_id: int, identity_value: str) -> int:
         """Retroactively links all unassigned tracker_dump rows matching identity_value (PAN/TAN/GSTIN) to client_id in rawPayload.db."""
@@ -4802,7 +4572,7 @@ class SeraDatabase:
         if not dumps:
             return 0
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # 1. Proximity matching for wizard submissions with empty candidates
         resolved_dumps = []
@@ -4912,10 +4682,8 @@ class SeraDatabase:
                           f"identity_key={identity_key!r} could not be carried over (no "
                           f"container has that key after the rebuild); the note was lost.")
 
-        self.sync_fst_reports()
         return updated_count
 
-    @staticmethod
     def _extract_dump_date_key(ts_str: Optional[str]) -> str:
         """Returns DD_MM_YY formatted local date string (e.g. 26_08_26) for the given ISO timestamp."""
         if not ts_str:
@@ -4930,40 +4698,6 @@ class SeraDatabase:
         except Exception:
             return datetime.datetime.now().strftime("%d_%m_%y")
 
-    def _get_daily_dump_file_paths(self, date_key: str) -> list[str]:
-        """Returns destination file paths for Raw_Payload_Dump/seraRawPayloadDump_dd_mm_yy.txt in safe app data dir."""
-        filename = f"seraRawPayloadDump_{date_key}.txt"
-        paths = []
-        try:
-            db_dir = os.path.dirname(os.path.abspath(self.db_path))
-            paths.append(os.path.join(db_dir, "Raw_Payload_Dump", filename))
-        except Exception:
-            pass
-
-        unique_paths = []
-        for p in paths:
-            norm = os.path.normpath(p)
-            if norm not in unique_paths:
-                unique_paths.append(norm)
-        return unique_paths
-
-    def _get_dump_folder_paths(self) -> list[str]:
-        """Returns destination folder paths for Raw_Payload_Dump directory in safe app data dir."""
-        paths = []
-        try:
-            db_dir = os.path.dirname(os.path.abspath(self.db_path))
-            paths.append(os.path.join(db_dir, "Raw_Payload_Dump"))
-        except Exception:
-            pass
-
-        unique_paths = []
-        for p in paths:
-            norm = os.path.normpath(p)
-            if norm not in unique_paths:
-                unique_paths.append(norm)
-        return unique_paths
-
-    @staticmethod
     def _format_dump_entry_block(dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name="") -> str:
         """Formats a standardized, high-contrast dump text block for an intercepted payload."""
         formatted_json = raw_payload_json or "{}"
@@ -5007,74 +4741,6 @@ class SeraDatabase:
             "\n"
         ]
         return "\n".join(entry_lines)
-
-    def _append_raw_payload_dump_file(self, dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name=""):
-        """Appends a raw payload entry to its date-partitioned daily dump (feature removed)."""
-        pass
-
-    def sync_raw_payload_dumps_file(self):
-        """Ensures the current daily dump is rebuilt when it is missing (feature removed)."""
-        pass
-
-    def rebuild_raw_payload_dumps_file(self) -> int:
-        """Rebuilds only the date-partitioned daily raw-payload dumps (feature removed)."""
-        # Refresh only the reports that remain part of the application.
-        self.sync_fst_reports()
-        return 0
-
-    def sync_fst_reports(self):
-        """Refresh the remaining classifier and DOM reports best-effort."""
-        self.sync_fst_classifier()
-        self.sync_dom_parser()
-
-    def _get_master_pans_for_reports(self) -> set[str]:
-        """Return active Master DB PANs for report-side identity validation."""
-        pan_re = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$", re.I)
-        pan_column_ids = {
-            c["id"] for c in self.get_mcl_columns()
-            if "pan" in str(c.get("label", "")).lower()
-        }
-        master_pans = set()
-        for client in self.search_clients("", include_archived=False):
-            for column_id in pan_column_ids:
-                value = str(client.get("values", {}).get(column_id, "")).strip().upper()
-                if pan_re.fullmatch(value):
-                    master_pans.add(value)
-        return master_pans
-
-    def sync_fst_classifier(self):
-        """Silently syncs FST_Classifier_1/payload_report.xlsx whenever dumps are updated."""
-        try:
-            workspace_dir = os.path.dirname(os.path.abspath(__file__))
-            classifier_dir = os.path.join(workspace_dir, "FST_Classifier_1")
-            report_path = os.path.join(classifier_dir, "payload_report.xlsx")
-            daily_paths = self._get_daily_dump_file_paths(self._extract_dump_date_key(None))
-            dump_file = next((p for p in daily_paths if os.path.exists(p)), "")
-            if os.path.exists(dump_file) and os.path.exists(classifier_dir):
-                import sys
-                if classifier_dir not in sys.path:
-                    sys.path.insert(0, classifier_dir)
-                import fst_classifier
-                fst_classifier.process_data(dump_file, report_path)
-        except Exception:
-            pass
-
-    def sync_dom_parser(self):
-        """Silently syncs DOM_Parser_1/dom_audit_report.xlsx whenever dumps or databases are updated."""
-        try:
-            workspace_dir = os.path.dirname(os.path.abspath(__file__))
-            parser_dir = os.path.join(workspace_dir, "DOM_Parser_1")
-            report_path = os.path.join(parser_dir, "dom_audit_report.xlsx")
-            db_file = os.path.join(workspace_dir, "rawPayload.db")
-            if os.path.exists(parser_dir):
-                import sys
-                if parser_dir not in sys.path:
-                    sys.path.insert(0, parser_dir)
-                import dom_parser
-                dom_parser.process_data(db_file, report_path)
-        except Exception:
-            pass
-
 
     def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
         """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db."""
@@ -5141,36 +4807,25 @@ class SeraDatabase:
             unassigned_id = r[2]
             raw_json_str = r[9] or ""
             p_obj = None
-            gemini_name = ""
             if raw_json_str and raw_json_str != "{}":
                 try:
                     p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
-                    if isinstance(p_obj, dict):
-                        g_ext = p_obj.get("gemini_extracted") or (p_obj.get("raw_payload", {}).get("gemini_extracted") if isinstance(p_obj.get("raw_payload"), dict) else None)
-                        if isinstance(g_ext, dict):
-                            gemini_name = (g_ext.get("legal_name") or g_ext.get("trade_name") or "").strip()
                 except Exception:
                     pass
-
-            has_gemini_record = bool(gemini_name and not SKELETON_NAME_REGEX.search(gemini_name))
 
             if cid and cid in client_map:
                 info = client_map[cid]
             elif unassigned_id:
-                # 0. Check raw_payload_json for Gemini AI extraction FIRST (Highest Priority)
-                if has_gemini_record:
-                    c_name = gemini_name
-                else:
-                    # 1. Try container map
-                    c_name = unassigned_map.get(unassigned_id, "")
-                    # 2. Try raw_payload_json if container lookup didn't yield a real name
-                    if not c_name or SKELETON_NAME_REGEX.search(c_name):
-                        if isinstance(p_obj, dict):
-                            c_name = (
-                                p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
-                                (p_obj.get("raw_payload", {}).get("client_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or
-                                (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
-                            )
+                # 1. Try container map
+                c_name = unassigned_map.get(unassigned_id, "")
+                # 2. Try raw_payload_json if container lookup didn't yield a real name
+                if not c_name or SKELETON_NAME_REGEX.search(c_name):
+                    if isinstance(p_obj, dict):
+                        c_name = (
+                            p_obj.get("client_name") or p_obj.get("name") or p_obj.get("taxpayer_name") or
+                            (p_obj.get("raw_payload", {}).get("client_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or
+                            (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
+                        )
                 if c_name and not SKELETON_NAME_REGEX.search(c_name):
                     info = {"name": f"{c_name} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
                 else:
@@ -5181,7 +4836,6 @@ class SeraDatabase:
             results.append({
                 "id": r[0], "client_id": cid, "unassigned_identity": unassigned_id,
                 "is_unassigned": info.get("is_unassigned", False),
-                "has_gemini": has_gemini_record,
                 "client_name": info["name"], "pan": info["pan"],
                 "service_id": r[3], "service_name": r[4] or "Portal", "portal": r[4] or "",
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",
@@ -5223,15 +4877,12 @@ class SeraDatabase:
         with self._connect_raw() as conn:
             cur = conn.execute("DELETE FROM tracker_dump WHERE id = ?", (dump_id,))
             res = cur.rowcount > 0
-        if res:
-            self.rebuild_raw_payload_dumps_file()
         return res
 
     def clear_tracker_dumps(self) -> int:
         with self._connect_raw() as conn:
             cur = conn.execute("DELETE FROM tracker_dump")
             count = cur.rowcount
-        self.rebuild_raw_payload_dumps_file()
         return count
 
 
@@ -5278,55 +4929,10 @@ class SeraDatabase:
                 result[(r[0], str(r[1]))] = {"bg_color": r[2], "fg_color": r[3]}
             return result
 
-    def cleanup_daily_dumps(self, max_raw_days: int = 7, max_archive_days: int = 60):
-        """
-        Storage retention policy for daily text dumps:
-        - Keeps recent dumps (<= max_raw_days old) as raw .txt for instant inspection.
-        - Compresses older dumps (> max_raw_days) to .txt.gz using gzip (reducing file size by ~90%).
-        - Deletes ancient compressed dumps (> max_archive_days) to keep disk space permanently bounded.
-        """
-        now = datetime.datetime.now()
-        raw_cutoff = now - datetime.timedelta(days=max_raw_days)
-        purge_cutoff = now - datetime.timedelta(days=max_archive_days)
-
-        search_folders = set()
-        db_dir = os.path.dirname(os.path.abspath(self.db_path))
-        search_folders.add(db_dir)
-        search_folders.add(os.path.join(db_dir, "Raw_Payload_Dump"))
-
-        for folder in search_folders:
-            if not os.path.exists(folder):
-                continue
-
-            # 1. Compress .txt dumps older than max_raw_days
-            txt_files = glob.glob(os.path.join(folder, "seraRawPayloadDump_*.txt"))
-            for txt_path in txt_files:
-                try:
-                    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(txt_path))
-                    if mtime < raw_cutoff:
-                        gz_path = txt_path + ".gz"
-                        with open(txt_path, "rb") as f_in:
-                            with gzip.open(gz_path, "wb", compresslevel=6) as f_out:
-                                shutil.copyfileobj(f_in, f_out)
-                        os.remove(txt_path)
-                except Exception as e:
-                    print(f"[database] Dump compression notice ({txt_path}): {e}")
-
-            # 2. Purge .txt.gz files older than max_archive_days
-            gz_files = glob.glob(os.path.join(folder, "seraRawPayloadDump_*.txt.gz"))
-            for gz_path in gz_files:
-                try:
-                    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(gz_path))
-                    if mtime < purge_cutoff:
-                        os.remove(gz_path)
-                except Exception as e:
-                    print(f"[database] Dump purge notice ({gz_path}): {e}")
-
     def optimize_storage(self):
         """
         Performs SQLite WAL truncation and checkpoint maintenance on both master.db and rawPayload.db.
         Flushes all journaled WAL frames into the database files and truncates WAL logs to zero bytes.
-        Also triggers the daily text dump retention cleanup.
         """
         try:
             with self._connect() as conn:
@@ -5340,10 +4946,6 @@ class SeraDatabase:
         except Exception as e:
             print(f"[database] rawPayload.db WAL checkpoint notice: {e}")
 
-        try:
-            self.cleanup_daily_dumps()
-        except Exception as e:
-            print(f"[database] Daily dump cleanup notice: {e}")
 
 
 

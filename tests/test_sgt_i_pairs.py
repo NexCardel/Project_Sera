@@ -121,7 +121,6 @@ def test_nothing_sgt_i_writes_to_disk_ever_contains_a_fixture_value(tmp_path):
     key = security.derive_key_hex("testpass123", security.load_salt(salt_path))
     db = SeraDatabase(os.path.join(tmp_path, "m.db"), key,
                       raw_db_path=os.path.join(tmp_path, "rawPayload.db"))
-    db.rebuild_raw_payload_dumps_file = lambda: 0     # no project-folder report files from a test
     db.insert_tracker_dump(portal="Income Tax (ITR-4)", period_label="AY 2025-26", arn_number="N/A",
                            capture_method="SGT_shadow", status="Draft", pan="ABCPD1234E",
                            filing_type="ITR-4", raw_payload_json=json.dumps(raw_payload),

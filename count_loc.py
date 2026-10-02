@@ -6,9 +6,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 EXCLUDE_DIRS = {
     ".git", ".hg", ".svn", "__pycache__", "node_modules", "venv", ".venv",
-    "env", "build", "dist", "artifacts", "installer_output",
+    ".build_venv", "env", "build", "dist", "artifacts", "installer_output",
     "package_build", "package_dist", ".idea", ".vscode", "site-packages",
-    ".restore_points", "source_2",
+    ".restore_points", "source_2", "tests", "tools", "SUDR", "backups",
+    "scratch", "build_tools", ".claude", ".pytest_cache", ".ruff_cache",
+    "package_assets", "data", "temp_cache",
 }
 
 EXCLUDE_EXTS = {
