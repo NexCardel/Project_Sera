@@ -4684,64 +4684,6 @@ class SeraDatabase:
 
         return updated_count
 
-    def _extract_dump_date_key(ts_str: Optional[str]) -> str:
-        """Returns DD_MM_YY formatted local date string (e.g. 26_08_26) for the given ISO timestamp."""
-        if not ts_str:
-            return datetime.datetime.now().strftime("%d_%m_%y")
-        try:
-            clean = str(ts_str).strip().replace("Z", "+00:00")
-            dt = datetime.datetime.fromisoformat(clean)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=datetime.timezone.utc)
-            local_dt = dt.astimezone()
-            return local_dt.strftime("%d_%m_%y")
-        except Exception:
-            return datetime.datetime.now().strftime("%d_%m_%y")
-
-    def _format_dump_entry_block(dump_id, client_id, portal, period_label, arn_number, capture_method, status, raw_payload_json, captured_by, created_at, client_name="") -> str:
-        """Formats a standardized, high-contrast dump text block for an intercepted payload."""
-        formatted_json = raw_payload_json or "{}"
-        parsed = {}
-        try:
-            if isinstance(raw_payload_json, str):
-                parsed = json.loads(raw_payload_json)
-            else:
-                parsed = raw_payload_json or {}
-            formatted_json = json.dumps(parsed, indent=4, ensure_ascii=False)
-        except Exception:
-            formatted_json = str(raw_payload_json)
-            parsed = {}
-
-        if not client_name and isinstance(parsed, dict):
-            client_name = (
-                parsed.get("client_name") 
-                or parsed.get("taxpayer_name") 
-                or parsed.get("name") 
-                or (parsed.get("raw_payload", {}).get("client_name") if isinstance(parsed.get("raw_payload"), dict) else "")
-                or (parsed.get("raw_payload", {}).get("taxpayer_name") if isinstance(parsed.get("raw_payload"), dict) else "")
-            )
-
-        client_str = f"{client_id} ({client_name})" if client_name else (str(client_id) if client_id else "N/A")
-        entry_lines = [
-            "=" * 88,
-            f"CAPTURE DUMP ENTRY #{dump_id or 'N/A'}",
-            "=" * 88,
-            f"Timestamp       : {created_at}",
-            f"Portal          : {portal or 'N/A'}",
-            f"Capture Method  : {capture_method or 'N/A'}",
-            f"Status          : {status or 'submitted'}",
-            f"ARN / Ack No    : {arn_number or 'N/A'}",
-            f"Period Label    : {period_label or 'N/A'}",
-            f"Client ID       : {client_str}",
-            f"Captured By     : {captured_by or 'System'}",
-            "-" * 88,
-            "RAW JSON PAYLOAD:",
-            formatted_json,
-            "=" * 88,
-            "\n"
-        ]
-        return "\n".join(entry_lines)
-
     def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
         """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db."""
         with self._connect_raw() as r_conn:
