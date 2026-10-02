@@ -1,4 +1,4 @@
-# Datapoint engine — end goal (parked 2026-10-03)
+# Sera Distill — datapoint engine end goal (parked 2026-10-03)
 
 The user's end goal for the class_diff probing and tests (`tools/pre_dev/class_diff/`). Nothing below is built yet except the pre-dev tools; this file holds the goal so work can resume later.
 
@@ -10,7 +10,13 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 2. **Relevance ranking.** The engine orders the extracted datapoints by relevance, decided by **maths and statistics**: "something like machine learning but much simpler". There is **no AI and no model** (§14 rule in `docs/sgt-blueprint.md`).
 3. **Where the user sees it:** a **dialog box opened from the Tools menu of the Tracker dump window** (`ui/windows/tracker_dump_window.py`, the "Tools ▾" button). Visibility must be good: clear and readable, **not like the SGT lab screen**.
 
-**Name:** not chosen yet; the user is open to suggestions (see the bottom of this file).
+**Name: Sera Distill**, short form **SDIS** (chosen by the user on 2026-10-03). The Tools menu entry will be "Distill…".
+
+## Dialog features (user decisions, 2026-10-03)
+
+- **One datapoint, many pages.** When the same datapoint is found on several pages, the dialog shows it **once**. A **collapsible dropdown arrow** beside it opens the **list of page links** where SDIS found it.
+- **Field label.** SDIS **suggests** a label (from the page's own labels: table row / column, nearby fixed text). The user can **edit** it, and an edited label is the user's and is kept.
+- **Numbers in percentages.** Every number SDIS shows the user is a **percentage**: relevance, how sure it is, and how often the datapoint was found.
 
 ## Rules already agreed (do not re-litigate)
 
@@ -39,15 +45,19 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 
 ## Still open before production
 
-1. **Build the alignment** (maths phase), then check that clients with different list lengths give zero "types differ" warnings.
+1. ~~Build the alignment~~ **Built 2026-10-03** as `tools/pre_dev/class_diff/align.py`, on by default in `compare.py`, with the raw view as the default view.
+   - **Fictional test:** two clients; B has an extra notice and 5 list rows against A's 3. Raw and SGT view both gave 0 template texts paired wrongly and 20 of 20 values correctly labelled (SGT view without alignment: 31 errors, 6 of 20).
+   - **Real GST captures:** in the raw view only 2 pairings changed, both correct (a rotating notice matched to the same notice).
+   - **Known limits:**
+     - A block that appears in a different ORDER on the two pages stays unpaired; it is never paired wrongly. This was seen in SGT's flat view with merged snapshots.
+     - Two look-alike values with no anchor between them, one missing on one side.
 2. **A truth set:** a few pages where the user marks the right datapoints and labels, so every change gets a precision/recall score.
 3. **Production privacy:** compare salted hashes, never stored values (§14). The CSVs hold real client data and are a local test only.
 4. **Coverage:** ITR, Edge and Firefox are untested; OCR/canvas pages (new TRACES) need line-based alignment.
 5. **How relevance is scored:** the signals and the maths (still to design).
 6. **Dialog design** for the Tracker dump Tools menu.
-7. **The name.**
 
-## Name suggestions (Claude, 2026-10-03)
+## Name suggestions considered (2026-10-03; user chose Distill)
 
 - **Assay**: the test that finds what a sample is made of. It fits "compare pages, find the data".
 - **Sieve**: shakes out template and keeps the values.

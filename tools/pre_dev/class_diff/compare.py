@@ -15,8 +15,14 @@ element types, stable ids and class names, counted per parent (card 1, card 2...
 (digit) and state (ng-valid, focused...) class names left out. Nothing here knows what any class
 name means, and nothing is portal-specific.
 
-View: by default only what SGT's control view sees (keys.VIEW = "sgt"); --view raw for every
-element the probe read.
+View: by default the RAW view - every element the probe read, nesting kept (decided 2026-10-03:
+production reads the raw view, measured 1.2-1.5x the control view's time); --view sgt for only what
+SGT's control view sees today.
+
+Pairing: by default elements are paired by ALIGNMENT (align.py: same shape + same text anchor in
+page order, the rest paired by shape between anchors), so one extra notice or list row no longer
+shifts every partner after it; --align off pairs by exact key, the old way. key_matched says
+"yes" (same key), "aligned" (paired by alignment, keys differ - a shift was absorbed) or "no".
 
 Label: for a variable element, the first fixed text inside the smallest box around it that has
 one ("Acknowledgement No :" inside the same .valueBox as the number). In a table (Table -> row ->
@@ -76,6 +82,7 @@ if str(HERE) not in sys.path:
 import keys                                                      # noqa: E402
 from keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
 import link_map                                                  # noqa: E402
+from align import align, shape                                   # noqa: E402
 
 # Only these value types can be FIXED (template). Any other type (number, date, period, code,
 # alphanumeric, amount, email, phone, percentage, yes/no, control) is data-shaped: a bare number is
@@ -316,15 +323,26 @@ def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, 
     return compare_flat(flatten(latest), flatten(previous))
 
 
+ALIGN = True      # pair elements by align.py (content + shape); False = by exact key, the old way
+
+
+def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> Dict[int, int]:
+    """{index in fl: index in fp} - by alignment, or by exact key when ALIGN is off."""
+    if ALIGN:
+        return align(fl, fp, _compared)
+    by_key = {e["key"]: j for j, e in enumerate(fp) if _compared(e)}
+    return {i: by_key[e["key"]] for i, e in enumerate(fl) if _compared(e) and e["key"] in by_key}
+
+
 def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One row per text element of either side (a read's or a map's flat list), latest first."""
-    prev_by_key = {e["key"]: e for e in fp if _compared(e)}
-    latest_keys = {e["key"] for e in fl if _compared(e)}
+    partner = _partners(fl, fp)
+    paired_prev = set(partner.values())
     status: Dict[int, str] = {}
     for i, e in enumerate(fl):
         if not _compared(e):
             continue
-        other = prev_by_key.get(e["key"])
+        other = fp[partner[i]] if i in partner else None
         if other is None:
             status[i] = ONLY_LATEST
         elif other["text"] != e["text"]:
@@ -336,18 +354,23 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
     # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
     # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
     shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
+    # An unpaired text (one more list row, card) that repeats a template text of the same shape is
+    # template too: a repeated card repeats its labels ("Period", "ARN" in rows 4 and 5).
+    template = {(shape(fl[i]), fl[i]["text"]) for i in shared}
+    shared |= {i for i, s in status.items() if s == ONLY_LATEST and (shape(fl[i]), fl[i]["text"]) in template}
     # ...and holding a real letter: an icon-font glyph beside a count ("<bell> 0") is no label.
     labels = {i for i in shared if i not in comp[id(fl)] and fl[i]["node"].get("ctype") not in NEVER_LABEL_CTYPES
               and any(c.isalpha() for c in fl[i]["text"])}
 
     def row(flat, i, st, example):
         e, n = flat[i], flat[i]["node"]
-        other = prev_by_key.get(e["key"]) if flat is fl else None
+        other = fp[partner[i]] if flat is fl and i in partner else None
         vt = element_type(e)
         pt = element_type(other) if other else ""
         label = _label(flat, i, labels) if st != FIXED and flat is fl else ""
         flag = "composite - its parts are listed on their own" if i in comp[id(flat)] else check(st, vt, pt, label)
-        return {"status": st, "key_matched": "yes" if st in (FIXED, SEMI_VARIABLE, VARIABLE) else "no",
+        matched = "no" if other is None else ("yes" if other["key"] == e["key"] else "aligned")
+        return {"status": st, "key_matched": matched,
                 "value_type": vt, "previous_type": pt, "check": flag,
                 "label": label,
                 "element": n.get("type_name") or n.get("ctype"), "classes": e["cls"],
@@ -357,8 +380,8 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
                 "key": e["key"]}
 
     rows = [row(fl, i, st, fl[i]["text"]) for i, st in status.items()]
-    rows += [row(fp, i, ONLY_PREVIOUS, e["text"]) for i, e in enumerate(fp)
-             if _compared(e) and e["key"] not in latest_keys]
+    rows += [row(fp, j, ONLY_PREVIOUS, e["text"]) for j, e in enumerate(fp)
+             if _compared(e) and j not in paired_prev]
     return rows
 
 
@@ -405,12 +428,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Compare two clients' maps of the same page link (or two single reads).")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
-    ap.add_argument("--view", choices=("sgt", "raw"), default="sgt",
-                    help="sgt (default): only what SGT's control view sees - what production can use; "
-                         "raw: every element the probe read (to study how a joined text splits)")
+    ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
+                    help="raw (default): every element the probe read - the view production will read; "
+                         "sgt: only what SGT's control view sees today")
+    ap.add_argument("--align", choices=("on", "off"), default="on",
+                    help="on (default): pair elements by content and shape (align.py); off: by exact key")
     args = ap.parse_args(argv)
     keys.VIEW = args.view
-    print(f"View     : {args.view}")
+    global ALIGN
+    ALIGN = args.align == "on"
+    print(f"View     : {args.view}    Align: {args.align}")
 
     # One comparison per page link: (page, latest side's name, other side's name, rows).
     results: List[Tuple[str, str, str, List[Dict[str, Any]]]] = []
@@ -465,10 +492,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Latest   : {l_name}")
         print(f"Previous : {p_name}")
         counts = Counter(r["status"] for r in page_rows)
-        matched = sum(1 for r in page_rows if r["key_matched"] == "yes")
+        matched = sum(1 for r in page_rows if r["key_matched"] in ("yes", "aligned"))
+        shifted = sum(1 for r in page_rows if r["key_matched"] == "aligned")
         for st in STATUSES:
             print(f"  {st:14s} {counts.get(st, 0):5d}")
-        print(f"  keys matched   {matched:5d} of {len(page_rows)}")
+        print(f"  paired         {matched:5d} of {len(page_rows)}   ({shifted} by alignment where the keys had shifted)")
         flags = Counter(r["check"] for r in page_rows if r["check"] != "ok")
         for msg, k in flags.most_common():
             print(f"  check: {k:4d} x {msg}")
