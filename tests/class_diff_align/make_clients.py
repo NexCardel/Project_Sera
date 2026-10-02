@@ -1,4 +1,11 @@
-"""Two fictional clients on one portal-like page, built to shift keys. All data is made up."""
+"""Two fictional clients on one portal-like page, built to shift keys. All data is made up.
+
+Regenerating the fixtures (only needed if key_probe's node format changes):
+  1. python make_clients.py  -> client_A.html, client_B.html beside this file
+  2. open each in Edge, run key_probe.py --once --title "SDIS align A" (then B)
+  3. copy the two key_probe_*.json reads here as client_A.json / client_B.json, with "page",
+     "title" and any file:/// link values replaced by test.local addresses (no local paths).
+"""
 import json
 from pathlib import Path
 
