@@ -53,3 +53,38 @@ def align(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
             for x, y in _common([shape(fl[i]) for i in ga], [shape(fp[j]) for j in gb]):
                 pairs[ga[x]] = gb[y]
     return pairs
+
+
+def pair_moved(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]], pairs: Dict[int, int],
+               compared: Callable[[Dict[str, Any]], bool]) -> Dict[int, int]:
+    """Alignment keeps page order, so a block that MOVED (a footer the page re-rendered elsewhere)
+    pairs with nothing. Pair what is left on both sides, in any order:
+      1. the same key AND the same text - the very same element;
+      2. a (shape, text) that is UNIQUE among the leftovers of each side.
+    Never by shape alone: two look-alike values out of order cannot be told apart."""
+    used = set(pairs.values())
+    left_a = [i for i, e in enumerate(fl) if compared(e) and i not in pairs]
+    left_b = {j for j, e in enumerate(fp) if compared(e) and j not in used}
+    by_key: Dict[Tuple[str, str], List[int]] = {}
+    for j in sorted(left_b):
+        by_key.setdefault((fp[j]["key"], fp[j]["text"]), []).append(j)
+    rest = []
+    for i in left_a:
+        cand = by_key.get((fl[i]["key"], fl[i]["text"]))
+        if cand:
+            j = cand.pop(0)
+            pairs[i] = j
+            left_b.discard(j)
+        else:
+            rest.append(i)
+    face_a: Dict[Tuple[str, str], List[int]] = {}
+    face_b: Dict[Tuple[str, str], List[int]] = {}
+    for i in rest:
+        face_a.setdefault((shape(fl[i]), fl[i]["text"]), []).append(i)
+    for j in left_b:
+        face_b.setdefault((shape(fp[j]), fp[j]["text"]), []).append(j)
+    for f, ia in face_a.items():
+        jb = face_b.get(f)
+        if len(ia) == 1 and jb and len(jb) == 1:
+            pairs[ia[0]] = jb[0]
+    return pairs

@@ -1,6 +1,6 @@
 # Sera Distill (SDIS) — datapoint engine
 
-Status: **pre-development**, last updated 2026-10-03. The pre-dev tools live in `tools/pre_dev/class_diff/`. The user is thinking it over; nothing beyond those tools is built.
+Status: **pre-development**, last updated 2026-10-03. The pre-dev tools live in `tools/pre_dev/class_diff/`. Nothing beyond those tools is built. Pipeline: `key_probe.py` (snapshots) → `link_map.py` (one map per client per link) → `memory.py` (all clients of a link).
 
 ## 1. The goal (the user's words, condensed)
 
@@ -26,6 +26,8 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 | R6 | **Dialog:** SDIS **suggests** the field label and the **user can edit it**. |
 | R7 | **Dialog:** every number shown to the user is a **percentage**. |
 | R8 | **SDIS counts per page and per client.** Snapshots of the same page must never count as extra comparisons or extra votes. |
+| R9 | **Matching is by shape and face** (shape = the key without counters; face = the text), approved 2026-10-03. Keys alone never decide identity. |
+| R10 | **Page memory** (the user's method, 2026-10-03): previous page memory → total node counting → match what matches → what matches nothing waits, flat and without a tree, until enough clients confirm it. |
 
 **Requests completed in pre-dev:**
 - Run and compare captures by hand: the commands are in §8.
@@ -35,6 +37,7 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 - Add raw-view timing.
 - Build alignment and test it.
 - Move the test into `tests/` and commit.
+- Merge snapshots by alignment (P16), group sessions into clients (P17), and build page memory into the pipeline (R10).
 
 ## 3. What is built (pre-dev only, not wired into the app)
 
@@ -42,11 +45,13 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 |---|---|
 | `key_probe.py` | Reads the page in both views. Default: a 30 s capture, with snapshots merged per page link. Also `--once` (single read) and `--timing` (SGT's own reader, control vs raw view, nothing written). |
 | `keys.py` | A key per element: type, stable id and classes per step, plus `[n]` sibling counters. Generated (digit) and state classes are dropped. `VIEW` = raw or sgt (control view, re-parented). |
-| `link_map.py` | One map per (capture session, page link): the snapshots merged **by key**. |
+| `link_map.py` | One map per (capture session, page link): snapshots merged **by alignment** (shape + face), then moved blocks (same key + face, or a unique shape + face). Entries keep an id; their key is the latest one. `group_clients` joins sessions that share a PAN/GSTIN (chained) into one client; a session with none stays "unidentified". |
+| `memory.py` | Page memory (R10). The first client's map sets the page order; every later client's map is counted, matched against memory, and its leftovers are matched against a flat pending pool (in page order, each remembered by its anchor, the memory node above it). A node is **confirmed** once N different clients have seen it (N = 2 by default). Each client's map is classed SAME SCREEN / CHANGED / RADICAL; each node gets a verdict: composite, changes within one client, repeat, only one client so far, same for all clients, differs between clients. |
 | `align.py` | Pairs two pages like a text diff. Anchors are the same shape (the key without counters) **and** the same text, in page order; between anchors, elements pair by shape. |
 | `compare.py` | Latest client vs the most recent **different** client, per page link. Labels and checks go to a CSV. Defaults: raw view, alignment on. |
 | `snapshot_diff.py` | One client, before vs after: NEW STATE / RETURNED / PART CLOSED / SAME SCREEN. |
 | `tests/test_class_diff_align.py` | Two fictional clients. B has an extra notice line and 5 list rows against A's 3. 8 tests. |
+| `tests/test_sdis_memory.py` | R8: the same snapshot twice, a re-render that renumbers keys, and a moved block add nothing; shared ids chain into one client; one client is one vote; client order changes no verdict. 6 tests. The old key merge fails the re-render and moved-block tests. |
 
 **Label rules in `compare.py`:**
 - A table cell gets "row / column", with the column matched by the browser's grid column or the screen box, **never by counting cells**.
@@ -86,6 +91,15 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
   - repeated elements grew from 7 in one snapshot to 18 in the merged map (client 1), and from 8 to 15 (client 2);
   - the whole footer was stored twice after the page re-rendered.
 
+- **Page memory on the real captures** (`memory.py`, 2 real GST clients + the 2 fictional sessions, N = 2), both client orders give the **same verdicts**:
+
+  | Page | 2nd client matched | Confirmed same / differs | Composite | Waiting |
+  |---|---|---|---|---|
+  | Services dashboard | 100% | 115 / 39 | 11 | 0 |
+  | Returns dashboard | 96.8–99.1% | 90 / 6 | 7 | 5 (3 repeats) |
+  | GSTR-1 | 97–100% | 92 / 13 | 18 | 4 |
+  | Fictional GSTR-1 / GSTR-3B | 100% | 48 / 8, 55 / 8 | 0 | 0 |
+
 ## 5. Problems encountered
 
 | # | Problem | Cause | Status |
@@ -103,14 +117,17 @@ Build an **engine that reliably extracts the useful datapoints on its own**, so 
 | P11 | An icon glyph plus a digit ("<bell> 0") used as a label | Counted as words with digits | **Fixed:** a label must contain a real letter |
 | P12 | GSTR-1 tile counts took the previous tile's title | Titles with digits could not be labels | **Fixed:** shared words-with-digits allowed as labels |
 | P13 | Extra list rows lost their labels | Their "Period"/"ARN" had no partner | **Fixed:** repeated template rule |
-| P14 | A block in a different **order** on the two pages stays unpaired | Alignment works in page order only | **Open:** move detection on unique anchors (proposed) |
+| P14 | A block in a different **order** on the two pages stays unpaired | Alignment works in page order only | **Fixed in the snapshot merge and memory** (`align.pair_moved`: same key + face, or a unique shape + face). `compare.py` does not use it yet |
 | P15 | Two look-alike values with no anchor between them, one missing: **the first is paired silently** | The information is not on the page | **Open:** mark as **ambiguous** (low %), then screen position, value type, and many clients |
-| P16 | **Snapshot merge double-counts elements** (the footer stored twice) | `link_map` merges snapshots by key, counters included | **Open, blocks R8:** merge snapshots with alignment |
-| P17 | Maps are per capture session, not per client | Grouping by session | **Open, blocks R8:** group by PAN/GSTIN; one vote per (client, page) |
+| P16 | **Snapshot merge double-counts elements** (the footer stored twice) | `link_map` merged snapshots by key, counters included | **Fixed:** merge by alignment + moved blocks. Double count 18 / 9 / 5 → 0 on every page; no text lost; every multi-value entry is one element changing (status, tile counts loading) |
+| P17 | Maps are per capture session, not per client | Grouping by session | **Fixed in `memory.py`** (`link_map.group_clients`). `compare.py` still uses its own same-client skip |
 | P18 | A capture that never shows a PAN/GSTIN cannot be told apart from the same client | No identity on the pages visited | **Open:** see Q10 |
 | P19 | The heavy page takes 478 ms even in the control view | A big page | Known; the change gate must stay |
 | P20 | Another session in the same checkout swept SDIS files into its commit (`3015b26`) | Two sessions committing in `../APP` | Process: work in a separate worktree, or commit only with an explicit file list |
 | P21 | The fictional tests were designed by Claude | — | **Open:** a real-portal test with different list lengths is the real proof |
+| P22 | The first snapshot of a link can be a loading shell (1 node); fed snapshot by snapshot, it became the memory and everything after was RADICAL | Memory built from raw snapshots | **Fixed:** memory is fed each client's merged map, never raw snapshots |
+| P23 | Client order changed which nodes sat in memory vs pending | The first client's nodes entered memory with no votes | **Fixed:** memory gives the page order only; a node is confirmed by N clients, wherever it sits |
+| P24 | A GSTR-1 tile's text gains its count when the page finishes loading ("7 - B2C (Others)" → "… 3") | Label and count glued in one link | Flagged **composite** in memory, so it is not counted as noise |
 
 **Keys are not useless.** The **shape** (types, ids, classes) is reliable and is half of the alignment. The **counters `[n]`** are the fragile part: they are right about 90–100% of the time, but the rest fails silently. The plan: shape for recognition, full key as a fast path, alignment as the referee.
 
@@ -131,7 +148,7 @@ All of it is counting turned into percentages, on salted hashes (no client value
 
 | # | Question | Notes |
 |---|---|---|
-| Q1 | **Build order.** Recommended: P16 + P17 (count per page and per client, with a test enforcing R8), then P15 (ambiguity), P14 (moves), then voting, slots and relevance. | P16/P17 block R8 |
+| Q1 | **Build order.** P16, P17 and page memory are done (2026-10-03). Next recommended: P15 (ambiguity), `compare.py` on memory, then slots and relevance. | |
 | Q2 | **Minimum clients** before SDIS shows a datapoint or a percentage, and what it shows below that | Proposed: about 5 |
 | Q3 | **Which relevance signals matter most** to you, and should your approvals and label edits feed back into the ranking? | |
 | Q4 | **What happens to a datapoint you accept?** Does it graduate into an SGT-C spec after your approval (§14), and where are edited labels stored? | |
@@ -155,4 +172,5 @@ All of it is counting turned into percentages, on salted hashes (no client value
   venv\Scripts\python.exe tools\pre_dev\class_diff\compare.py                          # latest client vs previous different client
   venv\Scripts\python.exe tools\pre_dev\class_diff\compare.py --view sgt --align off   # the old behaviour, for comparison
   venv\Scripts\python.exe tools\pre_dev\class_diff\key_probe.py --timing               # raw vs control view cost
+  venv\Scripts\python.exe tools\pre_dev\class_diff\memory.py                            # page memory over every client (N = 2), both orders
   ```

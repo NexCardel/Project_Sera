@@ -186,7 +186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         m = link_map.LinkMap(latest.get("client") or "", link_map.page_of(latest))
         for p, rec in same:
             m.add(rec, link_map.read_stamp(p))
-        known = set(m.entries)
+        known = m.known_keys()
     r = diff(latest, previous, known)
     out = write_csv(OUT_DIR / (f"snapdiff_{link_map.read_stamp(lp)}__{page_slug(link_map.page_of(latest))}.csv"),
                     FIELDS, r["rows"])

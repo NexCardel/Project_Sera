@@ -1,12 +1,14 @@
 """
 tools/pre_dev/class_diff/link_map.py - PRE-DEV TEST: one map per client per page link
 =====================================================================================
-Every node ever read at one page link, for one client, merged into ONE map by its key (keys.py).
-A link that shows several screens (a form, then a popup, then a success message) is still one
-map: each screen only adds the keys the map did not have yet.
+Every node ever read at one page link, for one client, merged into ONE map. Each read is paired
+with the map by ALIGNMENT - shape (the key without its counters) and face (the text) - never by
+key alone, so a re-render that renumbers elements does not store them twice. A link that shows
+several screens (a form, then a popup, then a success message) is still one map: each screen only
+adds the elements that paired with nothing.
 
-For each key the map keeps: the latest node (type, classes, id), the latest text, every distinct
-value seen (up to MAX_VALUES), and the read it first appeared in / was last seen in.
+For each entry the map keeps: the latest node (type, classes, id), its latest key and text, every
+distinct value seen (up to MAX_VALUES), and the read it first appeared in / was last seen in.
 
 EVENTS: each read after the first that brought keys the map had never had is an event - the
 moments a new part of the page appeared (a popup, a submission message). A block that only came
@@ -38,6 +40,7 @@ OUT_DIR = HERE / "output"
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+from align import align, pair_moved                              # noqa: E402
 from keys import flatten                                         # noqa: E402
 
 MAX_VALUES = 5
@@ -57,29 +60,65 @@ def page_of(rec: Dict[str, Any]) -> str:
     return rec.get("page") or ("title: " + (rec.get("title") or ""))
 
 
+def _always(e: Dict[str, Any]) -> bool:
+    return True
+
+
 class LinkMap:
+    """Entries are kept under an ENTRY ID: the element's key when it first appeared, made unique
+    with "#n" if a later, different element arrives under a key already taken. An entry's "key" is
+    its LATEST key - counters can change between snapshots, the entry stays the same one."""
+
     def __init__(self, client: str, page: str) -> None:
         self.client, self.page = client, page
         self.entries: Dict[str, Dict[str, Any]] = {}
         self.children: Dict[Optional[str], List[str]] = {}
         self.reads: List[str] = []
+        self.sessions: List[str] = []
         self.events: List[Dict[str, Any]] = []
 
-    def add(self, rec: Dict[str, Any], stamp: str) -> Dict[str, Any]:
-        """Merge one read. Returns {"new": keys the map did not have, "blocks": their blocks}."""
+    def _new_id(self, key: str) -> str:
+        eid, n = key, 1
+        while eid in self.entries:
+            n += 1
+            eid = f"{key}#{n}"
+        return eid
+
+    def known_keys(self) -> set:
+        """Every key any entry was ever seen under."""
+        return {k for ent in self.entries.values() for k in ent["keys"]}
+
+    def add(self, rec: Dict[str, Any], stamp: str, session: str = "") -> Dict[str, Any]:
+        """Merge one read. Each element of the read is paired with an entry the map already has
+        by ALIGNMENT (align.py: same shape + same text anchors in page order, the rest by shape
+        between anchors) - not by key, so a re-render that renumbers a footer, or one more row
+        above it, updates the entries the map has instead of storing them a second time (P16, R8).
+        Only what pairs nothing is new. Returns {"new": the new entry ids, "blocks": their blocks}."""
         flat = flatten(rec)
-        known = set(self.entries)
-        # This read's children of each parent, in order - to place a new key among its siblings.
+        if session and session not in self.sessions:
+            self.sessions.append(session)
+        cur = self.to_flat()
+        pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
+        ids: List[str] = []
+        new_idx: set = set()
+        for i, e in enumerate(flat):
+            if i in pairs:
+                ids.append(cur[pairs[i]]["id"])
+            else:
+                ids.append(self._new_id(e["key"]))
+                new_idx.add(i)
+                self.entries[ids[i]] = {"first": stamp, "values": [], "keys": set()}  # reserves the id
+        # This read's children of each parent, in order - to place a new entry among its siblings.
         read_children: Dict[Optional[str], List[str]] = {}
-        for e in flat:
-            read_children.setdefault(flat[e["parent"]]["key"] if e["parent"] >= 0 else None, []).append(e["key"])
+        for i, e in enumerate(flat):
+            read_children.setdefault(ids[e["parent"]] if e["parent"] >= 0 else None, []).append(ids[i])
         last_child: Dict[Optional[str], str] = {}
-        for e in flat:
-            k = e["key"]
-            pk = flat[e["parent"]]["key"] if e["parent"] >= 0 else None
-            ent = self.entries.get(k)
-            if ent is None:
-                ent = self.entries[k] = {"parent": pk, "first": stamp, "values": []}
+        for i, e in enumerate(flat):
+            k = ids[i]
+            pk = ids[e["parent"]] if e["parent"] >= 0 else None
+            ent = self.entries[k]
+            if i in new_idx:                                   # a paired entry stays where it is
+                ent["parent"] = pk
                 sibs = self.children.setdefault(pk, [])
                 prev = last_child.get(pk)
                 if prev in sibs:                               # right after the sibling it followed
@@ -89,13 +128,14 @@ class LinkMap:
                     nxt = next((s for s in order[order.index(k) + 1:] if s in sibs), None)  # page)
                     sibs.insert(sibs.index(nxt) if nxt else len(sibs), k)
             last_child[pk] = k
-            ent.update(node=e["node"], cls=e["cls"], type=e["type"], last=stamp)
+            ent.update(key=e["key"], node=e["node"], cls=e["cls"], type=e["type"], last=stamp)
+            ent["keys"].add(e["key"])
             if e["text"]:
                 ent["text"] = e["text"]
                 if e["text"] not in ent["values"] and len(ent["values"]) < MAX_VALUES:
                     ent["values"].append(e["text"])
-        new = {e["key"] for e in flat} - known
-        blocks = _blocks(flat, new)
+        new = {ids[i] for i in new_idx}
+        blocks = _blocks(flat, new_idx)
         if self.reads and any(b["texts"] for b in blocks):
             self.events.append({"read": stamp, "new_nodes": len(new), "blocks": blocks})
         self.reads.append(stamp)
@@ -103,27 +143,27 @@ class LinkMap:
 
     def to_flat(self) -> List[Dict[str, Any]]:
         """The map in page order, in keys.flatten()'s shape (key, parent index, depth, cls, type,
-        text, node) - plus values, first, last."""
+        text, node) - plus id (the entry id), values, first, last."""
         out: List[Dict[str, Any]] = []
 
         def walk(pk: Optional[str], parent: int, depth: int) -> None:
             for k in self.children.get(pk, []):
                 ent = self.entries[k]
-                out.append({"key": k, "parent": parent, "depth": depth, "cls": ent["cls"], "type": ent["type"],
-                            "text": ent.get("text", ""), "node": ent["node"], "values": ent["values"],
-                            "first": ent["first"], "last": ent["last"]})
+                out.append({"id": k, "key": ent["key"], "parent": parent, "depth": depth, "cls": ent["cls"],
+                            "type": ent["type"], "text": ent.get("text", ""), "node": ent["node"],
+                            "values": ent["values"], "first": ent["first"], "last": ent["last"]})
                 walk(k, len(out) - 1, depth + 1)
 
         walk(None, -1, 0)
         return out
 
 
-def _blocks(flat: List[Dict[str, Any]], keys: set) -> List[Dict[str, Any]]:
-    """Nodes whose key is in `keys`, grouped: a root (its parent not in `keys`) + all under it."""
+def _blocks(flat: List[Dict[str, Any]], idx: set) -> List[Dict[str, Any]]:
+    """The nodes at indexes `idx`, grouped: a root (its parent not in `idx`) + all under it."""
     blocks: List[Dict[str, Any]] = []
     root_of: Dict[int, Dict[str, Any]] = {}
     for i, e in enumerate(flat):
-        if e["key"] not in keys:
+        if i not in idx:
             continue
         p = e["parent"]
         b = root_of.get(p) if p >= 0 else None
@@ -156,19 +196,59 @@ def all_sources() -> List[Tuple[str, str, str, Dict[str, Any]]]:
 
 
 def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
-               until: Optional[str] = None) -> Dict[Tuple[str, str], LinkMap]:
+               until: Optional[str] = None,
+               client_of_session: Optional[Dict[str, str]] = None) -> Dict[Tuple[str, str], LinkMap]:
     """Every (session, page link) map, merged in time order (only up to `until`, a stamp, when
-    given). `reads`: only these single reads instead of everything in output/."""
+    given). `reads`: only these single reads instead of everything in output/.
+    `client_of_session` (group_clients): one map per (CLIENT, page link) instead - every session
+    of one client merged into one map, so a client is one vote per page (R8)."""
     if reads is not None:
         sources = [(read_stamp(p), client_of(r, p), page_of(r), r) for p, r in reads]
     else:
         sources = all_sources()
     maps: Dict[Tuple[str, str], LinkMap] = {}
-    for stamp, client, page, rec in sources:
+    for stamp, session, page, rec in sources:
         if until is not None and stamp > until:
             continue
-        maps.setdefault((client, page), LinkMap(client, page)).add(rec, stamp)
+        owner = (client_of_session or {}).get(session, session)
+        maps.setdefault((owner, page), LinkMap(owner, page)).add(rec, stamp, session)
     return maps
+
+
+def _by_time(session: str) -> str:
+    """A session name ends in its time ("capture <time>", "read <time>")."""
+    return session.split()[-1]
+
+
+def group_clients(session_ids: Dict[str, set]) -> Dict[str, str]:
+    """{session: client name}. Sessions that share any client id (a PAN or GSTIN, on any page
+    they visited) are the same client, chained: A shares a GSTIN with B, B a PAN with C -> one
+    client, named "client <n>" in order of its first session. A session with NO id stays its own
+    client, "unidentified <session>": it cannot be told apart from anyone (P18, Q10 open)."""
+    parent = {s: s for s in session_ids}
+
+    def root(s: str) -> str:
+        while parent[s] != s:
+            parent[s] = parent[parent[s]]
+            s = parent[s]
+        return s
+
+    owner_of_id: Dict[str, str] = {}
+    for s in sorted(session_ids, key=_by_time):
+        for cid in session_ids[s]:
+            if cid in owner_of_id:
+                parent[root(s)] = root(owner_of_id[cid])
+            else:
+                owner_of_id[cid] = s
+    names: Dict[str, str] = {}
+    out: Dict[str, str] = {}
+    for s in sorted(session_ids, key=_by_time):
+        if not session_ids[s]:
+            out[s] = f"unidentified {s}"
+            continue
+        names.setdefault(root(s), f"client {len(names) + 1}")
+        out[s] = names[root(s)]
+    return out
 
 
 def _slug(s: str) -> str:
