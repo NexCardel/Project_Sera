@@ -1,6 +1,6 @@
 # Sera Distill (SDIS) — blueprint
 
-**Status:** approved 2026-10-03 for building; **nothing in Parts B–Q is built yet.** Baseline: `main` at
+**Status:** approved 2026-10-03 for building; **nothing in Parts B–R is built yet.** Baseline: `main` at
 `0f30543` (the pre-dev engine). Worktree `../APP-sdis`, branch `sdis`. Deadline **2026-10-04 23:00 IST**. It is written from the
 design conversation of 2026-10-03 and builds on `docs/datapoint-engine-goal.md` (the pre-dev record:
 rules R1–R10, measurements, problems P1–P24, questions Q1–Q11). It is built the way Autofill tweaks
@@ -80,6 +80,7 @@ confidence, and there is no truth set to score it against: the user is the final
  Part O  "Find datapoints" on demand: loading dialog, app locked, <= 10% CPU, memory on disk
  Part P  Captures travel staff PC -> admin PC (Sera Sync v3 transport), deleted after receipt
  Part Q  A picked datapoint is registered on EVERY PC (synced table -> spec file SGT loads)
+ Part R  Firefox support for SGT-C and SDIS (address bar, title, line parity, Firefox fixtures)
             |
             v
  Part L  Distill… dialog
@@ -114,6 +115,9 @@ OCR portals (TRACES) are out of scope: SDIS needs an element tree (problem 8, la
 | 19 | Sera Sync v3 replicates **database rows**, not files; nothing moves capture files to the admin PC | — | P |
 | 20 | A field rule accepted today (SGT lab) goes into `sgt_fields.json` **on that PC only** (`sgt_specs.override_path()`); nothing spreads it to the other PCs | — | Q |
 | 21 | The installed app is a frozen program: "run mining in a separate process" cannot start `python -m …` | — | O |
+| 22 | **SGT gets no URL in Firefox.** Firefox's address bar is a ComboBox (automation id `urlbar-input`); both address readers (`vsdc_router` and `key_probe.read_url`) only look at Edit controls | measured 2026-10-03 | R |
+| 23 | Firefox window titles end in " — Mozilla Firefox" (em dash); the title cleanup only strips "-" | measured 2026-10-03 | R |
+| 24 | SGT-C has never been checked on Firefox: lines, dropdown/radio "Selected:" lines, the password guard, timing | — | R |
 
 Not problems for SDIS any more: P19 (SDIS learns offline on the admin PC, rule 7; its own raw read is guarded in Part K) and Q9 (answered by rule 7: offline over the corpus, never inside SGT-I's thread).
 
@@ -417,6 +421,45 @@ A datapoint the user picks becomes a field spec **on every PC** (D7):
   `sdis_decisions`, so mining on the admin PC remembers them (D6).
 * No tracker column is added automatically (D15), the same as the SGT lab today.
 
+## Part R — Firefox support for SGT-C and SDIS
+
+*(user, 2026-10-03: "we need the Firefox support for SGT-C and SDIS")*
+
+**Measured 2026-10-03** (a fictional page, `tests/class_diff_align/client_A.html`, in a throwaway
+Firefox profile, never a real tab):
+
+| | Firefox |
+| :--- | :--- |
+| UI Automation | exposed natively (framework "Gecko"); the page is a Document under `tabbrowser-tabpanels` |
+| SGT's text reader (`read_page_text`) | **works**: 82 lines, the right page text, 68 ms |
+| SDIS's node tree (`uia_nodes`) | **works**: control view 174 nodes, raw view 225; ids, classes and screen boxes present; **no grid (column) info**, so tables use the screen-box fallback |
+| Address bar | **not read**: it is a ComboBox (50003), automation id `urlbar-input`, name "Search with Google or enter address", ValuePattern = the full URL. Both readers look only at Edit (50004) |
+| Window title | "<page> — Mozilla Firefox" (em dash) |
+
+**R.1 Address bar and title** (W1-6). The address readers accept an Edit **or a ComboBox** whose
+name or automation id says address / url / search, exactly as they treat an Edit today, so Chrome and
+Edge are unchanged. The title cleanup strips " - ", " – " and " — " browser suffixes. With the URL, SGT-C's
+portal detection and specs work in Firefox, and SDIS gets page links (Part N) from Firefox captures.
+
+**R.2 Parity tool and Firefox fixtures** (W1-7). `tools/browser_parity.py` serves the fictional pages
+(the two `class_diff_align` clients plus a new fictional form page with a dropdown, radio buttons, a
+checkbox and a password box holding a fictional password) on 127.0.0.1, opens each installed browser
+(Chrome, Edge, Firefox) with a **throwaway profile**, reads the page the way SGT and SDIS do, closes
+**only the processes it started**, deletes the profiles, and prints a parity table: URL read, SGT
+lines (plus "Selected:" lines), password value never read, node counts, timings. It also saves the
+fictional reads as test fixtures, `tests/class_diff_align/client_{A,B}_{browser}.json`.
+Opening browser windows takes focus for about half a minute, so the worker asks first (D16).
+
+**R.3 Line parity fixes** (W2-5). Every difference R.2 finds in SGT's lines for Firefox is fixed **as a
+kind** in `core/vsdc/vsdc_uia_text.py` / `core/sgt_i/uia_nodes.py`, never per page. Chrome and Edge lines
+must not change (`tools/sgt_replay.py diff` unchanged).
+
+**R.4 SDIS on Firefox trees** (W3-4). The alignment and label tests run on the Chrome **and** Firefox
+fixtures: 0 template pairing errors and every value labelled, in both browsers. Part M keeps the
+browsers' memories apart; this proves the engine itself works on Firefox's tree.
+
+Hands-on: a real GST and ITR session in Firefox captures the same fields as in Chrome (W1-6's check).
+
 ## Part L — The Distill… dialog
 
 Tracker dump window → Tools ▾ → **Distill…**. Clear visibility, **not like the SGT lab** screen:
@@ -452,7 +495,8 @@ SGT session id + maths (Part D); rule 7 (no hashing, admin PC only); OCR later; 
 like Autofill tweaks; every browser captured and compared per browser (M); smart page link resolution
 (N); "Find datapoints" on demand with a locking loading dialog and ≤ 10% CPU, no idle learning (O);
 relevance by occurrences of non-fixed values, noise counted as fixed (J); no truth set, no absolute confidence; SDIS's own input, SGT-I
-irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved.
+irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved; Firefox support for SGT-C and
+SDIS (R).
 
 **Open (default in bold):**
 
@@ -473,6 +517,7 @@ irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved.
 | D13 | Raw-read budget per changed page, and the staff-PC size cap for raw records | **1.5 s; 500 MB** | W4-1 |
 | D14 | How captures reach the admin PC | **push over Sera Sync v3's transport, new `sdis_push` frame, delete after ack** (Part P) / shared folder | W4-2 |
 | D15 | Add a tracker column automatically for a registered datapoint | **no** (as the SGT lab today) / yes | W4-4 |
+| D16 | May a worker open Chrome, Edge and Firefox windows (throwaway profiles, fictional local pages) for about half a minute? | **yes, after the pop-up** / no (the user runs `tools/browser_parity.py` by hand) | W1-7 |
 
 ## 11. Build order
 
@@ -490,21 +535,25 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 1 | W1-3 | Part D: identity by session id + data fingerprint | sonnet | W0-2 |
 | 1 | W1-4 | Part N: smart page link resolution | sonnet | W0-2 |
 | 1 | W1-5 | Part M: per-browser memory | sonnet | W0-2 |
-| 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5 |
+| 1 | W1-6 | Part R.1: Firefox address bar and window title (SGT-C) | sonnet | W0-1 |
+| 1 | W1-7 | Part R.2: browser parity tool + Firefox fixtures | opus | W1-6 |
+| 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7 |
 | 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | sonnet | W1-R |
 | 2 | W2-2 | Part C: noise over time | sonnet | W1-R |
 | 2 | W2-3 | Part F: the variable_alignment state | sonnet | W2-1 |
 | 2 | W2-4 | Part H: memory upkeep (retire) | sonnet | W1-R |
-| 2 | W2-R | Phase 2 review | opus | W2-1, W2-2, W2-3, W2-4 |
+| 2 | W2-5 | Part R.3: Firefox line parity fixes (SGT-C) | sonnet | W1-R |
+| 2 | W2-R | Phase 2 review | opus | W2-1, W2-2, W2-3, W2-4, W2-5 |
 | 3 | W3-1 | Part I: statuses + labels from memory | sonnet | W2-R |
 | 3 | W3-2 | Part J: relevance by occurrences + slots | sonnet | W3-1 |
+| 3 | W3-4 | Part R.4: SDIS on Firefox trees | sonnet | W3-1 |
 | 3 | W3-3 | Part O engine: memory on disk, incremental mining | sonnet | W3-2 |
 | 4 | W4-1 | Part K: SDIS's own recorder (raw view, session id, browser) | opus | W3-3 |
 | 4 | W4-2 | Part P: captures travel to the admin PC | opus | W4-1 |
 | 4 | W4-3 | Part O: mining process capped at 10% CPU | opus | W3-3 |
 | 4 | W4-4 | Part Q: registration on every PC (synced tables) | opus | W3-3 |
 | 4 | W4-5 | Part L: the Distill dialog + loading dialog | sonnet | W3-2, W4-3, W4-4 |
-| 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5 |
+| 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5, W3-4 |
 
 Every WP: tests green, the regression runner before and after in its hand-off note (counts only),
 rules 5–8 of the runner kept. Decisions are asked by the WP named in section 10.

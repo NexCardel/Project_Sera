@@ -185,7 +185,66 @@ WPS = [
        " browsers happens in W3-2.) Tests: two fixture reads of one link marked chrome and firefox ->"
        " two memories; both '' -> one. Regression unchanged."),
 
-    wp("W1-R", 1, "opus", "S", ["W1-1", "W1-2", "W1-3", "W1-4", "W1-5"], "Phase 1 review",
+    wp("W1-6", 1, "sonnet", "M", ["W0-1"], "Part R.1: Firefox address bar and window title (SGT-C)",
+       "Blueprint Part R (the measurements table is exact) and runner rule 6 (this touches SGT capture:"
+       " Chrome and Edge must behave exactly as before). STEP 1: core/vsdc/vsdc_router.py, the address"
+       " reader (around 'Look for Edit control (Address bar)'): today it searches ControlType 50004 (Edit)"
+       " only. Search Edit OR ComboBox (50003) - build an OrCondition of the two ControlType conditions"
+       " (uia.CreateOrCondition) - and keep the SAME name / automation-id keyword test and the same"
+       " ValuePattern read and per-hwnd cache. Firefox's bar: ControlType 50003, AutomationId"
+       " 'urlbar-input', Name 'Search with Google or enter address', Value = the full URL with scheme;"
+       " 'url' in 'urlbar-input' already matches the keyword test. STEP 2: the same change in"
+       " tools/pre_dev/class_diff/key_probe.py read_url (it searches 50004 only, around line 215). grep"
+       " core/ and tools/ for any other place that finds the address bar by ControlType 50004 and fix it"
+       " the same way (core/vsdc/vsdc_uia_text.py's UIA_EDIT_CONTROL_TYPE_ID is about page content, not"
+       " the address bar: leave it). STEP 3: the title cleanup in vsdc_router.py (the regex with 'mozilla"
+       " firefox') and any other browser-suffix regex you find (grep -i 'google chrome' in core/): accept"
+       " '-', '–' and '—' before the browser name (character class [-–—]). STEP 4: tests"
+       " (tests/test_firefox_support.py) with fake UIA objects (follow the fakes in"
+       " tests/test_vsdc_*uia*.py or tests/test_sgt_*.py - grep 'class Fake'): a window whose address bar"
+       " is a ComboBox like Firefox's returns the URL; an Edit like Chrome's still returns it; a ComboBox"
+       " whose name/id has no address keyword (a page dropdown) is NOT taken; titles '<page> — Mozilla"
+       f" Firefox' and '<page> - Google Chrome' clean the same way. Run `{T} tests/test_sgt_*.py"
+       f" tests/test_vsdc_*.py tests/test_firefox_support.py` and `{PY} tools/sgt_replay.py diff` (must show"
+       " no change). Hands-on check: `check-add W1-6 --text \"Real GST and ITR sessions in Firefox: the"
+       " HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome\"`."),
+
+    wp("W1-7", 1, "opus", "L", ["W1-6"], "Part R.2: browser parity tool + Firefox fixtures",
+       "Blueprint Part R.2. STEP 1: ask D16 first:"
+       f" `{PY} tools/sdis.py ask W1-7 --question \"May I open Chrome, Edge and Firefox windows for about"
+       " half a minute (throwaway profiles, fictional local test pages only, closed afterwards)?\""
+       " --options \"Yes, go ahead|No, I will run it myself\" --default \"Yes, go ahead\"`. STEP 2:"
+       " tests/class_diff_align/make_form.py writes a fictional form page form.html (title 'SDIS parity"
+       " form'): a dropdown with 3 options (2nd selected), 3 radio buttons (one checked), a ticked"
+       " checkbox, a text box with a fictional value, a password box with the value 'Fictional#123', and a"
+       " small table with a header row. STEP 3: tools/browser_parity.py: serve the folder"
+       " tests/class_diff_align (client_A.html, client_B.html - regenerate them with make_clients.py into a"
+       " temp folder if they are not committed - and form.html) with http.server on 127.0.0.1 and a free"
+       " port, in a thread. For each browser found (Chrome: Program Files/Google/Chrome/Application/"
+       "chrome.exe; Edge: Program Files (x86)/Microsoft/Edge/Application/msedge.exe; Firefox: Program"
+       " Files/Mozilla Firefox/firefox.exe; skip the missing ones): make a temp profile folder and start it"
+       " ALONE with that profile (Chrome/Edge: --user-data-dir=<tmp> --no-first-run"
+       " --no-default-browser-check --new-window <url>; Firefox: -no-remote -profile <tmp> <url>), wait up"
+       " to 20 s for a window whose title contains the page's title (EnumWindows), then read: the address"
+       " (the W1-6 reader), SGT's lines (core.vsdc.vsdc_uia_text.read_page_text(hwnd,"
+       " include_selection=True)), the node trees (core.sgt_i.uia_nodes.read_page_nodes control and"
+       " raw_view=True), each timed. Then close it: terminate the process tree YOU started (by its PID and"
+       " its children - never by image name: the user's own browsers run too) and delete the temp profile."
+       " NEVER touch any other window. Print a parity table per page: URL read yes/no, number of SGT lines,"
+       " lines that differ between browsers (these are fictional, so printing them is allowed), the"
+       " 'Selected:' lines, whether 'Fictional#123' appears anywhere (must be NO), node counts, ms. STEP 4:"
+       " save the raw reads as fixtures tests/class_diff_align/client_A_<browser>.json and"
+       " client_B_<browser>.json in key_probe --once format ({title, page, read_at, docs}; docs from"
+       " read_page_nodes raw view with the same node fields key_probe writes - reuse key_probe's"
+       " typing/flag code rather than re-inventing it), with 'page' and every 127.0.0.1 address replaced"
+       " by test.local as make_clients.py's docstring says. STEP 5: put the parity table (fictional, no"
+       " client data) in docs/sdis/firefox-parity.md and summarise it in the hand-off note: every"
+       " difference W2-5 must fix. If the answer was 'No', write the tool and its tests only, add a"
+       " hands-on check 'run tools/browser_parity.py and commit its output', and finish. Tests"
+       " (tests/test_browser_parity.py): the table/diff logic on hand-made line lists; the process"
+       " cleanup only ever targets the PIDs it started (monkeypatch)."),
+
+    wp("W1-R", 1, "opus", "S", ["W1-1", "W1-2", "W1-3", "W1-4", "W1-5", "W1-6", "W1-7"], "Phase 1 review",
        "Review W1-1..W1-5 against blueprint section 0 and Parts B, D, G, M, N and their hand-off notes."
        " Check: the order in which link resolution (N), screens (G), browser (M) and identity (D) are"
        " applied in client_maps is consistent (resolve links -> identity -> per (link, browser) -> screens);"
@@ -271,7 +330,21 @@ WPS = [
        " not; a node in 2 clients then missing in 4 -> not retired; an unconfirmed node never retires."
        " Regression unchanged (2 clients cannot retire anything); say so."),
 
-    wp("W2-R", 2, "opus", "S", ["W2-1", "W2-2", "W2-3", "W2-4"], "Phase 2 review",
+    wp("W2-5", 2, "sonnet", "M", ["W1-R"], "Part R.3: Firefox line parity fixes (SGT-C)",
+       "Blueprint Part R.3 and runner rule 6. Input: docs/sdis/firefox-parity.md and W1-7's hand-off note"
+       " (the differences between Firefox's and Chrome's SGT lines on the fictional pages). If W1-7 found"
+       " no difference, or could not run (no table), record that with `decide`, add nothing, and finish."
+       " Otherwise fix each difference AS A KIND in core/vsdc/vsdc_uia_text.py (the line reader) or"
+       " core/sgt_i/uia_nodes.py (node fields): e.g. a control type Firefox reports differently, a name"
+       " Firefox puts in another property, a 'Selected:' line Firefox's dropdown/radio gives differently."
+       " Never special-case a page or a text; when a rule must depend on the browser, key it on the"
+       " element's framework id ('Gecko' vs 'Chrome'), not on a window title. Chrome and Edge lines must"
+       f" not change: `{PY} tools/sgt_replay.py diff` shows no change and `{T} tests/test_sgt_*.py"
+       " tests/test_vsdc_*.py tests/test_firefox_support.py` pass. Add a test per fixed difference using"
+       " the Firefox fixtures from W1-7 (or fakes). If D16 was 'Yes', rerun tools/browser_parity.py and"
+       " update docs/sdis/firefox-parity.md; else add a hands-on check to rerun it."),
+
+    wp("W2-R", 2, "opus", "S", ["W2-1", "W2-2", "W2-3", "W2-4", "W2-5"], "Phase 2 review",
        "Review W2-1..W2-4 against section 0 and Parts C, E, F, H. Check the verdict order in memory is one"
        " clear function (retired, composite, noise, ambiguous, waiting, variable_alignment, probably"
        " furniture, same/differs) and is documented in its docstring; client order still changes no"
@@ -324,6 +397,18 @@ WPS = [
        " fixed nodes never become datapoints; a value on 2 pages with the same label joins into one"
        " datapoint with 2 pages; a 50-row list counts once per client; share uses the page's own client"
        " count; slots and surprise."),
+
+    wp("W3-4", 3, "sonnet", "S", ["W3-1"], "Part R.4: SDIS on Firefox trees",
+       "Blueprint Part R.4. If W1-7 saved Firefox fixtures (tests/class_diff_align/client_A_firefox.json"
+       " and client_B_firefox.json): parametrize tests/test_class_diff_align.py and"
+       " tests/test_sdis_labels.py over the browsers that have fixtures (the existing client_A/B.json are"
+       " Edge reads; add chrome/firefox where present) so that, in every browser, alignment pairs 0"
+       " template texts wrongly and every EXPECTED value gets its label. If a Firefox case fails, fix the"
+       " KIND in core/sdis (keys.py, align.py, labels.py) - e.g. Firefox gives no grid column, so table"
+       " labels must come from the screen-box fallback - never a Firefox-only special case unless keyed on"
+       " a structural fact (framework id). Edge/Chrome results must not change. If there are no Firefox"
+       " fixtures (D16 was 'No' and the user has not run the tool yet), record it with `decide`, add a"
+       " hands-on check 'run tools/browser_parity.py, then rerun W3-4's tests', and finish."),
 
     wp("W3-3", 3, "sonnet", "L", ["W3-2"], "Part O engine: memory on disk, incremental mining",
        "Blueprint Part O (engine side only, no UI, no subprocess yet). STEP 1: core/sdis/store.py:"
@@ -491,7 +576,7 @@ WPS = [
        " Distill...: Find datapoints shows the loading dialog and locks the app; Cancel works; rename a"
        " label, register a datapoint, and see it captured on another PC after sync\"`."),
 
-    wp("W5-R", 5, "opus", "M", ["W4-2", "W4-5"], "Final review and merge-readiness note",
+    wp("W5-R", 5, "opus", "M", ["W4-2", "W4-5", "W3-4"], "Final review and merge-readiness note",
        "Review the whole branch against blueprint sections 0 and 9 and every Part. Run all"
        f" tests/test_sdis_*.py, tests/test_class_diff_align.py, tests/test_sgt_*.py, tests/test_sync_*.py"
        f" and `{PY} tools/sgt_replay.py diff` (no change); run the regression runner and compare with"

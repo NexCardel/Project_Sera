@@ -39,10 +39,14 @@ What to do:
 5. **Client data never leaves the admin PC's SDIS folders and is never printed.** Code, logs, test
    output, hand-off notes and commits contain counts, never page texts or values. Tests use the
    fictional fixtures in `tests/class_diff_align/` or hand-made data.
-6. **SGT capture must not change**, except where W4-1 and W4-4 say so. Anything touching `core/sgt/`,
+6. **SGT capture must not change**, except where W1-6, W2-5 (Firefox), W4-1 and W4-4 say so; even there
+   Chrome and Edge must behave exactly as before. Anything touching `core/sgt/`,
    `core/sgt_i/` or `core/vsdc/` must pass `tests/test_sgt_*.py` and show no change in
    `../APP/venv/Scripts/python.exe tools/sgt_replay.py diff`.
-7. **Strictly passive toward portals.** Nothing may click, type, scroll or submit on a portal.
+7. **Strictly passive toward portals.** Nothing may click, type, scroll or submit on a portal. Only
+   W1-7 (and W2-5 rerunning its tool) may open browser windows: throwaway profiles, fictional local
+   pages, after the D16 pop-up, closing only the processes it started. Never read or touch the user's
+   own browser windows or tabs.
 8. Never bump `version.json` or the app version, never build an installer. Never copy anything from
    `~/AmanAssociates_Sera/` into the repo.
 9. Match the surrounding code's style and comment density. Keep changes to what the WP needs. New
@@ -61,7 +65,7 @@ To tell whether a failing test is yours, compare with W0-1's hand-off note (sect
 
 ## When the user would normally be asked
 
-The blueprint's open decisions (D3–D15) are asked by the WP that needs them — the exact `ask` command
+The blueprint's open decisions (D3–D16) are asked by the WP that needs them — the exact `ask` command
 is in your focus; use it as written. For any other real design choice the blueprint does not settle
 (not things you can check in the code), work out the option that is most accurate and cheapest to
 build, make it the default, and ask:

@@ -8,8 +8,8 @@ a live Excel viewer.
 
 | File | What | Who writes it |
 | :--- | :--- | :--- |
-| `sdis-blueprint.md` | the design: rules, problems, Parts A–Q, decisions D1–D15, build order, hand-off notes | you (design) / workers (hand-off notes, taken decisions) |
-| `make_plan.py` → `sdis-plan.json` | 22 work packages: deps, model, step-by-step instructions, CLI permissions, deadline | edit `make_plan.py` and run it to re-plan |
+| `sdis-blueprint.md` | the design: rules, problems, Parts A–R (R = Firefox), decisions D1–D16, build order, hand-off notes | you (design) / workers (hand-off notes, taken decisions) |
+| `make_plan.py` → `sdis-plan.json` | 26 work packages: deps, model, step-by-step instructions, CLI permissions, deadline | edit `make_plan.py` and run it to re-plan |
 | `sdis-runner.md` | the prompt every worker session gets | edit by hand |
 | `sdis-status.csv` | one row per WP | `tools/sdis.py` only |
 | `sdis-runs.csv` | one row per agent run: model, minutes, tokens, cost, outcome | tool only |
