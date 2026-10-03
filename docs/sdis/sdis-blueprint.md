@@ -118,6 +118,7 @@ OCR portals (TRACES) are out of scope: SDIS needs an element tree (problem 8, la
 | 22 | **SGT gets no URL in Firefox.** Firefox's address bar is a ComboBox (automation id `urlbar-input`); both address readers (`vsdc_router` and `key_probe.read_url`) only look at Edit controls | measured 2026-10-03 | R |
 | 23 | Firefox window titles end in " — Mozilla Firefox" (em dash); the title cleanup only strips "-" | measured 2026-10-03 | R |
 | 24 | SGT-C has never been checked on Firefox: lines, dropdown/radio "Selected:" lines, the password guard, timing | — | R |
+| 25 | **Firefox: SGT reads BACKGROUND TABS too, mixing clients.** Firefox exposes every tab's page (and its hidden New Tab page) as a Document; `read_page_text` and `uia_nodes` read every Document. Verified: client A in front, client B in a background tab → 227 lines holding **both** clients | verified 2026-10-03 | R |
 
 Not problems for SDIS any more: P19 (SDIS learns offline on the admin PC, rule 7; its own raw read is guarded in Part K) and Q9 (answered by rule 7: offline over the corpus, never inside SGT-I's thread).
 
@@ -435,10 +436,27 @@ Firefox profile, never a real tab):
 | SDIS's node tree (`uia_nodes`) | **works**: control view 174 nodes, raw view 225; ids, classes and screen boxes present; **no grid (column) info**, so tables use the screen-box fallback |
 | Address bar | **not read**: it is a ComboBox (50003), automation id `urlbar-input`, name "Search with Google or enter address", ValuePattern = the full URL. Both readers look only at Edit (50004) |
 | Window title | "<page> — Mozilla Firefox" (em dash) |
+| Background tabs | **every tab's page is a Document** (plus a hidden "New Tab" page); the tab in front has `IsOffscreen = false`, every other `IsOffscreen = true` |
 
-**R.1 Address bar and title** (W1-6). The address readers accept an Edit **or a ComboBox** whose
-name or automation id says address / url / search, exactly as they treat an Edit today, so Chrome and
-Edge are unchanged. The title cleanup strips " - ", " – " and " — " browser suffixes. With the URL, SGT-C's
+**Verified 2026-10-03** (scratch scripts, no repo change; fictional pages; throwaway profile with
+Firefox's first-run screens turned off by a `user.js` in the profile - without it Firefox's
+"Welcome / Terms of Use" screen covers the page):
+
+| Check | Result |
+| :--- | :--- |
+| Planned address reader (Edit **or** ComboBox, same keyword test, ValuePattern) | returns `http://127.0.0.1:8765/client_A.html` from `urlbar-input` in 40 ms |
+| SGT lines on client A (front tab only) vs Edge's texts for the same page | all 52 Edge texts present, **same order**; nothing missing |
+| SGT today, A in front, B in a background tab | 227 lines, **clients A and B mixed** |
+| Same window, reading only Documents with `IsOffscreen = false` | 52 lines, **client A only** (= Edge) |
+
+**R.1 Address bar, title and background tabs** (W1-6). The address readers accept an Edit **or a
+ComboBox** whose name or automation id says address / url / search, exactly as they treat an Edit
+today, so Chrome and Edge are unchanged. The title cleanup strips " - ", " – " and " — " browser
+suffixes. **Both page readers read only Documents that are on screen** (`IsOffscreen` false):
+`vsdc_uia_text._find_document_elements` (SGT's lines) and `core/sgt_i/uia_nodes.read_page_nodes`
+(node trees, SDIS's recorder). This is a fix of a kind, not of Firefox: a page nobody can see is never
+read, in any browser. If every Document is offscreen (a minimised window), nothing is read, which is
+correct. With the URL, SGT-C's
 portal detection and specs work in Firefox, and SDIS gets page links (Part N) from Firefox captures.
 
 **R.2 Parity tool and Firefox fixtures** (W1-7). `tools/browser_parity.py` serves the fictional pages
@@ -535,7 +553,7 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 1 | W1-3 | Part D: identity by session id + data fingerprint | sonnet | W0-2 |
 | 1 | W1-4 | Part N: smart page link resolution | sonnet | W0-2 |
 | 1 | W1-5 | Part M: per-browser memory | sonnet | W0-2 |
-| 1 | W1-6 | Part R.1: Firefox address bar and window title (SGT-C) | sonnet | W0-1 |
+| 1 | W1-6 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | opus | W0-1 |
 | 1 | W1-7 | Part R.2: browser parity tool + Firefox fixtures | opus | W1-6 |
 | 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7 |
 | 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | sonnet | W1-R |

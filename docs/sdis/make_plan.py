@@ -185,7 +185,7 @@ WPS = [
        " browsers happens in W3-2.) Tests: two fixture reads of one link marked chrome and firefox ->"
        " two memories; both '' -> one. Regression unchanged."),
 
-    wp("W1-6", 1, "sonnet", "M", ["W0-1"], "Part R.1: Firefox address bar and window title (SGT-C)",
+    wp("W1-6", 1, "opus", "M", ["W0-1"], "Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C)",
        "Blueprint Part R (the measurements table is exact) and runner rule 6 (this touches SGT capture:"
        " Chrome and Edge must behave exactly as before). STEP 1: core/vsdc/vsdc_router.py, the address"
        " reader (around 'Look for Edit control (Address bar)'): today it searches ControlType 50004 (Edit)"
@@ -197,7 +197,7 @@ WPS = [
        " tools/pre_dev/class_diff/key_probe.py read_url (it searches 50004 only, around line 215). grep"
        " core/ and tools/ for any other place that finds the address bar by ControlType 50004 and fix it"
        " the same way (core/vsdc/vsdc_uia_text.py's UIA_EDIT_CONTROL_TYPE_ID is about page content, not"
-       " the address bar: leave it). STEP 3: the title cleanup in vsdc_router.py (the regex with 'mozilla"
+       " the address bar: leave it). STEP 2b - BACKGROUND TABS (problem 25, the most important part of this WP: today SGT mixes a background tab's client into the client on screen in Firefox): core/vsdc/vsdc_uia_text.py _find_document_elements keeps only Documents whose CurrentIsOffscreen is false (read the property inside try/except; an element whose property cannot be read is kept, as today); core/sgt_i/uia_nodes.py read_page_nodes applies the same rule to the Documents it walks (grep how it finds them). Verified by hand on 2026-10-03 (blueprint Part R): client A in front, client B in a background tab -> today 227 lines with both clients, with the rule 52 lines of A only. Tests: fakes with two Documents, one offscreen -> only the onscreen one's lines/nodes; all Documents offscreen -> nothing; a Document whose IsOffscreen raises -> kept. STEP 3: the title cleanup in vsdc_router.py (the regex with 'mozilla"
        " firefox') and any other browser-suffix regex you find (grep -i 'google chrome' in core/): accept"
        " '-', '–' and '—' before the browser name (character class [-–—]). STEP 4: tests"
        " (tests/test_firefox_support.py) with fake UIA objects (follow the fakes in"
@@ -224,7 +224,7 @@ WPS = [
        "chrome.exe; Edge: Program Files (x86)/Microsoft/Edge/Application/msedge.exe; Firefox: Program"
        " Files/Mozilla Firefox/firefox.exe; skip the missing ones): make a temp profile folder and start it"
        " ALONE with that profile (Chrome/Edge: --user-data-dir=<tmp> --no-first-run"
-       " --no-default-browser-check --new-window <url>; Firefox: -no-remote -profile <tmp> <url>), wait up"
+       " --no-default-browser-check --new-window <url>; Firefox: -no-remote -profile <tmp> <url>, after writing a user.js into <tmp> that turns off the first-run screens - browser.aboutwelcome.enabled false, datareporting.policy.dataSubmissionPolicyBypassNotification true, browser.startup.homepage_override.mstone 'ignore', startup.homepage_welcome_url '', browser.shell.checkDefaultBrowser false, toolkit.telemetry.reportingpolicy.firstRun false, trailhead.firstrun.didSeeAboutWelcome true, termsofuse.acceptedVersion 999 - or Firefox's 'Welcome / Terms of Use' screen covers the page; ALSO open client_B as a second tab (pass both URLs) and check SGT's lines hold client A's values only), wait up"
        " to 20 s for a window whose title contains the page's title (EnumWindows), then read: the address"
        " (the W1-6 reader), SGT's lines (core.vsdc.vsdc_uia_text.read_page_text(hwnd,"
        " include_selection=True)), the node trees (core.sgt_i.uia_nodes.read_page_nodes control and"
