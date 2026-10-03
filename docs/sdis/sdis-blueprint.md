@@ -1,7 +1,8 @@
 # Sera Distill (SDIS) — blueprint
 
-**Status:** approved 2026-10-03 for building; **nothing in Parts B–R is built yet.** Baseline: `main` at
-`0f30543` (the pre-dev engine). Worktree `../APP-sdis`, branch `sdis`. Deadline **2026-10-04 23:00 IST**. It is written from the
+**Status:** approved 2026-10-03 for building; Parts S–U (containers, portal registration, the field
+library) and decisions D3–D16 added 2026-10-04. **Nothing in Parts B–U is built yet.** Baseline: `main` at
+`0f30543` (the pre-dev engine). Worktree `../APP-sdis`, branch `sdis`. Deadline **2026-10-06 01:30 IST** (Tuesday; moved from 2026-10-04 23:00 by the user). It is written from the
 design conversation of 2026-10-03 and builds on `docs/datapoint-engine-goal.md` (the pre-dev record:
 rules R1–R10, measurements, problems P1–P24, questions Q1–Q11). It is built the way Autofill tweaks
 was: one set of rules, parts that each say *what is wrong → what changes*, and work packages run one
@@ -81,6 +82,9 @@ confidence, and there is no truth set to score it against: the user is the final
  Part P  Captures travel staff PC -> admin PC (Sera Sync v3 transport), deleted after receipt
  Part Q  A picked datapoint is registered on EVERY PC (synced table -> spec file SGT loads)
  Part R  Firefox support for SGT-C and SDIS (address bar, title, line parity, Firefox fixtures)
+ Part S  Classes and containers: Profile builder + Others per portal, Dataset containers; all in one JSON
+ Part T  Portal registration from the login links in service settings, same scope gate
+ Part U  sdis_mcl: the field library every registered datapoint is a field of
             |
             v
  Part L  Distill… dialog
@@ -119,6 +123,10 @@ OCR portals (TRACES) are out of scope: SDIS needs an element tree (problem 8, la
 | 23 | Firefox window titles end in " — Mozilla Firefox" (em dash); the title cleanup only strips "-" | measured 2026-10-03 | R |
 | 24 | SGT-C has never been checked on Firefox: lines, dropdown/radio "Selected:" lines, the password guard, timing | — | R |
 | 25 | **Firefox: SGT reads BACKGROUND TABS too, mixing clients.** Firefox exposes every tab's page (and its hidden New Tab page) as a Document; `read_page_text` and `uia_nodes` read every Document. Verified: client A in front, client B in a background tab → 227 lines holding **both** clients | verified 2026-10-03 | R |
+| 26 | **A picked datapoint has no class.** Nothing says whether it is part of the client's profile, part of a dataset (one filing / application / refund), or a standalone value. Only SGT's hand-written specs know (sections `profile`, `records`, `current_dataset`) | user, 2026-10-04 | S |
+| 27 | **Datasets cannot be built from picked datapoints.** SGT's datasets are hand-written (form + period + the submit ladder); SDIS has no way to group picked datapoints into one dataset or tell how complete it is | user, 2026-10-04 | S |
+| 28 | **Portals are hard-coded.** The scope gate knows two domains (`vsdc_scope.IN_SCOPE_DOMAINS`) plus an optional file; the portals the office actually uses are already typed in as login links in service settings (`services.login_page_link`) | user, 2026-10-04 | T |
+| 29 | **The same field on many pages is many datapoints.** PAN on the GST page and PAN on the ITR page are picked, labelled and registered separately; nothing makes them one reusable field | user, 2026-10-04 | U |
 
 Not problems for SDIS any more: P19 (SDIS learns offline on the admin PC, rule 7; its own raw read is guarded in Part K) and Q9 (answered by rule 7: offline over the corpus, never inside SGT-I's thread).
 
@@ -421,6 +429,9 @@ A datapoint the user picks becomes a field spec **on every PC** (D7):
 * Rejections (`variable_alignment` rejected, datapoints dismissed) live in a second synced table,
   `sdis_decisions`, so mining on the admin PC remembers them (D6).
 * No tracker column is added automatically (D15), the same as the SGT lab today.
+* `sdis_fields.json` holds only **how a field is captured** (its specs, named by their `sdis_mcl`
+  field). **Which container a field is in** lives in the containers file (Part S.3), so moving a field
+  between containers never touches its capture spec.
 
 ## Part R — Firefox support for SGT-C and SDIS
 
@@ -478,6 +489,194 @@ browsers' memories apart; this proves the engine itself works on Firefox's tree.
 
 Hands-on: a real GST and ITR session in Firefox captures the same fields as in Chrome (W1-6's check).
 
+## Part S — Classes and containers (problems 26, 27)
+
+*(user, 2026-10-04: "a container called dataset; we add whatever datapoints we want into it")*
+
+Every registered datapoint lives in exactly **one container**. There are three kinds:
+
+| Container | Holds | How many | What SGT does with it |
+| :--- | :--- | :--- | :--- |
+| **Profile builder** | profile datapoints (PAN, name, address…) | **one per registered portal** (D19, Part T) | adds the value to the session's **profile context** on that portal, exactly like today's `profile` specs (latches; identity, Part D, uses it too) |
+| **Dataset** containers | whatever datapoints the user adds | as many as the user makes ("GSTR-3B submission", "Refund application"…) | builds one **instance** per (client, key) (D17) and gives it a **completion level** defined in the containers file (S.3); written to the tracker dump |
+| **Others** | info datapoints (aggregate turnover…) | **one per registered portal** (Part T) | a standalone value per client and portal; the latest wins and the history is kept (D20) |
+
+### S.1 Class suggestion: "what does this value stay the same with?"
+
+*(user, 2026-10-04: "I like idea 1, apply it too")*
+
+SDIS suggests a container for each datapoint from counts over its value history (Part B), per client
+(Part D) and per period:
+
+| The value stays the same for… | Suggested container |
+| :--- | :--- |
+| the same **client**, on every page, day and period it was seen | Profile builder |
+| the same **client + period**, but changes between that client's periods | a Dataset container |
+| neither | Others |
+
+* **Period** of an observation: the period-shaped value (`labels.is_period`) shown **once** on that page,
+  or the masked link segment (Part N) when it is period-shaped; none → the observation is not used for
+  the dataset test.
+* A class is suggested only when **≥ 90%** of the clients with enough evidence agree, where "enough" is
+  two or more observations (profile test: on 2+ days or 2+ periods; dataset test: 2+ periods). Too
+  little evidence → **no suggestion** (rule 6); the dialog says why.
+* It is **only a suggestion**: it preselects the container in the Distill dialog. The user moves the
+  datapoint anywhere. A move is stored (`sdis_decisions`, D6) and fed back like a pick (D8): that
+  kind is never suggested into the rejected container again.
+* Known limit: a value fixed per client per year (aggregate turnover) can pass the dataset test. The
+  user moves it to Others once.
+
+### S.2 Dataset containers and completion
+
+*(user, 2026-10-04)*
+
+* The user **creates** a dataset container, names it, and **adds datapoints** to it from the Distill
+  list or from the field library (Part U). A container holds **fields** (Part U), so a field picked on
+  several pages fills the same slot from any of them.
+* **Completion levels are not in code.** *(user, 2026-10-04: "drop the dataset level I told above, it
+  will be added to the JSON")* Which levels exist, when each is reached and how each maps onto the
+  tracker's submit ladder are written in the containers file (S.3: `levels`, `level_map`). The code
+  only evaluates them; it assumes no level names and no thresholds. A container with no levels shows
+  only "k of n" (k = captured counted fields, n = counted fields) and is written to the tracker under
+  SGT's existing rule: a keyed dataset is at least a Draft.
+* **Levels only promote**, like the submit ladder: a value that disappears later never lowers the level.
+  The fields that made the level are kept as its evidence, with "k of n".
+* **Editing a container** (adding or removing a field, changing its levels) recomputes instances; an
+  instance never moves down.
+* Which instance a value belongs to is the **key** (D17).
+* **SGT side** (rule 8): containers are defined in the containers file (S.3); SGT builds container
+  instances the way it builds `current_dataset` today (a value shown once on a page belongs to the
+  instance being worked on; a new key starts a new instance) and writes each instance to the tracker
+  dump under the canonical key (`core/dataset_key.py`). With no containers registered, `tools/sgt_replay.py
+  diff` shows no change. SGT's built-in GST/ITR datasets and their ladder are untouched.
+* Pages listing **several instances** (a table of filings) are D22: the first version builds one
+  instance per page and key, like `current_dataset`.
+* **Key** (D17, taken): the container's name is the dataset's form, unless a field is marked `form`;
+  one field is marked `period`; an instance = (client, form, period). Values seen before the period is
+  known wait in the session, as SGT's current dataset does.
+* **Tracker ladder:** each level names the ladder status it writes (`level_map`, S.3). The mapping the
+  user agreed as D18 (Draft → Draft, In progress → Submitted (Not Verified), Complete → Submitted &
+  Verified) is what goes into the file; it is not built in.
+
+### S.3 The containers file: `sdis_containers.json`
+
+*(user, 2026-10-04: "we will require a json to maintain containers and establish exceptions")*
+
+One JSON document holds every container and every exception, in the same spirit as
+`sgt_fields.json`: edit it to change behaviour, no code change; every exception carries examples; a
+file that fails its own examples is **refused at load and the previous version keeps running**.
+
+* **Where it lives:** the office copy is one row of a synced table (`sdis_config`, the whole document +
+  a version number), so every PC gets the same file. Each PC writes it to
+  `<Sera data>/sdis_containers.json` when the row changes, and SGT and SDIS load that file. The Distill
+  dialog edits it (creating a container, adding a field, marking key fields); an admin can also
+  **export it, edit it by hand and import it** (the import runs the same checks). A built-in copy
+  shipped with the app (`core/sdis/sdis_containers.json`) is empty: no levels, no containers; the
+  office copy is laid over it.
+* **Shape** (field names are `sdis_mcl` names, Part U):
+
+```json
+{
+  "version": 1,
+  "levels": [{"name": "Draft",       "when": {"captured": 1}},
+             {"name": "In progress", "when": {"captured": "51%"}},
+             {"name": "Complete",    "when": {"captured": "all"}}],
+  "level_map": {"Draft": "Draft", "In progress": "Submitted (Not Verified)",
+                "Complete": "Submitted & Verified"},
+  "profile": {"GST Portal": ["pan", "legal_name"], "Income Tax": ["pan", "name"]},
+  "containers": [
+    {"name": "GSTR-3B submission", "portal": "GST Portal",
+     "form_field": null, "period_field": "tax_period",
+     "fields": ["tax_period", "tax_paid", "arn", "filing_date"],
+     "exceptions": {"optional": ["filing_date"],
+                    "proves": {"arn": "Complete"},
+                    "levels": null, "level_map": null},
+     "examples": [{"captured": ["tax_period"], "level": "Draft"},
+                  {"captured": ["tax_period", "filing_date"], "level": "Draft"},
+                  {"captured": ["tax_period", "tax_paid"], "level": "In progress"},
+                  {"captured": ["tax_period", "arn"], "level": "Complete"}]}
+  ],
+  "others": {"GST Portal": ["aggregate_turnover"]},
+  "class_exceptions": {"aggregate_turnover": "info"},
+  "portal_exceptions": {"extra_domains": {"Some Portal": ["work.example.gov.in"]},
+                        "never_register": ["login.microsoftonline.com"]}
+}
+```
+
+  The levels above only illustrate the syntax; the real ones are whatever the user writes.
+
+* **Levels** (`levels`, file-wide; a container's own `levels` replaces them): an ordered list, lowest
+  first. Each level has a `name` and a `when`; the instance is at the **highest** level whose `when`
+  holds (and never lower than it has been). `when` may hold:
+  * `captured`: a number of counted fields (`2`), a share of n (`"51%"`, rounded up), or `"all"`;
+  * `fields`: a list of fields that must all be captured;
+  both, when given, must hold.
+
+* **The exceptions:**
+
+  | Exception | Where | Does |
+  | :--- | :--- | :--- |
+  | `optional` | a container | the field is captured and shown, but **not counted in n** (a field many instances never have) |
+  | `proves` | a container | capturing this field alone lifts the instance to **at least** that level (the same idea as SGT's `identifier_proves`: an ARN may prove the filing is done even if other fields were never seen). The level is the higher of the count and every `proves` hit; it still only promotes |
+  | `levels` / `level_map` | file, or a container | a container's own levels, and its own mapping onto the tracker's submit ladder, replace the file's |
+  | `form_field` | a container | the form comes from this field instead of the container's name (D17) |
+  | `class_exceptions` | file | a field is always in this class, whatever S.1 suggests |
+  | `portal_exceptions.extra_domains` | file | extra domains for a registered portal (a portal that moves to another domain after login, Part T) |
+  | `portal_exceptions.never_register` | file | domains a login link may never register (shared sign-in sites); checked before Part T's confirmation |
+
+* **Load checks** (refuse the whole file, keep the previous one, say why in the log and the dialog):
+  every field name exists in `sdis_mcl`; `profile` and `others` name registered portals; `period_field` and `form_field` are fields of their container;
+  `optional` and `proves` name fields of their container; `optional` never names the period field;
+  level names are unique; a `when` uses only `captured` / `fields`, with a share between 1% and 100%
+  and fields of the container; every `proves` level is a defined level; every `level_map` key is a
+  defined level and every value a real status of the ladder; at least one field counts
+  (n ≥ 1); a field is in at most one container per portal; every container's `examples` give the levels
+  they claim; `never_register` and `extra_domains` entries pass Part T's domain checks.
+
+## Part T — Portal registration from service settings (problem 28)
+
+*(user, 2026-10-04: "take the link and dissect it to obtain the domain and use the gates as SGT-I")*
+
+* **Source:** the login links the user already types in **service settings**
+  (`ui/dialogs/service_manager_dialog.py` → `services.login_page_link`, `sera_db/mcl_services.py`;
+  the `services` table already replicates to every PC, `sync_schema.py`).
+* **Dissect:** `vsdc_scope.extract_host(link)` (parsed hostname, never a substring), then the
+  **registered domain** = the host down to one label above its public suffix
+  (`services.gst.gov.in` → `gst.gov.in`, `unifiedportal-mem.epfindia.gov.in` → `epfindia.gov.in`).
+  Suffixes come from a short built-in list (`gov.in`, `nic.in`, `co.in`, `org.in`, `net.in`,
+  `edu.in`, `ac.in`, `res.in`, `com`, `org`, `net`, `in`…); a host whose suffix is not on the list
+  keeps its **full host** (the narrowest scope). A bare suffix is never accepted
+  (`_FORBIDDEN_ENTRIES`), nor `localhost` or an IP outside tests.
+* **The same gates:** the domain joins the scope gate exactly as the built-in two do (`is_in_scope_url`,
+  `portal_for_url`: the domain or a subdomain of it, by parsed hostname). Income Tax and GST stay
+  built in. The portal's name is the service's name.
+* **What registration gives:** the portal is in scope for SGT-C and the SDIS recorder (D21), it gets
+  its **Others** container (Part S), and it is the `portal` of every spec registered on it.
+* **Exceptions** come from the containers file (S.3): `never_register` domains are refused, and
+  `extra_domains` add a working domain to a registered portal.
+* **Shown to the user** (D21, taken): saving a service shows the domain that will be watched and asks
+  once; the confirmed domain is in scope for **both** SGT-C and the SDIS recorder.
+  Deleting the service unregisters the portal: capture stops there; its registered datapoints stay,
+  marked inactive.
+* **Login domain ≠ working domain** (a portal that moves to another domain after login): the existing
+  tripwire (`vsdc_router` `_tripwire_hosts`, a portal title on an out-of-scope host) already notices
+  it; it offers "watch <domain> for <portal> too?" instead of only warning.
+
+## Part U — `sdis_mcl`: the field library (problem 29)
+
+*(user, 2026-10-04: "the fields that are approved or entered go into sdis_mcl so that we can reuse them
+for multiple datapoints")*
+
+* A synced office table **`sdis_mcl`**: one row per **field** (gid, name, label, value type, class =
+  profile / dataset / info, portal or "all", status, who, when). Every field the user approves in the
+  Distill dialog, or types in by hand, goes in.
+* A registered datapoint **is a field** of the library: PAN picked on the GST page and PAN picked on
+  the ITR page are two datapoints (two specs, two pages) of **one** field. Containers (Part S) list
+  fields, not datapoints. Part M's join across browsers uses the field once it is picked.
+* Naming a datapoint in the dialog **offers the existing fields first** (type-ahead); a new name
+  creates a new field. Renaming a field renames it everywhere (R6); what is captured does not change.
+* Its relation to Sera's existing **Master Column List** (`mcl_columns`, the client columns) is D23.
+
 ## Part L — The Distill… dialog
 
 Tracker dump window → Tools ▾ → **Distill…**. Clear visibility, **not like the SGT lab** screen:
@@ -490,7 +689,11 @@ Tracker dump window → Tools ▾ → **Distill…**. Clear visibility, **not li
   datapoint changes only its name, never what is captured. An edited label is never overwritten by a
   later mining run;
 * a `variable_alignment` list with keep / reject;
-* filters: relevance, sure, page, state, browser;
+* **containers** (Part S): beside the datapoint list, one Profile builder per registered portal, the Dataset containers
+  (create, rename, delete; each shows its datapoints and n) and one Others per registered portal
+  (Part T). Each datapoint shows its **suggested container** (S.1); the user adds it to a container,
+  which registers it (D7) as a field of `sdis_mcl` (Part U); the label box offers existing fields first;
+* filters: relevance, sure, page, state, browser, suggested container;
 * the **Find datapoints** button and the time of the last mining run (Part O).
 
 Accepting a datapoint is D7.
@@ -514,35 +717,47 @@ like Autofill tweaks; every browser captured and compared per browser (M); smart
 (N); "Find datapoints" on demand with a locking loading dialog and ≤ 10% CPU, no idle learning (O);
 relevance by occurrences of non-fixed values, noise counted as fixed (J); no truth set, no absolute confidence; SDIS's own input, SGT-I
 irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved; Firefox support for SGT-C and
-SDIS (R).
+SDIS (R). **2026-10-04:** containers (Profile builder and Others per portal, Dataset containers whose
+completion levels are written in the containers file) and the class suggestion (S); portal registration from service-settings login
+links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D23 answered (below).
 
-**Open (default in bold):**
+| # | Decision | Taken (user, 2026-10-04 unless marked) |
+| :--- | :--- | :--- |
+| D1 | Engine location | `core/sdis/` package, pre-dev scripts as module aliases (Part A) (2026-10-03) |
+| D2 | Production input | SDIS's own recorder, SGT-I irrelevant (Part K) (2026-10-03) |
+| D3 | Confirm threshold N, and the minimum clients for a full Sure % (Q2) | N = 2 to confirm; 5 for full Sure % |
+| D4 | Capture whose identity stays undecided (Q10) | **no vote** |
+| D5 | Captures on different days (Q11) | automatic, by SDIS's recorder |
+| D6 | Where rejections, edited labels and container moves are stored (Q4) | office DB tables, synced (Part Q) |
+| D7 | An accepted datapoint becomes an SGT-C spec (Q4); its label stays editable | yes, by the user's approval only |
+| D8 | Picks, rejections and container moves feed back into the ranking (Q3) | yes: a picked kind ×1.5, a rejected kind left out |
+| D9 | Truth set | none; SDIS removes the fluff and the user picks (2026-10-03) |
+| D10 | Baseline | committed on `main` as `0f30543` (2026-10-03) |
+| D11 | Thresholds: screen 0.5, retire 1%, identity 0.9 / 0.5 over 3 values, ambiguity margin 0.5 | these; changed only when the regression runner shows a reason |
+| D12 | Idle time before learning | no idle learning; "Find datapoints" on demand (Part O) (2026-10-03) |
+| D13 | Raw-read budget per changed page; staff-PC size cap | 1.5 s; 500 MB |
+| D14 | How captures reach the admin PC | push over Sera Sync v3's transport, `sdis_push`, delete after ack (Part P) |
+| D15 | Tracker column added automatically for a registered datapoint | no |
+| D16 | A worker may open Chrome, Edge and Firefox (throwaway profiles, fictional local pages) | **yes** (no pop-up needed) |
+| D17 | Dataset key | the container's name is the form (unless a field is marked `form`); one field is marked `period`; instance = (client, form, period) (Part S.2) |
+| D18 | Completion → tracker ladder | **superseded the same day:** levels and their ladder mapping are written in the containers file (S.3), not built in. Agreed mapping, for the file: Draft → Draft; In progress → Submitted (Not Verified); Complete → Submitted & Verified; "k of n" kept; overridable per container (S.3) |
+| D21 | Portal registration | the domain is confirmed once on save; it is in scope for SGT-C **and** SDIS; exceptions in the containers file (Part T, S.3) |
+| — | Containers and exceptions | one JSON document, `sdis_containers.json`, synced, validated with examples like `sgt_fields.json` (Part S.3) |
+| D19 | Profile builder | **one per registered portal** |
+| D20 | An Others value that changes | the latest wins; the history is kept |
+| D22 | Pages that list several instances of a container | later; first version: one instance per page and key |
+| D23 | `sdis_mcl` and Sera's Master Column List (`mcl_columns`) | separate tables; a field may be linked to a column later |
+| — | Dataset completion levels | not in code: defined in the containers file (`levels`, `level_map`) |
+| — | Deadline | moved to **2026-10-06 01:30 IST** (Tuesday) |
 
-| # | Question | Default | Asked by |
-| :--- | :--- | :--- | :--- |
-| D1 | ~~Engine location~~ | **Taken:** `core/sdis/` package, pre-dev scripts as module aliases (Part A) | — |
-| D2 | ~~Production input~~ | **Taken:** SDIS's own recorder, SGT-I irrelevant (Part K) | — |
-| D3 | Confirm threshold N, and the minimum clients before a % is shown (Q2) | **N = 2 to confirm; 5 for full Sure %** | W3-2 |
-| D4 | Capture whose identity stays undecided (Q10) | **no vote** / low-weight vote | W1-3 |
-| D5 | Captures on different days (Q11) | **automatic, by SDIS's recorder** / by hand | W2-2 |
-| D6 | Where rejections and edited labels are stored (Q4) | **office DB tables, synced** (Part Q) / a file on the admin PC | W4-4 |
-| D7 | An accepted datapoint becomes an SGT-C spec after approval (Q4); its label (as the user edited it) stays editable afterwards | **yes, by the user's approval only** | W4-4 |
-| D8 | Do the user's picks and rejections feed back into the ranking (Q3) | **yes: a picked kind ×1.5, a rejected kind left out** | W3-2 |
-| D9 | ~~Truth set~~ | **Taken:** none. SDIS removes the fluff and the user picks; no absolute confidence | — |
-| D10 | ~~Baseline~~ | **Taken:** committed on `main` as `0f30543` | — |
-| D11 | Thresholds: screen 0.5, retire 1%, identity 0.9 / 0.5 over 3 values, ambiguity margin 0.5 | **these; changed only when the regression runner shows a reason** | W2-R |
-| D12 | ~~Idle time before learning~~ | **Taken:** no idle learning; "Find datapoints" on demand, app locked by the loading dialog, ≤ 10% CPU (Part O) | — |
-| D13 | Raw-read budget per changed page, and the staff-PC size cap for raw records | **1.5 s; 500 MB** | W4-1 |
-| D14 | How captures reach the admin PC | **push over Sera Sync v3's transport, new `sdis_push` frame, delete after ack** (Part P) / shared folder | W4-2 |
-| D15 | Add a tracker column automatically for a registered datapoint | **no** (as the SGT lab today) / yes | W4-4 |
-| D16 | May a worker open Chrome, Edge and Firefox windows (throwaway profiles, fictional local pages) for about half a minute? | **yes, after the pop-up** / no (the user runs `tools/browser_parity.py` by hand) | W1-7 |
+No decision is open. Workers record any new choice with `decide` and ask with `ask`.
 
 ## 11. Build order
 
 Run by `tools/sdis.py` (the SGT-overhaul dispatcher via `use_project()`), in the worktree `../APP-sdis`
 on branch `sdis`. One fresh session per WP, with retries, usage-limit sleeps, questions by pop-up,
 CSV trackers, and nothing merged automatically. The step-by-step instructions for each WP are in
-`sdis-plan.json` (generated by `make_plan.py`). Deadline **2026-10-04 23:00 IST**.
+`sdis-plan.json` (generated by `make_plan.py`). Deadline **2026-10-06 01:30 IST** (Tuesday).
 
 | Phase | WP | What | Model | Needs |
 | :--- | :--- | :--- | :--- | :--- |
@@ -555,7 +770,8 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 1 | W1-5 | Part M: per-browser memory | sonnet | W0-2 |
 | 1 | W1-6 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | opus | W0-1 |
 | 1 | W1-7 | Part R.2: browser parity tool + Firefox fixtures | opus | W1-6 |
-| 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7 |
+| 1 | W1-8 | Part T: portal registration from service-settings login links | opus | W0-1 |
+| 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7, W1-8 |
 | 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | sonnet | W1-R |
 | 2 | W2-2 | Part C: noise over time | sonnet | W1-R |
 | 2 | W2-3 | Part F: the variable_alignment state | sonnet | W2-1 |
@@ -565,13 +781,16 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 3 | W3-1 | Part I: statuses + labels from memory | sonnet | W2-R |
 | 3 | W3-2 | Part J: relevance by occurrences + slots | sonnet | W3-1 |
 | 3 | W3-4 | Part R.4: SDIS on Firefox trees | sonnet | W3-1 |
+| 3 | W3-5 | Part S.1: class suggestion (what a value stays the same with) | sonnet | W3-2 |
 | 3 | W3-3 | Part O engine: memory on disk, incremental mining | sonnet | W3-2 |
 | 4 | W4-1 | Part K: SDIS's own recorder (raw view, session id, browser) | opus | W3-3 |
 | 4 | W4-2 | Part P: captures travel to the admin PC | opus | W4-1 |
 | 4 | W4-3 | Part O: mining process capped at 10% CPU | opus | W3-3 |
 | 4 | W4-4 | Part Q: registration on every PC (synced tables) | opus | W3-3 |
-| 4 | W4-5 | Part L: the Distill dialog + loading dialog | sonnet | W3-2, W4-3, W4-4 |
-| 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5, W3-4 |
+| 4 | W4-6 | Parts U + S.3: `sdis_mcl`, the containers file (sync + checks) | opus | W4-4, W1-8 |
+| 4 | W4-7 | Part S.2 in SGT: container instances, completion, Others values | opus | W4-6 |
+| 4 | W4-5 | Part L: the Distill dialog + loading dialog + containers | sonnet | W3-5, W4-3, W4-6 |
+| 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5, W4-7, W3-4 |
 
 Every WP: tests green, the regression runner before and after in its hand-off note (counts only),
 rules 5–8 of the runner kept. Decisions are asked by the WP named in section 10.

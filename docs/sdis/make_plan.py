@@ -142,11 +142,8 @@ WPS = [
        " a link with -> its own client 'client <n>' (next free number); otherwise owner 'undecided"
        " <session>'. Sessions with ids keep their group_clients owner. STEP 3: memory.client_maps() uses"
        " resolve_owners and DROPS 'undecided ...' owners from memory (no vote); the regression runner"
-       " prints owners per session. Ask the user D4 before coding the 'undecided' branch:"
-       f" `{PY} tools/sdis.py ask W1-3 --question \"A capture SDIS cannot identify (no PAN/GSTIN, data"
-       " inconclusive): what should happen to it?\" --options \"No vote|Low-weight vote\" --default \"No"
-       " vote\"` and follow the ANSWER (low weight = count it as 0.5 of a client in confirmed() and"
-       " relevance; record how). STEP 4: tests/test_sdis_identity.py: fixtures A and B as two sessions with"
+       " prints owners per session. D4 is taken (user, 2026-10-04): NO VOTE - an undecided capture is dropped from memory and relevance."
+       " STEP 4: tests/test_sdis_identity.py: fixtures A and B as two sessions with"
        " no ids -> 'different' -> two clients; A twice (two sessions) -> 'same' -> one client; a session"
        " with too few data values -> 'undecided'; chained ids still join. Regression: the two fictional"
        " sessions (no ids, same fictional page) become ONE client, so the fictional pages drop out of the"
@@ -210,10 +207,8 @@ WPS = [
        " HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome\"`."),
 
     wp("W1-7", 1, "opus", "L", ["W1-6"], "Part R.2: browser parity tool + Firefox fixtures",
-       "Blueprint Part R.2. STEP 1: ask D16 first:"
-       f" `{PY} tools/sdis.py ask W1-7 --question \"May I open Chrome, Edge and Firefox windows for about"
-       " half a minute (throwaway profiles, fictional local test pages only, closed afterwards)?\""
-       " --options \"Yes, go ahead|No, I will run it myself\" --default \"Yes, go ahead\"`. STEP 2:"
+       "Blueprint Part R.2. STEP 1: D16 is taken (user, 2026-10-04): yes, you may open the browsers (throwaway profiles, fictional local"
+       " pages only, close only the processes you started); no pop-up. STEP 2:"
        " tests/class_diff_align/make_form.py writes a fictional form page form.html (title 'SDIS parity"
        " form'): a dropdown with 3 options (2nd selected), 3 radio buttons (one checked), a ticked"
        " checkbox, a text box with a fictional value, a password box with the value 'Fictional#123', and a"
@@ -244,7 +239,43 @@ WPS = [
        " (tests/test_browser_parity.py): the table/diff logic on hand-made line lists; the process"
        " cleanup only ever targets the PIDs it started (monkeypatch)."),
 
-    wp("W1-R", 1, "opus", "S", ["W1-1", "W1-2", "W1-3", "W1-4", "W1-5", "W1-6", "W1-7"], "Phase 1 review",
+    wp("W1-8", 1, "opus", "M", ["W0-1"], "Part T: portal registration from service-settings login links",
+       "Blueprint Part T, Part S.3 (portal_exceptions only) and rule 8. D21 is taken (user, 2026-10-04):"
+       " the domain is shown and confirmed once on save, and a confirmed domain is in scope for BOTH SGT-C"
+       " and the SDIS recorder. STEP 1: core/sdis/config.py, the loader for sdis_containers.json (blueprint"
+       " S.3): load(paths) lays the office file (<Sera data dir>/sdis_containers.json) over the built-in"
+       " core/sdis/sdis_containers.json (create it: version 1, empty levels, level_map, profile,"
+       " containers, others, class_exceptions, portal_exceptions); check() refuses the whole file with a"
+       " reason and the previous good version keeps running (follow how core/sgt/sgt_specs.py refuses a"
+       " spec file and keeps the last good one). In this WP implement and check ONLY version and"
+       " portal_exceptions; the other sections are read and passed through unchecked (W4-6 adds"
+       " their checks). STEP 2: core/vsdc/vsdc_scope.py: registered_domain(host) = the host down to one"
+       " label above its public suffix, from a module tuple PUBLIC_SUFFIXES (gov.in, nic.in, co.in,"
+       " org.in, net.in, edu.in, ac.in, res.in, gen.in, firm.in, ind.in, com, org, net, in, io, gov);"
+       " unknown suffix -> the full host; a bare suffix, _FORBIDDEN_ENTRIES, localhost or an IP -> None"
+       " (an IP only when local test pages are allowed). service_domains(): {portal name: (domains,)}"
+       " from the services table's login_page_link (read through the database the app already opened;"
+       " never at import time; cached and cleared by reload_extra_domains()), minus never_register,"
+       " plus portal_exceptions.extra_domains. is_in_scope_url and portal_for_url accept these domains"
+       " exactly as they accept extra_domains() (parsed hostname, domain or subdomain). Income Tax and"
+       " GST stay built in and win on overlap. STEP 3: core/sdis/portals.py: registered_portals() = the"
+       " built-in two plus service_domains(), each {name, domains, source}; Part S's Others containers"
+       " and every spec's portal use it. STEP 4: ui/dialogs/service_manager_dialog.py: on save, show the"
+       " domain that will be watched and ask once (D21); a never_register domain or a link that gives no"
+       " domain saves the service but registers nothing and says why. Deleting a service unregisters its"
+       " domain (reload). STEP 5: the tripwire (core/vsdc/vsdc_router.py _tripwire_hosts, a portal title"
+       " on an out-of-scope host) logs that host's registered domain so W4-5 can offer 'watch it too'"
+       " (it becomes an extra_domains entry); no UI here. Tests (tests/test_sdis_portals.py):"
+       " registered_domain for services.gst.gov.in, eportal.incometax.gov.in,"
+       " unifiedportal-mem.epfindia.gov.in, www.mca.gov.in, a.b.example.co.in, gov.in (None),"
+       " incometax.gov.in.evil.example (its own domain, never incometax), localhost (None); a service link"
+       " puts its domain in scope and a lookalike host stays out; never_register refuses; extra_domains"
+       " adds; removing the service takes it out; a broken config file is refused and the previous one"
+       f" kept. Run `{T} tests/test_vsdc_scope*.py tests/test_sgt_*.py` and `{PY} tools/sgt_replay.py"
+       " diff` with no services -> no change."),
+
+
+    wp("W1-R", 1, "opus", "S", ["W1-1", "W1-2", "W1-3", "W1-4", "W1-5", "W1-6", "W1-7", "W1-8"], "Phase 1 review",
        "Review W1-1..W1-5 against blueprint section 0 and Parts B, D, G, M, N and their hand-off notes."
        " Check: the order in which link resolution (N), screens (G), browser (M) and identity (D) are"
        " applied in client_maps is consistent (resolve links -> identity -> per (link, browser) -> screens);"
@@ -291,11 +322,8 @@ WPS = [
        " before it in mem.order is confirmed 'same for all clients' with a letter in its text"
        " (LABEL_LOOKBACK = 6; leave a TODO naming W3-1). memory.verdict order: retired (later), composite,"
        " 'changes within one client', 'changes with time', then the existing ones; 'probably furniture'"
-       " replaces 'differs between clients' when it applies. Ask D5 first:"
-       f" `{PY} tools/sdis.py ask W2-2 --question \"SDIS spots furniture (dates, notices) by seeing pages on"
-       " different days. Where should those captures come from?\" --options \"Automatic, from SDIS's"
-       " recorder|Captured by hand\" --default \"Automatic, from SDIS's recorder\"` (the answer only goes"
-       " in the note and blueprint; the code is the same). Tests (tests/test_sdis_noise.py) with hand-made"
+       " replaces 'differs between clients' when it applies. D5 is taken (user, 2026-10-04): automatic, from SDIS's recorder (the code is the same either way)."
+       " Tests (tests/test_sdis_noise.py) with hand-made"
        " PageMemory nodes: same text for 2 clients on day 1, another shared text on day 2 -> changes with"
        " time; different texts for 2 clients on the same day -> not; a long unlabelled sentence that"
        " differs -> probably furniture; the same with a label before it -> stays 'differs'. Regression:"
@@ -348,10 +376,8 @@ WPS = [
        "Review W2-1..W2-4 against section 0 and Parts C, E, F, H. Check the verdict order in memory is one"
        " clear function (retired, composite, noise, ambiguous, waiting, variable_alignment, probably"
        " furniture, same/differs) and is documented in its docstring; client order still changes no"
-       " verdict (the runner's 'orders agree'); thresholds are module constants named as in D11. Ask"
-       f" D11: `{PY} tools/sdis.py ask W2-R --question \"Keep SDIS's starting thresholds (screen 0.5, retire"
-       " 1%, identity 0.9/0.5 over 3 values, ambiguity margin 0.5) until the results show a reason to"
-       " change?\" --options \"Keep them|Let me set them\" --default \"Keep them\"`. Fix defects with"
+       " verdict (the runner's 'orders agree'); thresholds are module constants named as in D11. D11 is taken (user, 2026-10-04): keep the"
+       " thresholds until the regression runner shows a reason. Fix defects with"
        " tests.", kind="review"),
 
     wp("W3-1", 3, "sonnet", "L", ["W2-R"], "Part I: statuses + labels from memory",
@@ -386,13 +412,9 @@ WPS = [
        " relevance_pct = round(100 * relevance / max relevance). sure_pct = round(100 * min(1, distinct"
        " clients / FULL_SURE_CLIENTS)) with FULL_SURE_CLIENTS from D3. Slots: the value types of all the"
        " datapoint's values -> slot_type_pct = share of the most common type; surprise = True when that"
-       " share is >= 90% but some value has another type. Ask D3 and D8:"
-       f" `{PY} tools/sdis.py ask W3-2 --question \"How many different clients should a page have before"
-       " SDIS shows a datapoint as fully sure (100%)?\" --options \"2|5|10\" --default \"5\"` and"
-       f" `{PY} tools/sdis.py ask W3-2 --question \"Should your picks and rejections in the Distill dialog"
-       " push similar datapoints up or down next time?\" --options \"Yes|No\" --default \"Yes\"` (if Yes:"
-       " datapoints() takes picked keys and rejected keys; a picked key gets x1.5, a rejected key is left"
-       " out). Print in memory.py main() and the regression runner: number of datapoints and the"
+       " share is >= 90% but some value has another type. D3 and D8 are taken (user, 2026-10-04): N = 2 to confirm, FULL_SURE_CLIENTS = 5; datapoints() takes picked"
+       " keys and rejected keys (container moves count as rejections of the other containers): a"
+       " picked key gets x1.5, a rejected key is left out. Print in memory.py main() and the regression runner: number of datapoints and the"
        " relevance_pct of the top 10 (numbers only, no labels). Tests (tests/test_sdis_relevance.py):"
        " fixed nodes never become datapoints; a value on 2 pages with the same label joins into one"
        " datapoint with 2 pages; a 50-row list counts once per client; share uses the page's own client"
@@ -409,6 +431,24 @@ WPS = [
        " a structural fact (framework id). Edge/Chrome results must not change. If there are no Firefox"
        " fixtures (D16 was 'No' and the user has not run the tool yet), record it with `decide`, add a"
        " hands-on check 'run tools/browser_parity.py, then rerun W3-4's tests', and finish."),
+
+    wp("W3-5", 3, "sonnet", "M", ["W3-2"], "Part S.1: class suggestion (what a value stays the same with)",
+       "Blueprint Part S.1 (the table and thresholds are exact). core/sdis/classes.py:"
+       " suggest(datapoints, memory_state) -> {datapoint key: ('profile' | 'dataset' | 'info' | None,"
+       " reason)}. Per client (owners from Part D, undecided dropped), from the value history (Part B):"
+       " PROFILE when the client's value is the same on every observation and the client has 2+"
+       " observations on 2+ different days or periods; DATASET when it differs between the client's"
+       " periods but is the same within each (client, period), with 2+ periods; INFO otherwise. The"
+       " period of an observation = the period-shaped value (core.sdis.labels.is_period) shown ONCE on"
+       " that snapshot, else the Part N masked link segment when is_period accepts it, else none (the"
+       " observation is skipped for the dataset test). A class is suggested only when >= 90% of the"
+       " clients with enough evidence give it (CLASS_AGREE = 0.9); otherwise None with the reason"
+       " 'not enough evidence' or 'clients disagree'. Moves the user made (sdis_decisions kind"
+       " 'container', read through the W3-2 picked/rejected inputs) override the suggestion. Datapoint"
+       " gains suggested_class and class_reason. Print in the regression runner: counts per suggested"
+       " class (numbers only). Tests (tests/test_sdis_classes.py, hand-made histories): one value per"
+       " client over 3 days -> profile; per-period values constant within a period -> dataset; values"
+       " changing within a period -> info; one observation -> None; 2 of 3 clients agreeing -> None."),
 
     wp("W3-3", 3, "sonnet", "L", ["W3-2"], "Part O engine: memory on disk, incremental mining",
        "Blueprint Part O (engine side only, no UI, no subprocess yet). STEP 1: core/sdis/store.py:"
@@ -456,10 +496,7 @@ WPS = [
        " ui/dialogs/unified_settings_dialog.py on the same page as 'Record pages for SGT testing'"
        " (grep it). STEP 4: core/sdis/sources.py: read_records(directory) yields the (stamp, session,"
        " link, rec) tuples link_map expects (stamp = ts, rec = {'docs': ..., 'browser': ...}); mine()"
-       " accepts a recorder folder as well as pre-dev captures (detect by file name). Ask D13:"
-       f" `{PY} tools/sdis.py ask W4-1 --question \"SDIS's extra page read: drop it when it takes longer"
-       " than how long, and how much disk may it use on each staff PC?\" --options \"1.5 s and 500"
-       " MB|1 s and 250 MB|3 s and 1 GB\" --default \"1.5 s and 500 MB\"`. Tests"
+       " accepts a recorder folder as well as pre-dev captures (detect by file name). D13 is taken (user, 2026-10-04): budget 1.5 s per changed page, 500 MB cap per staff PC. Tests"
        " (tests/test_sdis_recorder.py, fakes only, no real UIA): offer returns in < 5 ms with a reader that"
        " sleeps 2 s; a slow read is dropped; a fast one is written with every field; the size cap deletes"
        " the oldest file; a raising reader never escapes; SgtShadow with a stub sdis gets one offer per"
@@ -470,11 +507,7 @@ WPS = [
        " as before\"`."),
 
     wp("W4-2", 4, "opus", "L", ["W4-1"], "Part P: captures travel to the admin PC",
-       "Blueprint Part P (protocol exact). Ask D14 first:"
-       f" `{PY} tools/sdis.py ask W4-2 --question \"How should SDIS captures reach the admin PC?\" --options"
-       " \"Push over Sera Sync's secure channel, delete after the admin confirms|Shared folder\" --default"
-       " \"Push over Sera Sync's secure channel, delete after the admin confirms\"` (if 'Shared folder':"
-       " block the WP with the reason 'needs a re-plan' and stop). STEP 1: core/sdis/transfer.py:"
+       "Blueprint Part P (protocol exact). D14 is taken (user, 2026-10-04): push over Sera Sync's transport, delete after the admin's ack. STEP 1: core/sdis/transfer.py:"
        " FRAME_PUSH = 'sdis_push'; push(session, files) (staff side): send {t: 'sdis_push', files: [{name,"
        " size, sha256}]}, then each file with session.send_file, then read {t: 'sdis_ack', files: [...]}"
        " and return the acked names; handle_push(session, app_dir) (admin side): refuse (send {t:"
@@ -521,15 +554,9 @@ WPS = [
        " process at or below 10% CPU; Cancel stops it and the next run continues\"`."),
 
     wp("W4-4", 4, "opus", "L", ["W3-3"], "Part Q: registration on every PC (synced tables)",
-       "Blueprint Part Q and rule 8. Ask D7, D15 and D6 first (one question each):"
-       f" `{PY} tools/sdis.py ask W4-4 --question \"When you pick a datapoint in Distill, should it become"
-       " a field Sera captures on every PC (after your OK)?\" --options \"Yes, after my OK|No, only list"
-       " it\" --default \"Yes, after my OK\"`;"
-       f" `{PY} tools/sdis.py ask W4-4 --question \"Add a tracker column automatically for a registered"
-       " datapoint?\" --options \"No (like the SGT lab)|Yes\" --default \"No (like the SGT lab)\"`;"
-       f" `{PY} tools/sdis.py ask W4-4 --question \"Where should SDIS keep your edited labels and"
-       " rejections?\" --options \"Office database (synced)|A file on the admin PC\" --default \"Office"
-       " database (synced)\"`. STEP 1: tables sdis_fields (gid, name, portal, section, spec_json, label,"
+       "Blueprint Part Q and rule 8. D7, D15 and D6 are taken (user, 2026-10-04): registered on every PC only after the user's OK;"
+       " no tracker column is added automatically; labels, rejections and container moves live in"
+       " synced office tables. STEP 1: tables sdis_fields (gid, name, portal, section, spec_json, label,"
        " status, created_by, updated_at) and sdis_decisions (gid, signature, decision, label, updated_at):"
        " create them where the office tables are created (sera_db/schema.py; follow tracker_dump) and"
        " register them for replication in sync_schema.py with _register(TableSpec(...)) exactly like"
@@ -551,7 +578,7 @@ WPS = [
        " empty table -> no change. Note in the hand-off that main has uncommitted edits to sync_schema.py"
        " and sera_db/schema.py from other work, so the merge must be checked there."),
 
-    wp("W4-5", 4, "sonnet", "L", ["W3-2", "W4-3", "W4-4"], "Part L: the Distill dialog + loading dialog",
+    wp("W4-5", 4, "sonnet", "L", ["W3-5", "W4-3", "W4-6"], "Part L: the Distill dialog + loading dialog + containers",
        "Blueprint Part L and Part O (UI). STEP 1: ui/windows/tracker_dump_window.py: in"
        " _show_preferences_menu (the 'Tools  ▾' button) add 'Distill…' (icon mdi.flask-outline). On a"
        " PC that is not the admin PC (db.is_admin_pc()) show a QMessageBox 'Sera Distill runs on the"
@@ -565,7 +592,15 @@ WPS = [
        " a 'Register' button for the selected datapoint (asks 'Capture <label> on every PC?' then W4-4's"
        " register); a second tab 'Please check' listing variable_alignment items with Keep / Reject"
        " buttons (Reject is saved and sent to the next mining run); every number shown is a percentage"
-       " (R7). STEP 3: the loading dialog: an APPLICATION-MODAL QDialog (locks the app, not Windows) with a"
+       " (R7). STEP 2b: the containers (blueprint Part L and Part S): a side panel with the Profile"
+       " builder of each registered portal, the Dataset containers (create / rename / delete; each lists its fields and n)"
+       " and one Others per registered portal (Part T, core.sdis.portals); each datapoint row shows"
+       " its suggested container (W3-5) and an 'Add to…' action that registers it (D7) as a field of"
+       " sdis_mcl through the W4-6 functions (container edits go through core.sdis.config's helpers; per"
+       " field in a container the user can mark period / form, tick optional and set proves <level>; a"
+       " levels editor (file-wide and per container) writes levels / level_map; a"
+       " refused edit shows the check's reason; Export / Import buttons for the containers file); the label editor offers existing sdis_mcl fields first"
+       " (QCompleter). STEP 3: the loading dialog: an APPLICATION-MODAL QDialog (locks the app, not Windows) with a"
        " progress bar, 'Working on <done> of <total> - <page link>' and a Cancel button, driven by"
        " core/sdis/miner_client.MinerClient through Qt signals (never block the UI thread); on done it"
        " reloads the results from the saved state. Opening the dialog never starts mining. Tests"
@@ -576,7 +611,74 @@ WPS = [
        " Distill...: Find datapoints shows the loading dialog and locks the app; Cancel works; rename a"
        " label, register a datapoint, and see it captured on another PC after sync\"`."),
 
-    wp("W5-R", 5, "opus", "M", ["W4-2", "W4-5", "W3-4"], "Final review and merge-readiness note",
+    wp("W4-6", 4, "opus", "L", ["W4-4", "W1-8"], "Parts U + S.3: sdis_mcl, the containers file (sync + checks)",
+       "Blueprint Parts U, S.3 (the JSON shape, the levels syntax, the exceptions table and the load"
+       " checks are exact) and Q. D19 and D23 are taken (user, 2026-10-04): ONE PROFILE BUILDER PER"
+       " REGISTERED PORTAL ('profile' is {portal: [fields]}), and sdis_mcl is separate from mcl_columns."
+       " Completion levels are NOT in code: the built-in file has none, and the code must not assume any"
+       " level name or threshold. STEP 1: synced office tables, created and registered exactly like"
+       " W4-4's sdis_fields: sdis_mcl (gid, name, label, value_type, class, portal, status, created_by,"
+       " updated_at) and sdis_config (gid, name = 'containers', doc_json, version, updated_by,"
+       " updated_at: ONE row holding the whole containers document). sdis_fields gains mcl_gid."
+       " sera_db/sdis.py: add/rename/retire/list for sdis_mcl (renaming a field renames its label in"
+       " every sdis_fields row, R6); get/put for the containers document (put runs"
+       " core.sdis.config.check first and refuses a failing document; version + 1). STEP 2:"
+       " core/sdis/config.py (from W1-8): implement the remaining checks of S.3 (levels and when;"
+       " level_map; profile and others per registered portal; containers with form_field /"
+       " period_field / fields / exceptions.optional / exceptions.proves / their own levels and"
+       " level_map / examples; class_exceptions) and level_for(container, captured_fields, doc) used by"
+       " the examples check: n = fields minus optional; k = captured counted fields; levels = the"
+       " container's own, else the file's; a `when` holds if its `captured` holds (a number: k >= it;"
+       " 'p%': k >= ceil(p/100 * n); 'all': k == n) and its `fields` are all captured; the result is"
+       " the highest level whose when holds, raised to every proves hit; no levels -> None (the caller"
+       " shows 'k of n' only). Helpers that edit the document (add_container, rename_container,"
+       " delete_container, add_field, remove_field, mark_key, set_exception, set_levels, move_field) each"
+       " return a new document that passes check(). STEP 3: every PC writes the sdis_config row to"
+       " <Sera data dir>/sdis_containers.json atomically whenever it changes (the same hook W4-4 uses for"
+       " sdis_fields.json) and at start-up; export(path) / import(path) for the admin (import = check +"
+       " put). STEP 4: core/sdis/register.py registers a datapoint as a field: sdis_mcl row (new or"
+       " existing) + its spec in sdis_fields; the container it goes in is a config edit, never a spec"
+       " change. core/sdis/classes.py suggest() honours class_exceptions. Tests"
+       " (tests/test_sdis_containers.py): the blueprint's example document passes and its examples give"
+       " their levels (n = 3 there: filing_date is optional; arn proves Complete); a document with no"
+       " levels passes and level_for gives None; a container's own levels replace the file's; each load"
+       " check refuses its own broken document and the previous version stays; one field registered on"
+       " two pages = two specs, one field; rename reaches both; moving a field between containers leaves"
+       " sdis_fields.json byte-identical; empty tables -> no file change. Run"
+       f" `{T} tests/test_sgt_*.py tests/test_sync_schema.py` and `{PY} tools/sgt_replay.py diff` -> no"
+       " change."),
+
+    wp("W4-7", 4, "opus", "L", ["W4-6"], "Part S.2 in SGT: container instances, completion, Others values",
+       "Blueprint Part S.2, S.3 and rule 8. Taken (user, 2026-10-04): D17 instance key = (client, form,"
+       " period), form = the container's name unless form_field is set, period = period_field; D18 is"
+       " superseded: levels and their ladder mapping come ONLY from the containers file (levels,"
+       " level_map), never from code; D19 one Profile builder per registered portal; D20 Others: the"
+       " latest value wins and the history is kept; D22 one instance per page and key (no list pages"
+       " yet). STEP 1: core/sgt/sgt_containers.py (pure, no UIA): load the containers document through"
+       " core.sdis.config (a refused file -> the last good one; none -> no containers);"
+       " Instance(container, client, form, period, values {field: value}, evidence, level) whose level is"
+       " core.sdis.config.level_for(...) and only promotes; apply(instance, field, value). STEP 2:"
+       " core/sgt/sgt_shadow.py: for each container, build instances the way current_dataset is built (a"
+       " value shown once on a page belongs to the instance being worked on; a new period starts a new"
+       " instance; values seen before the period wait in the session); write each instance to the tracker"
+       " dump under core/dataset_key.compute_dataset_key with its status = level_map[level] ('k of n'"
+       " and the proves hit, if any, kept as evidence); with no level (no levels defined) the status is"
+       " SGT's existing minimum for a keyed dataset (Draft); never lower a status; never touch the"
+       " built-in GST/ITR datasets. Others: per (client, portal, field), stored where SGT keeps profile"
+       " values today (read the code; follow it). Profile builder fields become ordinary profile specs"
+       " of their portal (nothing new). STEP 3: a changed document recomputes instances; none moves"
+       " down. Tests (tests/test_sgt_containers.py) with fixture documents written in the test: a"
+       " count-based levels list and a fields-based one; optional fields not counted; a proves field"
+       " lifts and a later count never lowers; a container's levels/level_map replace the file's; no"
+       " levels -> 'k of n' and Draft; a field captured on two pages fills one slot; a new period opens a"
+       " new instance; a changed document never lowers a level. Run"
+       f" `{T} tests/test_sgt_*.py` and `{PY} tools/sgt_replay.py diff` with no containers -> no change."
+       " Hands-on check: `check-add W4-7 --text \"Write levels and a 4-field dataset container into the"
+       " containers file; on a portal, capture its fields one by one and see the tracker row climb the"
+       " levels you wrote\"`."),
+
+
+    wp("W5-R", 5, "opus", "M", ["W4-2", "W4-5", "W4-7", "W3-4"], "Final review and merge-readiness note",
        "Review the whole branch against blueprint sections 0 and 9 and every Part. Run all"
        f" tests/test_sdis_*.py, tests/test_class_diff_align.py, tests/test_sgt_*.py, tests/test_sync_*.py"
        f" and `{PY} tools/sgt_replay.py diff` (no change); run the regression runner and compare with"
@@ -595,7 +697,7 @@ def main() -> None:
         "about": ("Sera Distill (SDIS) work packages (blueprint docs/sdis/sdis-blueprint.md). Fixed data:"
                   " re-plan by editing docs/sdis/make_plan.py and running it. Live status is in"
                   " sdis-status.csv, written only by tools/sdis.py."),
-        "deadline": "2026-10-04T23:00:00+05:30",
+        "deadline": "2026-10-06T01:30:00+05:30",
         "models": {k: v for k, v in base["models"].items() if v["runner"] == "claude"},
         "tiers": {"_note": "Claude only (owner decision 2026-09-29).", "sonnet": ["sonnet"],
                   "haiku": ["haiku"], "opus": ["opus"]},

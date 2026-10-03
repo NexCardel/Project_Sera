@@ -8,8 +8,8 @@ a live Excel viewer.
 
 | File | What | Who writes it |
 | :--- | :--- | :--- |
-| `sdis-blueprint.md` | the design: rules, problems, Parts A–R (R = Firefox), decisions D1–D16, build order, hand-off notes | you (design) / workers (hand-off notes, taken decisions) |
-| `make_plan.py` → `sdis-plan.json` | 26 work packages: deps, model, step-by-step instructions, CLI permissions, deadline | edit `make_plan.py` and run it to re-plan |
+| `sdis-blueprint.md` | the design: rules, problems, Parts A–U (R = Firefox, S = containers, T = portal registration, U = field library), decisions D1–D23, build order, hand-off notes | you (design) / workers (hand-off notes, taken decisions) |
+| `make_plan.py` → `sdis-plan.json` | 30 work packages: deps, model, step-by-step instructions, CLI permissions, deadline | edit `make_plan.py` and run it to re-plan |
 | `sdis-runner.md` | the prompt every worker session gets | edit by hand |
 | `sdis-status.csv` | one row per WP | `tools/sdis.py` only |
 | `sdis-runs.csv` | one row per agent run: model, minutes, tokens, cost, outcome | tool only |
@@ -28,7 +28,7 @@ after 4 minutes, a lock so only one dispatcher runs, and workers can never push.
 
 Worktree `..\APP-sdis` on branch `sdis`, created from `main` at `0f30543` (the pre-dev engine:
 alignment merge, client grouping, page memory, 14 tests). The first commit on the branch adds this
-folder, the dispatcher wrapper and the launchers. Deadline: **2026-10-04 23:00 IST**
+folder, the dispatcher wrapper and the launchers. Deadline: **2026-10-06 01:30 IST** (Tuesday)
 (`sdis-plan.json`); the dispatcher stops there and whatever is not Done stays Not started / Retry for
 a later run.
 
