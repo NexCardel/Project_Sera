@@ -167,10 +167,10 @@ def extract_profile_from_payload(raw_payload: Any) -> Dict[str, str]:
             )
 
         non_identity_name_keys = ("bank", "account", "branch", "ifsc", "institution", "holdertype")
+        # filter once: the loop below visits every key for every target name
+        name_kv = [(k, v) for k, v in flat_kv if not any(part in k for part in non_identity_name_keys)]
         for target in company_keys:
-            for k, v in flat_kv:
-                if any(part in k for part in non_identity_name_keys):
-                    continue
+            for k, v in name_kv:
                 matches = k == target or (target not in ("name", "trade") and target in k and "first" not in k and "last" not in k and "user" not in k)
                 if matches:
                     if len(v) >= 3 and not re.match(r"^[A-Z]{5}[0-9]{4}[A-Z]$", v.upper()) and "@" not in v:
@@ -309,7 +309,7 @@ def map_profile_to_mcl_columns(extracted_profile: Dict[str, str], mcl_columns: L
                 continue
 
         # 6. Phone / Mobile Column
-        if ("ph" in lbl or "phone" in lbl or "mobile" in lbl or "contact" in lbl) and "pass" not in lbl:
+        if (re.search(r"\bph\b", lbl) or "phone" in lbl or "mobile" in lbl or "contact" in lbl) and "pass" not in lbl:
             if extracted_profile.get("phone"):
                 mapped[col_id] = extracted_profile["phone"]
                 continue

@@ -6,6 +6,19 @@ Split out of database.py; methods are unchanged. Mixed into SeraDatabase.
 
 import json
 import re
+import functools
+import time
+
+
+def _drops_mcl_cache(method):
+    """A method that changes mcl_columns: forget the remembered column list afterwards."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._mcl_cache = None
+    return wrapper
 
 
 class MclServicesMixin:
@@ -13,7 +26,23 @@ class MclServicesMixin:
 
     # ---------------- Master Column List (MCL) ----------------
 
+    # The column list is read several times by every screen (opening one client profile did it
+    # three times, ~9 ms each: one database connection per read) and changes almost never. It is
+    # remembered until a method below changes it, or _MCL_CACHE_TTL_S passes - the cap covers
+    # changes this class does not see (a peer's change applied by sync, another program).
+    # (data_generation is no use as the key: every audit-log write moves it.)
+    _MCL_CACHE_TTL_S = 10.0
+
     def get_mcl_columns(self) -> list[dict]:
+        cached = getattr(self, "_mcl_cache", None)
+        if cached and time.monotonic() - cached[0] < self._MCL_CACHE_TTL_S:
+            cols = cached[1]
+        else:
+            cols = self._read_mcl_columns()
+            self._mcl_cache = (time.monotonic(), cols)
+        return [{**c, "dropdown_options": list(c["dropdown_options"])} for c in cols]
+
+    def _read_mcl_columns(self) -> list[dict]:
         with self._connect() as conn:
             cur = conn.execute(
                 """SELECT id, label, field_type, dropdown_options, is_identity, sort_order, show_in_search, allow_quick_copy, admin_show_in_search, is_internal_pk 
@@ -52,6 +81,7 @@ class MclServicesMixin:
                 return col
         return None
 
+    @_drops_mcl_cache
     def create_mcl_column(self, label: str, field_type: str, dropdown_options=None, is_identity: int = 0, is_internal_pk: int = 0) -> int:
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
@@ -66,6 +96,7 @@ class MclServicesMixin:
             )
             return cur.lastrowid
 
+    @_drops_mcl_cache
     def update_mcl_column(self, column_id: int, label: str, field_type: str, dropdown_options=None, is_identity: int = None, is_internal_pk: int = None):
         opts_json = json.dumps(dropdown_options) if dropdown_options else None
         with self._connect() as conn:
@@ -87,27 +118,32 @@ class MclServicesMixin:
                 (label.strip(), field_type, opts_json, target_ident, target_pk, column_id)
             )
 
+    @_drops_mcl_cache
     def delete_mcl_column(self, column_id: int):
         with self._connect() as conn:
             conn.execute("DELETE FROM mcl_columns WHERE id=?", (column_id,))
 
+    @_drops_mcl_cache
     def reorder_mcl_columns(self, ordered_column_ids: list):
         with self._connect() as conn:
             for idx, col_id in enumerate(ordered_column_ids):
                 conn.execute("UPDATE mcl_columns SET sort_order=? WHERE id=?", (idx, col_id))
 
+    @_drops_mcl_cache
     def bulk_update_mcl_visibility(self, visible_ids: list[int]):
         with self._connect() as conn:
             conn.execute("UPDATE mcl_columns SET show_in_search=0")
             for cid in visible_ids:
                 conn.execute("UPDATE mcl_columns SET show_in_search=1 WHERE id=?", (cid,))
 
+    @_drops_mcl_cache
     def bulk_update_mcl_quick_copy(self, allowed_ids: list[int]):
         with self._connect() as conn:
             conn.execute("UPDATE mcl_columns SET allow_quick_copy=0")
             for cid in allowed_ids:
                 conn.execute("UPDATE mcl_columns SET allow_quick_copy=1 WHERE id=?", (cid,))
 
+    @_drops_mcl_cache
     def bulk_update_mcl_admin_visibility(self, admin_visible_ids: list[int]):
         with self._connect() as conn:
             conn.execute("UPDATE mcl_columns SET admin_show_in_search=0")
@@ -122,7 +158,7 @@ class MclServicesMixin:
             cur = conn.execute(
                 """SELECT id, name, login_page_link, userid_column_id, password_column_id,
                           username_selector, password_selector, automation_mode, extension_flow,
-                          success_selector, arn_selector, sort_order, automation_mode_2
+                          success_selector, arn_selector, sort_order, automation_mode_2, browser
                    FROM services ORDER BY sort_order"""
             )
             return [
@@ -134,6 +170,7 @@ class MclServicesMixin:
                     "extension_flow": r[8],
                     "success_selector": r[9], "arn_selector": r[10], "sort_order": r[11],
                     "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
+                    "browser": r[13] if len(r) > 13 and r[13] else "",
                 }
                 for r in cur.fetchall()
             ]
@@ -149,7 +186,7 @@ class MclServicesMixin:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "",
-                       automation_mode_2: str = "") -> int:
+                       automation_mode_2: str = "", browser: str = "") -> int:
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -182,11 +219,11 @@ class MclServicesMixin:
             cur = conn.execute(
                 """INSERT INTO services (name, login_page_link, userid_column_id, password_column_id,
                                          username_selector, password_selector, automation_mode, automation_mode_2,
-                                         extension_flow, success_selector, arn_selector, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                         extension_flow, success_selector, arn_selector, sort_order, browser)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (name.strip(), link, userid_column_id, password_column_id,
                  u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
-                 success_selector, arn_selector, next_order)
+                 success_selector, arn_selector, next_order, (browser or "").strip().lower())
             )
             return cur.lastrowid
 
@@ -194,7 +231,7 @@ class MclServicesMixin:
                        password_column_id: int, username_selector: str, password_selector: str,
                        automation_mode: str = "extension", extension_flow: str = "double",
                        success_selector: str = "", arn_selector: str = "",
-                       automation_mode_2: str = ""):
+                       automation_mode_2: str = "", browser: str = ""):
         u_sel = (username_selector or "").strip()
         p_sel = (password_selector or "").strip()
         link = (login_page_link or "").strip()
@@ -226,10 +263,10 @@ class MclServicesMixin:
                 """UPDATE services SET name=?, login_page_link=?, userid_column_id=?,
                                        password_column_id=?, username_selector=?, password_selector=?,
                                        automation_mode=?, automation_mode_2=?, extension_flow=?,
-                                       success_selector=?, arn_selector=? WHERE id=?""",
+                                       success_selector=?, arn_selector=?, browser=? WHERE id=?""",
                 (name.strip(), link, userid_column_id, password_column_id,
                  u_sel, p_sel, automation_mode, (automation_mode_2 or "").strip(), extension_flow,
-                 success_selector, arn_selector, service_id)
+                 success_selector, arn_selector, (browser or "").strip().lower(), service_id)
             )
 
     def auto_populate_service_selectors(self):

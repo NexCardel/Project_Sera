@@ -370,6 +370,13 @@ class TrackerDumpMixin:
                 }
             )
 
+        # A capture for an already registered client may carry details its MCL record lacks
+        if valid_id and raw_payload_json:
+            try:
+                self.enrich_client_from_capture(valid_id, raw_payload_json)
+            except Exception as e:
+                print(f"[database] MCL enrichment from capture notice: {e}")
+
         self._bump_sync_revision_if_configured()
 
         return {
@@ -743,6 +750,7 @@ class TrackerDumpMixin:
                 ).fetchall()
             }
             r_conn.execute("DELETE FROM client_raw_containers")
+            r_conn.execute("DELETE FROM client_raw_container_light")
             for d in resolved_dumps:
                 cands = d["effective_candidates"]
                 matched_id = None
@@ -792,6 +800,7 @@ class TrackerDumpMixin:
                     "UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?",
                     (notes, screenshot_path, identity_key)
                 )
+                r_conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
                 if cur.rowcount == 0:
                     # The identity_key this note was filed under no longer exists after
                     # the rebuild (e.g. the underlying dumps re-resolved to a client, so

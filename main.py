@@ -514,16 +514,25 @@ class SeraApp:
             self._shadow_check_timer.start(30 * 60 * 1000)
             _run_shadow_check_async()
 
-        # Asynchronous background auto-updater (non-blocking, silent)
+        # Updates. Installed builds have the SYSTEM update agent (core/update_agent.py): it downloads
+        # and installs with no prompt; the app only closes itself when the PC is idle. Without the
+        # agent (source runs, older installs) the in-app updater below downloads and installs on exit.
         loading_dlg.set_status("Initializing Background Auto-Updater...")
         import version
-        self.update_manager = version.BackgroundUpdateManager(
-            check_interval_seconds=7200,
-            on_update_found=lambda info: self.sync_bridge.update_found_signal.emit(info),
-            on_update_ready=lambda path, info: self.sync_bridge.update_ready_signal.emit(str(path), info),
-            on_error=lambda err: print(f"[AutoUpdater] {err}")
-        )
-        self.update_manager.start(initial_delay_seconds=3)
+        from core import update_agent
+        self.update_manager = None
+        if update_agent.is_available():
+            self._agent_update_timer = QTimer(self.app)
+            self._agent_update_timer.timeout.connect(self._check_agent_update)
+            self._agent_update_timer.start(30_000)
+        else:
+            self.update_manager = version.BackgroundUpdateManager(
+                check_interval_seconds=7200,
+                on_update_found=lambda info: self.sync_bridge.update_found_signal.emit(info),
+                on_update_ready=lambda path, info: self.sync_bridge.update_ready_signal.emit(str(path), info),
+                on_error=lambda err: print(f"[AutoUpdater] {err}")
+            )
+            self.update_manager.start(initial_delay_seconds=3)
         memory_mark("start-up: sync + updater started")
 
         loading_dlg.set_status("Initializing User Interface...")
@@ -1901,6 +1910,22 @@ class SeraApp:
                 import version
                 version.apply_and_restart(installer, silent=True)
 
+    def _check_agent_update(self):
+        """The update agent has staged a newer version: close at an idle moment so it can install.
+        A helper reopens the app once the install is done."""
+        from core import update_agent
+        if self._update_applied:
+            return
+        ver = update_agent.should_close_now(APP_DIR, captures_busy=bool(self._capture_queue.unfinished_tasks))
+        if not ver:
+            return
+        print(f"[AutoUpdater] Closing for the staged v{ver} update (PC idle); it reopens after the install.")
+        update_agent.record_close(APP_DIR, ver)
+        self._update_applied = True
+        self._agent_update_timer.stop()
+        update_agent.start_relauncher()
+        self._quit_application()
+
     def _flush_capture_queue_on_quit(self, timeout_sec: float = 5.0):
         """Waits (bounded) for queued captures to be written; the capture thread is a daemon."""
         import time as _time
@@ -2307,6 +2332,11 @@ class SeraApp:
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
+    from core import update_agent
+    if update_agent.is_available() and update_agent.install_in_progress():
+        # The update agent is replacing these files: get out of its way, reopen when it is done.
+        update_agent.start_relauncher(trigger_agent=False)
+        sys.exit(0)
     _setup_sync_log(APP_DIR)
     SeraApp().run()
 

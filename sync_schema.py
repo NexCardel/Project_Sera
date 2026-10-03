@@ -209,6 +209,16 @@ client_raw_containers = _register(TableSpec(
           "over there.",
 ))
 
+client_raw_container_light = _register(TableSpec(
+    "client_raw_container_light", RAW_DB, LOCAL, row_key=("identity_key",),
+    notes="Owner decision 2026-10-03: `local`. A derived cache of client_raw_containers "
+          "(payload-free filing history, the latest payload's status, total_captures, "
+          "last_updated, and a mirror of notes) so the tracker list never reads the big "
+          "filing_history column. Rebuilt with the containers in "
+          "re_resolve_all_tracker_dumps() and backfilled on read when a row is missing, so it "
+          "never needs to replicate; the hand-typed notes sync through client_container_notes.",
+))
+
 client_container_notes = _register(TableSpec(
     "client_container_notes", RAW_DB, LWW, row_key=("identity_key",),
     fk={"client_id": "clients"},

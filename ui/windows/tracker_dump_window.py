@@ -13,7 +13,7 @@ import shutil
 import time
 from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, Signal, QTimer, QSize
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -94,12 +94,15 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         if not arn:
             arn = (latest_f.get("arn") or "").strip()
 
-    # If raw_payload has explicit status or ltt captures
+    # If raw_payload has explicit status or ltt captures. List rows come without payloads
+    # (get_srpf_containers(slim=True)) and carry the payload's status ready-made.
     raw_json = record.get("raw_payload_json") or ""
     if not raw_json and filing_hist:
         raw_json = filing_hist[-1].get("raw_payload_json") or ""
 
-    if raw_json:
+    if record.get("payload_status"):
+        raw_status = record["payload_status"]
+    elif raw_json:
         try:
             p_obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
             if isinstance(p_obj, dict):
@@ -1256,6 +1259,296 @@ class PayloadInspectorDialog(QDialog):
             self.accept()
 
 
+class _DatapointScanThread(QThread):
+    """Reads the captured datapoints off the UI thread (every DB call opens its own connection)."""
+    scanned = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self._db = db
+
+    def run(self):
+        try:
+            self.scanned.emit(self._db.get_capture_datapoints())
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+_LIVE_SCAN_THREADS: set = set()   # a scan outlives a dialog closed mid-scan until it finishes
+
+
+class _McLColumnDelegate(QStyledItemDelegate):
+    """One shared combo editor for the "Map to" column instead of a combo widget per row."""
+    def __init__(self, options, parent=None):
+        super().__init__(parent)
+        self._options = options          # [(label, column_id)]
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.addItem("—", None)
+        for label, col_id in self._options:
+            combo.addItem(label, col_id)
+        combo.activated.connect(lambda _=0, c=combo: self.commitData.emit(c))
+        combo.activated.connect(lambda _=0, c=combo: self.closeEditor.emit(c))
+        QTimer.singleShot(0, combo.showPopup)
+        return combo
+
+    def setEditorData(self, editor, index):
+        idx = editor.findData(index.data(Qt.UserRole))
+        editor.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def setModelData(self, editor, model, index):
+        col_id = editor.currentData()
+        model.setData(index, editor.currentText() if col_id is not None else "—", Qt.DisplayRole)
+        model.setData(index, col_id, Qt.UserRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+
+class McLMappingDialog(QDialog):
+    """Maps captured datapoints (payload keys) to Master Column List columns.
+
+    Used when the automatic mapping misses a column. Saved mappings are applied whenever a
+    capture arrives for an already registered client (blank MCL columns only are filled).
+    """
+    _KEY, _SEEN, _SAMPLE, _AUTO, _MAP = range(5)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Map Captured Datapoints to MCL Columns")
+        self.setModal(True)
+        self.resize(1040, 680)
+        self._mcl_cols = [c for c in self.db.get_mcl_columns() if c.get("field_type") != "id"]
+        self._col_label = {c["id"]: c["label"] for c in self._mcl_cols}
+        self._scan = None
+        self._setup_ui()
+        self._start_scan()
+
+    # ---------------- UI ----------------
+    def _setup_ui(self):
+        self.setStyleSheet("""
+            QDialog { background-color: #141414; color: #F8F5F2; font-family: 'Segoe UI', sans-serif; }
+            QLabel { color: #C9D1D9; font-size: 12px; }
+            QLabel#title { color: #F8F5F2; font-size: 17px; font-weight: 700; }
+            QLabel#hint { color: #8B949E; font-size: 12px; }
+            QLabel#stat { color: #8B949E; font-size: 11.5px; }
+            QLineEdit { background-color: #0D1117; border: 1px solid #30363D; border-radius: 8px;
+                        color: #F0F6FC; padding: 8px 12px; font-size: 13px; }
+            QLineEdit:focus { border: 1px solid #2E9B5F; }
+            QComboBox { background-color: #0D1117; border: 1px solid #2E9B5F; border-radius: 6px;
+                        color: #F0F6FC; padding: 3px 8px; font-size: 12.5px; }
+            QComboBox QAbstractItemView { background-color: #0D1117; color: #F0F6FC;
+                                          selection-background-color: #2E9B5F; border: 1px solid #30363D; }
+            QCheckBox { color: #C9D1D9; font-size: 12px; spacing: 6px; }
+            QTableWidget { background-color: #0F0F0F; alternate-background-color: #141414;
+                           border: 1px solid #262626; border-radius: 8px; color: #E6EDF3;
+                           font-size: 12.5px; outline: 0; }
+            QTableWidget::item { padding: 0 10px; border: none; }
+            QTableWidget::item:hover { background-color: #1B2A22; }
+            QTableWidget::item:selected { background-color: #1B2A22; color: #E6EDF3; }
+            QHeaderView::section { background-color: #0F0F0F; color: #8B949E; border: none;
+                                   border-bottom: 1px solid #2E9B5F; padding: 8px 10px;
+                                   font-size: 11px; font-weight: 700; text-align: left; }
+            QScrollBar:vertical { background: #0F0F0F; width: 10px; margin: 0; }
+            QScrollBar::handle:vertical { background: #333333; border-radius: 5px; min-height: 30px; }
+            QScrollBar::handle:vertical:hover { background: #2E9B5F; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QPushButton { background-color: #1F1F1F; color: #E6EDF3; border: 1px solid #3A3A3A;
+                          border-radius: 8px; padding: 9px 18px; font-size: 13px; }
+            QPushButton:hover { background-color: #2A2A2A; border-color: #4A4A4A; }
+            QPushButton:disabled { color: #5A5A5A; border-color: #262626; }
+            QPushButton#primary { background-color: #2E9B5F; color: #FFFFFF; font-weight: 700; border: none; }
+            QPushButton#primary:hover { background-color: #36B06D; }
+            QPushButton#primary:disabled { background-color: #1F3A2B; color: #5E7F6C; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Map captured datapoints to MCL columns")
+        title.setObjectName("title")
+        hint = QLabel("Pick the MCL column a datapoint belongs to where auto-mapping misses it. "
+                      "When a capture arrives for a registered client, mapped values fill that client's "
+                      "blank columns; existing values are never overwritten.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(hint)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(14)
+        self.txt_filter = QLineEdit()
+        self.txt_filter.setPlaceholderText("Search datapoints or sample values…")
+        self.txt_filter.setClearButtonEnabled(True)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self.txt_filter.textChanged.connect(lambda _: self._filter_timer.start())
+        self.chk_unmapped = QCheckBox("Only unmapped")
+        self.chk_unmapped.toggled.connect(self._apply_filter)
+        bar.addWidget(self.txt_filter, stretch=1)
+        bar.addWidget(self.chk_unmapped)
+        layout.addLayout(bar)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["DATAPOINT", "SEEN", "SAMPLE VALUE", "AUTO-MAPPED TO", "MAP TO MCL COLUMN"])
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setHighlightSections(False)
+        hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        hdr.setSectionResizeMode(self._KEY, QHeaderView.Interactive)
+        hdr.setSectionResizeMode(self._SEEN, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(self._SAMPLE, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(self._AUTO, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(self._MAP, QHeaderView.Fixed)
+        self.table.setColumnWidth(self._KEY, 210)
+        self.table.setColumnWidth(self._SEEN, 64)
+        self.table.setColumnWidth(self._AUTO, 170)
+        self.table.setColumnWidth(self._MAP, 210)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setItemDelegateForColumn(
+            self._MAP, _McLColumnDelegate([(c["label"], c["id"]) for c in self._mcl_cols], self.table))
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        layout.addWidget(self.table, stretch=1)
+
+        foot = QHBoxLayout()
+        self.lbl_status = QLabel("Reading recent captures…")
+        self.lbl_status.setObjectName("stat")
+        foot.addWidget(self.lbl_status, stretch=1)
+        layout.addLayout(foot)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        self.btn_apply = QPushButton("Save && apply to registered clients")
+        self.btn_apply.setToolTip("Saves the mappings, then fills blank MCL columns of registered clients from their existing captures.")
+        self.btn_apply.clicked.connect(lambda: self._save(apply_now=True))
+        self.btn_save = QPushButton("Save")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.clicked.connect(lambda: self._save(apply_now=False))
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.reject)
+        self.btn_save.setEnabled(False)
+        self.btn_apply.setEnabled(False)
+        btns.addWidget(self.btn_apply)
+        btns.addStretch(1)
+        btns.addWidget(btn_close)
+        btns.addWidget(self.btn_save)
+        layout.addLayout(btns)
+
+    # ---------------- loading (off the UI thread) ----------------
+    def _start_scan(self):
+        self._scan = _DatapointScanThread(self.db)
+        _LIVE_SCAN_THREADS.add(self._scan)
+        self._scan.finished.connect(lambda t=self._scan: _LIVE_SCAN_THREADS.discard(t))
+        self._scan.scanned.connect(self._populate)
+        self._scan.failed.connect(lambda msg: self.lbl_status.setText(f"Could not read captures: {msg}"))
+        self._scan.start()
+
+    def done(self, result):
+        if self._scan is not None:
+            try:
+                self._scan.scanned.disconnect(self._populate)
+            except (RuntimeError, TypeError):
+                pass
+        super().done(result)
+
+    def _populate(self, points: list):
+        saved = {m["source"]: m["column_id"] for m in self.db.get_capture_mcl_mappings()}
+        # a saved mapping stays editable even when its datapoint has aged out of recent captures
+        known = {p["key"] for p in points}
+        for key in saved:
+            if key not in known:
+                points.append({"key": key, "count": 0, "sample": "", "auto_column_id": None})
+
+        green, cyan, dim = QColor("#4CF9B7"), QColor("#58C4FF"), QColor("#6E7681")
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(points))
+        for r, p in enumerate(points):
+            key_item = QTableWidgetItem(p["key"])
+            key_item.setToolTip(p["key"])
+            key_item.setFont(QFont("Consolas", 10))
+            seen_item = QTableWidgetItem(str(p["count"]))
+            seen_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            seen_item.setForeground(dim)
+            sample_item = QTableWidgetItem(p["sample"])
+            sample_item.setToolTip(p["sample"])
+            sample_item.setForeground(QColor("#9DA7B3"))
+            auto_item = QTableWidgetItem(self._col_label.get(p["auto_column_id"], ""))
+            auto_item.setForeground(green)
+            col_id = saved.get(p["key"])
+            map_item = QTableWidgetItem(self._col_label.get(col_id, "—"))
+            map_item.setData(Qt.UserRole, col_id)
+            map_item.setForeground(cyan if col_id is not None else dim)
+            for item in (key_item, seen_item, sample_item, auto_item):
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            map_item.setFlags(map_item.flags() | Qt.ItemIsEditable)
+            for c, item in enumerate((key_item, seen_item, sample_item, auto_item, map_item)):
+                self.table.setItem(r, c, item)
+        self.table.setUpdatesEnabled(True)
+        self.btn_save.setEnabled(True)
+        self.btn_apply.setEnabled(True)
+        self._apply_filter()
+
+    # ---------------- interaction ----------------
+    def _on_cell_clicked(self, row, col):
+        if col == self._MAP:
+            self.table.editItem(self.table.item(row, col))
+
+    def _is_mapped(self, row: int) -> bool:
+        return bool(self.table.item(row, self._AUTO).text()) or self.table.item(row, self._MAP).data(Qt.UserRole) is not None
+
+    def _apply_filter(self, *_):
+        needle = self.txt_filter.text().strip().lower()
+        only_unmapped = self.chk_unmapped.isChecked()
+        shown = mapped = 0
+        self.table.setUpdatesEnabled(False)
+        for r in range(self.table.rowCount()):
+            hay = f"{self.table.item(r, self._KEY).text()} {self.table.item(r, self._SAMPLE).text()}".lower()
+            is_mapped = self._is_mapped(r)
+            mapped += is_mapped
+            hide = (bool(needle) and needle not in hay) or (only_unmapped and is_mapped)
+            self.table.setRowHidden(r, hide)
+            shown += 0 if hide else 1
+        self.table.setUpdatesEnabled(True)
+        total = self.table.rowCount()
+        self.lbl_status.setText(f"{shown} of {total} datapoints shown  ·  {mapped} mapped, {total - mapped} unmapped")
+
+    def _save(self, apply_now: bool):
+        mappings = []
+        for r in range(self.table.rowCount()):
+            col_id = self.table.item(r, self._MAP).data(Qt.UserRole)
+            if col_id is not None:
+                mappings.append({"source": self.table.item(r, self._KEY).text(), "column_id": col_id})
+        try:
+            self.db.save_capture_mcl_mappings(mappings)
+            if apply_now:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    changed = self.db.enrich_registered_clients_from_containers()
+                finally:
+                    QApplication.restoreOverrideCursor()
+                QMessageBox.information(self, "Mappings saved",
+                                        f"{len(mappings)} mapping(s) saved. {changed} registered client record(s) updated.")
+            else:
+                QMessageBox.information(self, "Mappings saved",
+                                        f"{len(mappings)} mapping(s) saved. They apply to future captures of registered clients.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", f"Could not save the mappings: {e}")
+
+
 class TrackerDumpWindow(QWidget):
     """Full-featured workspace for inspecting client tracker dumps and SRPF unified containers."""
 
@@ -1927,7 +2220,7 @@ class TrackerDumpWindow(QWidget):
             raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
             if is_grouped:
-                self._dumps_cache = self.db.get_srpf_containers(limit=200)
+                self._dumps_cache = self.db.get_srpf_containers(limit=200, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
             else:
@@ -2505,7 +2798,16 @@ class TrackerDumpWindow(QWidget):
             # Actions Column - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=False)
 
+    def _full_container(self, item: dict) -> dict:
+        """List rows are slim (no payloads); dialogs need the whole container."""
+        if item.get("_slim") and item.get("identity_key"):
+            full = self.db.get_srpf_containers(limit=1, identity_key=item["identity_key"])
+            if full:
+                return full[0]
+        return item
+
     def _show_container_dialog(self, container_item: dict):
+        container_item = self._full_container(container_item)
         dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
@@ -2516,6 +2818,7 @@ class TrackerDumpWindow(QWidget):
             self.load_data()
 
     def _create_client_from_capture(self, dump_item: dict):
+        dump_item = self._full_container(dump_item)
         dlg = AddClientFromCaptureDialog(self.db, dump_item, self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
@@ -2605,6 +2908,12 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
 
+    def _open_mcl_mapping_dialog(self):
+        try:
+            McLMappingDialog(self.db, self).exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Mapping Error", f"Could not open the mapping dialog: {e}")
+
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
         from PySide6.QtWidgets import QMenu
@@ -2636,6 +2945,9 @@ class TrackerDumpWindow(QWidget):
 
         act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
         act_reresolve.triggered.connect(self._reresolve_identities)
+
+        act_map = menu.addAction(_safe_qta_icon("mdi.table-arrow-right", "#4CF9B7"), "Map Datapoints to MCL Columns…")
+        act_map.triggered.connect(self._open_mcl_mapping_dialog)
 
         menu.addSeparator()
 

@@ -205,7 +205,7 @@ class ClientsMixin:
                 """SELECT s.id, s.name, s.login_page_link, s.userid_column_id,
                           s.password_column_id, s.username_selector, s.password_selector,
                           s.automation_mode, s.sort_order, s.extension_flow, s.success_selector, s.arn_selector,
-                          s.automation_mode_2
+                          s.automation_mode_2, s.browser
                    FROM services s
                    INNER JOIN client_services cs ON s.id = cs.service_id
                    WHERE cs.client_id = ?
@@ -222,6 +222,7 @@ class ClientsMixin:
                     "success_selector": r[10] if len(r) > 10 else "",
                     "arn_selector": r[11] if len(r) > 11 else "",
                     "automation_mode_2": r[12] if len(r) > 12 and r[12] else "",
+                    "browser": r[13] if len(r) > 13 and r[13] else "",
                 }
                 for r in cur.fetchall()
             ]

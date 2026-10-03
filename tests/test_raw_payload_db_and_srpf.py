@@ -453,13 +453,130 @@ class TestRawPayloadDbAndSRPF(unittest.TestCase):
         # Resolved LTT status must match sdc_parser: 'Submitted (e-verification pending)'
         status_text, status_color = _resolve_ltt_submission_status(c)
         self.assertEqual(status_text, "Submitted (e-verification pending)")
-        self.assertEqual(status_color, "#F1E05A")
+        self.assertEqual(status_color["fg"], "#F1E05A")
 
         # Test chronological ordering in raw dumps: latest capture (ARN 132255440300826) must be above earlier
         raw_dumps = self.db.get_tracker_dumps(client_id=cid)
         self.assertEqual(len(raw_dumps), 2)
         self.assertEqual(raw_dumps[0]["arn_number"], "132255440300826")
         self.assertEqual(raw_dumps[1]["arn_number"], "827916720300726")
+
+    def _col(self, label):
+        return next(c for c in self.db.get_mcl_columns() if c["label"].upper() == label.upper())
+
+    def _make_client(self, pan, **extra):
+        vals = {self._col("PAN")["id"]: pan}
+        vals.update({self._col(k)["id"]: v for k, v in extra.items()})
+        return self.db.add_client(vals, notes="", service_ids=[])
+
+    def test_delete_container_only_removes_its_own_captures(self):
+        """A capture of another container that merely mentions this PAN must survive."""
+        pan = "ABCDE1234F"
+        gstin = "27ABCDE1234F1Z5"
+        self.db.insert_tracker_dump(client_id=None, portal="Income Tax Portal", arn_number="111111111111111",
+                                    period_label="AY 2025-26", status="Submitted", capture_method="Extension_Capture",
+                                    raw_payload_json=json.dumps({"pan": pan}), pan=pan)
+        self.db.insert_tracker_dump(client_id=None, portal="GST Portal", arn_number="AA2709250000001",
+                                    period_label="Sep 2025", status="Submitted", capture_method="Extension_Capture",
+                                    raw_payload_json=json.dumps({"gstin": gstin, "note": f"linked pan {pan}"}), pan=gstin)
+        keys = {c["identity_key"] for c in self.db.get_srpf_containers()}
+        self.assertIn(pan, keys)
+        self.assertIn(gstin, keys)
+
+        self.db.delete_srpf_container(pan)
+
+        remaining = self.db.get_tracker_dumps()
+        self.assertEqual([d["arn_number"] for d in remaining], ["AA2709250000001"])
+        self.assertIsNotNone(self.db.get_client_raw_container(identity_key=gstin))
+        self.assertIsNone(self.db.get_client_raw_container(identity_key=pan))
+
+    def test_delete_registered_container_uses_client_id(self):
+        cid = self._make_client("AEYPH5467G")
+        other = self._make_client("BEYPH5467H")
+        for c, pan, arn in ((cid, "AEYPH5467G", "222222222222222"), (other, "BEYPH5467H", "333333333333333")):
+            self.db.insert_tracker_dump(client_id=c, portal="Income Tax Portal", arn_number=arn,
+                                        period_label="AY 2025-26", status="Submitted", capture_method="Extension_Capture",
+                                        raw_payload_json=json.dumps({"pan": pan}))
+        self.db.delete_srpf_container(f"CLI-{cid:05d}")
+        self.assertEqual([d["arn_number"] for d in self.db.get_tracker_dumps()], ["333333333333333"])
+
+    def test_capture_fills_blank_mcl_columns_of_registered_client_only(self):
+        pan = "CIQPM7599L"
+        cid = self._make_client(pan, **{"NAME OF PROPRIETOR": "Simran Kaur"})
+        self.db.insert_tracker_dump(
+            client_id=cid, portal="Income Tax Portal", arn_number="444444444444444", period_label="AY 2025-26",
+            status="Submitted", capture_method="Extension_Capture",
+            raw_payload_json=json.dumps({"pan": pan, "mobile": "9123456780", "email": "a@b.com",
+                                         "firstName": "Someone", "lastName": "Else"}))
+        vals = self.db.get_client(cid)["values"]
+        self.assertEqual(vals[self._col("PH. NO.")["id"]], "9123456780")
+        self.assertEqual(vals[self._col("EMAIL")["id"]], "a@b.com")
+        # existing, complete name is not overwritten by a shorter/different one
+        self.assertEqual(vals[self._col("NAME OF PROPRIETOR")["id"]], "Simran Kaur")
+
+    def test_user_mapping_fills_column_auto_mapping_missed(self):
+        pan = "CIQPM7599L"
+        cid = self._make_client(pan)
+        tan_col = self._col("TAN")["id"]
+        self.db.save_capture_mcl_mappings([{"source": "deductorref", "column_id": tan_col}])
+        self.assertEqual(self.db.get_capture_mcl_mappings(), [{"source": "deductorref", "column_id": tan_col}])
+        self.db.insert_tracker_dump(
+            client_id=cid, portal="Income Tax Portal", arn_number="555555555555555", period_label="AY 2025-26",
+            status="Submitted", capture_method="Extension_Capture",
+            raw_payload_json=json.dumps({"pan": pan, "data": {"deductorRef": "XYZ12345Q"}}))
+        self.assertEqual(self.db.get_client(cid)["values"][tan_col], "XYZ12345Q")
+        points = {p["key"]: p for p in self.db.get_capture_datapoints()}
+        self.assertIn("deductorref", points)
+
+    def test_slim_container_list_matches_full_and_resolves_same_status(self):
+        from ui.windows.tracker_dump_window import _resolve_ltt_submission_status
+        cid = self._make_client("AEYPH5467G")
+        for arn, st, payload in (
+            ("827916720300726", "Filed", {"pan": "AEYPH5467G", "status": "Filed & Verified (Processed)"}),
+            ("132255440300826", "Submitted", {"pan": "AEYPH5467G", "raw_payload": {"status": "Submitted (Pending e-Verification)"}}),
+        ):
+            self.db.insert_tracker_dump(client_id=cid, portal="Income Tax Portal", arn_number=arn, period_label="AY " + arn[:4],
+                                        status=st, capture_method="Extension_Capture", raw_payload_json=json.dumps(payload))
+        self.db.insert_tracker_dump(client_id=None, portal="GST Portal", arn_number="AA2709250000001", period_label="Sep 2025",
+                                    status="Submitted", capture_method="Extension_Capture", pan="ZZZZZ9999Z",
+                                    raw_payload_json="not json at all")
+        full = {c["identity_key"]: c for c in self.db.get_srpf_containers()}
+        slim = {c["identity_key"]: c for c in self.db.get_srpf_containers(slim=True)}
+        self.assertEqual(set(full), set(slim))
+        for key, f in full.items():
+            s = slim[key]
+            self.assertTrue(s["_slim"])
+            self.assertEqual(s["raw_payload_json"], "")
+            self.assertTrue(all("raw_payload_json" not in h for h in s["filing_history"]))
+            for field in ("display_name", "period_summary", "latest_arn", "latest_status", "total_captures", "last_updated", "client_id"):
+                self.assertEqual(s[field], f[field], field)
+            self.assertEqual([h["arn"] for h in s["filing_history"]], [h["arn"] for h in f["filing_history"]])
+            self.assertEqual(_resolve_ltt_submission_status(s)[0], _resolve_ltt_submission_status(f)[0], key)
+        # notes typed on a container show in the list; a container without a light row (written
+        # before the table existed) is backfilled on the next slim read
+        key = f"CLI-{cid:05d}"
+        self.db.save_srpf_container_media(key, "call back tomorrow", "")
+        with self.db._connect_raw() as conn:
+            conn.execute("DELETE FROM client_raw_container_light")
+        again = {c["identity_key"]: c for c in self.db.get_srpf_containers(slim=True)}
+        self.assertEqual(again[key]["notes"], "call back tomorrow")
+        self.assertEqual(again[key]["period_summary"], slim[key]["period_summary"])
+        self.assertEqual(_resolve_ltt_submission_status(again[key])[0], _resolve_ltt_submission_status(full[key])[0])
+        # the whole payload is still one lookup away
+        one = self.db.get_srpf_containers(limit=1, identity_key=f"CLI-{cid:05d}")
+        self.assertEqual(len(one), 1)
+        self.assertTrue(one[0]["raw_payload_json"])
+        self.db.delete_srpf_container(key)
+        with self.db._connect_raw() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM client_raw_container_light WHERE identity_key = ?", (key,)).fetchone())
+
+    def test_unregistered_capture_does_not_touch_clients(self):
+        cid = self._make_client("CIQPM7599L")
+        self.db.insert_tracker_dump(
+            client_id=None, portal="Income Tax Portal", arn_number="666666666666666", period_label="AY 2025-26",
+            status="Submitted", capture_method="Extension_Capture", pan="ZZZZZ9999Z",
+            raw_payload_json=json.dumps({"pan": "ZZZZZ9999Z", "mobile": "9123456780"}))
+        self.assertNotIn(self._col("PH. NO.")["id"], {k for k, v in self.db.get_client(cid)["values"].items() if v})
 
 
 if __name__ == "__main__":

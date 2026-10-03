@@ -35,6 +35,9 @@ Source: "..\package_dist\Amas_Sera\*"; DestDir: "{app}"; Flags: ignoreversion re
 Source: "..\package_assets\extension\ProjectSeraCompanion.crx"; DestDir: "{app}\extension"; Flags: ignoreversion
 Source: "..\package_assets\extension\extension_id.txt"; DestDir: "{app}\extension"; Flags: ignoreversion
 Source: "..\package_assets\extension\extension_version.txt"; DestDir: "{app}\extension"; Flags: ignoreversion
+; Silent update agent (SYSTEM scheduled task, see build_tools/updater/)
+Source: "updater\sera_update_agent.ps1"; DestDir: "{app}\updater"; Flags: ignoreversion
+Source: "updater\register_update_task.ps1"; DestDir: "{app}\updater"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#ShortcutName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; IconIndex: 0
@@ -69,10 +72,15 @@ end;
 [Run]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Amas Sera Sync"""; Flags: runhidden
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Amas Sera Sync"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=private,domain,public"; Flags: runhidden
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\updater\register_update_task.ps1"" -AppDir ""{app}"""; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Amas Sera Sync"""; Flags: runhidden; RunOnceId: "DelAmasSeraSyncRule"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""\Amas Sera\Updater"" /F"; Flags: runhidden; RunOnceId: "DelAmasSeraUpdater"
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{commonappdata}\AmasSera\updater"
 
 
 

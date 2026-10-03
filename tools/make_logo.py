@@ -1,7 +1,7 @@
 """Generate every Sera logo asset from one geometry.
 
-The mark is the evergreen (logo study A, "Evergreen refined"). The app icon places it,
-knocked out, on an emerald binder page so the icon also reads as "document".
+The mark is the evergreen (logo study A, "Evergreen refined"). The app icon places it on a
+binder page so the icon also reads as "document"; PAGE_STYLE picks the page colours.
 
 Usage:  venv\\Scripts\\python tools\\make_logo.py [--preview out.png]
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
-    QColor, QGuiApplication, QImage, QPainter, QPainterPath, QPainterPathStroker, QPolygonF, QTransform,
+    QColor, QGuiApplication, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPolygonF, QTransform,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +31,13 @@ LOGO_DIR = ROOT / "assets" / "logo"
 EXT_DIRS = [ROOT / "sera_extension", ROOT / "sera_extension_firefox"]
 
 BRAND = "#2E9B5F"
+# "white": white page, emerald tree, hairline outline so the page holds its edge on white.
+# "emerald": emerald page, white tree (no outline needed).
+PAGE_STYLE = "emerald"
+PAGE_STYLES = {
+    "white": {"page": "#FFFFFF", "tree": BRAND, "border": "#C9D3CD"},
+    "emerald": {"page": BRAND, "tree": "#FFFFFF", "border": None},
+}
 GRID = 64.0
 FILL = 0.94  # share of the canvas the mark's bounds occupy
 STROKE = 2.4  # round-join stroke that softens the tier corners
@@ -83,36 +90,53 @@ def tree_transform() -> QTransform:
     return t
 
 
-def page_path(size_px: int) -> QPainterPath:
+def page_path() -> QPainterPath:
     page = QPainterPath()
     page.addRoundedRect(PAGE, PAGE_R, PAGE_R)
     for cx, cy, r in BITES:
         bite = QPainterPath()
         bite.addEllipse(QPointF(cx, cy), r, r)
         page = page.subtracted(bite)
-    return page.subtracted(tree_transform().map(mark_path(size_px)))
+    return page
 
 
-def icon_path(size_px: int) -> QPainterPath:
-    return page_path(size_px) if size_px >= PAGE_MIN_PX else mark_path(size_px)
+# A layer list is [(path, fill, border-or-None), ...] painted in order; the first layer sets the bounds.
+def page_layers(size_px: int):
+    # The tree is painted over the whole page (not into a cut-out) so no anti-aliasing seam
+    # shows around it; its notches let the page show through.
+    style = PAGE_STYLES[PAGE_STYLE]
+    return [
+        (page_path(), style["page"], style["border"]),
+        (tree_transform().map(mark_path(size_px)), style["tree"], None),
+    ]
 
 
-def render(size_px: int, path_fn=icon_path, color: str = BRAND) -> QImage:
+def mark_layers(size_px: int):
+    return [(mark_path(size_px), BRAND, None)]
+
+
+def icon_layers(size_px: int):
+    return page_layers(size_px) if size_px >= PAGE_MIN_PX else mark_layers(size_px)
+
+
+def render(size_px: int, layers_fn=icon_layers) -> QImage:
     img = QImage(size_px, size_px, QImage.Format_ARGB32_Premultiplied)
     img.fill(Qt.transparent)
     p = QPainter(img)
     p.setRenderHint(QPainter.Antialiasing)
     # Fit the shape's real bounds into the canvas (with a small margin) instead of the 64 grid,
     # so it fills the icon like neighbouring apps do.
-    path = path_fn(size_px)
-    br = path.boundingRect()
+    layers = layers_fn(size_px)
+    br = layers[0][0].boundingRect()
     k = size_px * FILL / max(br.width(), br.height())
     p.translate(size_px / 2, size_px / 2)
     p.scale(k, k)
     p.translate(-br.center().x(), -br.center().y())
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(color))
-    p.drawPath(path)
+    for path, fill, border in layers:
+        # a border stays ~1 device pixel wide at every size
+        p.setPen(QPen(QColor(border), 1.0 / k) if border else Qt.NoPen)
+        p.setBrush(QColor(fill))
+        p.drawPath(path)
     p.end()
     return img
 
@@ -142,20 +166,43 @@ def svg_mark() -> str:
 """
 
 
+def _svg_d(path: QPainterPath) -> str:
+    """QPainterPath -> SVG path data (move/line/cubic only, which is all Qt emits here)."""
+    out, i, n = [], 0, path.elementCount()
+    while i < n:
+        e = path.elementAt(i)
+        if e.type == QPainterPath.ElementType.MoveToElement:
+            out.append(f"M{e.x:.3f} {e.y:.3f}")
+        elif e.type == QPainterPath.ElementType.LineToElement:
+            out.append(f"L{e.x:.3f} {e.y:.3f}")
+        else:  # CurveToElement followed by two CurveToDataElements
+            c2, end = path.elementAt(i + 1), path.elementAt(i + 2)
+            out.append(f"C{e.x:.3f} {e.y:.3f} {c2.x:.3f} {c2.y:.3f} {end.x:.3f} {end.y:.3f}")
+            i += 2
+        i += 1
+    return "".join(out) + "Z"
+
+
 def svg_page() -> str:
+    style = PAGE_STYLES[PAGE_STYLE]
     t = tree_transform()
     matrix = f"matrix({t.m11():.4f} 0 0 {t.m22():.4f} {t.dx():.4f} {t.dy():.4f})"
+    border = (
+        f' stroke="{style["border"]}" stroke-width="1" vector-effect="non-scaling-stroke"'
+        if style["border"] else ""
+    )
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <title>Sera</title>
-  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+  <mask id="notches" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
     <rect width="64" height="64" fill="#fff"/>
-    {_svg_circles(BITES, "#000")}
-    <g transform="{matrix}" stroke-width="{STROKE:g}" stroke-linejoin="round">
-      {_svg_tiers("#000")}
-      {_svg_circles(NOTCHES, "#fff")}
-    </g>
+    {_svg_circles(NOTCHES, "#000")}
   </mask>
-  <rect x="{PAGE.x():g}" y="{PAGE.y():g}" width="{PAGE.width():g}" height="{PAGE.height():g}" rx="{PAGE_R:g}" fill="{BRAND}" mask="url(#cut)"/>
+  <path d="{_svg_d(page_path())}" fill="{style["page"]}"{border}/>
+  <g transform="{matrix}">
+    <g mask="url(#notches)" stroke-width="{STROKE:g}" stroke-linejoin="round">
+      {_svg_tiers(style["tree"])}
+    </g>
+  </g>
 </svg>
 """
 
@@ -224,7 +271,7 @@ def main() -> int:
     # The toolbar shows the extension icon on its own, so the page is used at every size there.
     for d in EXT_DIRS:
         for s in (16, 32, 48, 128):
-            render(s, page_path).save(str(d / f"icon{s}.png"))
+            render(s, page_layers).save(str(d / f"icon{s}.png"))
     print("Logo assets written.")
     return 0
 

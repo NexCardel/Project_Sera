@@ -328,6 +328,19 @@ class SchemaMixin:
             self._ensure_column(conn, "tracker_dump", "screenshot_path", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "notes", "TEXT")
             self._ensure_column(conn, "client_raw_containers", "screenshot_path", "TEXT")
+            # What the tracker list reads from a container, kept apart from the big
+            # filing_history column (see SrpfMixin._write_container_light). Derived cache.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_raw_container_light (
+                    identity_key    TEXT PRIMARY KEY,
+                    history_light   TEXT,
+                    payload_status  TEXT,
+                    total_captures  INTEGER DEFAULT 0,
+                    last_updated    TEXT,
+                    notes           TEXT
+                );
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_client_raw_container_light_updated ON client_raw_container_light(last_updated DESC);")
             
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_pan ON sdc_session_timelines(pan);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_cid ON sdc_session_timelines(client_id);")
@@ -450,6 +463,7 @@ class SchemaMixin:
                     automation_mode    TEXT NOT NULL DEFAULT 'extension',
                     automation_mode_2  TEXT DEFAULT '',
                     extension_flow     TEXT NOT NULL DEFAULT 'double',
+                    browser            TEXT DEFAULT '',
                     success_selector   TEXT,
                     arn_selector       TEXT,
                     sort_order         INTEGER NOT NULL DEFAULT 0
@@ -459,6 +473,7 @@ class SchemaMixin:
             self._ensure_column(conn, "services", "success_selector", "TEXT")
             self._ensure_column(conn, "services", "arn_selector", "TEXT")
             self._ensure_column(conn, "services", "automation_mode_2", "TEXT DEFAULT ''")
+            self._ensure_column(conn, "services", "browser", "TEXT DEFAULT ''")
             conn.execute("UPDATE services SET automation_mode = 'extension' WHERE automation_mode IN ('automated', 'playwright')")
 
             # 6. Client Services (Attachment table)

@@ -1,18 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <title>Sera</title>
-  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+  <mask id="notches" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
     <rect width="64" height="64" fill="#fff"/>
-    <circle cx="10" cy="17" r="5.25" fill="#000"/>
-      <circle cx="10" cy="32" r="5.25" fill="#000"/>
-      <circle cx="10" cy="47" r="5.25" fill="#000"/>
-    <g transform="matrix(0.7240 0 0 0.7240 10.9567 8.4697)" stroke-width="2.4" stroke-linejoin="round">
-      <path d="M32 7.5 41 20 23 20Z" fill="#000" stroke="#000"/>
-      <path d="M26.5 25.5 37.5 25.5 47.5 39 16.5 39Z" fill="#000" stroke="#000"/>
-      <path d="M23.5 44.5 40.5 44.5 51 57.5 13 57.5Z" fill="#000" stroke="#000"/>
-      <circle cx="32" cy="25.5" r="3" fill="#fff"/>
-      <circle cx="32" cy="44.5" r="3.4" fill="#fff"/>
-      <circle cx="32" cy="58.5" r="4.2" fill="#fff"/>
-    </g>
+    <circle cx="32" cy="25.5" r="3" fill="#000"/>
+      <circle cx="32" cy="44.5" r="3.4" fill="#000"/>
+      <circle cx="32" cy="58.5" r="4.2" fill="#000"/>
   </mask>
-  <rect x="10" y="4" width="44" height="56" rx="6.5" fill="#2E9B5F" mask="url(#cut)"/>
+  <path d="M10.000 10.500L10.331 8.445L11.254 6.661L12.661 5.254L14.445 4.331L16.500 4.000L47.500 4.000L49.555 4.331L51.339 5.254L52.746 6.661L53.669 8.445L54.000 10.500L54.000 53.500L53.669 55.555L52.746 57.339L51.339 58.746L49.555 59.669L47.500 60.000L16.500 60.000L14.445 59.669L12.661 58.746L11.254 57.339L10.331 55.555L10.000 53.500L10.000 52.250L12.044 51.837L13.712 50.712L14.837 49.044L15.250 47.000L14.837 44.956L13.712 43.288L12.044 42.163L10.000 41.750L10.000 37.250L12.044 36.837L13.712 35.712L14.837 34.044L15.250 32.000L14.837 29.956L13.712 28.288L12.044 27.163L10.000 26.750L10.000 22.250L12.044 21.837L13.712 20.712L14.837 19.044L15.250 17.000L14.837 14.956L13.712 13.288L12.044 12.163L10.000 11.750L10.000 10.500Z" fill="#2E9B5F"/>
+  <g transform="matrix(0.7240 0 0 0.7240 10.9567 8.4697)">
+    <g mask="url(#notches)" stroke-width="2.4" stroke-linejoin="round">
+      <path d="M32 7.5 41 20 23 20Z" fill="#FFFFFF" stroke="#FFFFFF"/>
+      <path d="M26.5 25.5 37.5 25.5 47.5 39 16.5 39Z" fill="#FFFFFF" stroke="#FFFFFF"/>
+      <path d="M23.5 44.5 40.5 44.5 51 57.5 13 57.5Z" fill="#FFFFFF" stroke="#FFFFFF"/>
+    </g>
+  </g>
 </svg>

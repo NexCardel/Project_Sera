@@ -51,6 +51,17 @@ MODE_HELP_2 = (
     "Optional secondary autofill button for this service in Client Detail.\n"
     "Choose another method from the pool, or None if only one button is desired."
 )
+# Stored values match automation.open_in_default_browser; "" = use the app-wide browser setting.
+BROWSER_CHOICES = (
+    ("Default (app setting)", ""),
+    ("Google Chrome", "chrome"),
+    ("Microsoft Edge", "edge"),
+    ("Mozilla Firefox", "firefox"),
+)
+BROWSER_HELP = (
+    "Browser that opens this portal when Sera has to launch one.\n"
+    "Default uses the browser chosen in Settings."
+)
 MODE_TAGS = {
     automation.ACTION_AUTOFILL: "Fast Autofill",
     automation.ACTION_SMTI: "SMTI Assist",
@@ -195,6 +206,16 @@ class ServiceEditDialog(QDialog):
             self.ext_flow_combo.setCurrentIndex(max(idx_ext_flow, 0))
         
         form.addRow("Extension Login Flow:", self.ext_flow_combo)
+
+        self.browser_combo = QComboBox()
+        for label, key in BROWSER_CHOICES:
+            self.browser_combo.addItem(label, key)
+        self.browser_combo.setToolTip(BROWSER_HELP)
+        if service_data:
+            idx_browser = self.browser_combo.findData((service_data.get("browser") or "").lower())
+            self.browser_combo.setCurrentIndex(max(idx_browser, 0))
+
+        form.addRow("Browser:", self.browser_combo)
         main_layout.addWidget(form_frame)
 
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
@@ -297,6 +318,7 @@ class ServiceEditDialog(QDialog):
             "automation_mode": self.mode_combo.currentData() or automation.ACTION_AUTOFILL,
             "automation_mode_2": self.mode_2_combo.currentData() or "",
             "extension_flow": self.ext_flow_combo.currentData(),
+            "browser": self.browser_combo.currentData() or "",
             "success_selector": old.get("success_selector") or "",
             "arn_selector": old.get("arn_selector") or "",
         }

@@ -4,6 +4,7 @@ client_detail_window.py
 Window 2: shows client info, masked passwords, and autofill buttons.
 """
 
+import threading
 import webbrowser
 
 from PySide6.QtCore import Qt, QTimer, QSize, Signal
@@ -222,13 +223,21 @@ class ClientDetailWindow(QWidget):
     def load_client(self, client_id: int):
         self.scroll_widget.setUpdatesEnabled(False)
         try:
-            self._load_client_internal(client_id)
+            if self._load_client_internal(client_id) is not False:
+                self._record_view_async(client_id)
+        finally:
+            self.scroll_widget.setUpdatesEnabled(True)
+
+    def _record_view_async(self, client_id: int):
+        """The audit entry and the activity counter are three database connections; they are
+        bookkeeping, so they run off the UI thread and never delay the panel sliding in."""
+        def work():
             try:
+                self.db.log_action(self.actor, "view", client_id=client_id)
                 self.db.record_client_activity(client_id, "Viewed", "Opened profile")
             except Exception:
                 pass
-        finally:
-            self.scroll_widget.setUpdatesEnabled(True)
+        threading.Thread(target=work, name="client-view-log", daemon=True).start()
 
     def _load_client_internal(self, client_id: int):
         self._clear_layout(self.scroll_layout)
@@ -242,9 +251,8 @@ class ClientDetailWindow(QWidget):
         if not self.client:
             QMessageBox.warning(self, "Not found", "That client record no longer exists.")
             self.back_requested.emit()
-            return
+            return False
 
-        self.db.log_action(self.actor, "view", client_id=client_id)
 
         # Header Titles and Token
         primary, secondary = self._get_identity_parts(self.client)
@@ -262,13 +270,14 @@ class ClientDetailWindow(QWidget):
         
         from PySide6.QtWidgets import QGridLayout
         
-        mask_mode = self.db.get_setting("mask_mode", "last_n")
-        reveal_count = int(self.db.get_setting("mask_reveal_count", "4"))
-        show_hide_btn_enabled = self.db.get_setting("show_hide_btn_enabled", "1") == "1"
+        settings = self.db.get_all_settings()    # one connection, not four
+        mask_mode = settings.get("mask_mode", "last_n")
+        reveal_count = int(settings.get("mask_reveal_count", "4"))
+        show_hide_btn_enabled = settings.get("show_hide_btn_enabled", "1") == "1"
         
         timeout_sec = 30
         try:
-            timeout_sec = int(self.db.get_setting("clipboard_clear_seconds", "30"))
+            timeout_sec = int(settings.get("clipboard_clear_seconds", "30"))
         except Exception:
             pass
 

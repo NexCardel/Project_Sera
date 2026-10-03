@@ -281,21 +281,62 @@ def _send_to_extension(service: dict, user_id: str, password: str, client_id: in
     _deliver_to_extension(payload, service, on_error)
 
 
+def _default_browser_kind() -> str:
+    """'chrome' | 'edge' | 'firefox' | '': the browser the app setting names, else the OS default."""
+    try:
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(str(Path.home() / "AmanAssociates_Sera" / "settings.ini"))
+        pref = cfg.get("Automation", "browser", fallback="system_default").strip().lower()
+        if pref in ("chrome", "edge", "firefox"):
+            return pref
+    except Exception:
+        pass
+    try:
+        import winreg
+        key = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+            prog = str(winreg.QueryValueEx(k, "ProgId")[0]).lower()
+        if "firefox" in prog:
+            return "firefox"
+        if "msedge" in prog or "edge" in prog:
+            return "edge"
+        if "chrome" in prog:
+            return "chrome"
+    except Exception:
+        pass
+    return ""
+
+
 def _deliver_to_extension(payload: dict, service: dict, on_error=None):
     """Sends `payload` to one connected browser (retrying up to 10 s, launching the browser once)."""
     def _attempt_send():
         from ui import ws_bridge
         max_attempts = 20
         launched_browser = False
+        # The service's own browser is strict: no other browser may fill it. "Default" prefers the
+        # app-wide / OS default browser but still falls back to any connected one.
+        browser = (service.get("browser") or "").strip().lower()
+        preferred = "" if browser else _default_browser_kind()
 
         for attempt in range(1, max_attempts + 1):
             bridge = ws_bridge.get_active_bridge()
-            if bridge and bridge.send_first(payload):
-                return
+            if bridge:
+                if browser:
+                    if bridge.send_first(payload, browser=browser):
+                        return
+                else:
+                    # preferred browser, then the Chromium ones, then whatever is connected
+                    if any(bridge.send_first(payload, browser=b)
+                           for b in dict.fromkeys((preferred, "chrome", "edge")) if b):
+                        return
+                    if bridge.send_first(payload):
+                        return
             if not launched_browser:
                 launched_browser = True
                 try:
-                    open_in_default_browser(service.get("login_page_link", ""))
+                    open_in_default_browser(service.get("login_page_link", ""),
+                                            browser or None)
                 except Exception:
                     pass
             time.sleep(0.5)

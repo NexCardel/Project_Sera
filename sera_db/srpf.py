@@ -7,6 +7,37 @@ Split out of database.py; methods are unchanged. Mixed into SeraDatabase.
 import datetime
 import json
 import re
+from functools import lru_cache
+from typing import Optional
+
+
+@lru_cache(maxsize=8)
+def _profile_of_json(raw_payload_json: str) -> dict:
+    """extract_profile_from_payload for a JSON string, remembered: one capture is profiled
+    by both the container update and the client enrichment. Callers must not mutate it."""
+    from ui.utils.profile_parser import extract_profile_from_payload
+    return extract_profile_from_payload(raw_payload_json)
+
+
+def _light_history(hist: list) -> list:
+    """A filing history without the (large) raw payload of each filing."""
+    return [{k: v for k, v in h.items() if k != "raw_payload_json"} for h in hist]
+
+
+def _latest_payload_status(hist: list) -> Optional[str]:
+    """The status the latest filing's payload states itself (what the tracker's status
+    resolver looks for), or None."""
+    if not hist:
+        return None
+    raw = hist[-1].get("raw_payload_json")
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) and raw else raw
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    inner = obj.get("raw_payload") if isinstance(obj.get("raw_payload"), dict) else {}
+    return obj.get("status") or inner.get("status") or None
 
 
 class SrpfMixin:
@@ -99,7 +130,9 @@ class SrpfMixin:
             except Exception:
                 payload_obj = {}
 
-        new_profile = extract_profile_from_payload(payload_obj)
+        raw_for_profile = dump_row.get("raw_payload_json")
+        new_profile = (_profile_of_json(raw_for_profile) if isinstance(raw_for_profile, str) and raw_for_profile
+                       else extract_profile_from_payload(payload_obj))
 
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
@@ -169,6 +202,7 @@ class SrpfMixin:
                 SET client_id = ?, company_name = ?, proprietor_name = ?, pan = ?, gstin = ?, tan = ?, phone = ?, email = ?, dob = ?, user_id = ?, filing_history = ?, total_captures = ?, last_updated = ?
                 WHERE identity_key = ?
             """, (cid, comp, prop, pan_val, gst_val, tan_val, ph_val, em_val, dob_val, uid_val, json.dumps(hist), tot_caps, final_last_updated, clean_key))
+            self._write_container_light(r_conn, clean_key, hist, tot_caps, final_last_updated)
         else:
             hist = []
             arn_str = dump_row.get("arn_number")
@@ -205,6 +239,7 @@ class SrpfMixin:
                 new_profile.get("phone", ""), new_profile.get("email", ""), new_profile.get("dob", ""),
                 new_profile.get("user_id", ""), "{}", json.dumps(hist), "{}", 1, dump_ts
             ))
+            self._write_container_light(r_conn, clean_key, hist, 1, dump_ts)
 
     def get_client_raw_container(self, client_id: int = None, identity_key: str = None) -> Optional[dict]:
         """SRPF Stage 1: Retrieves unified raw container by client_id or identity_key (PAN/GSTIN/TAN) from rawPayload.db."""
@@ -294,24 +329,74 @@ class SrpfMixin:
             }
         return client_map
 
-    def get_srpf_containers(self, limit: int = 200, search_query: str = None) -> list[dict]:
+    @staticmethod
+    def _write_container_light(r_conn, identity_key: str, hist: list, total_captures: int, last_updated: str) -> None:
+        """Mirrors what the tracker LIST needs from a container into client_raw_container_light.
+
+        The list used to read these from client_raw_containers, but SQLite keeps a row's big
+        filing_history column in overflow pages, and reading any column stored AFTER it
+        (total_captures, last_updated, notes) means walking that whole overflow chain."""
+        r_conn.execute(
+            """INSERT INTO client_raw_container_light (identity_key, history_light, payload_status, total_captures, last_updated, notes)
+               VALUES (?, ?, ?, ?, ?, (SELECT notes FROM client_raw_containers WHERE identity_key = ?))
+               ON CONFLICT(identity_key) DO UPDATE SET history_light = excluded.history_light,
+                   payload_status = excluded.payload_status, total_captures = excluded.total_captures,
+                   last_updated = excluded.last_updated, notes = excluded.notes""",
+            (identity_key, json.dumps(_light_history(hist)), _latest_payload_status(hist), total_captures, last_updated, identity_key),
+        )
+
+    def _backfill_container_light(self, r_conn) -> None:
+        """Containers written before the light table existed (or restored from a backup that
+        lacks it): build their light rows once from the full container."""
+        todo = r_conn.execute(
+            """SELECT c.identity_key, c.filing_history, c.total_captures, c.last_updated FROM client_raw_containers c
+               WHERE NOT EXISTS (SELECT 1 FROM client_raw_container_light l WHERE l.identity_key = c.identity_key)"""
+        ).fetchall()
+        for key, raw, total, last_updated in todo:
+            try:
+                hist = json.loads(raw) if raw else []
+            except Exception:
+                hist = []
+            self._write_container_light(r_conn, key, hist, total or 0, last_updated)
+
+    def get_srpf_containers(self, limit: int = 200, search_query: str = None, slim: bool = False, identity_key: str = None) -> list[dict]:
         """SRPF Phase 1 Filtration: Returns grouped client containers from rawPayload.db.
-        Each distinct client or unregistered entity is aggregated into exactly ONE container row."""
+        Each distinct client or unregistered entity is aggregated into exactly ONE container row.
+
+        slim=True is for list views. The filings' raw payloads make up nearly all of a
+        container's size, so a slim read takes the payload-free history_light column instead of
+        filing_history (SQLite never reads the big column's pages) plus the latest payload's own
+        status as "payload_status". Slim rows have raw_payload_json == "" and "_slim": True; fetch
+        one container with identity_key=... (slim=False) when the full payloads are needed."""
         with self._connect_raw() as r_conn:
             # 1. Auto-sync tracker_dump records into client_raw_containers if needed
             cur = r_conn.execute("SELECT COUNT(*) FROM client_raw_containers")
             container_count = cur.fetchone()[0]
             if container_count == 0:
                 self.re_resolve_all_tracker_dumps()
+            if slim:
+                self._backfill_container_light(r_conn)
 
             # 2. Query containers
-            sql = "SELECT identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated, notes FROM client_raw_containers WHERE 1=1"
+            early = "c.identity_key, c.client_id, c.company_name, c.proprietor_name, c.pan, c.gstin, c.tan, c.phone, c.email, c.dob, c.user_id, c.portal_profiles"
+            if slim:
+                # nothing stored after filing_history is read from the main table (see _write_container_light)
+                sql = (f"SELECT {early}, l.history_light, '{{}}', l.total_captures, l.last_updated, l.notes, l.payload_status "
+                       "FROM client_raw_containers c JOIN client_raw_container_light l ON l.identity_key = c.identity_key WHERE 1=1")
+                order = "l.last_updated"
+            else:
+                sql = (f"SELECT {early}, c.filing_history, c.raw_aggregates, c.total_captures, c.last_updated, c.notes, NULL "
+                       "FROM client_raw_containers c WHERE 1=1")
+                order = "c.last_updated"
             params = []
+            if identity_key:
+                sql += " AND c.identity_key = ?"
+                params.append(identity_key)
             if search_query:
                 q = f"%{search_query}%"
-                sql += " AND (identity_key LIKE ? OR company_name LIKE ? OR proprietor_name LIKE ? OR pan LIKE ? OR gstin LIKE ? OR phone LIKE ? OR email LIKE ?)"
+                sql += " AND (c.identity_key LIKE ? OR c.company_name LIKE ? OR c.proprietor_name LIKE ? OR c.pan LIKE ? OR c.gstin LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)"
                 params.extend([q, q, q, q, q, q, q])
-            sql += " ORDER BY last_updated DESC LIMIT ?"
+            sql += f" ORDER BY {order} DESC LIMIT ?"
             params.append(limit)
 
             cur = r_conn.execute(sql, params)
@@ -386,6 +471,7 @@ class SrpfMixin:
 
             latest_status = filing_hist[-1].get("status", "") if filing_hist else ""
             latest_payload = filing_hist[-1].get("raw_payload_json", "") if filing_hist else ""
+            payload_status = r[17] if len(r) > 17 else None
 
             containers.append({
                 "identity_key": identity_key,
@@ -413,7 +499,9 @@ class SrpfMixin:
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
                 "last_updated": r[15],
-                "notes": r[16] if len(r) > 16 else ""
+                "notes": r[16] if len(r) > 16 else "",
+                "payload_status": payload_status,
+                "_slim": slim,
             })
 
         # Default chronological entry organisation: latest entry at top
@@ -421,18 +509,45 @@ class SrpfMixin:
         return containers
 
     def delete_srpf_container(self, identity_key: str) -> bool:
-        """Deletes a container and its associated captures from rawPayload.db."""
+        """Deletes a container and ONLY the captures that belong to it from rawPayload.db.
+
+        A capture belongs to a container when it files under the same container key as
+        _update_srpf_container: "CLI-<id>" for a registered client, otherwise the first
+        identity candidate (or the unassigned identity). Captures of other containers that
+        merely mention this identity in their payload (e.g. a GSTIN capture mentioning the
+        PAN) are left alone.
+        """
         if not identity_key:
             return False
         clean = str(identity_key).strip().upper()
         with self._connect_raw() as conn:
+            conn.execute("DELETE FROM client_raw_container_light WHERE UPPER(identity_key) = ?", (clean,))
             conn.execute("DELETE FROM client_raw_containers WHERE UPPER(identity_key) = ?", (clean,))
-            conn.execute("""
-                DELETE FROM tracker_dump
-                WHERE UPPER(TRIM(unassigned_identity)) = ?
-                   OR UPPER(TRIM(arn_number)) LIKE ?
-                   OR UPPER(raw_payload_json) LIKE ?
-            """, (clean, f"%{clean}%", f"%{clean}%"))
+            owned_ids = []
+            m = re.match(r"^CLI-(\d+)$", clean)
+            if m:
+                owned_ids = [r[0] for r in conn.execute(
+                    "SELECT id FROM tracker_dump WHERE client_id = ?", (int(m.group(1)),)
+                ).fetchall()]
+            else:
+                m = re.match(r"^UNASSIGNED_(\d+)$", clean)
+                if m:
+                    owned_ids = [int(m.group(1))]
+                else:
+                    rows = conn.execute(
+                        "SELECT id, unassigned_identity, arn_number, raw_payload_json FROM tracker_dump "
+                        "WHERE client_id IS NULL OR client_id = 0"
+                    ).fetchall()
+                    for rid, unassigned, arn, payload in rows:
+                        cands = self._extract_identity_candidates_from_payload(arn_number=arn, raw_payload_json=payload)
+                        row_key = cands[0] if cands else str(unassigned or "").strip().upper()
+                        if row_key == clean:
+                            owned_ids.append(rid)
+            for i in range(0, len(owned_ids), 500):
+                chunk = owned_ids[i:i + 500]
+                conn.execute(
+                    f"DELETE FROM tracker_dump WHERE id IN ({','.join('?' for _ in chunk)})", chunk
+                )
         return True
 
     def _resolve_session_proximity_candidate(self, portal: str, timestamp_str: str, max_seconds: int = 900, session_id: str = None) -> Optional[str]:
@@ -520,4 +635,187 @@ class SrpfMixin:
     def save_srpf_container_media(self, identity_key: str, notes: str, screenshot_path: str) -> bool:
         with self._connect_raw() as conn:
             cur = conn.execute("UPDATE client_raw_containers SET notes = ?, screenshot_path = ? WHERE identity_key = ?", (notes, screenshot_path, identity_key))
+            conn.execute("UPDATE client_raw_container_light SET notes = ? WHERE identity_key = ?", (notes, identity_key))
             return cur.rowcount > 0
+
+    # ---------------- Capture -> MCL mapping (client record enrichment) ----------------
+
+    _MCL_MAPPING_SETTING = "tracker_mcl_mappings"
+
+    @staticmethod
+    def _flatten_payload_leaves(payload, depth: int = 6) -> list[tuple[str, str]]:
+        """Returns [(leaf_key_lower, value)] for every scalar in a payload (sgt_i notes excluded)."""
+        out: list[tuple[str, str]] = []
+
+        def walk(item, d):
+            if d <= 0 or item is None:
+                return
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    if k == "sgt_i":
+                        continue
+                    if isinstance(v, (dict, list)):
+                        walk(v, d - 1)
+                    elif isinstance(v, (str, int, float)) and not isinstance(v, bool):
+                        sv = str(v).strip()
+                        if sv and sv.lower() not in ("null", "none", "undefined", "n/a"):
+                            out.append((str(k).strip().lower(), sv))
+            elif isinstance(item, list):
+                for v in item:
+                    walk(v, d - 1)
+
+        walk(payload, depth)
+        return out
+
+    @staticmethod
+    def _payload_to_obj(raw_payload_json):
+        if isinstance(raw_payload_json, dict):
+            return raw_payload_json
+        try:
+            obj = json.loads(raw_payload_json) if raw_payload_json else {}
+        except Exception:
+            return {}
+        return obj if isinstance(obj, (dict, list)) else {}
+
+    def get_capture_mcl_mappings(self) -> list[dict]:
+        """User-defined mappings [{"source": <captured datapoint key>, "column_id": <MCL column id>}]."""
+        try:
+            data = json.loads(self.get_setting(self._MCL_MAPPING_SETTING, "") or "[]")
+        except Exception:
+            return []
+        result = []
+        for m in data if isinstance(data, list) else []:
+            if isinstance(m, dict) and m.get("source") and isinstance(m.get("column_id"), int):
+                result.append({"source": str(m["source"]).strip().lower(), "column_id": m["column_id"]})
+        return result
+
+    def save_capture_mcl_mappings(self, mappings: list[dict]) -> None:
+        clean, seen = [], set()
+        for m in mappings or []:
+            src = str(m.get("source") or "").strip().lower()
+            cid = m.get("column_id")
+            if src and isinstance(cid, int) and (src, cid) not in seen:
+                seen.add((src, cid))
+                clean.append({"source": src, "column_id": cid})
+        self.set_setting(self._MCL_MAPPING_SETTING, json.dumps(clean))
+
+    def get_capture_datapoints(self, limit: int = 300, auto_limit: int = 40) -> list[dict]:
+        """Lists the datapoints (leaf keys) seen in recent captures for the mapping dialog.
+
+        Each entry: {"key", "count", "sample", "auto_column_id"} where auto_column_id is the MCL
+        column the built-in auto-mapper already sends this datapoint's value to (or None).
+        """
+        from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
+        mcl_cols = self.get_mcl_columns()
+        with self._connect_raw() as conn:
+            rows = conn.execute(
+                "SELECT raw_payload_json FROM tracker_dump WHERE raw_payload_json IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        points: dict[str, dict] = {}
+        for n, (raw,) in enumerate(rows):
+            payload = self._payload_to_obj(raw)
+            if not payload:
+                continue
+            auto_by_value = {}
+            # the profile parser is the costly part: only the newest payloads are probed for
+            # "auto-mapped to"; every payload still counts towards the key statistics
+            if n < auto_limit:
+                try:
+                    mapped = map_profile_to_mcl_columns(extract_profile_from_payload(payload), mcl_cols)
+                    auto_by_value = {str(v).strip(): c for c, v in mapped.items() if str(v).strip()}
+                except Exception:
+                    pass
+            for key, val in self._flatten_payload_leaves(payload):
+                if len(val) > 200:
+                    continue
+                pt = points.setdefault(key, {"key": key, "count": 0, "sample": val, "auto_column_id": None})
+                pt["count"] += 1
+                if pt["auto_column_id"] is None and val in auto_by_value:
+                    pt["auto_column_id"] = auto_by_value[val]
+        return sorted(points.values(), key=lambda p: (-p["count"], p["key"]))
+
+    def _build_client_enrichment(self, client_id: int, payload, raw_json: Optional[str] = None) -> dict[int, str]:
+        """Safe MCL changes for one registered client from one capture payload: fills blank
+        columns, or improves an incomplete name. User mappings win over the auto-mapper."""
+        from tracker_dump_parser.mcl_enricher import build_mcl_updates
+        from ui.utils.profile_parser import extract_profile_from_payload
+        mcl_cols = self.get_mcl_columns()
+        with self._connect() as m_conn:
+            client = self._fetch_client_full(m_conn, client_id)
+        if not client:
+            return {}
+        existing = client.get("values", {})
+        id_col_ids = {c["id"] for c in mcl_cols if c.get("field_type") == "id"}
+
+        updates: dict[int, str] = {}
+        mappings = self.get_capture_mcl_mappings()
+        if mappings:
+            leaves = self._flatten_payload_leaves(payload)
+            for m in mappings:
+                col_id = m["column_id"]
+                if col_id in updates or col_id in id_col_ids:
+                    continue
+                if str(existing.get(col_id) or "").strip():
+                    continue
+                for key, val in leaves:
+                    if key == m["source"]:
+                        updates[col_id] = val
+                        break
+
+        label_by_id = {c["id"]: (c.get("label") or "").lower() for c in mcl_cols}
+        profile = _profile_of_json(raw_json) if isinstance(raw_json, str) and raw_json else extract_profile_from_payload(payload)
+        for col_id, val in build_mcl_updates(mcl_cols, existing, [profile]).items():
+            lbl = label_by_id.get(col_id, "")
+            # a generic "...date..." column is not a date-of-birth column
+            if "date" in lbl and not any(t in lbl for t in ("dob", "birth", "incorp")):
+                continue
+            current = str(existing.get(col_id) or "").strip()
+            if current:
+                # an existing name is only completed (e.g. "Simran" -> "Simran Kaur"), never replaced
+                cur_tokens = set(re.findall(r"[a-z0-9]+", current.lower()))
+                if not cur_tokens <= set(re.findall(r"[a-z0-9]+", val.lower())):
+                    continue
+            updates.setdefault(col_id, val)
+        return {c: v for c, v in updates.items() if c not in id_col_ids}
+
+    def enrich_client_from_capture(self, client_id: int, raw_payload_json) -> dict[int, str]:
+        """Writes newly captured details of an already registered client into its MCL record."""
+        if not client_id:
+            return {}
+        payload = self._payload_to_obj(raw_payload_json)
+        if not payload:
+            return {}
+        updates = self._build_client_enrichment(client_id, payload, raw_payload_json)
+        if not updates:
+            return {}
+        for col_id, val in updates.items():
+            self.update_client_single_field(client_id, col_id, val, log_action=False)
+        labels = {c["id"]: c.get("label") for c in self.get_mcl_columns()}
+        try:
+            self.log_action(
+                actor="System", action="update", client_id=client_id,
+                detail="Updated from capture: " + ", ".join(str(labels.get(c, c)) for c in updates),
+            )
+        except Exception:
+            pass
+        self._bump_sync_revision_if_configured()
+        return updates
+
+    def enrich_registered_clients_from_containers(self) -> int:
+        """Retrospective pass: applies every registered client's captured payloads to its MCL
+        record (oldest first, so the newest capture's improvements win). Returns clients changed."""
+        with self._connect_raw() as conn:
+            rows = conn.execute(
+                "SELECT client_id, raw_payload_json FROM tracker_dump "
+                "WHERE client_id IS NOT NULL AND client_id != 0 AND raw_payload_json IS NOT NULL "
+                "ORDER BY created_at"
+            ).fetchall()
+        changed = set()
+        for cid, raw in rows:
+            try:
+                if self.enrich_client_from_capture(cid, raw):
+                    changed.add(cid)
+            except Exception:
+                pass
+        return len(changed)

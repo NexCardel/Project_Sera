@@ -234,6 +234,7 @@ class TestSccVaultTagger(unittest.TestCase):
         from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
         dlg = UnifiedSettingsDialog(self.db, actor="Admin", page="general")
         self.assertIsNotNone(dlg)
+        dlg.set_page("scc")        # pages are built when first visited
         self.assertTrue(dlg.scc_check.isChecked())
         self.assertIsNotNone(dlg.scc_opt1_label_edit)
         self.assertIsNotNone(dlg.scc_opt1_str_edit)
@@ -284,6 +285,7 @@ class TestSccVaultTagger(unittest.TestCase):
 
         # Re-open dialog to verify controls load the saved options
         dlg2 = UnifiedSettingsDialog(self.db, actor="Admin", page="general")
+        dlg2.set_page("scc")       # pages are built when first visited
         self.assertEqual(dlg2.scc_opt1_label_edit.text(), "Primary Opt")
         self.assertEqual(dlg2.scc_opt1_str_edit.text(), "#")
         self.assertEqual(dlg2.scc_opt2_label_edit.text(), "Secondary Opt")

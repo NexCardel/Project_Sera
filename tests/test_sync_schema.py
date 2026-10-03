@@ -55,7 +55,7 @@ def test_registry_covers_expected_tables():
     }
     expected_raw = {
         "tracker_dump", "sdc_session_timelines", "client_raw_containers",
-        "client_container_notes",
+        "client_raw_container_light", "client_container_notes",
     }
 
     assert {t.name for t in sync_schema.tables_for(MASTER_DB)} == expected_master
@@ -92,6 +92,7 @@ def test_modes_match_blueprint_section_5():
         "tracker_dump": LWW,
         "sdc_session_timelines": LWW,
         "client_raw_containers": LOCAL,
+        "client_raw_container_light": LOCAL,
         "client_container_notes": LWW,
     }
     for name, mode in expect.items():
@@ -150,6 +151,7 @@ def test_replicated_tables_excludes_local():
 
     raw_replicated = {t.name for t in sync_schema.replicated_tables_for(RAW_DB)}
     assert "client_raw_containers" not in raw_replicated
+    assert "client_raw_container_light" not in raw_replicated
     assert "client_container_notes" in raw_replicated
     assert "tracker_dump" in raw_replicated
 

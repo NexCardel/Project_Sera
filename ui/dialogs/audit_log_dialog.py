@@ -408,7 +408,10 @@ class AuditLogDialog(QDialog):
         self.table.setHorizontalHeaderLabels([
             "ID", "Date & Time (Local)", "Actor", "Action", "Client (Name / Token)", "Service", "Detail"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        # Fixed, not ResizeToContents: that re-measures the whole column on every
+        # setItem and made a 1000-row refresh take ~15 s on the UI thread.
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 70)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)

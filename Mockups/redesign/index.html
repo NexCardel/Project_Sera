@@ -1,0 +1,528 @@
+<title>Sera Redesign Mockups</title>
+<style>
+/* Layout: sticky screen tabs on top; each screen is a fixed-size dark app frame in a horizontally scrolling stage,
+   with a short "what changes" strip underneath. Colours are the app's own (fixed by the owner). */
+:root{
+  color-scheme:dark;
+  --page:#0b0d0c; --ink:#e8ece9; --ink2:#a9b3ad; --ink3:#6f7a74; --rule:#242a27;
+  /* app palette */
+  --bg:#202020; --side:#171717; --panel:#141414; --card:#191919; --raise:#1f1f1f;
+  --line:#2a2a2a; --line2:#363636; --text:#f8fafc; --text2:#c9d1d9; --muted:#8e8d88; --faint:#6e6e6e;
+  --em:#2e9b5f; --em2:#34b76d; --emdim:#1a382b; --emdeep:#0e1f16; --mint:#4cf9b7;
+  --danger:#ff4d4d; --dangerdim:#3a1a1a; --warn:#e3b341; --warndim:#33290f; --info:#5aa7ff;
+  /* grid (stays white) */
+  --g-bg:#fff; --g-alt:#f7faf8; --g-line:#e7ece9; --g-head:#101713; --g-headtx:#cfe9dc; --g-text:#1b2420; --g-mute:#6b7a72; --g-hover:#edf6f1; --g-sel:#d9f2e4;
+  --r-s:6px; --r-m:8px; --r-l:12px;
+  --ff:'Segoe UI',system-ui,-apple-system,'Helvetica Neue',sans-serif; --mono:Consolas,'Cascadia Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--page);color:var(--ink);font:14px/1.5 var(--ff);padding-inline:20px;padding-block:0 60px}
+h1,h2,h3,h4,p{margin:0}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--page);padding-block:14px 0;border-bottom:1px solid var(--rule)}
+.top h1{font-size:19px;font-weight:700;letter-spacing:.01em}
+.top .sub{color:var(--ink3);font-size:12.5px;margin-top:2px}
+.tabs{display:flex;gap:2px;overflow-x:auto;margin-top:12px;scrollbar-width:none}
+.tabs button{all:unset;cursor:pointer;padding:9px 14px;font-size:13px;color:var(--ink2);border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected=true]{color:var(--mint);border-bottom-color:var(--mint)}
+.tabs button:focus-visible{outline:2px solid var(--mint);outline-offset:-2px}
+section.screen{display:none;padding-top:22px}
+section.screen.on{display:block}
+.stage{overflow-x:auto;padding-bottom:10px}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px 36px;margin-top:22px;max-width:1240px}
+.notes h4{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);margin-bottom:8px;font-weight:600}
+.notes ul{margin:0;padding-left:17px;color:var(--ink2);font-size:13px;display:grid;gap:5px}
+.notes li::marker{color:var(--ink3)}
+.notes b{color:var(--ink);font-weight:600}
+.legend{font-size:12.5px;color:var(--ink3);margin-bottom:10px}
+.legend b{color:var(--ink2)}
+
+/* ---------- app frame ---------- */
+.app{display:grid;grid-template-columns:212px 1fr;width:1240px;height:780px;background:var(--bg);color:var(--text);border:1px solid #333;border-radius:10px;overflow:hidden;position:relative;font-size:13px;line-height:1.4}
+.app.nosb{grid-template-columns:1fr}
+.app *{scrollbar-width:thin;scrollbar-color:#3a3a3a transparent}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+svg.i.s{width:14px;height:14px}svg.i.l{width:20px;height:20px}
+/* sidebar */
+.sb{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px 10px}
+.brand{display:flex;align-items:center;gap:9px;padding:0 4px 12px}
+.logo{width:30px;height:30px;border-radius:8px;background:var(--emdeep);border:1px solid #1e4d34;display:grid;place-items:center;color:var(--mint);font-weight:700;font-size:12px}
+.brand b{font-size:14px;line-height:1.15;flex:1;min-width:0}.brand b span{display:block;font-size:11px;color:var(--muted);font-weight:500}
+.admin-row{display:flex;align-items:center;justify-content:space-between;padding:8px 6px 10px;color:#a0a0a0;font-size:12px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.nav-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:12px 8px 5px;font-weight:600}
+.nav{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border-radius:8px;color:#b9b9b4;cursor:default;position:relative}
+.nav:hover{background:#1f1f1f;color:var(--text)}
+.nav.on{background:var(--emdim);color:var(--text);font-weight:600}
+.nav.on::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--em)}
+.nav .kb{margin-left:auto}
+.nav.admin{display:flex}
+.sb-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px}
+.me{display:flex;align-items:center;gap:8px;padding:2px 4px;font-size:12px;font-weight:600;color:#e0e0e0}
+.avatar{width:26px;height:26px;border-radius:50%;background:var(--em);display:grid;place-items:center;color:#fff}
+.pill-sync{display:flex;align-items:center;justify-content:center;gap:7px;height:30px;border-radius:15px;border:1px solid #1e4d34;background:var(--emdeep);color:var(--mint);font-size:11.5px;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--em2);box-shadow:0 0 0 3px rgba(52,183,109,.18);flex:none}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px rgba(227,179,65,.18)}.dot.off{background:#666;box-shadow:none}.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(255,77,77,.16)}
+.ver{text-align:center;color:#6e6e6e;font-size:10px}
+/* main */
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;padding:20px 24px 16px;gap:14px;position:relative}
+.hd{display:flex;align-items:center;gap:12px;min-height:40px}
+.hd h2{font-size:21px;font-weight:700;letter-spacing:.005em}
+.count{color:var(--muted);font-size:12.5px;background:#191919;border:1px solid var(--line);border-radius:12px;padding:2px 10px}
+.sp{flex:1}
+/* controls */
+.btn{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 13px;border-radius:var(--r-m);background:#1a1a1a;border:1px solid var(--line2);color:var(--text);font:600 12.5px var(--ff);cursor:pointer;white-space:nowrap}
+.btn:hover{background:#242424;border-color:#444}
+.btn:focus-visible,.ibtn:focus-visible,.chip:focus-visible,.sw:focus-visible{outline:2px solid var(--mint);outline-offset:1px}
+.btn.pri{background:var(--em);border-color:var(--em2);color:#fff}.btn.pri:hover{background:var(--em2)}
+.btn.soft{background:var(--emdeep);border-color:#1e4d34;color:var(--mint)}.btn.soft:hover{background:#163626}
+.btn.dng{background:transparent;border-color:#7a2b2b;color:#ff8d8d}.btn.dng:hover{background:var(--dangerdim)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--text2)}.btn.ghost:hover{background:#222}
+.btn.sm{height:28px;padding:0 10px;font-size:12px}.btn.lg{height:38px;padding:0 18px;font-size:13px}
+.btn[disabled],.btn.dis{opacity:.4;pointer-events:none}
+.ibtn{all:unset;box-sizing:border-box;width:32px;height:32px;display:inline-grid;place-items:center;border-radius:var(--r-m);color:var(--text2);cursor:pointer}
+.ibtn:hover{background:#262626;color:var(--text)}.ibtn.bd{border:1px solid var(--line2);background:#1a1a1a}
+.inp{box-sizing:border-box;height:34px;background:var(--panel);border:1px solid #303030;border-radius:var(--r-m);color:var(--text);font:13px var(--ff);padding:0 12px;min-width:0;width:100%}
+.inp::placeholder{color:#74746f}.inp:focus{outline:none;border-color:var(--mint);box-shadow:0 0 0 3px rgba(76,249,183,.12)}
+textarea.inp{height:auto;padding:10px 12px;resize:vertical;line-height:1.5}
+select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#9a9a9a 50%),linear-gradient(135deg,#9a9a9a 50%,transparent 50%);background-position:calc(100% - 17px) 14px,calc(100% - 12px) 14px;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+.field{position:relative;display:flex;align-items:center}
+.field svg.i{position:absolute;left:11px;color:#7a7a75;pointer-events:none}.field .inp{padding-left:34px}
+.sw{all:unset;box-sizing:border-box;width:38px;height:22px;border-radius:11px;background:#2c2c2c;border:1px solid #3c3c3c;position:relative;cursor:pointer;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#bdbdb8;transition:transform .15s,background .15s}
+.sw[aria-checked=true]{background:var(--em);border-color:var(--em2)}.sw[aria-checked=true]::after{transform:translateX(16px);background:#fff}
+@media (prefers-reduced-motion:reduce){.sw,.sw::after{transition:none}}
+.chip{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 13px;border-radius:14px;border:1px solid #333;background:#181818;color:var(--text2);font:500 12.5px var(--ff);cursor:pointer;white-space:nowrap}
+.chip:hover{border-color:#4a4a4a;color:var(--text)}
+.chip.on{background:var(--emdeep);border-color:var(--em);color:var(--mint)}
+.tag{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:600;background:#262626;color:#c4c4be;white-space:nowrap}
+.tag.g{background:var(--emdim);color:var(--mint)}.tag.w{background:var(--warndim);color:var(--warn)}.tag.r{background:var(--dangerdim);color:#ff9a9a}.tag.b{background:#16263b;color:#8bbcff}.tag.p{background:#2a1f3d;color:#c4a8ff}
+.kb{display:inline-block;font:600 10.5px var(--mono);color:#9a9a95;background:#222;border:1px solid #333;border-bottom-width:2px;border-radius:5px;padding:0 5px;line-height:17px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-l)}
+.card>header{display:flex;align-items:center;gap:10px;padding:14px 18px 0}
+.card>header h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.card>header .sp{flex:1}
+.mut{color:var(--muted)}.sm{font-size:12px}
+/* grid */
+.gridwrap{background:var(--g-bg);border-radius:var(--r-l);border:1px solid #333;overflow:hidden;flex:1;min-height:0;display:flex;flex-direction:column;box-shadow:0 1px 0 rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.35)}
+.gridscroll{overflow:auto;flex:1;min-height:0}
+table.grid{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:13px;color:var(--g-text)}
+.grid th{position:sticky;top:0;z-index:1;background:var(--g-head);color:var(--g-headtx);font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;text-align:left;padding:0 14px;height:38px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid th+th{border-left:1px solid #1d2822}
+.grid td{padding:0 14px;height:40px;border-bottom:1px solid var(--g-line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid tbody tr:nth-child(even) td{background:var(--g-alt)}
+.grid tbody tr:hover td{background:var(--g-hover)}
+.grid tbody tr.sel td{background:var(--g-sel);color:#0b2a1a;font-weight:500}
+.grid tbody tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--em)}
+.grid td.num{color:var(--g-mute);font-variant-numeric:tabular-nums}
+.grid td.mono{font-family:var(--mono);font-size:12px;color:#33433a}
+.grid tr{cursor:pointer}
+.gfoot{height:32px;border-top:1px solid var(--g-line);background:#fbfcfb;color:var(--g-mute);font-size:11.5px;display:flex;align-items:center;padding:0 14px;gap:14px}
+.gfoot .kb{background:#f0f3f1;border-color:#d9dfdc;color:#55645c}
+.gp{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;margin-right:10px;color:#3a4a41}
+.gp i{width:7px;height:7px;border-radius:50%;display:inline-block}
+.empty-g{display:grid;place-items:center;flex:1;color:var(--g-mute);text-align:center;padding:30px;gap:6px}
+.empty-g b{color:var(--g-text);font-size:14px}
+/* selection bar */
+.selbar{display:flex;align-items:center;gap:6px;height:44px;padding:0 10px 0 14px;border-radius:10px;background:#1b2a22;border:1px solid #24503a}
+.selbar .who{font-weight:600;margin-right:6px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vr{width:1px;height:22px;background:#2e4a3b;margin:0 6px;flex:none}
+.grp{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#6fa88a;margin-right:2px}
+/* panel */
+.panel{position:absolute;top:0;right:0;bottom:0;width:520px;background:var(--panel);border-left:1px solid var(--line2);box-shadow:-16px 0 40px rgba(0,0,0,.45);display:flex;flex-direction:column}
+.p-hd{padding:16px 20px 14px;border-bottom:1px solid var(--line);display:grid;gap:9px}
+.p-top{display:flex;align-items:center;gap:10px}
+.p-top h2{font-size:18px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idchip{font:600 11.5px var(--mono);color:var(--mint);background:var(--emdeep);border:1px solid #1e4d34;border-radius:8px;padding:3px 9px;cursor:pointer}
+.p-meta{color:var(--muted);font-size:12.5px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.p-meta .sep{color:#444}
+.p-body{overflow:auto;padding:16px 20px 24px;display:grid;gap:14px;align-content:start;flex:1}
+.svc{display:flex;align-items:center;gap:10px;padding:11px 18px;border-top:1px solid var(--line)}
+.svc:first-of-type{border-top:none}
+.svc .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:#222}
+.svc .nm{flex:1;font-weight:600;font-size:13.5px}.svc .nm small{display:block;font-weight:400;color:var(--muted);font-size:11.5px}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:0 24px;padding:6px 18px 14px}
+.kv .f{padding:9px 0;border-bottom:1px solid #222;min-width:0}
+.kv .f:nth-last-child(-n+2){border-bottom:none}
+.kv label{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+.kv .v{display:flex;align-items:center;gap:6px;font-size:13.5px;min-width:0}
+.kv .v span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv .v .ibtn{width:24px;height:24px;color:#777}.kv .v .ibtn:hover{color:var(--mint)}
+.kv .v.mono span{font-family:var(--mono);font-size:12.5px}
+.notset{padding:0 18px 14px;color:#7c7c77;font-size:12px}
+.notset b{color:#a0a09a;font-weight:500}
+/* toast */
+.toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:10px;background:#12281d;border:1px solid #24503a;color:var(--text);box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:12.5px;max-width:520px}
+.toast svg{color:var(--mint)}
+/* dialog frame (used by settings, sync, small dialogs) */
+.dlg-bg{background:#101010;padding:34px;display:grid;place-items:center}
+.dlg{background:var(--bg);border:1px solid #3a3a3a;border-radius:12px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;position:relative;color:var(--text);font-size:13px;line-height:1.4}
+.dlg>.d-hd{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.dlg>.d-hd h2{font-size:17px;font-weight:700}.dlg>.d-hd p{color:var(--muted);font-size:12.5px;margin-top:1px}
+.d-ic{width:34px;height:34px;border-radius:9px;background:var(--emdeep);border:1px solid #1e4d34;display:grid;place-items:center;color:var(--mint);flex:none}
+.d-bd{padding:18px 20px;display:grid;gap:14px;align-content:start;flex:1;min-height:0;overflow:auto}
+.d-ft{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:#1b1b1b}
+.d-ft .sp{flex:1}
+/* settings */
+.set{display:grid;grid-template-columns:236px 1fr;flex:1;min-height:0}
+.set-nav{background:var(--side);border-right:1px solid var(--line);padding:14px 10px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.set-nav .nav{height:32px}
+.set-main{position:relative;overflow:auto;padding:22px 28px 90px;min-width:0}
+.set-main h2{font-size:19px;font-weight:700}
+.set-main .lead{color:var(--muted);font-size:12.5px;margin:3px 0 18px;max-width:640px}
+.stack{display:grid;gap:14px;max-width:760px}
+.row{display:flex;align-items:center;gap:20px;padding:14px 18px;border-top:1px solid #222}
+.row:first-child{border-top:none}
+.row .t{flex:1;min-width:0}.row .t b{display:block;font-weight:600;font-size:13.5px}.row .t span{display:block;color:var(--muted);font-size:12px;margin-top:2px;max-width:480px}
+.row .ctl{width:230px;flex:none;display:flex;justify-content:flex-end;align-items:center;gap:8px}
+.row .ctl.sw-only{width:auto}
+.stepper{display:flex;align-items:center;border:1px solid #303030;border-radius:8px;background:var(--panel);height:34px;width:100%}
+.stepper button{all:unset;width:34px;text-align:center;cursor:pointer;color:var(--text2);font-size:16px}
+.stepper button:hover{color:var(--mint)}.stepper span{flex:1;text-align:center;font-variant-numeric:tabular-nums}
+.savebar{position:sticky;bottom:-70px;margin-top:22px;max-width:760px;display:flex;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-radius:12px;background:#10261b;border:1px solid var(--em);box-shadow:0 12px 30px rgba(0,0,0,.5);transform:translateY(-70px)}
+.savebar[hidden]{display:none}
+.savebar span{flex:1;font-weight:600}
+.danger-zone{border-color:#5b2323;background:#1b1414}
+.danger-zone>header h3{color:#ff8d8d}
+/* small tables in dialogs */
+table.dt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dt th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:9px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.dt td{padding:10px 14px;border-bottom:1px solid #222;vertical-align:middle}
+table.dt tr:last-child td{border-bottom:none}
+table.dt tr.sel td{background:#162a20}
+table.dt tr{cursor:default}
+.empty{display:grid;place-items:center;gap:6px;padding:34px 20px;text-align:center;color:var(--muted)}
+.empty b{color:var(--text);font-size:14px}
+.empty .ring{width:44px;height:44px;border-radius:50%;background:#1d1d1d;border:1px solid #2e2e2e;display:grid;place-items:center;color:#777;margin-bottom:4px}
+.banner{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:10px;font-size:12.5px;border:1px solid}
+.banner.w{background:var(--warndim);border-color:#5b4814;color:#f1d27c}.banner.r{background:#2a1515;border-color:#5b2323;color:#ffabab}.banner.g{background:#10261b;border-color:#24503a;color:#a9f0cf}
+.banner .sp{flex:1}.banner a{color:inherit;text-decoration:underline;cursor:pointer}
+.tabs2{display:flex;gap:4px;border-bottom:1px solid var(--line);padding:0 20px;background:#1b1b1b}
+.tabs2 button{all:unset;cursor:pointer;padding:11px 14px;color:var(--muted);font-weight:600;font-size:12.5px;border-bottom:2px solid transparent;display:flex;gap:8px;align-items:center}
+.tabs2 button:hover{color:var(--text)}.tabs2 button[aria-selected=true]{color:var(--mint);border-bottom-color:var(--mint)}
+.tabs2 .n{background:#2a2a2a;color:#ccc;border-radius:9px;font-size:10.5px;padding:0 6px;line-height:17px}
+.tabs2 .n.a{background:var(--warndim);color:var(--warn)}
+.stat{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 18px 18px}
+.stat div{background:#141414;border:1px solid #262626;border-radius:10px;padding:10px 12px}
+.stat b{display:block;font-size:20px;font-variant-numeric:tabular-nums}.stat span{font-size:11px;color:var(--muted)}
+.formula{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 18px 4px}
+.formula .p{font:600 12px var(--mono);color:var(--mint);background:var(--emdeep);border:1px solid #1e4d34;border-radius:7px;padding:4px 9px}
+.formula .p.f{color:var(--warn);background:var(--warndim);border-color:#5b4814}
+.formula i{color:var(--muted);font-style:normal}
+.log{font:12px/1.65 var(--mono);color:#c9d1d9;background:#0f1412;border:1px solid #1d2622;border-radius:10px;padding:12px 14px;overflow:auto}
+.log .ts{color:#6a7a72}.log .tg{display:inline-block;min-width:54px;font-weight:700}
+.log .tg.guard{color:var(--warn)}.log .tg.sync{color:var(--mint)}.log .tg.err{color:#ff8d8d}.log .tg.peer{color:#8bbcff}
+.cmp{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+/* foundation page */
+.fx{display:grid;gap:26px;max-width:1240px}
+.fx section{display:grid;gap:12px}
+.fx h3{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);font-weight:600;border-bottom:1px solid var(--rule);padding-bottom:7px}
+.sw-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.sw-c{border:1px solid #2a2a2a;border-radius:10px;overflow:hidden;background:#141414}
+.sw-c i{display:block;height:46px}.sw-c div{padding:7px 10px;font-size:12px;color:var(--ink2)}.sw-c b{display:block;color:var(--ink);font:600 12px var(--mono)}
+.demo{background:var(--bg);border:1px solid #333;border-radius:12px;padding:20px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;color:var(--text)}
+.tscale{display:grid;gap:8px;background:var(--bg);border:1px solid #333;border-radius:12px;padding:18px 22px;color:var(--text)}
+.tscale div{display:flex;align-items:baseline;gap:18px}.tscale small{width:150px;color:var(--muted);font:11px var(--mono);flex:none}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.rule{background:#111513;border:1px solid #232a26;border-radius:10px;padding:12px 14px;font-size:13px;color:var(--ink2)}
+.rule b{display:block;color:var(--ink);margin-bottom:3px;font-size:13px}
+.three{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:22px;align-items:start}
+.cap{font-size:12px;color:var(--ink3);margin:0 0 8px}
+.dlg-sm{width:520px}
+.choice{display:flex;align-items:center;gap:14px;padding:16px 18px;border-radius:12px;background:#181818;border:1px solid var(--line2);cursor:pointer}
+.choice:hover{border-color:var(--em)}.choice b{display:block;font-size:14px}.choice span{color:var(--muted);font-size:12.5px}
+.choice .d-ic{width:40px;height:40px}
+.progress{height:6px;border-radius:3px;background:#262626;overflow:hidden}.progress i{display:block;height:100%;width:62%;background:var(--em)}
+@media (max-width:560px){body{padding-inline:16px}.tabs button{padding:9px 10px}}
+</style>
+
+<header class="top">
+  <h1>Sera Redesign Mockups</h1>
+  <div class="sub">Dark only. Grids stay white. Manage Clients and Tracker Dump stay as built. Every icon carries the Material Design name the app will use (hover it).</div>
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+</header>
+
+<main id="screens"></main>
+
+<script>
+/* ---------- tiny helpers ---------- */
+const P={search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>',plus:'<path d="M12 5v14M5 12h14"/>',refresh:'<path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/>',copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/>',eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',edit:'<path d="M4 20h4L19 9l-4-4L4 16v4z"/>',trash:'<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',archive:'<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/>',bolt:'<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>',assist:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><circle cx="12" cy="11" r="2"/><path d="M8.5 17c.5-2 2-3 3.5-3s3 1 3.5 3"/>',down:'<path d="M6 9l6 6 6-6"/>',right:'<path d="M9 6l6 6-6 6"/>',up:'<path d="M12 19V5M6 11l6-6 6 6"/>',dn:'<path d="M12 5v14M6 13l6 6 6-6"/>',back:'<path d="M19 12H5M11 6l-6 6 6 6"/>',close:'<path d="M6 6l12 12M18 6L6 18"/>',check:'<path d="M5 12l5 5 9-10"/>',cog:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',users:'<circle cx="9" cy="9" r="3"/><path d="M3 20c.6-3.5 3-5 6-5s5.4 1.5 6 5"/><circle cx="17" cy="8" r="2.4"/><path d="M17 13.5c2.3.2 3.7 1.6 4 4.5"/>',brief:'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V4h6v3M3 13h18"/>',db:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',dl:'<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',ul:'<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/>',lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',pulse:'<path d="M3 12h4l2-6 4 12 2-6h6"/>',monitor:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',cols:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',server:'<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/>',fill:'<path d="M5 12l7-7 7 7-7 7-7-7z"/><path d="M19 15c1 1.5 1.5 2.5 1.5 3.5a1.5 1.5 0 01-3 0c0-1 .5-2 1.5-3.5z"/>',tcol:'<path d="M6 19L12 5l6 14M8.5 14h7"/>',erase:'<path d="M4 15l8-9 8 8-5 5H8l-4-4z"/>',undo:'<path d="M9 8L4 13l5 5M4 13h9a6 6 0 010 7"/>',redo:'<path d="M15 8l5 5-5 5M20 13h-9a6 6 0 000 7"/>',dock:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',warn:'<path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/>',sync:'<path d="M4 12a8 8 0 0113.5-5.8M20 12a8 8 0 01-13.5 5.8"/><path d="M18 3v4h-4M6 21v-4h4"/>',play:'<circle cx="12" cy="12" r="9"/><path d="M10 8.5l5 3.5-5 3.5z"/>',csv:'<path d="M6 3h8l4 4v14H6V3z"/><path d="M14 3v4h4"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',filter:'<path d="M4 5h16l-6 8v6l-4-2v-4L4 5z"/>',dots:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',bldg:'<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2"/>',laptop:'<rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M3 19h18"/>',key:'<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',tray:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h5l1 2h6l1-2h5"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',pct:'<path d="M5 19L19 5"/><circle cx="7" cy="7" r="2"/><circle cx="17" cy="17" r="2"/>',doc:'<path d="M6 3h8l4 4v14H6V3z"/><path d="M9 12h6M9 16h6"/>',mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',bell:'<path d="M6 17V11a6 6 0 0112 0v6l2 2H4l2-2zM10 21h4"/>',pause:'<path d="M9 5v14M15 5v14"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4 4-6 8-6s7.2 2 8 6"/>'};
+const M={search:'magnify',plus:'plus',refresh:'refresh',copy:'content-copy',eye:'eye-outline',edit:'pencil',trash:'delete-outline',archive:'archive-outline',bolt:'flash',assist:'clipboard-account-outline',down:'chevron-down',right:'chevron-right',up:'arrow-up',dn:'arrow-down',back:'arrow-left',close:'close',check:'check',cog:'cog-outline',users:'account-multiple-outline',brief:'briefcase-outline',db:'database-outline',dl:'download',ul:'upload',shield:'shield-outline',lock:'lock-outline',pulse:'pulse',monitor:'monitor',cols:'view-column',server:'server',fill:'format-color-fill',tcol:'format-color-text',erase:'eraser',undo:'undo',redo:'redo',dock:'dock-left',warn:'alert-outline',sync:'sync',play:'play-circle-outline',csv:'file-delimited-outline',info:'information-outline',filter:'filter-variant',dots:'dots-horizontal',bldg:'domain',laptop:'laptop',key:'key-outline',tray:'tray',clock:'clock-outline',pct:'percent',doc:'file-document-outline',mail:'email-outline',bell:'bell-outline',pause:'pause',user:'account'};
+const I=(n,c='')=>`<svg class="i ${c}" viewBox="0 0 24 24" data-mdi="mdi.${M[n]}"><title>mdi.${M[n]}</title>${P[n]}</svg>`;
+const sw=(on,id)=>`<button class="sw" role="switch" aria-checked="${!!on}" ${id?`id="${id}"`:''}></button>`;
+const dot=(c='')=>`<span class="dot ${c}"></span>`;
+const SVC={GST:'#ff6a3d',IT:'#4d8dff',Email:'#a77bff',TRACES:'#e3b341',EPFO:'#35c4a0'};
+const svcName={GST:'GST','IT':'Income Tax',Email:'Email',TRACES:'TRACES',EPFO:'EPFO'};
+const gp=k=>`<span class="gp"><i style="background:${SVC[k]}"></i>${svcName[k]}</span>`;
+
+/* ---------- shared pieces ---------- */
+function sidebar(active,admin=true){
+ const n=(id,ic,t,extra='',cls='')=>`<div class="nav ${cls} ${active===id?'on':''}">${I(ic)}<span>${t}</span>${extra}</div>`;
+ return `<aside class="sb">
+  <div class="brand"><div class="logo">PS</div><b>Aman Associates<span>Project Sera</span></b><button class="ibtn" title="Toggle sidebar (Ctrl+B)">${I('dock')}</button></div>
+  <div class="admin-row"><span>Admin mode</span>${sw(admin)}</div>
+  <div class="nav-label">Work</div>
+  ${n('clients','users','All Clients','<span class="kb">Ctrl K</span>')}
+  ${admin?n('manage','edit','Manage Clients'):''}
+  ${n('tracker','pulse','Tracker Dump')}
+  <div class="nav-label">Tools</div>
+  ${n('import','db','Import CSV')}
+  ${admin?n('audit','shield','Audit Log'):''}
+  ${admin?`<div class="nav-label">Admin</div>${n('staff','brief','Manage Staff')}${n('options','cog','Options')}`:''}
+  <div class="sb-foot">
+    <div class="me"><span class="avatar">${I('user','s')}</span>Admin</div>
+    <div class="pill-sync">${dot()}Auto-sync active</div>
+    <div class="ver">v2.12.0</div>
+  </div></aside>`;
+}
+const people=[
+ ['A. C. T. Dresses','Jabed Ali','ABCDE1001F','9800000001',['GST','IT']],
+ ['A. Classic','Maruf Gazi','ABCDE1002F','9800000002',['GST','IT','Email']],
+ ['A. H. Ranu Dresses','Sk. Saheb Jada','ABCDE1003F','9800000003',['GST']],
+ ['A. Kaizar Dresses','Anamur Rahaman Molla','ABCDE1004F','9800000004',['IT']],
+ ['A. N. Engineering','Anwara Begum','ABCDE1005F','9800000005',['GST','IT']],
+ ['A. N. Nousheen','Nakibuddin Gazi','ABCDE1006F','9800000006',['GST','IT','Email']],
+ ['A. Noor Azam Dresses','Md. Noor Azam Molla','ABCDE1007F','9800000007',['GST','IT']],
+ ['A. Paruli Dresses','Mohammad Arif Molla','ABCDE1008F','9800000008',['GST','IT','Email']],
+ ['A. R. Anisha Dresses','Rafikul Jamal Molla','ABCDE1009F','9800000009',['IT']],
+ ['A. BLOSSOM','PARTNERSHIP','ABCDE1010F','9800000010',['GST','IT']],
+ ['A. P. Enterprise','Md. Ashraf Ali','ABCDE1011F','9800000011',['GST']],
+ ['Sri Venkateswara Agro Processing & Cold Storage Pvt Ltd','Venkateswara Rao Chinnamsetty','ABCDE1012F','9800000012',['GST','IT','Email','TRACES']],
+ ['A. Rinku Dresses','Matin Ali Molla','ABCDE1013F','9800000013',['IT','EPFO']],
+ ['A. Shabnam Dresses','AMEJUDDIN SK','ABCDE1014F','9800000014',['GST','IT']],
+ ['A. Spikyar','Manzur Ali Molla','ABCDE1015F','9800000015',['GST']],
+ ['A. T. Kids World Dresses','Khairullah Thandar','ABCDE1016F','9800000016',['GST','IT']],
+ ['A. Wahid Dresses','Md. Yeasin Molla','ABCDE1017F','9800000017',['GST','IT']],
+ ['A.S. ENGINEERING WORKS','SEKH SOHEL RANA','ABCDE1018F','9800000018',['IT']]];
+function searchGrid(sel){
+ const rows=people.map((p,i)=>`<tr class="${i===sel?'sel':''}" data-i="${i}"><td class="num">${i+1}</td><td title="${p[0]}">${p[0]}</td><td title="${p[1]}">${p[1]}</td><td class="mono col-lo">${p[2]}</td><td class="num col-lo">${p[3]}</td><td class="col-lo">${p[4].map(gp).join('')}</td></tr>`).join('');
+ return `<div class="gridwrap"><div class="gridscroll"><table class="grid"><colgroup><col style="width:64px"><col><col style="width:22%"><col class="col-lo" style="width:120px"><col class="col-lo" style="width:110px"><col class="col-lo" style="width:200px"></colgroup>
+ <thead><tr><th>No.</th><th>Name of company</th><th>Name of proprietor</th><th class="col-lo">PAN</th><th class="col-lo">Ph. no.</th><th class="col-lo">Services</th></tr></thead><tbody>${rows}</tbody></table></div>
+ <div class="gfoot"><span>1,284 clients</span><span class="sp"></span><span><span class="kb">Enter</span> opens the top result</span><span><span class="kb">↑</span><span class="kb">↓</span> move</span><span><span class="kb">Esc</span> closes the panel</span></div></div>`;
+}
+function selbar(name){return `<div class="selbar"><span class="who">${name}</span>
+ <button class="btn sm soft">${I('right','s')}Open</button><button class="btn sm">${I('edit','s')}Edit</button><button class="btn sm">${I('server','s')}Services</button><button class="btn sm">${I('archive','s')}Archive</button>
+ <span class="vr"></span><span class="grp">Cell</span><button class="ibtn" title="Fill">${I('fill')}</button><button class="ibtn" title="Text colour">${I('tcol')}</button><button class="ibtn" title="Clear formatting">${I('erase')}</button><button class="ibtn" title="Undo  Ctrl+Z">${I('undo')}</button><button class="ibtn" title="Redo  Ctrl+Y">${I('redo')}</button>
+ <span class="sp"></span><button class="btn sm dng">${I('trash','s')}Delete</button></div>`;}
+function filterRow(c){return `<div style="display:flex;gap:10px;align-items:center">
+ <div class="field" style="flex:1;max-width:520px">${I('search')}<input class="inp" placeholder="Search clients across all columns…" aria-label="Search clients"></div>
+ ${c?`<span class="chip on">All ${I('down','s')}</span>`:`<span class="chip on">All</span>`}${c?'':`<span class="chip">Has services</span><span class="chip">No services</span><span class="chip">Archived</span><span class="chip">More ${I('down','s')}</span>`}</div>`;}
+function searchHd(c){return `<div class="hd"><h2>All Clients</h2><span class="count">1,284 clients</span><span class="sp"></span>
+ ${c?'':`<button class="btn">${I('cols')}Columns ${I('down','s')}</button>`}<button class="ibtn bd" title="Refresh">${I('refresh')}</button>${c?`<button class="ibtn bd" title="Add client" style="background:var(--em);border-color:var(--em2);color:#fff">${I('plus')}</button>`:`<button class="btn pri">${I('plus')}Add client</button>`}</div>`;}
+
+function detailPanel(){
+ const svc=(k,sub,btns,n)=>`<div class="svc"><div class="ic" style="color:${SVC[k]}">${I(k==='Email'?'mail':k==='GST'?'pct':'doc')}</div><div class="nm">${svcName[k]}<small>${sub}</small></div>${btns}<span class="kb" title="Alt+${n}">Alt ${n}</span></div>`;
+ const A=`<button class="btn sm pri" title="Fast Autofill (Alt+n)">${I('bolt','s')}Autofill</button>`;
+ const S=`<button class="btn sm" title="SMTI Manual Assist (Alt+Ctrl+n)">${I('assist','s')}Assist</button>`;
+ const C=`<button class="btn sm" title="MECP Manual Copy">${I('copy','s')}Copy login</button>`;
+  const f=(l,v,mono)=>`<div class="f"><label>${l}</label><div class="v ${mono?'mono':''}"><span>${v}</span><button class="ibtn" title="Copy ${l}">${I('copy','s')}</button></div></div>`;
+ const pw=(l,v)=>`<div class="f"><label>${l}</label><div class="v mono"><span>${v}</span><button class="ibtn" title="Show / hide">${I('eye','s')}</button><button class="ibtn" title="Copy ${l}">${I('copy','s')}</button></div></div>`;
+ return `<aside class="panel">
+  <div class="p-hd"><div class="p-top"><button class="ibtn bd" title="Back (Esc)">${I('back')}</button><h2>A. Paruli Dresses</h2><span class="idchip" title="Click to copy client ID">CLI-00008</span><button class="ibtn bd" title="More: Services, Archive, Delete">${I('dots')}</button><button class="btn sm">${I('edit','s')}Edit</button></div>
+   <div class="p-meta"><span>#8</span><span class="sep">·</span><span>PAN ABCDE1008F</span><span class="sep">·</span><span>Mohammad Arif Molla</span><span class="sep">·</span><span class="tag g">${I('clock','s')} Autofilled today 11:42</span></div></div>
+  <div class="p-body">
+   <div class="card"><header><h3>Services</h3><span class="sp"></span><span class="mut sm" title="Alt+1…9 runs Autofill. Alt+Ctrl+1…9 runs the second mode when a service has one.">${I('info','s')} Alt+1…9 · Alt+Ctrl+1…9 for mode 2</span></header>
+    <div style="height:8px"></div>
+    ${svc('GST','Fast Autofill',A,1)}${svc('IT','Autofill, Assist',A+S,2)}${svc('Email','Copy login',C+`<button class="btn sm dis" title="Off: Assist needs a saved password for this service">${I('assist','s')}Assist</button>`,3)}
+   </div>
+   <div class="card"><header><h3>Identity</h3></header><div class="kv">${f('No.','8')}${f('Name of company','A. Paruli Dresses')}${f('Name of proprietor','Mohammad Arif Molla')}${f('GSTIN','19ABCDE1008F1Z0',1)}${f('PAN','ABCDE1008F',1)}${f('Ph. no.','9800000008')}</div>
+    <div class="notset"><b>Not set:</b> DOB</div></div>
+   <div class="card"><header><h3>Logins</h3><span class="sp"></span><span class="mut sm">Masked: first 5 characters shown</span></header><div class="kv">${f('User ID','apar_****',1)}${f('Email','mparu*********',1)}${pw('GST_Password','Digit*****')}${pw('IT_Password','Cjlp@*****')}${pw('Email_Password','Class*****')}</div>
+    <div class="notset"><b>Not set:</b> TAN, TDS_Password</div></div>
+   <div class="card"><header><h3>Notes</h3><span class="sp"></span><span class="mut sm">${I('check','s')} Saved</span></header><div style="padding:10px 18px 16px"><textarea class="inp" rows="4" placeholder="Add notes for this client…" aria-label="Notes"></textarea></div></div>
+  </div></aside>`;
+}
+
+/* ---------- screens ---------- */
+const S={};
+S.foundation={tab:'Foundation',html:()=>`<div class="fx">
+<section><h3>Colours (unchanged, owner's scheme)</h3><div class="sw-row">
+${[['--bg','#202020'],['--side','#171717'],['--panel','#141414'],['--card','#191919'],['--line','#2a2a2a'],['--em','#2e9b5f'],['--mint','#4cf9b7'],['--emdim','#1a382b'],['--danger','#ff4d4d'],['--warn','#e3b341'],['--muted','#8e8d88'],['--text','#f8fafc']].map(([n,c])=>`<div class="sw-c"><i style="background:${c}"></i><div><b>${n}</b>${c}</div></div>`).join('')}</div>
+<div class="legend">Red means danger only (Delete, Restore, Purge, errors). Amber means attention. Emerald is the action colour. Today's red Autofill button is retired.</div></section>
+<section><h3>Type · Segoe UI (the app's current font)</h3><div class="tscale">
+<div><small>Page title 21/700</small><span style="font-size:21px;font-weight:700">All Clients</span></div>
+<div><small>Dialog title 17/700</small><span style="font-size:17px;font-weight:700">Sera Sync</span></div>
+<div><small>Body 13/400</small><span>Search clients across all columns</span></div>
+<div><small>Strong 13.5/600</small><span style="font-size:13.5px;font-weight:600">Click-to-copy</span></div>
+<div><small>Hint 12/400 muted</small><span style="font-size:12px;color:var(--muted)">Staff can click a field's value to copy it.</span></div>
+<div><small>Section label 11/600 caps +0.09em</small><span style="font-size:11px;font-weight:600;letter-spacing:.09em;color:var(--muted)">IDENTITY</span></div>
+<div><small>Data 12.5 Consolas</small><span style="font:12.5px var(--mono)">ABCDE1008F · CLI-00008</span></div></div></section>
+<section><h3>Controls · 32px high, 8px radius, one border colour</h3><div class="demo">
+<button class="btn pri">${I('plus')}Primary</button><button class="btn soft">${I('bolt')}Soft</button><button class="btn">${I('copy')}Secondary</button><button class="btn ghost">Ghost</button><button class="btn dng">${I('trash')}Danger</button><button class="btn dis">Disabled</button><button class="btn sm">Small 28</button><button class="ibtn bd">${I('refresh')}</button>
+<div class="field" style="width:240px">${I('search')}<input class="inp" placeholder="Input 34px" aria-label="demo input"></div><select class="inp" style="width:170px" aria-label="demo select"><option>Select</option></select>
+<span class="chip on">Chip on</span><span class="chip">Chip off</span>${sw(1)}${sw(0)}<span class="tag g">tag</span><span class="tag w">tag</span><span class="tag r">tag</span><span class="tag b">tag</span><span class="kb">Alt 1</span></div></section>
+<section><h3>The white grid · refined</h3><div style="max-width:760px;background:var(--bg);padding:16px;border-radius:12px;border:1px solid #333"><div class="gridwrap" style="height:236px"><div class="gridscroll"><table class="grid"><colgroup><col style="width:56px"><col><col style="width:210px"></colgroup><thead><tr><th>No.</th><th>Name of company</th><th>Services</th></tr></thead><tbody>
+<tr><td class="num">1</td><td>A. C. T. Dresses</td><td>${gp('GST')}${gp('IT')}</td></tr><tr class="sel"><td class="num">2</td><td>A. Classic (selected)</td><td>${gp('GST')}${gp('Email')}</td></tr><tr><td class="num">3</td><td>A. H. Ranu Dresses</td><td>${gp('IT')}</td></tr><tr><td class="num">4</td><td>A. Kaizar Dresses (hover)</td><td>${gp('GST')}</td></tr><tr><td class="num">5</td><td>A. N. Engineering</td><td>${gp('GST')}${gp('IT')}</td></tr></tbody></table></div></div></div>
+<div class="legend"><b>Header</b> deep green-black with mint caps · <b>rows</b> 40px, soft zebra · <b>selection</b> mint tint with an emerald edge (replaces the blue) · <b>edges</b> 12px radius, hairline border, soft shadow on the dark page · <b>empty</b> a sentence that says what to do.</div></section>
+<section><h3>Dialog anatomy · toast · empty state</h3><div class="three">
+<div><div class="cap">Header (icon, title, one-line purpose) · body · footer with one primary</div><div class="dlg dlg-sm" style="height:260px"><div class="d-hd"><div class="d-ic">${I('shield','l')}</div><div><h2>Dialog title</h2><p>One line saying what this does.</p></div></div><div class="d-bd"><div class="mut">Body content</div></div><div class="d-ft"><button class="btn">Cancel</button><button class="btn pri">Primary action</button></div></div></div>
+<div><div class="cap">Toast · bottom centre of the content area, never over the sidebar</div><div class="app nosb" style="width:100%;height:120px"><div class="toast">${I('check')}Copied A. Paruli Dresses · Mohammad Arif Molla</div></div><div class="cap" style="margin-top:14px">Empty state</div><div class="card"><div class="empty"><div class="ring">${I('laptop','l')}</div><b>No other PCs found yet</b><span>Open Sera on another PC on the same Wi-Fi, then press Scan again.</span></div></div></div></div></section>
+<section><h3>Rules that keep the app fast (apply to every screen)</h3><div class="rules">
+<div class="rule"><b>Styling only, no new work at runtime</b>Colours, sizes and layout change. No new timers, polling, animation loops or background threads.</div>
+<div class="rule"><b>No widgets per row per refresh</b>The grid keeps its current cell approach. Row pills are drawn in the cell, never as new widgets created on every refresh.</div>
+<div class="rule"><b>mdi icons only, and only names that exist</b>Every icon in this file shows its name on hover. The font is the 5.9.55 build and a test fails on a missing name.</div>
+<div class="rule"><b>No heavy imports at module level</b>No pandas, openpyxl or new libraries. Lazy imports stay lazy. Start-up must still paint in the same time.</div>
+<div class="rule"><b>Keep every objectName and signal</b>Automation, tests and QSS look widgets up by name. Rename nothing. Add new names only.</div>
+<div class="rule"><b>Search keeps its 60 s cache</b>Layout changes must not call refresh() on tab switch or clear the search box.</div></div></section></div>`,
+ notes:null};
+
+S.search={tab:'Search',html:()=>`<div class="stage"><div class="app" id="app-search">${sidebar('clients')}<div class="main">${searchHd()}${filterRow()}<div id="selslot">${selbar('A. Noor Azam Dresses')}</div>${searchGrid(6)}</div></div></div>`,
+ notes:{c:['<b>Selection bar</b> appears only when a row is selected. Client actions and cell tools are labelled and grouped; Delete sits alone at the far end.','<b>Filter chips</b> replace the dropdown, like Manage Clients. Rare presets go under More.','<b>Columns</b> menu holds the same switches as Settings → Main Screen.','<b>Sidebar</b> regrouped: Work, Tools, Admin. "All Clients" and "Search" were the same page, so they are one item.','<b>Grid</b>: soft zebra, mint selection, services as coloured dots, long names cut with a tooltip.'],k:['White grid, cell highlights, keyboard moves, Enter opens the top result, Ctrl+K / Ctrl+F, Ctrl+B.','Admin mode still hides Manage Clients, Audit Log, Manage Staff and Options.','Click the sync pill still broadcasts a sync. Clicking the name row still opens Sera Sync in admin mode.'],t:['Click any row to select it. The grid never loses columns on its own.']}};
+
+S.panel={tab:'Client panel',html:()=>`<div class="stage"><div class="app" id="app-panel">${sidebar('clients')}<div class="main" style="padding-right:544px">${searchHd(1)}${filterRow(1)}${searchGrid(7)}<div class="toast" style="left:254px;max-width:440px">${I('check')}Manually copied A. Paruli Dresses · Mohammad Arif Molla</div></div>${detailPanel()}</div></div>`,
+ notes:{c:['<b>Grid shrinks beside the panel</b> and hides PAN, Ph. no. and Services (the low-priority columns). It never slides under it. The filter row and header shrink too. Closing the panel brings everything back.','<b>Header</b>: name, ID chip, then #, PAN, proprietor and the last autofill on one line. Edit is one click; Services, Archive and Delete move into the ⋯ menu while the panel is open, and the selection bar returns when it closes.','<b>Services first</b>, because that is why staff open it. Three clear buttons: <b>Autofill</b> (filled green, was Fast Autofill), <b>Assist</b> (SMTI Manual Assist), <b>Copy login</b> (MECP Manual Copy). Full names are in the tooltips.','<b>No red</b> except danger. An unavailable action is a dimmed button with a tooltip saying why.','Copy icons sit next to the value. Empty fields collapse to one "Not set" line. Notes get a real box.'],k:['Alt+1…9 and Alt+Ctrl+1…9. Esc closes. Click ID chip to copy. Masking follows Settings → Password Masking. Eye buttons stay a setting.','Same credential check and warning dialogs. Assist still minimises Sera.'],t:['The toast sits over the grid area, not over the sidebar sync pill.']}};
+
+/* settings */
+const SET=[['App settings',[['general','cog','General'],['actions','pulse','Action Buttons'],['scc','shield','SCC Vault Presets'],['tracker','pulse','Tracker']]],['Column schema',[['mcl','cols','Master Column List'],['services','server','Services']]],['Visibility',[['main','monitor','Main Screen'],['qc','copy','Quick-Copy Fields'],['admin','shield','Admin Screen']]],['Data tools',[['export','dl','Export CSV'],['backup','db','Backup & Restore'],['purge','trash','Purge Duplicates']]]];
+const selOpt=(a,v)=>`<select class="inp" aria-label="${v}">${a.map(x=>`<option ${x===v?'selected':''}>${x}</option>`).join('')}</select>`;
+const step=(v,u='')=>`<div class="stepper"><button aria-label="less">−</button><span>${v}${u}</span><button aria-label="more">+</button></div>`;
+const rowS=(t,d,c,cls='')=>`<div class="row"><div class="t"><b>${t}</b><span>${d}</span></div><div class="ctl ${cls}">${c}</div></div>`;
+const swRow=(t,d,on)=>rowS(t,d,sw(on),'sw-only');
+const colList=(kind)=>{const cols=[['No.','id'],['NAME OF COMPANY','text'],['NAME OF PROPRIETOR','text'],['GSTIN','alphanumeric'],['PAN','alphanumeric'],['PH. NO.','number'],['DOB','date'],['USER ID','password'],['EMAIL','password'],['TAN','password'],['GST_Password','password'],['IT_Password','password']];
+ return `<div class="card"><div style="padding:12px 18px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #222"><div class="field" style="width:260px">${I('search')}<input class="inp" placeholder="Find a column" aria-label="Find a column"></div><span class="sp"></span><span class="mut sm" id="colcount">3 of 12 shown</span></div>`+
+ cols.map((c,i)=>`<div class="row" style="padding:10px 18px"><div class="t"><b style="font-weight:600">${c[0]}</b></div><span class="tag ${c[1]==='password'?'r':''}">${c[1]}</span>${sw(i<3)}</div>`).join('')+`</div>`;};
+const SETPAGE={
+general:()=>`<h2>General</h2><p class="lead">Display, passwords, start-up and capture options for this PC.</p><div class="stack">
+ <div class="card"><header><h3>Display</h3></header>${rowS('Window size on launch','How the app window opens.',selOpt(['Full screen / maximised','Square','Normal'],'Full screen / maximised'))}</div>
+ <div class="card"><header><h3>Passwords and clipboard</h3></header>
+  ${rowS('Password masking','How passwords are hidden in the client panel. Preview: <span style="font-family:var(--mono);color:var(--text2)">Abwf@•••••</span>',selOpt(['First N characters visible','Last N characters visible','Fully hidden'],'First N characters visible'))}
+  ${rowS('Characters shown','How many stay visible when masked.',step(5))}
+  ${rowS('Clear clipboard after','Copied values are wiped after this long.',step(30,' sec'))}
+  ${swRow('Click-to-copy','Staff can click a field\'s value to copy it.',1)}</div>
+ <div class="card"><header><h3>Start-up</h3></header>
+  ${swRow('Keep running when closed','Closing the window minimises Sera to the system tray.',1)}
+  ${swRow('Start with Windows','Sera starts in the background when Windows starts.',1)}</div>
+ <div class="card"><header><h3>Capture options</h3><span class="sp"></span><span class="tag">same settings as today</span></header>
+  ${rowS('SDC DOM crosshair','Shown as today.',selOpt(['On','Off'],'On'))}${rowS('SCA mode','Shown as today.',selOpt(['Portals only','Off'],'Portals only'))}${rowS('SCA uses per user ID','Shown as today.',step(1))}
+  <div class="row"><div class="t"><b>Schema info</b><span>Read-only line as today.</span></div></div></div></div>`,
+actions:()=>`<h2>Action Buttons</h2><p class="lead">Each service gets its autofill buttons in the client panel. The type (Fast Autofill, SMTI Assist or MECP Copy) is chosen per service in Services → Automation mode.</p><div class="stack"><div class="card">${swRow('Show eye buttons','Adds a show / hide toggle next to each password field in the client panel.',0)}</div></div>`,
+scc:()=>`<h2>SCC Vault Presets</h2><p class="lead">Sera Credential Capture: two PAN-based password formulas and two fixed passwords.</p><div class="stack">
+ <div class="card">${swRow('SCC one-time verification','On an unverified client\'s tax-portal login, show 4 resolved passwords in the in-browser SMTI widget.',1)}${rowS('Detect login automatically','Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never changes what SGT captures. Needs SGT on.',selOpt(['Off','On'],'Off'))}</div>
+ <div class="card"><header><h3>Counts · this PC, this session and earlier</h3></header><div class="stat">${[['Attempts',16],['Worked',6],['Failed',8],['Locked',4],['No conclusion',4],['Asked',3],['Saved',4],['Not understood',4]].map(a=>`<div><b>${a[1]}</b><span>${a[0]}</span></div>`).join('')}</div></div>
+ <div class="card"><header><h3>Option 1 · 4 letters + fixed string + 4 digits</h3></header><div style="height:10px"></div><div class="formula"><span class="p">pan_letters (4 lowercase)</span><i>+</i><span class="p f">fixed string</span><i>+</i><span class="p">pan_digits (4)</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 18px 18px"><input class="inp" value="Combo 1" aria-label="Option 1 label"><input class="inp" value="@" aria-label="Option 1 fixed string"></div></div>
+ <div class="card"><header><h3>Option 2 · fixed string + 4 digits</h3></header><div style="height:10px"></div><div class="formula"><span class="p f">fixed string</span><i>+</i><span class="p">pan_digits (4)</span></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 18px 18px"><input class="inp" value="Combo 2" aria-label="Option 2 label"><input class="inp" placeholder="Fixed string, e.g. Pass#" aria-label="Option 2 fixed string"></div></div>
+ <div class="card"><header><h3>Options 3 and 4 · plain fixed passwords</h3></header><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 18px 18px"><input class="inp" placeholder="Option 3 label" aria-label="o3l"><input class="inp" placeholder="Option 3 password" aria-label="o3p"><input class="inp" placeholder="Option 4 label" aria-label="o4l"><input class="inp" placeholder="Option 4 password" aria-label="o4p"></div></div></div>`,
+tracker:()=>`<h2>Tracker</h2><p class="lead">SGT (Sera Global Tracker) is the capture engine. The older engines stay off unless you need one beside it.</p><div class="stack">
+ <div class="card" style="border-color:#24503a"><header><h3 style="color:var(--mint)">SGT · main capture engine</h3><span class="sp"></span><span class="tag g">${dot()} Live</span></header>
+  ${rowS('SGT mode','Reads every portal page and works out each datapoint from its field list, without crosshairs. Live saves captures as tracker rows. Shadow keeps SGT\'s rows separate from the other engines for comparison.',selOpt(['Live (main capture engine)','Shadow','Off'],'Live (main capture engine)'))}
+  ${swRow('Record pages for SGT testing','Keeps the text of each portal page it reads on this PC for 30 days so a change to SGT\'s field list can be replayed. The pages contain client details and never leave this PC.',1)}
+  <div class="row"><div class="t"><b>More SGT options</b><span>HUD pill, SGT-I and the rest keep their current controls, moved into this card.</span></div></div></div>
+ <div class="card"><header><h3>Older engines</h3><span class="sp"></span><span class="mut sm">all off</span></header>
+  ${swRow('VSDC · visual DOM crosshair','Reads structured data from client portals using DOM coordinates.',0)}${swRow('VSDC-X · UI automation','Fallback that navigates modal overlays using UI Automation exact-text reading.',0)}${swRow('VSDC 24/7 · optical','Always-on background screen reader. Takes periodic screenshots of designated portals and runs OCR to find receipts.',0)}</div></div>`,
+mcl:()=>`<h2>Master Column List</h2><p class="lead">The schema for every client field. Changes apply immediately.</p><div class="stack"><div class="card"><div style="display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid #222"><button class="btn sm pri">${I('plus','s')}Add column</button><button class="btn sm">${I('edit','s')}Edit</button><button class="btn sm dng">${I('trash','s')}Delete</button><span class="sp"></span><button class="ibtn bd" title="Move up">${I('up')}</button><button class="ibtn bd" title="Move down">${I('dn')}</button></div>
+ <table class="dt"><thead><tr><th>Column</th><th>Type</th><th>Role</th></tr></thead><tbody>${[['No.','id','ID / serial'],['NAME OF COMPANY','text','Identity'],['NAME OF PROPRIETOR','text','Identity'],['GSTIN','alphanumeric',''],['PAN','alphanumeric','Internal PK'],['PH. NO.','number',''],['DOB','date',''],['USER ID','password','Secret'],['EMAIL','password','Secret'],['TAN','password','Secret'],['GST_Password','password','Secret'],['IT_Password','password','Secret']].map((r,i)=>`<tr class="${i===4?'sel':''}"><td style="font-weight:600">${r[0]}</td><td><span class="tag">${r[1]}</span></td><td>${r[2]?`<span class="tag ${r[2]==='Secret'?'r':r[2]==='Internal PK'?'w':'g'}">${r[2]}</span>`:''}</td></tr>`).join('')}</tbody></table></div></div>`,
+services:()=>`<h2>Services</h2><p class="lead">Compliance portals and their automation. Changes apply immediately.</p><div class="stack"><div class="card"><div style="display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid #222"><button class="btn sm pri">${I('plus','s')}Add service</button><button class="btn sm">${I('edit','s')}Edit</button><button class="btn sm dng">${I('trash','s')}Delete</button></div>
+ <table class="dt"><thead><tr><th>Service</th><th>Automation mode</th></tr></thead><tbody>${['GST','IT','Email','TRACES','EPFO'].map((k,i)=>`<tr class="${i===1?'sel':''}"><td style="font-weight:600"><span style="display:inline-flex;align-items:center;gap:9px"><i class="dot" style="background:${SVC[k]};box-shadow:none"></i>${svcName[k]}</span></td><td><span class="tag g">${I('bolt','s')} Fast Autofill</span></td></tr>`).join('')}</tbody></table></div></div>`,
+main:()=>`<h2>Main Screen Columns</h2><p class="lead">Choose which columns appear on the main client grid.</p><div class="stack">${colList()}</div>`,
+qc:()=>`<h2>Quick-Copy Fields</h2><p class="lead">Choose which fields staff can click to copy. Same layout as Main Screen.</p><div class="stack">${colList()}</div>`,
+admin:()=>`<h2>Admin Screen Columns</h2><p class="lead">Choose which columns appear on the admin screen. Same layout as Main Screen.</p><div class="stack">${colList()}</div>`,
+export:()=>`<h2>Export CSV</h2><p class="lead">Download client data or a blank import template.</p><div class="stack"><div class="card">${rowS('Export all clients','Download every active client record as a CSV file.',`<button class="btn soft">${I('dl')}Export all clients</button>`)}${rowS('Import template','A blank CSV that matches your current Master Column List.',`<button class="btn">${I('csv')}Download template</button>`)}</div></div>`,
+backup:()=>`<h2>Backup & Restore</h2><p class="lead">Protect your data with regular backups or roll back to a previous snapshot.</p><div class="stack"><div class="card">${rowS('Back up database','Copy the encrypted database to a folder you choose.',`<button class="btn soft">${I('db')}Choose backup folder</button>`)}</div>
+ <div class="card danger-zone"><header><h3>Danger zone</h3></header>${rowS('Restore database','Make a previous backup the data again. In an office this is done on every PC. The app restarts.',`<button class="btn dng">${I('db')}Restore from backup</button>`)}</div></div>`,
+purge:()=>`<h2>Purge Duplicates</h2><p class="lead">Permanently remove duplicate client records that share the same identity values.</p><div class="stack"><div class="card danger-zone"><header><h3>Danger zone</h3></header>${rowS('Purge duplicate clients','Scans all non-archived clients and deletes duplicates with the same identity values. The oldest record (lowest ID) is kept in each group. This cannot be undone.',`<button class="btn dng">${I('trash')}Run deduplication</button>`)}</div></div>`};
+S.settings={tab:'Settings',html:()=>`<div class="stage"><div class="app nosb" style="height:740px;width:1120px"><div class="dlg" style="position:absolute;inset:0;border:none;border-radius:0">
+ <div class="d-hd"><div class="d-ic">${I('cog','l')}</div><div style="flex:1"><h2>Settings</h2><p>Project Sera · this PC</p></div><button class="ibtn bd" title="Close (Esc)">${I('close')}</button></div>
+ <div class="set"><nav class="set-nav" id="setnav"><div class="field" style="margin-bottom:6px">${I('search')}<input class="inp" id="setq" placeholder="Search settings…" aria-label="Search settings"></div>
+ ${SET.map(g=>`<div class="nav-label">${g[0]}</div>`+g[1].map(i=>`<div class="nav" data-p="${i[0]}">${I(i[1])}<span>${i[2]}</span></div>`).join('')).join('')}</nav>
+ <div class="set-main" id="setmain"></div></div></div></div></div>`,
+ notes:{c:['<b>Real switches</b> instead of green squares, and every control the same width so the right edge lines up.','<b>Cards with plain headings</b> replace one long list with tiny section labels.','<b>Save bar</b> appears only once something changes (try a switch on General). Discard and Save sit together. The old greyed Save button goes.','<b>Theme row removed.</b> The app is dark only. The <code>theme</code> setting is no longer read.','<b>Tracker</b>: SGT first as the main engine, the three older engines grouped and collapsed. <b>Danger zone</b> for Restore and Purge.','<b>Master Column List and Services</b> become tables with type and role tags.'],k:['Every setting, same stored names, same Save behaviour (one Save writes all pending changes).','Page names and order in the left list.'],t:['Click through all 12 pages. Pages marked "same settings as today" show where controls I have not seen live are carried over unchanged.']}};
+
+/* sera sync */
+const SYNCT=['members','status','devices','activity'];
+const SYNCP={
+members:()=>`<div class="banner r">${I('warn')}<span>Can't reach Admin. Check that both PCs are on a Private network and that the Wi-Fi doesn't isolate devices.</span><a>How to fix</a></div>
+ <div class="card"><table class="dt"><thead><tr><th>Name</th><th>Online</th><th>Role</th><th>Last successful sync (this PC)</th><th>This PC</th></tr></thead><tbody>
+ <tr class="sel"><td style="font-weight:600">DESKTOP-62FSJVL</td><td><span class="tag g">${dot()} Online (this PC)</span></td><td>Admin</td><td class="mut">never</td><td><span class="tag">This PC</span></td></tr>
+ <tr><td style="font-weight:600">Admin</td><td><span class="tag">${dot('off')} Offline</span></td><td>Member</td><td>2026-09-28 19:51 UTC</td><td></td></tr></tbody></table></div>
+ <div style="display:flex;gap:10px"><button class="btn pri">${I('laptop')}Add workstation</button><button class="btn">${I('users')}Remove</button><button class="btn">${I('key')}Hand over admin</button><button class="btn">${I('shield')}Become admin</button></div>`,
+status:()=>`<div class="card"><div class="stat" style="grid-template-columns:repeat(3,1fr)"><div><b>340</b><span>Pending outgoing changes · 1 member</span></div><div><b>0</b><span>Parked</span></div><div><b style="font-size:16px;line-height:30px">Live</b><span>Sync mode · since 2026-09-28</span></div></div>
+  <div style="display:flex;gap:10px;padding:0 18px 18px"><button class="btn">${I('play')}Start shadow mode</button><button class="btn">${I('refresh')}Reset shadow mode</button><button class="btn soft">${I('bolt')}Go live</button><span class="sp"></span><button class="btn">${I('shield')}Run now</button></div></div>
+ <div class="card"><header><h3>Recent checks</h3></header><div style="padding:12px 18px 18px"><div class="log"><span class="ts">2026-09-28T19:08:58Z</span> peer_digest_check OK (peer Admin): no local seal yet<br><span class="ts">2026-09-28T19:10:35Z</span> seal_timing count=4 mean=25.3ms max=55.5ms<br><span class="ts">2026-09-28T19:10:36Z</span> go-live staged; the shadow replicas become the live databases at the next start<br><span class="ts">2026-09-28T19:10:37Z</span> went live. Previous databases are in pre-golive-20260929_004037</div></div></div>
+ <div class="card"><header><h3>Conflicts · field edits an older change lost to</h3></header><table class="dt" style="margin-top:8px"><thead><tr><th>Table</th><th>Column</th><th>Kept</th><th>Discarded</th><th>When</th></tr></thead><tbody></tbody></table><div class="empty" style="padding:22px"><b>No conflicts</b><span>Nothing was overwritten.</span></div><div style="display:flex;gap:10px;padding:0 18px 16px"><button class="btn dis">${I('check')}Keep</button><button class="btn dis">${I('undo')}Use discarded value</button></div></div>`,
+devices:()=>`<div class="card"><div class="empty" style="padding:56px 20px"><div class="ring">${I('laptop','l')}</div><b>No other PCs found yet</b><span>Open Sera on another PC on the same Wi-Fi, then press Scan again.<br>Columns when found: user, host, IP, version, database changed, clients / dumps, mode.</span></div></div>
+ <div style="display:flex;gap:10px"><button class="btn pri">${I('refresh')}Scan again</button><button class="btn">${I('plus')}Add PC by IP</button><button class="btn">${I('trash')}Remove PC by IP</button><span class="sp"></span><button class="btn">${I('doc')}Export recovery kit</button></div>`,
+activity:()=>`<div style="display:flex;gap:8px;align-items:center"><span class="chip on">All</span><span class="chip">Guard</span><span class="chip">Sync</span><span class="chip">Errors</span><span class="sp"></span><button class="btn sm">${I('pause','s')}Pause</button><button class="btn sm">${I('trash','s')}Clear</button></div>
+ <div class="log" style="flex:1;min-height:360px"><span class="ts">[12:41:32]</span> <span class="tg guard">GUARD</span> Public network detected. Sera Sync is reachable by other devices on it.<br><span class="ts">[12:41:40]</span> <span class="tg peer">PEER</span> Admin unreachable (timeout 3 s)<br><span class="ts">[12:42:10]</span> <span class="tg sync">SYNC</span> 340 changes queued for Admin<br><span class="ts">[12:43:02]</span> <span class="tg err">ERROR</span> Could not reach Admin: connection refused</div>`};
+S.sync={tab:'Sera Sync',html:()=>`<div class="stage"><div class="app nosb" style="height:740px"><div class="dlg" style="position:absolute;inset:0;border:none;border-radius:0">
+ <div class="d-hd"><div class="d-ic">${I('sync','l')}</div><div style="flex:1"><h2>Sera Sync</h2><p>Office members, sync status and live activity</p></div><span class="tag">${dot('off')} 0 devices online</span><span class="tag g">Mode: live</span><button class="ibtn bd" title="Close (Esc)">${I('close')}</button></div>
+ <div class="banner w" style="margin:12px 20px 0;border-radius:10px">${I('warn')}<span>This PC's network is Public, so other devices on it can reach Sera Sync. Set it to Private: Windows Settings → Network.</span><a>Dismiss for today</a></div>
+ <div class="tabs2" style="margin-top:12px" id="syncTabs"><button data-t="members" aria-selected="true">${I('users','s')}Members</button><button data-t="status">${I('sync','s')}Status</button><button data-t="devices">${I('laptop','s')}Devices</button><button data-t="activity">${I('pulse','s')}Live activity <span class="n a">1</span></button></div>
+ <div class="d-bd" id="syncBody" style="padding-top:16px"></div></div></div></div>`,
+ notes:{c:['<b>Four tabs</b> replace one long scrolling window: Members, Status, Devices, Live activity. The activity tab shows a count of unseen events.','<b>Public-network warning</b> becomes a slim amber banner with a dismiss, instead of a permanent red bar. Real errors ("Can\'t reach Admin") stay red inside the tab they belong to.','<b>Counts as numbers</b> (pending, parked, mode) with the actions underneath. Log text keeps its monospace.','<b>Empty states</b> say what to do. <b>One primary</b> per tab.','Live activity gets filters and Pause.'],k:['Every button and its current behaviour: Add workstation, Remove, Hand over admin, Become admin, Start / Reset shadow, Go live, Run now, Keep, Use discarded value, Refresh, Add / Remove PC by IP, Export recovery kit, Clear.','The live stream keeps updating from the same signals even when its tab is not showing, so no events are lost.'],t:['Click the four tabs.']}};
+
+/* audit */
+S.audit={tab:'Audit log',html:()=>{
+ const rows=[[13,'03 Oct 2026, 12:49 PM','Admin','View','g','Sharma Traders Pvt Ltd','—','Viewed client'],[12,'03 Oct 2026, 12:49 PM','Staff','Create','','Reddy Infra','—','Added new client'],[11,'03 Oct 2026, 12:49 PM','Staff','Create','','Das Hardware','—','Added new client'],[10,'03 Oct 2026, 12:48 PM','Staff','Autofill','b','Bose Publications','GST','Extension autofill triggered for GST'],[9,'03 Oct 2026, 12:48 PM','Staff','Manual assist','p','Singh Motors','Income Tax','Manual assist triggered for Income Tax'],[8,'03 Oct 2026, 12:47 PM','Admin','Edit','w','Nair Clinic','—','Updated PAN'],[7,'03 Oct 2026, 12:47 PM','Staff','Create','','Patel Jewellers','—','Added new client'],[6,'03 Oct 2026, 12:46 PM','Admin','Delete','r','Khan Logistics','—','Deleted client']];
+ return `<div class="stage"><div class="app nosb" style="height:740px"><div class="dlg" style="position:absolute;inset:0;border:none;border-radius:0">
+ <div class="d-hd"><div class="d-ic">${I('shield','l')}</div><div style="flex:1"><h2>Audit Log</h2><p>Sera-Sync Audit Log (SSAL)</p></div><span class="tag g">${dot()} Host aggregator active</span><button class="ibtn bd" title="Close (Esc)">${I('close')}</button></div>
+ <div style="display:grid;grid-template-columns:210px 1fr;flex:1;min-height:0">
+  <div style="border-right:1px solid var(--line);padding:14px 10px;background:var(--side)"><div class="nav-label" style="padding-top:0">Workstations</div><div class="nav on">${I('laptop')}<span>All (this office)</span></div><div class="nav">${I('laptop')}<span>DESKTOP-62FSJVL</span></div></div>
+  <div style="display:flex;flex-direction:column;gap:12px;padding:14px 336px 14px 18px;min-width:0;position:relative">
+   <div style="display:flex;gap:10px;align-items:center"><div class="field" style="flex:1">${I('search')}<input class="inp" placeholder="Search client, PAN, actor, action, service, details…" aria-label="Search audit"></div><select class="inp" style="width:150px" aria-label="Action"><option>All actions</option></select><select class="inp" style="width:150px" aria-label="Staff"><option>All staff</option></select><button class="ibtn bd" title="Refresh">${I('refresh')}</button><button class="btn soft">${I('dl')}Export CSV</button></div>
+   <div style="display:flex;gap:8px;align-items:center"><span class="chip on">Last 30 days</span><span class="chip">Today</span><span class="chip">7 days</span><span class="chip">Custom</span><span class="mut sm" style="margin-left:6px">2026-09-03 → 2026-10-03</span><span class="sp"></span><span class="count">13 entries</span></div>
+   <div class="gridwrap"><div class="gridscroll"><table class="grid"><colgroup><col style="width:52px"><col style="width:176px"><col style="width:76px"><col style="width:126px"><col></colgroup><thead><tr><th>ID</th><th>Date and time</th><th>Actor</th><th>Action</th><th>Client</th></tr></thead><tbody>${rows.map((r,i)=>`<tr class="${i===3?'sel':''}"><td class="num">${r[0]}</td><td class="num">${r[1]}</td><td style="font-weight:600">${r[2]}</td><td><span class="tag ${r[4]}" style="${r[4]===''?'background:#e3f3ea;color:#1c6b43':r[4]==='g'?'background:#eceeed;color:#4b5a52':r[4]==='b'?'background:#e1ecff;color:#2456a8':r[4]==='p'?'background:#eee6ff;color:#5d3ba8':r[4]==='w'?'background:#fff1d1;color:#8a6200':'background:#ffe0e0;color:#a32121'}">${r[3]}</span></td><td>${r[5]}</td></tr>`).join('')}</tbody></table></div><div class="gfoot"><span>Service and Detail show in the drawer while it is open</span></div></div>
+   <aside style="position:absolute;right:0;top:0;bottom:0;width:318px;z-index:5;background:var(--panel);border-left:1px solid var(--line2);box-shadow:-14px 0 30px rgba(0,0,0,.4);padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+    <div style="display:flex;align-items:center;gap:8px"><h3 style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);flex:1">Entry 10</h3><button class="ibtn" title="Close">${I('close')}</button></div>
+    <div><span class="tag b">Autofill</span></div>
+    <div class="kv" style="grid-template-columns:1fr;padding:0"><div class="f"><label>When</label><div class="v">03 Oct 2026, 12:48:31 PM</div></div><div class="f"><label>Actor</label><div class="v">Staff</div></div><div class="f"><label>Client</label><div class="v">Bose Publications</div></div><div class="f"><label>Service</label><div class="v">GST</div></div><div class="f"><label>Detail</label><div class="v" style="white-space:normal">Extension autofill triggered for GST</div></div></div>
+    <div style="margin-top:auto;display:flex;gap:8px"><button class="btn">${I('copy')}Copy details</button><button class="btn">${I('filter','s')}Filter to this client</button></div></aside>
+  </div></div></div></div></div>`},
+ notes:{c:['<b>Detail drawer</b> opens on the right when a row is selected, replacing the tall drill-down box that sat empty most of the time. While it is open the grid drops Service and Detail (they are in the drawer); with it closed all seven columns show.','<b>Filters in two rows</b> with date presets as chips and the exact range beside them. Count moves next to them.','<b>Action chips</b> colour the actions (Create, Autofill, Assist, Edit, Delete) so the table scans quickly. The white grid is kept, with the shared grid style.','Workstation list stays on the left.'],k:['Every column, search, filters, Export CSV, Copy details, Filter client, host aggregator status.'],t:['The selected row here is entry 10.']}};
+
+/* dialogs */
+S.dialogs={tab:'Small dialogs',html:()=>`<div class="three">
+ <div><div class="cap">Import clients from CSV</div><div class="dlg dlg-sm" style="width:100%;height:470px"><div class="d-hd"><div class="d-ic">${I('csv','l')}</div><div><h2>Import clients from CSV</h2><p>Add new clients or update existing ones.</p></div></div><div class="d-bd">
+  <div class="banner g" style="align-items:flex-start">${I('info')}<span>A row that matches an existing client's identity column (GSTIN, PAN or name) <b>updates</b> that client. Other rows <b>create</b> a new client. Add services with a "Services" column or "Service: [name]" columns holding Yes or No.</span></div>
+  <div style="border:1px dashed #3a3a3a;border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px;background:#171717"><span class="mut" style="flex:1">No file chosen. Drop a CSV here or browse.</span><button class="btn">${I('csv')}Browse CSV</button></div>
+  <div class="card"><div class="empty" style="padding:26px"><b>Column mapping</b><span>Choose a file to see how its columns match.</span></div></div></div><div class="d-ft"><button class="btn">Cancel</button><button class="btn pri dis">${I('ul')}Import</button></div></div></div>
+ <div><div class="cap">Change master password</div><div class="dlg dlg-sm" style="width:100%;height:470px"><div class="d-hd"><div class="d-ic">${I('lock','l')}</div><div><h2>Change master password</h2><p>Protects the office key and recovery kits.</p></div></div><div class="d-bd">
+  <div><label class="mut sm" for="cp1">Current password</label><input class="inp" id="cp1" type="password" placeholder="Current master password" style="margin-top:5px"></div>
+  <div><label class="mut sm" for="cp2">New password</label><input class="inp" id="cp2" type="password" placeholder="At least 8 characters" style="margin-top:5px"><div class="progress" style="margin-top:8px"><i></i></div><div class="mut sm" style="margin-top:4px">Strength: good</div></div>
+  <div><label class="mut sm" for="cp3">Confirm new password</label><input class="inp" id="cp3" type="password" placeholder="Type it again" style="margin-top:5px"></div>
+  <div class="mut sm">The database is not changed. Only the key recovery file is re-encrypted.</div></div><div class="d-ft"><button class="btn">Cancel</button><button class="btn pri">Change password</button></div></div></div>
+ <div><div class="cap">First run</div><div class="dlg dlg-sm" style="width:100%;height:470px"><div class="d-hd" style="flex-direction:column;align-items:flex-start;gap:8px;padding-top:22px"><div class="logo" style="width:40px;height:40px;font-size:14px">PS</div><div><h2>Welcome to Project Sera</h2><p>No database on this PC yet. How should this workstation start?</p></div></div><div class="d-bd">
+  <div class="choice"><div class="d-ic">${I('bldg','l')}</div><div><b>Create a new office</b><span>Set up a new office here. You choose the office master password.</span></div></div>
+  <div class="choice"><div class="d-ic" style="background:#16263b;border-color:#24466e;color:#8bbcff">${I('laptop','l')}</div><div><b>Join an existing office</b><span>Pair with the admin PC using the 6-digit code from its Add workstation window, then download the office database.</span></div></div></div><div class="d-ft"><button class="btn">Exit</button></div></div></div>
+ <div><div class="cap">Update required (mandatory update)</div><div class="dlg dlg-sm" style="width:100%;height:470px"><div class="d-hd"><div class="d-ic" style="background:var(--warndim);border-color:#5b4814;color:var(--warn)">${I('warn','l')}</div><div><h2>Update required</h2><p>This version of Project Sera can no longer be used.</p></div></div><div class="d-bd">
+  <div style="display:flex;align-items:center;gap:12px;justify-content:center;padding:6px 0"><span class="tag">v2.12.0</span>${I('right')}<span class="tag g" style="font-size:13px;height:24px">v2.13.0</span></div>
+  <div class="card"><header><h3>Release notes</h3></header><div style="padding:10px 18px 16px;color:var(--text2)">Bug fixes and performance improvements.</div></div>
+  <div class="progress"><i></i></div><div class="mut sm">Click Update now to install. Sera restarts when it finishes.</div></div><div class="d-ft"><button class="btn">Exit app</button><button class="btn pri">${I('dl')}Update now</button></div></div></div>
+ <div><div class="cap">SGT lab</div><div class="dlg dlg-sm" style="width:100%;height:470px"><div class="d-hd"><div class="d-ic">${I('pulse','l')}</div><div><h2>SGT lab</h2><p>Suggestions for new datapoints, from counting and maths only. Accept writes the drafted spec to this PC. Reject only remembers your choice.</p></div></div><div class="d-bd">
+  <div class="card"><header><h3>English</h3><span class="sp"></span><span class="tag">Income Tax</span><span class="tag">dataset</span><span class="tag">text</span></header><div style="padding:8px 18px 14px;color:var(--muted);font-size:12px">Support: 6 clients, seen 346× · Proven rules: none · Replay diff: 1,265 pages, +867 new captures</div><div class="log" style="margin:0 18px 14px;max-height:100px">{ "field": "english", "labels": ["English"], "within": 2, "confidence": 70 }</div><div style="display:flex;gap:8px;padding:0 18px 16px"><button class="btn sm pri">${I('check','s')}Accept</button><button class="btn sm">Reject</button></div></div>
+  <div class="mut sm">Not understood yet: 8 groups · Page furniture ignored: 2 portals. Shown in two collapsible lists.</div></div><div class="d-ft"><button class="btn">${I('search','s')}Look for new datapoints</button><span class="sp"></span><button class="btn">Close</button></div></div></div>
+ <div><div class="cap">Start-up loading</div><div class="dlg dlg-sm" style="width:100%;height:470px;place-items:center;justify-content:center;align-items:center;gap:18px"><div class="logo" style="width:56px;height:56px;font-size:20px;border-radius:14px">PS</div><div style="text-align:center"><h2 style="font-size:17px">Project Sera</h2><div class="mut" style="margin-top:3px">Opening your database…</div></div><div class="progress" style="width:240px"><i style="width:38%"></i></div></div></div>
+</div>`,
+ notes:{c:['<b>One dialog frame</b> for all of them: icon + title + one-line purpose, body, footer with a single primary.','<b>Password dialog</b> gains a strength bar. <b>CSV import</b> gets a drop area, the rules as one info box, and an empty mapping state. <b>Update required</b> loses the red slab and gets a calm amber header.','<b>First run</b> shows two choice cards.'],k:['All wording that carries meaning, all buttons and behaviours. The update dialog keeps its mandatory (no close) behaviour.'],t:['Not drawn here, they follow the same frame: Master Column and Service editors, Office Recovery, Rejoin Office, Salvage, Join Approval, SCA Diagnostics. I have not seen their live contents yet.']}};
+
+/* ---------- boot ---------- */
+const order=['foundation','search','panel','settings','sync','audit','dialogs'];
+const tabs=document.getElementById('tabs'),host=document.getElementById('screens');
+function noteHtml(n){if(!n)return'';return `<div class="notes"><div><h4>What changes</h4><ul>${n.c.map(x=>`<li>${x}</li>`).join('')}</ul></div><div><h4>Kept as it is</h4><ul>${n.k.map(x=>`<li>${x}</li>`).join('')}</ul></div><div><h4>Try it</h4><ul>${n.t.map(x=>`<li>${x}</li>`).join('')}</ul></div></div>`;}
+order.forEach(k=>{const b=document.createElement('button');b.textContent=S[k].tab;b.setAttribute('role','tab');b.dataset.k=k;tabs.appendChild(b);
+ const s=document.createElement('section');s.className='screen';s.id='s-'+k;s.innerHTML=S[k].html()+noteHtml(S[k].notes);host.appendChild(s);});
+function show(k){if(!S[k])k='foundation';order.forEach(x=>{document.getElementById('s-'+x).classList.toggle('on',x===k)});[...tabs.children].forEach(b=>b.setAttribute('aria-selected',b.dataset.k===k));try{history.replaceState(null,'','#'+k)}catch(e){}}
+tabs.addEventListener('click',e=>{const b=e.target.closest('button');if(b)show(b.dataset.k)});
+show((location.hash||'').slice(1)||'foundation');
+/* switches + chips */
+document.addEventListener('click',e=>{const s=e.target.closest('.sw');if(s){s.setAttribute('aria-checked',s.getAttribute('aria-checked')!=='true');const bar=document.getElementById('savebar');if(bar&&s.closest('#setmain'))bar.hidden=false;}
+ const c=e.target.closest('.chip');if(c&&c.parentElement){[...c.parentElement.querySelectorAll('.chip')].forEach(x=>{if(x!==c&&x.classList.contains('on'))x.classList.remove('on')});c.classList.toggle('on',true);}});
+document.addEventListener('input',e=>{if(e.target.closest('#setmain')){const b=document.getElementById('savebar');if(b)b.hidden=false}});
+/* search: row select + panel */
+const appS=document.getElementById('app-search');
+appS.addEventListener('click',e=>{const tr=e.target.closest('tbody tr');if(!tr)return;appS.querySelectorAll('tr.sel').forEach(x=>x.classList.remove('sel'));tr.classList.add('sel');const n=people[+tr.dataset.i][0];appS.querySelector('.selbar .who').textContent=n;});
+/* panel screen: hide low-priority columns */
+document.getElementById('app-panel').querySelectorAll('.col-lo').forEach(x=>x.style.display='none');document.querySelector('#app-panel colgroup col:nth-child(3)').style.width='150px';
+/* settings */
+const sm=document.getElementById('setmain'),sn=document.getElementById('setnav');
+function setPage(p){sn.querySelectorAll('.nav').forEach(n=>n.classList.toggle('on',n.dataset.p===p));sm.innerHTML=SETPAGE[p]()+`<div class="savebar" id="savebar" hidden><span>You have unsaved changes</span><button class="btn" id="discard">Discard</button><button class="btn pri" id="save">${I('check')}Save changes</button></div>`;sm.scrollTop=0;
+ sm.querySelector('#discard').onclick=()=>setPage(p);sm.querySelector('#save').onclick=()=>{sm.querySelector('#savebar').hidden=true};}
+sn.addEventListener('click',e=>{const n=e.target.closest('.nav[data-p]');if(n)setPage(n.dataset.p)});
+document.getElementById('setq').addEventListener('input',e=>{const q=e.target.value.toLowerCase();sn.querySelectorAll('.nav[data-p]').forEach(n=>n.style.display=n.textContent.toLowerCase().includes(q)?'':'none')});
+setPage('general');
+/* sync tabs */
+const sb=document.getElementById('syncBody'),st=document.getElementById('syncTabs');
+function syncShow(t){st.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',b.dataset.t===t));sb.innerHTML=SYNCP[t]();}
+st.addEventListener('click',e=>{const b=e.target.closest('button');if(b)syncShow(b.dataset.t)});syncShow('members');
+</script>

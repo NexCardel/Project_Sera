@@ -131,6 +131,7 @@ class WSBridge(QObject):
         self._server: Optional[QWebSocketServer] = None
         self._sockets: list[QWebSocket] = []
         self._chrome_id: Optional[str] = None
+        self._kinds: dict = {}   # socket -> browser kind, see _browser_kind()
         self._bound_port: Optional[int] = None
         # A reply to SCA_PASSWORD_REQUEST must go back only to the browser that asked, never to
         # every connected browser. Keyed by the request's "_id" (every message the extension
@@ -268,10 +269,30 @@ class WSBridge(QObject):
                 sock.close()
                 continue
             self._sockets.append(sock)
+            self._kinds[sock] = self._browser_kind(sock, origin)
             sock.textMessageReceived.connect(lambda text, s=sock: self._on_text_message(s, text))
             sock.disconnected.connect(lambda s=sock: self._on_disconnected(s))
 
+    @staticmethod
+    def _browser_kind(sock: QWebSocket, origin: str) -> str:
+        """'firefox' | 'edge' | 'chrome' | '' (unknown). Chrome and Edge share the
+        chrome-extension:// origin, so the handshake's User-Agent tells them apart."""
+        if (origin or "").startswith(FIREFOX_ORIGIN_PREFIX):
+            return "firefox"
+        try:
+            ua = bytes(sock.request().rawHeader("User-Agent")).decode("latin-1")
+        except Exception:
+            return ""
+        if "Edg/" in ua or "EdgA/" in ua:
+            return "edge"
+        if "Firefox/" in ua:
+            return "firefox"
+        if "Chrome/" in ua:
+            return "chrome"
+        return ""
+
     def _on_disconnected(self, sock: QWebSocket):
+        self._kinds.pop(sock, None)
         try:
             self._sockets.remove(sock)
         except ValueError:
@@ -396,16 +417,20 @@ class WSBridge(QObject):
             return sent
         return self._call_on_qt_thread(_do)
 
-    def send_first(self, payload: dict) -> bool:
+    def send_first(self, payload: dict, browser: Optional[str] = None) -> bool:
         """Sends to one connected browser only - whichever connected first. Used for autofill,
         where pushing the same command to every open browser would fill the same portal twice.
 
+        `browser` ('chrome' | 'edge' | 'firefox') restricts that to a browser of that kind; with
+        none connected it returns False rather than falling back to another browser.
+
         Safe to call from any thread - see broadcast() above for why that matters."""
         def _do():
-            if not self._sockets:
-                return False
-            self._send(self._sockets[0], payload)
-            return True
+            for sock in self._sockets:
+                if not browser or self._kinds.get(sock) == browser:
+                    self._send(sock, payload)
+                    return True
+            return False
         return self._call_on_qt_thread(_do)
 
     @property

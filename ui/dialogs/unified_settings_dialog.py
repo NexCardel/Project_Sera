@@ -342,18 +342,13 @@ class UnifiedSettingsDialog(QDialog):
         self._page_widgets = {}
 
         self._initial_state = None
+        self._loaded_groups = set()
         self._apply_global_style()
         self._build_ui()
-        # Pre-build settings pages so all controls exist for unified load & dirty tracking
-        for p in _SETTINGS_PAGES:
-            if p not in self._page_widgets:
-                builder = self._page_builders.get(p)
-                if builder:
-                    widget = builder()
-                    self._page_widgets[p] = widget
-                    self._stack.addWidget(widget)
 
-        # Switch to requested page (or default to general)
+        # Only the requested page is built now (building all eight settings pages cost ~0.75-1.5 s
+        # before the dialog could show); each other page is built, loaded and added to the
+        # dirty-tracking baseline the first time it is visited - see _on_page_built.
         target_page = _PAGE_MAP.get(self._start_page, _P_GENERAL)
         self._switch_page(target_page)
         self._load_settings()
@@ -364,8 +359,23 @@ class UnifiedSettingsDialog(QDialog):
         self._start_page = page
         target_page = _PAGE_MAP.get(page, _P_GENERAL) if isinstance(page, str) else page
         self._switch_page(target_page)
-        self._load_settings()
+        self._load_settings(force=True)         # reopening shows the saved values again
         self._initial_state = self._capture_state()
+        self._update_save_btn_state()
+
+    def _on_page_built(self):
+        """A page was just built: load its controls and treat their loaded values as 'unchanged'
+        - without touching what the user may have changed on pages already built."""
+        self._load_settings()
+        if self._initial_state is None:
+            return
+        for key, value in self._capture_state().items():
+            if isinstance(value, dict):
+                base = self._initial_state.setdefault(key, {})
+                for cid, checked in value.items():
+                    base.setdefault(cid, checked)
+            else:
+                self._initial_state.setdefault(key, value)
         self._update_save_btn_state()
 
     # ── Global style ──────────────────────────────────────────────────────────
@@ -585,6 +595,8 @@ class UnifiedSettingsDialog(QDialog):
                 widget = builder()
                 self._page_widgets[page_idx] = widget
                 self._stack.addWidget(widget)
+                if page_idx in _SETTINGS_PAGES:
+                    self._on_page_built()
 
         target_widget = self._page_widgets.get(page_idx)
         if target_widget:
@@ -1353,14 +1365,25 @@ class UnifiedSettingsDialog(QDialog):
                 self.scc_counts_label.setText("(counts not available)")
 
     # ── Load settings into controls ───────────────────────────────────────────
-    def _load_settings(self):
-        g = self.db.get_setting
+    def _pending(self, group: str, sentinel: str, force: bool) -> bool:
+        """True when `group` of controls exists (its page is built) and still needs its values."""
+        if not hasattr(self, sentinel):
+            return False
+        if group in self._loaded_groups and not force:
+            return False
+        self._loaded_groups.add(group)
+        return True
+
+    def _load_settings(self, force: bool = False):
+        # one database connection for all ~30 reads (each get_setting opened its own, ~8 ms)
+        snapshot = self.db.get_all_settings()
+        g = lambda key, default=None: snapshot.get(key, default)
         def _set(combo: QComboBox, val: str):
             idx = combo.findData(val)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
 
-        if hasattr(self, "theme_combo"):
+        if self._pending("general", "theme_combo", force):
             _set(self.theme_combo,       g("theme", "light"))
             _set(self.window_mode_combo, g("window_mode", "fullscreen"))
             _set(self.mask_mode_combo,   g("mask_mode", "last_n"))
@@ -1386,7 +1409,7 @@ class UnifiedSettingsDialog(QDialog):
             except Exception:
                 self.autostart_check.setChecked(False)
 
-        if hasattr(self, "scc_check"):
+        if self._pending("scc", "scc_check", force):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
             _set(self.scc_detect_combo, g("scc_detect_mode", "off"))
             if hasattr(self, "scc_opt1_label_edit"):
@@ -1406,11 +1429,11 @@ class UnifiedSettingsDialog(QDialog):
             if hasattr(self, "scc_opt4_str_edit"):
                 self.scc_opt4_str_edit.setText(g("scc_opt4_fixed_str", ""))
 
-        if hasattr(self, "show_hide_check"):
+        if self._pending("actions", "show_hide_check", force):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
 
-        if hasattr(self, "vsdc_check"):
+        if self._pending("tracker", "vsdc_check", force):
             # Same defaults as core/vsdc/vsdc_engines.py, so the page shows what runs.
             self.vsdc_check.setChecked(g("vsdc_enabled", "0") == "1")
             self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "0") == "1")

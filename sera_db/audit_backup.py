@@ -109,18 +109,25 @@ class AuditBackupMixin:
 
             client_name_map = {}
             if resolve_names:
+                # Only look up the clients that actually appear in these rows --
+                # scanning every client's values on each refresh froze the UI.
+                wanted = sorted({r[4] for r in rows if r[4]})
                 try:
-                    cur_vals = conn.execute("""
-                        SELECT cv.client_id, cv.value
-                        FROM client_values cv
-                        JOIN mcl_columns mc ON mc.id = cv.column_id
-                        WHERE cv.value IS NOT NULL AND cv.value != ''
-                          AND LOWER(TRIM(mc.label)) NOT IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')
-                        ORDER BY mc.is_identity DESC, mc.sort_order ASC
-                    """).fetchall()
-                    for cid_val, val_text in cur_vals:
-                        if cid_val not in client_name_map:
-                            client_name_map[cid_val] = val_text
+                    for i in range(0, len(wanted), 500):
+                        chunk = wanted[i:i + 500]
+                        marks = ",".join("?" * len(chunk))
+                        cur_vals = conn.execute(f"""
+                            SELECT cv.client_id, cv.value
+                            FROM client_values cv
+                            JOIN mcl_columns mc ON mc.id = cv.column_id
+                            WHERE cv.client_id IN ({marks})
+                              AND cv.value IS NOT NULL AND cv.value != ''
+                              AND LOWER(TRIM(mc.label)) NOT IN ('no', 'no.', 'sl no', 'sl. no.', 's.no.', 'sno', 'id', '#')
+                            ORDER BY mc.is_identity DESC, mc.sort_order ASC
+                        """, chunk).fetchall()
+                        for cid_val, val_text in cur_vals:
+                            if cid_val not in client_name_map:
+                                client_name_map[cid_val] = val_text
                 except Exception:
                     pass
 
