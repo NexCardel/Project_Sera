@@ -17,6 +17,7 @@ a live Excel viewer.
 | `sdis-decisions.csv` | choices workers made or that you answered | tool only |
 | `sdis-checks.csv` | hands-on checks only a person can do | tool only (you mark results) |
 | `sdis-report.md` | summary, rebuilt after every run | tool only |
+| `distill-dialog-mockup.html` | the Distill dialog design W4-5 builds to (fictional data) | you (design) |
 | `sdis-regress-baseline.txt` | the regression runner's counts before any change (W0-1) | W0-1 |
 
 The dispatcher is the SGT overhaul's own (`tools/sgt_overhaul.py`), pointed at this folder by

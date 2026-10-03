@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distill dialog mockup</title>
+<!--
+  Sera Distill (SDIS) - the Distill... dialog, design for W4-5 (blueprint Part L).
+  Static mockup in the app's own dark theme (Tracker Dump / MCL manager colours).
+  ALL DATA IS FICTIONAL. Never put real client values in this file (blueprint rule 10).
+  Frames: A main view, B container editor, C "Please check" tab, D loading dialog, E empty / not-admin.
+-->
+<style>
+  :root {
+    --bg: #0f0f10; --win: #161617; --panel: #1c1c1e; --panel2: #222225; --line: #2c2c30;
+    --text: #e8e8ea; --muted: #9a9ca3; --faint: #6c6e75;
+    --green: #27a75a; --green-hi: #3fd17f; --green-dim: #173d28;
+    --amber: #f0a830; --amber-dim: #3d2e12; --red: #e5534b; --red-dim: #3d1a18;
+    --blue: #5aa9ff; --blue-dim: #16304d; --violet: #b48cff; --violet-dim: #2c2147;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.45 "Segoe UI", system-ui, sans-serif; padding: 24px 16px 64px; }
+  h1.doc { font-size: 18px; margin: 0 0 4px; } p.doc { color: var(--muted); margin: 0 0 20px; max-width: 900px; }
+  .frame-title { color: var(--green-hi); font-weight: 600; margin: 36px 0 8px; font-size: 14px; }
+  .frame-note { color: var(--muted); margin: -4px 0 10px; max-width: 980px; }
+  .win { background: var(--win); border: 1px solid var(--line); border-radius: 10px; max-width: 1280px;
+         overflow: hidden; box-shadow: 0 12px 40px #0008; }
+  .titlebar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #111113;
+              border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .titlebar .x { margin-left: auto; color: var(--faint); }
+  .head { display: flex; align-items: flex-start; gap: 16px; padding: 18px 22px 10px; }
+  .head h2 { margin: 0; font-size: 20px; }
+  .head .sub { color: var(--muted); margin-top: 2px; }
+  .head .right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  .lastrun { color: var(--muted); text-align: right; font-size: 12px; line-height: 1.35; }
+  .lastrun b { color: var(--text); font-weight: 600; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 7px; padding: 7px 14px;
+         border: 1px solid var(--line); background: var(--panel); color: var(--text); font-weight: 500;
+         white-space: nowrap; }
+  .btn.primary { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+  .btn.ghost { background: transparent; }
+  .btn.small { padding: 3px 9px; font-size: 12px; }
+  .btn.danger { background: var(--red-dim); border-color: #6b2a26; color: #ffb4ae; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 6px 22px 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 12px; }
+  .card .n { font-size: 20px; font-weight: 700; }
+  .card .l { color: var(--muted); font-size: 12px; }
+  .card.sel { border-color: var(--green); }
+  .n.g { color: var(--green-hi); } .n.a { color: var(--amber); } .n.b { color: var(--blue); } .n.f { color: var(--faint); }
+  .tabs { display: flex; gap: 4px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+  .tab { padding: 8px 14px; color: var(--muted); border-bottom: 2px solid transparent; }
+  .tab.on { color: var(--text); border-color: var(--green); font-weight: 600; }
+  .tab .badge { background: var(--amber-dim); color: var(--amber); border-radius: 9px; padding: 0 7px; margin-left: 4px; font-size: 11px; }
+  .body { display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 560px; }
+  .main { padding: 12px 16px 16px 22px; min-width: 0; }
+  .side { border-left: 1px solid var(--line); background: #141415; padding: 12px 16px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
+  .search { flex: 1 1 220px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+            padding: 6px 10px; color: var(--faint); min-width: 180px; }
+  .pill { border: 1px solid var(--line); border-radius: 16px; padding: 4px 11px; color: var(--text); background: var(--panel); font-size: 12px; white-space: nowrap; }
+  .pill.on { border-color: var(--green); color: var(--green-hi); }
+  .pill .c { color: var(--faint); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--green-hi); font-weight: 600; font-size: 12px; padding: 7px 8px;
+       border-bottom: 2px solid var(--green-dim); white-space: nowrap; }
+  td { padding: 7px 8px; border-bottom: 1px solid #222226; vertical-align: middle; }
+  tr.dp:hover td { background: #1b1b1e; }
+  tr.sel td { background: #18241d; }
+  tr.child td { background: #131315; color: var(--muted); font-size: 12px; padding-top: 5px; padding-bottom: 5px; }
+  tr.why td { background: #131315; font-size: 12px; color: var(--muted); padding: 2px 8px 10px; }
+  .arrow { color: var(--faint); width: 14px; display: inline-block; }
+  .label { font-weight: 600; }
+  .label .pen { color: var(--faint); font-weight: 400; margin-left: 6px; font-size: 11px; }
+  .label .reg { font-size: 11px; color: var(--green-hi); font-weight: 500; margin-left: 6px; }
+  .ex { color: var(--muted); font-family: Consolas, monospace; font-size: 12px; }
+  .type { color: var(--muted); font-size: 12px; }
+  .bar { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+  .bar .track { flex: 1; height: 6px; background: #2a2a2e; border-radius: 4px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--green); border-radius: 4px; }
+  .bar .pct { width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+  .sure { font-variant-numeric: tabular-nums; }
+  .sure.low { color: var(--amber); }
+  .chip { display: inline-flex; align-items: center; gap: 4px; border-radius: 12px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .chip.profile { background: var(--blue-dim); color: var(--blue); }
+  .chip.dataset { background: var(--green-dim); color: var(--green-hi); }
+  .chip.others { background: var(--violet-dim); color: var(--violet); }
+  .chip.none { background: #26262a; color: var(--muted); font-weight: 500; }
+  .chip.warn { background: var(--amber-dim); color: var(--amber); }
+  .menu { position: relative; }
+  .dropdown { position: absolute; right: 0; top: 30px; z-index: 5; width: 270px; background: var(--panel2);
+              border: 1px solid #3a3a40; border-radius: 8px; box-shadow: 0 10px 30px #000a; padding: 6px; font-size: 12.5px; }
+  .dropdown .grp { color: var(--faint); font-size: 11px; padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: .04em; }
+  .dropdown .it { padding: 6px 8px; border-radius: 5px; display: flex; gap: 8px; align-items: center; }
+  .dropdown .it.hi { background: #26392d; }
+  .dropdown .it .star { color: var(--amber); }
+  .dropdown .it .k { margin-left: auto; color: var(--faint); font-size: 11px; }
+  .side h3 { margin: 2px 0 2px; font-size: 14px; }
+  .side .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .portals { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+  .portals .p { padding: 4px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .portals .p.on { color: var(--text); border-color: var(--green); }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 11px; margin-bottom: 9px; }
+  .box.drop { border: 1px dashed var(--green); background: #16231b; }
+  .box .t { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .box .t .meta { margin-left: auto; color: var(--faint); font-weight: 400; font-size: 11.5px; }
+  .fields { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .f { background: #26262a; border-radius: 5px; padding: 2px 7px; font-size: 12px; }
+  .f.key { outline: 1px solid var(--green); }
+  .f.opt { color: var(--muted); font-style: italic; }
+  .f .m { color: var(--amber); font-size: 10.5px; margin-left: 3px; }
+  .levels { margin-top: 7px; color: var(--muted); font-size: 11.5px; }
+  .side .foot { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .footer { display: flex; align-items: center; gap: 10px; padding: 10px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  .footer .right { margin-left: auto; display: flex; gap: 8px; }
+  .hint { color: var(--faint); font-size: 11.5px; }
+  .callout { border-left: 3px solid var(--green); background: #151d18; padding: 8px 12px; margin: 10px 0; color: var(--muted); border-radius: 0 6px 6px 0; }
+  /* editor */
+  .editor { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; padding: 16px 22px; }
+  .sect { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin: 0 0 6px; }
+  .input { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; display: inline-block; min-width: 60px; }
+  .radio, .check { display: inline-block; width: 13px; height: 13px; border: 1px solid #55575e; border-radius: 50%; vertical-align: -2px; }
+  .check { border-radius: 3px; }
+  .radio.on { border-color: var(--green); box-shadow: inset 0 0 0 3px var(--win), inset 0 0 0 7px var(--green); }
+  .check.on { background: var(--green); border-color: var(--green); }
+  .preview { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .steps { display: flex; gap: 3px; margin-top: 6px; }
+  .steps div { flex: 1; text-align: center; font-size: 11px; padding: 4px 0; border-radius: 4px; background: #26262a; color: var(--muted); }
+  .steps .d { background: #2d2a1a; color: var(--amber); } .steps .p { background: #1a2b3d; color: var(--blue); } .steps .c { background: var(--green-dim); color: var(--green-hi); }
+  .ok { color: var(--green-hi); } .bad { color: var(--red); }
+  /* loading */
+  .overlay { position: relative; background: repeating-linear-gradient(45deg, #121214, #121214 10px, #141416 10px, #141416 20px); padding: 60px 16px; max-width: 1280px; border-radius: 10px; border: 1px solid var(--line); }
+  .modal { max-width: 460px; margin: 0 auto; background: var(--win); border: 1px solid #3a3a40; border-radius: 10px; padding: 20px 22px; box-shadow: 0 20px 60px #000c; }
+  .modal h3 { margin: 0 0 4px; }
+  .prog { height: 8px; background: #2a2a2e; border-radius: 5px; overflow: hidden; margin: 14px 0 6px; }
+  .prog div { height: 100%; width: 41%; background: var(--green); }
+  .row2 { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; max-width: 1280px; }
+  .empty { padding: 40px 24px; text-align: center; color: var(--muted); }
+  .empty .big { color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  @media (max-width: 900px) {
+    .body { grid-template-columns: 1fr; } .side { border-left: 0; border-top: 1px solid var(--line); }
+    .cards { grid-template-columns: repeat(2, 1fr); } .editor { grid-template-columns: 1fr; }
+    .hide-sm { display: none; } .main { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+
+<h1 class="doc">Sera Distill — the Distill… dialog</h1>
+<p class="doc">Design for W4-5 (blueprint Part L). Tracker dump → Tools ▾ → Distill…, admin PC only. Same dark theme and
+green accent as the Tracker Dump window. <b>All values below are fictional.</b> The aim is the opposite of the SGT lab:
+one calm list of datapoints, every number a percentage, each datapoint shown once, and the containers always in view
+on the right.</p>
+
+<!-- ============================ FRAME A ============================ -->
+<div class="frame-title">A · Main view (Datapoints tab), one datapoint expanded, "Add to" menu open</div>
+<p class="frame-note">Non-modal window, opens at 1280×800, resizable; the side panel is collapsible (≡ in the title row). Opening it never starts mining.</p>
+<div class="win">
+  <div class="titlebar">Sera Distill <span class="x">— ☐ ✕</span></div>
+  <div class="head">
+    <div>
+      <h2>Sera Distill</h2>
+      <div class="sub">Datapoints found by comparing the same page across clients. Pick what to capture — the rest is fluff.</div>
+    </div>
+    <div class="right">
+      <div class="lastrun">Last run <b>today 14:05</b><br>312 captures · 41 clients · 3 browsers</div>
+      <span class="btn primary">⟳ Find datapoints</span>
+    </div>
+  </div>
+  <div class="cards">
+    <div class="card sel"><div class="n g">86</div><div class="l">Datapoints found</div></div>
+    <div class="card"><div class="n b">7</div><div class="l">New since last run</div></div>
+    <div class="card"><div class="n a">5</div><div class="l">Please check</div></div>
+    <div class="card"><div class="n">23</div><div class="l">Already captured</div></div>
+    <div class="card"><div class="n f">12</div><div class="l">Too little evidence</div></div>
+  </div>
+  <div class="tabs">
+    <div class="tab on">Datapoints</div>
+    <div class="tab">Please check <span class="badge">5</span></div>
+  </div>
+  <div class="body">
+    <div class="main">
+      <div class="filters">
+        <div class="search">⌕  Search label, page link, example…</div>
+        <span class="pill">Portal: GST Portal ▾</span>
+        <span class="pill">Relevance ≥ 20% ▾</span>
+        <span class="pill">Suggested: any ▾</span>
+        <span class="pill hide-sm">Browser: all ▾</span>
+        <span class="pill on">Hide captured ✓</span>
+      </div>
+      <table>
+        <thead><tr>
+          <th style="width:30%">Label</th><th class="hide-sm">Example</th><th>Type</th>
+          <th>Relevance</th><th>Sure</th><th class="hide-sm">Found on</th><th>Suggested</th><th></th>
+        </tr></thead>
+        <tbody>
+          <tr class="dp sel">
+            <td><span class="arrow">▾</span><span class="label">Tax period <span class="pen">✎</span></span></td>
+            <td class="ex hide-sm">Aug 2026</td><td class="type">period</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:100%"></div></div><span class="pct">100%</span></div></td>
+            <td class="sure">100%</td><td class="hide-sm">3 pages</td>
+            <td><span class="chip dataset">◆ Dataset</span></td>
+            <td class="menu"><span class="btn small">Add to ▾</span>
+              <div class="dropdown">
+                <div class="grp">Suggested</div>
+                <div class="it hi"><span class="star">★</span> GSTR-3B submission <span class="k">dataset · 3 fields</span></div>
+                <div class="grp">GST Portal</div>
+                <div class="it">GSTR-1 submission <span class="k">dataset · 4 fields</span></div>
+                <div class="it">Profile builder <span class="k">6 fields</span></div>
+                <div class="it">Others <span class="k">2 fields</span></div>
+                <div class="it" style="color:var(--green-hi)">＋ New dataset container…</div>
+                <div class="grp">Not this one</div>
+                <div class="it" style="color:var(--muted)">Dismiss (never suggest again)</div>
+              </div>
+            </td>
+          </tr>
+          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr3b/summary · <span style="color:var(--text)">38 of 41 clients (93%)</span> · Chrome, Edge</td></tr>
+          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr1/summary · <span style="color:var(--text)">29 of 33 clients (88%)</span> · Chrome</td></tr>
+          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/dashboard · <span style="color:var(--text)">40 of 41 clients (98%)</span> · Chrome, Edge, Firefox</td></tr>
+          <tr class="why"><td colspan="8" style="padding-left:30px">Why Dataset: changes between a client's periods, the same within each period — 91% of 22 clients. &nbsp;Slot holds a period 100% of the time.</td></tr>
+
+          <tr class="dp">
+            <td><span class="arrow">▸</span><span class="label">Tax paid in cash <span class="pen">✎</span></span></td>
+            <td class="ex hide-sm">12,450.00</td><td class="type">amount</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:78%"></div></div><span class="pct">78%</span></div></td>
+            <td class="sure">100%</td><td class="hide-sm">1 page</td>
+            <td><span class="chip dataset">◆ Dataset</span></td><td><span class="btn small">Add to ▾</span></td>
+          </tr>
+          <tr class="dp">
+            <td><span class="arrow">▸</span><span class="label">Trade name <span class="pen">✎</span></span></td>
+            <td class="ex hide-sm">Fictional Traders</td><td class="type">text</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:71%"></div></div><span class="pct">71%</span></div></td>
+            <td class="sure">100%</td><td class="hide-sm">4 pages</td>
+            <td><span class="chip profile">● Profile</span></td><td><span class="btn small">Add to ▾</span></td>
+          </tr>
+          <tr class="dp">
+            <td><span class="arrow">▸</span><span class="label">Aggregate turnover <span class="pen">✎</span></span></td>
+            <td class="ex hide-sm">1,20,00,000</td><td class="type">amount</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:44%"></div></div><span class="pct">44%</span></div></td>
+            <td class="sure">80%</td><td class="hide-sm">1 page</td>
+            <td><span class="chip others">▲ Others</span></td><td><span class="btn small">Add to ▾</span></td>
+          </tr>
+          <tr class="dp">
+            <td><span class="arrow">▸</span><span class="label">Filing date <span class="pen">✎</span></span></td>
+            <td class="ex hide-sm">18/09/2026</td><td class="type">date</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:39%"></div></div><span class="pct">39%</span></div></td>
+            <td class="sure">100%</td><td class="hide-sm">2 pages</td>
+            <td><span class="chip dataset">◆ Dataset</span></td><td><span class="btn small">Add to ▾</span></td>
+          </tr>
+          <tr class="dp">
+            <td><span class="arrow">▸</span><span class="label" style="color:var(--muted)">(no label) <span class="pen">✎ name it</span></span></td>
+            <td class="ex hide-sm">REF-0042-X</td><td class="type">code</td>
+            <td><div class="bar"><div class="track"><div class="fill" style="width:22%"></div></div><span class="pct">22%</span></div></td>
+            <td class="sure low">40%</td><td class="hide-sm">1 page</td>
+            <td><span class="chip none" title="Only 2 clients have it on 2+ periods">? not sure</span></td><td><span class="btn small">Add to ▾</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">Label cells are edited in place (double-click or ✎). Typing offers existing <b>sdis_mcl</b> fields first —
+        "Legal name · used by 3 datapoints" — so the same field is reused instead of a new one being made. An edited label is never
+        overwritten by a later run.</div>
+    </div>
+
+    <div class="side">
+      <h3>Containers</h3>
+      <div class="sub">Drag a datapoint here, or use Add to. Adding it captures it on every PC.</div>
+      <div class="portals"><span class="p on">GST Portal</span><span class="p">Income Tax</span><span class="p">EPFO</span><span class="p">MCA</span></div>
+
+      <div class="box">
+        <div class="t"><span class="chip profile">●</span> Profile builder <span class="meta">6 fields</span></div>
+        <div class="fields"><span class="f">GSTIN</span><span class="f">PAN</span><span class="f">Legal name</span><span class="f">Trade name</span><span class="f">State</span><span class="f">Reg. date</span></div>
+      </div>
+
+      <div class="box drop">
+        <div class="t"><span class="chip dataset">◆</span> GSTR-3B submission <span class="meta">3 of 3 counted · ✎</span></div>
+        <div class="fields"><span class="f key">Tax period <span class="m">period</span></span><span class="f">Tax paid in cash</span><span class="f">ARN <span class="m">proves Complete</span></span><span class="f opt">Filing date</span></div>
+        <div class="levels">Levels from file: Draft · In progress · Complete &nbsp;→&nbsp; tracker ladder</div>
+      </div>
+
+      <div class="box">
+        <div class="t"><span class="chip dataset">◆</span> GSTR-1 submission <span class="meta">4 counted · ✎</span></div>
+        <div class="fields"><span class="f key">Tax period <span class="m">period</span></span><span class="f">B2B invoices</span><span class="f">Total value</span><span class="f">ARN</span></div>
+        <div class="levels">Own levels: 2 (Started · Filed)</div>
+      </div>
+
+      <div class="box">
+        <div class="t"><span class="chip others">▲</span> Others <span class="meta">2 fields</span></div>
+        <div class="fields"><span class="f">Aggregate turnover</span><span class="f">Compliance rating</span></div>
+      </div>
+
+      <span class="btn ghost small" style="color:var(--green-hi)">＋ New dataset container</span>
+      <div class="foot">
+        <span class="btn small">Levels…</span><span class="btn small">Export JSON</span><span class="btn small">Import JSON</span>
+      </div>
+      <div class="hint" style="margin-top:8px">Containers file v14 · checked ✓ · saved 14:07 by Admin</div>
+    </div>
+  </div>
+  <div class="footer">
+    Showing 6 of 86 datapoints · every number is a percentage of the clients who visited that page
+    <div class="right"><span class="btn">Close</span></div>
+  </div>
+</div>
+
+<!-- ============================ FRAME B ============================ -->
+<div class="frame-title">B · Container editor (✎ on a container) — fields, key, exceptions, levels</div>
+<p class="frame-note">A sheet over the side panel (or a child dialog at small widths). Every change runs the containers-file checks
+live; Save is disabled while a check fails, and the reason is shown in words. Save writes the synced <code>sdis_config</code> row.</p>
+<div class="win">
+  <div class="titlebar">Edit container <span class="x">✕</span></div>
+  <div class="editor">
+    <div>
+      <div class="sect">Container</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+        Name <span class="input" style="min-width:220px">GSTR-3B submission</span>
+        Portal <span class="input">GST Portal ▾</span>
+      </div>
+      <div class="sect">Fields (from sdis_mcl)</div>
+      <table>
+        <thead><tr><th>Field</th><th>Period</th><th>Form</th><th>Optional</th><th>Proves</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>Tax period</td><td><span class="radio on"></span></td><td><span class="radio"></span></td><td><span class="check"></span></td><td class="type">—</td><td class="hint">⋮⋮ ✕</td></tr>
+          <tr><td>Tax paid in cash</td><td><span class="radio"></span></td><td><span class="radio"></span></td><td><span class="check"></span></td><td class="type">—</td><td class="hint">⋮⋮ ✕</td></tr>
+          <tr><td>ARN</td><td><span class="radio"></span></td><td><span class="radio"></span></td><td><span class="check"></span></td><td><span class="input" style="padding:2px 7px">Complete ▾</span></td><td class="hint">⋮⋮ ✕</td></tr>
+          <tr><td>Filing date</td><td><span class="radio"></span></td><td><span class="radio"></span></td><td><span class="check on"></span></td><td class="type">—</td><td class="hint">⋮⋮ ✕</td></tr>
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top:6px">No field marked Form → the form is the container's name. ＋ Add field (type-ahead over sdis_mcl)</div>
+    </div>
+    <div>
+      <div class="sect">Levels &nbsp;<span style="text-transform:none;letter-spacing:0">( ◉ use the file's levels &nbsp; ○ this container's own )</span></div>
+      <table>
+        <thead><tr><th>Level</th><th>Reached when captured</th><th>Also needs</th><th>Tracker status</th></tr></thead>
+        <tbody>
+          <tr><td>Draft</td><td><span class="input">1</span></td><td class="type">—</td><td class="type">Draft</td></tr>
+          <tr><td>In progress</td><td><span class="input">51%</span></td><td class="type">—</td><td class="type">Submitted (Not Verified)</td></tr>
+          <tr><td>Complete</td><td><span class="input">all</span></td><td class="type">—</td><td class="type">Submitted &amp; Verified</td></tr>
+        </tbody>
+      </table>
+      <div class="preview">
+        <b>Preview</b> — 3 counted fields (Filing date is optional)
+        <div class="steps"><div>0 · Not started</div><div class="d">1 · Draft</div><div class="p">2 · In progress</div><div class="c">3 · Complete</div></div>
+        <div class="hint" style="margin-top:6px">ARN alone → Complete (proves). A level never moves down.</div>
+      </div>
+      <div style="margin-top:12px" class="ok">✓ All checks pass · examples: 4 of 4 give their level</div>
+      <div style="margin-top:4px" class="hint">If a check fails it reads e.g. <span class="bad">"Filing date can't be the period and optional at once"</span>.</div>
+    </div>
+  </div>
+  <div class="footer"><span class="btn danger small">Delete container</span><div class="right"><span class="btn">Cancel</span><span class="btn primary">Save</span></div></div>
+</div>
+
+<!-- ============================ FRAME C ============================ -->
+<div class="frame-title">C · "Please check" tab — shared text sitting in a data slot (variable_alignment)</div>
+<p class="frame-note">Short, plain sentences; one decision per row. Keep = treat as data (a status or form word); Template = never a datapoint again. Both are stored in sdis_decisions and synced.</p>
+<div class="win">
+  <div class="tabs" style="padding-top:8px"><div class="tab">Datapoints</div><div class="tab on">Please check <span class="badge">5</span></div></div>
+  <div class="main" style="padding:12px 22px">
+    <table>
+      <thead><tr><th>Text</th><th>Where</th><th>What SDIS saw</th><th style="width:210px"></th></tr></thead>
+      <tbody>
+        <tr><td class="label">Filed</td><td class="type">GST returns dashboard · Status column</td>
+            <td class="type">Same for 95% of clients, but the same slot says "Not filed" for 2 clients</td>
+            <td><span class="btn small">Keep as data</span> <span class="btn small">Template</span></td></tr>
+        <tr><td class="label">Electronic cash ledger</td><td class="type">GST ledger page · row name</td>
+            <td class="type">Same for every client; its column holds amounts</td>
+            <td><span class="btn small">Keep as data</span> <span class="btn small">Template</span></td></tr>
+        <tr><td class="label">Regular</td><td class="type">GST profile page · Taxpayer type</td>
+            <td class="type">Same for 90% of clients; 4 clients show "Composition"</td>
+            <td><span class="btn small">Keep as data</span> <span class="btn small">Template</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ============================ FRAME D + E ============================ -->
+<div class="frame-title">D · Find datapoints — the loading dialog (application-modal)</div>
+<p class="frame-note">Locks Sera, not Windows. Mining runs in its own process capped at 10% CPU; work finished so far is saved, so Cancel loses nothing.</p>
+<div class="overlay">
+  <div class="modal">
+    <h3>Finding datapoints…</h3>
+    <div class="hint">Sera is locked until this finishes. Capture keeps running.</div>
+    <div class="prog"><div></div></div>
+    <div class="row2"><span>128 of 312 captures</span><span>about 2 min left</span></div>
+    <div class="hint" style="margin-top:6px">return.gst.gov.in/returns/{value}/gstr3b/summary · Chrome</div>
+    <div class="hint" style="margin-top:10px">CPU capped at 10% · finished work is saved as it goes</div>
+    <div style="text-align:right;margin-top:14px"><span class="btn">Cancel</span></div>
+  </div>
+</div>
+
+<div class="frame-title">E · Empty and refused states</div>
+<div class="grid2">
+  <div class="win"><div class="empty"><div class="big">SDIS hasn't looked yet</div>
+    Find datapoints reads the captures synced to this PC and lists what it finds here.<br><br><span class="btn primary">⟳ Find datapoints</span></div></div>
+  <div class="win"><div class="empty"><div class="big">Sera Distill runs on the admin PC only</div>
+    Captures are collected there. Datapoints picked there are captured on this PC too.<br><br><span class="btn">OK</span></div></div>
+  <div class="win"><div class="empty"><div class="big">Containers file refused</div>
+    <span class="bad">"GSTR-1 submission: level 'Filed' maps to 'Done', which is not a tracker status."</span><br>
+    The previous version (v13) is still in use.<br><br><span class="btn small">Open editor</span> <span class="btn small">Import JSON…</span></div></div>
+</div>
+
+</body>
+</html>

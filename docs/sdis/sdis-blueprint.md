@@ -499,7 +499,7 @@ Every registered datapoint lives in exactly **one container**. There are three k
 | :--- | :--- | :--- | :--- |
 | **Profile builder** | profile datapoints (PAN, name, address…) | **one per registered portal** (D19, Part T) | adds the value to the session's **profile context** on that portal, exactly like today's `profile` specs (latches; identity, Part D, uses it too) |
 | **Dataset** containers | whatever datapoints the user adds | as many as the user makes ("GSTR-3B submission", "Refund application"…) | builds one **instance** per (client, key) (D17) and gives it a **completion level** defined in the containers file (S.3); written to the tracker dump |
-| **Others** | info datapoints (aggregate turnover…) | **one per registered portal** (Part T) | a standalone value per client and portal; the latest wins and the history is kept (D20) |
+| **Others** | info datapoints (aggregate turnover…) | **one per registered portal** (Part T) | a standalone value per client and portal; the latest wins and the history is kept (D20); stored in the client's **SRPF container** as JSON (S.4) |
 
 ### S.1 Class suggestion: "what does this value stay the same with?"
 
@@ -633,6 +633,32 @@ file that fails its own examples is **refused at load and the previous version k
   (n ≥ 1); a field is in at most one container per portal; every container's `examples` give the levels
   they claim; `never_register` and `extra_domains` entries pass Part T's domain checks.
 
+### S.4 Where Others and Profile builder values are kept: the SRPF container
+
+*(user, 2026-10-04: "keep it in the SRPF container, JSON payload")*
+
+* The client's SRPF container (`client_raw_containers`, `sera_db/srpf.py`) already has two JSON columns
+  that are created and always written as `{}`: **`raw_aggregates`** and **`portal_profiles`**. They
+  become:
+  * `raw_aggregates` = the **Others** values: `{portal: {field: {"value", "updated_at", "history":
+    [{"value", "at"}]}}}`. The latest value wins and every change is kept in `history` (D20).
+  * `portal_profiles` = the **Profile builder** values per portal (D19): `{portal: {field: value}}`,
+    latching like SGT's profile (a `promote_longer` field may replace a value with a longer one).
+* **They must travel inside `tracker_dump`.** SRPF containers are a local cache rebuilt from
+  `tracker_dump` (`re_resolve_all_tracker_dumps()` deletes and re-inserts them; the table is `local`
+  in `sync_schema.py`), so anything written only into the container is lost at the next rebuild and
+  never reaches another PC. Therefore:
+  * SGT puts the values in the payload JSON of the rows it writes for that client, under one key:
+    `"sdis": {"portal": …, "portal_profile": {field: value}, "others": {field: value}, "at": …}`;
+  * a session that captured Others or profile values but wrote no dataset row writes one **carrier
+    row** per (client, portal): capture method `SGT_sdis_info`, no form, no period. Every tracker view,
+    counter and status resolver ignores carrier rows (they are not datasets);
+  * `_update_srpf_container` folds every row's `sdis` key into the two columns (latest `at` wins,
+    history appended), so a rebuild gives the same result and every PC gets the values through
+    `tracker_dump`'s sync.
+* Shown in the client detail window and the Tracker dump's container view, per portal, labelled with
+  the `sdis_mcl` labels.
+
 ## Part T — Portal registration from service settings (problem 28)
 
 *(user, 2026-10-04: "take the link and dissect it to obtain the domain and use the gates as SGT-I")*
@@ -698,6 +724,32 @@ Tracker dump window → Tools ▾ → **Distill…**. Clear visibility, **not li
 
 Accepting a datapoint is D7.
 
+**The design** *(user, 2026-10-04: "make a good dialog design, I trust you")* is
+`docs/sdis/distill-dialog-mockup.html` (fictional data only), in the Tracker Dump window's dark theme
+and green accent. W4-5 builds to it:
+
+* **A · Main view:** a header with the last run (time, captures, clients, browsers) and **Find
+  datapoints**; five stat cards (found, new since last run, please check, already captured, too little
+  evidence); two tabs (Datapoints, Please check). The datapoint table has these columns: Label (edited
+  in place) · Example · Type · Relevance (bar + %) · Sure % (amber below 60%) · Found on · Suggested
+  (a Profile / Dataset / Others chip, or "? not sure") · **Add to ▾**. An expanded row lists its pages
+  ("38 of 41 clients (93%)", browsers) and one plain "why" line for the suggestion. The Add to menu
+  puts the suggested container first (★), then the portal's containers, "New dataset container…" and
+  "Dismiss". The **containers side panel** on the right shows the portal tabs and, for each portal, its
+  Profile builder, its Dataset containers (period key outlined, optional fields in italics, a `proves`
+  badge, the levels in use) and its Others. Datapoints can be dragged in. At the bottom: Levels…,
+  Export JSON, Import JSON, and the file version with its check state.
+* **B · Container editor:** name and portal; a fields table (Period / Form radio buttons, Optional
+  tick, Proves level); a levels table (the file's levels or the container's own; reached when
+  captured: n / % / all; also needs fields; tracker status); a **live preview** strip (0 … n →
+  level); the checks run live, and Save stays disabled with the reason in words while a check fails.
+* **C · Please check:** one row per `variable_alignment` text: the text, where it is, what SDIS saw in
+  one sentence, and **Keep as data** / **Template**.
+* **D · Loading dialog:** application-modal; a progress bar, "128 of 312 captures", the time left, the
+  current page link, "CPU capped at 10%, finished work is saved", Cancel.
+* **E · States:** not mined yet; not the admin PC; containers file refused (the reason in words, the
+  version still in use).
+
 ---
 
 ## 9. Privacy, all in one place
@@ -745,6 +797,8 @@ links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D2
 | — | Containers and exceptions | one JSON document, `sdis_containers.json`, synced, validated with examples like `sgt_fields.json` (Part S.3) |
 | D19 | Profile builder | **one per registered portal** |
 | D20 | An Others value that changes | the latest wins; the history is kept |
+| — | Where Others and Profile builder values are kept | the client's SRPF container, JSON (`raw_aggregates`, `portal_profiles`), carried in `tracker_dump` payloads (S.4) |
+| — | Ideas 2–4 (role tagging, session stickiness, ARN cross-check) | dropped; containers are filled by the user (Part S) |
 | D22 | Pages that list several instances of a container | later; first version: one instance per page and key |
 | D23 | `sdis_mcl` and Sera's Master Column List (`mcl_columns`) | separate tables; a field may be linked to a column later |
 | — | Dataset completion levels | not in code: defined in the containers file (`levels`, `level_map`) |
