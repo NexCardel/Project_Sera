@@ -173,6 +173,17 @@ def test_counts_hold_no_values():
     assert "5 rows x 4 cols" in line and "AA2706261111111" not in line and "Filed" not in line
 
 
+def test_command_line_prints_no_values(tmp_path, monkeypatch, capsys):
+    """Section 9: the console gets shapes only; --text puts the grids in the output folder."""
+    monkeypatch.setattr(tables, "OUT_DIR", tmp_path)
+    assert tables.main([str(FIX / "tables_edge.json"), "--text"]) == 0
+    printed = capsys.readouterr().out
+    texts = {c["text"] for tb in _read("edge") for c in tb["cells"] if len(c["text"]) > 3}
+    assert texts and not [t for t in texts if t in printed]
+    written = (tmp_path / "tables_tables_edge.txt").read_text(encoding="utf-8")
+    assert "AA2706261111111" in written and "AA2706261111111" not in printed
+
+
 # ── hand-made nodes: what the browsers did not show ──────────────────────────
 
 def _n(parent, depth, ctype, name="", rect=None, **kw):

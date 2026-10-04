@@ -2685,7 +2685,7 @@ class TrackerDumpWindow(QWidget):
 
         menu.addSeparator()
 
-        act_clear =menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
+        act_clear = menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
         act_clear.triggered.connect(self._clear_all_dumps)
 
         # Spawn popup directly below Preferences button

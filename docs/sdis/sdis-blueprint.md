@@ -1,7 +1,8 @@
 # Sera Distill (SDIS) — blueprint
 
 **Status:** approved 2026-10-03 for building; Parts S–U (containers, portal registration, the field
-library) and decisions D3–D16 added 2026-10-04. **Nothing in Parts B–U is built yet.** Baseline: `main` at
+library) and decisions D3–D16 added 2026-10-04. **Parts A–U are built on branch `sdis` (2026-10-05, not
+merged; see the merge-readiness note in §11).** Baseline: `main` at
 `0f30543` (the pre-dev engine). Worktree `../APP-sdis`, branch `sdis`. Deadline **2026-10-06 01:30 IST** (Tuesday; moved from 2026-10-04 23:00 by the user). It is written from the
 design conversation of 2026-10-03 and builds on `docs/datapoint-engine-goal.md` (the pre-dev record:
 rules R1–R10, measurements, problems P1–P24, questions Q1–Q11). It is built the way Autofill tweaks
@@ -864,6 +865,63 @@ Everything else, every review and anything touching SGT, sync, the database or t
 Every WP: tests green, the regression runner before and after in its hand-off note (counts only),
 rules 5–8 of the runner kept. Decisions are asked by the WP named in section 10.
 
+### Merge readiness (W5-R, 2026-10-05)
+
+**Verdict:** ready to merge by hand, after the conflict work and hands-on checks below. Nothing was
+merged; branch `sdis` is 30 WPs on top of `0f30543`.
+
+**What is built (all Parts A–U, Parts in `core/sdis/`, pre-dev files are aliases):** value history
+(B), noise over time (C), identity by session id + fingerprint, undecided = no vote (D), scored
+look-alikes / AMBIGUOUS (E), `variable_alignment` (F), screens (G), retirement (H), statuses + labels
+from memory (I), relevance / Sure % (J), SDIS's own raw recorder behind SGT's change gate (K),
+per-browser memory (M), link resolution (N), on-disk incremental mining in a child process
+(`main.py --sdis-mine`, O), push of finished capture files to the admin PC over Sera Sync v3 (P),
+synced `sdis_fields` / `sdis_decisions` / `sdis_mcl` / `sdis_config` tables written to
+`sdis_fields.json` + `sdis_containers.json` on every PC (Q, S.3, U), Firefox address bar, title and
+background tabs + line parity (R), class suggestion, containers and completion levels, Others /
+Profile builder values in SRPF (S), portal registration from service login links (T), the Distill…
+dialog in Tracker dump → Tools, admin PC only (L). Tests: 364 SDIS + align tests pass.
+
+**What changed for SGT (rule 8):** (1) Firefox only: ComboBox address bar, em-dash titles,
+background tabs dropped (`onscreen_only`), Gecko-only line rules for closed `<select>` options and
+wrapped labels (`vsdc_uia_text`, `uia_nodes`); Chrome/Edge lines are byte-identical (parity tool).
+(2) `vsdc_scope` also accepts the domains of registered service login links. (3) `SgtShadow` offers
+each page that passed its change gate to the SDIS recorder (own thread, never blocks, setting
+`sdis_record`, default on). (4) Specs named `sdis.*` (from `sdis_fields.json`) feed container
+instances, rows with capture method `SGT_sdis_info` carry Others values, and rows carry
+`raw_payload.sdis`; **with no registered field and the built-in empty containers file none of
+this runs**. `tools/sgt_replay.py diff` prints only the "newly written" list every WP since W1-6
+has seen (the baseline in `~/AmanAssociates_Sera` is shared with `../APP`'s newer SGT; replay never
+runs any of the paths above). All `tests/test_sgt_*.py` pass.
+
+**Files that will conflict with `main`.** Main has committed changes since `0f30543` in 14 files this
+branch also edits. Identical on both sides (no conflict): `core/vsdc/vsdc_uia_text.py`,
+`tests/test_firefox_support.py`. Expected conflicts and how to resolve them:
+
+| File | Main did | Resolve |
+| :--- | :--- | :--- |
+| `core/sgt_i/uia_nodes.py` | took W2-5's Gecko change inline in `read_page_nodes` | keep the branch (`_read_docs` holds the same lines + `read_page_nodes_here`) |
+| `core/vsdc/vsdc_router.py` | took W1-6's address bar + `BROWSER_SUFFIX_RE` | same hunks; add the branch's `sdis_record`, `SdisRecorder`, tripwire line |
+| `sera_db/srpf.py` | `client_raw_container_light` cache, `slim` list reads, capture → MCL enrichment | keep both; **pass `0 if carrier else 1` to `_write_container_light`** for a new container; slim rows return `'{}'` for `raw_aggregates`, so the container inspector must fetch the full container (`identity_key=`) before showing SDIS values |
+| `sera_db/tracker_dump.py` | `enrich_client_from_capture` on insert, light-cache upkeep | keep both; carriers then enrich the MCL record from their profile (wanted) |
+| `sera_db/schema.py`, `sync_schema.py`, `tests/test_sync_schema.py` | `client_raw_container_light` (local) + `services.browser` | keep both sets of tables; the expected-table sets in the test need both |
+| `main.py`, `ui/windows/tracker_dump_window.py`, `ui/windows/client_detail_window.py`, `ui/dialogs/service_manager_dialog.py`, `ui/dialogs/unified_settings_dialog.py` | UI and start-up work | keep both; branch adds are self-contained blocks (Distill menu item, PORTAL VALUES, D21 prompt, recorder checkbox, `--sdis-mine`, writers on "synced") |
+
+On top of that, `../APP` has **uncommitted** edits to `sync_schema.py`, `sera_db/schema.py`, `main.py`,
+`ui/dialogs/unified_settings_dialog.py` and `ui/windows/tracker_dump_window.py`: commit them on main
+first, then merge, and re-check these five files.
+
+**Before merging, run:** `tests/test_sdis_*.py`, `tests/test_class_diff_align.py`, `tests/test_sgt_*.py`,
+`tests/test_sync_*.py`, `tests/test_raw_payload_db_and_srpf.py`, `tests/test_firefox_support.py`,
+`tests/test_browser_parity.py` and `tools/sdis_regress.py` on the merge result. Known before this
+branch: 54 failures + 43 errors in `tests/test_sync_*` (`sera_db/clients.py` internal-PK check, a
+missing seeded "EPFO" service), none in files the branch touches. Then the hands-on checks in
+`sdis-checks.csv` (1–11): real Firefox sessions, a registered EPF-type portal, the recorder in three
+browsers, two-PC push / registration / containers sync, Find datapoints with Cancel, a container
+climbing its levels, and on the merged build the tracker list with a carrier row and the frozen
+installer (`--sdis-mine`, the built-in `sdis_containers.json` shipped). Rule 7 stays: SDIS runs on
+the admin PC only and hashing must come before it leaves the monitoring phase (section 9.4).
+
 ## 12. Hand-off notes
 
 - **W0-1** (2026-10-04, claude-sonnet-5-5): added `tools/sdis_regress.py` (counts only; `--captures DIR`, default
@@ -1242,5 +1300,19 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   `sgt_replay.py diff`: identical to HEAD's sgt_shadow output (85 lines, random session id masked). Regression before = after, every line.
   Decisions: Q (A, shared key, section 10) + 2 recorded. Check 9. Next: W4-5's dataset/Others fields registered before W4-7 have no spec
   (re-register them); SGT-I `sera_data` sees carriers (no form/period, harmless).
+- **W5-R** (2026-10-05, claude-opus-5-5): final review. Merge-readiness note written in §11 (built Parts, SGT changes, conflict
+  table vs main's commits since `0f30543` + main's uncommitted files, tests and checks to run); status line at the top updated.
+  Fixed: `core/sdis/tables.py` command line printed every table's cell texts (console now counts only; `--text` writes the
+  grids to `output/tables_<file>.txt`, `--counts` kept as a no-op); `core/sdis/link_map.py` command line printed the first
+  texts of each new block (now counts; texts stay in its CSV; `BLOCK_TEXTS` removed); a lost space in tracker_dump_window.
+  Grep of core/sdis: every other print/log is counts, page links, types or field/container names. Tests: +1
+  `test_sdis_tables.py`, +1 `test_sdis_screens.py`; SDIS + align 364 passed; SGT + sync: 1275 passed, 54 failed + 43 errors,
+  all in `test_sync_*` (`sera_db/clients.py` internal-PK check, missing seeded "EPFO" service; files this branch never touched),
+  no SGT failure. `sgt_replay.py diff`: the same pre-existing "newly written" list. Regression before = after, identical in
+  every line. Against `sdis-regress-baseline.txt` (W0-1) every difference is a WP's: owners section (W1-3), memory 5 -> 3 links
+  (W1-3, D4: the fictional captures stay undecided), differs 6 -> 5 + furniture 1 (W2-2), same -> variable_alignment 3/20/26
+  (W2-3), statuses/data nodes (W3-1), retired line (W2-R), datapoints 93 (W3-2), suggested class (W3-5); maps, snapshots,
+  2367 nodes, 0/0/28 unchanged. Decision recorded (console counts only). Checks 10-11 added (merged tracker list, frozen build).
+  Next: the merge itself is the user's; main's `client_raw_container_light` needs the carrier fix named in §11.
 
 

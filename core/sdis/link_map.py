@@ -41,7 +41,6 @@ from core.sdis.paths import data_dir, write_csv
 OUT_DIR = data_dir()
 
 MAX_VALUES = 5
-BLOCK_TEXTS = 3
 
 
 def read_stamp(path: Path) -> str:
@@ -343,9 +342,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"   events {len(m.events)}")
         for ev in m.events:
             for b in ev["blocks"]:
-                if b["texts"]:
-                    shown = " | ".join(t[:30] for t in b["texts"][:BLOCK_TEXTS])
-                    print(f"   read {ev['read']}: new block, {b['nodes']} nodes: {shown}")
+                if b["texts"]:      # counts only: the texts are in the CSV (SDIS section 9)
+                    print(f"   read {ev['read']}: new block, {b['nodes']} nodes, {len(b['texts'])} with text")
         rows = [{"key": e["key"], "element": e["type"], "classes": e["cls"], "id": e["node"].get("id", ""),
                  "text": e["text"], "values_seen": " || ".join(e["values"]), "first_seen": e["first"],
                  "last_seen": e["last"]} for e in flat if e["text"]]

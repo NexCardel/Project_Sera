@@ -252,3 +252,22 @@ def test_content_replacement_creates_two_screens():
     assert sorted(cm2["portal.gov.in/page [screen 2]"]) == ["client1", "client2"]
     assert cm2["portal.gov.in/page"]["client2"].reads == ["20261001_100003"]
     assert cm2["portal.gov.in/page [screen 2]"]["client2"].reads == ["20261001_100002"]
+
+
+def test_link_map_command_line_prints_counts_not_texts(tmp_path, monkeypatch, capsys):
+    """Section 9: a new block is reported by its counts; its texts go to the CSV only."""
+    class _Map:
+        reads = ["20261001_100000", "20261001_100001"]
+        events = [{"read": 1, "blocks": [{"nodes": 4, "texts": ["FICTIONAL TRADERS", "Notice text"]}]}]
+
+        def to_flat(self):
+            return [{"key": "div[1]", "type": "div", "cls": "", "node": {}, "text": "FICTIONAL TRADERS",
+                     "values": ["FICTIONAL TRADERS"], "first": 0, "last": 1}]
+
+    monkeypatch.setattr(link_map, "build_maps", lambda: {("client 1", "portal.gov.in/page"): _Map()})
+    monkeypatch.setattr(link_map, "OUT_DIR", tmp_path)
+    assert link_map.main([]) == 0
+    printed = capsys.readouterr().out
+    assert "new block, 4 nodes, 2 with text" in printed
+    assert "FICTIONAL" not in printed and "Notice" not in printed
+    assert "FICTIONAL TRADERS" in next(tmp_path.glob("map_*.csv")).read_text(encoding="utf-8-sig")

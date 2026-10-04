@@ -32,10 +32,11 @@ Fix the kind, not the case: nothing here knows a portal, a class name or a wordi
 
 Usage:
     python tools/pre_dev/class_diff/tables.py                       # the newest read in output/
-    python tools/pre_dev/class_diff/tables.py FILE.json [--snapshot N] [--html] [--counts]
---html writes output/tables_<file>.html (open it beside the portal to compare); --counts prints
-only each table's shape (no values), safe to paste anywhere. Real reads hold client data: the
-text and HTML output stay in the git-ignored output folder on this PC.
+    python tools/pre_dev/class_diff/tables.py FILE.json [--snapshot N] [--html] [--text]
+The console only ever gets each table's shape (no values), safe to paste anywhere. --html writes
+output/tables_<file>.html (open it beside the portal to compare), --text the text grids to
+output/tables_<file>.txt. Real reads hold client data: that output stays in the git-ignored
+output folder on this PC (SDIS section 9).
 """
 
 import argparse
@@ -484,7 +485,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("file", nargs="?", help="a key_probe / capture JSON (default: the newest in output/)")
     ap.add_argument("--snapshot", type=int, default=-1, help="which capture snapshot (default: the last)")
     ap.add_argument("--html", action="store_true", help="also write output/tables_<file>.html")
-    ap.add_argument("--counts", action="store_true", help="print only each table's shape, no values")
+    ap.add_argument("--text", action="store_true", help="also write the text grids to output/tables_<file>.txt")
+    ap.add_argument("--counts", action="store_true", help="(the default now: the console gets shapes only)")
     args = ap.parse_args(argv)
     if args.file:
         path = Path(args.file)
@@ -498,9 +500,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     tables = extract(load_docs(path, args.snapshot))
     print(f"{path.name}: {len(tables)} table(s)")
     for i, tb in enumerate(tables):
-        print(f"  table {i}: {counts(tb)}" if args.counts else "\n" + render_text(tb))
-    if args.html:
+        print(f"  table {i}: {counts(tb)}")
+    if args.text or args.html:
         OUT_DIR.mkdir(exist_ok=True)
+    if args.text:
+        out = OUT_DIR / f"tables_{path.stem}.txt"
+        out.write_text("\n\n".join(render_text(tb) for tb in tables), encoding="utf-8")
+        print(f"text: {out}")
+    if args.html:
         out = OUT_DIR / f"tables_{path.stem}.html"
         out.write_text(render_html(tables, path.stem), encoding="utf-8")
         print(f"HTML: {out}")
