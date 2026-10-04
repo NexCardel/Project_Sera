@@ -1183,5 +1183,21 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   W4-5 must feed `corpus/<device id>/` folders + `sdis_capture`, but mine() keys files by bare NAME, so same-named day files from two PCs collide:
   key by relative path (engine change) before walking several folders. Hands-on check 5 added; it should also confirm the windowed frozen exe
   writes to the pipe (run() skips output when sys.stdout is None).
+- **W4-4** (2026-10-05, claude-opus-5-5): Part Q. Tables `sdis_fields` (gid, name, portal, section, spec_json, label, status, created_by,
+  updated_at) and `sdis_decisions` (gid, signature, decision, label, updated_at) in rawPayload.db (`sera_db/schema.py`, beside tracker_dump),
+  registered LWW on gid in `sync_schema.py`; NEW mixin `sera_db/sdis.py` (`add/rename/retire/list_sdis_fields`, `set/list_sdis_decisions`;
+  retire = status update; add keeps a label the user edited; every local field change rewrites the file). NEW `core/sdis/register.py`:
+  `value_shapes` (mask_shape, each client's distinct values once, sure pairings only), `draft_spec(datapoint, memories, portal, container)` ->
+  row via `miner.draft_field` + `miner.check_spec`, spec name `sdis.<field>`, user label in `note` (rename never touches capture),
+  `write_fields_file` (atomic; no active rows -> file removed), `refresh(db)`. `sgt_specs.sdis_fields_path()` (env `SDIS_FIELDS_PATH`, else
+  ~/AmanAssociates_Sera/sdis_fields.json) + `default_paths()` used by load_registry and SpecStore. main.py: `_write_sdis_fields` on a thread at
+  start-up and on engine "synced" (live mode) when `sdis_fields` is among the tables. **Only Profile builder fields register** (dataset/others
+  raise NotRegistrable until W4-7); period/label/sentence/control types are not registrable. Tests: NEW `test_sdis_register.py` 8;
+  test_sync_schema 22; SGT + sync_schema 630; SDIS + align 302. test_sync_capture/apply/tables: 6 fail in `clients.py` internal-PK validation
+  (untouched file, pre-existing). `sgt_replay.py diff`: only the pre-existing "newly written" list (replay passes its own spec paths).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 nodes, 0/0/28; owners 4; 3 links; datapoints 93; class 0/3/7/83).
+  Decisions recorded (2). Hands-on check 6 (two PCs). **Merge:** main has uncommitted edits to `sync_schema.py` and `sera_db/schema.py`; check both
+  and `tests/test_sync_schema.py`'s expected sets there. W4-5/W4-6: read `list_sdis_decisions()` into mining's rejected/moves; a counts-only
+  `../sdis_regress_w44_after.txt` can go.
 
 

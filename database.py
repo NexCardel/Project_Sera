@@ -25,6 +25,7 @@ from sera_db.audit_backup import AuditBackupMixin
 from sera_db.srpf import SrpfMixin
 from sera_db.tracker_dump import TrackerDumpMixin
 from sera_db.maintenance import MaintenanceMixin
+from sera_db.sdis import SdisMixin
 
 
 # Rows changed through master.db in this process, per database file (every SeraDatabase instance
@@ -34,7 +35,7 @@ _WRITE_GENERATION: dict = {}
 _WRITE_GENERATION_LOCK = threading.Lock()
 
 
-class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, AuditBackupMixin, SrpfMixin, TrackerDumpMixin, MaintenanceMixin):
+class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, AuditBackupMixin, SrpfMixin, TrackerDumpMixin, MaintenanceMixin, SdisMixin):
     def __init__(self, db_path: str, hex_key: str, raw_db_path: str = None, defer_startup_maintenance: bool = False, key_mode: str = None):
         self.db_path = db_path
         self.hex_key = hex_key

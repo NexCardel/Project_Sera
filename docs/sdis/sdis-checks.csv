@@ -4,3 +4,4 @@ Check,WP,Text,Result,Date,Notes
 3,W4-1,"Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before",Not run,2026-10-04 18:13,
 4,W4-2,Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving,Not run,2026-10-04 18:19,
 5,W4-3,"Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues",Not run,2026-10-04 18:24,
+6,W4-4,"Two real PCs in live sync: register a Profile builder field on one (W4-5 dialog or db.add_sdis_field), check the other PC's ~/AmanAssociates_Sera/sdis_fields.json appears after a sync round and SGT logs one more profile spec; rename and retire also reach it",Not run,2026-10-05 01:09,

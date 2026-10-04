@@ -165,6 +165,20 @@ tracker_dump = _register(TableSpec(
           "gids with a separate read connection (§4.4).",
 ))
 
+sdis_fields = _register(TableSpec(
+    "sdis_fields", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part Q (D7): a datapoint the user registered, as an SGT "
+          "spec (spec_json) plus its user-edited label. Every PC writes the "
+          "active rows to <Sera data>/sdis_fields.json for SGT. A retire is an "
+          "UPDATE of status, never a DELETE.",
+))
+
+sdis_decisions = _register(TableSpec(
+    "sdis_decisions", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part Q (D6): rejections, dismissed datapoints and "
+          "container moves, one row per signature, read by mining on the admin PC.",
+))
+
 sdc_session_timelines = _register(TableSpec(
     "sdc_session_timelines", RAW_DB, LWW, row_key=("session_id",),
     fk={"client_id": "clients"},

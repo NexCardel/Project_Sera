@@ -335,6 +335,32 @@ class SchemaMixin:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tracker_dump_created ON tracker_dump(created_at DESC);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sdc_timelines_start ON sdc_session_timelines(start_time DESC);")
 
+            # Sera Distill (SDIS Part Q): registered datapoints and the user's decisions, synced
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sdis_fields (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gid         TEXT,
+                    name        TEXT NOT NULL,
+                    portal      TEXT,
+                    section     TEXT,
+                    spec_json   TEXT NOT NULL,
+                    label       TEXT,
+                    status      TEXT DEFAULT 'active',
+                    created_by  TEXT,
+                    updated_at  TEXT NOT NULL
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sdis_decisions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gid         TEXT,
+                    signature   TEXT NOT NULL,
+                    decision    TEXT NOT NULL,
+                    label       TEXT,
+                    updated_at  TEXT NOT NULL
+                );
+            """)
+
             import sync_tables
             sync_tables.ensure_sync_infrastructure(conn, "raw", device_id=self._device_id)
             # rawPayload.db follows master.db's sync mode (P3-3 review): an auto-healed

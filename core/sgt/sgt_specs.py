@@ -43,6 +43,8 @@ except ImportError:                     # pragma: no cover - older interpreters
 FIELDS_FILE_NAME = "sgt_fields.json"
 FIELDS_PATH_ENV = "SGT_FIELDS_PATH"
 BUILTIN_FIELDS_PATH = Path(__file__).resolve().parent / FIELDS_FILE_NAME
+SDIS_FIELDS_FILE_NAME = "sdis_fields.json"       # datapoints registered in Sera Distill (SDIS Part Q)
+SDIS_FIELDS_PATH_ENV = "SDIS_FIELDS_PATH"
 
 MAX_PATTERN_LEN = 400
 MAX_LINE_LEN = 400          # the resolver never feeds a pattern a longer line than this
@@ -544,6 +546,19 @@ def override_path() -> Path:
     return Path(__file__).resolve().parents[2] / FIELDS_FILE_NAME
 
 
+def sdis_fields_path() -> Path:
+    """The third spec file: every PC writes the synced `sdis_fields` table's active rows here
+    (core/sdis/register.py). A missing file is fine."""
+    env = os.environ.get(SDIS_FIELDS_PATH_ENV)
+    if env:
+        return Path(env)
+    return Path.home() / "AmanAssociates_Sera" / SDIS_FIELDS_FILE_NAME
+
+
+def default_paths() -> List[Path]:
+    return [BUILTIN_FIELDS_PATH, override_path(), sdis_fields_path()]
+
+
 def _read_json(path: Path, errors: List[str]) -> Optional[Dict[str, Any]]:
     try:
         if not path.is_file():
@@ -564,7 +579,7 @@ def load_registry(paths: Optional[Sequence[Path]] = None, previous: Optional[Reg
     A spec that fails to build or fails its self-test is refused; if `previous` held a good
     version of it, that version is kept, so a bad edit never removes working capture.
     """
-    paths = list(paths) if paths is not None else [BUILTIN_FIELDS_PATH, override_path()]
+    paths = list(paths) if paths is not None else default_paths()
     errors: List[str] = []
     rules = previous.current_rules if previous else CurrentRules()
     prules = previous.profile_rules if previous else ProfileRules()
@@ -835,7 +850,7 @@ class SpecStore:
         self._checked = 0.0
 
     def _current_paths(self) -> List[Path]:
-        return self._paths if self._paths is not None else [BUILTIN_FIELDS_PATH, override_path()]
+        return self._paths if self._paths is not None else default_paths()
 
     def _stamps(self) -> Tuple[Any, ...]:
         out = []

@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 18:20)
+# Sera Distill — report (2026-10-04 18:24)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 5 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 24 |
+| Done | 25 |
 | Blocked | 0 |
 
-Runs: 25   output tokens: 1287072   API-equivalent cost: $32.59
+Runs: 26   output tokens: 1305649   API-equivalent cost: $33.75
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -38,7 +38,7 @@ Runs: 25   output tokens: 1287072   API-equivalent cost: $32.59
 | W3-3 | Done | sonnet | eb2abfa | Part O engine: memory on disk, incremental mining | store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees |
 | W4-1 | Done | opus | f6dd800 | Part K: SDIS's own recorder (raw view, session id, browser) | SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests +  |
 | W4-2 | Done | opus | 864adf5 | Part P: captures travel to the admin PC | Part P: core/sdis/transfer.py push/handle_push/Pusher, sdis_push in dispatch_session, main.py trigger; 6 new tests; regression identical |
-| W4-3 | Not started | opus |  | Part O: mining in its own process (no CPU cap) |  |
+| W4-3 | Done | opus | 5b16e05 | Part O: mining in its own process (no CPU cap) | mine_process.run via main.py --sdis-mine (JSON lines), MinerClient (reader thread, instant cancel, no CPU cap); 8 new tests, SDIS 294 passed, regression unchang |
 | W4-4 | Not started | opus |  | Part Q: registration on every PC (synced tables) |  |
 | W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
 | W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |
@@ -65,6 +65,8 @@ Runs: 25   output tokens: 1287072   API-equivalent cost: $32.59
 - **W4-1** Which UIA worker does SDIS's raw read use? → Its own: the recorder thread joins the MTA and creates its own CUIAutomation8 (as sgt_i/uia_events); new uia_nodes.read_page_nodes_here reads on that thread; read_page_nodes unchanged (read_page_nodes runs on vsdc_uia_text's single shared worker; a raw read still in flight when SGT's next read starts would make SGT abandon that worker and count toward UIA switching off (5 per run), which would change SGT capture (rule 6))
 - **W4-1** How is a recorder session named for the engine? → record carries started (time of the session's first record this run); sources names it 'sgt <session id> <started>' (identity._by_time orders sessions by their last word as a time; a bare SGT session id is random hex, so client order and retirement (time order) would be random)
 - **W4-2** Push trigger, batch size and repeat files → Any successful sync session triggers a push at most every 15 min on its own thread; a push carries at most 200 files / 200 MB (rest next time); a file written in the last 60 s is not finished; a re-pushed name replaces the stored copy (atomic .part + os.replace); names other than sdis_YYYY-MM-DD.jsonl refuse the whole manifest (Fits the transport's 600 s session deadline, never sends a file still being written, and a lost ack only causes a harmless resend)
+- **W4-3** Which captures folders does one mining run take, given pushed files sit in corpus/<device id>/ with the same day names on every PC? → One --captures folder per run, as mine() takes today; walking corpus/<device>/ plus sdis_capture (file keys by relative path) is left to the WP wiring the button (W4-5) (mine() keys files by bare name, so a multi-folder run needs an engine change to state keys; out of W4-3's scope and not on the regression path)
+- **W4-3** Does the PyInstaller spec need core.sdis.mine_process added by hand? → No: build_tools has no .spec in the repo and no hand-listed hiddenimports; main.py imports the module statically so PyInstaller finds it (grep of build_tools for hiddenimports found none; nothing to edit, no installer built)
 
 ## Checks waiting for you
 
@@ -72,3 +74,4 @@ Runs: 25   output tokens: 1287072   API-equivalent cost: $32.59
 - #2 (W1-8) Admin PC: Manage Services, add a service with a non-GST/ITR login link (e.g. EPF), confirm the domain prompt, open that portal in Chrome and check SGT/VSDC now reads it; delete the service and check capture stops there; also edit a link to a shared sign-in site listed in never_register and check the 'not registered' message — Not run
 - #3 (W4-1) Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before — Not run
 - #4 (W4-2) Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving — Not run
+- #5 (W4-3) Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues — Not run
