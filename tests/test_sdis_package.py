@@ -85,6 +85,14 @@ def test_pre_dev_noise_is_the_core_module():
     assert noise is core.sdis.noise
 
 
+def test_pre_dev_memory_is_the_core_module():
+    import memory
+    import core.sdis.memory
+    assert memory is core.sdis.memory
+    assert hasattr(core.sdis.memory, "RETIRE_P")
+    assert core.sdis.memory.RETIRE_P == 0.01
+
+
 def test_core_sdis_imports_without_pyside6(tmp_path):
     env = dict(os.environ, SDIS_DATA_DIR=str(tmp_path))
     code = ("import sys, core.sdis.paths, core.sdis.keys, core.sdis.align, core.sdis.labels, "

@@ -1029,4 +1029,18 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   services dashboard confirmed same 115 → 89, variable_alignment 0 → 26; orders agree yes on all links (reclassified nodes share shapes
   with client data). Decisions: rejected signature `(link, shape, text)` matches either `self.link` or `self.page`. Next WP must know:
   `PageMemory.verdict(nid, differs_shapes=..., rejected=...)` returns `'variable_alignment'`; rejections stored in W4-4.
+- **W2-4** (2026-10-04, gemini-3.8-flash-high): built Part H memory upkeep (retire). Files: `core/sdis/memory.py`
+  (`RETIRE_P` = 0.01; `PageMemory` tracks `self.clients` in addition order; each node keeps `first_ci` and `last_ci`; after each
+  `add()`, confirmed nodes in `self.order` evaluate `chances = len(self.clients) - first_ci`, `seen = len(nd["clients"])`,
+  `misses = len(self.clients) - 1 - last_ci`, `p = (seen + 1) / (chances + 2)`; retire when `misses >= 2` and
+  `(1 - p) ** misses < 0.01`: removed from `self.order`, status 'retired', verdict 'retired'; unconfirmed nodes never retire;
+  retired node returning through later client becomes new pending node; summary and main CSV updated), `tests/test_sdis_retire.py`
+  (7 tests), `tests/test_sdis_package.py`. Tests: 177 passed (169 previous + 8 new). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links
+  (return dashboard 87 same / 5 diff / 7 comp / 1 furn / 3 var_align + 5 wait, gstr1 72 same / 13 diff / 18 comp / 1 changes / 20 var_align + 4 wait,
+  services dashboard 89 same / 39 diff / 11 comp / 26 var_align); orders agree yes on all links; exactly 0 numbers changed because
+  2 clients cannot retire anything (`misses < 2` and unconfirmed nodes never retire). Decisions taken: none (followed Part H exact formulas
+  and worked examples). Next WP must know: `PageMemory` has `self.clients` list; node `status` and `verdict(nid)` are 'retired' for retired
+  nodes; retired nodes are removed from `self.order`.
+
 

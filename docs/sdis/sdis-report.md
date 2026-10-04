@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:10)
+# Sera Distill — report (2026-10-04 16:25)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 17 |
+| Not started | 16 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 13   output tokens: 786434   API-equivalent cost: $13.10
+Runs: 14   output tokens: 864689   API-equivalent cost: $13.10
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 13   output tokens: 786434   API-equivalent cost: $13.10
 | W1-R | Done | opus | c627eb0 | Phase 1 review | Review: fixed per-browser map overwrite, identity per (link, browser) + screen-safe, fingerprint pair weighting, Part N votes per client; 140 passed; regression |
 | W2-1 | Done | gemini_first | 33f376c | Part E: look-alikes scored, AMBIGUOUS | Part E: look-alikes scored pairing, ambiguous detection under margin 0.5, wired into memory and compare |
 | W2-2 | Done | gemini_first | f5e5d3d | Part C: noise over time | Part C: noise over time, changes_with_time, probably_furniture heuristic, wired into memory.py |
-| W2-3 | Not started | gemini_first |  | Part F: the variable_alignment state |  |
+| W2-3 | Done | gemini_first | c9d12c0 | Part F: the variable_alignment state | Part F: variable_alignment state, rejected hook, compare_flat shared labels |
 | W2-4 | Not started | gemini_first |  | Part H: memory upkeep (retire) |  |
 | W2-5 | Not started | sonnet |  | Part R.3: Firefox line parity fixes (SGT-C) |  |
 | W2-R | Not started | opus |  | Phase 2 review |  |
@@ -54,6 +54,7 @@ Runs: 13   output tokens: 786434   API-equivalent cost: $13.10
 - **W1-R** Part N: what counts as a value vote for a link position? → each distinct client once (VALUE_CLIENTS = 3, page votes 0), not each link pair (R8: link-pair counting let 2 clients with 3 sibling pages mask a position, while many clients sharing 2 years never did; 3 keeps W1-4's tested 2-clients-not-enough / 3-clients-masked behaviour)
 - **W1-R** Part D: rarity weight of a value both compared captures show → count the compared pair as one capture: 1 / (rarity - 1) (an equal value is always shown by both, an unequal one by one; literal 1/rarity halved agreement, so one changed value among 10 rare ones gave 0.82 (undecided) instead of 0.9 (same); blueprint says an ARN weighs 1)
 - **W1-R** Part D check: the two fictional local-page sessions should be one client → keep them undecided (no vote) (counts on today's captures: per page 3 codes, 2 periods and 1 alphanumeric value differ (sim 0.70, was 0.56): not one client; the blueprint's expectation was wrong, undecided is the honest result (rule 6))
+- **W2-3** How does memory match rejected signatures? → (link, shape, text) matching either self.link or self.page (Allows callers to pass either resolved base link or page string cleanly)
 
 ## Checks waiting for you
 

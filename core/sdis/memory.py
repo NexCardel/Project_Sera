@@ -44,7 +44,7 @@ git-ignored, keep on this PC).
 import argparse
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from core.sdis import link_map
 from core.sdis.align import align, pair_moved, shape
@@ -58,6 +58,7 @@ VARIABLE_ALIGNMENT = "variable_alignment"
 
 SAME_MATCH, SAME_NEW = 0.95, 3        # same screen: >= 95% of the map matched, <= 3 new
 RADICAL_MATCH = 0.50                  # radical: under half of the map matched memory
+RETIRE_P = 0.01                       # retire: (1 - p) ** misses < 0.01 (1%)
 _SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
 _BROWSER_RE = re.compile(r" \[([a-zA-Z0-9_-]+)\]$")
 
@@ -95,24 +96,37 @@ class PageMemory:
         clean = _BROWSER_RE.sub("", clean)
         self.link = link if link is not None else clean
         self.rejected: set = set(rejected) if rejected else set()
+        self.clients: List[str] = []               # clients in the order they were added
         self.nodes: List[Dict[str, Any]] = []      # every node, memory or pending
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
         self.log: List[Dict[str, Any]] = []
         self._differs_shapes_cache: Optional[set] = None
 
-    def _node(self, e: Dict[str, Any], anchor: Optional[int], status: str) -> int:
+    def _node(self, e: Dict[str, Any], anchor: Optional[int], status: str,
+              first_ci: Optional[int] = None, last_ci: Optional[int] = None) -> int:
         node = e.get("node") or {}
         ctype = node.get("ctype") if isinstance(node, dict) else None
         if ctype is None:
             ctype = e.get("ctype")
+        if first_ci is None:
+            first_ci = len(self.clients) - 1 if self.clients else 0
+        if last_ci is None:
+            last_ci = first_ci
         self.nodes.append({"shape": shape(e), "key": e["key"], "text": e["text"], "type": e["type"],
                            "ctype": ctype, "node": node,
-                           "status": status, "anchor": anchor, "clients": {}, "composite": False})
+                           "status": status, "anchor": anchor, "clients": {}, "composite": False,
+                           "first_ci": first_ci, "last_ci": last_ci})
         return len(self.nodes) - 1
 
-    def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool, sure: bool = True) -> None:
+    def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool, sure: bool = True,
+             ci: Optional[int] = None) -> None:
         nd = self.nodes[nid]
+        if ci is None:
+            ci = self.clients.index(client) if client in self.clients else (len(self.clients) - 1 if self.clients else 0)
+        nd["last_ci"] = ci
+        if "first_ci" not in nd:
+            nd["first_ci"] = ci
         if "ctype" not in nd or nd["ctype"] is None:
             node = e.get("node") or {}
             ctype = node.get("ctype") if isinstance(node, dict) else None
@@ -142,13 +156,18 @@ class PageMemory:
 
     def add(self, flat: List[Dict[str, Any]], client: str) -> None:
         """One client's merged map of this link (link_map.LinkMap.to_flat())."""
+        is_first = len(self.clients) == 0
+        if client not in self.clients:
+            self.clients.append(client)
+        ci = self.clients.index(client)
+
         self._differs_shapes_cache = None
         comp = composites(flat)
-        if not self.order:                                         # the first client's map IS the memory
+        if is_first:                                               # the first client's map IS the memory
             for i, e in enumerate(flat):
-                nid = self._node(e, None, "memory")
+                nid = self._node(e, None, "memory", first_ci=ci, last_ci=ci)
                 self.order.append(nid)
-                self._see(nid, e, client, i in comp, sure=True)
+                self._see(nid, e, client, i in comp, sure=True, ci=ci)
             self.log.append({"client": client, "nodes": len(flat), "memory": 0, "matched": len(flat),
                              "pending_hit": 0, "new": 0, "kind": "FIRST"})
             return
@@ -160,7 +179,7 @@ class PageMemory:
         for i in range(len(flat)):
             if i in pairs:
                 anchor = self.order[pairs[i]]
-                self._see(anchor, flat[i], client, i in comp, sure=(i not in amb))
+                self._see(anchor, flat[i], client, i in comp, sure=(i not in amb), ci=ci)
             else:
                 anchor_of[i] = anchor
         # 3: the leftovers against the pending pool, the same way (page order, then moved blocks).
@@ -174,11 +193,11 @@ class PageMemory:
                 hit += 1
                 sure = (x not in p_amb)
             else:
-                nid = self._node(flat[i], anchor_of[i], "pending")
+                nid = self._node(flat[i], anchor_of[i], "pending", first_ci=ci, last_ci=ci)
                 self.pending.append(nid)
                 new += 1
                 sure = True
-            self._see(nid, flat[i], client, i in comp, sure=sure)
+            self._see(nid, flat[i], client, i in comp, sure=sure, ci=ci)
         matched = len(pairs) / len(flat) if flat else 1.0
         if matched >= SAME_MATCH and new <= SAME_NEW:
             kind = "SAME SCREEN"
@@ -189,6 +208,7 @@ class PageMemory:
         self.log.append({"client": client, "nodes": len(flat), "memory": n_mem, "matched": len(pairs),
                          "pending_hit": hit, "new": new, "kind": kind})
         self._promote()
+        self._retire()
 
     def _promote(self) -> None:
         """4: pending nodes seen by N clients join the memory right after their anchor (after any
@@ -205,6 +225,30 @@ class PageMemory:
             self.nodes[p]["promoted_after"] = a
             self.order.insert(pos, p)
 
+    def _retire(self) -> None:
+        """Retire confirmed memory nodes that stopped appearing, by statistics (Part H)."""
+        n_clients = len(self.clients)
+        retired_any = False
+        for nid in list(self.order):
+            if not self.confirmed(nid):
+                continue
+            nd = self.nodes[nid]
+            first_ci = nd.get("first_ci", 0)
+            last_ci = nd.get("last_ci", first_ci)
+            chances = n_clients - first_ci
+            seen = len(nd["clients"])
+            misses = n_clients - 1 - last_ci
+            if misses < 2:
+                continue
+            p = (seen + 1) / (chances + 2)
+            if (1.0 - p) ** misses < RETIRE_P:
+                self.order.remove(nid)
+                nd["status"] = "retired"
+                nd["verdict"] = "retired"
+                retired_any = True
+        if retired_any:
+            self._differs_shapes_cache = None
+
     def confirmed(self, nid: int) -> bool:
         """Seen by N different clients with sure True. The first client's nodes sit in memory (they give the page
         order) but are no more confirmed than a pending node - so the client order changes nothing."""
@@ -217,7 +261,7 @@ class PageMemory:
         shapes: set = set()
         self._differs_shapes_cache = set()
         for i, nd in enumerate(self.nodes):
-            if not self.confirmed(i) or nd.get("composite"):
+            if not self.confirmed(i) or nd.get("composite") or nd.get("status") == "retired":
                 continue
             if changes_within_client(nd) or changes_with_time(nd):
                 continue
@@ -231,6 +275,8 @@ class PageMemory:
     def verdict(self, nid: int, differs_shapes: Optional[set] = None,
                 rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> str:
         nd = self.nodes[nid]
+        if nd.get("status") == "retired" or nd.get("verdict") == "retired":
+            return "retired"
         cl = nd["clients"]
         if nd["composite"]:
             return "composite"
@@ -266,7 +312,7 @@ class PageMemory:
 
     def summary(self) -> Counter:
         differs = self._differs_shapes()
-        return Counter(("confirmed" if self.confirmed(i) else "waiting",
+        return Counter((nd.get("status") if nd.get("status") == "retired" else ("confirmed" if self.confirmed(i) else "waiting"),
                         self.verdict(i, differs_shapes=differs))
                        for i, nd in enumerate(self.nodes) if nd["text"])
 
@@ -417,7 +463,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 for (st, v), k in sorted(sums[0].items()):
                     print(f"      {st:8s} {v:26s} {k:5d} text nodes")
                 differs = m._differs_shapes()
-                rows = [{"status": "confirmed" if m.confirmed(i) else "waiting",
+                rows = [{"status": nd.get("status") if nd.get("status") == "retired" else ("confirmed" if m.confirmed(i) else "waiting"),
                          "verdict": m.verdict(i, differs_shapes=differs), "clients": len(nd["clients"]),
                          "type": nd["type"], "shape": nd["shape"],
                          "texts": " || ".join(t for c in nd["clients"].values() for t in c["texts"])}
