@@ -1,5 +1,5 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
-W0-1,0,Baseline: tests + the regression runner tools/sdis_regress.py,In progress,claude-sonnet-5-5,1,,,2026-10-04 13:54
+W0-1,0,Baseline: tests + the regression runner tools/sdis_regress.py,Done,claude-sonnet-5-5,1,36e67ef,"tools/sdis_regress.py + test + baseline; 16 tests pass; numbers as expected (double count 0, lost 0, orders agree yes)",2026-10-04 13:55
 W0-2,0,Engine package core/sdis/ (pre-dev files become module aliases),Not started,claude-sonnet-5-5,0,,,
 W1-1,1,Part B: value history with times,Not started,claude-sonnet-5-5,0,,,
 W1-2,1,"Part G: screens (one link, several pages) by weighted matching",Not started,claude-sonnet-5-5,0,,,
