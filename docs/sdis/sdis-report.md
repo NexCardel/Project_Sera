@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:44)
+# Sera Distill — report (2026-10-04 17:41)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 13 |
+| Not started | 11 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 17 |
+| Retry | 1 |
+| Done | 18 |
 | Blocked | 0 |
 
-Runs: 17   output tokens: 993735   API-equivalent cost: $17.42
+Runs: 19   output tokens: 1103543   API-equivalent cost: $20.72
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -31,8 +31,8 @@ Runs: 17   output tokens: 993735   API-equivalent cost: $17.42
 | W2-4 | Done | gemini_first | ede141d | Part H: memory upkeep (retire) | Part H: memory upkeep (retire), RETIRE_P = 0.01, client history and misses |
 | W2-5 | Done | sonnet | b551792 | Part R.3: Firefox line parity fixes (SGT-C) | Firefox lines now identical to Chrome/Edge on the fictional pages (dropdown options, wrapped labels, cached offscreen, Edge ZWSP title); regression unchanged |
 | W2-R | Done | opus | f0f325f | Phase 2 review | Phase 2 review: one documented verdict order; 6 defects fixed with 6 tests; regression unchanged, orders agree yes |
-| W3-1 | Not started | sonnet |  | Part I: statuses + labels from memory |  |
-| W3-2 | Not started | gemini_first |  | Part J: relevance by occurrences + slots |  |
+| W3-1 | Done | sonnet | e7854ea | Part I: statuses + labels from memory | Part I: memory.status/label from client views, table cell labels, furniture via real labels, compare memory view; 204 tests pass, regression counts unchanged |
+| W3-2 | Retry | gemini_first |  | Part J: relevance by occurrences + slots | stopped by usage limit, resumes after 18:11 |
 | W3-4 | Not started | gemini_first |  | Part R.4: SDIS on Firefox trees |  |
 | W3-5 | Not started | gemini_first |  | Part S.1: class suggestion (what a value stays the same with) |  |
 | W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |
@@ -59,6 +59,8 @@ Runs: 17   output tokens: 993735   API-equivalent cost: $17.42
 - **W2-5** How to key Firefox-only line rules (dropdown options, doubled label)? → On the Document's framework id 'Gecko' (live CurrentFrameworkId / cached 30024); node trees carry gecko:true on the document's first node (Blueprint rule: browser-dependent rules key on framework id; Chrome/Edge lines and nodes stay byte-identical)
 - **W2-R** Retirement follows time order, so forward/reversed builds can legitimately differ once 4+ clients exist; how is 'orders agree' kept meaningful? → The order check builds both orders with retire=False (PageMemory/build retire flag); the runner prints 'retired (time order): k' from the forward build (Part H counts misses in a row by time; the order check is meant to prove alignment and verdicts do not depend on client order)
 - **W2-R** Part C rule 2 'changes with time': does a day seen by only one client count as agreement? → No: the texts must differ between days that 2+ clients were seen on (Rule 6: two clients captured on different days with their own data would otherwise be called noise and their datapoint lost)
+- **W3-1** Which verdicts may a label candidate come from, given probably furniture asks for labels while verdicts are being computed? → Base verdict 'same for all clients' with a fixable or alphanumeric type, plus unpaired repeats of such a (shape, text) (Same set as compare.py's fixed + variable_alignment + semi-variable alphanumeric (variable_alignment only ever comes from a fixable text); avoids the label -> verdict -> furniture -> label loop)
+- **W3-1** A node in a real table whose column has no name (or a header cell): what label? → Fall back to the screen-box rules (labels._label, which still tries the structural _table_label first) (Blueprint: box rules apply to values outside any table and to tables without table markup; a nameless column gives the table nothing to say)
 
 ## Checks waiting for you
 

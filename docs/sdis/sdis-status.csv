@@ -17,7 +17,7 @@ W2-4,2,Part H: memory upkeep (retire),Done,gemini-3.8-flash-high,1,ede141d,"Part
 W2-5,2,Part R.3: Firefox line parity fixes (SGT-C),Done,claude-sonnet-5-5,1,b551792,"Firefox lines now identical to Chrome/Edge on the fictional pages (dropdown options, wrapped labels, cached offscreen, Edge ZWSP title); regression unchanged",2026-10-04 16:39
 W2-R,2,Phase 2 review,Done,claude-opus-5-5,1,f0f325f,"Phase 2 review: one documented verdict order; 6 defects fixed with 6 tests; regression unchanged, orders agree yes",2026-10-04 16:44
 W3-1,3,Part I: statuses + labels from memory,Done,claude-sonnet-5-5,2,e7854ea,"Part I: memory.status/label from client views, table cell labels, furniture via real labels, compare memory view; 204 tests pass, regression counts unchanged",2026-10-04 17:34
-W3-2,3,Part J: relevance by occurrences + slots,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
+W3-2,3,Part J: relevance by occurrences + slots,In progress,claude-sonnet-5-5,1,,"stopped by usage limit, resumes after 18:11",2026-10-04 17:41
 W3-4,3,Part R.4: SDIS on Firefox trees,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
 W3-5,3,Part S.1: class suggestion (what a value stays the same with),Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
 W3-3,3,"Part O engine: memory on disk, incremental mining",Not started,claude-sonnet-5-5,0,,,

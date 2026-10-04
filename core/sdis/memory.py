@@ -544,6 +544,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise SystemExit("No page link has two clients yet - capture it for another client first.")
     print(f"N = {args.n}\n")
     stable = True
+    forward_mems = []
     for page in sorted(pages):
         cm = pages[page]
         order = sorted(cm, key=lambda c: cm[c].reads[0])
@@ -554,6 +555,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         sums = []
         for label, o in (("forward", order), ("reversed", order[::-1])):
             m = build(page, cm, o, args.n)
+            if label == "forward":
+                forward_mems.append(m)
             sums.append(build(page, cm, o, args.n, retire=False).summary())   # retirement follows time
             print(f"  {label}:")
             for r in m.log:
@@ -577,5 +580,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  ORDER CHANGES THE RESULT: forward {dict(sums[0] - sums[1])}  reversed {dict(sums[1] - sums[0])}")
         print()
     print(f"Same verdicts in both client orders: {'yes' if stable else 'NO'}")
+    from core.sdis.relevance import datapoints
+    dps = datapoints(forward_mems)
+    top10 = [dp.relevance_pct for dp in dps[:10]]
+    print(f"datapoints {len(dps)}, top 10 relevance %: {top10}")
     print("(output/memory_*.csv hold real page values - keep them on this PC)")
     return 0

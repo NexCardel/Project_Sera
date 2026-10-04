@@ -48,7 +48,7 @@ def run(captures: Path, out: List[str]) -> bool:
     os.environ["SDIS_DATA_DIR"] = str(captures)
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
-    from core.sdis import identity, link_map, memory
+    from core.sdis import identity, link_map, memory, relevance
     from core.sdis.align import shape
     from core.sdis.keys import flatten
     link_map.OUT_DIR = captures
@@ -84,6 +84,7 @@ def run(captures: Path, out: List[str]) -> bool:
     say()
     say(f"== memory: {len(pages)} page links with 2+ clients (N = 2) ==")
     agree_all = True
+    forward_mems = []
     for page in sorted(pages):
         cm = pages[page]
         order = sorted(cm, key=lambda c: cm[c].reads[0])
@@ -95,6 +96,8 @@ def run(captures: Path, out: List[str]) -> bool:
         for label, o in (("forward", order), ("reversed", order[::-1])):
             m = memory.build(page, cm, o, 2, retire=False)      # retirement follows time, not compared
             sums.append(m.summary())
+            if label == "forward":
+                forward_mems.append(m)
             say(f"  {label}: memory {len(m.order)} nodes, pending {len(m.pending)}")
             for r in m.log:
                 say(f"    {r['client']:22s} nodes {r['nodes']:4d}  matched {r['matched']:4d}"
@@ -111,7 +114,9 @@ def run(captures: Path, out: List[str]) -> bool:
         agree = sums[0] == sums[1]
         agree_all = agree_all and agree
         say(f"  orders agree: {'yes' if agree else 'no'}")
+    dps = relevance.datapoints(forward_mems)
     say()
+    say(f"datapoints {len(dps)}, top 10 relevance %: {[dp.relevance_pct for dp in dps[:10]]}")
     say(f"orders agree: {'yes' if agree_all else 'no'}")
     return agree_all
 

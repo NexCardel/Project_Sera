@@ -1088,5 +1088,17 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   base verdict 'same' with fixable/alphanumeric type + unpaired repeats of such (shape, text) (= compare.py's set, no verdict loop); a
   nameless table column falls back to the box rules. Next WP must know: `memory.label` / `status` need `add()`'d views (hand-made nodes
   have none -> label ''); `main_memory()` was only tested on fictional fixtures (real output stays untouched).
+- **W3-2** (2026-10-04, claude-sonnet-5-5): Part J. `core/sdis/relevance.py` (+ pre-dev alias): `datapoints(memories, rejected=(), picked=())`
+  -> `Datapoint(key, label, value_type, relevance_pct, sure_pct, pages[(link, screen, browser, share)], nodes[(memory idx, nid)],
+  slot_type_pct, surprise)`, best first. Counts nodes with status variable / semi-variable / variable_alignment (unrejected); a rejected
+  variable_alignment (memory.rejected) is skipped; share = sure clients / `len(m.clients)` of that PageMemory; joined by (label lower-cased
+  without trailing ':' / spaces, node type = most common last-value type, ties by name so runs agree), no label -> (link, shape). picked x1.5,
+  rejected keys left out (keys are (label, type) or (link, shape); labels are cleaned before compare). N = 2, FULL_SURE_CLIENTS = 5, surprise
+  at >= 90%. memory.main() and sdis_regress.py print "datapoints N, top 10 relevance %" (numbers only). Tests: `tests/test_sdis_relevance.py`
+  (8) + package test; SDIS + align 213 passed. Regression before = after on every earlier line (11 maps, 41 snapshots, 2367 text nodes,
+  0/0/28; owners 4; verdicts, statuses, retired 0, orders agree yes). New line: datapoints 93 (from 141 data nodes joined by label), top 10 =
+  [100, 100, 100, 67, 67, 67, 33, 33, 33, 33] (a label found on all 3 pages with both clients leads; 2 pages 67, 1 page 33).
+  Next WP must know: `datapoints()` needs `add()`'d PageMemory objects (labels come from views); unsure-pairing clients never vote;
+  container moves (Part S) must be passed in as rejected keys of the other containers.
 
 

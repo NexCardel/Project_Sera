@@ -93,12 +93,22 @@ def test_pre_dev_memory_is_the_core_module():
     assert core.sdis.memory.RETIRE_P == 0.01
 
 
+def test_pre_dev_relevance_is_the_core_module():
+    import relevance
+    import core.sdis.relevance
+    assert relevance is core.sdis.relevance
+    assert hasattr(core.sdis.relevance, "FULL_SURE_CLIENTS")
+    assert core.sdis.relevance.FULL_SURE_CLIENTS == 5
+    assert core.sdis.relevance.N == 2
+
+
 def test_core_sdis_imports_without_pyside6(tmp_path):
     env = dict(os.environ, SDIS_DATA_DIR=str(tmp_path))
     code = ("import sys, core.sdis.paths, core.sdis.keys, core.sdis.align, core.sdis.labels, "
-            "core.sdis.identity, core.sdis.history, core.sdis.noise, core.sdis.screens, core.sdis.links, core.sdis.link_map, core.sdis.memory, core.sdis.tables; "
+            "core.sdis.identity, core.sdis.history, core.sdis.noise, core.sdis.screens, core.sdis.links, core.sdis.link_map, core.sdis.memory, core.sdis.tables, core.sdis.relevance; "
             "sys.exit(1 if 'PySide6' in sys.modules else 0)")
     r = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-500:]
+
 
 
