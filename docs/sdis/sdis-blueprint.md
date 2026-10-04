@@ -800,6 +800,7 @@ links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D2
 | D17 | Dataset key | the container's name is the form (unless a field is marked `form`); one field is marked `period`; instance = (client, form, period) (Part S.2) |
 | D18 | Completion → tracker ladder | **superseded the same day:** levels and their ladder mapping are written in the containers file (S.3), not built in. Agreed mapping, for the file: Draft → Draft; In progress → Submitted (Not Verified); Complete → Submitted & Verified; "k of n" kept; overridable per container (S.3) |
 | D21 | Portal registration | the domain is confirmed once on save; it is in scope for SGT-C **and** SDIS; exceptions in the containers file (Part T, S.3) |
+| — | Declining the D21 domain prompt (W1-8) | **Taken** (default, no answer in time): No saves nothing; the edit dialog stays open so the link can be changed |
 | — | Containers and exceptions | one JSON document, `sdis_containers.json`, synced, validated with examples like `sgt_fields.json` (Part S.3) |
 | D19 | Profile builder | **one per registered portal** |
 | D20 | An Others value that changes | the latest wins; the history is kept |
@@ -965,6 +966,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   3 docs) - use cached 30022; (4) Edge title `- Profile 1 - Microsoft​ Edge` is not stripped by `BROWSER_SUFFIX_RE`.
   Decisions recorded: occlusion off in the throwaway browsers (an occluded window gives 0 lines in Chromium and Firefox), 4
   extra Firefox first-run prefs; fixtures via key_probe. Rerunning the tool rewrites firefox-parity.md (keep its top section).
+- **W1-8** (2026-10-04, claude-opus-5-5): Part T. `core/sdis/config.py` (`load(paths, previous)` -> (config, errors): built-in
+  `core/sdis/sdis_containers.json` (new, empty) then the office file (`<Sera data>/sdis_containers.json`, env `SDIS_CONTAINERS_PATH`);
+  a top-level section replaces the built-in one; `check()` covers ONLY `version` (1) and `portal_exceptions` (keys
+  extra_domains/never_register, Part T domain checks); a refused file keeps the previous good config; `current()`/`reload()`/
+  `portal_exceptions()`). `core/vsdc/vsdc_scope.py`: `PUBLIC_SUFFIXES`, `registered_domain`, `domain_for_link`, `never_registered`,
+  `builtin_portal_for_domain`, `set_services_source(fn)` (main.py sets `db.get_services` next to VSDCWorker), `service_domains()`
+  (cached; `reload_extra_domains()` clears it; also called after service add/edit/delete and on sync received); `portal_for_url`
+  checks them after the built-ins and `vsdc_scope.json`. `core/sdis/portals.py` `registered_portals()` / `portal_names()`.
+  Dialog: `ServiceEditDialog._confirm_watched_domain` (D21). Tripwire logs the host's registered domain. Tests:
+  `tests/test_sdis_portals.py` 31; VSDC scope + SGT 636 passed; SDIS + align + Firefox 148 passed. `sgt_replay.py diff`: the
+  same pre-existing "newly written" list W1-6 described (shared baseline; replay sets no services source, so scope is unchanged).
+  Regression before = after: 11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts.
+  Next: W4-6 adds the other sections' checks to `config.check()`; Part S's Others/profile and spec portals must use
+  `portals.registered_portals()`; sgt_specs does not validate portal names (left unchanged). Installer packaging of the new json not checked.
 
 
 

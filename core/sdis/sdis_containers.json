@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "levels": [],
+  "level_map": {},
+  "profile": {},
+  "containers": [],
+  "others": {},
+  "class_exceptions": {},
+  "portal_exceptions": {"extra_domains": {}, "never_register": []}
+}

@@ -1,1 +1,2 @@
 Q,WP,Question,Options,Default,Answer,By,Asked,Answered
+1,W1-8,"Service settings, on save: Sera shows 'will watch gst-like.gov.in for <service>' (D21). If the user answers No, what happens? A = nothing is saved, the edit dialog stays open so the link can be changed. B = the service is saved but its domain is not watched (Sera remembers this choice per service in a synced setting).",A | B,A,A,default (no answer in time),2026-10-04 15:33,2026-10-04 15:41

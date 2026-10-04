@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 15:08)
+# Sera Distill — report (2026-10-04 15:31)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 22 |
+| Not started | 21 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 8 |
+| Done | 9 |
 | Blocked | 0 |
 
-Runs: 8   output tokens: 511288   API-equivalent cost: $4.82
+Runs: 9   output tokens: 566929   API-equivalent cost: $8.31
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -22,7 +22,7 @@ Runs: 8   output tokens: 511288   API-equivalent cost: $4.82
 | W1-4 | Done | gemini_first | 2b2b592 | Part N: smart page link resolution | Part N smart page link resolution; 101 tests pass; regression identical |
 | W1-5 | Done | gemini_first | 1d03032 | Part M: per-browser memory | Part M per-browser memory; 105 tests pass; regression identical |
 | W1-6 | Done | opus | 2643145 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | Firefox URL (Edit or ComboBox), dash-agnostic title suffix, offscreen Documents never read; 12 new tests; regress unchanged |
-| W1-7 | Not started | opus |  | Part R.2: browser parity tool + Firefox fixtures |  |
+| W1-7 | Done | opus | 9f2f751 | Part R.2: browser parity tool + Firefox fixtures | Parity tool + fixtures; client lines identical in 3 browsers; 4 fixes for W2-5 (select options, doubled labels, cached IsOffscreen in read_page_nodes, Edge titl |
 | W1-8 | Not started | opus |  | Part T: portal registration from service-settings login links |  |
 | W1-R | Not started | opus |  | Phase 1 review |  |
 | W2-1 | Not started | gemini_first |  | Part E: look-alikes scored, AMBIGUOUS |  |
@@ -44,6 +44,11 @@ Runs: 8   output tokens: 511288   API-equivalent cost: $4.82
 | W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |
 | W4-7 | Not started | opus |  | Part S.2 in SGT: container instances, completion, Others values |  |
 | W5-R | Not started | opus |  | Final review and merge-readiness note |  |
+
+## Decisions taken for you
+
+- **W1-7** Chrome/Edge started by the parity tool showed no page tree (0 lines); how to get a real read? → Launch Chrome/Edge with --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows and Firefox with widget.windows.window_occlusion_tracking.enabled=false (throwaway profiles only) (Measured: a window opened behind others is occluded; Chromium builds no accessibility tree (even with --force-renderer-accessibility) and Firefox marks the front page offscreen. A user reads a page in front, so this reproduces the real condition.)
+- **W1-7** Where do fixture docs and the background-tab filter come from, and what about W1-6's ineffective node filter? → Fixtures from key_probe.read_keys (control+raw) + key_probe._typed; read_keys filters Documents by the CACHED IsOffscreen. core/ untouched (rule 6): the read_page_nodes filter bug goes to W2-5 (key_probe's node fields are the fixture format; onscreen_only's CurrentIsOffscreen raises on AutomationElementMode_None elements so every Document is kept. W1-7 is not allowed to change SGT capture.)
 
 ## Checks waiting for you
 

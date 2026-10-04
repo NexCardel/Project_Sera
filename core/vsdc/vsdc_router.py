@@ -19,7 +19,7 @@ from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
-    sanitize_page_url,
+    sanitize_page_url, registered_domain,
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
@@ -521,6 +521,8 @@ class VSDCRouter:
         self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
         print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
               f"Add it to vsdc_scope.json if this is the real portal.")
+        # SDIS Part T: the domain a 'watch it too' offer (W4-5) would add as an extra_domains entry.
+        print(f"[VSDC Scope] tripwire registered domain: {registered_domain(host) or host} (portal {cue})")
         self.notify_activity("prompt", "Portal address looks new - VSDC paused",
                              f"{host} shows the {cue} logo but is not on the allowed list")
 

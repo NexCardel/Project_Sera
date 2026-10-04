@@ -628,7 +628,9 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
-            from core.vsdc import VSDCWorker
+            from core.vsdc import VSDCWorker, vsdc_scope
+            # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
+            vsdc_scope.set_services_source(self.db.get_services)
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
@@ -2086,6 +2088,11 @@ class SeraApp:
     def _on_sync_received(self):
         """Called from SyncPeerService background TCP thread when an incoming
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
+        try:
+            from core.vsdc import vsdc_scope
+            vsdc_scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
+        except Exception:
+            pass
         self.sync_bridge.sync_received_signal.emit()
 
     def _on_live_sync_received(self, sender_username: str = "", sender_host: str = ""):
