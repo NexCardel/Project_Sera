@@ -97,7 +97,7 @@ def probably_furniture(mem: Any, nid: int) -> bool:
     lookback_start = max(0, idx - LABEL_LOOKBACK)
     lookback = mem.order[lookback_start:idx]
     for prev_nid in lookback:
-        if mem.confirmed(prev_nid) and mem.verdict(prev_nid) == "same for all clients":
+        if mem.confirmed(prev_nid) and mem.verdict(prev_nid) in ("same for all clients", "variable_alignment"):
             prev_nd = mem.nodes[prev_nid]
             prev_text = prev_nd.get("text") or ""
             if not prev_text:

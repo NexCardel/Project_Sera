@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:01)
+# Sera Distill — report (2026-10-04 16:10)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 18 |
+| Not started | 17 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 12 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 12   output tokens: 723769   API-equivalent cost: $13.10
+Runs: 13   output tokens: 786434   API-equivalent cost: $13.10
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Runs: 12   output tokens: 723769   API-equivalent cost: $13.10
 | W1-8 | Done | opus | 2797f2f | Part T: portal registration from service-settings login links | Part T: service login links register portals in vsdc_scope (D21 confirm on save), sdis_containers.json loader with version+portal_exceptions checks; 31 new test |
 | W1-R | Done | opus | c627eb0 | Phase 1 review | Review: fixed per-browser map overwrite, identity per (link, browser) + screen-safe, fingerprint pair weighting, Part N votes per client; 140 passed; regression |
 | W2-1 | Done | gemini_first | 33f376c | Part E: look-alikes scored, AMBIGUOUS | Part E: look-alikes scored pairing, ambiguous detection under margin 0.5, wired into memory and compare |
-| W2-2 | Not started | gemini_first |  | Part C: noise over time |  |
+| W2-2 | Done | gemini_first | f5e5d3d | Part C: noise over time | Part C: noise over time, changes_with_time, probably_furniture heuristic, wired into memory.py |
 | W2-3 | Not started | gemini_first |  | Part F: the variable_alignment state |  |
 | W2-4 | Not started | gemini_first |  | Part H: memory upkeep (retire) |  |
 | W2-5 | Not started | sonnet |  | Part R.3: Firefox line parity fixes (SGT-C) |  |

@@ -84,9 +84,9 @@ from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, N
                               element_type, is_period, value_type)
 from core.sdis.paths import write_csv                            # noqa: E402
 
-FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
-    "fixed", "semi-variable", "variable", "only latest", "only previous")
-STATUSES = (FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS)
+FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT = (
+    "fixed", "semi-variable", "variable", "only latest", "only previous", "variable_alignment")
+STATUSES = (FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT)
 
 
 def page_key(rec: Dict[str, Any]) -> str:
@@ -225,7 +225,8 @@ def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
     return {i: by_key[e["key"]] for i, e in enumerate(fl) if _compared(e) and e["key"] in by_key}
 
 
-def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
+                 rejected: Optional[set] = None) -> List[Dict[str, Any]]:
     """One row per text element of either side (a read's or a map's flat list), latest first."""
     ambiguous: set = set()
     partner = _partners(fl, fp, ambiguous=ambiguous)
@@ -241,11 +242,27 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
             status[i] = VARIABLE
         else:
             status[i] = FIXED if element_type(e) in FIXABLE_TYPES else SEMI_VARIABLE
-    fixed = {i for i, s in status.items() if s == FIXED}
     comp = {id(fl): composites(fl), id(fp): composites(fp)}
+    var_shapes = {shape(fl[j]) for j, s in status.items() if s == VARIABLE}
+    for i, s in list(status.items()):
+        if s == FIXED:
+            e = fl[i]
+            txt = e["text"]
+            node = e.get("node") or {}
+            ctype = node.get("ctype")
+            if (value_type(txt) != "label"
+                    and not txt.rstrip().endswith(":")
+                    and i not in comp[id(fl)]
+                    and ctype not in CHOICE_CTYPES
+                    and shape(e) in var_shapes):
+                if rejected and any((link, shape(e), txt) in rejected for link in ("", fl[i].get("page", ""))):
+                    continue
+                status[i] = VARIABLE_ALIGNMENT
+    fixed = {i for i, s in status.items() if s == FIXED}
     # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
     # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
-    shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
+    shared = fixed | {i for i, s in status.items() if s == VARIABLE_ALIGNMENT} | {
+        i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
     # An unpaired text (one more list row, card) that repeats a template text of the same shape is
     # template too: a repeated card repeats its labels ("Period", "ARN" in rows 4 and 5).
     template = {(shape(fl[i]), fl[i]["text"]) for i in shared}

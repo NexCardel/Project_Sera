@@ -1016,4 +1016,17 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   (1 unlabelled sentence node reclassified); gstr1 (92/13/18 + 1 changes + 4 wait) and services dashboard (115/39/11) unchanged; orders agree yes on all links.
   Decisions taken: none (D5 taken previously; followed Part C blueprint directly). Next WP must know: `changes_within_client`, `changes_with_time`, and
   `probably_furniture` live in `core.sdis.noise`; `PageMemory.verdict(nid)` returns 'probably furniture' for differing sentence/label nodes lacking preceding labels.
+- **W2-3** (2026-10-04, gemini-3.8-flash-high): built Part F variable_alignment state and rejected hook. Files: `core/sdis/memory.py`
+  (`_differs_shapes` computed once per call and cached; `verdict()` transitions 'same for all clients' to 'variable_alignment' if
+  `labels.value_type(text) != 'label'`, not composite, ctype not in `CHOICE_CTYPES`, and shape in `_differs_shapes`; rejected hook
+  restores 'same for all clients'; `summary()` passes differs_shapes; `build()` accepts `rejected`), `core/sdis/noise.py`
+  (recognizes 'variable_alignment' as preceding label in `probably_furniture`), `tools/pre_dev/class_diff/compare.py`
+  (added `VARIABLE_ALIGNMENT = 'variable_alignment'` to `STATUSES`; `compare_flat` classifies FIXED sharing shape with VARIABLE as
+  VARIABLE_ALIGNMENT and includes in `shared`), `tests/test_sdis_variable_alignment.py` (5 tests), `tests/test_sdis_package.py`.
+  Tests: 169 passed (164 previous + 5 new); `test_class_diff_align.py` passed unchanged. Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links;
+  return dashboard confirmed same 90 → 87, variable_alignment 0 → 3; gstr1 confirmed same 92 → 72, variable_alignment 0 → 20;
+  services dashboard confirmed same 115 → 89, variable_alignment 0 → 26; orders agree yes on all links (reclassified nodes share shapes
+  with client data). Decisions: rejected signature `(link, shape, text)` matches either `self.link` or `self.page`. Next WP must know:
+  `PageMemory.verdict(nid, differs_shapes=..., rejected=...)` returns `'variable_alignment'`; rejections stored in W4-4.
 

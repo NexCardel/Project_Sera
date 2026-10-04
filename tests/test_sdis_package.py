@@ -44,6 +44,8 @@ def test_compare_still_exposes_the_moved_names():
     assert compare.composites is labels.composites
     assert compare.client_ids is identity.client_ids
     assert compare.keys is core.sdis.keys
+    assert compare.VARIABLE_ALIGNMENT == "variable_alignment"
+    assert compare.VARIABLE_ALIGNMENT in compare.STATUSES
 
 
 def test_pre_dev_screens_is_the_core_module():

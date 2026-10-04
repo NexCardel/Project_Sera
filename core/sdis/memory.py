@@ -48,12 +48,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.sdis import link_map
 from core.sdis.align import align, pair_moved, shape
-from core.sdis.keys import page_slug
-from core.sdis.labels import composites
+from core.sdis.keys import CHOICE_CTYPES, page_slug
+from core.sdis.labels import composites, value_type
 from core.sdis.noise import changes_within_client, changes_with_time, probably_furniture
 from core.sdis.paths import data_dir, write_csv
 
 OUT_DIR = data_dir()
+VARIABLE_ALIGNMENT = "variable_alignment"
 
 SAME_MATCH, SAME_NEW = 0.95, 3        # same screen: >= 95% of the map matched, <= 3 new
 RADICAL_MATCH = 0.50                  # radical: under half of the map matched memory
@@ -73,7 +74,8 @@ def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]],
 
 class PageMemory:
     def __init__(self, page: str, n_promote: int, screen: Optional[int] = None,
-                 link: Optional[str] = None, browser: str = "") -> None:
+                 link: Optional[str] = None, browser: str = "",
+                 rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> None:
         self.page, self.n = page, n_promote
         m = _SCREEN_RE.search(page)
         if screen is not None:
@@ -92,18 +94,32 @@ class PageMemory:
             self.browser = ""
         clean = _BROWSER_RE.sub("", clean)
         self.link = link if link is not None else clean
+        self.rejected: set = set(rejected) if rejected else set()
         self.nodes: List[Dict[str, Any]] = []      # every node, memory or pending
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
         self.log: List[Dict[str, Any]] = []
+        self._differs_shapes_cache: Optional[set] = None
 
     def _node(self, e: Dict[str, Any], anchor: Optional[int], status: str) -> int:
+        node = e.get("node") or {}
+        ctype = node.get("ctype") if isinstance(node, dict) else None
+        if ctype is None:
+            ctype = e.get("ctype")
         self.nodes.append({"shape": shape(e), "key": e["key"], "text": e["text"], "type": e["type"],
+                           "ctype": ctype, "node": node,
                            "status": status, "anchor": anchor, "clients": {}, "composite": False})
         return len(self.nodes) - 1
 
     def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool, sure: bool = True) -> None:
         nd = self.nodes[nid]
+        if "ctype" not in nd or nd["ctype"] is None:
+            node = e.get("node") or {}
+            ctype = node.get("ctype") if isinstance(node, dict) else None
+            nd["ctype"] = ctype if ctype is not None else e.get("ctype")
+        if "node" not in nd or not nd["node"]:
+            if e.get("node"):
+                nd["node"] = e["node"]
         if client not in nd["clients"]:
             c = nd["clients"].setdefault(client, {"texts": [], "history": [], "sure": sure})
         else:
@@ -126,7 +142,8 @@ class PageMemory:
 
     def add(self, flat: List[Dict[str, Any]], client: str) -> None:
         """One client's merged map of this link (link_map.LinkMap.to_flat())."""
-        comp =composites(flat)
+        self._differs_shapes_cache = None
+        comp = composites(flat)
         if not self.order:                                         # the first client's map IS the memory
             for i, e in enumerate(flat):
                 nid = self._node(e, None, "memory")
@@ -193,7 +210,26 @@ class PageMemory:
         order) but are no more confirmed than a pending node - so the client order changes nothing."""
         return sum(1 for c in self.nodes[nid]["clients"].values() if c.get("sure", True)) >= self.n
 
-    def verdict(self, nid: int) -> str:
+    def _differs_shapes(self) -> set:
+        """The shapes of confirmed nodes whose verdict is 'differs between clients'."""
+        if self._differs_shapes_cache is not None:
+            return self._differs_shapes_cache
+        shapes: set = set()
+        self._differs_shapes_cache = set()
+        for i, nd in enumerate(self.nodes):
+            if not self.confirmed(i) or nd.get("composite"):
+                continue
+            if changes_within_client(nd) or changes_with_time(nd):
+                continue
+            cl = nd["clients"]
+            last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}
+            if len(last) > 1 and not probably_furniture(self, i):
+                shapes.add(nd["shape"])
+        self._differs_shapes_cache = shapes
+        return shapes
+
+    def verdict(self, nid: int, differs_shapes: Optional[set] = None,
+                rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> str:
         nd = self.nodes[nid]
         cl = nd["clients"]
         if nd["composite"]:
@@ -209,13 +245,29 @@ class PageMemory:
             return "repeat" if nd["shape"] in shapes else "only one client so far"
         last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}
         if len(last) == 1:
+            text = next(iter(last)) if last else (nd.get("text") or "")
+            if (value_type(text) != "label"
+                    and not text.rstrip().endswith(":")
+                    and not nd["composite"]):
+                ctype = nd.get("ctype")
+                if ctype not in CHOICE_CTYPES:
+                    if differs_shapes is None:
+                        differs_shapes = self._differs_shapes()
+                    if nd["shape"] in differs_shapes:
+                        rej = self.rejected if rejected is None else set(rejected)
+                        sig = (self.link, nd["shape"], text)
+                        sig_page = (self.page, nd["shape"], text)
+                        if sig not in rej and sig_page not in rej:
+                            return "variable_alignment"
             return "same for all clients"
         if probably_furniture(self, nid):
             return "probably furniture"
         return "differs between clients"
 
     def summary(self) -> Counter:
-        return Counter(("confirmed" if self.confirmed(i) else "waiting", self.verdict(i))
+        differs = self._differs_shapes()
+        return Counter(("confirmed" if self.confirmed(i) else "waiting",
+                        self.verdict(i, differs_shapes=differs))
                        for i, nd in enumerate(self.nodes) if nd["text"])
 
 
@@ -319,7 +371,8 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
 
 def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int,
           screen: Optional[int] = None, link: Optional[str] = None,
-          browser: Optional[str] = None) -> PageMemory:
+          browser: Optional[str] = None,
+          rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> PageMemory:
     first_lm = next(iter(maps.values())) if maps else None
     if screen is None and first_lm is not None:
         screen = getattr(first_lm, "screen", None)
@@ -327,7 +380,7 @@ def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int
         link = getattr(first_lm, "link", None)
     if browser is None and first_lm is not None:
         browser = getattr(first_lm, "browser", "")
-    mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "")
+    mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "", rejected=rejected)
     for client in order:
         if client in maps:
             mem.add(maps[client].to_flat(), client)
@@ -363,7 +416,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             if label == "forward":
                 for (st, v), k in sorted(sums[0].items()):
                     print(f"      {st:8s} {v:26s} {k:5d} text nodes")
-                rows = [{"status": "confirmed" if m.confirmed(i) else "waiting", "verdict": m.verdict(i), "clients": len(nd["clients"]),
+                differs = m._differs_shapes()
+                rows = [{"status": "confirmed" if m.confirmed(i) else "waiting",
+                         "verdict": m.verdict(i, differs_shapes=differs), "clients": len(nd["clients"]),
                          "type": nd["type"], "shape": nd["shape"],
                          "texts": " || ".join(t for c in nd["clients"].values() for t in c["texts"])}
                         for i, nd in enumerate(m.nodes) if nd["text"]]
