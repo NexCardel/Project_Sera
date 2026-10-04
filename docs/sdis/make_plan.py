@@ -57,10 +57,11 @@ WPS = [
        " line each) and core/sdis/paths.py with data_dir(): Path(os.environ['SDIS_DATA_DIR']) if set, else"
        " Path.home() / SERA_DATA_DIR_NAME / 'sdis' (import SERA_DATA_DIR_NAME from core.vsdc.vsdc_alerts,"
        " as core/sgt/sgt_corpus.py does), and write_csv() moved unchanged from tools/pre_dev/class_diff/"
-       "compare.py. STEP 2: `git mv` tools/pre_dev/class_diff/keys.py, align.py, link_map.py, memory.py"
+       "compare.py. STEP 2: `git mv` tools/pre_dev/class_diff/keys.py, align.py, link_map.py, memory.py, tables.py"
        " into core/sdis/. Change their imports to absolute core.sdis ones (from core.sdis.align import"
        " align, pair_moved, shape ...). keys.LEARNED_FILE becomes data_dir() / 'learned_state.json';"
-       " link_map.OUT_DIR becomes data_dir(). memory.py: `from compare import ...` is not allowed in core;"
+       " link_map.OUT_DIR and tables.OUT_DIR become data_dir(); tables._is_period imports is_period from"
+       " core.sdis.labels (step 3) instead of compare. memory.py: `from compare import ...` is not allowed in core;"
        " see step 3. STEP 3: create core/sdis/labels.py and MOVE into it from compare.py, unchanged:"
        " FIXABLE_TYPES, SENTENCE_WORDS, the period regexes (_MONTH, _YEAR_PREFIX, _PERIOD_RES), is_period,"
        " value_type, element_type, _end, composites, CT_HYPERLINK/CT_IMAGE/CT_TABLE, NEVER_LABEL_CTYPES."
@@ -69,20 +70,22 @@ WPS = [
        " compare.compare_flat and every name the tests use still exist on the compare module. memory.py"
        " imports composites from core.sdis.labels, client_ids from core.sdis.identity, write_csv from"
        " core.sdis.paths. STEP 4: recreate tools/pre_dev/class_diff/keys.py, align.py, link_map.py,"
-       " memory.py as ALIASES, each exactly: a docstring naming the core module; `import os, sys`;"
+       " memory.py, tables.py as ALIASES, each exactly: a docstring naming the core module; `import os, sys`;"
        " `from pathlib import Path`; _HERE = Path(__file__).resolve().parent;"
        " os.environ.setdefault('SDIS_DATA_DIR', str(_HERE / 'output')); put _HERE.parents[2] on sys.path;"
-       " `import core.sdis.<name> as _m`; then for link_map.py and memory.py (they have main()):"
+       " `import core.sdis.<name> as _m`; then for link_map.py, memory.py and tables.py (they have main()):"
        " `if __name__ == '__main__': raise SystemExit(_m.main())` `else: sys.modules[__name__] = _m`;"
        " for keys.py and align.py just `sys.modules[__name__] = _m`. WHY: tests and compare.py set"
        " keys.VIEW and compare.ALIGN on the module; a star-import copy would silently not reach"
        " flatten(). STEP 5: tests/test_sdis_package.py: with tools/pre_dev/class_diff on sys.path,"
        " `import keys` is core.sdis.keys; setting keys.VIEW = 'sgt' changes core.sdis.keys.VIEW; core.sdis"
-       " imports without PySide6. STEP 6: switch tools/sdis_regress.py to import core.sdis directly (set"
+       " imports without PySide6; `import tables` is core.sdis.tables. tests/test_sdis_tables.py and"
+       " tests/class_diff_tables/ stay as they are and must pass unchanged (capture_fixtures.py keeps"
+       " importing the pre-dev key_probe, which does not move). STEP 6: switch tools/sdis_regress.py to import core.sdis directly (set"
        " SDIS_DATA_DIR first). The regression printout must be IDENTICAL to"
        " docs/sdis/sdis-regress-baseline.txt except the timing line; diff them and say so in the note."
        f" Prove the pre-dev scripts still import: `{PY} tools/pre_dev/class_diff/compare.py --help` and"
-       f" `{PY} tools/pre_dev/class_diff/memory.py --help`."),
+       f" `{PY} tools/pre_dev/class_diff/memory.py --help` and `{PY} tools/pre_dev/class_diff/tables.py --help`."),
 
     wp("W1-1", 1, "sonnet", "S", ["W0-2"], "Part B: value history with times",
        "Blueprint Part B. In core/sdis/link_map.py LinkMap.add: each entry gets 'history', a list of"
@@ -381,7 +384,11 @@ WPS = [
        " tests.", kind="review"),
 
     wp("W3-1", 3, "sonnet", "L", ["W2-R"], "Part I: statuses + labels from memory",
-       "Blueprint Part I. STEP 1: move the label logic from tools/pre_dev/class_diff/compare.py into"
+       "Blueprint Part I. For a node inside a real table (core.sdis.tables finds it: a cell's node index),"
+       " its column label is tables.column_names(tb)[col] and, in a matrix (header_cols 1), its row label"
+       " is that row's first cell; only when the node is in no table do the screen-box rules below apply."
+       " Test it on tests/class_diff_tables fixtures (every body cell of t_ledger gets 'Tax / IGST'-style"
+       " labels, t_matrix cells get both). STEP 1: move the label logic from tools/pre_dev/class_diff/compare.py into"
        " core/sdis/labels.py unchanged: _container, _children, _first_label, _same_column, _table_label,"
        " LABEL_LOOKBACK, _label (compare imports them back; tests/test_class_diff_align.py must pass"
        " unchanged). STEP 2: PageMemory keeps, per client, its last view: (flat, nid_of_idx) set in add()"

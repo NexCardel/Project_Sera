@@ -30,7 +30,8 @@ confidence, and there is no truth set to score it against: the user is the final
 | pair | `align.py` | anchors (same shape + same text) in page order, shape between anchors, `pair_moved` for moved blocks |
 | memory | `memory.py` | the user's page-memory method: every client's map → memory + flat pending pool, confirmed by N clients, a verdict per node |
 | compare | `compare.py` | latest client vs previous client: statuses, labels, checks (CSV) |
-| tests | `tests/test_class_diff_align.py`, `tests/test_sdis_memory.py` | 14 tests (alignment labels; R8) |
+| tables | `tables.py` | every table on a read as a **grid**: texts, row/column spans, header rows, a matrix's header column, caption (or the heading above), nested tables linked to their cell; re-rendered as a text grid and an HTML page (`--counts` = shapes only). The raw view has no row/column numbers or header flag in any browser, so the grid is rebuilt from the cells' boxes (added 2026-10-04) |
+| tests | `tests/test_class_diff_align.py`, `tests/test_sdis_memory.py`, `tests/test_sdis_tables.py` | 14 tests (alignment labels; R8) + 49 table tests: a fictional page of hard tables read live in Edge, Chrome and Firefox (`tests/class_diff_tables/`, `capture_fixtures.py`) must come back as the page defines them, and its HTML re-render must parse back the same |
 
 ---
 
@@ -147,6 +148,7 @@ Not problems for SDIS any more: P19 (SDIS learns offline on the admin PC, rule 7
    | `core/sdis/align.py` | from pre-dev `align.py` |
    | `core/sdis/link_map.py` | from pre-dev `link_map.py` (the capture-file readers stay in pre-dev) |
    | `core/sdis/memory.py` | from pre-dev `memory.py` (engine part; its `main()` stays a pre-dev front end) |
+   | `core/sdis/tables.py` | from pre-dev `tables.py` (its output folder comes from `paths`; `is_period` from `core/sdis/labels.py`) |
    | later | `history` (B), `noise` (C), `identity` (D), `screens` (G), `links` (N), `labels` (I), `relevance` (J), `store` + `mine` (O), `recorder` (K), `transfer` (P), `register` (Q) |
 
    The pre-dev files `keys.py`, `align.py`, `link_map.py` and `memory.py` become **module aliases** of the
@@ -285,6 +287,11 @@ variable, `variable_alignment`, ambiguous, furniture, waiting) and labels (table
 fixed text in the box, composites never labels, a real letter required, all from the pre-dev rules)
 are computed once per node from memory, over every client, not one pair. It uses client grouping,
 `pair_moved` and screens. The CSV stays as a debugging view.
+
+**Labels inside real tables come from `core/sdis/tables.py`:** a cell's column label is its
+column's header text top-down ("Tax / IGST" under a two-level header), and in a matrix (empty corner,
+labels down the first column) its row label is that row's first cell. The screen-box rules apply only
+to values outside any table (and to tables a page builds without table markup).
 
 ## Part J — Relevance ranking
 
