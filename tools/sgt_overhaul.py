@@ -304,6 +304,7 @@ class Tracker:
         out = self.docs / f"{PREFIX}-agents.xlsx"
         if out.with_name("~$" + out.name).exists():
             raise Refused(f"{out.name} is open in Excel - close it and run again")
+        self.save()                             # the Status sheet lists every WP of the current plan
         wb = Workbook()
         ws = wb.active
         ws.title = "How to use"
