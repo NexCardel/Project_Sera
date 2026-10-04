@@ -863,4 +863,17 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
 
 ## 12. Hand-off notes
 
-(written by each WP)
+- **W0-1** (2026-10-04, claude-sonnet-5-5): added `tools/sdis_regress.py` (counts only; `--captures DIR`, default
+  `../APP/tools/pre_dev/class_diff/output`, "no captures" + exit 0 if missing; `--save PATH`; sets `SDIS_DATA_DIR` and
+  `link_map.OUT_DIR` before use; `main(argv)` returns 0), `tests/test_sdis_regress.py` (2 tests: fictional clients A/B →
+  "orders agree: yes", "double count 0"; missing folder → "no captures"), and `docs/sdis/sdis-regress-baseline.txt`.
+  Tests: step 1 gave 14 passed; with the new tests 16 passed. No engine file changed, so regression before = after.
+  Regression (11 maps, 41 snapshots, 2367 text nodes): double count 0, lost 0 everywhere; MULTI 28 in total (returns
+  gstr1: 13 per session; local fictional gstr1: 1). Memory, confirmed same/differs/composite: services dashboard
+  115/39/11; returns dashboard 90/6/7 + 5 waiting (2 only-one-client, 3 repeat); GSTR-1 92/13/18 + 1 "changes within
+  one client" + 4 waiting; fictional GSTR-1 48/8 + 1 changes-within-one-client; fictional GSTR-3B 55/8; orders agree yes
+  on all 5 links. All as expected. Run time ~2-3 s.
+  Next WP must know: double count = sum over (shape, text) of merged count minus the most any one snapshot showed; LOST
+  compares snapshot texts with the entries' `values` (capped at MAX_VALUES 5). The runner prints session names (capture
+  times / "client n") and page links only. When W0-2 moves the engine to `core/sdis/`, the runner's `import link_map`
+  etc. go through the pre-dev aliases; keep `link_map.OUT_DIR` assignment working through the alias.
