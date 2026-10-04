@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:32)
+# Sera Distill — report (2026-10-04 16:39)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 15   output tokens: 932896   API-equivalent cost: $13.10
+Runs: 16   output tokens: 963978   API-equivalent cost: $15.42
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 15   output tokens: 932896   API-equivalent cost: $13.10
 | W2-2 | Done | gemini_first | f5e5d3d | Part C: noise over time | Part C: noise over time, changes_with_time, probably_furniture heuristic, wired into memory.py |
 | W2-3 | Done | gemini_first | c9d12c0 | Part F: the variable_alignment state | Part F: variable_alignment state, rejected hook, compare_flat shared labels |
 | W2-4 | Done | gemini_first | ede141d | Part H: memory upkeep (retire) | Part H: memory upkeep (retire), RETIRE_P = 0.01, client history and misses |
-| W2-5 | Not started | sonnet |  | Part R.3: Firefox line parity fixes (SGT-C) |  |
+| W2-5 | Done | sonnet | b551792 | Part R.3: Firefox line parity fixes (SGT-C) | Firefox lines now identical to Chrome/Edge on the fictional pages (dropdown options, wrapped labels, cached offscreen, Edge ZWSP title); regression unchanged |
 | W2-R | Not started | opus |  | Phase 2 review |  |
 | W3-1 | Not started | sonnet |  | Part I: statuses + labels from memory |  |
 | W3-2 | Not started | gemini_first |  | Part J: relevance by occurrences + slots |  |
@@ -55,6 +55,8 @@ Runs: 15   output tokens: 932896   API-equivalent cost: $13.10
 - **W1-R** Part D: rarity weight of a value both compared captures show → count the compared pair as one capture: 1 / (rarity - 1) (an equal value is always shown by both, an unequal one by one; literal 1/rarity halved agreement, so one changed value among 10 rare ones gave 0.82 (undecided) instead of 0.9 (same); blueprint says an ARN weighs 1)
 - **W1-R** Part D check: the two fictional local-page sessions should be one client → keep them undecided (no vote) (counts on today's captures: per page 3 codes, 2 periods and 1 alphanumeric value differ (sim 0.70, was 0.56): not one client; the blueprint's expectation was wrong, undecided is the honest result (rule 6))
 - **W2-3** How does memory match rejected signatures? → (link, shape, text) matching either self.link or self.page (Allows callers to pass either resolved base link or page string cleanly)
+- **W2-5** Edge window title with profile name: strip only the zero-width space, or also the profile segment? → Allow zero-width spaces inside 'Microsoft Edge' in BROWSER_SUFFIX_RE only (Chrome/Edge titles must not change; the leftover '- Profile 1' is stable and only used when the address bar is unreadable)
+- **W2-5** How to key Firefox-only line rules (dropdown options, doubled label)? → On the Document's framework id 'Gecko' (live CurrentFrameworkId / cached 30024); node trees carry gecko:true on the document's first node (Blueprint rule: browser-dependent rules key on framework id; Chrome/Edge lines and nodes stay byte-identical)
 
 ## Checks waiting for you
 

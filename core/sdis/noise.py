@@ -22,12 +22,14 @@ def changes_within_client(node: Dict[str, Any]) -> bool:
 
 
 def changes_with_time(node: Dict[str, Any]) -> bool:
-    """True when there are 2+ days, every day's set of texts from every client's
-    history has exactly one text, and the texts differ between days.
+    """True when every day's set of texts from every client's history has exactly one text,
+    and the texts differ between days WITNESSED by 2+ clients. A day only one client was seen
+    on proves nothing: clients captured on different days with their own data are not noise.
 
     For each client and each day seen, takes the LAST text that client had on that day.
     """
     day_texts: Dict[str, Set[str]] = {}
+    day_clients: Dict[str, int] = {}
     for c in node.get("clients", {}).values():
         hist = c.get("history") or []
         # Sort by timestamp to ensure chronological order for the client
@@ -49,60 +51,38 @@ def changes_with_time(node: Dict[str, Any]) -> bool:
                 client_days[day] = str(text) if text is not None else ""
         for day, text in client_days.items():
             day_texts.setdefault(day, set()).add(text)
+            day_clients[day] = day_clients.get(day, 0) + 1
 
-    if len(day_texts) < 2:
-        return False
     if any(len(s) != 1 for s in day_texts.values()):
         return False
-    all_texts = {next(iter(s)) for s in day_texts.values()}
-    return len(all_texts) > 1
+    witnessed = {next(iter(s)) for d, s in day_texts.items() if day_clients[d] >= 2}
+    return len(witnessed) > 1
 
 
 def probably_furniture(mem: Any, nid: int) -> bool:
-    """True if the node's verdict is 'differs between clients', labels.value_type(text)
-    is 'sentence' or 'label', and it has NO label.
+    """True if the node's base verdict is 'differs between clients', EVERY voting client's
+    text is labels.value_type 'sentence' or 'label' (so the client order cannot change it),
+    and it has NO label.
 
     Until W3-1 brings real labels, 'no label' = none of the 6 nodes before it in
-    mem.order is confirmed 'same for all clients' with a letter in its text.
+    mem.order is 'same for all clients' (base verdict, so variable_alignment counts too)
+    with a letter in its text.
     """
-    nd = mem.nodes[nid]
-    cl = nd.get("clients", {})
-
-    # The node's verdict is 'differs between clients'
-    if nd.get("composite"):
+    if mem.base_verdict(nid) != "differs between clients":
         return False
-    if changes_within_client(nd):
-        return False
-    if changes_with_time(nd):
-        return False
-    if not mem.confirmed(nid):
-        return False
-    last = {c["texts"][-1] if c.get("texts") else "" for c in cl.values()}
-    if len(last) <= 1:
+    cl = mem.nodes[nid].get("clients", {})
+    texts = [c["texts"][-1] for c in cl.values() if c.get("sure", True) and c.get("texts")]
+    if not texts or any(labels.value_type(t) not in ("sentence", "label") for t in texts):
         return False
 
-    # labels.value_type(text) is 'sentence' or 'label'
-    text = nd.get("text") or ""
-    if not text:
-        text = next((c["texts"][-1] for c in cl.values() if c.get("texts")), "")
-    vtype = labels.value_type(text)
-    if vtype not in ("sentence", "label"):
-        return False
-
-    # Check for preceding label:
     # TODO(W3-1): replace heuristic lookback with real labels when W3-1 brings them.
     if nid not in mem.order:
         return True
     idx = mem.order.index(nid)
-    lookback_start = max(0, idx - LABEL_LOOKBACK)
-    lookback = mem.order[lookback_start:idx]
-    for prev_nid in lookback:
-        if mem.confirmed(prev_nid) and mem.verdict(prev_nid) in ("same for all clients", "variable_alignment"):
-            prev_nd = mem.nodes[prev_nid]
-            prev_text = prev_nd.get("text") or ""
-            if not prev_text:
-                prev_text = next((c["texts"][-1] for c in prev_nd.get("clients", {}).values() if c.get("texts")), "")
-            if any(ch.isalpha() for ch in prev_text):
+    for prev_nid in mem.order[max(0, idx - LABEL_LOOKBACK):idx]:
+        if mem.base_verdict(prev_nid) == "same for all clients":
+            prev_texts = [c["texts"][-1] for c in mem.nodes[prev_nid]["clients"].values()
+                          if c.get("sure", True) and c.get("texts")]
+            if any(ch.isalpha() for t in prev_texts for ch in t):
                 return False
-
     return True

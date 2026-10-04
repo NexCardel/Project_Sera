@@ -25,15 +25,19 @@ one map too.
 
 Each client's map is sorted by its counts: SAME SCREEN (nearly everything matched, almost nothing
 new), CHANGED (some new), RADICAL (most of it matched nothing - another screen at the link).
-Each node gets a verdict from the counts only:
+Each node gets a verdict from the counts only (PageMemory.verdict; the first that applies wins):
+    retired                     a confirmed node that stopped appearing (Part H)
     composite                   its text is its children's texts joined (a tile title + its count)
     changes within one client   more than one value for the same client (noise - notices, dates)
     changes with time           differed between days, agreed within each day (noise - dates, notices)
+    ambiguous                   not confirmed, and a client paired it only as an unsure look-alike (Part E)
     repeat                      pending, shaped like a memory node (one more row)
     only one client so far      waiting for more clients
+    variable_alignment          same for all clients, but its shape holds data elsewhere (Part F)
     same for all clients        template
     probably furniture          differs between clients, sentence/label shaped, no label beside it
     differs between clients     data
+Only clients whose pairing was sure vote (Part E): an unsure look-alike's texts are never counted.
 
     python tools/pre_dev/class_diff/memory.py            # N = 2; both client orders
 
@@ -67,6 +71,16 @@ def _always(e: Dict[str, Any]) -> bool:
     return True
 
 
+def voters(nd: Dict[str, Any]) -> Dict[str, Any]:
+    """The node with only the clients whose pairing was sure: an unsure look-alike has no vote."""
+    cl = nd.get("clients", {})
+    return dict(nd, clients={c: v for c, v in cl.items() if v.get("sure", True)})
+
+
+def _last_texts(nd: Dict[str, Any]) -> set:
+    return {c["texts"][-1] if c.get("texts") else "" for c in nd.get("clients", {}).values()}
+
+
 def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]],
            ambiguous: Optional[set] = None) -> Dict[int, int]:
     """{index in flat: index in other}: alignment, then moved blocks."""
@@ -76,8 +90,8 @@ def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]],
 class PageMemory:
     def __init__(self, page: str, n_promote: int, screen: Optional[int] = None,
                  link: Optional[str] = None, browser: str = "",
-                 rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> None:
-        self.page, self.n = page, n_promote
+                 rejected: Optional[Iterable[Tuple[str, str, str]]] = None, retire: bool = True) -> None:
+        self.page, self.n, self.retire = page, n_promote, retire
         m = _SCREEN_RE.search(page)
         if screen is not None:
             self.screen = screen
@@ -152,7 +166,9 @@ class PageMemory:
         nd["composite"] = nd["composite"] or composite
 
     def _view(self, ids: List[int]) -> List[Dict[str, Any]]:
-        return [{"key": self.nodes[n]["key"], "text": self.nodes[n]["text"]} for n in ids]
+        # node carries the rect, so look-alikes score their screen column against memory too (Part E)
+        return [{"key": self.nodes[n]["key"], "text": self.nodes[n]["text"], "node": self.nodes[n].get("node") or {}}
+                for n in ids]
 
     def add(self, flat: List[Dict[str, Any]], client: str) -> None:
         """One client's merged map of this link (link_map.LinkMap.to_flat())."""
@@ -208,7 +224,8 @@ class PageMemory:
         self.log.append({"client": client, "nodes": len(flat), "memory": n_mem, "matched": len(pairs),
                          "pending_hit": hit, "new": new, "kind": kind})
         self._promote()
-        self._retire()
+        if self.retire:
+            self._retire()
 
     def _promote(self) -> None:
         """4: pending nodes seen by N clients join the memory right after their anchor (after any
@@ -226,7 +243,8 @@ class PageMemory:
             self.order.insert(pos, p)
 
     def _retire(self) -> None:
-        """Retire confirmed memory nodes that stopped appearing, by statistics (Part H)."""
+        """Retire confirmed memory nodes that stopped appearing, by statistics (Part H). 'In a row'
+        follows the order clients were added (time), so retirement is left out of the order check."""
         n_clients = len(self.clients)
         retired_any = False
         for nid in list(self.order):
@@ -255,60 +273,60 @@ class PageMemory:
         return sum(1 for c in self.nodes[nid]["clients"].values() if c.get("sure", True)) >= self.n
 
     def _differs_shapes(self) -> set:
-        """The shapes of confirmed nodes whose verdict is 'differs between clients'."""
-        if self._differs_shapes_cache is not None:
-            return self._differs_shapes_cache
-        shapes: set = set()
-        self._differs_shapes_cache = set()
-        for i, nd in enumerate(self.nodes):
-            if not self.confirmed(i) or nd.get("composite") or nd.get("status") == "retired":
-                continue
-            if changes_within_client(nd) or changes_with_time(nd):
-                continue
-            cl = nd["clients"]
-            last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}
-            if len(last) > 1 and not probably_furniture(self, i):
-                shapes.add(nd["shape"])
-        self._differs_shapes_cache = shapes
-        return shapes
+        """The shapes of nodes whose verdict is 'differs between clients' (data)."""
+        if self._differs_shapes_cache is None:
+            self._differs_shapes_cache = {nd["shape"] for i, nd in enumerate(self.nodes)
+                                          if self.base_verdict(i) == "differs between clients"
+                                          and not probably_furniture(self, i)}
+        return self._differs_shapes_cache
 
-    def verdict(self, nid: int, differs_shapes: Optional[set] = None,
-                rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> str:
+    def base_verdict(self, nid: int) -> str:
+        """verdict() without its two refinements (variable_alignment, probably furniture), which
+        look at other nodes' base verdicts - so nothing here depends on another node's verdict."""
         nd = self.nodes[nid]
         if nd.get("status") == "retired" or nd.get("verdict") == "retired":
             return "retired"
-        cl = nd["clients"]
         if nd["composite"]:
             return "composite"
-        if changes_within_client(nd):
+        votes = voters(nd)
+        if changes_within_client(votes):
             return "changes within one client"
-        if changes_with_time(nd):
+        if changes_with_time(votes):
             return "changes with time"
         if not self.confirmed(nid):
-            if any(not c.get("sure", True) for c in cl.values()):
+            if any(not c.get("sure", True) for c in nd["clients"].values()):
                 return "ambiguous"
-            shapes = {self.nodes[m]["shape"] for m in range(len(self.nodes)) if self.confirmed(m)}
+            shapes = {m["shape"] for i, m in enumerate(self.nodes)
+                      if m.get("status") != "retired" and self.confirmed(i)}
             return "repeat" if nd["shape"] in shapes else "only one client so far"
-        last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}
-        if len(last) == 1:
-            text = next(iter(last)) if last else (nd.get("text") or "")
-            if (value_type(text) != "label"
-                    and not text.rstrip().endswith(":")
-                    and not nd["composite"]):
-                ctype = nd.get("ctype")
-                if ctype not in CHOICE_CTYPES:
-                    if differs_shapes is None:
-                        differs_shapes = self._differs_shapes()
-                    if nd["shape"] in differs_shapes:
-                        rej = self.rejected if rejected is None else set(rejected)
-                        sig = (self.link, nd["shape"], text)
-                        sig_page = (self.page, nd["shape"], text)
-                        if sig not in rej and sig_page not in rej:
-                            return "variable_alignment"
-            return "same for all clients"
-        if probably_furniture(self, nid):
+        return "same for all clients" if len(_last_texts(votes)) == 1 else "differs between clients"
+
+    def verdict(self, nid: int, differs_shapes: Optional[set] = None,
+                rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> str:
+        """The node's verdict, from counts only. The first rule that applies wins:
+          1. retired                     (Part H)
+          2. composite
+          3. noise: changes within one client, then changes with time (Part C rules 1-2)
+          4. ambiguous: not confirmed, and some client paired it only as an unsure look-alike (Part E)
+          5. waiting: repeat, else only one client so far
+          6. variable_alignment: one shared text, not label/control/composite, whose shape is data
+             elsewhere on the page (Part F) - unless rejected
+          7. probably furniture: differs, every client's text sentence/label shaped, no label (Part C rule 3)
+          8. same for all clients / differs between clients
+        Only sure clients vote. The client order changes none of 2-8 (retirement follows time)."""
+        base = self.base_verdict(nid)
+        nd = self.nodes[nid]
+        if base == "same for all clients":
+            text = next(iter(_last_texts(voters(nd))))
+            if (value_type(text) != "label" and not text.rstrip().endswith(":")
+                    and nd.get("ctype") not in CHOICE_CTYPES
+                    and nd["shape"] in (self._differs_shapes() if differs_shapes is None else differs_shapes)):
+                rej = self.rejected if rejected is None else set(rejected)
+                if (self.link, nd["shape"], text) not in rej and (self.page, nd["shape"], text) not in rej:
+                    return VARIABLE_ALIGNMENT
+        elif base == "differs between clients" and probably_furniture(self, nid):
             return "probably furniture"
-        return "differs between clients"
+        return base
 
     def summary(self) -> Counter:
         differs = self._differs_shapes()
@@ -418,7 +436,7 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
 def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int,
           screen: Optional[int] = None, link: Optional[str] = None,
           browser: Optional[str] = None,
-          rejected: Optional[Iterable[Tuple[str, str, str]]] = None) -> PageMemory:
+          rejected: Optional[Iterable[Tuple[str, str, str]]] = None, retire: bool = True) -> PageMemory:
     first_lm = next(iter(maps.values())) if maps else None
     if screen is None and first_lm is not None:
         screen = getattr(first_lm, "screen", None)
@@ -426,7 +444,7 @@ def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int
         link = getattr(first_lm, "link", None)
     if browser is None and first_lm is not None:
         browser = getattr(first_lm, "browser", "")
-    mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "", rejected=rejected)
+    mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "", rejected=rejected, retire=retire)
     for client in order:
         if client in maps:
             mem.add(maps[client].to_flat(), client)
@@ -452,7 +470,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sums = []
         for label, o in (("forward", order), ("reversed", order[::-1])):
             m = build(page, cm, o, args.n)
-            sums.append(m.summary())
+            sums.append(build(page, cm, o, args.n, retire=False).summary())   # retirement follows time
             print(f"  {label}:")
             for r in m.log:
                 print(f"    {r['client'][-26:]:26s} nodes {r['nodes']:4d}  memory {r['memory']:4d}  matched {r['matched']:4d}"
@@ -460,7 +478,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                       f"  new {r['new']:3d}  {r['kind']}")
             print(f"    memory {len(m.order)} nodes, pending {len(m.pending)}")
             if label == "forward":
-                for (st, v), k in sorted(sums[0].items()):
+                for (st, v), k in sorted(m.summary().items()):
                     print(f"      {st:8s} {v:26s} {k:5d} text nodes")
                 differs = m._differs_shapes()
                 rows = [{"status": nd.get("status") if nd.get("status") == "retired" else ("confirmed" if m.confirmed(i) else "waiting"),

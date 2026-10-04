@@ -175,7 +175,8 @@ Decided per node, from counts only. The first rule that applies wins:
 
 1. **Changes within one client**: one client, several texts (a rotating notice). Already built.
 2. **Changes with time**: on every day it was seen, all clients seen that day agree, **and** it
-   changed between days ("Site last updated on …"). This is furniture, not data.
+   changed between days ("Site last updated on …"). This is furniture, not data. Only days seen by
+   2+ clients show the change (W2-R): one client per day proves nothing.
 3. **Probably furniture** (low %): differs between clients, but is sentence- or label-shaped and has
    **no label** beside it. An address with a label stays data.
 4. Otherwise the verdicts of `memory.py` stand.
@@ -1055,5 +1056,19 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   list as W1-6/W1-8 (shared baseline; replay never touches these files). Regression before = after (11 maps, 41 snapshots, 2367
   text nodes, 0/0/28; owners 4; memory 3 links, same counts); nothing changed. Decisions recorded: key on framework id; Edge title.
   Next: W3-4 may want to drop `ctype` ListItems under a ComboBox from SDIS's Firefox node matching (nodes still hold them).
+- **W2-R** (2026-10-04, claude-opus-5-5): Phase 2 review. `memory.PageMemory.verdict` is now the one verdict function, its order in
+  its docstring (retired, composite, noise, ambiguous, waiting, variable_alignment, probably furniture, same/differs); new
+  `base_verdict` (no refinements) feeds `_differs_shapes` and `noise.probably_furniture`, so verdicts no longer recurse through a
+  half-filled cache. Fixed: (1) an unsure look-alike's texts still voted in confirmed nodes (`memory.voters`: only sure clients
+  count, Part E); (2) memory's `_view` dropped rects, so look-alikes vs memory never scored the screen column; (3) probably
+  furniture typed only the FIRST client's text (order-dependent): now every voting client's text must be sentence/label;
+  (4) `changes_with_time` accepted days seen by one client (clients captured on different days became noise): only days with
+  2+ clients count; (5) a retired node's shape still made pending nodes 'repeat'; (6) retirement follows time, so
+  `PageMemory/build(retire=False)` and the runner's / memory.py's order check build both orders without it; the runner prints
+  `retired (time order)`. D11 thresholds checked as module constants: `screens.SCREEN_MIN`, `memory.RETIRE_P`,
+  `identity.SAME/DIFF/MIN_VALUES`, `align.AMBIGUOUS_MARGIN` (unchanged). Tests: `tests/test_sdis_verdict.py` (6); SDIS + align 183
+  passed 1 skipped. Regression before = after (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all
+  verdict counts identical, retired 0; orders agree yes). Decisions recorded: the two above. Next: W3-1 replaces
+  `noise.probably_furniture`'s 6-node lookback with real labels; use `base_verdict` for any rule that looks at neighbours.
 
 

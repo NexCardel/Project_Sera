@@ -93,7 +93,7 @@ def run(captures: Path, out: List[str]) -> bool:
         say(f"Page: {page}{b_str} | clients {len(cm)}")
         sums = []
         for label, o in (("forward", order), ("reversed", order[::-1])):
-            m = memory.build(page, cm, o, 2)
+            m = memory.build(page, cm, o, 2, retire=False)      # retirement follows time, not compared
             sums.append(m.summary())
             say(f"  {label}: memory {len(m.order)} nodes, pending {len(m.pending)}")
             for r in m.log:
@@ -101,6 +101,8 @@ def run(captures: Path, out: List[str]) -> bool:
                     f" ({100 * r['matched'] / max(1, r['nodes']):5.1f}%)  {r['kind']}")
             for (st, v), k in sorted(sums[-1].items()):
                 say(f"      {st:9s} {v:26s} {k:5d}")
+        retired = sum(k for (st, _v), k in memory.build(page, cm, order, 2).summary().items() if st == "retired")
+        say(f"  retired (time order): {retired}")
         agree = sums[0] == sums[1]
         agree_all = agree_all and agree
         say(f"  orders agree: {'yes' if agree else 'no'}")
