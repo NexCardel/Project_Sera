@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 17:49)
+# Sera Distill — report (2026-10-04 18:03)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 9 |
+| Not started | 8 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 21 |
+| Done | 22 |
 | Blocked | 0 |
 
-Runs: 22   output tokens: 1150273   API-equivalent cost: $24.01
+Runs: 23   output tokens: 1229825   API-equivalent cost: $28.37
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -35,7 +35,7 @@ Runs: 22   output tokens: 1150273   API-equivalent cost: $24.01
 | W3-2 | Done | gemini_first | 8460cf1 | Part J: relevance by occurrences + slots | Part J: core/sdis/relevance.py datapoints(); 93 datapoints on real captures; regression unchanged; 213 SDIS tests pass |
 | W3-4 | Done | gemini_first | 128efd5 | Part R.4: SDIS on Firefox trees | alignment + label tests parametrized over edge/msedge/chrome/firefox fixtures; all pass, no core change |
 | W3-5 | Done | gemini_first | 76d79f7 | Part S.1: class suggestion (what a value stays the same with) | classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed |
-| W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |
+| W3-3 | Done | sonnet | eb2abfa | Part O engine: memory on disk, incremental mining | store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees |
 | W4-1 | Not started | opus |  | Part K: SDIS's own recorder (raw view, session id, browser) |  |
 | W4-2 | Not started | opus |  | Part P: captures travel to the admin PC |  |
 | W4-3 | Not started | opus |  | Part O: mining in its own process (no CPU cap) |  |

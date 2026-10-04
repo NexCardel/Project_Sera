@@ -1139,5 +1139,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   already-added session drops the whole (link, browser) group and re-adds its clients; screen weights on an incremental run = new batch + stored session maps (can
   split a screen differently from a rebuild in rare cases); a vanished file keeps its old maps. Next (W4-3) must know: call `mine()` in the child and read the state
   with `store.load`; the full rebuild of the real folder takes ~15 s (state saved per client map); `pm.views` is stored, so the file grows with clients.
+- **W4-1** (2026-10-04, claude-opus-5-5): Part K. NEW `core/sdis/recorder.py` `SdisRecorder` (size-1 slot, `offer` never blocks/raises, daemon
+  worker, budget 1.5 s / 500 MB cap per D13, slow/empty reads dropped, `stats` counts; `browser_of(hwnd)`; default folder `<Sera data>/sdis_capture`)
+  and `core/sdis/sources.py` (`read_records`, `file_records`; a half-written line is skipped). Record = {v, ts, started, session, portal, url, link,
+  title, browser, docs}. `sgt_shadow.SgtShadow(sdis=)`: one guarded `offer` right after the PageRecorder block, nothing else changed.
+  `vsdc_engines.SDIS_RECORD_SETTING` 'sdis_record' (default '1') + `read_sdis_record`; router `apply_engine_settings(sdis_record=)`, built in
+  `_run_sgt`; main.py passes it; Settings checkbox "Record pages for Sera Distill (SDIS)" under the SGT one. `link_map.file_sources/all_sources`
+  and `mine()` take `sdis_*.jsonl`. `uia_nodes`: body moved into `_read_docs`, new `read_page_nodes_here` (read_page_nodes behaves the same).
+  Tests: `tests/test_sdis_recorder.py` 15; SDIS + align 280 passed; SGT 608 passed; Firefox/VSDC settings/HUD/SGT-I/SCC/office 135 passed.
+  `sgt_replay.py diff`: the same pre-existing "newly written" list as W1-6/W1-8/W2-5 (shared baseline; replay passes no sdis, so the new line never runs).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all verdicts/statuses;
+  datapoints 93; suggested class 0/3/7/83; orders agree yes): no recorder files are in the pre-dev folder. Decisions recorded (2): the raw read uses the
+  recorder's OWN MTA UIA object, not vsdc_uia_text's shared worker (an in-flight SDIS read would make SGT abandon it); sessions are named
+  `sgt <id> <started>` so `identity._by_time` sorts them. Hands-on check 3 added (real browsers). Next (W4-2) must know: nodes carry no "sgt" mark
+  (raw only, keys.VIEW "sgt" treats them as raw); ISO stamps sort before pre-dev `2026...` stamps if both share a folder; a wedged UIA call stalls only
+  the recorder thread; files on staff PCs are deleted only by the cap until Part P deletes after ack. A counts-only `../sdis_regress_w41_after.txt` can go.
 
 

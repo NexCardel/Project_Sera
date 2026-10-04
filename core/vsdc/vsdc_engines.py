@@ -41,6 +41,10 @@ SGT_LIVE_ROLLOUT_VALUES = {SGT_SETTING: "live", "vsdc_enabled": "0", "vsdc_x_ena
 # (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
 SGT_RECORD_SETTING = "sgt_record_pages"
 SGT_RECORD_DEFAULT = "1"
+# Record the raw node tree of each page SGT reads, for Sera Distill (core/sdis/recorder.py,
+# sdis_capture folder, 500 MB cap). Only matters while SGT is on; never changes what SGT reads.
+SDIS_RECORD_SETTING = "sdis_record"
+SDIS_RECORD_DEFAULT = "1"
 # SGT-I - SGT's Intelligence half (core/sgt_i, blueprint 14.2): "off" or "on". It watches the
 # pages SGT reads on its own thread and never changes what SGT captures. Off = SGT exactly as before.
 SGT_I_SETTING = "sgt_i_mode"
@@ -97,6 +101,14 @@ def read_sgt_record_pages(get_setting: Callable[..., object]) -> bool:
     """Whether SGT records the pages it reads (default on)."""
     try:
         return str(get_setting(SGT_RECORD_SETTING, SGT_RECORD_DEFAULT) or SGT_RECORD_DEFAULT).strip() == "1"
+    except Exception:
+        return True
+
+
+def read_sdis_record(get_setting: Callable[..., object]) -> bool:
+    """Whether SDIS records the pages SGT reads (default on)."""
+    try:
+        return str(get_setting(SDIS_RECORD_SETTING, SDIS_RECORD_DEFAULT) or SDIS_RECORD_DEFAULT).strip() == "1"
     except Exception:
         return True
 

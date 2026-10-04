@@ -217,7 +217,11 @@ def all_reads(directory: Optional[Path] = None) -> List[Tuple[Path, Dict[str, An
 
 
 def file_sources(path: Path) -> List[Tuple[str, str, str, Dict[str, Any]]]:
-    """The sources of ONE file: a key_probe_*.json is one single read, a capture_*.json one per snapshot."""
+    """The sources of ONE file: a key_probe_*.json is one single read, a capture_*.json one per snapshot,
+    a recorder's sdis_*.jsonl one per record (sources.py)."""
+    from core.sdis import sources
+    if sources.is_record_file(path):
+        return sources.file_records(path)
     rec = json.loads(path.read_text(encoding="utf-8"))
     if not path.name.startswith("capture_"):
         rec.setdefault("browser", "")
@@ -237,6 +241,8 @@ def all_sources(directory: Optional[Path] = None) -> List[Tuple[str, str, str, D
         out.append((read_stamp(path), client_of(rec, path), page_of(rec), rec))
     for path in sorted((directory or OUT_DIR).glob("capture_*.json")):
         out.extend(file_sources(path))
+    from core.sdis import sources
+    out.extend(sources.read_records(directory or OUT_DIR))     # the recorder's folder (Part K)
     return sorted(out, key=lambda x: x[0])
 
 

@@ -1144,6 +1144,13 @@ class UnifiedSettingsDialog(QDialog):
             "deleted after 30 days) so a change to SGT's field list can be replayed against real pages "
             "before it is used. The pages contain client details; they never leave this PC.",
             self.sgt_record_check))
+        self.sdis_record_check = QCheckBox()
+        lay.addWidget(_setting_row("Record pages for Sera Distill (SDIS)",
+            "While SGT is on, also keeps the full structure of each changed portal page on this PC "
+            "(sdis_capture folder, at most 500 MB - the oldest go first) so Sera Distill can find the "
+            "datapoints of a page. Read after SGT's own read and dropped if it takes over 1.5 s, so SGT "
+            "captures exactly as before. The pages contain client details; they leave this PC only for "
+            "the admin PC.", self.sdis_record_check))
         self.sgt_i_combo = QComboBox()
         self.sgt_i_combo.addItem("Off", "off")
         self.sgt_i_combo.addItem("On", "on")
@@ -1171,6 +1178,7 @@ class UnifiedSettingsDialog(QDialog):
         self.vsdc_hud_check.toggled.connect(self._on_control_changed)
         self.sgt_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sgt_record_check.toggled.connect(self._on_control_changed)
+        self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
 
         lay.addStretch()
@@ -1313,6 +1321,7 @@ class UnifiedSettingsDialog(QDialog):
             state["vsdc_hud_enabled"] = self.vsdc_hud_check.isChecked()
             state["sgt_mode"] = self.sgt_mode_combo.currentData()
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
+            state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
@@ -1418,6 +1427,7 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
             _set(self.sgt_mode_combo, g("sgt_mode", "live"))
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
+            self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))
 
     #── Save settings ─────────────────────────────────────────────────────────
@@ -1487,6 +1497,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
                 bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "live"
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
+                bulk_settings["sdis_record"] = b(self.sdis_record_check)
                 bulk_settings["sgt_i_mode"] = self.sgt_i_combo.currentData() or "off"
 
             if hasattr(self.db, "set_settings_bulk"):

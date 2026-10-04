@@ -108,7 +108,8 @@ def mine(captures_dir: Any, state_path: Any = None, progress: Optional[Callable[
     fresh: List[Any] = []
     meta: Dict[str, Tuple[List[float], List[str]]] = {}
     files_of: Dict[str, Set[str]] = {}
-    for path in sorted([*captures_dir.glob("key_probe_*.json"), *captures_dir.glob("capture_*.json")],
+    for path in sorted([*captures_dir.glob("key_probe_*.json"), *captures_dir.glob("capture_*.json"),
+                        *captures_dir.glob("sdis_*.jsonl")],          # the recorder's records (Part K)
                        key=lambda p: p.name):
         try:
             st = path.stat()

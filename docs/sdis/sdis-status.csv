@@ -21,7 +21,7 @@ W3-2,3,Part J: relevance by occurrences + slots,Done,claude-sonnet-5-5,1,8460cf1
 W3-4,3,Part R.4: SDIS on Firefox trees,Done,claude-sonnet-5-5,1,128efd5,"alignment + label tests parametrized over edge/msedge/chrome/firefox fixtures; all pass, no core change",2026-10-04 17:45
 W3-5,3,Part S.1: class suggestion (what a value stays the same with),Done,claude-sonnet-5-5,1,76d79f7,"classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed",2026-10-04 17:49
 W3-3,3,"Part O engine: memory on disk, incremental mining",Done,claude-sonnet-5-5,1,eb2abfa,"store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees",2026-10-04 18:03
-W4-1,4,"Part K: SDIS's own recorder (raw view, session id, browser)",Not started,claude-opus-5-5,0,,,
+W4-1,4,"Part K: SDIS's own recorder (raw view, session id, browser)",In progress,claude-opus-5-5,1,,,2026-10-04 18:03
 W4-2,4,Part P: captures travel to the admin PC,Not started,claude-opus-5-5,0,,,
 W4-3,4,Part O: mining in its own process (no CPU cap),Not started,claude-opus-5-5,0,,,
 W4-4,4,Part Q: registration on every PC (synced tables),Not started,claude-opus-5-5,0,,,

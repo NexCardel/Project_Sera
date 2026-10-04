@@ -168,25 +168,43 @@ def read_page_nodes(hwnd: int, timeout_sec: float = 3.0, raw_view: bool = False)
 
     def _do_read():
         uia, uia_client = uia_text._get_uia_on_worker()
-        if not uia:
-            return empty
-        root = uia.ElementFromHandle(hwnd)
-        if not root:
-            return empty
-        condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
-        found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
-        docs: List[List[Dict[str, Any]]] = []
-        elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
-        for element in uia_text.onscreen_only(elements):     # never a background tab's page
-            nodes: List[Dict[str, Any]] = []
-            _walk(element, -1, 0, nodes)
-            if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
-                nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
-            docs.append(nodes)
-        return {"docs": docs}
+        return _read_docs(uia, uia_client, hwnd, raw_view)
 
     result = uia_text._run_with_timeout(_do_read, timeout_sec)
     return result if result is not None else empty
+
+
+def read_page_nodes_here(uia: Any, uia_client: Any, hwnd: int, raw_view: bool = False) -> Dict[str, Any]:
+    """read_page_nodes on the CALLING thread, with the caller's own UIA object (SDIS's recorder,
+    core/sdis/recorder.py): it never touches vsdc_uia_text's shared worker, so it can never make
+    SGT's next read wait or abandon that worker. No timeout - the caller's thread is its own."""
+    from core.vsdc import vsdc_uia_text as uia_text
+
+    if not hwnd or not uia_text.user32.IsWindow(hwnd):
+        return {"docs": []}
+    return _read_docs(uia, uia_client, hwnd, raw_view)
+
+
+def _read_docs(uia: Any, uia_client: Any, hwnd: int, raw_view: bool) -> Dict[str, Any]:
+    from core.vsdc import vsdc_uia_text as uia_text
+
+    empty: Dict[str, Any] = {"docs": []}
+    if not uia:
+        return empty
+    root = uia.ElementFromHandle(hwnd)
+    if not root:
+        return empty
+    condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
+    found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
+    docs: List[List[Dict[str, Any]]] = []
+    elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
+    for element in uia_text.onscreen_only(elements):     # never a background tab's page
+        nodes: List[Dict[str, Any]] = []
+        _walk(element, -1, 0, nodes)
+        if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
+            nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
+        docs.append(nodes)
+    return {"docs": docs}
 
 
 def lines_from_nodes(docs: List[List[Dict[str, Any]]], include_selection: bool = False,

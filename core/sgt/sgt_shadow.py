@@ -243,8 +243,12 @@ class SgtShadow:
         alert_unattributed: Optional[Callable[[str, str], Any]] = None,
         intelligence: Any = None,
         scc: Any = None,
+        sdis: Any = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # SDIS's own recorder (core.sdis.recorder.SdisRecorder), or None. It is only offered the
+        # pages SGT's change gate let through, after SGT's own read; see _observe.
+        self._sdis = sdis
         # SGT-I (core.sgt_i.SgtIntelligence), or None. It only ever gets copies; see _hand_to_sgt_i.
         self._sgt_i = intelligence
         # SCC-U (core.scc.SccHost), or None. Copies only, like SGT-I; see _hand_to_scc.
@@ -408,6 +412,12 @@ class SgtShadow:
             nodes = self._nodes_for_recording(hwnd) if record_nodes else None
             self._recorder.record(session=s.session_id, portal=portal, url=url, title=title,
                                   source=source, lines=lines, ts=now, today=today, nodes=nodes)
+        sdis = self._sdis
+        try:
+            if sdis is not None and sdis.enabled:
+                sdis.offer(hwnd, s.session_id, portal, url, title)
+        except Exception:
+            pass                                # SDIS never disturbs SGT
         if self._stats is not None:
             self._stats.record_read(portal, source, today)
 
