@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 17:44)
+# Sera Distill — report (2026-10-04 17:46)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 11 |
+| Not started | 10 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 19 |
+| Done | 20 |
 | Blocked | 0 |
 
-Runs: 20   output tokens: 1120599   API-equivalent cost: $21.91
+Runs: 21   output tokens: 1127174   API-equivalent cost: $22.52
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -33,7 +33,7 @@ Runs: 20   output tokens: 1120599   API-equivalent cost: $21.91
 | W2-R | Done | opus | f0f325f | Phase 2 review | Phase 2 review: one documented verdict order; 6 defects fixed with 6 tests; regression unchanged, orders agree yes |
 | W3-1 | Done | sonnet | e7854ea | Part I: statuses + labels from memory | Part I: memory.status/label from client views, table cell labels, furniture via real labels, compare memory view; 204 tests pass, regression counts unchanged |
 | W3-2 | Done | gemini_first | 8460cf1 | Part J: relevance by occurrences + slots | Part J: core/sdis/relevance.py datapoints(); 93 datapoints on real captures; regression unchanged; 213 SDIS tests pass |
-| W3-4 | Not started | gemini_first |  | Part R.4: SDIS on Firefox trees |  |
+| W3-4 | Done | gemini_first | 128efd5 | Part R.4: SDIS on Firefox trees | alignment + label tests parametrized over edge/msedge/chrome/firefox fixtures; all pass, no core change |
 | W3-5 | Not started | gemini_first |  | Part S.1: class suggestion (what a value stays the same with) |  |
 | W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |
 | W4-1 | Not started | opus |  | Part K: SDIS's own recorder (raw view, session id, browser) |  |

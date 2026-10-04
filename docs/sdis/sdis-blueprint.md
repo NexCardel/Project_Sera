@@ -1111,5 +1111,19 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   verdicts/statuses, datapoints 93, orders agree yes); nothing changed. Decisions: none asked or recorded.
   Next: the table fixtures (`class_diff_tables/tables_*.json`) already parametrize over the browsers present; W1-7's real Firefox GST/ITR
   read is still a hands-on check.
+- **W3-5** (2026-10-04, claude-sonnet-5-5): Part S.1. `core/sdis/classes.py`: `suggest(datapoints, memory_state, moves=None)` ->
+  {key: (profile | dataset | info | None, reason)}, `annotate()` (also sets `Datapoint.suggested_class` / `class_reason`, new fields in
+  relevance.py), `client_class(obs)`, `read_period(raw link, resolved link, texts)`, `CLASS_AGREE` = 0.9. Observation = (day, period,
+  value) per read of the page: `LinkMap.read_info` (new; `{stamp, period}` per read, filled in `add`) -> `PageMemory.read_info[client]`
+  (`add(flat, client, reads=None)`; `memory.build` and `client_maps` pass it); the value at a read = latest history item at or before
+  it, from the read the history starts. Period = the one period-shaped text on that read, else the one period-shaped masked link segment.
+  No reads (hand-made data) -> the history items are the observations. A constant value seen on one day in <= 1 period, or < 2
+  observations, is "no evidence", not info. Reasons are counts only ("... for 2 of 2 clients", "not enough evidence", "clients disagree").
+  Tests: `tests/test_sdis_classes.py` (9); SDIS + align 252 passed. Regression before -> after: every earlier line identical (11 maps, 41
+  snapshots, 2367 text nodes, 0/0/28; owners 4; verdicts, statuses, datapoints 93, orders agree yes); new line "suggested class: profile 0,
+  dataset 3, info 7, none 83" (counts only; the 3 dataset ones pool 2 pages with 1 period each per client, so they are weak, as expected from 2 clients).
+  Decisions (recorded): moves come in as `moves={key: class}` (override, reason "moved by the user"); the stored `sdis_decisions` read and the
+  "never into the rejected container again" feed-back belong to W4-4 (no table exists yet). Next WP must know: the period of a page text and of
+  a link segment are normalised separately (lower-case), so one period shown both ways counts as two; observations pool every page a datapoint is on.
 
 

@@ -93,6 +93,7 @@ class LinkMap:
         self.entries: Dict[str, Dict[str, Any]] = {}
         self.children: Dict[Optional[str], List[str]] = {}
         self.reads: List[str] = []
+        self.read_info: List[Dict[str, str]] = []      # per read: stamp and its period (Part S.1)
         self.sessions: List[str] = []
         self.events: List[Dict[str, Any]] = []
 
@@ -168,6 +169,9 @@ class LinkMap:
         blocks = _blocks(flat, new_idx)
         if self.reads and any(b["texts"] for b in blocks):
             self.events.append({"read": stamp, "new_nodes": len(new), "blocks": blocks})
+        from core.sdis.classes import read_period
+        self.read_info.append({"stamp": stamp, "period": read_period(
+            rec.get("page") or "", self.link, (e["text"] for e in flat))})
         self.reads.append(stamp)
         return {"new": new, "blocks": blocks}
 

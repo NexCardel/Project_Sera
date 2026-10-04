@@ -115,6 +115,7 @@ class PageMemory:
         self.link = link if link is not None else clean
         self.rejected: set = set(rejected) if rejected else set()
         self.clients: List[str] = []               # clients in the order they were added
+        self.read_info: Dict[str, List[Dict[str, str]]] = {}   # client -> its reads (stamp, period)
         self.nodes: List[Dict[str, Any]] = []      # every node, memory or pending
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
@@ -177,8 +178,10 @@ class PageMemory:
         return [{"key": self.nodes[n]["key"], "text": self.nodes[n]["text"], "node": self.nodes[n].get("node") or {}}
                 for n in ids]
 
-    def add(self, flat: List[Dict[str, Any]], client: str) -> None:
-        """One client's merged map of this link (link_map.LinkMap.to_flat())."""
+    def add(self, flat: List[Dict[str, Any]], client: str, reads: Optional[List[Dict[str, str]]] = None) -> None:
+        """One client's merged map of this link (link_map.LinkMap.to_flat()); reads = its read_info."""
+        if reads is not None:
+            self.read_info[client] = list(reads)
         is_first = len(self.clients) == 0
         if client not in self.clients:
             self.clients.append(client)
@@ -478,7 +481,7 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
             if not screen_mems:
                 page_name = f"{base_link} [{browser}]" if browser else base_link
                 pm = PageMemory(page_name, n_promote=2, screen=1, link=base_link, browser=browser)
-                pm.add(flat, client)
+                pm.add(flat, client, lm.read_info)
                 screen_mems.append(pm)
                 screen_client_maps.append({client: lm})
                 continue
@@ -501,13 +504,13 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
 
             if best_pm is not None and same_screen(best_max_cover, 0.0):
                 screen_client_maps[best_idx][client] = lm
-                best_pm.add(flat, client)
+                best_pm.add(flat, client, lm.read_info)
             else:
                 n_screen = len(screen_mems) + 1
                 prefix = f"{base_link} [{browser}]" if browser else base_link
                 page_name = f"{prefix} [screen {n_screen}]"
                 pm = PageMemory(page_name, n_promote=2, screen=n_screen, link=base_link, browser=browser)
-                pm.add(flat, client)
+                pm.add(flat, client, lm.read_info)
                 screen_mems.append(pm)
                 screen_client_maps.append({client: lm})
 
@@ -531,7 +534,7 @@ def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int
     mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "", rejected=rejected, retire=retire)
     for client in order:
         if client in maps:
-            mem.add(maps[client].to_flat(), client)
+            mem.add(maps[client].to_flat(), client, getattr(maps[client], "read_info", None))
     return mem
 
 
@@ -584,5 +587,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     dps = datapoints(forward_mems)
     top10 = [dp.relevance_pct for dp in dps[:10]]
     print(f"datapoints {len(dps)}, top 10 relevance %: {top10}")
+    from core.sdis.classes import annotate
+    annotate(dps, forward_mems)
+    counts = Counter(dp.suggested_class or "none" for dp in dps)
+    print("suggested class: " + ", ".join(f"{c} {counts[c]}" for c in ("profile", "dataset", "info", "none")))
     print("(output/memory_*.csv hold real page values - keep them on this PC)")
     return 0

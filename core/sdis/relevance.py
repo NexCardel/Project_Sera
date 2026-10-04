@@ -18,7 +18,7 @@ Counting only, no AI. What counts, and how:
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from core.sdis.keys import CHOICE_CTYPES
 from core.sdis.labels import value_type
@@ -41,6 +41,8 @@ class Datapoint:
     nodes: List[Tuple[int, int]]                   # (memory index, node id)
     slot_type_pct: int
     surprise: bool
+    suggested_class: Optional[str] = None          # Part S.1, set by classes.annotate
+    class_reason: str = ""
 
 
 def clean_label(label: str) -> str:

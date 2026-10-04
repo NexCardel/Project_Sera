@@ -48,7 +48,7 @@ def run(captures: Path, out: List[str]) -> bool:
     os.environ["SDIS_DATA_DIR"] = str(captures)
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
-    from core.sdis import identity, link_map, memory, relevance
+    from core.sdis import classes, identity, link_map, memory, relevance
     from core.sdis.align import shape
     from core.sdis.keys import flatten
     link_map.OUT_DIR = captures
@@ -117,6 +117,9 @@ def run(captures: Path, out: List[str]) -> bool:
     dps = relevance.datapoints(forward_mems)
     say()
     say(f"datapoints {len(dps)}, top 10 relevance %: {[dp.relevance_pct for dp in dps[:10]]}")
+    classes.annotate(dps, forward_mems)
+    counts = Counter(dp.suggested_class or "none" for dp in dps)
+    say("suggested class: " + ", ".join(f"{c} {counts[c]}" for c in ("profile", "dataset", "info", "none")))
     say(f"orders agree: {'yes' if agree_all else 'no'}")
     return agree_all
 
