@@ -1,23 +1,23 @@
-# Sera Distill — report (2026-10-04 14:08)
+# Sera Distill — report (2026-10-04 14:20)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 27 |
+| Not started | 26 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 3 |
+| Done | 4 |
 | Blocked | 0 |
 
-Runs: 3   output tokens: 85402   API-equivalent cost: $3.60
+Runs: 4   output tokens: 184173   API-equivalent cost: $3.60
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | sonnet | 36e67ef | Baseline: tests + the regression runner tools/sdis_regress.py | tools/sdis_regress.py + test + baseline; 16 tests pass; numbers as expected (double count 0, lost 0, orders agree yes) |
 | W0-2 | Done | sonnet | c8f3bd6 | Engine package core/sdis/ (pre-dev files become module aliases) | core/sdis package built; pre-dev keys/align/link_map/memory/tables are aliases; regression printout identical to baseline; 70 SDIS tests pass |
 | W1-1 | Done | gemini_first | 6260bab | Part B: value history with times | value history in LinkMap and PageMemory, core/sdis/history.py with day_of, 76 SDIS tests pass, regression identical |
-| W1-2 | Not started | gemini_first |  | Part G: screens (one link, several pages) by weighted matching |  |
+| W1-2 | Done | gemini_first | 2a52bda | Part G: screens (one link, several pages) by weighted matching | Part G screens by weighted matching; 82 SDIS tests pass; regression identical |
 | W1-3 | Not started | gemini_first |  | Part D: identity by session id + data fingerprint |  |
 | W1-4 | Not started | gemini_first |  | Part N: smart page link resolution |  |
 | W1-5 | Not started | gemini_first |  | Part M: per-browser memory |  |
