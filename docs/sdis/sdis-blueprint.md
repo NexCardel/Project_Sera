@@ -891,3 +891,12 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   unset, and identity's SGT/VSDC imports are inside `client_ids`: importing `core.vsdc` loads PySide6 (~0.8 s), which the
   "core.sdis imports without PySide6" test forbids. Next WP must know: set `SDIS_DATA_DIR` before importing `core.sdis.*`
   (LEARNED_FILE / OUT_DIR are read at import); a stray counts-only `../sdis_regress_after.txt` (outside the repo) can be deleted.
+- **W1-1** (2026-10-04, gemini-3.8-flash-high): built Part B value history with times. Files: `core/sdis/link_map.py` (`LinkMap.add`
+  tracks entry `history` as `[stamp, text]` on text change; `to_flat` includes `history`), `core/sdis/memory.py` (`PageMemory._see`
+  records `c['history']` per client, appending incoming items while skipping exact duplicates), `core/sdis/history.py` (`day_of(stamp)`
+  extracts 'YYYYMMDD' for snapshot, single read, or ISO stamps), `tests/test_sdis_history.py` (6 tests). Updated `test_sdis_package.py`.
+  Tests: 76 passed (70 previous + 6 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0,
+  lost 0, multi 28; orders agree yes on all 5 links; memory confirmed/waiting breakdown identical everywhere (0 numbers changed).
+  Decisions: none (Part B specification followed directly). Next WP must know: `day_of` lives in `core.sdis.history`; `to_flat()` items
+  and `mem.nodes[nid]["clients"][client]["history"]` carry `[[stamp, text], ...]`.
+

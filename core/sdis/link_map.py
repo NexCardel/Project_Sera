@@ -104,7 +104,7 @@ class LinkMap:
             else:
                 ids.append(self._new_id(e["key"]))
                 new_idx.add(i)
-                self.entries[ids[i]] = {"first": stamp, "values": [], "keys": set()}  # reserves the id
+                self.entries[ids[i]] = {"first": stamp, "values": [], "keys": set(), "history": []}  # reserves the id
         # This read's children of each parent, in order - to place a new entry among its siblings.
         read_children: Dict[Optional[str], List[str]] = {}
         for i, e in enumerate(flat):
@@ -131,6 +131,9 @@ class LinkMap:
                 ent["text"] = e["text"]
                 if e["text"] not in ent["values"] and len(ent["values"]) < MAX_VALUES:
                     ent["values"].append(e["text"])
+                hist = ent.setdefault("history", [])
+                if not hist or hist[-1][1] != e["text"]:
+                    hist.append([stamp, e["text"]])
         new = {ids[i] for i in new_idx}
         blocks = _blocks(flat, new_idx)
         if self.reads and any(b["texts"] for b in blocks):
@@ -140,7 +143,7 @@ class LinkMap:
 
     def to_flat(self) -> List[Dict[str, Any]]:
         """The map in page order, in keys.flatten()'s shape (key, parent index, depth, cls, type,
-        text, node) - plus id (the entry id), values, first, last."""
+        text, node) - plus id (the entry id), values, first, last, history."""
         out: List[Dict[str, Any]] = []
 
         def walk(pk: Optional[str], parent: int, depth: int) -> None:
@@ -148,7 +151,8 @@ class LinkMap:
                 ent = self.entries[k]
                 out.append({"id": k, "key": ent["key"], "parent": parent, "depth": depth, "cls": ent["cls"],
                             "type": ent["type"], "text": ent.get("text", ""), "node": ent["node"],
-                            "values": ent["values"], "first": ent["first"], "last": ent["last"]})
+                            "values": ent["values"], "first": ent["first"], "last": ent["last"],
+                            "history": ent.get("history", [])})
                 walk(k, len(out) - 1, depth + 1)
 
         walk(None, -1, 0)

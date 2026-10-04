@@ -79,10 +79,15 @@ class PageMemory:
 
     def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool) -> None:
         nd = self.nodes[nid]
-        c = nd["clients"].setdefault(client, {"texts": []})
+        c = nd["clients"].setdefault(client, {"texts": [], "history": []})
+        c.setdefault("history", [])
         for t in (e.get("values") or ([e["text"]] if e["text"] else [])):
             if t not in c["texts"]:
                 c["texts"].append(t)
+        for h in e.get("history") or []:
+            item = list(h) if isinstance(h, (list, tuple)) else h
+            if item not in c["history"]:
+                c["history"].append(item)
         nd["key"] = e["key"]
         nd["composite"] = nd["composite"] or composite
 
