@@ -266,11 +266,14 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
         candidates = [m for m in owner_link_maps.get((owner, resolved_page), [])
                       if getattr(m, "browser", "") == browser]
 
+        # Part M: each browser is its own map, keyed "link [browser]" like memory names it, so a
+        # client seen in two browsers never overwrites its first browser's map.
+        prefix = f"{resolved_page} [{browser}]" if browser else resolved_page
         if not candidates:
-            m = LinkMap(owner, resolved_page, screen=1, link=resolved_page, browser=browser)
+            m = LinkMap(owner, prefix, screen=1, link=resolved_page, browser=browser)
             m.add(rec, stamp, session, precomputed=(flat, {}))
             owner_link_maps.setdefault((owner, resolved_page), []).append(m)
-            maps[(owner, resolved_page)] = m
+            maps[(owner, prefix)] = m
             continue
 
         best_candidate = None
@@ -291,7 +294,7 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
             best_candidate.add(rec, stamp, session, precomputed=(flat, best_pairs))
         else:
             n = len(candidates) + 1
-            page_key = f"{resolved_page} [screen {n}]"
+            page_key = f"{prefix} [screen {n}]"
             m = LinkMap(owner, page_key, screen=n, link=resolved_page, browser=browser)
             m.add(rec, stamp, session, precomputed=(flat, {}))
             candidates.append(m)

@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 15:31)
+# Sera Distill — report (2026-10-04 15:43)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 21 |
+| Not started | 20 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 9 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 9   output tokens: 566929   API-equivalent cost: $8.31
+Runs: 10   output tokens: 599170   API-equivalent cost: $10.60
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 9   output tokens: 566929   API-equivalent cost: $8.31
 | W1-5 | Done | gemini_first | 1d03032 | Part M: per-browser memory | Part M per-browser memory; 105 tests pass; regression identical |
 | W1-6 | Done | opus | 2643145 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | Firefox URL (Edit or ComboBox), dash-agnostic title suffix, offscreen Documents never read; 12 new tests; regress unchanged |
 | W1-7 | Done | opus | 9f2f751 | Part R.2: browser parity tool + Firefox fixtures | Parity tool + fixtures; client lines identical in 3 browsers; 4 fixes for W2-5 (select options, doubled labels, cached IsOffscreen in read_page_nodes, Edge titl |
-| W1-8 | Not started | opus |  | Part T: portal registration from service-settings login links |  |
+| W1-8 | Done | opus | 2797f2f | Part T: portal registration from service-settings login links | Part T: service login links register portals in vsdc_scope (D21 confirm on save), sdis_containers.json loader with version+portal_exceptions checks; 31 new test |
 | W1-R | Not started | opus |  | Phase 1 review |  |
 | W2-1 | Not started | gemini_first |  | Part E: look-alikes scored, AMBIGUOUS |  |
 | W2-2 | Not started | gemini_first |  | Part C: noise over time |  |
@@ -49,7 +49,10 @@ Runs: 9   output tokens: 566929   API-equivalent cost: $8.31
 
 - **W1-7** Chrome/Edge started by the parity tool showed no page tree (0 lines); how to get a real read? → Launch Chrome/Edge with --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows and Firefox with widget.windows.window_occlusion_tracking.enabled=false (throwaway profiles only) (Measured: a window opened behind others is occluded; Chromium builds no accessibility tree (even with --force-renderer-accessibility) and Firefox marks the front page offscreen. A user reads a page in front, so this reproduces the real condition.)
 - **W1-7** Where do fixture docs and the background-tab filter come from, and what about W1-6's ineffective node filter? → Fixtures from key_probe.read_keys (control+raw) + key_probe._typed; read_keys filters Documents by the CACHED IsOffscreen. core/ untouched (rule 6): the read_page_nodes filter bug goes to W2-5 (key_probe's node fields are the fixture format; onscreen_only's CurrentIsOffscreen raises on AutomationElementMode_None elements so every Document is kept. W1-7 is not allowed to change SGT capture.)
+- **W1-8** Service settings, on save: Sera shows 'will watch gst-like.gov.in for <service>' (D21). If the user answers No, what happens? A = nothing is saved, the edit dialog stays open so the link can be changed. B = the service is saved but its domain is not watched (Sera remembers this choice per service in a synced setting). → A (asked as Q1)
+- **W1-8** Which services overlap rules apply when registering portals? → A domain equal to or covering/under Income Tax or GST is not registered (built-in wins); a domain overlapping one an earlier service (sort order) claimed is skipped; extra_domains only for portal names that are services; a single-label host gives no domain (no duplicate portals for one domain; narrowest scope; built-ins stay untouched)
 
 ## Checks waiting for you
 
 - #1 (W1-6) Real GST and ITR sessions in Firefox: the HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome — Not run
+- #2 (W1-8) Admin PC: Manage Services, add a service with a non-GST/ITR login link (e.g. EPF), confirm the domain prompt, open that portal in Chrome and check SGT/VSDC now reads it; delete the service and check capture stops there; also edit a link to a shared sign-in site listed in never_register and check the 'not registered' message — Not run

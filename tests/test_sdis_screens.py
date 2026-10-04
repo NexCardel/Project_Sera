@@ -237,3 +237,18 @@ def test_content_replacement_creates_two_screens():
     assert "portal.gov.in/page [screen 2]" in cm
     assert "client1" in cm["portal.gov.in/page"]
     assert "client1" in cm["portal.gov.in/page [screen 2]"]
+
+    # A second client sees the two screens the other way round: its screens are numbered by its
+    # own visit order, but memory pairs them by cover - each screen memory gets ONE map per client.
+    sources2 = sources + [
+        ("20261001_100002", "client2", "portal.gov.in/page", replaced),
+        ("20261001_100003", "client2", "portal.gov.in/page", a),
+    ]
+    maps2 = link_map.build_maps(sources=sources2)
+    assert maps2[("client2", "portal.gov.in/page")].reads == ["20261001_100002"]
+    cm2 = memory.client_maps(client_link_maps=maps2, sources=sources2)
+    assert sorted(cm2) == ["portal.gov.in/page", "portal.gov.in/page [screen 2]"]
+    assert sorted(cm2["portal.gov.in/page"]) == ["client1", "client2"]
+    assert sorted(cm2["portal.gov.in/page [screen 2]"]) == ["client1", "client2"]
+    assert cm2["portal.gov.in/page"]["client2"].reads == ["20261001_100003"]
+    assert cm2["portal.gov.in/page [screen 2]"]["client2"].reads == ["20261001_100002"]

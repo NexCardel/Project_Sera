@@ -5,6 +5,7 @@ Tests:
 - /returns/2026-27/summary for 3 clients -> one resolved link;
 - /returns/gstr1 and /returns/gstr2b visited by the same client -> unchanged;
 - a value position seen for only one client -> unchanged;
+- value votes count clients, not link pairs (R8);
 - a route segment ('#/auth/ARN123') resolved the same way;
 - letters-only segment visited with another value by the same client -> never masked;
 - host is never masked;
@@ -61,7 +62,7 @@ def test_value_position_seen_for_only_one_client_unchanged():
     resolved = resolve(links_by_client)
     assert resolved["/returns/2026-27/summary"] == "/returns/2026-27/summary"
 
-    # Only 2 clients (1 pair = 1 value vote < 2 threshold):
+    # Only 2 clients (2 value votes < VALUE_CLIENTS):
     links_two = {
         "client1": {"/returns/2025-26/summary"},
         "client2": {"/returns/2026-27/summary"},
@@ -69,6 +70,26 @@ def test_value_position_seen_for_only_one_client_unchanged():
     resolved_two = resolve(links_two)
     assert resolved_two["/returns/2025-26/summary"] == "/returns/2025-26/summary"
     assert resolved_two["/returns/2026-27/summary"] == "/returns/2026-27/summary"
+
+
+def test_value_votes_count_clients_not_link_pairs():
+    """R8: two clients with three sibling pages each are still two clients - not masked; four
+    clients sharing only two years on one page are four clients - masked."""
+    two_clients = {
+        "client1": {"/returns/2025-26/gstr1", "/returns/2025-26/gstr3b", "/returns/2025-26/gstr9"},
+        "client2": {"/returns/2026-27/gstr1", "/returns/2026-27/gstr3b", "/returns/2026-27/gstr9"},
+    }
+    resolved = resolve(two_clients)
+    assert all(resolved[l] == l for links in two_clients.values() for l in links)
+
+    four_clients = {
+        "client1": {"/returns/2025-26/summary"},
+        "client2": {"/returns/2025-26/summary"},
+        "client3": {"/returns/2026-27/summary"},
+        "client4": {"/returns/2026-27/summary"},
+    }
+    resolved = resolve(four_clients)
+    assert set(resolved.values()) == {"/returns/{v}/summary"}
 
 
 def test_route_segment_resolved_same_way():

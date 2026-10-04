@@ -980,6 +980,21 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Regression before = after: 11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts.
   Next: W4-6 adds the other sections' checks to `config.check()`; Part S's Others/profile and spec portals must use
   `portals.registered_portals()`; sgt_specs does not validate portal names (left unchanged). Installer packaging of the new json not checked.
+- **W1-R** (2026-10-04, claude-opus-5-5): Phase 1 review. Order in `memory.client_maps` is right (session ids -> resolve links
+  (N) -> owners (D) on resolved maps -> per (owner, link, browser) maps -> screens across clients (G)); memories vote one map per
+  client per screen (R8). Fixed: (1) `link_map.build_maps` keyed a client's maps by (owner, link) only, so its 2nd browser
+  OVERWROTE the 1st: keys are now `link [browser]` / `link [browser] [screen n]` (unchanged when browser ''); (2) `identity.
+  resolve_owners` compared sessions by page key, pairing per-session screen numbers and mixing browsers: now per (link,
+  browser), and a link where either side has 2+ screens gives no evidence; `client_ids` builds its URL from `m.link`;
+  (3) `fingerprint` halved every agreement (an equal value is shown by both compared captures): equal pairs weigh
+  1/(rarity-1); (4) `links.resolve` counted value votes per link PAIR: now distinct clients, `VALUE_CLIENTS` = 3 (decisions
+  recorded). Tests: +1 links, +2 identity (rarity test updated), +1 memory (one client in 2 browsers; the chrome/firefox
+  test now gives each browser both clients - lone sessions sharing no page are undecided, per D4), +1 screens (2nd client's
+  screens paired by cover). SDIS + align: 140 passed. Regression before = after (11 maps, 41 snapshots, 2367 text nodes,
+  0/0/28; owners 4, the 2 fictional sessions still undecided: sim 0.56 -> 0.70, they differ in 3 codes + 2 periods per page,
+  so Part D's "one client" expectation was wrong; memory 3 links, same counts). Not built (needs visit boundaries, W4-1):
+  Part D's "one session, same link twice, data disagree -> undecided". `client_maps(client_link_maps=...)` without
+  `sources` still reads all_sources() from disk for weights.
 
 
 

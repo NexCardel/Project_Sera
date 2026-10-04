@@ -81,7 +81,8 @@ def test_fingerprint_rarity_weights():
     assert agr == 1.0
     assert tot == 2.0
 
-    # With custom rarity: "100" seen by 2 sessions (w = 0.5), "200" by 1 (w = 1.0), "300" by 1 (w = 1.0)
+    # With custom rarity: "100" seen by the 2 compared sessions only (counted as one: w = 1.0),
+    # "200" by 1 (w = 1.0), "300" by 1 (w = 1.0)
     from core.sdis.align import shape
     sh = shape(flat_1[0])
     rarity = {
@@ -91,8 +92,51 @@ def test_fingerprint_rarity_weights():
     }
     agr_r, tot_r, n_r = fingerprint(m1, m2, rarity)
     assert n_r == 2
-    assert agr_r == 0.5
-    assert tot_r == 0.5 + (1.0 + 1.0) / 2.0  # 1.5
+    assert agr_r == 1.0
+    assert tot_r == 1.0 + (1.0 + 1.0) / 2.0  # 2.0
+
+    # "100" also shown by 2 third sessions (4 in all): w = 1 / 3
+    rarity[("page1", sh, "100")] = 4
+    agr_c, tot_c, _ = fingerprint(m1, m2, rarity)
+    assert agr_c == pytest.approx(1 / 3)
+    assert tot_c == pytest.approx(1 / 3 + 1.0)
+
+
+def test_one_changed_value_among_ten_rare_ones_is_same_client():
+    """Nine values only the two sessions share + one that changed: 9 / 10 = SAME. Counting the
+    shared ones at 1/2 (both sessions show them) would give 4.5 / 5.5 -> undecided."""
+    def make_entry(key, text):
+        return {
+            "key": key, "text": text, "type": "Text", "cls": "", "parent": -1,
+            "node": {"type_name": "Text", "ctype": 50020, "name": text, "sgt": True},
+        }
+
+    flat_1 = [make_entry(f"K{i}", str(1000 + i)) for i in range(10)]
+    flat_2 = [make_entry(f"K{i}", str(1000 + i)) for i in range(9)] + [make_entry("K9", "2999")]
+    page = "test.local/rare.html"
+    session_maps = {
+        ("capture 20260101_000000", page): _make_dummy_map("capture 20260101_000000", page, flat_1),
+        ("capture 20260101_000100", page): _make_dummy_map("capture 20260101_000100", page, flat_2),
+    }
+    owners = resolve_owners(session_maps, {"capture 20260101_000000": set(), "capture 20260101_000100": set()})
+    assert owners["capture 20260101_000000"] == owners["capture 20260101_000100"] == "client 1"
+
+
+def test_link_with_two_screens_gives_no_evidence():
+    """Screens are numbered per session, so a link where one session has two screens is not
+    compared at all: no evidence -> undecided, never 'different' by pairing the wrong screens."""
+    rec_a = json.loads((FIX / "client_A.json").read_text(encoding="utf-8"))
+    rec_b = json.loads((FIX / "client_B.json").read_text(encoding="utf-8"))
+    page = "test.local/client_A.html"
+    s1, s2 = "capture 20260101_000000", "capture 20260101_000100"
+    m1 = _make_dummy_map(s1, page, keys.flatten(rec_a))
+    m1b = _make_dummy_map(s1, page, keys.flatten(rec_b))
+    m1b.screen = 2
+    m2 = _make_dummy_map(s2, page, keys.flatten(rec_b))
+    session_maps = {(s1, page): m1, (s1, page + " [screen 2]"): m1b, (s2, page): m2}
+    owners = resolve_owners(session_maps, {s1: set(), s2: set()})
+    assert owners[s1] == f"undecided {s1}"
+    assert owners[s2] == f"undecided {s2}"
 
 
 def test_fixtures_a_and_b_two_clients():

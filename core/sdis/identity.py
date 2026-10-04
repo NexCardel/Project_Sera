@@ -28,7 +28,7 @@ def client_ids(m: Any) -> set:
     from core.sgt.sgt_specs import load_registry
     from core.vsdc.vsdc_scope import portal_for_url
     global _registry
-    page = getattr(m, "page", "")
+    page = getattr(m, "link", "") or getattr(m, "page", "")     # the link, without " [browser] [screen n]"
     url = "https://" + page
     portal = portal_for_url(url)
     if not portal:
@@ -93,7 +93,9 @@ def fingerprint(map_a: Any, map_b: Any,
     labels.FIXABLE_TYPES and is not 'control' (data-shaped values only);
     weight of a value = 1 / rarity[(link, shape, text)], rarity = number of sessions whose
     map of that link shows that (shape, text);
-    an equal pair adds its weight to agree and total;
+    an equal pair adds its weight to agree and total - counting the two compared sessions as ONE
+    capture (rarity - 1): both show it because they are compared, so a value only they share
+    weighs 1, like an unequal value only one of them shows (else agreement is always halved);
     an unequal pair adds the mean of both weights to total.
     Returns (agree_weight, total_weight, n_values)."""
     if rarity is None:
@@ -129,6 +131,7 @@ def fingerprint(map_a: Any, map_b: Any,
         wb = 1.0 / max(1, rarity.get((link, shape_b, tb), 1))
 
         if ta == tb:
+            wa = 1.0 / max(1, rarity.get((link, shape_a, ta), 2) - 1)
             agree_weight += wa
             total_weight += wa
         else:
@@ -173,9 +176,12 @@ def resolve_owners(session_maps: Dict[Tuple[str, str], Any],
                 session_seen.setdefault((link, shape(e), txt), set()).add(session)
     rarity = {k: len(sessions) for k, sessions in session_seen.items()}
 
-    pages_by_session: Dict[str, Dict[str, Any]] = {}
+    # A page is (link, browser): screens of one link are numbered per session, so "screen 2" of
+    # one session need not be "screen 2" of another.
+    pages_by_session: Dict[str, Dict[Tuple[str, str], List[Any]]] = {}
     for (session, page_key), lm in session_maps.items():
-        pages_by_session.setdefault(session, {})[page_key] = lm
+        page = (getattr(lm, "link", page_key), getattr(lm, "browser", ""))
+        pages_by_session.setdefault(session, {}).setdefault(page, []).append(lm)
 
     def compare_pair(sa: str, sb: str) -> Tuple[str, float, int]:
         shared = sorted(set(pages_by_session.get(sa, {}).keys()) & set(pages_by_session.get(sb, {}).keys()))
@@ -184,7 +190,10 @@ def resolve_owners(session_maps: Dict[Tuple[str, str], Any],
         sum_agr = sum_tot = 0.0
         sum_n = 0
         for pk in shared:
-            agr, tot, n = fingerprint(pages_by_session[sa][pk], pages_by_session[sb][pk], rarity)
+            ma, mb = pages_by_session[sa][pk], pages_by_session[sb][pk]
+            if len(ma) != 1 or len(mb) != 1:
+                continue                    # which screen pairs with which is not known: no evidence
+            agr, tot, n = fingerprint(ma[0], mb[0], rarity)
             sum_agr += agr
             sum_tot += tot
             sum_n += n

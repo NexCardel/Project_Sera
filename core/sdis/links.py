@@ -12,9 +12,11 @@ A link is 'host/path#route' as keys.page_link() makes it.
 Split it into host + segments (path segments, then the route's segments after '#').
 Group links by (host, number of segments, whether a route exists).
 Inside a group, look at every PAIR of links that differ in exactly ONE segment position i:
-if the two links belong to DIFFERENT clients (and not to a common client) that is one vote 'value at i';
+if the two links belong to DIFFERENT clients (and not to a common client), each of those clients
+votes 'value at i' - once, however many such pairs it is in (R8: one client = one vote);
 if the same client has both, that is one vote 'page at i'.
-Position i is masked in that group when value votes >= 2 and page votes == 0: every link's segment i becomes '{v}'.
+Position i is masked in that group when VALUE_CLIENTS (3) clients vote value and page votes == 0:
+every link's segment i becomes '{v}'.
 Never mask the host, never mask a segment of letters only that the same client also visited with another value.
 Links not in any masked group map to themselves.
 Do NOT use core/sgt_i atlas.url_hint.
@@ -22,6 +24,8 @@ Do NOT use core/sgt_i atlas.url_hint.
 
 import itertools
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
+
+VALUE_CLIENTS = 3       # different clients that must show a value position before it is masked
 
 
 class ParsedLink(NamedTuple):
@@ -106,9 +110,10 @@ def resolve(links_by_client: Dict[str, Set[str]]) -> Dict[str, str]:
 
     Inside a group (host, number of segments, whether a route exists):
     - pairs differing in exactly one segment position i cast:
-      - 1 vote 'value at i' if links belong to DIFFERENT clients (and not to a common client)
+      - 'value at i' from each of their clients if links belong to DIFFERENT clients (and not to
+        a common client); a client votes once per position
       - 1 vote 'page at i' if the same client has both
-    - position i is masked to '{v}' if value votes >= 2 and page votes == 0
+    - position i is masked to '{v}' if VALUE_CLIENTS clients vote value and page votes == 0
     - never mask the host, never mask a segment of letters only that the same client
       also visited with another value.
     """
@@ -136,7 +141,7 @@ def resolve(links_by_client: Dict[str, Set[str]]) -> Dict[str, str]:
 
         group_set = set(group_links)
         n_segs = group_key[1]
-        value_votes = [0] * n_segs
+        value_votes: List[Set[str]] = [set() for _ in range(n_segs)]
         page_votes = [0] * n_segs
 
         # Look at every PAIR of links that differ in exactly ONE segment position i
@@ -152,12 +157,12 @@ def resolve(links_by_client: Dict[str, Set[str]]) -> Dict[str, str]:
             if cls_a & cls_b:
                 page_votes[i] += 1
             else:
-                value_votes[i] += 1
+                value_votes[i] |= cls_a | cls_b
 
         # Determine masked positions
         masked_positions: Set[int] = set()
         for i in range(n_segs):
-            if value_votes[i] >= 2 and page_votes[i] == 0:
+            if len(value_votes[i]) >= VALUE_CLIENTS and page_votes[i] == 0:
                 # Never mask a segment of letters only that the same client also visited with another value
                 letters_only_same_client = False
                 for _c, clinks in links_by_client.items():
