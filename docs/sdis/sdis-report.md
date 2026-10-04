@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 14:50)
+# Sera Distill — report (2026-10-04 15:04)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 24 |
+| Not started | 23 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 6 |
+| Done | 7 |
 | Blocked | 0 |
 
-Runs: 6   output tokens: 393591   API-equivalent cost: $3.60
+Runs: 7   output tokens: 497342   API-equivalent cost: $3.60
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -20,7 +20,7 @@ Runs: 6   output tokens: 393591   API-equivalent cost: $3.60
 | W1-2 | Done | gemini_first | 2a52bda | Part G: screens (one link, several pages) by weighted matching | Part G screens by weighted matching; 82 SDIS tests pass; regression identical |
 | W1-3 | Done | gemini_first | 18a9998 | Part D: identity by session id + data fingerprint | Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay |
 | W1-4 | Done | gemini_first | 2b2b592 | Part N: smart page link resolution | Part N smart page link resolution; 101 tests pass; regression identical |
-| W1-5 | Not started | gemini_first |  | Part M: per-browser memory |  |
+| W1-5 | Done | gemini_first | 1d03032 | Part M: per-browser memory | Part M per-browser memory; 105 tests pass; regression identical |
 | W1-6 | Not started | opus |  | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) |  |
 | W1-7 | Not started | opus |  | Part R.2: browser parity tool + Firefox fixtures |  |
 | W1-8 | Not started | opus |  | Part T: portal registration from service-settings login links |  |
@@ -38,7 +38,7 @@ Runs: 6   output tokens: 393591   API-equivalent cost: $3.60
 | W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |
 | W4-1 | Not started | opus |  | Part K: SDIS's own recorder (raw view, session id, browser) |  |
 | W4-2 | Not started | opus |  | Part P: captures travel to the admin PC |  |
-| W4-3 | Not started | opus |  | Part O: mining process capped at 10% CPU |  |
+| W4-3 | Not started | opus |  | Part O: mining in its own process (no CPU cap) |  |
 | W4-4 | Not started | opus |  | Part Q: registration on every PC (synced tables) |  |
 | W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
 | W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |

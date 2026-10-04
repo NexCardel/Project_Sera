@@ -174,9 +174,10 @@ def read_page_nodes(hwnd: int, timeout_sec: float = 3.0, raw_view: bool = False)
         condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
         found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
         docs: List[List[Dict[str, Any]]] = []
-        for d in range(found.Length if found else 0):
+        elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
+        for element in uia_text.onscreen_only(elements):     # never a background tab's page
             nodes: List[Dict[str, Any]] = []
-            _walk(found.GetElement(d), -1, 0, nodes)
+            _walk(element, -1, 0, nodes)
             docs.append(nodes)
         return {"docs": docs}
 

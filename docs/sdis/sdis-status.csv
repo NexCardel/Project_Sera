@@ -6,7 +6,7 @@ W1-2,1,"Part G: screens (one link, several pages) by weighted matching",Done,gem
 W1-3,1,Part D: identity by session id + data fingerprint,Done,gemini-3.8-flash-high,1,18a9998,Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay two,2026-10-04 14:38
 W1-4,1,Part N: smart page link resolution,Done,gemini-3.8-flash-high,1,2b2b592,Part N smart page link resolution; 101 tests pass; regression identical,2026-10-04 14:49
 W1-5,1,Part M: per-browser memory,Done,gemini-3.8-flash-high,1,1d03032,Part M per-browser memory; 105 tests pass; regression identical,2026-10-04 15:03
-W1-6,1,"Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C)",Not started,claude-opus-5-5,0,,,
+W1-6,1,"Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C)",In progress,claude-opus-5-5,1,,,2026-10-04 15:04
 W1-7,1,Part R.2: browser parity tool + Firefox fixtures,Not started,claude-opus-5-5,0,,,
 W1-8,1,Part T: portal registration from service-settings login links,Not started,claude-opus-5-5,0,,,
 W1-R,1,Phase 1 review,Not started,claude-opus-5-5,0,,,

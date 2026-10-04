@@ -164,7 +164,22 @@ def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:
 def _find_document_elements(uia, uia_client, root_element) -> List[Any]:
     condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_DOCUMENT_CONTROL_TYPE_ID)
     found = root_element.FindAll(uia_client.TreeScope_Descendants, condition)
-    return [found.GetElement(i) for i in range(found.Length)] if found else []
+    return onscreen_only([found.GetElement(i) for i in range(found.Length)] if found else [])
+
+
+def onscreen_only(documents: List[Any]) -> List[Any]:
+    """Only the Documents someone can see. Firefox exposes every tab's page (background tabs too)
+    as a Document; a page nobody can see is never read, in any browser. An element whose
+    IsOffscreen cannot be read is kept, as before."""
+    kept = []
+    for doc in documents:
+        try:
+            if doc.CurrentIsOffscreen:
+                continue
+        except Exception:
+            pass
+        kept.append(doc)
+    return kept
 
 
 def _is_password(uia_client, element) -> bool:

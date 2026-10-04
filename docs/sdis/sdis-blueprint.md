@@ -939,6 +939,18 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Decisions taken: none (followed Part M blueprint directly). Next WP must know: `LinkMap` and `PageMemory` carry attribute `browser`
   (str: 'chrome', 'msedge', 'firefox', or ''); `client_maps()` keys memories by resolved link + `[browser]` when not empty; memories only
   compare the same browser. Joining datapoints across browsers happens in W3-2.
+- **W1-6** (2026-10-04, claude-opus-5-5): Part R.1. `core/vsdc/vsdc_router.py` `extract_browser_url` finds Edit OR ComboBox
+  (`CreateOrCondition`, same keyword test / ValuePattern / per-hwnd cache, tree order); title cleanup is now module constant
+  `BROWSER_SUFFIX_RE` accepting `-`, `–`, `—`. `tools/pre_dev/class_diff/key_probe.py` `read_url`: same Or condition. Background
+  tabs: new `vsdc_uia_text.onscreen_only(documents)` (drops `CurrentIsOffscreen` true, keeps unreadable) used by
+  `_find_document_elements` and `core/sgt_i/uia_nodes.read_page_nodes`. Left alone: `core/sgt_i/uia_events.register` still hooks
+  every Document (events only trigger a read; the read is filtered). No other 50004 address-bar search in core/ or tools/.
+  Tests: `tests/test_firefox_support.py` 12 (fake UIA); SGT+VSDC+Firefox 913 passed 1 skipped; SDIS 105 passed.
+  `sgt_replay.py diff` prints a list of "newly written" rows: not from this WP - replay feeds the saved corpus through `core/sgt`
+  only (no file there changed; no UIA/title path is used); the baseline in ~/AmanAssociates_Sera is shared with ../APP's newer
+  SGT. A later WP should re-take the baseline on this branch before relying on the diff.
+  Regression before → after: identical (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts).
+  Decisions: none asked. Hands-on check 1 added (real GST/ITR in Firefox). Next: W1-7's parity tool can use `onscreen_only`.
 
 
 

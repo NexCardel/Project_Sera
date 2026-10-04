@@ -212,7 +212,9 @@ def read_url(hwnd: int, timeout_sec: float = 5.0) -> str:
         root = uia.ElementFromHandle(hwnd) if uia else None
         if not root:
             return ""
-        edits = root.FindAll(4, uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50004))
+        edits = root.FindAll(4, uia.CreateOrCondition(           # Edit, or Firefox's ComboBox
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50004),
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50003)))
         for i in range(edits.Length if edits else 0):
             edit = edits.GetElement(i)
             if "address" in (edit.CurrentName or "").lower():
