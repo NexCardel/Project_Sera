@@ -216,17 +216,19 @@ def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, 
 ALIGN = True      # pair elements by align.py (content + shape); False = by exact key, the old way
 
 
-def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> Dict[int, int]:
+def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
+              ambiguous: Optional[set] = None) -> Dict[int, int]:
     """{index in fl: index in fp} - by alignment, or by exact key when ALIGN is off."""
     if ALIGN:
-        return align(fl, fp, _compared)
+        return align(fl, fp, _compared, ambiguous=ambiguous)
     by_key = {e["key"]: j for j, e in enumerate(fp) if _compared(e)}
     return {i: by_key[e["key"]] for i, e in enumerate(fl) if _compared(e) and e["key"] in by_key}
 
 
 def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One row per text element of either side (a read's or a map's flat list), latest first."""
-    partner = _partners(fl, fp)
+    ambiguous: set = set()
+    partner = _partners(fl, fp, ambiguous=ambiguous)
     paired_prev = set(partner.values())
     status: Dict[int, str] = {}
     for i, e in enumerate(fl):
@@ -258,7 +260,12 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
         vt = element_type(e)
         pt = element_type(other) if other else ""
         label = _label(flat, i, labels) if st != FIXED and flat is fl else ""
-        flag = "composite - its parts are listed on their own" if i in comp[id(flat)] else check(st, vt, pt, label)
+        if flat is fl and i in ambiguous:
+            flag = "ambiguous pairing - look-alikes, one side has fewer"
+        elif i in comp[id(flat)]:
+            flag = "composite - its parts are listed on their own"
+        else:
+            flag = check(st, vt, pt, label)
         matched = "no" if other is None else ("yes" if other["key"] == e["key"] else "aligned")
         return {"status": st, "key_matched": matched,
                 "value_type": vt, "previous_type": pt, "check": flag,

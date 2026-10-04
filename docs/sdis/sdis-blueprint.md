@@ -995,7 +995,14 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   so Part D's "one client" expectation was wrong; memory 3 links, same counts). Not built (needs visit boundaries, W4-1):
   Part D's "one session, same link twice, data disagree -> undecided". `client_maps(client_link_maps=...)` without
   `sources` still reads all_sources() from disk for weights.
-
-
-
-
+- **W2-1** (2026-10-04, gemini-3.8-flash-high): built Part E look-alikes scored pairing and AMBIGUOUS detection. Files: `core/sdis/align.py`
+  (`AMBIGUOUS_MARGIN` = 0.5, `_MAX_CELLS` = 40000, `_pattern`, `_column` sideways overlap, `_score`, `_best_injection` DP with banned pair,
+  `_look_alikes` injection & unsure check, `align` finds uneven shapes between anchors, skips from LCS, and calls `_look_alikes`),
+  `core/sdis/memory.py` (`_match` passes `ambiguous` set, `_see` tracks `c['sure']` with later sure setting it True, `confirmed()` counts only
+  clients with `sure` True, `verdict()` returns 'ambiguous' for not confirmed node with not-sure client), `tools/pre_dev/class_diff/compare.py`
+  (`compare_flat` passes `ambiguous` set and sets `check = 'ambiguous pairing - look-alikes, one side has fewer'`), `tests/test_sdis_lookalikes.py`
+  (10 tests), `tests/test_sdis_package.py` (alias test). Tests: 151 passed (140 previous + 11). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links (return dashboard
+  90/6/7 + 5 wait, gstr1 92/13/18 + 1 changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; 0 numbers changed on real
+  captures (no look-alikes uneven on real captures). Decisions taken: none (followed Part E blueprint directly). Next WP must know: `align`
+  takes `ambiguous: Optional[set] = None`; `memory.nodes[nid]['clients'][c]['sure']` is bool; `compare_flat` flags ambiguous look-alike rows in `check`.

@@ -62,9 +62,10 @@ def _always(e: Dict[str, Any]) -> bool:
     return True
 
 
-def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]]) -> Dict[int, int]:
+def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]],
+           ambiguous: Optional[set] = None) -> Dict[int, int]:
     """{index in flat: index in other}: alignment, then moved blocks."""
-    return pair_moved(flat, other, align(flat, other, _always), _always) if other and flat else {}
+    return pair_moved(flat, other, align(flat, other, _always, ambiguous=ambiguous), _always) if other and flat else {}
 
 
 class PageMemory:
@@ -98,9 +99,14 @@ class PageMemory:
                            "status": status, "anchor": anchor, "clients": {}, "composite": False})
         return len(self.nodes) - 1
 
-    def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool) -> None:
+    def _see(self, nid: int, e: Dict[str, Any], client: str, composite: bool, sure: bool = True) -> None:
         nd = self.nodes[nid]
-        c = nd["clients"].setdefault(client, {"texts": [], "history": []})
+        if client not in nd["clients"]:
+            c = nd["clients"].setdefault(client, {"texts": [], "history": [], "sure": sure})
+        else:
+            c = nd["clients"][client]
+            if sure:
+                c["sure"] = True
         c.setdefault("history", [])
         for t in (e.get("values") or ([e["text"]] if e["text"] else [])):
             if t not in c["texts"]:
@@ -122,33 +128,37 @@ class PageMemory:
             for i, e in enumerate(flat):
                 nid = self._node(e, None, "memory")
                 self.order.append(nid)
-                self._see(nid, e, client, i in comp)
+                self._see(nid, e, client, i in comp, sure=True)
             self.log.append({"client": client, "nodes": len(flat), "memory": 0, "matched": len(flat),
                              "pending_hit": 0, "new": 0, "kind": "FIRST"})
             return
         n_mem = len(self.order)
-        pairs = _match(flat, self._view(self.order))               # 1-2: count + match vs memory
+        amb: set = set()
+        pairs = _match(flat, self._view(self.order), amb)               # 1-2: count + match vs memory
         anchor_of: Dict[int, Optional[int]] = {}
         anchor: Optional[int] = None
         for i in range(len(flat)):
             if i in pairs:
                 anchor = self.order[pairs[i]]
-                self._see(anchor, flat[i], client, i in comp)
+                self._see(anchor, flat[i], client, i in comp, sure=(i not in amb))
             else:
                 anchor_of[i] = anchor
         # 3: the leftovers against the pending pool, the same way (page order, then moved blocks).
         left = sorted(anchor_of)
-        ppairs = _match([flat[i] for i in left], self._view(self.pending))
+        p_amb: set = set()
+        ppairs = _match([flat[i] for i in left], self._view(self.pending), p_amb)
         hit = new = 0
         for x, i in enumerate(left):
             if x in ppairs:
                 nid = self.pending[ppairs[x]]
                 hit += 1
+                sure = (x not in p_amb)
             else:
                 nid = self._node(flat[i], anchor_of[i], "pending")
                 self.pending.append(nid)
                 new += 1
-            self._see(nid, flat[i], client, i in comp)
+                sure = True
+            self._see(nid, flat[i], client, i in comp, sure=sure)
         matched = len(pairs) / len(flat) if flat else 1.0
         if matched >= SAME_MATCH and new <= SAME_NEW:
             kind = "SAME SCREEN"
@@ -176,9 +186,9 @@ class PageMemory:
             self.order.insert(pos, p)
 
     def confirmed(self, nid: int) -> bool:
-        """Seen by N different clients. The first client's nodes sit in memory (they give the page
+        """Seen by N different clients with sure True. The first client's nodes sit in memory (they give the page
         order) but are no more confirmed than a pending node - so the client order changes nothing."""
-        return len(self.nodes[nid]["clients"]) >= self.n
+        return sum(1 for c in self.nodes[nid]["clients"].values() if c.get("sure", True)) >= self.n
 
     def verdict(self, nid: int) -> str:
         nd = self.nodes[nid]
@@ -188,6 +198,8 @@ class PageMemory:
         if any(len(c["texts"]) > 1 for c in cl.values()):
             return "changes within one client"
         if not self.confirmed(nid):
+            if any(not c.get("sure", True) for c in cl.values()):
+                return "ambiguous"
             shapes = {self.nodes[m]["shape"] for m in range(len(self.nodes)) if self.confirmed(m)}
             return "repeat" if nd["shape"] in shapes else "only one client so far"
         last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}

@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 15:43)
+# Sera Distill — report (2026-10-04 15:50)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 20 |
+| Not started | 19 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 10 |
+| Done | 11 |
 | Blocked | 0 |
 
-Runs: 10   output tokens: 599170   API-equivalent cost: $10.60
+Runs: 11   output tokens: 633063   API-equivalent cost: $13.10
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -24,7 +24,7 @@ Runs: 10   output tokens: 599170   API-equivalent cost: $10.60
 | W1-6 | Done | opus | 2643145 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | Firefox URL (Edit or ComboBox), dash-agnostic title suffix, offscreen Documents never read; 12 new tests; regress unchanged |
 | W1-7 | Done | opus | 9f2f751 | Part R.2: browser parity tool + Firefox fixtures | Parity tool + fixtures; client lines identical in 3 browsers; 4 fixes for W2-5 (select options, doubled labels, cached IsOffscreen in read_page_nodes, Edge titl |
 | W1-8 | Done | opus | 2797f2f | Part T: portal registration from service-settings login links | Part T: service login links register portals in vsdc_scope (D21 confirm on save), sdis_containers.json loader with version+portal_exceptions checks; 31 new test |
-| W1-R | Not started | opus |  | Phase 1 review |  |
+| W1-R | Done | opus | c627eb0 | Phase 1 review | Review: fixed per-browser map overwrite, identity per (link, browser) + screen-safe, fingerprint pair weighting, Part N votes per client; 140 passed; regression |
 | W2-1 | Not started | gemini_first |  | Part E: look-alikes scored, AMBIGUOUS |  |
 | W2-2 | Not started | gemini_first |  | Part C: noise over time |  |
 | W2-3 | Not started | gemini_first |  | Part F: the variable_alignment state |  |
@@ -51,6 +51,9 @@ Runs: 10   output tokens: 599170   API-equivalent cost: $10.60
 - **W1-7** Where do fixture docs and the background-tab filter come from, and what about W1-6's ineffective node filter? → Fixtures from key_probe.read_keys (control+raw) + key_probe._typed; read_keys filters Documents by the CACHED IsOffscreen. core/ untouched (rule 6): the read_page_nodes filter bug goes to W2-5 (key_probe's node fields are the fixture format; onscreen_only's CurrentIsOffscreen raises on AutomationElementMode_None elements so every Document is kept. W1-7 is not allowed to change SGT capture.)
 - **W1-8** Service settings, on save: Sera shows 'will watch gst-like.gov.in for <service>' (D21). If the user answers No, what happens? A = nothing is saved, the edit dialog stays open so the link can be changed. B = the service is saved but its domain is not watched (Sera remembers this choice per service in a synced setting). → A (asked as Q1)
 - **W1-8** Which services overlap rules apply when registering portals? → A domain equal to or covering/under Income Tax or GST is not registered (built-in wins); a domain overlapping one an earlier service (sort order) claimed is skipped; extra_domains only for portal names that are services; a single-label host gives no domain (no duplicate portals for one domain; narrowest scope; built-ins stay untouched)
+- **W1-R** Part N: what counts as a value vote for a link position? → each distinct client once (VALUE_CLIENTS = 3, page votes 0), not each link pair (R8: link-pair counting let 2 clients with 3 sibling pages mask a position, while many clients sharing 2 years never did; 3 keeps W1-4's tested 2-clients-not-enough / 3-clients-masked behaviour)
+- **W1-R** Part D: rarity weight of a value both compared captures show → count the compared pair as one capture: 1 / (rarity - 1) (an equal value is always shown by both, an unequal one by one; literal 1/rarity halved agreement, so one changed value among 10 rare ones gave 0.82 (undecided) instead of 0.9 (same); blueprint says an ARN weighs 1)
+- **W1-R** Part D check: the two fictional local-page sessions should be one client → keep them undecided (no vote) (counts on today's captures: per page 3 codes, 2 periods and 1 alphanumeric value differ (sim 0.70, was 0.56): not one client; the blueprint's expectation was wrong, undecided is the honest result (rule 6))
 
 ## Checks waiting for you
 

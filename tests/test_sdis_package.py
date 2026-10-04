@@ -71,6 +71,12 @@ def test_pre_dev_links_is_the_core_module():
     assert links is core.sdis.links
 
 
+def test_pre_dev_align_is_the_core_module():
+    import align
+    import core.sdis.align
+    assert align is core.sdis.align
+
+
 def test_core_sdis_imports_without_pyside6(tmp_path):
     env = dict(os.environ, SDIS_DATA_DIR=str(tmp_path))
     code = ("import sys, core.sdis.paths, core.sdis.keys, core.sdis.align, core.sdis.labels, "
