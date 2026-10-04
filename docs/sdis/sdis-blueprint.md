@@ -1100,5 +1100,16 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   [100, 100, 100, 67, 67, 67, 33, 33, 33, 33] (a label found on all 3 pages with both clients leads; 2 pages 67, 1 page 33).
   Next WP must know: `datapoints()` needs `add()`'d PageMemory objects (labels come from views); unsure-pairing clients never vote;
   container moves (Part S) must be passed in as rejected keys of the other containers.
+- **W3-4** (2026-10-04, claude-sonnet-5-5): Part R.4. Firefox fixtures exist (W1-7), so tests only: `tests/test_class_diff_align.py` gets
+  `ALIGN_BROWSERS` (edge = the original client_A/B.json, plus msedge / chrome / firefox where both files exist) and `_load(c, browser)`;
+  the `setup` fixture is parametrized, so every alignment test (pairing errors 0, every EXPECTED labelled, keys still shift without
+  alignment, extra rows only-latest) runs in raw + sgt view on all 4. `tests/test_sdis_labels.py`: the three memory-label tests
+  (labels from memory in both client orders, values are data, template texts fixed) run per browser. All pass first time, Firefox
+  included: no change to `core/sdis` was needed (the fixtures hold identical lines, W2-5 already dropped the ComboBox option
+  duplicates for the line view; the form page has no SDIS fixture). Tests: SDIS + align 243 passed (was 213 + the new browser cases).
+  Regression before = after, identical in every line (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all
+  verdicts/statuses, datapoints 93, orders agree yes); nothing changed. Decisions: none asked or recorded.
+  Next: the table fixtures (`class_diff_tables/tables_*.json`) already parametrize over the browsers present; W1-7's real Firefox GST/ITR
+  read is still a hands-on check.
 
 

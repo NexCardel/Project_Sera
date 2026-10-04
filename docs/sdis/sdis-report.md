@@ -1,4 +1,4 @@
-# Sera Distill — report (2026-10-04 17:41)
+# Sera Distill — report (2026-10-04 17:44)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-06T01:30:00+05:30
 | :--- | ---: |
 | Not started | 11 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 18 |
+| Retry | 0 |
+| Done | 19 |
 | Blocked | 0 |
 
-Runs: 19   output tokens: 1103543   API-equivalent cost: $20.72
+Runs: 20   output tokens: 1120599   API-equivalent cost: $21.91
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ Runs: 19   output tokens: 1103543   API-equivalent cost: $20.72
 | W2-5 | Done | sonnet | b551792 | Part R.3: Firefox line parity fixes (SGT-C) | Firefox lines now identical to Chrome/Edge on the fictional pages (dropdown options, wrapped labels, cached offscreen, Edge ZWSP title); regression unchanged |
 | W2-R | Done | opus | f0f325f | Phase 2 review | Phase 2 review: one documented verdict order; 6 defects fixed with 6 tests; regression unchanged, orders agree yes |
 | W3-1 | Done | sonnet | e7854ea | Part I: statuses + labels from memory | Part I: memory.status/label from client views, table cell labels, furniture via real labels, compare memory view; 204 tests pass, regression counts unchanged |
-| W3-2 | Retry | gemini_first |  | Part J: relevance by occurrences + slots | stopped by usage limit, resumes after 18:11 |
+| W3-2 | Done | gemini_first | 8460cf1 | Part J: relevance by occurrences + slots | Part J: core/sdis/relevance.py datapoints(); 93 datapoints on real captures; regression unchanged; 213 SDIS tests pass |
 | W3-4 | Not started | gemini_first |  | Part R.4: SDIS on Firefox trees |  |
 | W3-5 | Not started | gemini_first |  | Part S.1: class suggestion (what a value stays the same with) |  |
 | W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |

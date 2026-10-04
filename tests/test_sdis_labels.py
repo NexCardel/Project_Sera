@@ -21,21 +21,21 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "tools" / "pre_dev" / "class_diff"))
 
 import compare  # noqa: E402
-from test_class_diff_align import EXPECTED  # noqa: E402
+from test_class_diff_align import ALIGN_BROWSERS, EXPECTED, _load  # noqa: E402
 
 FIX_ALIGN = HERE / "class_diff_align"
 FIX_TABLES = HERE / "class_diff_tables"
 BROWSERS = [b for b in ("edge", "chrome", "firefox") if (FIX_TABLES / f"tables_{b}.json").exists()]
 
 
-def _client(c):
-    return keys.flatten(json.loads((FIX_ALIGN / f"client_{c}.json").read_text(encoding="utf-8")))
+def _client(c, browser="edge"):
+    return keys.flatten(_load(c, browser))
 
 
-def _memory(order):
+def _memory(order, browser="edge"):
     mem = PageMemory("fictional/page", n_promote=2)
     for c in order:
-        mem.add(_client(c), c)
+        mem.add(_client(c, browser), c)
     return mem
 
 
@@ -44,9 +44,10 @@ def _nids(mem, client, text):
     return [nid_of[i] for i, e in enumerate(flat) if e["text"] == text]
 
 
+@pytest.mark.parametrize("browser", ALIGN_BROWSERS)
 @pytest.mark.parametrize("order", ["AB", "BA"])
-def test_every_expected_value_gets_its_label_from_memory(order):
-    mem = _memory(order)
+def test_every_expected_value_gets_its_label_from_memory(order, browser):
+    mem = _memory(order, browser)
     wrong = {}
     for value, want in EXPECTED.items():
         got = {mem.label(n).strip() for n in _nids(mem, "B", value)}
@@ -55,15 +56,17 @@ def test_every_expected_value_gets_its_label_from_memory(order):
     assert not wrong
 
 
-def test_expected_values_are_data_not_template():
-    mem = _memory("AB")
+@pytest.mark.parametrize("browser", ALIGN_BROWSERS)
+def test_expected_values_are_data_not_template(browser):
+    mem = _memory("AB", browser)
     for value in EXPECTED:
         for nid in _nids(mem, "B", value):
             assert mem.status(nid) not in ("fixed", "retired", "composite")
 
 
-def test_template_texts_are_fixed_and_unknown_nodes_have_no_label():
-    mem = _memory("AB")
+@pytest.mark.parametrize("browser", ALIGN_BROWSERS)
+def test_template_texts_are_fixed_and_unknown_nodes_have_no_label(browser):
+    mem = _memory("AB", browser)
     assert {mem.status(n) for n in _nids(mem, "B", "Taxpayer details")} == {"fixed"}
     assert mem.label(10 ** 6) == ""
 
