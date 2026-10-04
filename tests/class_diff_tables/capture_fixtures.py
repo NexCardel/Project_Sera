@@ -56,7 +56,7 @@ def _args(name, exe, profile, url):
         (Path(profile) / "user.js").write_text(FIREFOX_USER_JS, encoding="utf-8")
         return [exe, "-no-remote", "-profile", profile, "-width", "1400", "-height", "1000", url]
     return [exe, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-            "--disable-sync", "--force-renderer-accessibility", "--new-window", "--window-size=1400,1000", url]
+            "--disable-sync", "--new-window", "--window-size=1400,1000", url]
 
 
 def capture(name: str, url: str) -> bool:
@@ -79,7 +79,8 @@ def capture(name: str, url: str) -> bool:
         time.sleep(2.0)                         # let layout settle (boxes are what the extractor uses)
         for _ in range(key_probe.WARM_READS):
             key_probe.read_keys(hwnd, False)
-        # Chrome builds its accessibility tree late in a fresh profile: read until the page shows.
+        # A fresh Chrome profile exposes the page to UI Automation only after a few seconds of reads
+        # (no flag needed - checked 2026-10-04): read until the page shows.
         for _ in range(20):
             control = key_probe.read_keys(hwnd, False)
             raw = key_probe.read_keys(hwnd, True)
