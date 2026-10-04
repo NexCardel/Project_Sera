@@ -53,6 +53,14 @@ _VALUE_BEARING_CONTROL_TYPES = frozenset({
 # opts in (include_selection), so VSDC-X's lines are unchanged.
 UIA_RADIOBUTTON_CONTROL_TYPE_ID = 50013
 UIA_CHECKBOX_CONTROL_TYPE_ID = 50002
+UIA_IS_OFFSCREEN_PROPERTY_ID = 30022
+UIA_FRAMEWORK_ID_PROPERTY_ID = 30024
+
+# Gecko (Firefox) builds a different tree for the same HTML: a closed <select> keeps its options as
+# ListItems under the ComboBox, and a <label> wrapping a radio / checkbox is a named container
+# right before the control. Chromium folds both, so these two rules apply to Gecko elements only.
+FRAMEWORK_GECKO = "Gecko"
+_LABEL_CONTAINER_TYPES = frozenset({50025, 50026, 50033})      # Custom, Group, Pane
 SELECTED_PREFIX = "Selected: "
 
 # Generous versus the ~0.1s observed in practice, while still bounded: a raw
@@ -164,7 +172,32 @@ def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:
 def _find_document_elements(uia, uia_client, root_element) -> List[Any]:
     condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_DOCUMENT_CONTROL_TYPE_ID)
     found = root_element.FindAll(uia_client.TreeScope_Descendants, condition)
-    return [found.GetElement(i) for i in range(found.Length)] if found else []
+    return onscreen_only([found.GetElement(i) for i in range(found.Length)] if found else [])
+
+
+def onscreen_only(documents: List[Any]) -> List[Any]:
+    """Only the Documents someone can see. Firefox exposes every tab's page (background tabs too)
+    as a Document; a page nobody can see is never read, in any browser. An element whose
+    IsOffscreen cannot be read is kept, as before."""
+    kept = []
+    for doc in documents:
+        if _is_offscreen(doc):
+            continue
+        kept.append(doc)
+    return kept
+
+
+def _is_offscreen(element) -> bool:
+    """The live IsOffscreen, else the cached one (a cache-only element, as read_page_nodes gets,
+    raises on the live property). False when neither can be read."""
+    try:
+        return bool(element.CurrentIsOffscreen)
+    except Exception:
+        pass
+    try:
+        return bool(element.GetCachedPropertyValue(UIA_IS_OFFSCREEN_PROPERTY_ID))
+    except Exception:
+        return False
 
 
 def _is_password(uia_client, element) -> bool:
@@ -205,6 +238,17 @@ def _is_chosen(uia_client, element, control_type: int) -> bool:
     return False
 
 
+def _framework_is_gecko(element) -> bool:
+    try:
+        return element.CurrentFrameworkId == FRAMEWORK_GECKO
+    except Exception:
+        pass
+    try:
+        return element.GetCachedPropertyValue(UIA_FRAMEWORK_ID_PROPERTY_ID) == FRAMEWORK_GECKO
+    except Exception:
+        return False
+
+
 def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional[int] = None,
                               include_selection: bool = False) -> List[str]:
     """Returns the visible text of every descendant, in document order — label
@@ -220,12 +264,30 @@ def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional
     true_cond = uia.CreateTrueCondition()
     elements = root_element.FindAll(uia_client.TreeScope_Descendants, true_cond)
     count = elements.Length if elements else 0
+    gecko = _framework_is_gecko(root_element)
+    skip = 0                    # Gecko: the option elements of the dropdown just read
+    container_name = ""         # Gecko: the name of the container element read just before
     for i in range(count):
         if max_lines is not None and len(lines) >= max_lines:
             break
+        if skip:
+            skip -= 1
+            continue
         try:
             el = elements.GetElement(i)
             name = (el.CurrentName or "").strip()
+            ctype = None
+            if gecko:
+                try:
+                    ctype = el.CurrentControlType
+                except Exception:
+                    pass
+                echoed, container_name = container_name, ""
+                if ctype in _LABEL_CONTAINER_TYPES:
+                    container_name = name
+                elif name and name == echoed and ctype in (UIA_RADIOBUTTON_CONTROL_TYPE_ID, UIA_CHECKBOX_CONTROL_TYPE_ID) \
+                        and lines and lines[-1] == name:
+                    lines.pop()         # the <label> around this control already said its name
             if name:
                 lines.append(name)
 
@@ -233,13 +295,17 @@ def _collect_descendant_lines(uia, uia_client, root_element, max_lines: Optional
             # pattern on every descendant of a large page would cost a
             # cross-process call per element for nothing.
             value = ""
-            ctype = None
             try:
                 ctype = el.CurrentControlType
                 if ctype in _VALUE_BEARING_CONTROL_TYPES and not _is_password(uia_client, el):
                     value = _read_value_pattern(uia_client, el)
             except Exception:
                 value = ""
+            if gecko and ctype == UIA_COMBOBOX_CONTROL_TYPE_ID:
+                try:
+                    skip = el.FindAll(uia_client.TreeScope_Descendants, true_cond).Length
+                except Exception:
+                    skip = 0
             if value and value != name:
                 lines.append(value)
                 # A dropdown's value IS the user's choice; mark it as one, so a rule can tell

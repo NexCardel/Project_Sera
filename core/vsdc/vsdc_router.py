@@ -102,6 +102,10 @@ BROWSER_EXE_NAMES = (
     "opera.exe",
 )
 
+# " - Google Chrome", " – ...", " — Mozilla Firefox": the browser's suffix on a window title
+BROWSER_SUFFIX_RE = re.compile(r"[-–—]\s*(?:google chrome|microsoft[\s​]*edge|mozilla firefox|brave|opera).*$",
+                               re.IGNORECASE)
+
 
 class _WindowSession:
     """
@@ -937,11 +941,11 @@ class VSDCRouter:
             if not element:
                 return None
 
-            # Look for Edit control (Address bar)
-            # UIA_EditControlTypeId = 50004
-            condition = self._uia.CreatePropertyCondition(
-                self._uia_client.UIA_ControlTypePropertyId,
-                50004,
+            # Look for Edit control (Address bar) - or a ComboBox, which is what Firefox's bar is
+            # UIA_EditControlTypeId = 50004, UIA_ComboBoxControlTypeId = 50003
+            condition = self._uia.CreateOrCondition(
+                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50004),
+                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50003),
             )
             edits = element.FindAll(self._uia_client.TreeScope_Descendants, condition)
             if not edits:
@@ -1059,7 +1063,7 @@ class VSDCRouter:
             # Strip session countdown timers and browser suffixes so title doesn't change every second
             cleaned_title = re.sub(r"\b(?:session\s*time|time\s*remaining|timeout)\b[:\s0-9]+", "", title_lower, flags=re.IGNORECASE)
             cleaned_title = re.sub(r"\b\d{1,2}\s*:\s*\d{2}\b", "", cleaned_title)
-            cleaned_title = re.sub(r"-\s*(?:google chrome|microsoft edge|mozilla firefox|brave|opera).*$", "", cleaned_title, flags=re.IGNORECASE).strip()
+            cleaned_title = BROWSER_SUFFIX_RE.sub("", cleaned_title).strip()
             url = cleaned_title or title_lower
 
         url_normalized = url.replace("\\", "/")
