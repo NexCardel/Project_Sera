@@ -7,8 +7,10 @@ the synced `sdis_fields` table (sera_db/sdis.py); every PC then writes the activ
 write_fields_file() to <Sera data>/sdis_fields.json, which core/sgt/sgt_specs.SpecStore loads
 after the built-in file and the local override.
 
-Only Profile builder fields are registered for now: a dataset or Others field must not latch as
-profile, and SGT reads those through the containers file (W4-7). The user's label goes into the
+A Profile builder field is a `profile` spec (it latches, like SGT's own profile). A dataset or
+Others field must not latch: it is a `current_dataset` spec, and SGT hands its hits to the
+containers (core/sgt/sgt_containers.py, by the "sdis." name), never to its built-in dataset
+(W4-7). The user's label goes into the
 spec's `note`, never its `labels` (the page labels it is found by), so renaming changes nothing
 that is captured. No values are written anywhere: the shapes are letters -> A, digits -> 9.
 
@@ -22,14 +24,18 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 PROFILE = "profile"
-CONTAINERS_LATER = ("dataset", "others")       # Part S.2 in SGT (W4-7)
+CURRENT = "current_dataset"                    # the sgt_fields.json section of dataset / Others fields
+# container kind (or sdis_mcl class) -> (spec section, sdis_mcl class)
+SECTIONS = {"profile": (PROFILE, "profile"), "dataset": (CURRENT, "dataset"),
+            "others": (CURRENT, "info"), "info": (CURRENT, "info")}
 NAME_PREFIX = "sdis."                          # spec names never land on a built-in spec's name
 
-# SDIS value type -> the SGT-I miner's type. period / label / sentence / control have no drafted
-# pattern: such a datapoint is not registered (never a guessed pattern).
+# SDIS value type -> the SGT-I miner's type. label / sentence / control have no drafted pattern:
+# such a datapoint is not registered (never a guessed pattern). A period gets the shape pattern
+# of the values seen (a container's period field must be capturable).
 MINER_TYPES = {"text": "text", "number": "number", "amount": "amount", "date": "date", "code": "code",
                "alphanumeric": "code", "email": "email", "phone": "phone", "percentage": "percentage",
-               "yes/no": "yes/no"}
+               "yes/no": "yes/no", "period": "code"}
 
 
 class NotRegistrable(ValueError):
@@ -95,10 +101,9 @@ def draft_spec(datapoint: Any, memories: Sequence[Any], portal: str, container: 
     from core.sgt import sgt_specs
     from core.sgt_i import miner
 
-    if container in CONTAINERS_LATER:
-        raise NotRegistrable("%s fields are registered once SGT reads containers (W4-7)" % container)
-    if container != PROFILE:
+    if container not in SECTIONS:
         raise NotRegistrable("unknown container kind")
+    section = SECTIONS[container][0]
     if not portal:
         raise NotRegistrable("no portal")
     label = clean_label(_get(datapoint, "label") or "")
@@ -111,23 +116,25 @@ def draft_spec(datapoint: Any, memories: Sequence[Any], portal: str, container: 
     base = list(base_paths) if base_paths is not None else sgt_specs.default_paths()
     field = field or field_name(label, _taken_fields(base))
     try:
-        spec = miner.draft_field(label, typ, shapes, field, PROFILE, portal)
+        spec = miner.draft_field(label, typ, shapes, field, section, portal)
     except miner.Drop as e:
         raise NotRegistrable(str(e))
     spec["name"] = NAME_PREFIX + field
     spec["note"] = label
-    err = miner.check_spec(PROFILE, spec, base)
+    err = miner.check_spec(section, spec, base)
     if err:
         raise NotRegistrable("refused by the SGT loader")
-    return {"name": spec["name"], "field": field, "portal": portal, "section": PROFILE,
+    return {"name": spec["name"], "field": field, "portal": portal, "section": section,
             "spec": spec, "label": label}
 
 
 def fields_document(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    """The active Profile builder rows as an sgt_fields.json document, the user's label in `note`."""
+    """The active rows as an sgt_fields.json document (Profile builder fields under `profile`,
+    dataset / Others fields under `current_dataset.fields`), the user's label in `note`."""
     profile: List[Dict[str, Any]] = []
+    current: List[Dict[str, Any]] = []
     for r in rows:
-        if r.get("status", "active") != "active" or r.get("section") != PROFILE:
+        if r.get("status", "active") != "active" or r.get("section") not in (PROFILE, CURRENT):
             continue
         spec = r.get("spec")
         if spec is None:
@@ -140,8 +147,13 @@ def fields_document(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         spec = dict(spec, name=r.get("name") or spec.get("name"))
         if r.get("label"):
             spec["note"] = r["label"]
-        profile.append(spec)
-    return {"profile": profile} if profile else {}
+        (profile if r.get("section") == PROFILE else current).append(spec)
+    doc: Dict[str, Any] = {}
+    if profile:
+        doc["profile"] = profile
+    if current:
+        doc["current_dataset"] = {"fields": current}
+    return doc
 
 
 def fields_path() -> Path:
@@ -203,17 +215,18 @@ def register_field(db: Any, datapoint: Any, memories: Sequence[Any], portal: str
     name = same[0]["name"] if same else spec_name_for(name_for, (s["name"] for s in specs))
     if name != row["name"]:
         row["spec"]["name"] = name
-        if miner_check(row["spec"], base):
+        if miner_check(row["spec"], base, row["section"]):
             raise NotRegistrable("refused by the SGT loader")
-    mcl_gid = db.add_sdis_mcl(name_for, row["label"], _get(datapoint, "value_type") or "", cls, portal, created_by)
+    mcl_class = SECTIONS[cls][1]
+    mcl_gid = db.add_sdis_mcl(name_for, row["label"], _get(datapoint, "value_type") or "", mcl_class, portal, created_by)
     label = (library.get(name_for) or {}).get("label") or row["label"]
     field_gid = db.add_sdis_field(name, portal, row["section"], row["spec"], label, created_by, mcl_gid)
     return {"mcl_gid": mcl_gid, "field_gid": field_gid, "field": name_for, "name": name}
 
 
-def miner_check(spec: Dict[str, Any], base: Sequence[Path]) -> Optional[str]:
+def miner_check(spec: Dict[str, Any], base: Sequence[Path], section: str = PROFILE) -> Optional[str]:
     from core.sgt_i import miner
-    return miner.check_spec(PROFILE, spec, base)
+    return miner.check_spec(section, spec, base)
 
 
 def refresh(db: Any) -> Optional[Path]:

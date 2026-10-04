@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-05 01:23)
+# Sera Distill — report (2026-10-05 01:41)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 3 |
+| Not started | 2 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 27 |
+| Done | 28 |
 | Blocked | 0 |
 
-Runs: 28   output tokens: 1395259   API-equivalent cost: $40.75
+Runs: 29   output tokens: 1503428   API-equivalent cost: $47.85
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -40,7 +40,7 @@ Runs: 28   output tokens: 1395259   API-equivalent cost: $40.75
 | W4-2 | Done | opus | 864adf5 | Part P: captures travel to the admin PC | Part P: core/sdis/transfer.py push/handle_push/Pusher, sdis_push in dispatch_session, main.py trigger; 6 new tests; regression identical |
 | W4-3 | Done | opus | 5b16e05 | Part O: mining in its own process (no CPU cap) | mine_process.run via main.py --sdis-mine (JSON lines), MinerClient (reader thread, instant cancel, no CPU cap); 8 new tests, SDIS 294 passed, regression unchang |
 | W4-4 | Done | opus | 738bf1f | Part Q: registration on every PC (synced tables) | Part Q: synced sdis_fields/sdis_decisions, register.py drafts Profile builder specs -> sdis_fields.json, SGT third spec file; regression unchanged |
-| W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
+| W4-5 | Done | sonnet | e97b6f2 | Part L: the Distill dialog + loading dialog + containers | Part L: Distill dialog + loading dialog + containers panel/editors; 18 new tests, SDIS+align 362 pass, regression unchanged |
 | W4-6 | Done | opus | 82c13ca | Parts U + S.3: sdis_mcl, the containers file (sync + checks) | sdis_mcl + sdis_config synced tables, all S.3 load checks, level_for, edit helpers, file on every PC, register_field; 42 new tests; regression unchanged |
 | W4-7 | Not started | opus |  | Part S.2 in SGT: container instances, completion, Others values |  |
 | W5-R | Not started | opus |  | Final review and merge-readiness note |  |
@@ -73,6 +73,8 @@ Runs: 28   output tokens: 1395259   API-equivalent cost: $40.75
 - **W4-6** Loading sdis_containers.json on a PC has no database: check field names against sdis_mcl and portals against registered ones there? → No: put() and import run those two membership checks; load runs every other S.3 check (the written file was checked when it was put; portal_names() at load would recurse through vsdc_scope -> config)
 - **W4-6** remove_field: what happens to a container's examples that captured the removed field, and class_exceptions vs a user's move? → examples capturing the removed field are dropped (the rest must still give their levels); a user's move beats class_exceptions, which beat the S.1 suggestion (an example of a field combination that no longer exists cannot be checked; a move is the user's latest explicit choice)
 - **W4-6** sdis_config row identity and spec names for one field on several pages → the containers row has a fixed gid (md5 of 'sdis_config:containers'); specs are sdis.<field>, sdis.<field>.2, .3...; the same page (portal + page labels) re-uses its spec (two PCs creating the row at once write the same LWW row, not two; spec names stay unique while SGT merges captures by field)
+- **W4-5** Register for a Dataset or Others datapoint → Add to sdis_mcl and the containers file only; no spec until SGT reads containers (W4-7) (A dataset or Others field must not latch as a profile spec; register_field refuses them by design)
+- **W4-5** Mining reads one folder keyed by bare file name, but every PC has same-named day files → Find datapoints hard-links each device's sdis_*.jsonl into mine_input/ as sdis_<tag>__<name> (Same-named files from different PCs would collide in mine(); names stay stable between runs so mining stays incremental)
 
 ## Checks waiting for you
 
@@ -83,3 +85,4 @@ Runs: 28   output tokens: 1395259   API-equivalent cost: $40.75
 - #5 (W4-3) Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues — Not run
 - #6 (W4-4) Two real PCs in live sync: register a Profile builder field on one (W4-5 dialog or db.add_sdis_field), check the other PC's ~/AmanAssociates_Sera/sdis_fields.json appears after a sync round and SGT logs one more profile spec; rename and retire also reach it — Not run
 - #7 (W4-6) Two PCs: put the containers document and add/rename an sdis_mcl field on one PC; after sync the other PC's <Sera data>/sdis_containers.json matches (same version) and both sdis_fields.json notes show the new label. Edit on both PCs at once: one sdis_config row (fixed gid) survives, never two. — Not run
+- #8 (W4-5) Admin PC: Tracker dump -> Tools -> Distill...: Find datapoints shows the loading dialog and locks the app; Cancel works; rename a label, register a datapoint, and see it captured on another PC after sync — Not run

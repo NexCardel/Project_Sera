@@ -160,8 +160,14 @@ def test_add_to_a_dataset_container_registers_the_field(app, monkeypatch):
          "exceptions": {}}]}
     db.add_sdis_mcl("status", "Status", "text", "dataset", PORTAL)
     monkeypatch.setattr(config, "add_field", lambda doc, where, field, **kw: {**doc, "added": [where, field]})
+    calls = []
+    # W4-7: a dataset field gets its SGT spec too (register_field, cls dataset)
+    monkeypatch.setattr(register, "register_field",
+                        lambda db, dp, mems, portal, field=None, cls="profile", created_by="":
+                        calls.append(cls) or {"field": "trade_name"})
     ok, msg = dlg.add_to(dlg.dps[1], "Returns")
     assert ok, msg
+    assert calls == ["dataset"]
     assert db.containers["added"] == ["Returns", "trade_name"]
     assert dlg.decided.registered[dlg.dps[1].key] == "trade_name"
     assert dlg.state["picked"] == [("Trade name", "text")]
@@ -173,6 +179,7 @@ def test_a_refused_container_edit_gives_the_reason(app, monkeypatch):
     def refuse(*a, **k):
         raise config.ConfigError("a container needs at least one field")
     monkeypatch.setattr(config, "add_field", refuse)
+    monkeypatch.setattr(register, "register_field", lambda *a, **k: {"field": "trade_name"})
     ok, msg = dlg.add_to(dlg.dps[1], "Returns")
     assert not ok and "at least one field" in msg
     assert dlg.dps[1].key not in dlg.decided.registered

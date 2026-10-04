@@ -860,6 +860,13 @@ class PayloadInspectorDialog(QDialog):
 
         sum_layout.addLayout(cards_row)
 
+        # SDIS Others and Profile builder values, per portal (blueprint S.4), sdis_mcl labels
+        for portal, pairs in self._sdis_values(item_data, raw_json):
+            sdis_card, sdis_v = _card(f"{portal} — portal values (SDIS)")
+            grid, _ = _field_grid(pairs, cols=3)
+            sdis_v.addLayout(grid)
+            sum_layout.addWidget(sdis_card)
+
         # Filing History Table
         filing_history = item_data.get("filing_history") or []
         if not filing_history and item_data.get("arn_number"):
@@ -1129,6 +1136,24 @@ class PayloadInspectorDialog(QDialog):
                 self._show_preview(spath)
         except Exception as e:
             print(f"Error loading media: {e}")
+
+    def _sdis_values(self, item_data: dict, raw_json) -> list:
+        """[(portal, [(label, value)])]: a container's SRPF columns, or a single row's own 'sdis' key."""
+        from sera_db.srpf import fold_sdis, sdis_info_of, sdis_value_rows
+        aggregates = item_data.get("raw_aggregates") or {}
+        profiles = item_data.get("portal_profiles") or {}
+        if not (aggregates or profiles):
+            try:
+                payload = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                aggregates, profiles = {}, {}
+                fold_sdis(aggregates, profiles, sdis_info_of(payload))
+        if not (aggregates or profiles):
+            return []
+        labels = self.db.sdis_field_labels() if self.db is not None else {}
+        return sdis_value_rows(aggregates, profiles, labels)
 
     def _show_preview(self, path):
         pixmap = QPixmap(path)

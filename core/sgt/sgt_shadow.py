@@ -83,7 +83,9 @@ from core.vsdc.vsdc_alerts import SERA_DATA_DIR_NAME, device_name
 from .sgt_resolver import Dataset, PageResult, resolve_page
 from .sgt_specs import SpecStore, compose_values
 from .sgt_toolbox import MERGES, SUBMIT_LEVELS, submit_level
-from core.dataset_key import compute_dataset_key
+from .sgt_containers import (KEYED_MINIMUM, Carrier, ContainerSession, Instance, evidence_of, info_signature,
+                             load_doc, sdis_info, split_hits)
+from core.dataset_key import SDIS_INFO_METHOD, compute_dataset_key
 
 SHADOW_DIR_ENV = "SGT_SHADOW_DIR"
 MODE_SHADOW = "shadow"
@@ -101,6 +103,7 @@ MISSES_TO_CLEAR = 2             # reads in a row a piece must be missing from it
 MISSING_CLEAR_SEC = 5.0         # ...and for at least this long
 TIMELINE_CAP = 200
 CURRENT_RECORD = "current_dataset"  # the record name a dataset built across pages is written under
+SDIS_CARRIER_FORM = "SDIS info"     # the form in a carrier row's key (blueprint S.4); never a dataset
 # How the pill names the client datapoints it has just captured.
 PROFILE_LABELS = {"name": "name", "first_name": "first name", "middle_name": "middle name",
                   "last_name": "last name", "pan": "PAN", "gstin": "GSTIN", "dob": "date of birth",
@@ -216,10 +219,12 @@ class _Session:
     confirmed: bool = False             # the client's identity may go on rows
     confirm_note: str = ""
     strict: bool = False                # born from a contradiction: a single sighting never confirms
+    # SDIS dataset containers and Others values (core/sgt/sgt_containers.py, blueprint S.2/S.4)
+    sdis: ContainerSession = field(default_factory=ContainerSession)
 
     @property
     def has_content(self) -> bool:
-        return bool(self.profile or self.slots or self.draft.pieces)
+        return bool(self.profile or self.slots or self.draft.pieces or self.sdis.has_content)
 
 
 class SgtShadow:
@@ -292,6 +297,7 @@ class SgtShadow:
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
+        self._sdis_doc: Optional[Dict[str, Any]] = None   # the containers document instances were built under
         if self._state_path is not None:
             self._recover()
 
@@ -445,11 +451,14 @@ class SgtShadow:
         s.conflicts += len(res.conflicts)
         self._page_pans = {p for ln in lines for p in _PAN_TOKEN.findall(ln or "")}
         self._foreign_pans = self._other_pans_on_page(s, res, lines)
+        # SDIS field specs ("sdis.<field>") feed containers, never SGT's built-in dataset.
+        res.current, sdis_hits = split_hits(res.current)
         if not res.is_list:
             # Before the datasets, so a confirmation page's ARN can be joined to the form and
             # period the earlier pages supplied.
             self._update_draft(s, res, url, source, registry.current_rules)
         self._absorb(s, res, url, source, registry)
+        self._feed_containers(s, res, sdis_hits, url, source)
         if scc is not None:    # the one read above: Settings may detach it mid-tick
             self._hand_to_scc(scc, s, portal, url, title, source, lines, res, registry, now, today, hwnd)
         self._save_state()
@@ -632,11 +641,151 @@ class SgtShadow:
                 used = True
         return used
 
+    # ── SDIS containers (blueprint S.2 / S.4) ────────────────────────────────────
+    def _feed_containers(self, s: _Session, res: PageResult, hits: Dict[str, Any], url: str, source: str) -> None:
+        """The page's SDIS field values into the session's container instances and Others values.
+        Built like the dataset in progress: list pages never feed it, and while another client's
+        PAN is readable only the link and title count. A changed containers document re-evaluates
+        every open instance first; nothing moves down."""
+        if not hits and not any(x.sdis.instances for x in self._sessions.values()):
+            return
+        doc = load_doc()
+        if doc is not self._sdis_doc:
+            if self._sdis_doc is not None:
+                for other in list(self._sessions.values()):
+                    for inst in other.sdis.recompute(doc):
+                        self._event(other, "container", change="re-evaluated (containers file changed)",
+                                    container=inst.container, level=inst.level, status=inst.status)
+                        if inst.keyed:
+                            self._queue(other, inst)
+            self._sdis_doc = doc
+        if self._foreign_pans:
+            hits = {f: h for f, h in hits.items() if h.source != "page"}
+        if not hits or res.is_list:
+            return
+        values = {f: h.value for f, h in hits.items()}
+        for inst in s.sdis.feed(doc, s.portal, values, url):
+            before = inst.sent_key
+            self._event(s, "container", container=inst.container, form=inst.form, period=inst.period,
+                        fields=sorted(inst.captured), level=inst.level, status=inst.status,
+                        k_of_n=f"{inst.k} of {inst.n}", page=url, source=source)
+            self._echo(f"[SGT] {self._tag} container {inst.container} {inst.period}: {inst.k} of {inst.n}"
+                       f"{' - ' + inst.level if inst.level else ''} ({inst.status})")
+            if inst.keyed:
+                self._queue(s, inst)
+                if before is None:
+                    self._hud(s, "capture", "Dataset captured",
+                              f"{self._who(s)} • {inst.container} • {inst.level or f'{inst.k} of {inst.n}'}".strip(" •"),
+                              {"form": inst.form, "period": inst.period})
+        changed = s.sdis.feed_others(doc, s.portal, values, datetime.now().isoformat(timespec="seconds"))
+        if changed:
+            self._event(s, "others", fields=changed, page=url, source=source)
+            self._echo(f"[SGT] {self._tag} Others: {', '.join(changed)} captured")
+
+    def _sdis_profile(self, s: _Session) -> Dict[str, str]:
+        """The session's profile values a row may carry: PAN, GSTIN and name only once confirmed."""
+        prof = {k: p["value"] for k, p in s.profile.items() if k not in _CLIENT_KEYS + ("name",)}
+        if s.confirmed:
+            prof.update({k: s.profile[k]["value"] for k in _CLIENT_KEYS + ("name",) if k in s.profile})
+        return prof
+
+    def _sdis_info(self, s: _Session) -> Optional[Dict[str, Any]]:
+        if not (s.sdis.others or s.profile):
+            return None
+        return sdis_info(s.sdis, load_doc(), s.portal, self._sdis_profile(s),
+                         datetime.now().isoformat(timespec="seconds"))
+
+    def _attach_sdis(self, s: _Session, payload: Dict[str, Any]) -> None:
+        """S.4: the session's Others and Profile builder values ride on every row it writes."""
+        info = self._sdis_info(s)
+        if info:
+            payload["raw_payload"]["sdis"] = info
+            s.sdis.carried = info_signature(info)
+
+    def _carry_sdis(self, s: _Session) -> None:
+        """Session end: values no dispatched row carried yet go out - on the session's last row, or,
+        with no dataset row at all, on its one carrier row (capture method SGT_sdis_info)."""
+        info = self._sdis_info(s)
+        if not info or info_signature(info) == s.sdis.carried:
+            return
+        if any(e[0] is s for e in self._outbox.values()):
+            return                              # a row on its way picks the values up when built
+        sent = [x for x in list(s.slots) + list(s.sdis.instances) if x.sent_key]
+        if sent:
+            self._queue(s, sent[-1])
+            return
+        if s.sdis.carrier is None:
+            s.sdis.carrier = Carrier()
+        self._queue(s, s.sdis.carrier)
+
+    def _sdis_payload(self, s: _Session, obj: Any) -> Dict[str, Any]:
+        """A container instance's tracker row, or the session's carrier row."""
+        prof = self._sdis_profile(s)
+        ids = self._client_ids(s)
+        ident = ids.get("gstin") or ids.get("pan") or f"SGT{s.session_id}"
+        if isinstance(obj, Instance):
+            key = compute_dataset_key(s.portal, ident, obj.form, obj.period)
+            if not self.live:
+                key = f"SGT:{key}"
+            form, period, status, method = obj.form, obj.period, obj.status or KEYED_MINIMUM, CAPTURE_METHODS[self.mode]
+            dataset = {"form": form, "period": period, "status": status, "container": obj.container,
+                       "fields": dict(obj.values), "evidence": evidence_of(obj),
+                       "status_evidence": f"{obj.k} of {obj.n} fields captured"
+                                          + (f" ({obj.level})" if obj.level else "")}
+            record = obj.container
+        else:
+            key = compute_dataset_key(s.portal, ident, SDIS_CARRIER_FORM, "")
+            form, period, status, method = "", "", SUBMIT_LEVELS[0], SDIS_INFO_METHOD
+            dataset, record = {}, "sdis_info"
+        supersedes = obj.sent_key if obj.sent_key and obj.sent_key != key else None
+        obj.sent_key = key
+        gstin = prof.get("gstin") or ""
+        pan = prof.get("pan") or (gstin[2:12] if len(gstin) == 15 else "")
+        payload = {
+            "source": "sgt",
+            "session_id": f"SGT-{s.session_id}",
+            "portal": s.portal,
+            "pan": pan,
+            "gstin": gstin,
+            "client_name": prof.get("name", ""),
+            "dob": prof.get("dob", ""),
+            "mobile": prof.get("phone", ""),
+            "email": prof.get("email", ""),
+            "filing_type": form,
+            "filing_preference": "",
+            "period_label": period,
+            "arn": "N/A",
+            "status": status,
+            "filing_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "raw_text": "",                         # SGT never stores page text
+            "capture_method": method,
+            "identity_resolved": bool(pan),
+            "page_url": next(iter(obj.evidence.values()), s.last_url) if isinstance(obj, Instance) else s.last_url,
+            "dataset_key": key,
+            "supersedes_dataset_key": supersedes,
+            "raw_payload": {
+                "source": {"engine": "SGT", "mode": self.mode, "record": record, "confidence": 0,
+                           "identity": s.confirm_note or "not confirmed yet"},
+                "sgt_dataset": dataset,
+                "client_profile": prof,
+                "timeline": list(s.timeline),
+                "session_id": f"SGT-{s.session_id}",
+                "dataset_key": key,
+            },
+        }
+        self._attach_sdis(s, payload)
+        return payload
+
     # ── Folding a page into the session ──────────────────────────────────────────
     # ── Tracker rows ─────────────────────────────────────────────────────────────
     def _queue(self, s: _Session, slot: _Slot) -> None:
         """Hands a dataset to the tracker - unless it breaks a dataset rule: then it is held,
         with the reason, and written the next time it is queued and passes."""
+        if isinstance(slot, (Instance, Carrier)):
+            # SDIS rows: the built-in dataset_rules are about SGT's own GST/ITR datasets.
+            self._outbox[id(slot)] = (s, slot)
+            self._outbox.move_to_end(id(slot))
+            return
         problems = self.store.get().dataset_rules.problems(s.portal, slot.values, self._today())
         if slot.claimed:
             client = self._client_pan(s)
@@ -665,6 +814,12 @@ class SgtShadow:
         for slot in s.slots:
             if every or slot.sent_key is not None:
                 self._queue(s, slot)
+        for inst in s.sdis.instances:
+            if inst.keyed and (every or inst.sent_key is not None):
+                self._queue(s, inst)
+        carrier = s.sdis.carrier
+        if carrier is not None and (every or carrier.sent_key is not None):
+            self._queue(s, carrier)
 
     def pending(self) -> int:
         return len(self._outbox)
@@ -739,6 +894,8 @@ class SgtShadow:
         return {k: s.profile[k]["value"] for k in _CLIENT_KEYS if k in s.profile}
 
     def _tracker_payload(self, s: _Session, slot: _Slot) -> Dict[str, Any]:
+        if isinstance(slot, (Instance, Carrier)):
+            return self._sdis_payload(s, slot)
         v = dict(slot.values)
         # Name, PAN and GSTIN say WHO: none of them go on a row until the client is confirmed.
         prof = {k: p["value"] for k, p in s.profile.items() if k not in _CLIENT_KEYS + ("name",)}
@@ -792,6 +949,7 @@ class SgtShadow:
             extra = sgt_i.enrichment(s.session_id)
             if extra:
                 payload["raw_payload"]["sgt_i"] = extra
+        self._attach_sdis(s, payload)
         return payload
 
     # ── HUD pill ─────────────────────────────────────────────────────────────────
@@ -1101,6 +1259,7 @@ class SgtShadow:
                     self._queue(s, slot)
         # The dataset still being built is dispatched only if it is complete.
         self._close_draft(s, self.store.get().current_rules, f"session end ({reason})", s.last_url)
+        self._carry_sdis(s)
         self._alert_unknown_client(s)
         payload = self.would_be_payload(s)
         stats = {"reads": s.reads, "ocr_reads": s.ocr_reads, "blind_pages": s.blind_pages,
@@ -1246,6 +1405,7 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
                   for f, piece in s.draft.pieces.items()},
         "draft_slot": s.slots.index(s.draft.slot) if s.draft.slot in s.slots else None,
         "draft_claims": list(s.draft.claims),
+        "sdis": s.sdis.to_json(),
     }
 
 
@@ -1264,4 +1424,5 @@ def _session_from_json(raw: Dict[str, Any]) -> _Session:
     idx = raw.get("draft_slot")
     if isinstance(idx, int) and 0 <= idx < len(s.slots):
         s.draft.slot = s.slots[idx]
+    s.sdis = ContainerSession.from_json(raw.get("sdis"))
     return s

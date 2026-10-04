@@ -27,5 +27,5 @@ W4-3,4,Part O: mining in its own process (no CPU cap),Done,claude-opus-5-5,1,5b1
 W4-4,4,Part Q: registration on every PC (synced tables),Done,claude-opus-5-5,1,738bf1f,"Part Q: synced sdis_fields/sdis_decisions, register.py drafts Profile builder specs -> sdis_fields.json, SGT third spec file; regression unchanged",2026-10-05 01:09
 W4-5,4,Part L: the Distill dialog + loading dialog + containers,Done,claude-sonnet-5-5,1,e97b6f2,"Part L: Distill dialog + loading dialog + containers panel/editors; 18 new tests, SDIS+align 362 pass, regression unchanged",2026-10-05 01:41
 W4-6,4,"Parts U + S.3: sdis_mcl, the containers file (sync + checks)",Done,claude-opus-5-5,1,82c13ca,"sdis_mcl + sdis_config synced tables, all S.3 load checks, level_for, edit helpers, file on every PC, register_field; 42 new tests; regression unchanged",2026-10-05 01:22
-W4-7,4,"Part S.2 in SGT: container instances, completion, Others values",Not started,claude-opus-5-5,0,,,
+W4-7,4,"Part S.2 in SGT: container instances, completion, Others values",In progress,claude-opus-5-5,1,,,2026-10-05 01:41
 W5-R,5,Final review and merge-readiness note,Not started,claude-opus-5-5,0,,,

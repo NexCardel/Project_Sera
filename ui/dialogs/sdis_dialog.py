@@ -996,8 +996,7 @@ class SdisDialog(QDialog):
             return
         text = f"Capture {label} on every PC?"
         if distill.where_class(where) != "profile":
-            text += (f"\n\nIt is added to {distill.where_label(where)} now; capture on every PC starts once "
-                     "Sera reads the containers file.")
+            text += f"\n\nIt goes into {distill.where_label(where)}."
         if self._ask("Register", text):
             self.add_to_and_report(dp, where)
 
@@ -1011,11 +1010,12 @@ class SdisDialog(QDialog):
         name = " ".join((name or "").split())
         if not ok or not name:
             return
-        field = self._field_name_for(dp)
+        mems = (self.state or {}).get("memories") or []
         try:
-            self.db.add_sdis_mcl(field, label, dp.value_type, "dataset", portal, self.who)
+            field = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls="dataset",
+                                            created_by=self.who)["field"]
             self.put(config.add_container(self.doc(), name, portal, [field], **self.known()))
-        except config.ConfigError as e:
+        except (register.NotRegistrable, config.ConfigError) as e:
             self._refused = str(e)
             self._say(f"Not registered: {e}", bad=True)
             self._fill_side()
@@ -1034,15 +1034,10 @@ class SdisDialog(QDialog):
         """An existing library field the datapoint's label stands for (the same field is reused)."""
         return field_named(self.shown_label(dp), self.library_labels())
 
-    def _field_name_for(self, dp: Any) -> str:
-        from core.sgt import sgt_specs
-        return self._field_for(dp) or register.field_name(
-            self.shown_label(dp), register._taken_fields(sgt_specs.default_paths()) | set(self.library()))
-
     def add_to(self, dp: Any, where: distill.Where) -> tuple:
-        """Registers the datapoint as a field of sdis_mcl and puts it in `where` (D7). A Profile builder
-        field also gets its SGT spec (Part Q). Dataset / Others fields are containers-file entries
-        until SGT reads containers (W4-7). Returns (ok, a counts-only message)."""
+        """Registers the datapoint as a field of sdis_mcl with its SGT spec (Part Q; a dataset / Others
+        field's spec feeds SGT's containers, W4-7) and puts it in `where` (D7). Returns (ok, a
+        counts-only message)."""
         label, portal = self.shown_label(dp), self.portal_for(dp)
         if not label:
             return False, "Name the datapoint first: double-click its label."
@@ -1051,12 +1046,8 @@ class SdisDialog(QDialog):
         cls = distill.where_class(where)
         mems = (self.state or {}).get("memories") or []
         try:
-            if cls == "profile":
-                name = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls="profile",
-                                               created_by=self.who)["field"]
-            else:
-                name = self._field_name_for(dp)
-                self.db.add_sdis_mcl(name, label, dp.value_type, "info" if cls == "others" else cls, portal, self.who)
+            name = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls=cls,
+                                           created_by=self.who)["field"]
             self.put(config.add_field(self.doc(), where, name, **self.known()))
         except (register.NotRegistrable, config.ConfigError) as e:
             return False, f"Not registered: {e}"

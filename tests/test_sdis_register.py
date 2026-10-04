@@ -64,12 +64,16 @@ def test_field_name_never_lands_on_an_existing_field():
     assert register.field_name("PAN", taken) == "pan_2"
 
 
-def test_dataset_others_and_untyped_datapoints_are_not_registered():
+def test_dataset_and_others_fields_are_current_dataset_specs_untyped_are_not_registered(tmp_path):
+    # W4-7: dataset / Others fields never latch as profile; SGT hands them to the containers
     dp, mems = _datapoint()
     for kind in ("dataset", "others"):
-        with pytest.raises(register.NotRegistrable):
-            register.draft_spec(dp, mems, "Fictional Portal", container=kind, base_paths=BASE)
-    dp, mems = _datapoint(value_type="period")
+        row = register.draft_spec(dp, mems, "Fictional Portal", container=kind, base_paths=BASE)
+        assert row["section"] == "current_dataset"
+        out = register.write_fields_file([dict(row, status="active")], tmp_path / f"{kind}.json")
+        spec = sgt_specs.load_registry(BASE + [out]).by_name()[row["name"]]
+        assert spec.slot == "current"
+    dp, mems = _datapoint(value_type="label")
     with pytest.raises(register.NotRegistrable):
         register.draft_spec(dp, mems, "Fictional Portal", base_paths=BASE)
 

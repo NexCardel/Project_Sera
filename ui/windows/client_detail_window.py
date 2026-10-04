@@ -570,6 +570,8 @@ class ClientDetailWindow(QWidget):
             div3.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
             self.scroll_layout.addWidget(div3)
 
+        self._add_sdis_values(client_id)
+
         # ======================================================================
         # 4. Notes Section (Clean White Editor)
         # ======================================================================
@@ -615,6 +617,44 @@ class ClientDetailWindow(QWidget):
         self.scroll_layout.addWidget(self.notes_edit)
 
         self.scroll_layout.addStretch()
+
+    def _add_sdis_values(self, client_id: int) -> None:
+        """SDIS Others and Profile builder values captured on each portal (blueprint S.4), read-only,
+        labelled from sdis_mcl. Nothing is shown when the client has none."""
+        try:
+            from sera_db.srpf import sdis_value_rows
+            container = self.db.get_client_raw_container(client_id=client_id) or {}
+            rows = sdis_value_rows(container.get("raw_aggregates") or {}, container.get("portal_profiles") or {},
+                                   self.db.sdis_field_labels())
+        except Exception:
+            rows = []
+        if not rows:
+            return
+        hdr = QLabel("PORTAL VALUES")
+        hdr.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+        hdr.setToolTip("Captured by SGT for Sera Distill's Profile builder and Others containers")
+        self.scroll_layout.addWidget(hdr)
+        for portal, pairs in rows:
+            box = QFormLayout()
+            box.setContentsMargins(0, 2, 0, 6)
+            box.setHorizontalSpacing(14)
+            box.setVerticalSpacing(4)
+            title = QLabel(portal)
+            title.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
+            box.addRow(title)
+            for label, value in pairs:
+                k = QLabel(label)
+                k.setStyleSheet("color: #8E8D88; font-size: 11.5px;")
+                v = QLabel(value)
+                v.setStyleSheet("color: #E8E8E3; font-size: 12px;")
+                v.setWordWrap(True)
+                v.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                box.addRow(k, v)
+            self.scroll_layout.addLayout(box)
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+        self.scroll_layout.addWidget(div)
 
     def run_service_action(self, client_id: int, service: dict) -> None:
         """Loads the client (without showing the window) and runs the service's Automation Mode 1 action."""

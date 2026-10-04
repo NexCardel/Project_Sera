@@ -811,6 +811,7 @@ links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D2
 | D23 | `sdis_mcl` and Sera's Master Column List (`mcl_columns`) | separate tables; a field may be linked to a column later |
 | — | Dataset completion levels | not in code: defined in the containers file (`levels`, `level_map`) |
 | — | S.3 details (W4-6, recorded) | **Taken:** Profile builder, Others and dataset containers all count for "one container per portal"; loading the file skips the sdis_mcl/portal membership checks (put and import run them); removing a field drops the examples that captured it; a user's move beats `class_exceptions`; the `sdis_config` row has a fixed gid; specs of one field are `sdis.<field>`, `.2`, `.3`… |
+| — | A container named after a built-in form (W4-7) | **Taken** (user, 2026-10-05): **A** - its tracker row shares the canonical key (form = container name) with SGT's built-in row; the tracker keeps one row per key and never lowers its status |
 | — | Deadline | moved to **2026-10-06 01:30 IST** (Tuesday) |
 
 No decision is open. Workers record any new choice with `decide` and ask with `ask`.
@@ -1226,5 +1227,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Decisions: (1) mine() reads ONE folder keyed by bare name, so Find datapoints hard-links every device's `sdis_*.jsonl` into `mine_input/` as
   `sdis_<tag>__<name>`; (2) Dataset / Others register = sdis_mcl + containers file only, captured once SGT reads containers (W4-7); (3) Please check
   buttons: Keep as data / Template. W4-7 must: read `reg|` rows for dataset/Others fields, since no spec exists for them yet.
+- **W4-7** (2026-10-05, claude-opus-5-5): Part S.2/S.4 in SGT. NEW `core/sgt/sgt_containers.py` (pure: `load_doc` via `config.current()`,
+  `Instance` (form = name or form_field, period, values, evidence, level, status, k/n, proves, sent_key), `evaluate`/`apply` (level_for,
+  promote-only level AND status; no level or unmapped -> Draft), `ContainerSession` (feed: one instance per (form, period), values before
+  the period wait, a new period opens/returns to an instance; feed_others; recompute; json), `split_hits`, `sdis_info`). `sgt_shadow`: SDIS
+  hits (spec name `sdis.`) are split off `res.current` before `_update_draft` and fed to containers after `_absorb` (no list pages; page text
+  ignored while another PAN shows); a changed document re-evaluates every instance; instance rows (canonical key, mode's method) and one
+  carrier row (`SGT_sdis_info`, key form "SDIS info") go through the outbox; every row carries `raw_payload.sdis` once there are values;
+  sessions snapshot `sdis`. `register.py`: dataset/Others -> `current_dataset` specs, period -> shape pattern; dialog registers every class.
+  `sera_db/srpf.py`: `fold_sdis` (history of changes, latest `at`), carriers add no filing/capture, `get_srpf_containers` returns both
+  columns, `sdis_value_rows`, `sdis_field_labels`; `get_tracker_dumps` + database.py's count skip carriers (`core/dataset_key.NOT_CARRIER_SQL`).
+  Shown in the container inspector and client detail ("PORTAL VALUES"). Tests: NEW `test_sgt_containers.py` 21; register/dialog updated;
+  SGT 628 + 21, SDIS + align 362 passed; tracker/DB files: only the pre-existing clients.py internal-PK (7) and 2 SRPF UI-format failures.
+  `sgt_replay.py diff`: identical to HEAD's sgt_shadow output (85 lines, random session id masked). Regression before = after, every line.
+  Decisions: Q (A, shared key, section 10) + 2 recorded. Check 9. Next: W4-5's dataset/Others fields registered before W4-7 have no spec
+  (re-register them); SGT-I `sera_data` sees carriers (no form/period, harmless).
 
 

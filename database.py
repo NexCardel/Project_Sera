@@ -432,7 +432,8 @@ class SeraDatabase(SchemaMixin, SettingsMixin, MclServicesMixin, ClientsMixin, A
             latest_dump_ts = ""
             try:
                 with self._connect_raw() as r_conn:
-                    cur = r_conn.execute("SELECT COUNT(*), MAX(created_at) FROM tracker_dump")
+                    from core.dataset_key import NOT_CARRIER_SQL     # SDIS carrier rows are not captures
+                    cur = r_conn.execute("SELECT COUNT(*), MAX(created_at) FROM tracker_dump WHERE " + NOT_CARRIER_SQL)
                     r_row = cur.fetchone()
                     tracker_count = r_row[0] if r_row and r_row[0] else 0
                     latest_dump_ts = r_row[1] if r_row and r_row[1] else ""

@@ -9,6 +9,11 @@ the extension) and SGT in live mode both do. Pure: depends on nothing but `re`.
 
 import re
 
+# SDIS carrier rows (blueprint S.4): a session's Others / Profile builder values with no dataset
+# row to ride on. They are not datasets: every tracker view, counter and status resolver skips them.
+SDIS_INFO_METHOD = "SGT_sdis_info"
+NOT_CARRIER_SQL = "(capture_method IS NULL OR capture_method != 'SGT_sdis_info')"
+
 
 def compute_dataset_key(portal: str, identifier: str, form_type: str, period_label: str) -> str:
     """Generates a canonical, deterministic dataset key for instant O(1) deduplication & promotion:
