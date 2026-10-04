@@ -52,7 +52,8 @@ def value_shapes(datapoint: Any, memories: Sequence[Any]) -> Dict[str, int]:
     seen = set()
     shapes: Dict[str, int] = {}
     for mi, nid in _get(datapoint, "nodes") or ():
-        nd = (_get(memories[mi], "nodes") or {}).get(nid)
+        nodes = _get(memories[mi], "nodes") or {}
+        nd = nodes.get(nid) if isinstance(nodes, dict) else nodes[nid] if 0 <= nid < len(nodes) else None
         if not nd:
             continue
         for client, c in voters(nd).get("clients", {}).items():

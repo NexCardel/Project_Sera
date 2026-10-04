@@ -1215,5 +1215,16 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Regression before = after, every line identical (11 maps, 41 snapshots, 2367 nodes, 0/0/28; owners 4; 3 links; datapoints 93; class 0/3/7/83).
   Decisions recorded (4). Check 7 (two PCs). Next: W4-7 reads `config.current()` + `level_for` (promotion over time is the caller's); W4-5 edits
   via the helpers + `db.put_sdis_containers` and passes `class_exceptions` / `field_of` (from sdis_fields.mcl_gid) to `classes.annotate`.
+- **W4-5** (2026-10-05, claude-sonnet-5-5): Part L. Tracker dump -> Tools -> Distill... (`_open_distill`; non-admin PC gets the message). NEW
+  `core/sdis/distill.py` (Qt-free: decision rows -> `Decided`, `shown_label`, `apply_decisions` pushes dismissed/registered/rejected triples into the
+  state before a run, `recount`, `counts`, `roll_seen`, container helpers, `stage_inputs`), `ui/dialogs/sdis_dialog.py` (`SdisDialog` mockup frames A/C/E +
+  side panel, `SdisLoadingDialog` application-modal over `MinerClient`, signals only), `ui/dialogs/sdis_containers_dialog.py` (frame B: `ContainerEditor`,
+  `LevelsDialog`, `LevelsTable`; a refused edit shows the check's reason). Label edit = `label|key` decision, never overwritten; Register / Add to / drag =
+  `reg|key` decision + `register_field` (profile) or `add_sdis_mcl` (dataset / Others) + `config.add_field` + `put_sdis_containers`. `register.value_shapes`
+  fixed for real `PageMemory` (list nodes). Tests: NEW `test_sdis_dialog.py` 18; SDIS + align 362 passed. Regression before = after, every line identical
+  (41 snapshots, 2367 nodes; datapoints 93; class 0/3/7/83). Check 8 (admin PC + a second PC after sync). core/sgt* untouched.
+  Decisions: (1) mine() reads ONE folder keyed by bare name, so Find datapoints hard-links every device's `sdis_*.jsonl` into `mine_input/` as
+  `sdis_<tag>__<name>`; (2) Dataset / Others register = sdis_mcl + containers file only, captured once SGT reads containers (W4-7); (3) Please check
+  buttons: Keep as data / Template. W4-7 must: read `reg|` rows for dataset/Others fields, since no spec exists for them yet.
 
 

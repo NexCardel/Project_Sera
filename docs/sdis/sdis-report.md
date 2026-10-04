@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-05 01:10)
+# Sera Distill — report (2026-10-05 01:23)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 4 |
+| Not started | 3 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 26 |
+| Done | 27 |
 | Blocked | 0 |
 
-Runs: 27   output tokens: 1338521   API-equivalent cost: $37.07
+Runs: 28   output tokens: 1395259   API-equivalent cost: $40.75
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -41,7 +41,7 @@ Runs: 27   output tokens: 1338521   API-equivalent cost: $37.07
 | W4-3 | Done | opus | 5b16e05 | Part O: mining in its own process (no CPU cap) | mine_process.run via main.py --sdis-mine (JSON lines), MinerClient (reader thread, instant cancel, no CPU cap); 8 new tests, SDIS 294 passed, regression unchang |
 | W4-4 | Done | opus | 738bf1f | Part Q: registration on every PC (synced tables) | Part Q: synced sdis_fields/sdis_decisions, register.py drafts Profile builder specs -> sdis_fields.json, SGT third spec file; regression unchanged |
 | W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
-| W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |
+| W4-6 | Done | opus | 82c13ca | Parts U + S.3: sdis_mcl, the containers file (sync + checks) | sdis_mcl + sdis_config synced tables, all S.3 load checks, level_for, edit helpers, file on every PC, register_field; 42 new tests; regression unchanged |
 | W4-7 | Not started | opus |  | Part S.2 in SGT: container instances, completion, Others values |  |
 | W5-R | Not started | opus |  | Final review and merge-readiness note |  |
 
@@ -69,6 +69,10 @@ Runs: 27   output tokens: 1338521   API-equivalent cost: $37.07
 - **W4-3** Does the PyInstaller spec need core.sdis.mine_process added by hand? → No: build_tools has no .spec in the repo and no hand-listed hiddenimports; main.py imports the module statically so PyInstaller finds it (grep of build_tools for hiddenimports found none; nothing to edit, no installer built)
 - **W4-4** Where the user's label lives in sdis_fields.json and how a registered spec is named → label in the spec's note (never its labels); spec name sdis.<field>; field slug never equal to an existing field (_2, _3 ...) (the page labels decide capture, so a rename must not touch them; a bare field name would override a built-in spec of the same name in load_registry)
 - **W4-4** Which database file holds sdis_fields / sdis_decisions, and what an empty table writes → rawPayload.db next to tracker_dump (LWW on gid, retire = status update); no active rows -> sdis_fields.json removed; period/label/sentence/control datapoints are not registrable (follows tracker_dump as the WP says; a missing file is exactly the pre-Part-Q spec set; no drafted pattern exists for those types, so no guessed spec)
+- **W4-6** Which containers count for the S.3 check 'a field is in at most one container per portal'? → Profile builder, Others and every dataset container of that portal (Part S: every registered datapoint lives in exactly one container; the three kinds are all containers)
+- **W4-6** Loading sdis_containers.json on a PC has no database: check field names against sdis_mcl and portals against registered ones there? → No: put() and import run those two membership checks; load runs every other S.3 check (the written file was checked when it was put; portal_names() at load would recurse through vsdc_scope -> config)
+- **W4-6** remove_field: what happens to a container's examples that captured the removed field, and class_exceptions vs a user's move? → examples capturing the removed field are dropped (the rest must still give their levels); a user's move beats class_exceptions, which beat the S.1 suggestion (an example of a field combination that no longer exists cannot be checked; a move is the user's latest explicit choice)
+- **W4-6** sdis_config row identity and spec names for one field on several pages → the containers row has a fixed gid (md5 of 'sdis_config:containers'); specs are sdis.<field>, sdis.<field>.2, .3...; the same page (portal + page labels) re-uses its spec (two PCs creating the row at once write the same LWW row, not two; spec names stay unique while SGT merges captures by field)
 
 ## Checks waiting for you
 
@@ -78,3 +82,4 @@ Runs: 27   output tokens: 1338521   API-equivalent cost: $37.07
 - #4 (W4-2) Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving — Not run
 - #5 (W4-3) Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues — Not run
 - #6 (W4-4) Two real PCs in live sync: register a Profile builder field on one (W4-5 dialog or db.add_sdis_field), check the other PC's ~/AmanAssociates_Sera/sdis_fields.json appears after a sync round and SGT logs one more profile spec; rename and retire also reach it — Not run
+- #7 (W4-6) Two PCs: put the containers document and add/rename an sdis_mcl field on one PC; after sync the other PC's <Sera data>/sdis_containers.json matches (same version) and both sdis_fields.json notes show the new label. Edit on both PCs at once: one sdis_config row (fixed gid) survives, never two. — Not run

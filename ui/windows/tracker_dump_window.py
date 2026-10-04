@@ -2605,6 +2605,19 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
 
+    def _open_distill(self):
+        """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
+        if not self.db.is_admin_pc():
+            QMessageBox.information(self, "Sera Distill", "Sera Distill runs on the admin PC only.")
+            return
+        dlg = getattr(self, "_distill_dialog", None)
+        if dlg is None:
+            from ui.dialogs.sdis_dialog import SdisDialog
+            dlg = self._distill_dialog = SdisDialog(self.db, self)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
         from PySide6.QtWidgets import QMenu
@@ -2642,9 +2655,12 @@ class TrackerDumpWindow(QWidget):
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
 
+        act_distill = menu.addAction(_safe_qta_icon("mdi.flask-outline", "#4CF9B7"), "Distill…")
+        act_distill.triggered.connect(self._open_distill)
+
         menu.addSeparator()
 
-        act_clear = menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
+        act_clear =menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
         act_clear.triggered.connect(self._clear_all_dumps)
 
         # Spawn popup directly below Preferences button
