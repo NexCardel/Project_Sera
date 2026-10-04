@@ -179,6 +179,20 @@ sdis_decisions = _register(TableSpec(
           "container moves, one row per signature, read by mining on the admin PC.",
 ))
 
+sdis_mcl = _register(TableSpec(
+    "sdis_mcl", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part U (D23): the field library, one row per field; "
+          "sdis_fields.mcl_gid points here. Separate from mcl_columns. A retire "
+          "is an UPDATE of status, never a DELETE.",
+))
+
+sdis_config = _register(TableSpec(
+    "sdis_config", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part S.3: ONE row (name 'containers') holding the whole "
+          "containers document + its version. Every PC writes it to "
+          "<Sera data>/sdis_containers.json.",
+))
+
 sdc_session_timelines = _register(TableSpec(
     "sdc_session_timelines", RAW_DB, LWW, row_key=("session_id",),
     fk={"client_id": "clients"},

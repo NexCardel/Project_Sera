@@ -638,8 +638,9 @@ class SeraApp:
             from core.vsdc import VSDCWorker, vsdc_scope
             # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
             vsdc_scope.set_services_source(self.db.get_services)
-            # SDIS Part Q: the synced sdis_fields table -> sdis_fields.json, SGT's third spec file.
-            threading.Thread(target=self._write_sdis_fields, name="sdis-fields", daemon=True).start()
+            # SDIS Part Q / S.3: the synced sdis_fields table -> sdis_fields.json, SGT's third spec
+            # file; the sdis_config row -> sdis_containers.json.
+            threading.Thread(target=self._write_sdis_files, name="sdis-fields", daemon=True).start()
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
@@ -2113,6 +2114,18 @@ class SeraApp:
         except Exception as e:
             print(f"[SDIS] sdis_fields.json not written: {type(e).__name__}")
 
+    def _write_sdis_containers(self):
+        """SDIS Part S.3: rewrite <Sera data>/sdis_containers.json from the synced sdis_config row."""
+        try:
+            from core.sdis.config import refresh
+            refresh(self.db)
+        except Exception as e:
+            print(f"[SDIS] sdis_containers.json not written: {type(e).__name__}")
+
+    def _write_sdis_files(self):
+        self._write_sdis_fields()
+        self._write_sdis_containers()
+
     def _on_live_sync_received(self, sender_username: str = "", sender_host: str = ""):
         """Called from SyncPeerService background thread. Under v3 (P0-4), live in-place replacement
         is retired; incoming databases are staged and require application restart to swap."""
@@ -2187,6 +2200,8 @@ class SeraApp:
             self._queue_synced_tables(info.get("tables") or ())
             if "sdis_fields" in (info.get("tables") or ()):
                 self._write_sdis_fields()   # SDIS Part Q: another PC registered/renamed/retired a field
+            if "sdis_config" in (info.get("tables") or ()):
+                self._write_sdis_containers()   # SDIS Part S.3: another PC edited the containers
         elif kind == "clock_ahead":
             name = info.get("name") or info.get("device_id") or "Peer"
             ahead_ms = info.get("ahead_ms", 0)

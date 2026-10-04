@@ -360,6 +360,33 @@ class SchemaMixin:
                     updated_at  TEXT NOT NULL
                 );
             """)
+            # SDIS Part U / S.3: the field library and the containers document (one row)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sdis_mcl (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gid         TEXT,
+                    name        TEXT NOT NULL,
+                    label       TEXT,
+                    value_type  TEXT,
+                    class       TEXT,
+                    portal      TEXT,
+                    status      TEXT DEFAULT 'active',
+                    created_by  TEXT,
+                    updated_at  TEXT NOT NULL
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sdis_config (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    gid         TEXT,
+                    name        TEXT NOT NULL,
+                    doc_json    TEXT NOT NULL,
+                    version     INTEGER DEFAULT 0,
+                    updated_by  TEXT,
+                    updated_at  TEXT NOT NULL
+                );
+            """)
+            self._ensure_column(conn, "sdis_fields", "mcl_gid", "TEXT")
 
             import sync_tables
             sync_tables.ensure_sync_infrastructure(conn, "raw", device_id=self._device_id)

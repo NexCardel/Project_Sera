@@ -11,6 +11,9 @@ Only Profile builder fields are registered for now: a dataset or Others field mu
 profile, and SGT reads those through the containers file (W4-7). The user's label goes into the
 spec's `note`, never its `labels` (the page labels it is found by), so renaming changes nothing
 that is captured. No values are written anywhere: the shapes are letters -> A, digits -> 9.
+
+Part U: register_field() makes every registered datapoint a datapoint of an sdis_mcl field: the
+same field picked on two pages is two specs (sdis.<field>, sdis.<field>.2) of one field.
 """
 
 import json
@@ -158,6 +161,58 @@ def write_fields_file(rows: Iterable[Dict[str, Any]], path: Optional[Path] = Non
     tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
     return path
+
+
+def spec_name_for(field: str, taken_names: Iterable[str]) -> str:
+    """sdis.<field> for the field's first spec, sdis.<field>.2, .3 ... for more pages of it."""
+    taken = set(taken_names)
+    name, n = NAME_PREFIX + field, 2
+    while name in taken:
+        name, n = "%s%s.%d" % (NAME_PREFIX, field, n), n + 1
+    return name
+
+
+def register_field(db: Any, datapoint: Any, memories: Sequence[Any], portal: str,
+                   field: Optional[str] = None, cls: str = PROFILE, created_by: str = "",
+                   base_paths: Optional[Sequence[Path]] = None) -> Dict[str, Any]:
+    """Part U: a picked datapoint becomes a datapoint of a field. `field` names an existing
+    sdis_mcl field (PAN picked again on another page); None makes a new field from the label.
+    The spec goes into sdis_fields linked to the field (mcl_gid), named sdis.<field>[.n]. Which
+    container the field is in is a containers-file edit (core/sdis/config.py), never a spec
+    change. Returns {mcl_gid, field_gid, field, name}; raises NotRegistrable."""
+    from core.sgt import sgt_specs
+
+    library = {r["name"]: r for r in db.list_sdis_mcl()}
+    specs = db.list_sdis_fields()
+    base = list(base_paths) if base_paths is not None else sgt_specs.default_paths()
+    if field is not None:
+        if field not in library:
+            raise NotRegistrable("no such field in the library")
+        name_for = field
+    else:
+        label = clean_label(_get(datapoint, "label") or "")
+        if not label:
+            raise NotRegistrable("the datapoint has no label")
+        name_for = field_name(label, _taken_fields(base) | set(library))
+    # the same page again re-registers its spec; another page of the field gets a new spec
+    row = draft_spec(datapoint, memories, portal, cls, field=name_for, base_paths=base)
+    mcl = library.get(name_for)
+    same = [s for s in specs if mcl and s.get("mcl_gid") == mcl["gid"] and s.get("portal") == portal
+            and (s.get("spec") or {}).get("labels") == row["spec"].get("labels")]
+    name = same[0]["name"] if same else spec_name_for(name_for, (s["name"] for s in specs))
+    if name != row["name"]:
+        row["spec"]["name"] = name
+        if miner_check(row["spec"], base):
+            raise NotRegistrable("refused by the SGT loader")
+    mcl_gid = db.add_sdis_mcl(name_for, row["label"], _get(datapoint, "value_type") or "", cls, portal, created_by)
+    label = (library.get(name_for) or {}).get("label") or row["label"]
+    field_gid = db.add_sdis_field(name, portal, row["section"], row["spec"], label, created_by, mcl_gid)
+    return {"mcl_gid": mcl_gid, "field_gid": field_gid, "field": name_for, "name": name}
+
+
+def miner_check(spec: Dict[str, Any], base: Sequence[Path]) -> Optional[str]:
+    from core.sgt_i import miner
+    return miner.check_spec(PROFILE, spec, base)
 
 
 def refresh(db: Any) -> Optional[Path]:

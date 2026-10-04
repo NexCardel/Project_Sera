@@ -810,6 +810,7 @@ links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D2
 | D22 | Pages that list several instances of a container | later; first version: one instance per page and key |
 | D23 | `sdis_mcl` and Sera's Master Column List (`mcl_columns`) | separate tables; a field may be linked to a column later |
 | — | Dataset completion levels | not in code: defined in the containers file (`levels`, `level_map`) |
+| — | S.3 details (W4-6, recorded) | **Taken:** Profile builder, Others and dataset containers all count for "one container per portal"; loading the file skips the sdis_mcl/portal membership checks (put and import run them); removing a field drops the examples that captured it; a user's move beats `class_exceptions`; the `sdis_config` row has a fixed gid; specs of one field are `sdis.<field>`, `.2`, `.3`… |
 | — | Deadline | moved to **2026-10-06 01:30 IST** (Tuesday) |
 
 No decision is open. Workers record any new choice with `decide` and ask with `ask`.
@@ -1199,5 +1200,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Decisions recorded (2). Hands-on check 6 (two PCs). **Merge:** main has uncommitted edits to `sync_schema.py` and `sera_db/schema.py`; check both
   and `tests/test_sync_schema.py`'s expected sets there. W4-5/W4-6: read `list_sdis_decisions()` into mining's rejected/moves; a counts-only
   `../sdis_regress_w44_after.txt` can go.
+- **W4-6** (2026-10-05, claude-opus-5-5): Parts U + S.3. Tables `sdis_mcl` (gid, name, label, value_type, class, portal, status,
+  created_by, updated_at) and `sdis_config` (ONE row, name 'containers', fixed gid = md5('sdis_config:containers'), doc_json, version,
+  updated_by, updated_at) in rawPayload.db, LWW on gid; `sdis_fields.mcl_gid` (`_ensure_column`). `sera_db/sdis.py`: `add/rename/retire/
+  list_sdis_mcl` (rename = label, also every sdis_fields row of it, R6; a 2nd portal makes the field 'all'), `get/put_sdis_containers` (put runs
+  `config.check` with sdis_mcl names + registered portals, refuses, version + 1, writes the file). `core/sdis/config.py`: every S.3 load check,
+  `level_for` / `k_of_n` / `levels_of` / `level_map_of` (no level name or threshold in code), helpers `add/rename/delete_container`, `add/remove/
+  move_field` (where = container name or ("profile"|"others", portal)), `mark_key`, `set_exception`, `set_levels` (each returns a checked copy),
+  `write_file` (atomic, same bytes or no row -> untouched), `refresh(db)` (+ reload), `export(db, path)` / `import_file(db, path)`. Loading the file
+  skips only the two membership checks (decided). main.py writes it at start-up (with sdis_fields) and on "synced" with `sdis_config`.
+  `register.register_field(db, dp, memories, portal, field=None)`: mcl row + spec `sdis.<field>[.n]`; still Profile builder only (W4-4 rule).
+  `classes.suggest(..., class_exceptions, field_of)`: move > class exception > suggestion. Tests: NEW `test_sdis_containers.py` 42; SDIS + align
+  344 passed; SGT + sync_schema 630 passed. `sgt_replay.py diff`: only the pre-existing "newly written" list (no core/sgt file changed).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 nodes, 0/0/28; owners 4; 3 links; datapoints 93; class 0/3/7/83).
+  Decisions recorded (4). Check 7 (two PCs). Next: W4-7 reads `config.current()` + `level_for` (promotion over time is the caller's); W4-5 edits
+  via the helpers + `db.put_sdis_containers` and passes `class_exceptions` / `field_of` (from sdis_fields.mcl_gid) to `classes.annotate`.
 
 

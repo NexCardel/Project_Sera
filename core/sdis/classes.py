@@ -89,16 +89,25 @@ def _reason(cls: str, k: int, n: int) -> str:
 
 
 def suggest(datapoints: Iterable[Any], memory_state: Iterable[Any],
-            moves: Optional[Mapping[Any, str]] = None) -> Dict[Any, Tuple[Optional[str], str]]:
+            moves: Optional[Mapping[Any, str]] = None,
+            class_exceptions: Optional[Mapping[str, str]] = None,
+            field_of: Optional[Mapping[Any, str]] = None) -> Dict[Any, Tuple[Optional[str], str]]:
     """{datapoint key: (class or None, reason)}. memory_state: the PageMemory objects the datapoints
-    came from. moves: {datapoint key: class} the user chose; they override the suggestion."""
+    came from. moves: {datapoint key: class} the user chose; they override the suggestion.
+    class_exceptions: the containers file's {field: class} (S.3); a datapoint registered as that
+    field (field_of: {datapoint key: sdis_mcl field name}) is always in that class."""
     from core.sdis.relevance import _norm as norm_key
     mems = list(memory_state)
     moved = {norm_key(k): v for k, v in (moves or {}).items() if v in CLASSES}
+    fields = {norm_key(k): v for k, v in (field_of or {}).items()}
+    fixed = {f: c for f, c in (class_exceptions or {}).items() if c in CLASSES}
     out: Dict[Any, Tuple[Optional[str], str]] = {}
     for dp in datapoints:
         if dp.key in moved:
             out[dp.key] = (moved[dp.key], "moved by the user")
+            continue
+        if fields.get(dp.key) in fixed:
+            out[dp.key] = (fixed[fields[dp.key]], "class exception in the containers file")
             continue
         votes = Counter(c for c in (client_class(o) for o in _observations(mems, dp).values()) if c)
         n = sum(votes.values())
@@ -114,9 +123,11 @@ def suggest(datapoints: Iterable[Any], memory_state: Iterable[Any],
 
 
 def annotate(datapoints: List[Any], memory_state: Iterable[Any],
-             moves: Optional[Mapping[Any, str]] = None) -> Dict[Any, Tuple[Optional[str], str]]:
+             moves: Optional[Mapping[Any, str]] = None,
+             class_exceptions: Optional[Mapping[str, str]] = None,
+             field_of: Optional[Mapping[Any, str]] = None) -> Dict[Any, Tuple[Optional[str], str]]:
     """suggest(), and set suggested_class / class_reason on every datapoint."""
-    result = suggest(datapoints, memory_state, moves)
+    result = suggest(datapoints, memory_state, moves, class_exceptions, field_of)
     for dp in datapoints:
         dp.suggested_class, dp.class_reason = result[dp.key]
     return result

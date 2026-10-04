@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 18:24)
+# Sera Distill — report (2026-10-05 01:10)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 5 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 25 |
+| Done | 26 |
 | Blocked | 0 |
 
-Runs: 26   output tokens: 1305649   API-equivalent cost: $33.75
+Runs: 27   output tokens: 1338521   API-equivalent cost: $37.07
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -39,7 +39,7 @@ Runs: 26   output tokens: 1305649   API-equivalent cost: $33.75
 | W4-1 | Done | opus | f6dd800 | Part K: SDIS's own recorder (raw view, session id, browser) | SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests +  |
 | W4-2 | Done | opus | 864adf5 | Part P: captures travel to the admin PC | Part P: core/sdis/transfer.py push/handle_push/Pusher, sdis_push in dispatch_session, main.py trigger; 6 new tests; regression identical |
 | W4-3 | Done | opus | 5b16e05 | Part O: mining in its own process (no CPU cap) | mine_process.run via main.py --sdis-mine (JSON lines), MinerClient (reader thread, instant cancel, no CPU cap); 8 new tests, SDIS 294 passed, regression unchang |
-| W4-4 | Not started | opus |  | Part Q: registration on every PC (synced tables) |  |
+| W4-4 | Done | opus | 738bf1f | Part Q: registration on every PC (synced tables) | Part Q: synced sdis_fields/sdis_decisions, register.py drafts Profile builder specs -> sdis_fields.json, SGT third spec file; regression unchanged |
 | W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
 | W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |
 | W4-7 | Not started | opus |  | Part S.2 in SGT: container instances, completion, Others values |  |
@@ -67,6 +67,8 @@ Runs: 26   output tokens: 1305649   API-equivalent cost: $33.75
 - **W4-2** Push trigger, batch size and repeat files → Any successful sync session triggers a push at most every 15 min on its own thread; a push carries at most 200 files / 200 MB (rest next time); a file written in the last 60 s is not finished; a re-pushed name replaces the stored copy (atomic .part + os.replace); names other than sdis_YYYY-MM-DD.jsonl refuse the whole manifest (Fits the transport's 600 s session deadline, never sends a file still being written, and a lost ack only causes a harmless resend)
 - **W4-3** Which captures folders does one mining run take, given pushed files sit in corpus/<device id>/ with the same day names on every PC? → One --captures folder per run, as mine() takes today; walking corpus/<device>/ plus sdis_capture (file keys by relative path) is left to the WP wiring the button (W4-5) (mine() keys files by bare name, so a multi-folder run needs an engine change to state keys; out of W4-3's scope and not on the regression path)
 - **W4-3** Does the PyInstaller spec need core.sdis.mine_process added by hand? → No: build_tools has no .spec in the repo and no hand-listed hiddenimports; main.py imports the module statically so PyInstaller finds it (grep of build_tools for hiddenimports found none; nothing to edit, no installer built)
+- **W4-4** Where the user's label lives in sdis_fields.json and how a registered spec is named → label in the spec's note (never its labels); spec name sdis.<field>; field slug never equal to an existing field (_2, _3 ...) (the page labels decide capture, so a rename must not touch them; a bare field name would override a built-in spec of the same name in load_registry)
+- **W4-4** Which database file holds sdis_fields / sdis_decisions, and what an empty table writes → rawPayload.db next to tracker_dump (LWW on gid, retire = status update); no active rows -> sdis_fields.json removed; period/label/sentence/control datapoints are not registrable (follows tracker_dump as the WP says; a missing file is exactly the pre-Part-Q spec set; no drafted pattern exists for those types, so no guessed spec)
 
 ## Checks waiting for you
 
@@ -75,3 +77,4 @@ Runs: 26   output tokens: 1305649   API-equivalent cost: $33.75
 - #3 (W4-1) Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before — Not run
 - #4 (W4-2) Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving — Not run
 - #5 (W4-3) Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues — Not run
+- #6 (W4-4) Two real PCs in live sync: register a Profile builder field on one (W4-5 dialog or db.add_sdis_field), check the other PC's ~/AmanAssociates_Sera/sdis_fields.json appears after a sync round and SGT logs one more profile spec; rename and retire also reach it — Not run
