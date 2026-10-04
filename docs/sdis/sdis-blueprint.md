@@ -18,7 +18,7 @@ across clients, using **counting and statistics only, with no AI**. The user see
 usual useless fluff so the user can pick datapoints fast. It does not need to show absolute
 confidence, and there is no truth set to score it against: the user is the final filter. It is a
 **learning** feature, not real-time capture: it mines **on one PC (the admin PC), when the user asks**
-("Find datapoints", like SGT-I), behind a loading dialog, at most 10% CPU.
+("Find datapoints", like SGT-I), behind a loading dialog, at full speed (admin PC only).
 
 **What already exists (pre-dev, `tools/pre_dev/class_diff/`, not wired into the app):**
 
@@ -79,7 +79,7 @@ confidence, and there is no truth set to score it against: the user is the final
             v
  Part K  SDIS's own input (raw view + session id + browser), tuned for SDIS (not SGT-I)
  Part M  Every browser captured; compared per browser at mining   Part N  Smart page link resolution
- Part O  "Find datapoints" on demand: loading dialog, app locked, <= 10% CPU, memory on disk
+ Part O  "Find datapoints" on demand: loading dialog, app locked, own process (no CPU cap), memory on disk
  Part P  Captures travel staff PC -> admin PC (Sera Sync v3 transport), deleted after receipt
  Part Q  A picked datapoint is registered on EVERY PC (synced table -> spec file SGT loads)
  Part R  Firefox support for SGT-C and SDIS (address bar, title, line parity, Firefox fixtures)
@@ -377,28 +377,26 @@ links that are one page.
 ## Part O — "Find datapoints": mining on demand
 
 *(user, 2026-10-03: no idle-time learning. It works like SGT-I's "Look for new datapoints", but faster,
-with a loading dialog that locks the screen, and at most 10% CPU)*
+with a loading dialog that locks the screen)* *(user, 2026-10-04: "since mining will be done in the admin
+PC, don't cap it")*
 
 * Mining runs **only when the user asks**: a **Find datapoints** button (in the Distill… dialog), on
   the admin PC only (rule 7).
 * A **loading dialog** shows progress (captures done / total, the current page) and **locks the app**
   (modal) until mining ends. It locks the app, not Windows. It has a **Cancel** button: everything
   finished so far is already saved, so cancelling loses nothing.
-* **At most 10% CPU, enforced by the OS:** mining runs in a **separate process** under a Windows Job
-  Object with a hard CPU-rate cap of 10% (`JobObjectCpuRateControlInformation`,
-  `JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP`, `CpuRate = 1000`; via
-  `ctypes`, no new library). The installed app is frozen, so the child is **the app's own program
-  started with a flag** (`<exe> --sdis-mine <args>`), handled at the very top of `main.py` before Qt or
+* **No CPU cap** (2026-10-04, replacing the 10% cap of 2026-10-03): mining runs only on the admin PC,
+  so it runs as fast as that PC allows - no Job Object, no priority change. It still runs in a
+  **separate process**, so Sera stays responsive behind the dialog and Cancel is instant. The installed
+  app is frozen, so the child is **the app's own program started with a flag** (`<exe> --sdis-mine <args>`), handled at the very top of `main.py` before Qt or
   the database load. From source it is `python main.py --sdis-mine …`. Progress comes back as JSON lines
-  on the child's stdout; Cancel ends the job. The app and SGT capture keep running normally; the dialog
+  on the child's stdout; Cancel ends the process. The app and SGT capture keep running normally; the dialog
   only reads progress.
 * **Fast because it is incremental:** memory is **saved on disk** (admin PC) and each run processes
   only the captures that arrived since the last run, one client map at a time (merge → link
   resolution (N) → identity (D) → per browser (M) → memory (G, H) → relevance (J)).
   Measured on today's 11 pre-dev captures: the whole engine takes 1.8 s with Python start-up included.
-  One Python thread is about 12.5% of an 8-core PC, so the cap barely slows it there. On a 4-core PC,
-  10% is 40% of one core, about 2.5× slower. The first run over a big corpus is the slow one; the dialog
-  shows it honestly.
+  The first run over a big corpus is the slow one; the dialog shows it honestly.
 * Opening the dialog never starts mining by itself; it shows the last saved results.
 
 ## Part P — Captures travel to the admin PC (rule 7)
@@ -753,7 +751,7 @@ and green accent. W4-5 builds to it:
 * **C · Please check:** one row per `variable_alignment` text: the text, where it is, what SDIS saw in
   one sentence, and **Keep as data** / **Template**.
 * **D · Loading dialog:** application-modal; a progress bar, "128 of 312 captures", the time left, the
-  current page link, "CPU capped at 10%, finished work is saved", Cancel.
+  current page link, "finished work is saved as it goes", Cancel.
 * **E · States:** not mined yet; not the admin PC; containers file refused (the reason in words, the
   version still in use).
 
@@ -773,7 +771,8 @@ and green accent. W4-5 builds to it:
 **Taken (2026-10-03):** rules R1–R10; problems 1–6 solved as Parts C–H describe; identity by the
 SGT session id + maths (Part D); rule 7 (no hashing, admin PC only); OCR later; plan first, then build
 like Autofill tweaks; every browser captured and compared per browser (M); smart page link resolution
-(N); "Find datapoints" on demand with a locking loading dialog and ≤ 10% CPU, no idle learning (O);
+(N); "Find datapoints" on demand with a locking loading dialog, no idle learning (O; no CPU cap since
+2026-10-04, admin PC only);
 relevance by occurrences of non-fixed values, noise counted as fixed (J); no truth set, no absolute confidence; SDIS's own input, SGT-I
 irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved; Firefox support for SGT-C and
 SDIS (R). **2026-10-04:** containers (Profile builder and Others per portal, Dataset containers whose
@@ -846,7 +845,7 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 3 | W3-3 | Part O engine: memory on disk, incremental mining | sonnet | W3-2 |
 | 4 | W4-1 | Part K: SDIS's own recorder (raw view, session id, browser) | opus | W3-3 |
 | 4 | W4-2 | Part P: captures travel to the admin PC | opus | W4-1 |
-| 4 | W4-3 | Part O: mining process capped at 10% CPU | opus | W3-3 |
+| 4 | W4-3 | Part O: mining in its own process (no CPU cap) | opus | W3-3 |
 | 4 | W4-4 | Part Q: registration on every PC (synced tables) | opus | W3-3 |
 | 4 | W4-6 | Parts U + S.3: `sdis_mcl`, the containers file (sync + checks) | opus | W4-4, W1-8 |
 | 4 | W4-7 | Part S.2 in SGT: container instances, completion, Others values | opus | W4-6 |

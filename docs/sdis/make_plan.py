@@ -534,31 +534,26 @@ WPS = [
        " `check-add W4-2 --text \"Two real office PCs: a staff PC's sdis_capture files arrive on the admin"
        " PC and are deleted on the staff PC only after arriving\"`."),
 
-    wp("W4-3", 4, "opus", "M", ["W3-3"], "Part O: mining process capped at 10% CPU",
-       "Blueprint Part O (Job Object details exact). STEP 1: core/sdis/jobcap.py, ctypes only:"
-       " cap_current_process(percent=10) creates a Job Object (CreateJobObjectW), sets"
-       " JOBOBJECT_CPU_RATE_CONTROL_INFORMATION (info class 15) with ControlFlags ="
-       " JOB_OBJECT_CPU_RATE_CONTROL_ENABLE (0x1) | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP (0x4) and CpuRate"
-       " = percent * 100, and assigns the CURRENT process (AssignProcessToJobObject(job,"
-       " GetCurrentProcess())); returns True/False, never raises; no-op returning False off Windows. STEP"
-       " 2: core/sdis/mine_process.py: run(argv) parses --captures, --state, --rebuild; calls"
-       " cap_current_process(10) FIRST; runs mine() with progress printing one JSON line per step to"
-       " stdout ({\"done\": n, \"total\": t, \"page\": link}, flushed) and a final {\"result\": \"ok\","
-       " ...summary} or {\"result\": \"error\", \"message\": ...}; exit code 0/1. STEP 3: main.py: at the very"
-       " top, right after `import sys` and BEFORE any PySide6, database or app import, add: if"
-       " '--sdis-mine' in sys.argv: from core.sdis.mine_process import run; sys.exit(run(sys.argv)). Check"
-       " the PyInstaller spec in build_tools/ (grep hiddenimports) and add core.sdis.mine_process if"
-       " modules are listed by hand; do NOT build an installer. STEP 4: core/sdis/miner_client.py:"
+    wp("W4-3", 4, "opus", "M", ["W3-3"], "Part O: mining in its own process (no CPU cap)",
+       "Blueprint Part O. Owner decision 2026-10-04: mining runs only on the admin PC, so it is NOT CPU-capped"
+       " - no Job Object, no priority change; it runs as fast as the PC allows. It still runs in a separate"
+       " process so the app stays responsive and Cancel is instant. STEP 1: core/sdis/mine_process.py:"
+       " run(argv) parses --captures, --state, --rebuild; runs mine() with progress printing one JSON line"
+       " per step to stdout ({\"done\": n, \"total\": t, \"page\": link}, flushed) and a final"
+       " {\"result\": \"ok\", ...summary} or {\"result\": \"error\", \"message\": ...}; exit code 0/1. STEP 2:"
+       " main.py: at the very top, right after `import sys` and BEFORE any PySide6, database or app import,"
+       " add: if '--sdis-mine' in sys.argv: from core.sdis.mine_process import run; sys.exit(run(sys.argv))."
+       " Check the PyInstaller spec in build_tools/ (grep hiddenimports) and add core.sdis.mine_process if"
+       " modules are listed by hand; do NOT build an installer. STEP 3: core/sdis/miner_client.py:"
        " MinerClient.start(captures, state) runs [sys.executable, '--sdis-mine', ...] when frozen"
        " (getattr(sys, 'frozen', False)) else [sys.executable, <repo>/main.py, '--sdis-mine', ...], with"
        " CREATE_NO_WINDOW; a reader thread parses the JSON lines and calls on_progress / on_done;"
        " cancel() terminates the process (the state on disk is safe: it is saved after every client)."
-       " Tests (tests/test_sdis_mine_process.py): run(argv) on the fixtures in a tmp folder prints"
-       " progress lines and a final ok; on Windows, a child that busy-loops for 3 s after"
-       " cap_current_process(10) uses at most ~15% of (3 s x cpu count) CPU time (GetProcessTimes or"
-       " psutil if it is installed; skip otherwise); MinerClient end to end against the fixtures. Hands-on"
-       " check: `check-add W4-3 --text \"Find datapoints on the admin PC: Task Manager shows the mining"
-       " process at or below 10% CPU; Cancel stops it and the next run continues\"`."),
+       " Tests (tests/test_sdis_mine_process.py): run(argv) on the fixtures in a tmp folder prints progress"
+       " lines and a final ok; a bad --captures folder gives a final error line and exit 1; MinerClient end"
+       " to end against the fixtures, and cancel() mid-run leaves a loadable state. Hands-on check:"
+       " `check-add W4-3 --text \"Find datapoints on the admin PC: the loading dialog shows progress, Sera"
+       " stays responsive behind it, Cancel stops mining at once and the next run continues\"`."),
 
     wp("W4-4", 4, "opus", "L", ["W3-3"], "Part Q: registration on every PC (synced tables)",
        "Blueprint Part Q and rule 8. D7, D15 and D6 are taken (user, 2026-10-04): registered on every PC only after the user's OK;"
