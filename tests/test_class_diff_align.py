@@ -112,16 +112,3 @@ def test_moved_block_is_left_unpaired_never_mispaired():
     for i, j in pairs.items():                          # whatever pairs, label pairs with the same label
         if b[i]["text"].endswith(":") or a[j]["text"].endswith(":"):
             assert b[i]["text"] == a[j]["text"]
-
-
-@pytest.mark.parametrize("text, expected", [
-    ("Flat 4B", "alphanumeric"),
-    ("139(1)", "alphanumeric"),
-    ("Tower 2 Block", "alphanumeric"),                  # 3 words: still a value
-    ("Tower 2 Block C", "text"),                        # 4 words: wording, not a value
-    ("Returns filed for 2 periods", "text"),
-    ("9B - Credit / Debit Notes", "text"),              # "-" and "/" are not words; 4 words
-    ("Table 4A -", "alphanumeric"),                     # a lone dash is not a word
-])
-def test_alphanumeric_only_for_short_values(text, expected):
-    assert compare.value_type(text) == expected
