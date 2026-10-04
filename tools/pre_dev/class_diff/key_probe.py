@@ -194,9 +194,12 @@ def read_keys(hwnd: int, raw_view: bool, timeout_sec: float = READ_TIMEOUT) -> L
         condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, uia_nodes.CT_DOCUMENT)
         found = root.FindAllBuildCache(4, condition, request)       # TreeScope_Descendants
         docs = []
-        for d in range(found.Length if found else 0):
+        elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
+        # Never a background tab's page. The request caches elements only (no live reference), so
+        # CurrentIsOffscreen cannot be read here: the cached IsOffscreen decides.
+        for element in [e for e in elements if not _cached(e, uia_nodes.PID_IS_OFFSCREEN)]:
             nodes: List[Dict[str, Any]] = []
-            _walk(found.GetElement(d), -1, 0, nodes)
+            _walk(element, -1, 0, nodes)
             docs.append(nodes)
         return docs
 

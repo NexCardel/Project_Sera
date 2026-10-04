@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 15:04)
+# Sera Distill — report (2026-10-04 15:08)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 23 |
+| Not started | 22 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 7 |
+| Done | 8 |
 | Blocked | 0 |
 
-Runs: 7   output tokens: 497342   API-equivalent cost: $3.60
+Runs: 8   output tokens: 511288   API-equivalent cost: $4.82
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -21,7 +21,7 @@ Runs: 7   output tokens: 497342   API-equivalent cost: $3.60
 | W1-3 | Done | gemini_first | 18a9998 | Part D: identity by session id + data fingerprint | Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay |
 | W1-4 | Done | gemini_first | 2b2b592 | Part N: smart page link resolution | Part N smart page link resolution; 101 tests pass; regression identical |
 | W1-5 | Done | gemini_first | 1d03032 | Part M: per-browser memory | Part M per-browser memory; 105 tests pass; regression identical |
-| W1-6 | Not started | opus |  | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) |  |
+| W1-6 | Done | opus | 2643145 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | Firefox URL (Edit or ComboBox), dash-agnostic title suffix, offscreen Documents never read; 12 new tests; regress unchanged |
 | W1-7 | Not started | opus |  | Part R.2: browser parity tool + Firefox fixtures |  |
 | W1-8 | Not started | opus |  | Part T: portal registration from service-settings login links |  |
 | W1-R | Not started | opus |  | Phase 1 review |  |
@@ -44,3 +44,7 @@ Runs: 7   output tokens: 497342   API-equivalent cost: $3.60
 | W4-6 | Not started | opus |  | Parts U + S.3: sdis_mcl, the containers file (sync + checks) |  |
 | W4-7 | Not started | opus |  | Part S.2 in SGT: container instances, completion, Others values |  |
 | W5-R | Not started | opus |  | Final review and merge-readiness note |  |
+
+## Checks waiting for you
+
+- #1 (W1-6) Real GST and ITR sessions in Firefox: the HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome — Not run

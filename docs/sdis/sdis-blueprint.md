@@ -951,6 +951,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   SGT. A later WP should re-take the baseline on this branch before relying on the diff.
   Regression before → after: identical (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts).
   Decisions: none asked. Hands-on check 1 added (real GST/ITR in Firefox). Next: W1-7's parity tool can use `onscreen_only`.
+- **W1-7** (2026-10-04, claude-opus-5-5): Part R.2. `tools/browser_parity.py` (serves regenerated client A/B + new
+  `tests/class_diff_align/make_form.py` form on 127.0.0.1; each browser alone per page, throwaway profile; A opened with B
+  as a 2nd tab; closes only its own PID tree via a Toolhelp snapshot, same-exe descendants; `--browsers`, `--md`,
+  `--no-fixtures`, `--show-lines`), fixtures `client_{A,B}_{chrome,msedge,firefox}.json` (key_probe format, test.local),
+  `docs/sdis/firefox-parity.md`, `tests/test_browser_parity.py` (13). key_probe `read_keys` now skips Documents whose CACHED
+  IsOffscreen is true. Tests: SDIS+align 105 passed, parity 13 passed. No core/ file changed. Regression before = after
+  (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts).
+  Result: client A/B lines identical in all 3 browsers (52/69, same order); B never read while A in front; password never
+  read; 3 `Selected:` lines everywhere. **W2-5 must fix** (details in firefox-parity.md): (1) Firefox reads a closed
+  `<select>`'s options as lines; (2) Firefox doubles a wrapped radio/checkbox label; (3) `onscreen_only` uses
+  `CurrentIsOffscreen`, which raises on `read_page_nodes`' cache-only elements, so node reads keep background tabs (Firefox
+  3 docs) - use cached 30022; (4) Edge title `- Profile 1 - Microsoft​ Edge` is not stripped by `BROWSER_SUFFIX_RE`.
+  Decisions recorded: occlusion off in the throwaway browsers (an occluded window gives 0 lines in Chromium and Firefox), 4
+  extra Firefox first-run prefs; fixtures via key_probe. Rerunning the tool rewrites firefox-parity.md (keep its top section).
 
 
 
