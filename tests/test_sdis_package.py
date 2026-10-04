@@ -52,6 +52,19 @@ def test_pre_dev_screens_is_the_core_module():
     assert screens is core.sdis.screens
 
 
+def test_pre_dev_identity_is_the_core_module():
+    import identity
+    import core.sdis.identity
+    assert identity is core.sdis.identity
+
+
+def test_link_map_reexports_identity_functions():
+    from core.sdis import identity, link_map
+    assert link_map.group_clients is identity.group_clients
+    assert link_map._by_time is identity._by_time
+
+
+
 def test_core_sdis_imports_without_pyside6(tmp_path):
     env = dict(os.environ, SDIS_DATA_DIR=str(tmp_path))
     code = ("import sys, core.sdis.paths, core.sdis.keys, core.sdis.align, core.sdis.labels, "

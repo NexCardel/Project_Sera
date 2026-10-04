@@ -48,7 +48,7 @@ def run(captures: Path, out: List[str]) -> bool:
     os.environ["SDIS_DATA_DIR"] = str(captures)
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
-    from core.sdis import link_map, memory
+    from core.sdis import identity, link_map, memory
     from core.sdis.align import shape
     from core.sdis.keys import flatten
     link_map.OUT_DIR = captures
@@ -70,6 +70,15 @@ def run(captures: Path, out: List[str]) -> bool:
         say(f"Page: {page} | {session}")
         say("  " + "  ".join(f"{k} {v}" for k, v in r.items()))
     say(f"TOTAL  {'  '.join(f'{k} {v}' for k, v in totals.items())}")
+
+    ids: Dict[str, set] = {}
+    for (session, _page), lm in maps.items():
+        ids.setdefault(session, set()).update(identity.client_ids(lm))
+    owners = identity.resolve_owners(maps, ids)
+    say()
+    say(f"== owners per session: {len(owners)} ==")
+    for session in sorted(owners, key=identity._by_time):
+        say(f"  {session}: {owners[session]}")
 
     pages = {p: cm for p, cm in memory.client_maps().items() if len(cm) >= 2}
     say()

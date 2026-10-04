@@ -909,6 +909,17 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   lost 0, multi 28; orders agree yes on all 5 links; 0 numbers changed; no real link splits. Decisions: none (Part G followed directly).
   Next WP must know: `LinkMap` and `PageMemory` have attributes `link` (base link) and `screen` (int >= 1); screens >= 2 are keyed/printed
   as `'link [screen n]'`.
+- **W1-3** (2026-10-04, gemini-3.8-flash-high): Part D identity by session id + data fingerprinting. Files: `core/sdis/identity.py`
+  (`_by_time`, `group_clients` moved from `link_map`; `fingerprint`, `decide`, `resolve_owners`), `core/sdis/link_map.py` (re-exports
+  `_by_time`, `group_clients`), `core/sdis/memory.py` (`client_maps` uses `resolve_owners` and drops undecided owners per D4),
+  `tools/pre_dev/class_diff/identity.py` (alias), `tools/sdis_regress.py` (prints owners per session), `tests/test_sdis_identity.py`
+  (7 tests), `tests/test_sdis_package.py` (2 new tests). Tests: 91 passed (82 + 9). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28 unchanged. Owners: 4 sessions (2 undecided captures, client 1,
+  client 2). Memory: 5 links → 3 links (fictional GSTR-1 and GSTR-3B drop out of memory because both fictional captures have no IDs
+  and sim=0.556 is undecided, so they are dropped from voting per D4, leaving 0 voting clients; real GST clients stay two on 3 links).
+  Orders agree: yes on all links. Decisions: D4 confirmed applied (undecided dropped from memory). Next WP must know: `resolve_owners`
+  lives in `core.sdis.identity`; `memory.client_maps()` ignores undecided sessions (`owner.startswith("undecided")`).
+
 
 
 

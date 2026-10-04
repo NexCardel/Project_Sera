@@ -275,40 +275,8 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
     return maps
 
 
-def _by_time(session: str) -> str:
-    """A session name ends in its time ("capture <time>", "read <time>")."""
-    return session.split()[-1]
+from core.sdis.identity import _by_time, group_clients  # noqa: F401 re-exported
 
-
-def group_clients(session_ids: Dict[str, set]) -> Dict[str, str]:
-    """{session: client name}. Sessions that share any client id (a PAN or GSTIN, on any page
-    they visited) are the same client, chained: A shares a GSTIN with B, B a PAN with C -> one
-    client, named "client <n>" in order of its first session. A session with NO id stays its own
-    client, "unidentified <session>": it cannot be told apart from anyone (P18, Q10 open)."""
-    parent = {s: s for s in session_ids}
-
-    def root(s: str) -> str:
-        while parent[s] != s:
-            parent[s] = parent[parent[s]]
-            s = parent[s]
-        return s
-
-    owner_of_id: Dict[str, str] = {}
-    for s in sorted(session_ids, key=_by_time):
-        for cid in session_ids[s]:
-            if cid in owner_of_id:
-                parent[root(s)] = root(owner_of_id[cid])
-            else:
-                owner_of_id[cid] = s
-    names: Dict[str, str] = {}
-    out: Dict[str, str] = {}
-    for s in sorted(session_ids, key=_by_time):
-        if not session_ids[s]:
-            out[s] = f"unidentified {s}"
-            continue
-        names.setdefault(root(s), f"client {len(names) + 1}")
-        out[s] = names[root(s)]
-    return out
 
 
 def _slug(s: str) -> str:

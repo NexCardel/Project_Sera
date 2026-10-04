@@ -192,7 +192,7 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
     """{page link: {client: that client's ONE map of it}} - sessions grouped into clients by the
     PAN / GSTIN SGT-C finds on any page they visited.
     Groups by base link and assigns each client's screen map to a PageMemory screen by weighted matching."""
-    from core.sdis.identity import client_ids
+    from core.sdis.identity import client_ids, resolve_owners
     from core.sdis.screens import covers, link_weights, same_screen
 
     if sources is None:
@@ -204,10 +204,12 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
         ids: Dict[str, set] = {}
         for (session, _page), lm in session_maps.items():
             ids.setdefault(session, set()).update(client_ids(lm))
-        owners = link_map.group_clients(ids)
-        all_client_maps = link_map.build_maps(client_of_session=owners, sources=sources)
+        owners = resolve_owners(session_maps, ids)
+        sources_filtered = [s for s in sources if not owners.get(s[1], "").startswith("undecided")]
+        all_client_maps = link_map.build_maps(client_of_session=owners, sources=sources_filtered)
     else:
-        all_client_maps = client_link_maps
+        all_client_maps = {k: v for k, v in client_link_maps.items() if not k[0].startswith("undecided")}
+
 
     by_link: Dict[str, List[link_map.LinkMap]] = {}
     for (client, page_key), lm in all_client_maps.items():
