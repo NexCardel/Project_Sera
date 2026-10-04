@@ -215,12 +215,14 @@ def all_sources() -> List[Tuple[str, str, str, Dict[str, Any]]]:
 def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
                until: Optional[str] = None,
                client_of_session: Optional[Dict[str, str]] = None,
-               sources: Optional[List[Tuple[str, str, str, Dict[str, Any]]]] = None) -> Dict[Tuple[str, str], LinkMap]:
+               sources: Optional[List[Tuple[str, str, str, Dict[str, Any]]]] = None,
+               link_of: Optional[Dict[str, str]] = None) -> Dict[Tuple[str, str], LinkMap]:
     """Every (session, page link) map, merged in time order (only up to `until`, a stamp, when
     given). `reads`: only these single reads instead of everything in output/.
     `client_of_session` (group_clients): one map per (CLIENT, page link) instead - every session
     of one client merged into one map, so a client is one vote per page (R8).
-    Candidate maps are the owner's maps of that link; weighted matching splits into screens (Part G)."""
+    Candidate maps are the owner's maps of that link; weighted matching splits into screens (Part G).
+    `link_of`: optional mapping from raw link to resolved link (Part N)."""
     from core.sdis.screens import covers, link_weights, same_screen
 
     if sources is not None:
@@ -232,20 +234,22 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
     if until is not None:
         sources = [s for s in sources if s[0] <= until]
 
-    weights = link_weights(sources)
+    sources_for_weights = [(s[0], s[1], link_of.get(s[2], s[2]), s[3]) for s in sources] if link_of else sources
+    weights = link_weights(sources_for_weights)
     maps: Dict[Tuple[str, str], LinkMap] = {}
     owner_link_maps: Dict[Tuple[str, str], List[LinkMap]] = {}
 
     for stamp, session, page, rec in sources:
         owner = (client_of_session or {}).get(session, session)
+        resolved_page = link_of.get(page, page) if link_of else page
         flat = flatten(rec)
-        candidates = owner_link_maps.get((owner, page), [])
+        candidates = owner_link_maps.get((owner, resolved_page), [])
 
         if not candidates:
-            m = LinkMap(owner, page, screen=1, link=page)
+            m = LinkMap(owner, resolved_page, screen=1, link=resolved_page)
             m.add(rec, stamp, session, precomputed=(flat, {}))
-            owner_link_maps[(owner, page)] = [m]
-            maps[(owner, page)] = m
+            owner_link_maps[(owner, resolved_page)] = [m]
+            maps[(owner, resolved_page)] = m
             continue
 
         best_candidate = None
@@ -266,8 +270,8 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
             best_candidate.add(rec, stamp, session, precomputed=(flat, best_pairs))
         else:
             n = len(candidates) + 1
-            page_key = f"{page} [screen {n}]"
-            m = LinkMap(owner, page_key, screen=n, link=page)
+            page_key = f"{resolved_page} [screen {n}]"
+            m = LinkMap(owner, page_key, screen=n, link=resolved_page)
             m.add(rec, stamp, session, precomputed=(flat, {}))
             candidates.append(m)
             maps[(owner, page_key)] = m

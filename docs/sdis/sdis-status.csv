@@ -4,7 +4,7 @@ W0-2,0,Engine package core/sdis/ (pre-dev files become module aliases),Done,clau
 W1-1,1,Part B: value history with times,Done,gemini-3.8-flash-high,1,6260bab,"value history in LinkMap and PageMemory, core/sdis/history.py with day_of, 76 SDIS tests pass, regression identical",2026-10-04 14:08
 W1-2,1,"Part G: screens (one link, several pages) by weighted matching",Done,gemini-3.8-flash-high,1,2a52bda,Part G screens by weighted matching; 82 SDIS tests pass; regression identical,2026-10-04 14:20
 W1-3,1,Part D: identity by session id + data fingerprint,Done,gemini-3.8-flash-high,1,18a9998,Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay two,2026-10-04 14:38
-W1-4,1,Part N: smart page link resolution,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
+W1-4,1,Part N: smart page link resolution,In progress,gemini-3.8-flash-high,1,,,2026-10-04 14:39
 W1-5,1,Part M: per-browser memory,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
 W1-6,1,"Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C)",Not started,claude-opus-5-5,0,,,
 W1-7,1,Part R.2: browser parity tool + Firefox fixtures,Not started,claude-opus-5-5,0,,,

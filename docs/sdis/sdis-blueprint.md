@@ -917,8 +917,18 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28 unchanged. Owners: 4 sessions (2 undecided captures, client 1,
   client 2). Memory: 5 links → 3 links (fictional GSTR-1 and GSTR-3B drop out of memory because both fictional captures have no IDs
   and sim=0.556 is undecided, so they are dropped from voting per D4, leaving 0 voting clients; real GST clients stay two on 3 links).
-  Orders agree: yes on all links. Decisions: D4 confirmed applied (undecided dropped from memory). Next WP must know: `resolve_owners`
-  lives in `core.sdis.identity`; `memory.client_maps()` ignores undecided sessions (`owner.startswith("undecided")`).
+- **W1-4** (2026-10-04, gemini-3.8-flash-high): Part N smart page link resolution. Files: `core/sdis/links.py` (`resolve`:
+  groups by host, segment count, route existence; pair-wise voting on diffs=1; masks to `{v}` if value votes >= 2 and
+  page votes == 0; protects letters-only same-client variation and host), `tools/pre_dev/class_diff/links.py` (alias),
+  `core/sdis/link_map.py` (`build_maps` takes `link_of`, keys maps by resolved link), `core/sdis/memory.py` (`client_maps`
+  computes raw links, calls `resolve()`, resolves links before identity/owners and builds with `link_of`),
+  `tests/test_sdis_links.py` (9 tests), `tests/test_sdis_package.py` (package alias & import tests). Tests: 101 passed
+  (91 + 10 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0,
+  multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links (return dashboard 90/6/7 + 5 wait, gstr1 92/13/18 + 1
+  changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; exactly 0 numbers changed on real captures
+  (static links carry no per-client values). Decisions: none. Next WP must know: `resolve(links_by_client)` lives in
+  `core.sdis.links`; `link_map.build_maps(..., link_of=...)` keys maps by resolved link; `memory.client_maps` resolves links
+  before `resolve_owners`.
 
 
 
