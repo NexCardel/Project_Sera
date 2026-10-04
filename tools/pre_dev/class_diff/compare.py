@@ -92,6 +92,10 @@ from align import align, shape                                   # noqa: E402
 # radio, checkbox - keys.CHOICE_CTYPES). Buttons are actions, not data: left out of the comparison.
 FIXABLE_TYPES = frozenset({"text", "label", "sentence"})
 SENTENCE_WORDS = 8
+# "alphanumeric" is a short value (Flat 4B, 139(1), Tower 2). Words holding digits in a longer text
+# ("Returns filed for 2 periods") are wording, not a value: past this many words it stays "text".
+# A word = a token with a letter or digit, so "-" and "/" do not count.
+ALNUM_MAX_WORDS = 3
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
     "fixed", "semi-variable", "variable", "only latest", "only previous")
@@ -123,13 +127,18 @@ def is_period(text: str) -> bool:
     return any(r.match(v) for r in _PERIOD_RES)
 
 
+def _words(text: str) -> int:
+    """Tokens holding a letter or digit: "9B - Credit / Debit Notes" is 4 words."""
+    return sum(1 for w in text.split() if any(c.isalnum() for c in w))
+
+
 def value_type(text: str) -> str:
     """SGT-I's generic type (core/sgt_i/pairs.classify_type: text, number, amount, date, code,
     email, phone, percentage, yes/no), plus four for this comparison: "period" (a year, month or
     quarter span - A.Y. 2026-27, AY 26-27, April 2026, Q1), "label" (text ending in ':'),
     "sentence" (SENTENCE_WORDS+ words) - those two almost always furniture - and "alphanumeric"
-    (digits mixed with letters or punctuation that no other type claimed: 139(1), Flat 4B, Tower 2;
-    "text" is then only words). The more
+    (digits mixed with letters or punctuation that no other type claimed, in at most ALNUM_MAX_WORDS
+    words: 139(1), Flat 4B, Tower 2; a longer text with a digit is "text"). The more
     specific type wins: a single letters+digits token stays "code" (PAN, ARN), a date stays
     "date", a period "period"; a label or sentence holding a digit stays label / sentence."""
     t = classify_type(text)
@@ -141,7 +150,7 @@ def value_type(text: str) -> str:
         return "label"
     if len(text.split()) >= SENTENCE_WORDS:
         return "sentence"
-    if any(c.isdigit() for c in text):
+    if any(c.isdigit() for c in text) and _words(text) <= ALNUM_MAX_WORDS:
         return "alphanumeric"      # digits mixed with letters or punctuation: 139(1), Flat 4B, 26-27
     return "text"
 
@@ -351,8 +360,9 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
             status[i] = FIXED if element_type(e) in FIXABLE_TYPES else SEMI_VARIABLE
     fixed = {i for i, s in status.items() if s == FIXED}
     comp = {id(fl): composites(fl), id(fp): composites(fp)}
-    # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
-    # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
+    # A label is a text both clients show alike: the fixed texts, plus short words-with-digits both
+    # share ("Table 4A") - never a bare number, date, code or amount. (A longer one, "9B - Credit /
+    # Debit Notes", is "text" and already fixed.)
     shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
     # An unpaired text (one more list row, card) that repeats a template text of the same shape is
     # template too: a repeated card repeats its labels ("Period", "ARN" in rows 4 and 5).
