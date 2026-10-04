@@ -11,7 +11,7 @@ W1-7,1,Part R.2: browser parity tool + Firefox fixtures,Done,claude-opus-5-5,1,9
 W1-8,1,Part T: portal registration from service-settings login links,Done,claude-opus-5-5,1,2797f2f,"Part T: service login links register portals in vsdc_scope (D21 confirm on save), sdis_containers.json loader with version+portal_exceptions checks; 31 new tests; regression unchanged",2026-10-04 15:43
 W1-R,1,Phase 1 review,Done,claude-opus-5-5,1,c627eb0,"Review: fixed per-browser map overwrite, identity per (link, browser) + screen-safe, fingerprint pair weighting, Part N votes per client; 140 passed; regression unchanged",2026-10-04 15:50
 W2-1,2,"Part E: look-alikes scored, AMBIGUOUS",Done,gemini-3.8-flash-high,1,33f376c,"Part E: look-alikes scored pairing, ambiguous detection under margin 0.5, wired into memory and compare",2026-10-04 16:00
-W2-2,2,Part C: noise over time,In progress,gemini-3.8-flash-high,1,,,2026-10-04 16:01
+W2-2,2,Part C: noise over time,Done,gemini-3.8-flash-high,1,f5e5d3d,"Part C: noise over time, changes_with_time, probably_furniture heuristic, wired into memory.py",2026-10-04 16:09
 W2-3,2,Part F: the variable_alignment state,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
 W2-4,2,Part H: memory upkeep (retire),Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
 W2-5,2,Part R.3: Firefox line parity fixes (SGT-C),Not started,claude-sonnet-5-5,0,,,
