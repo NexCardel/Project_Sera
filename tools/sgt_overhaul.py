@@ -132,6 +132,8 @@ class Tracker:
                        for wp in self.order}
         for wp, row in self.status.items():     # plan columns, so the live sheet explains itself
             row["Phase"], row["What"] = str(self.wps[wp]["phase"]), self.wps[wp]["what"]
+            if row["Status"] == "Not started" and (row.get("Attempts") or "0") == "0":
+                row["Model"] = self.planned_models(wp)   # follows a re-plan until the WP first runs
         for p, fields in ((self.p_runs, RUN_FIELDS), (self.p_decisions, DECISION_FIELDS),
                           (self.p_checks, CHECK_FIELDS), (self.p_questions, QUESTION_FIELDS)):
             if not p.exists():                  # the viewer's queries need every file, even empty
@@ -141,9 +143,13 @@ class Tracker:
 
     # plan
     def model_id(self, wp: str) -> str:
-        """The model a WP last ran on, else its tier's last-resort (Claude) model."""
+        """The model a WP last ran on, else the models its tier will try, in order."""
         used = getattr(self, "status", {}).get(wp, {}).get("Model")
-        return used or self.plan["models"][self.plan["tiers"][self.wps[wp]["model"]][-1]]["id"]
+        return used or self.planned_models(wp)
+
+    def planned_models(self, wp: str) -> str:
+        """The tier's models in the order the dispatcher tries them: "gemini-3.8-flash-high -> claude-sonnet-5-5"."""
+        return " -> ".join(self.plan["models"][k]["id"] for k in self.plan["tiers"][self.wps[wp]["model"]])
 
     def deadline(self) -> dt.datetime:
         return dt.datetime.fromisoformat(self.plan["deadline"])
@@ -313,13 +319,15 @@ class Tracker:
                      "file opens and every minute (or Data -> Refresh All). Nothing typed here is saved back.",
                      "Answer a worker's question in the pop-up window, or:",
                      "  ..\\APP\\venv\\Scripts\\python.exe " + CLI.replace("/", "\\") + " answer <Q> <choice>",
+                     "Model: a WP not started yet shows the models it will try, in order (Plan sheet: always);",
+                     "once it runs, Status shows the model that actually ran it.",
                      f"Deadline: {self.plan['deadline']}"):
             ws.append([line])
         ws.column_dimensions["A"].width = 100
         plan = wb.create_sheet("Plan")
         plan.append(["WP", "Phase", "What", "Model", "Kind", "Size", "Deps", "Focus"])
         for w in self.plan["wps"]:
-            plan.append([w["wp"], w["phase"], w["what"], self.model_id(w["wp"]), w["kind"], w["size"],
+            plan.append([w["wp"], w["phase"], w["what"], self.planned_models(w["wp"]), w["kind"], w["size"],
                          ", ".join(w["deps"]), w["focus"]])
         plan.freeze_panes = "A2"
         links = [("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
