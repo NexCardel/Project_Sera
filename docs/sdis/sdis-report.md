@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 18:14)
+# Sera Distill — report (2026-10-04 18:20)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 23 |
+| Done | 24 |
 | Blocked | 0 |
 
-Runs: 24   output tokens: 1264566   API-equivalent cost: $31.09
+Runs: 25   output tokens: 1287072   API-equivalent cost: $32.59
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -37,7 +37,7 @@ Runs: 24   output tokens: 1264566   API-equivalent cost: $31.09
 | W3-5 | Done | gemini_first | 76d79f7 | Part S.1: class suggestion (what a value stays the same with) | classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed |
 | W3-3 | Done | sonnet | eb2abfa | Part O engine: memory on disk, incremental mining | store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees |
 | W4-1 | Done | opus | f6dd800 | Part K: SDIS's own recorder (raw view, session id, browser) | SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests +  |
-| W4-2 | Not started | opus |  | Part P: captures travel to the admin PC |  |
+| W4-2 | Done | opus | 864adf5 | Part P: captures travel to the admin PC | Part P: core/sdis/transfer.py push/handle_push/Pusher, sdis_push in dispatch_session, main.py trigger; 6 new tests; regression identical |
 | W4-3 | Not started | opus |  | Part O: mining in its own process (no CPU cap) |  |
 | W4-4 | Not started | opus |  | Part Q: registration on every PC (synced tables) |  |
 | W4-5 | Not started | sonnet |  | Part L: the Distill dialog + loading dialog + containers |  |
@@ -64,9 +64,11 @@ Runs: 24   output tokens: 1264566   API-equivalent cost: $31.09
 - **W3-5** How do container moves reach suggest()? → moves={key: class} argument; override with reason 'moved by the user' (sdis_decisions table does not exist before W4-4; the dict is what that reader will pass)
 - **W4-1** Which UIA worker does SDIS's raw read use? → Its own: the recorder thread joins the MTA and creates its own CUIAutomation8 (as sgt_i/uia_events); new uia_nodes.read_page_nodes_here reads on that thread; read_page_nodes unchanged (read_page_nodes runs on vsdc_uia_text's single shared worker; a raw read still in flight when SGT's next read starts would make SGT abandon that worker and count toward UIA switching off (5 per run), which would change SGT capture (rule 6))
 - **W4-1** How is a recorder session named for the engine? → record carries started (time of the session's first record this run); sources names it 'sgt <session id> <started>' (identity._by_time orders sessions by their last word as a time; a bare SGT session id is random hex, so client order and retirement (time order) would be random)
+- **W4-2** Push trigger, batch size and repeat files → Any successful sync session triggers a push at most every 15 min on its own thread; a push carries at most 200 files / 200 MB (rest next time); a file written in the last 60 s is not finished; a re-pushed name replaces the stored copy (atomic .part + os.replace); names other than sdis_YYYY-MM-DD.jsonl refuse the whole manifest (Fits the transport's 600 s session deadline, never sends a file still being written, and a lost ack only causes a harmless resend)
 
 ## Checks waiting for you
 
 - #1 (W1-6) Real GST and ITR sessions in Firefox: the HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome — Not run
 - #2 (W1-8) Admin PC: Manage Services, add a service with a non-GST/ITR login link (e.g. EPF), confirm the domain prompt, open that portal in Chrome and check SGT/VSDC now reads it; delete the service and check capture stops there; also edit a link to a shared sign-in site listed in never_register and check the 'not registered' message — Not run
 - #3 (W4-1) Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before — Not run
+- #4 (W4-2) Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving — Not run

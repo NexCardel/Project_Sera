@@ -1168,5 +1168,20 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Decision recorded (trigger/batch/repeat files). Hands-on check 4 added. Next (W4-3) must know: pushed files sit one level down in
   `corpus/<device id>/` with the SAME day names on every PC; `mine()` globs one folder flat, so feed it each device folder (or walk them) plus the
   admin's own `sdis_capture`. A `../sdis_regress_w42_after.txt` (counts + page links, from `--save`) can go.
+- **W4-3** (2026-10-04, claude-opus-5-5): Part O child process, no CPU cap (no Job Object, no priority). NEW `core/sdis/mine_process.py`
+  `run(argv)`: `--captures` (required, must be a folder), `--state`, `--rebuild`; JSON lines on stdout, ASCII, flushed: `{"done","total","page"}`
+  per client map, last `{"result":"ok", **mine() summary}` (exit 0) or `{"result":"error","message"}` (exit 1; exception TYPE only, never its text).
+  main.py: `if '--sdis-mine' in sys.argv` right after `import sys`, before os/Qt/database. NEW `core/sdis/miner_client.py` `MinerClient(on_progress,
+  on_done)`: `start(captures, state=None, rebuild=False)` (state resolved in the parent: `store.default_path()` loads core.vsdc/Qt), `command()` =
+  `[exe, --sdis-mine, ...]` frozen else `[python, <repo>/main.py, --sdis-mine, ...]`, CREATE_NO_WINDOW, stderr to DEVNULL; `cancel()` kills;
+  `wait(timeout)`; `running()`. Callbacks run ON THE READER THREAD (Qt: re-emit via a signal); a cancel gives on_done({"result":"cancelled"}).
+  Tests: NEW `tests/test_sdis_mine_process.py` 8 (run progress+ok, --rebuild, bad folder, missing arg, frozen/source command, client end to end via
+  a wrapper script applying the fictional ids, cancel mid-run -> loadable state + next run adds the rest, real `main.py --sdis-mine` answers ok);
+  the two modules added to the PySide6-free import test. SDIS + align 294 passed. Regression before = after, every line identical (11 maps, 41
+  snapshots, 2367 nodes, 0/0/28; owners 4; 3 links, all verdicts/statuses; datapoints 93; class 0/3/7/83; orders agree) - mining code unchanged.
+  Decisions recorded (2): no spec edit (no .spec / hiddenimports in build_tools; main.py imports it statically); one --captures folder per run -
+  W4-5 must feed `corpus/<device id>/` folders + `sdis_capture`, but mine() keys files by bare NAME, so same-named day files from two PCs collide:
+  key by relative path (engine change) before walking several folders. Hands-on check 5 added; it should also confirm the windowed frozen exe
+  writes to the pipe (run() skips output when sys.stdout is None).
 
 

@@ -5,6 +5,10 @@ App entry point for Project Sera.
 """
 
 import sys
+# SDIS "Find datapoints" (Part O): the app's own program started as a mining child, before Qt or the database.
+if '--sdis-mine' in sys.argv:
+    from core.sdis.mine_process import run
+    sys.exit(run(sys.argv))
 import os
 import socket
 import json

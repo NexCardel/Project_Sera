@@ -3,3 +3,4 @@ Check,WP,Text,Result,Date,Notes
 2,W1-8,"Admin PC: Manage Services, add a service with a non-GST/ITR login link (e.g. EPF), confirm the domain prompt, open that portal in Chrome and check SGT/VSDC now reads it; delete the service and check capture stops there; also edit a link to a shared sign-in site listed in never_register and check the 'not registered' message",Not run,2026-10-04 15:43,
 3,W4-1,"Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before",Not run,2026-10-04 18:13,
 4,W4-2,Two real office PCs: a staff PC's sdis_capture files arrive on the admin PC and are deleted on the staff PC only after arriving,Not run,2026-10-04 18:19,
+5,W4-3,"Find datapoints on the admin PC: the loading dialog shows progress, Sera stays responsive behind it, Cancel stops mining at once and the next run continues",Not run,2026-10-04 18:24,

@@ -23,7 +23,7 @@ W3-5,3,Part S.1: class suggestion (what a value stays the same with),Done,claude
 W3-3,3,"Part O engine: memory on disk, incremental mining",Done,claude-sonnet-5-5,1,eb2abfa,"store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees",2026-10-04 18:03
 W4-1,4,"Part K: SDIS's own recorder (raw view, session id, browser)",Done,claude-opus-5-5,1,f6dd800,"SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests + regression unchanged",2026-10-04 18:14
 W4-2,4,Part P: captures travel to the admin PC,Done,claude-opus-5-5,1,864adf5,"Part P: core/sdis/transfer.py push/handle_push/Pusher, sdis_push in dispatch_session, main.py trigger; 6 new tests; regression identical",2026-10-04 18:20
-W4-3,4,Part O: mining in its own process (no CPU cap),Not started,claude-opus-5-5,0,,,
+W4-3,4,Part O: mining in its own process (no CPU cap),In progress,claude-opus-5-5,1,,,2026-10-04 18:20
 W4-4,4,Part Q: registration on every PC (synced tables),Not started,claude-opus-5-5,0,,,
 W4-5,4,Part L: the Distill dialog + loading dialog + containers,Not started,claude-sonnet-5-5,0,,,
 W4-6,4,"Parts U + S.3: sdis_mcl, the containers file (sync + checks)",Not started,claude-opus-5-5,0,,,
