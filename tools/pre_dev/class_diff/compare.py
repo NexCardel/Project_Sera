@@ -92,15 +92,6 @@ from align import align, shape                                   # noqa: E402
 # radio, checkbox - keys.CHOICE_CTYPES). Buttons are actions, not data: left out of the comparison.
 FIXABLE_TYPES = frozenset({"text", "label", "sentence"})
 SENTENCE_WORDS = 8
-# A shared alphanumeric of more than this many words stays SEMI-VARIABLE data and is never promoted
-# to a label or template ("Flat 4B, Tower 2, Sector 9"). A word = a token with a letter or digit,
-# so "-" and "/" do not count.
-ALNUM_LABEL_MAX_WORDS = 3
-
-
-def words(text: str) -> int:
-    """Tokens holding a letter or digit: "9B - Credit / Debit Notes" is 4 words."""
-    return sum(1 for w in text.split() if any(c.isalnum() for c in w))
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
     "fixed", "semi-variable", "variable", "only latest", "only previous")
@@ -360,11 +351,9 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
             status[i] = FIXED if element_type(e) in FIXABLE_TYPES else SEMI_VARIABLE
     fixed = {i for i, s in status.items() if s == FIXED}
     comp = {id(fl): composites(fl), id(fp): composites(fp)}
-    # A label is a text both clients show alike: the fixed texts, plus SHORT words-with-digits both
-    # share ("Table 4A", at most ALNUM_LABEL_MAX_WORDS words) - never a bare number, date, code or
-    # amount. A longer shared alphanumeric stays semi-variable data.
-    shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"
-                      and words(fl[i]["text"]) <= ALNUM_LABEL_MAX_WORDS}
+    # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
+    # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
+    shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
     # An unpaired text (one more list row, card) that repeats a template text of the same shape is
     # template too: a repeated card repeats its labels ("Period", "ARN" in rows 4 and 5).
     template = {(shape(fl[i]), fl[i]["text"]) for i in shared}

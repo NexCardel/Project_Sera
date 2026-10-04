@@ -62,7 +62,7 @@ WPS = [
        " align, pair_moved, shape ...). keys.LEARNED_FILE becomes data_dir() / 'learned_state.json';"
        " link_map.OUT_DIR becomes data_dir(). memory.py: `from compare import ...` is not allowed in core;"
        " see step 3. STEP 3: create core/sdis/labels.py and MOVE into it from compare.py, unchanged:"
-       " FIXABLE_TYPES, SENTENCE_WORDS, ALNUM_LABEL_MAX_WORDS, words, the period regexes (_MONTH, _YEAR_PREFIX, _PERIOD_RES), is_period,"
+       " FIXABLE_TYPES, SENTENCE_WORDS, the period regexes (_MONTH, _YEAR_PREFIX, _PERIOD_RES), is_period,"
        " value_type, element_type, _end, composites, CT_HYPERLINK/CT_IMAGE/CT_TABLE, NEVER_LABEL_CTYPES."
        " Create core/sdis/identity.py and MOVE into it from compare.py: CLIENT_FIELDS, _registry,"
        " client_ids, masked. compare.py imports all of them back (`from core.sdis.labels import ...`) so"

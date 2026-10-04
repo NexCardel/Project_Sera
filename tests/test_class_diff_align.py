@@ -112,22 +112,3 @@ def test_moved_block_is_left_unpaired_never_mispaired():
     for i, j in pairs.items():                          # whatever pairs, label pairs with the same label
         if b[i]["text"].endswith(":") or a[j]["text"].endswith(":"):
             assert b[i]["text"] == a[j]["text"]
-
-
-def _cflat(texts):
-    """Minimal compare-ready entries: one Text node per text, stacked down the page."""
-    return [{"key": f"D / Text[{n + 1}]", "loose": f"D / Text[{n + 1}]", "text": t, "cls": "", "type": "Text",
-             "parent": -1, "depth": 0, "values": [t],
-             "node": {"ctype": 50020, "type_name": "Text", "rect": [0, 20 * n, 300, 18]}}
-            for n, t in enumerate(texts)]
-
-
-def test_long_shared_alphanumeric_stays_semi_variable_and_is_no_label():
-    long_alnum = "Flat 4B Tower 2 Sector 9"               # 6 words, digits: data, never a label
-    a = _cflat(["Table 4A", long_alnum, "ALPHA"])
-    b = _cflat(["Table 4A", long_alnum, "BETA"])
-    rows = {r["example_value"]: r for r in compare.compare_flat(b, a)}
-    assert compare.words("9B - Credit / Debit Notes") == 4      # "-" and "/" are not words
-    assert rows[long_alnum]["status"] == compare.SEMI_VARIABLE
-    assert rows["Table 4A"]["status"] == compare.SEMI_VARIABLE
-    assert rows["BETA"]["label"] == "Table 4A"                # the long one never labels a value
