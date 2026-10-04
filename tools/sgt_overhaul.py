@@ -438,9 +438,15 @@ def runner_exe(t: Tracker, runner: str) -> Optional[List[str]]:
 def pick_model(t: Tracker, wp: str, held: Dict[str, dt.datetime]) -> Optional[str]:
     """The model key to run `wp` with now, or None if every allowed runner is unavailable."""
     w = t.wp(wp)
-    for key in t.plan["tiers"][w["model"]]:
+    tier = t.plan["tiers"][w["model"]]
+    attempts = int(getattr(t, "status", {}).get(wp, {}).get("Attempts") or 0)
+    claude_later = any(t.plan["models"][k]["runner"] == "claude" for k in tier)
+    for key in tier:
         runner = t.plan["models"][key]["runner"]
         if w.get("claude_only") and runner != "claude":
+            continue
+        # A retry goes to Claude once the other runner has had its tries (plan cli.non_claude_attempts).
+        if runner != "claude" and claude_later and attempts >= t.plan["cli"].get("non_claude_attempts", 99):
             continue
         if held.get(runner) and held[runner] > now():
             continue

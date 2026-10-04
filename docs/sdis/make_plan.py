@@ -87,7 +87,7 @@ WPS = [
        f" Prove the pre-dev scripts still import: `{PY} tools/pre_dev/class_diff/compare.py --help` and"
        f" `{PY} tools/pre_dev/class_diff/memory.py --help` and `{PY} tools/pre_dev/class_diff/tables.py --help`."),
 
-    wp("W1-1", 1, "sonnet", "S", ["W0-2"], "Part B: value history with times",
+    wp("W1-1", 1, "gemini_first", "S", ["W0-2"], "Part B: value history with times",
        "Blueprint Part B. In core/sdis/link_map.py LinkMap.add: each entry gets 'history', a list of"
        " [stamp, text]; append [stamp, text] when the element has text and it differs from the last"
        " history item's text (so a repeated text is stored once, a text that comes BACK after another is"
@@ -152,7 +152,7 @@ WPS = [
        " sessions (no ids, same fictional page) become ONE client, so the fictional pages drop out of the"
        " memory section (one client); the two real GST clients stay two. Explain this in the note."),
 
-    wp("W1-4", 1, "sonnet", "M", ["W0-2"], "Part N: smart page link resolution",
+    wp("W1-4", 1, "gemini_first", "M", ["W0-2"], "Part N: smart page link resolution",
        "Blueprint Part N. core/sdis/links.py: resolve(links_by_client: Dict[str, Set[str]]) ->"
        " Dict[str, str] mapping every link to its resolved link. A link is 'host/path#route' as"
        " keys.page_link() makes it. Split it into host + segments (path segments, then the route's"
@@ -314,7 +314,7 @@ WPS = [
        " identical patterns and columns -> ambiguous; _pattern examples ('AB1234' -> 'A9', 'Filed' -> 'A')."
        " All 14 old tests must still pass and the merge numbers (double count, lost) must stay 0."),
 
-    wp("W2-2", 2, "sonnet", "M", ["W1-R"], "Part C: noise over time",
+    wp("W2-2", 2, "gemini_first", "M", ["W1-R"], "Part C: noise over time",
        "Blueprint Part C (rules in order). core/sdis/noise.py with functions on a PageMemory node:"
        " changes_within_client(node) (exists today in memory.verdict: any client with 2+ texts; move it"
        " here); changes_with_time(node): build {day: set of texts} from every client's history (day ="
@@ -348,7 +348,7 @@ WPS = [
        " variable_alignment (the 'Filed' status cells), and a rejected signature turns it back. Regression:"
        " print the variable_alignment count per page; explain the numbers."),
 
-    wp("W2-4", 2, "sonnet", "S", ["W1-R"], "Part H: memory upkeep (retire)",
+    wp("W2-4", 2, "gemini_first", "S", ["W1-R"], "Part H: memory upkeep (retire)",
        "Blueprint Part H (formula and worked examples exact). PageMemory keeps self.clients (the order"
        " clients were added); each node keeps first_ci (index of the client that created it) and last_ci"
        " (index of the last client that had it). After each add(): for every node in self.order that is"
@@ -427,7 +427,7 @@ WPS = [
        " datapoint with 2 pages; a 50-row list counts once per client; share uses the page's own client"
        " count; slots and surprise."),
 
-    wp("W3-4", 3, "sonnet", "S", ["W3-1"], "Part R.4: SDIS on Firefox trees",
+    wp("W3-4", 3, "gemini_first", "S", ["W3-1"], "Part R.4: SDIS on Firefox trees",
        "Blueprint Part R.4. If W1-7 saved Firefox fixtures (tests/class_diff_align/client_A_firefox.json"
        " and client_B_firefox.json): parametrize tests/test_class_diff_align.py and"
        " tests/test_sdis_labels.py over the browsers that have fixtures (the existing client_A/B.json are"
@@ -439,7 +439,7 @@ WPS = [
        " fixtures (D16 was 'No' and the user has not run the tool yet), record it with `decide`, add a"
        " hands-on check 'run tools/browser_parity.py, then rerun W3-4's tests', and finish."),
 
-    wp("W3-5", 3, "sonnet", "M", ["W3-2"], "Part S.1: class suggestion (what a value stays the same with)",
+    wp("W3-5", 3, "gemini_first", "M", ["W3-2"], "Part S.1: class suggestion (what a value stays the same with)",
        "Blueprint Part S.1 (the table and thresholds are exact). core/sdis/classes.py:"
        " suggest(datapoints, memory_state) -> {datapoint key: ('profile' | 'dataset' | 'info' | None,"
        " reason)}. Per client (owners from Part D, undecided dropped), from the value history (Part B):"
@@ -720,11 +720,20 @@ def main() -> None:
                   " re-plan by editing docs/sdis/make_plan.py and running it. Live status is in"
                   " sdis-status.csv, written only by tools/sdis.py."),
         "deadline": "2026-10-06T01:30:00+05:30",
-        "models": {k: v for k, v in base["models"].items() if v["runner"] == "claude"},
-        "tiers": {"_note": "Claude only (owner decision 2026-09-29).", "sonnet": ["sonnet"],
-                  "haiku": ["haiku"], "opus": ["opus"]},
-        "runners": {"claude": base["runners"]["claude"]},
-        "cli": base["cli"],
+        "models": {k: v for k, v in base["models"].items() if v["runner"] == "claude" or k == "gemini-flash"},
+        "tiers": {"_note": ("Owner decision 2026-10-04: six engine-only WPs (no SGT, sync, DB or UI) go to"
+                            " Gemini first to save Claude tokens; Claude Sonnet takes over on Gemini's quota/sign-in"
+                            " or from the second attempt (cli.non_claude_attempts). Everything else Claude only."),
+                  "sonnet": ["sonnet"], "haiku": ["haiku"], "opus": ["opus"],
+                  "gemini_first": ["gemini-flash", "sonnet"]},
+        "runners": {"claude": base["runners"]["claude"],
+                    "antigravity": dict(base["runners"]["antigravity"], enabled=True, _note=(
+                        "Owner decision 2026-10-04: unrestricted (--dangerously-skip-permissions). Measured with"
+                        " agy 1.2.14: restricted print mode refuses every command and settings.json allow-rules"
+                        " match only the exact command line, so a restricted worker cannot run the tests. The"
+                        " rules Gemini follows are GEMINI.md's allow/blocklist and this runner prompt; git push is"
+                        " refused by the repository's pre-push hook (SGT_OVERHAUL_WORKER)."))},
+        "cli": dict(base["cli"], non_claude_attempts=1),
         "wps": WPS,
     }
     ids = {w["wp"] for w in WPS}
