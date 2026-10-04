@@ -825,22 +825,22 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 0 | W0-1 | Baseline: tests + the regression runner tools/sdis_regress.py | sonnet | - |
 | 0 | W0-2 | Engine package core/sdis/ (pre-dev files become module aliases) | sonnet | W0-1 |
 | 1 | W1-1 | Part B: value history with times | gemini → sonnet | W0-2 |
-| 1 | W1-2 | Part G: screens (one link, several pages) by weighted matching | sonnet | W0-2 |
-| 1 | W1-3 | Part D: identity by session id + data fingerprint | sonnet | W0-2 |
+| 1 | W1-2 | Part G: screens (one link, several pages) by weighted matching | gemini → sonnet | W0-2 |
+| 1 | W1-3 | Part D: identity by session id + data fingerprint | gemini → sonnet | W0-2 |
 | 1 | W1-4 | Part N: smart page link resolution | gemini → sonnet | W0-2 |
-| 1 | W1-5 | Part M: per-browser memory | sonnet | W0-2 |
+| 1 | W1-5 | Part M: per-browser memory | gemini → sonnet | W0-2 |
 | 1 | W1-6 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | opus | W0-1 |
 | 1 | W1-7 | Part R.2: browser parity tool + Firefox fixtures | opus | W1-6 |
 | 1 | W1-8 | Part T: portal registration from service-settings login links | opus | W0-1 |
 | 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7, W1-8 |
-| 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | sonnet | W1-R |
+| 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | gemini → sonnet | W1-R |
 | 2 | W2-2 | Part C: noise over time | gemini → sonnet | W1-R |
-| 2 | W2-3 | Part F: the variable_alignment state | sonnet | W2-1 |
+| 2 | W2-3 | Part F: the variable_alignment state | gemini → sonnet | W2-1 |
 | 2 | W2-4 | Part H: memory upkeep (retire) | gemini → sonnet | W1-R |
 | 2 | W2-5 | Part R.3: Firefox line parity fixes (SGT-C) | sonnet | W1-R |
 | 2 | W2-R | Phase 2 review | opus | W2-1, W2-2, W2-3, W2-4, W2-5 |
 | 3 | W3-1 | Part I: statuses + labels from memory | sonnet | W2-R |
-| 3 | W3-2 | Part J: relevance by occurrences + slots | sonnet | W3-1 |
+| 3 | W3-2 | Part J: relevance by occurrences + slots | gemini → sonnet | W3-1 |
 | 3 | W3-4 | Part R.4: SDIS on Firefox trees | gemini → sonnet | W3-1 |
 | 3 | W3-5 | Part S.1: class suggestion (what a value stays the same with) | gemini → sonnet | W3-2 |
 | 3 | W3-3 | Part O engine: memory on disk, incremental mining | sonnet | W3-2 |
@@ -853,7 +853,7 @@ CSV trackers, and nothing merged automatically. The step-by-step instructions fo
 | 4 | W4-5 | Part L: the Distill dialog + loading dialog + containers | sonnet | W3-5, W4-3, W4-6 |
 | 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5, W4-7, W3-4 |
 
-**Models (owner decision 2026-10-04):** the six engine-only WPs marked "gemini → sonnet" run on Gemini
+**Models (owner decision 2026-10-04):** the twelve engine-only WPs marked "gemini → sonnet" run on Gemini
 3.8 Flash High first (Antigravity CLI, unrestricted, following GEMINI.md's allow/blocklist; `git push` is
 refused by the pre-push hook). Claude Sonnet takes over on Gemini's quota or from the second attempt.
 Everything else, every review and anything touching SGT, sync, the database or the UI is Claude only.

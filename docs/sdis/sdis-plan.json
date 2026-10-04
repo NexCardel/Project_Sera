@@ -20,7 +20,7 @@
   }
  },
  "tiers": {
-  "_note": "Owner decision 2026-10-04: six engine-only WPs (no SGT, sync, DB or UI) go to Gemini first to save Claude tokens; Claude Sonnet takes over on Gemini's quota/sign-in or from the second attempt (cli.non_claude_attempts). Everything else Claude only.",
+  "_note": "Owner decision 2026-10-04: twelve engine-only WPs (no SGT, sync, DB or UI) go to Gemini first to save Claude tokens; Claude Sonnet takes over on Gemini's quota/sign-in or from the second attempt (cli.non_claude_attempts). Everything else Claude only.",
   "sonnet": [
    "sonnet"
   ],
@@ -158,7 +158,7 @@
   {
    "wp": "W1-2",
    "phase": 1,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "L",
    "deps": [
@@ -170,7 +170,7 @@
   {
    "wp": "W1-3",
    "phase": 1,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "L",
    "deps": [
@@ -194,7 +194,7 @@
   {
    "wp": "W1-5",
    "phase": 1,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "S",
    "deps": [
@@ -261,7 +261,7 @@
   {
    "wp": "W2-1",
    "phase": 2,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "L",
    "deps": [
@@ -285,7 +285,7 @@
   {
    "wp": "W2-3",
    "phase": 2,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "M",
    "deps": [
@@ -349,7 +349,7 @@
   {
    "wp": "W3-2",
    "phase": 3,
-   "model": "sonnet",
+   "model": "gemini_first",
    "kind": "auto",
    "size": "L",
    "deps": [

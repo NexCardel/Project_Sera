@@ -100,7 +100,7 @@ WPS = [
        " same text twice -> 1; A, B, A -> 3; day_of on all three formats; memory keeps each client's"
        " history apart. Nothing else changes: regression numbers identical."),
 
-    wp("W1-2", 1, "sonnet", "L", ["W0-2"], "Part G: screens (one link, several pages) by weighted matching",
+    wp("W1-2", 1, "gemini_first", "L", ["W0-2"], "Part G: screens (one link, several pages) by weighted matching",
        "Blueprint Part G (formulas are exact). STEP 1: core/sdis/screens.py: link_weights(sources) ->"
        " {(shape, text): weight} where sources are link_map.all_sources() tuples; links = number of"
        " distinct page links in sources; weight = math.log((1 + links) / links_showing_it); a key not in"
@@ -127,7 +127,7 @@ WPS = [
        " real captures and every other number is unchanged; if a real link splits, stop, investigate and"
        " explain."),
 
-    wp("W1-3", 1, "sonnet", "L", ["W0-2"], "Part D: identity by session id + data fingerprint",
+    wp("W1-3", 1, "gemini_first", "L", ["W0-2"], "Part D: identity by session id + data fingerprint",
        "Blueprint Part D (thresholds exact). In the pre-dev captures a capture SESSION stands in for an"
        " SGT session. STEP 1: move group_clients and _by_time from core/sdis/link_map.py into"
        " core/sdis/identity.py (link_map re-exports them so old imports work). STEP 2: identity.py:"
@@ -172,7 +172,7 @@ WPS = [
        " Regression: no change expected on the real captures (their links carry no values); if one"
        " changes, explain."),
 
-    wp("W1-5", 1, "sonnet", "S", ["W0-2"], "Part M: per-browser memory",
+    wp("W1-5", 1, "gemini_first", "S", ["W0-2"], "Part M: per-browser memory",
        "Blueprint Part M. Every record may carry 'browser' (chrome / msedge / firefox / ''): the pre-dev"
        " captures have none, so they are browser ''. STEP 1: tools/pre_dev/class_diff/key_probe.py: when it"
        " saves a capture or read, add 'browser' = the window process's exe name without .exe, lower case"
@@ -286,7 +286,7 @@ WPS = [
        " explain it; the tests are meaningful. Fix defects with tests. Run the regression runner and all"
        " tests/test_sdis_*.py.", kind="review"),
 
-    wp("W2-1", 2, "sonnet", "L", ["W1-R"], "Part E: look-alikes scored, AMBIGUOUS",
+    wp("W2-1", 2, "gemini_first", "L", ["W1-R"], "Part E: look-alikes scored, AMBIGUOUS",
        "Blueprint Part E. Implement in core/sdis/align.py exactly this (it was written once and passed all"
        " tests): AMBIGUOUS_MARGIN = 0.5; _MAX_CELLS = 40000. _pattern(text): collapse whitespace, digits ->"
        " '9', letters (regex [^\\W\\d_]) -> 'A', then collapse runs of the same char (re.sub(r'(.)\\1+',"
@@ -332,7 +332,7 @@ WPS = [
        " differs -> probably furniture; the same with a label before it -> stays 'differs'. Regression:"
        " expect few or no changes (all captures are from one day); explain any."),
 
-    wp("W2-3", 2, "sonnet", "M", ["W2-1"], "Part F: the variable_alignment state",
+    wp("W2-3", 2, "gemini_first", "M", ["W2-1"], "Part F: the variable_alignment state",
        "Blueprint Part F. core/sdis/memory.py verdict: a node whose verdict would be 'same for all"
        " clients' becomes 'variable_alignment' when ALL of: labels.value_type(text) != 'label' (not ending"
        " in ':'), it is not composite, its ctype is not a choice control (keys.CHOICE_CTYPES), and at least"
@@ -407,7 +407,7 @@ WPS = [
        " and check every value in tests/test_class_diff_align.py's EXPECTED gets its label from"
        " memory.label (import EXPECTED from that test module). Regression: print status counts per page."),
 
-    wp("W3-2", 3, "sonnet", "L", ["W3-1"], "Part J: relevance by occurrences + slots",
+    wp("W3-2", 3, "gemini_first", "L", ["W3-1"], "Part J: relevance by occurrences + slots",
        "Blueprint Part J (counting rules exact). core/sdis/relevance.py: datapoints(memories, rejected=())"
        " -> list of Datapoint (dataclass: key, label, value_type, relevance_pct, sure_pct, pages: list of"
        " (link, screen, browser, share), nodes: list of (memory index, nid), slot_type_pct, surprise). A"
@@ -721,7 +721,7 @@ def main() -> None:
                   " sdis-status.csv, written only by tools/sdis.py."),
         "deadline": "2026-10-06T01:30:00+05:30",
         "models": {k: v for k, v in base["models"].items() if v["runner"] == "claude" or k == "gemini-flash"},
-        "tiers": {"_note": ("Owner decision 2026-10-04: six engine-only WPs (no SGT, sync, DB or UI) go to"
+        "tiers": {"_note": ("Owner decision 2026-10-04: twelve engine-only WPs (no SGT, sync, DB or UI) go to"
                             " Gemini first to save Claude tokens; Claude Sonnet takes over on Gemini's quota/sign-in"
                             " or from the second attempt (cli.non_claude_attempts). Everything else Claude only."),
                   "sonnet": ["sonnet"], "haiku": ["haiku"], "opus": ["opus"],
