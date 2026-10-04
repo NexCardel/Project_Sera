@@ -53,7 +53,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from core.sdis import link_map
 from core.sdis.align import align, pair_moved, shape
 from core.sdis.keys import CHOICE_CTYPES, page_slug
-from core.sdis.labels import composites, value_type
+from core.sdis.labels import FIXABLE_TYPES, NEVER_LABEL_CTYPES, _label, cell_labels, composites, value_type
 from core.sdis.noise import changes_within_client, changes_with_time, probably_furniture
 from core.sdis.paths import data_dir, write_csv
 
@@ -63,6 +63,10 @@ VARIABLE_ALIGNMENT = "variable_alignment"
 SAME_MATCH, SAME_NEW = 0.95, 3        # same screen: >= 95% of the map matched, <= 3 new
 RADICAL_MATCH = 0.50                  # radical: under half of the map matched memory
 RETIRE_P = 0.01                       # retire: (1 - p) ** misses < 0.01 (1%)
+_STATUS_OF = {"differs between clients": "variable", VARIABLE_ALIGNMENT: VARIABLE_ALIGNMENT, "ambiguous": "ambiguous",
+              "changes within one client": "furniture", "changes with time": "furniture",
+              "probably furniture": "furniture", "repeat": "waiting", "only one client so far": "waiting",
+              "retired": "retired", "composite": "composite"}
 _SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
 _BROWSER_RE = re.compile(r" \[([a-zA-Z0-9_-]+)\]$")
 
@@ -115,6 +119,9 @@ class PageMemory:
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
         self.log: List[Dict[str, Any]] = []
+        self.views: Dict[str, Tuple[List[Dict[str, Any]], List[int]]] = {}   # client -> (its last flat, node id per index)
+        self._view_pos: Dict[str, Dict[int, int]] = {}
+        self._label_cache: Dict[str, Tuple[set, Dict[int, str]]] = {}
         self._differs_shapes_cache: Optional[set] = None
 
     def _node(self, e: Dict[str, Any], anchor: Optional[int], status: str,
@@ -178,10 +185,15 @@ class PageMemory:
         ci = self.clients.index(client)
 
         self._differs_shapes_cache = None
+        self._label_cache = {}
         comp = composites(flat)
+        nid_of: List[int] = [-1] * len(flat)
+        self.views[client] = (flat, nid_of)
+        self._view_pos.pop(client, None)
         if is_first:                                               # the first client's map IS the memory
             for i, e in enumerate(flat):
                 nid = self._node(e, None, "memory", first_ci=ci, last_ci=ci)
+                nid_of[i] = nid
                 self.order.append(nid)
                 self._see(nid, e, client, i in comp, sure=True, ci=ci)
             self.log.append({"client": client, "nodes": len(flat), "memory": 0, "matched": len(flat),
@@ -195,6 +207,7 @@ class PageMemory:
         for i in range(len(flat)):
             if i in pairs:
                 anchor = self.order[pairs[i]]
+                nid_of[i] = anchor
                 self._see(anchor, flat[i], client, i in comp, sure=(i not in amb), ci=ci)
             else:
                 anchor_of[i] = anchor
@@ -213,6 +226,7 @@ class PageMemory:
                 self.pending.append(nid)
                 new += 1
                 sure = True
+            nid_of[i] = nid
             self._see(nid, flat[i], client, i in comp, sure=sure, ci=ci)
         matched = len(pairs) / len(flat) if flat else 1.0
         if matched >= SAME_MATCH and new <= SAME_NEW:
@@ -266,6 +280,7 @@ class PageMemory:
                 retired_any = True
         if retired_any:
             self._differs_shapes_cache = None
+            self._label_cache = {}
 
     def confirmed(self, nid: int) -> bool:
         """Seen by N different clients with sure True. The first client's nodes sit in memory (they give the page
@@ -327,6 +342,75 @@ class PageMemory:
         elif base == "differs between clients" and probably_furniture(self, nid):
             return "probably furniture"
         return base
+
+    def status(self, nid: int) -> str:
+        """The node's status for the Distill dialog, from its verdict: fixed / semi-variable /
+        variable / variable_alignment / ambiguous / furniture / waiting / retired / composite.
+        'Same for all clients' is fixed for a fixable text type, semi-variable for any data type
+        (a choice is data: the clients may just have chosen alike)."""
+        v = self.verdict(nid)
+        if v == "same for all clients":
+            return "fixed" if self._type_of(nid) in FIXABLE_TYPES else "semi-variable"
+        return _STATUS_OF.get(v, "waiting")
+
+    def _type_of(self, nid: int, text: Optional[str] = None) -> str:
+        nd = self.nodes[nid]
+        if nd.get("ctype") in CHOICE_CTYPES:
+            return "control"
+        if text is None:
+            texts = _last_texts(voters(nd)) or {nd["text"]}
+            text = next(iter(texts))
+        return value_type(text)
+
+    def _view_of(self, nid: int) -> Optional[Tuple[str, int]]:
+        """(client, index in that client's flat) from the latest client whose view holds the node."""
+        for client in reversed(self.clients):
+            view = self.views.get(client)
+            if view is None:
+                continue
+            pos = self._view_pos.get(client)
+            if pos is None:
+                pos = self._view_pos[client] = {n: i for i, n in enumerate(view[1])}
+            if nid in pos:
+                return client, pos[nid]
+        return None
+
+    def _label_info(self, client: str) -> Tuple[set, Dict[int, str]]:
+        """For one client's view: the indexes that may be labels, and its table cells' labels. A
+        label is a text the clients share (compare.py's 'shared': fixed, variable_alignment, a
+        semi-variable that is words with digits), plus an unpaired text that repeats such a text of
+        the same shape ("Period", "ARN" on one more list row); never a composite, link, image or
+        button, and only with a real letter. Judged from the base verdict: variable_alignment
+        refines 'same for all clients' without changing who may be a label, and probably furniture
+        asks for labels itself."""
+        if client not in self._label_cache:
+            flat, nid_of = self.views[client]
+            shared: set = set()
+            waiting: List[int] = []
+            for j, nid in enumerate(nid_of):
+                base = self.base_verdict(nid)
+                if base == "same for all clients":
+                    if self._type_of(nid, flat[j]["text"]) in FIXABLE_TYPES | {"alphanumeric"}:
+                        shared.add(j)
+                elif base in ("repeat", "only one client so far"):
+                    waiting.append(j)
+            template = {(shape(flat[j]), flat[j]["text"]) for j in shared}
+            shared |= {j for j in waiting if (shape(flat[j]), flat[j]["text"]) in template}
+            cands = {j for j in shared if self.nodes[nid_of[j]].get("ctype") not in NEVER_LABEL_CTYPES
+                     and any(c.isalpha() for c in flat[j]["text"])}
+            self._label_cache[client] = (cands, cell_labels(flat))
+        return self._label_cache[client]
+
+    def label(self, nid: int) -> str:
+        """The node's label, from the latest client view that holds it: inside a real table its
+        column name (and a matrix's row name), else the screen-box rules over the texts the clients
+        share (labels._label). '' when the node is in no client's view or nothing labels it."""
+        view = self._view_of(nid)
+        if view is None:
+            return ""
+        client, i = view
+        cands, cells = self._label_info(client)
+        return cells.get(i) or _label(self.views[client][0], i, cands)
 
     def summary(self) -> Counter:
         differs = self._differs_shapes()

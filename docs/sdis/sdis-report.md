@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:39)
+# Sera Distill — report (2026-10-04 16:44)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 14 |
+| Not started | 13 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 16 |
+| Done | 17 |
 | Blocked | 0 |
 
-Runs: 16   output tokens: 963978   API-equivalent cost: $15.42
+Runs: 17   output tokens: 993735   API-equivalent cost: $17.42
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ Runs: 16   output tokens: 963978   API-equivalent cost: $15.42
 | W2-3 | Done | gemini_first | c9d12c0 | Part F: the variable_alignment state | Part F: variable_alignment state, rejected hook, compare_flat shared labels |
 | W2-4 | Done | gemini_first | ede141d | Part H: memory upkeep (retire) | Part H: memory upkeep (retire), RETIRE_P = 0.01, client history and misses |
 | W2-5 | Done | sonnet | b551792 | Part R.3: Firefox line parity fixes (SGT-C) | Firefox lines now identical to Chrome/Edge on the fictional pages (dropdown options, wrapped labels, cached offscreen, Edge ZWSP title); regression unchanged |
-| W2-R | Not started | opus |  | Phase 2 review |  |
+| W2-R | Done | opus | f0f325f | Phase 2 review | Phase 2 review: one documented verdict order; 6 defects fixed with 6 tests; regression unchanged, orders agree yes |
 | W3-1 | Not started | sonnet |  | Part I: statuses + labels from memory |  |
 | W3-2 | Not started | gemini_first |  | Part J: relevance by occurrences + slots |  |
 | W3-4 | Not started | gemini_first |  | Part R.4: SDIS on Firefox trees |  |
@@ -57,6 +57,8 @@ Runs: 16   output tokens: 963978   API-equivalent cost: $15.42
 - **W2-3** How does memory match rejected signatures? → (link, shape, text) matching either self.link or self.page (Allows callers to pass either resolved base link or page string cleanly)
 - **W2-5** Edge window title with profile name: strip only the zero-width space, or also the profile segment? → Allow zero-width spaces inside 'Microsoft Edge' in BROWSER_SUFFIX_RE only (Chrome/Edge titles must not change; the leftover '- Profile 1' is stable and only used when the address bar is unreadable)
 - **W2-5** How to key Firefox-only line rules (dropdown options, doubled label)? → On the Document's framework id 'Gecko' (live CurrentFrameworkId / cached 30024); node trees carry gecko:true on the document's first node (Blueprint rule: browser-dependent rules key on framework id; Chrome/Edge lines and nodes stay byte-identical)
+- **W2-R** Retirement follows time order, so forward/reversed builds can legitimately differ once 4+ clients exist; how is 'orders agree' kept meaningful? → The order check builds both orders with retire=False (PageMemory/build retire flag); the runner prints 'retired (time order): k' from the forward build (Part H counts misses in a row by time; the order check is meant to prove alignment and verdicts do not depend on client order)
+- **W2-R** Part C rule 2 'changes with time': does a day seen by only one client count as agreement? → No: the texts must differ between days that 2+ clients were seen on (Rule 6: two clients captured on different days with their own data would otherwise be called noise and their datapoint lost)
 
 ## Checks waiting for you
 

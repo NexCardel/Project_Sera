@@ -95,3 +95,126 @@ def composites(flat: List[Dict[str, Any]]) -> set:
         if len(parts) >= 2 and " ".join(" ".join(parts).split()) == text:
             out.add(i)
     return out
+
+
+def _container(flat: List[Dict[str, Any]], i: int) -> str:
+    """The nearest ancestor that has a class - the box the element sits in."""
+    p = flat[i]["parent"]
+    while p >= 0:
+        if flat[p]["cls"]:
+            return flat[p]["cls"]
+        p = flat[p]["parent"]
+    return ""
+
+
+def _children(flat: List[Dict[str, Any]], p: int) -> List[int]:
+    return [j for j in range(p + 1, _end(flat, p)) if flat[j]["parent"] == p]
+
+
+def _first_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
+    """Element i's own text if it can be a label, else the first one inside it."""
+    for j in range(i, _end(flat, i)):
+        if j in labels and flat[j]["text"]:
+            return flat[j]["text"]
+    return ""
+
+
+def _same_column(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """How surely two cells sit in the same column: the browser's own column number when both
+    carry one (SGT's reader keeps it as "grid"), else how much their screen boxes overlap
+    sideways (0..1). Never the cell's count in its row: a view can drop a cell (SGT's control
+    view drops an empty corner cell), and counting would shift every column by one."""
+    ga, gb = a.get("grid"), b.get("grid")
+    if ga and gb:
+        return 1.0 if ga[1] == gb[1] else 0.0
+    ra, rb = a.get("rect"), b.get("rect")
+    if not ra or not rb or ra[2] <= 0 or rb[2] <= 0:
+        return 0.0
+    overlap = min(ra[0] + ra[2], rb[0] + rb[2]) - max(ra[0], rb[0])
+    return max(0.0, overlap) / min(ra[2], rb[2])
+
+
+def _table_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
+    """A table cell's label: its row's first cell and its column's header (the first earlier row
+    that holds a label in that column), "row / column". Structure only: Table -> row -> cell."""
+    a = i
+    while a >= 0:
+        r = flat[a]["parent"]
+        t = flat[r]["parent"] if r >= 0 else -1
+        if t >= 0 and flat[t]["node"].get("ctype") == CT_TABLE:
+            break
+        a = r
+    else:
+        return ""
+    cells = _children(flat, r)
+    row_label = _first_label(flat, cells[0], labels) if cells[0] != a else ""
+    col_label = ""
+    for other in _children(flat, t):
+        if other == r:
+            break
+        best, best_cell = 0.5, -1
+        for oc in _children(flat, other):
+            score = _same_column(flat[a]["node"], flat[oc]["node"])
+            if score > best:
+                best, best_cell = score, oc
+        if best_cell >= 0:
+            col_label = _first_label(flat, best_cell, labels)
+            if col_label:
+                break
+    return " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
+
+
+LABEL_LOOKBACK = 6     # fallback: how many elements back a label may sit when no box holds one
+
+
+def _label(flat: List[Dict[str, Any]], i: int, fixed: set) -> str:
+    """The label of element i (fixed = the indexes that may be labels): a table cell's row and
+    column (_table_label), else inside the smallest box around it that holds a fixed text, the
+    fixed text NEAREST BEFORE it (else the first after it). When no box around it holds one - the
+    browser can flatten a card, leaving "GSTIN OF TAXPAYER" and the value's box as plain siblings -
+    the nearest fixed text at most LABEL_LOOKBACK elements before it in page order."""
+    in_table = _table_label(flat, i, fixed)
+    if in_table:
+        return in_table
+    a = flat[i]["parent"]
+    while a >= 0:
+        before, after = "", ""
+        j = a + 1
+        while j < len(flat) and flat[j]["depth"] > flat[a]["depth"]:
+            if j != i and j in fixed and flat[j]["text"]:
+                if j < i:
+                    before = flat[j]["text"]
+                else:
+                    after = after or flat[j]["text"]
+                    break
+            j += 1
+        if before or after:
+            return before or after
+        a = flat[a]["parent"]
+    for j in range(i - 1, max(-1, i - 1 - LABEL_LOOKBACK), -1):
+        if j in fixed and flat[j]["text"]:
+            return flat[j]["text"]
+    return ""
+
+
+def cell_labels(flat: List[Dict[str, Any]]) -> Dict[int, str]:
+    """{index: label} for every element inside a real table cell (core.sdis.tables finds the
+    tables): the cell's column name top-down ("Tax / IGST"), and in a matrix (header_cols 1) its
+    row's first cell in front. Header cells and cells whose column has no name get nothing, so the
+    screen-box rules (_label) decide for them. Page order, outer tables first: a nested table's
+    cells overwrite the outer cell they sit in."""
+    from core.sdis import tables
+
+    doc = [dict(e.get("node") or {}, parent=e["parent"]) for e in flat]
+    out: Dict[int, str] = {}
+    for tb in tables.extract([doc]):
+        names, g = tables.column_names(tb), tables.grid(tb)
+        for c in tb["cells"]:
+            label = ""
+            if c["row"] >= tb["header_rows"]:
+                col_label = names[c["col"]] if c["col"] < len(names) else ""
+                row_label = g[c["row"]][0] if tb["header_cols"] and c["col"] > 0 else ""
+                label = " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
+            for j in range(c["node"], _end(flat, c["node"])):
+                out[j] = label
+    return {j: s for j, s in out.items() if s}

@@ -34,8 +34,13 @@ when the page gave none), or a COMPOSITE - an element whose text is just its chi
 joined ("79,99,235.00 View/Update"). A composite row is kept but flagged in check: its parts are
 listed on their own.
 
-    python tools/pre_dev/class_diff/compare.py                         # latest client vs previous client
+    python tools/pre_dev/class_diff/compare.py                         # every page link's MEMORY (all clients)
+    python tools/pre_dev/class_diff/compare.py --two                   # latest client vs previous client
     python tools/pre_dev/class_diff/compare.py --latest A.json --previous B.json   # two single reads
+
+The default is a view of core/sdis/memory.py (Part I): one row per node with a text, its status
+(memory.status), label (memory.label), type, number of clients, the latest client's value and key,
+in output/compare_memory__<page>.csv. Everything below describes the two-client mode (--two).
 
 Writes output/compare_<latest read's timestamp>.csv (opens in Excel). example_value is from the
 latest read; an "only previous" row has none there, so it shows the previous read's value. It holds real values from
@@ -79,9 +84,10 @@ from core.sdis import link_map                                   # noqa: E402
 from core.sdis.align import align, shape                         # noqa: E402
 from core.sdis.identity import CLIENT_FIELDS, client_ids, masked   # noqa: E402,F401
 from core.sdis.keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
-from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, NEVER_LABEL_CTYPES,   # noqa: E402,F401
-                              SENTENCE_WORDS, _MONTH, _PERIOD_RES, _YEAR_PREFIX, _end, composites,
-                              element_type, is_period, value_type)
+from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, LABEL_LOOKBACK,   # noqa: E402,F401
+                              NEVER_LABEL_CTYPES, SENTENCE_WORDS, _MONTH, _PERIOD_RES, _YEAR_PREFIX,
+                              _children, _container, _end, _first_label, _label, _same_column,
+                              _table_label, composites, element_type, is_period, value_type)
 from core.sdis.paths import write_csv                            # noqa: E402
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT = (
@@ -106,106 +112,6 @@ def check(status: str, latest_type: str, previous_type: str, label: str = "") ->
     if status == VARIABLE and latest_type in ("label", "sentence") and not label:
         return "furniture-shaped - wording may have changed"
     return "ok"
-
-
-def _container(flat: List[Dict[str, Any]], i: int) -> str:
-    """The nearest ancestor that has a class - the box the element sits in."""
-    p = flat[i]["parent"]
-    while p >= 0:
-        if flat[p]["cls"]:
-            return flat[p]["cls"]
-        p = flat[p]["parent"]
-    return ""
-
-
-def _children(flat: List[Dict[str, Any]], p: int) -> List[int]:
-    return [j for j in range(p + 1, _end(flat, p)) if flat[j]["parent"] == p]
-
-
-def _first_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
-    """Element i's own text if it can be a label, else the first one inside it."""
-    for j in range(i, _end(flat, i)):
-        if j in labels and flat[j]["text"]:
-            return flat[j]["text"]
-    return ""
-
-
-def _same_column(a: Dict[str, Any], b: Dict[str, Any]) -> float:
-    """How surely two cells sit in the same column: the browser's own column number when both
-    carry one (SGT's reader keeps it as "grid"), else how much their screen boxes overlap
-    sideways (0..1). Never the cell's count in its row: a view can drop a cell (SGT's control
-    view drops an empty corner cell), and counting would shift every column by one."""
-    ga, gb = a.get("grid"), b.get("grid")
-    if ga and gb:
-        return 1.0 if ga[1] == gb[1] else 0.0
-    ra, rb = a.get("rect"), b.get("rect")
-    if not ra or not rb or ra[2] <= 0 or rb[2] <= 0:
-        return 0.0
-    overlap = min(ra[0] + ra[2], rb[0] + rb[2]) - max(ra[0], rb[0])
-    return max(0.0, overlap) / min(ra[2], rb[2])
-
-
-def _table_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
-    """A table cell's label: its row's first cell and its column's header (the first earlier row
-    that holds a label in that column), "row / column". Structure only: Table -> row -> cell."""
-    a = i
-    while a >= 0:
-        r = flat[a]["parent"]
-        t = flat[r]["parent"] if r >= 0 else -1
-        if t >= 0 and flat[t]["node"].get("ctype") == CT_TABLE:
-            break
-        a = r
-    else:
-        return ""
-    cells = _children(flat, r)
-    row_label = _first_label(flat, cells[0], labels) if cells[0] != a else ""
-    col_label = ""
-    for other in _children(flat, t):
-        if other == r:
-            break
-        best, best_cell = 0.5, -1
-        for oc in _children(flat, other):
-            score = _same_column(flat[a]["node"], flat[oc]["node"])
-            if score > best:
-                best, best_cell = score, oc
-        if best_cell >= 0:
-            col_label = _first_label(flat, best_cell, labels)
-            if col_label:
-                break
-    return " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
-
-
-LABEL_LOOKBACK = 6     # fallback: how many elements back a label may sit when no box holds one
-
-
-def _label(flat: List[Dict[str, Any]], i: int, fixed: set) -> str:
-    """The label of element i (fixed = the indexes that may be labels): a table cell's row and
-    column (_table_label), else inside the smallest box around it that holds a fixed text, the
-    fixed text NEAREST BEFORE it (else the first after it). When no box around it holds one - the
-    browser can flatten a card, leaving "GSTIN OF TAXPAYER" and the value's box as plain siblings -
-    the nearest fixed text at most LABEL_LOOKBACK elements before it in page order."""
-    in_table = _table_label(flat, i, fixed)
-    if in_table:
-        return in_table
-    a = flat[i]["parent"]
-    while a >= 0:
-        before, after = "", ""
-        j = a + 1
-        while j < len(flat) and flat[j]["depth"] > flat[a]["depth"]:
-            if j != i and j in fixed and flat[j]["text"]:
-                if j < i:
-                    before = flat[j]["text"]
-                else:
-                    after = after or flat[j]["text"]
-                    break
-            j += 1
-        if before or after:
-            return before or after
-        a = flat[a]["parent"]
-    for j in range(i - 1, max(-1, i - 1 - LABEL_LOOKBACK), -1):
-        if j in fixed and flat[j]["text"]:
-            return flat[j]["text"]
-    return ""
 
 
 def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -321,8 +227,49 @@ FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "v
           "container", "id", "sgt_sees", "key"]
 
 
+MEMORY_FIELDS = ["status", "label", "value_type", "clients", "example_value", "key"]
+
+
+def memory_rows(m: Any) -> List[Dict[str, Any]]:
+    """One row per memory node with a text: example_value is the latest client's, from its own view."""
+    rows = []
+    for nid, nd in enumerate(m.nodes):
+        if not nd["text"]:
+            continue
+        client, i = m._view_of(nid)
+        example = m.views[client][0][i]["text"]
+        rows.append({"status": m.status(nid), "label": m.label(nid), "value_type": m._type_of(nid, example),
+                     "clients": len(nd["clients"]), "example_value": example, "key": nd["key"]})
+    return rows
+
+
+def main_memory() -> int:
+    """The default: every page link's memory over all its clients (not one pair)."""
+    from core.sdis import memory
+    pages = {p: cm for p, cm in memory.client_maps().items() if len(cm) >= 2}
+    if not pages:
+        raise SystemExit(f"No page link has two clients in {OUT_DIR} yet - capture it for another client first.")
+    for page in sorted(pages):
+        cm = pages[page]
+        m = memory.build(page, cm, sorted(cm, key=lambda c: cm[c].reads[0]), 2)
+        page_rows = memory_rows(m)
+        print(f"Page     : {page}   clients {len(cm)}")
+        counts = Counter(r["status"] for r in page_rows)
+        for st in sorted(counts):
+            print(f"  {st:18s} {counts[st]:5d}")
+        data = [r for r in page_rows if r["status"] in ("semi-variable", "variable", VARIABLE_ALIGNMENT)]
+        print(f"  data nodes {len(data)}, labelled {sum(1 for r in data if r['label'])}")
+        out = write_csv(OUT_DIR / f"compare_memory__{page_slug(page)}.csv", MEMORY_FIELDS, page_rows)
+        print(f"CSV      : {out.name}")
+        print()
+    print("(the CSVs hold real page values - keep them on this PC)")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Compare two clients' maps of the same page link (or two single reads).")
+    ap = argparse.ArgumentParser(description="Page memory view (default), or --two: two clients' maps of the same "
+                                             "page link (or two single reads).")
+    ap.add_argument("--two", action="store_true", help="the old mode: the latest client vs the previous one")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
     ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
@@ -335,6 +282,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     global ALIGN
     ALIGN = args.align == "on"
     print(f"View     : {args.view}    Align: {args.align}")
+    if not (args.two or args.latest or args.previous):
+        return main_memory()
 
     # One comparison per page link: (page, latest side's name, other side's name, rows).
     results: List[Tuple[str, str, str, List[Dict[str, Any]]]] = []

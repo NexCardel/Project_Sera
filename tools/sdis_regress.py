@@ -101,6 +101,11 @@ def run(captures: Path, out: List[str]) -> bool:
                     f" ({100 * r['matched'] / max(1, r['nodes']):5.1f}%)  {r['kind']}")
             for (st, v), k in sorted(sums[-1].items()):
                 say(f"      {st:9s} {v:26s} {k:5d}")
+            stat = Counter(m.status(i) for i, nd in enumerate(m.nodes) if nd["text"])
+            data = [i for i, nd in enumerate(m.nodes) if nd["text"]
+                    and m.status(i) in ("semi-variable", "variable", "variable_alignment")]
+            say(f"    statuses: " + "  ".join(f"{s} {k}" for s, k in sorted(stat.items())))
+            say(f"    data nodes {len(data)}, labelled {sum(1 for i in data if m.label(i))}")
         retired = sum(k for (st, _v), k in memory.build(page, cm, order, 2).summary().items() if st == "retired")
         say(f"  retired (time order): {retired}")
         agree = sums[0] == sums[1]

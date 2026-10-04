@@ -12,8 +12,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from core.sdis import history, labels
 
-LABEL_LOOKBACK = 6
-
 
 def changes_within_client(node: Dict[str, Any]) -> bool:
     """True if any client has 2+ distinct texts for this node."""
@@ -62,11 +60,7 @@ def changes_with_time(node: Dict[str, Any]) -> bool:
 def probably_furniture(mem: Any, nid: int) -> bool:
     """True if the node's base verdict is 'differs between clients', EVERY voting client's
     text is labels.value_type 'sentence' or 'label' (so the client order cannot change it),
-    and it has NO label.
-
-    Until W3-1 brings real labels, 'no label' = none of the 6 nodes before it in
-    mem.order is 'same for all clients' (base verdict, so variable_alignment counts too)
-    with a letter in its text.
+    and it has NO label (mem.label: table column, or a shared text in its box / just before it).
     """
     if mem.base_verdict(nid) != "differs between clients":
         return False
@@ -74,15 +68,4 @@ def probably_furniture(mem: Any, nid: int) -> bool:
     texts = [c["texts"][-1] for c in cl.values() if c.get("sure", True) and c.get("texts")]
     if not texts or any(labels.value_type(t) not in ("sentence", "label") for t in texts):
         return False
-
-    # TODO(W3-1): replace heuristic lookback with real labels when W3-1 brings them.
-    if nid not in mem.order:
-        return True
-    idx = mem.order.index(nid)
-    for prev_nid in mem.order[max(0, idx - LABEL_LOOKBACK):idx]:
-        if mem.base_verdict(prev_nid) == "same for all clients":
-            prev_texts = [c["texts"][-1] for c in mem.nodes[prev_nid]["clients"].values()
-                          if c.get("sure", True) and c.get("texts")]
-            if any(ch.isalpha() for t in prev_texts for ch in t):
-                return False
-    return True
+    return mem.label(nid) == ""

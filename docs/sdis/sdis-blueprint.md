@@ -1070,5 +1070,23 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   passed 1 skipped. Regression before = after (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all
   verdict counts identical, retired 0; orders agree yes). Decisions recorded: the two above. Next: W3-1 replaces
   `noise.probably_furniture`'s 6-node lookback with real labels; use `base_verdict` for any rule that looks at neighbours.
+- **W3-1** (2026-10-04, claude-sonnet-5-5): Part I. `core/sdis/labels.py` now holds (moved unchanged from compare.py, imported back)
+  `_container _children _first_label _same_column _table_label LABEL_LOOKBACK _label`, plus new `cell_labels(flat)` (real tables via
+  `core.sdis.tables` on a doc rebuilt from the flat: column name top-down, matrix row name in front; header cells / nameless columns get
+  nothing). `memory.PageMemory`: `views[client] = (flat, node id per index)` set in `add()`; `status(nid)` (fixed / semi-variable /
+  variable / variable_alignment / ambiguous / furniture / waiting / retired / composite); `label(nid)` from the latest client view that
+  holds the node (table label, else `labels._label` over candidates; candidates cached per view, reset by add/retire). `noise.
+  probably_furniture` is now `label(nid) == ""` (W2-2's lookback and `noise.LABEL_LOOKBACK` removed). `compare.py`: default = memory view
+  (`compare_memory__<page>.csv`: status, label, value_type, clients, example_value, key), old mode under `--two` (or --latest/--previous).
+  Tests: `tests/test_sdis_labels.py` (27: EXPECTED labels from memory in both client orders, ledger/matrix cells, statuses, furniture,
+  lookback 5/6, compare CSV); the 6 furniture tests of test_sdis_noise.py moved there rewritten on real views; SDIS + align 204 passed.
+  Regression (`sdis_regress.py` now also prints statuses + "data nodes / labelled" per page): before = after on every earlier line (11 maps,
+  41 snapshots, 2367 text nodes, 0/0/28; owners 4; all verdict counts and furniture 1 on returns dashboard identical; orders agree yes).
+  New lines: returns dashboard fixed 73, semi-variable 14, variable 5, var_align 3, furniture 1, waiting 5, composite 7, data 22 / labelled 21;
+  GSTR-1 fixed 56, semi 16, variable 13, var_align 20, furniture 1 (the within-client noise), waiting 4, composite 18, data 49 / labelled 48;
+  services dashboard fixed 84, semi 5, variable 39, var_align 26, composite 11, data 70 / labelled 70. Decisions recorded (2): candidates =
+  base verdict 'same' with fixable/alphanumeric type + unpaired repeats of such (shape, text) (= compare.py's set, no verdict loop); a
+  nameless table column falls back to the box rules. Next WP must know: `memory.label` / `status` need `add()`'d views (hand-made nodes
+  have none -> label ''); `main_memory()` was only tested on fictional fixtures (real output stays untouched).
 
 
