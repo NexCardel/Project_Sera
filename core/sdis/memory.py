@@ -40,8 +40,9 @@ git-ignored, keep on this PC).
 """
 
 import argparse
+import re
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.sdis import link_map
 from core.sdis.align import align, pair_moved, shape
@@ -53,6 +54,7 @@ OUT_DIR = data_dir()
 
 SAME_MATCH, SAME_NEW = 0.95, 3        # same screen: >= 95% of the map matched, <= 3 new
 RADICAL_MATCH = 0.50                  # radical: under half of the map matched memory
+_SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
 
 
 def _always(e: Dict[str, Any]) -> bool:
@@ -65,8 +67,16 @@ def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]]) -> Dict[int,
 
 
 class PageMemory:
-    def __init__(self, page: str, n_promote: int) -> None:
+    def __init__(self, page: str, n_promote: int, screen: Optional[int] = None, link: Optional[str] = None) -> None:
         self.page, self.n = page, n_promote
+        m = _SCREEN_RE.search(page)
+        if screen is not None:
+            self.screen = screen
+        elif m:
+            self.screen = int(m.group(1))
+        else:
+            self.screen = 1
+        self.link = link if link is not None else _SCREEN_RE.sub("", page)
         self.nodes: List[Dict[str, Any]] = []      # every node, memory or pending
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
@@ -177,22 +187,92 @@ class PageMemory:
                        for i, nd in enumerate(self.nodes) if nd["text"])
 
 
-def client_maps() -> Dict[str, Dict[str, link_map.LinkMap]]:
+def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMap]] = None,
+                sources: Optional[List[Any]] = None) -> Dict[str, Dict[str, link_map.LinkMap]]:
     """{page link: {client: that client's ONE map of it}} - sessions grouped into clients by the
-    PAN / GSTIN SGT-C finds on any page they visited."""
+    PAN / GSTIN SGT-C finds on any page they visited.
+    Groups by base link and assigns each client's screen map to a PageMemory screen by weighted matching."""
     from core.sdis.identity import client_ids
-    ids: Dict[str, set] = {}
-    for (session, _page), lm in link_map.build_maps().items():
-        ids.setdefault(session, set()).update(client_ids(lm))
-    owners = link_map.group_clients(ids)
+    from core.sdis.screens import covers, link_weights, same_screen
+
+    if sources is None:
+        sources = link_map.all_sources()
+    weights = link_weights(sources)
+
+    if client_link_maps is None:
+        session_maps = link_map.build_maps(sources=sources)
+        ids: Dict[str, set] = {}
+        for (session, _page), lm in session_maps.items():
+            ids.setdefault(session, set()).update(client_ids(lm))
+        owners = link_map.group_clients(ids)
+        all_client_maps = link_map.build_maps(client_of_session=owners, sources=sources)
+    else:
+        all_client_maps = client_link_maps
+
+    by_link: Dict[str, List[link_map.LinkMap]] = {}
+    for (client, page_key), lm in all_client_maps.items():
+        base_link = getattr(lm, "link", page_key)
+        by_link.setdefault(base_link, []).append(lm)
+
     out: Dict[str, Dict[str, link_map.LinkMap]] = {}
-    for (client, page), lm in link_map.build_maps(client_of_session=owners).items():
-        out.setdefault(page, {})[client] = lm
+
+    for base_link, lms in by_link.items():
+        lms_sorted = sorted(lms, key=lambda m: m.reads[0] if m.reads else "")
+        screen_mems: List[PageMemory] = []
+        screen_client_maps: List[Dict[str, link_map.LinkMap]] = []
+
+        for lm in lms_sorted:
+            client = lm.client
+            flat = lm.to_flat()
+
+            if not screen_mems:
+                pm = PageMemory(base_link, n_promote=2, screen=1, link=base_link)
+                pm.add(flat, client)
+                screen_mems.append(pm)
+                screen_client_maps.append({client: lm})
+                continue
+
+            best_pm = None
+            best_idx = -1
+            best_max_cover = -1.0
+
+            for idx, pm in enumerate(screen_mems):
+                if client in screen_client_maps[idx]:
+                    continue
+                cur = pm._view(pm.order)
+                pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
+                c_new, c_old = covers(flat, cur, pairs, weights)
+                mc = max(c_new, c_old)
+                if mc > best_max_cover:
+                    best_max_cover = mc
+                    best_pm = pm
+                    best_idx = idx
+
+            if best_pm is not None and same_screen(best_max_cover, 0.0):
+                screen_client_maps[best_idx][client] = lm
+                best_pm.add(flat, client)
+            else:
+                n_screen = len(screen_mems) + 1
+                page_name = f"{base_link} [screen {n_screen}]"
+                pm = PageMemory(page_name, n_promote=2, screen=n_screen, link=base_link)
+                pm.add(flat, client)
+                screen_mems.append(pm)
+                screen_client_maps.append({client: lm})
+
+        for pm, cm in zip(screen_mems, screen_client_maps):
+            out[pm.page] = cm
+
     return out
 
 
-def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int) -> PageMemory:
-    mem = PageMemory(page, n)
+def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int,
+          screen: Optional[int] = None, link: Optional[str] = None) -> PageMemory:
+    first_lm = next(iter(maps.values())) if maps else None
+    if screen is None and first_lm is not None:
+        screen = getattr(first_lm, "screen", None)
+    if link is None and first_lm is not None:
+        link = getattr(first_lm, "link", None)
+    mem = PageMemory(page, n, screen=screen, link=link)
     for client in order:
         if client in maps:
             mem.add(maps[client].to_flat(), client)

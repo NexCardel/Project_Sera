@@ -899,4 +899,16 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   lost 0, multi 28; orders agree yes on all 5 links; memory confirmed/waiting breakdown identical everywhere (0 numbers changed).
   Decisions: none (Part B specification followed directly). Next WP must know: `day_of` lives in `core.sdis.history`; `to_flat()` items
   and `mem.nodes[nid]["clients"][client]["history"]` carry `[[stamp, text], ...]`.
+- **W1-2** (2026-10-04, gemini-3.8-flash-high): built Part G screens by weighted matching. Files: `core/sdis/screens.py`
+  (`link_weights`, `covers`, `same_screen`, `WeightDict`, `SCREEN_MIN` = 0.5), `core/sdis/link_map.py` (`build_maps` computes
+  weights and matches candidates, splitting into screens; `LinkMap` `link`/`screen` attributes; `add` accepts `precomputed`),
+  `core/sdis/memory.py` (`client_maps` groups by base link and `PageMemory` screens; `build` sets `screen`/`link`),
+  `tools/pre_dev/class_diff/screens.py` (alias), `tools/sdis_regress.py` (fallback to base link), `tests/test_sdis_screens.py`
+  (5 tests: tiny math, `link_weights` formula, A+block, shell+A, replacement split). Updated `tests/test_sdis_package.py`.
+  Tests: 82 passed (76 previous + 6 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0,
+  lost 0, multi 28; orders agree yes on all 5 links; 0 numbers changed; no real link splits. Decisions: none (Part G followed directly).
+  Next WP must know: `LinkMap` and `PageMemory` have attributes `link` (base link) and `screen` (int >= 1); screens >= 2 are keyed/printed
+  as `'link [screen n]'`.
+
+
 

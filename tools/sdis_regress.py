@@ -64,7 +64,8 @@ def run(captures: Path, out: List[str]) -> bool:
     say(f"== maps: {len(maps)} (session, page link) ==")
     totals: Counter = Counter()
     for (session, page), lm in sorted(maps.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        r = _map_report(by_map.get((session, page), []), lm, flatten, shape)
+        sources = by_map.get((session, page)) or by_map.get((session, getattr(lm, "link", page)), [])
+        r = _map_report(sources, lm, flatten, shape)
         totals.update(r)
         say(f"Page: {page} | {session}")
         say("  " + "  ".join(f"{k} {v}" for k, v in r.items()))

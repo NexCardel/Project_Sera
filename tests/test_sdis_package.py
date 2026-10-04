@@ -46,10 +46,17 @@ def test_compare_still_exposes_the_moved_names():
     assert compare.keys is core.sdis.keys
 
 
+def test_pre_dev_screens_is_the_core_module():
+    import screens
+    import core.sdis.screens
+    assert screens is core.sdis.screens
+
+
 def test_core_sdis_imports_without_pyside6(tmp_path):
     env = dict(os.environ, SDIS_DATA_DIR=str(tmp_path))
     code = ("import sys, core.sdis.paths, core.sdis.keys, core.sdis.align, core.sdis.labels, "
-            "core.sdis.identity, core.sdis.history, core.sdis.link_map, core.sdis.memory, core.sdis.tables; "
+            "core.sdis.identity, core.sdis.history, core.sdis.screens, core.sdis.link_map, core.sdis.memory, core.sdis.tables; "
             "sys.exit(1 if 'PySide6' in sys.modules else 0)")
     r = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-500:]
+

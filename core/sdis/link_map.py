@@ -61,13 +61,24 @@ def _always(e: Dict[str, Any]) -> bool:
     return True
 
 
+_SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
+
+
 class LinkMap:
     """Entries are kept under an ENTRY ID: the element's key when it first appeared, made unique
     with "#n" if a later, different element arrives under a key already taken. An entry's "key" is
     its LATEST key - counters can change between snapshots, the entry stays the same one."""
 
-    def __init__(self, client: str, page: str) -> None:
+    def __init__(self, client: str, page: str, screen: Optional[int] = None, link: Optional[str] = None) -> None:
         self.client, self.page = client, page
+        m = _SCREEN_RE.search(page)
+        if screen is not None:
+            self.screen = screen
+        elif m:
+            self.screen = int(m.group(1))
+        else:
+            self.screen = 1
+        self.link = link if link is not None else _SCREEN_RE.sub("", page)
         self.entries: Dict[str, Dict[str, Any]] = {}
         self.children: Dict[Optional[str], List[str]] = {}
         self.reads: List[str] = []
@@ -85,17 +96,22 @@ class LinkMap:
         """Every key any entry was ever seen under."""
         return {k for ent in self.entries.values() for k in ent["keys"]}
 
-    def add(self, rec: Dict[str, Any], stamp: str, session: str = "") -> Dict[str, Any]:
+    def add(self, rec: Dict[str, Any], stamp: str, session: str = "",
+            precomputed: Optional[Tuple[List[Dict[str, Any]], Dict[int, int]]] = None) -> Dict[str, Any]:
         """Merge one read. Each element of the read is paired with an entry the map already has
         by ALIGNMENT (align.py: same shape + same text anchors in page order, the rest by shape
         between anchors) - not by key, so a re-render that renumbers a footer, or one more row
         above it, updates the entries the map has instead of storing them a second time (P16, R8).
         Only what pairs nothing is new. Returns {"new": the new entry ids, "blocks": their blocks}."""
-        flat = flatten(rec)
+        if precomputed is not None:
+            flat, pairs = precomputed
+            cur = self.to_flat() if (pairs and self.entries) else []
+        else:
+            flat = flatten(rec)
+            cur = self.to_flat()
+            pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
         if session and session not in self.sessions:
             self.sessions.append(session)
-        cur = self.to_flat()
-        pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
         ids: List[str] = []
         new_idx: set = set()
         for i, e in enumerate(flat):
@@ -198,21 +214,64 @@ def all_sources() -> List[Tuple[str, str, str, Dict[str, Any]]]:
 
 def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
                until: Optional[str] = None,
-               client_of_session: Optional[Dict[str, str]] = None) -> Dict[Tuple[str, str], LinkMap]:
+               client_of_session: Optional[Dict[str, str]] = None,
+               sources: Optional[List[Tuple[str, str, str, Dict[str, Any]]]] = None) -> Dict[Tuple[str, str], LinkMap]:
     """Every (session, page link) map, merged in time order (only up to `until`, a stamp, when
     given). `reads`: only these single reads instead of everything in output/.
     `client_of_session` (group_clients): one map per (CLIENT, page link) instead - every session
-    of one client merged into one map, so a client is one vote per page (R8)."""
-    if reads is not None:
+    of one client merged into one map, so a client is one vote per page (R8).
+    Candidate maps are the owner's maps of that link; weighted matching splits into screens (Part G)."""
+    from core.sdis.screens import covers, link_weights, same_screen
+
+    if sources is not None:
+        pass
+    elif reads is not None:
         sources = [(read_stamp(p), client_of(r, p), page_of(r), r) for p, r in reads]
     else:
         sources = all_sources()
+    if until is not None:
+        sources = [s for s in sources if s[0] <= until]
+
+    weights = link_weights(sources)
     maps: Dict[Tuple[str, str], LinkMap] = {}
+    owner_link_maps: Dict[Tuple[str, str], List[LinkMap]] = {}
+
     for stamp, session, page, rec in sources:
-        if until is not None and stamp > until:
-            continue
         owner = (client_of_session or {}).get(session, session)
-        maps.setdefault((owner, page), LinkMap(owner, page)).add(rec, stamp, session)
+        flat = flatten(rec)
+        candidates = owner_link_maps.get((owner, page), [])
+
+        if not candidates:
+            m = LinkMap(owner, page, screen=1, link=page)
+            m.add(rec, stamp, session, precomputed=(flat, {}))
+            owner_link_maps[(owner, page)] = [m]
+            maps[(owner, page)] = m
+            continue
+
+        best_candidate = None
+        best_max_cover = -1.0
+        best_pairs = None
+
+        for m in candidates:
+            cur = m.to_flat()
+            pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
+            c_new, c_old = covers(flat, cur, pairs, weights)
+            mc = max(c_new, c_old)
+            if mc > best_max_cover:
+                best_max_cover = mc
+                best_candidate = m
+                best_pairs = pairs
+
+        if best_candidate is not None and same_screen(best_max_cover, 0.0):
+            best_candidate.add(rec, stamp, session, precomputed=(flat, best_pairs))
+        else:
+            n = len(candidates) + 1
+            page_key = f"{page} [screen {n}]"
+            m = LinkMap(owner, page_key, screen=n, link=page)
+            m.add(rec, stamp, session, precomputed=(flat, {}))
+            candidates.append(m)
+            maps[(owner, page_key)] = m
+
     return maps
 
 
