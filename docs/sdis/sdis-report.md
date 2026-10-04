@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 17:46)
+# Sera Distill — report (2026-10-04 17:49)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 10 |
+| Not started | 9 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 20 |
+| Done | 21 |
 | Blocked | 0 |
 
-Runs: 21   output tokens: 1127174   API-equivalent cost: $22.52
+Runs: 22   output tokens: 1150273   API-equivalent cost: $24.01
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -34,7 +34,7 @@ Runs: 21   output tokens: 1127174   API-equivalent cost: $22.52
 | W3-1 | Done | sonnet | e7854ea | Part I: statuses + labels from memory | Part I: memory.status/label from client views, table cell labels, furniture via real labels, compare memory view; 204 tests pass, regression counts unchanged |
 | W3-2 | Done | gemini_first | 8460cf1 | Part J: relevance by occurrences + slots | Part J: core/sdis/relevance.py datapoints(); 93 datapoints on real captures; regression unchanged; 213 SDIS tests pass |
 | W3-4 | Done | gemini_first | 128efd5 | Part R.4: SDIS on Firefox trees | alignment + label tests parametrized over edge/msedge/chrome/firefox fixtures; all pass, no core change |
-| W3-5 | Not started | gemini_first |  | Part S.1: class suggestion (what a value stays the same with) |  |
+| W3-5 | Done | gemini_first | 76d79f7 | Part S.1: class suggestion (what a value stays the same with) | classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed |
 | W3-3 | Not started | sonnet |  | Part O engine: memory on disk, incremental mining |  |
 | W4-1 | Not started | opus |  | Part K: SDIS's own recorder (raw view, session id, browser) |  |
 | W4-2 | Not started | opus |  | Part P: captures travel to the admin PC |  |
@@ -61,6 +61,7 @@ Runs: 21   output tokens: 1127174   API-equivalent cost: $22.52
 - **W2-R** Part C rule 2 'changes with time': does a day seen by only one client count as agreement? → No: the texts must differ between days that 2+ clients were seen on (Rule 6: two clients captured on different days with their own data would otherwise be called noise and their datapoint lost)
 - **W3-1** Which verdicts may a label candidate come from, given probably furniture asks for labels while verdicts are being computed? → Base verdict 'same for all clients' with a fixable or alphanumeric type, plus unpaired repeats of such a (shape, text) (Same set as compare.py's fixed + variable_alignment + semi-variable alphanumeric (variable_alignment only ever comes from a fixable text); avoids the label -> verdict -> furniture -> label loop)
 - **W3-1** A node in a real table whose column has no name (or a header cell): what label? → Fall back to the screen-box rules (labels._label, which still tries the structural _table_label first) (Blueprint: box rules apply to values outside any table and to tables without table markup; a nameless column gives the table nothing to say)
+- **W3-5** How do container moves reach suggest()? → moves={key: class} argument; override with reason 'moved by the user' (sdis_decisions table does not exist before W4-4; the dict is what that reader will pass)
 
 ## Checks waiting for you
 

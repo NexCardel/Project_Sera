@@ -146,7 +146,7 @@ class PageMemory:
         nd = self.nodes[nid]
         if ci is None:
             ci = self.clients.index(client) if client in self.clients else (len(self.clients) - 1 if self.clients else 0)
-        nd["last_ci"] = ci
+        nd["last_ci"] = max(nd.get("last_ci", ci), ci)         # a client added again must not look like a miss
         if "first_ci" not in nd:
             nd["first_ci"] = ci
         if "ctype" not in nd or nd["ctype"] is None:
@@ -428,7 +428,7 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
     PAN / GSTIN SGT-C finds on any page they visited.
     Groups by base link and assigns each client's screen map to a PageMemory screen by weighted matching."""
     from core.sdis.identity import client_ids, group_clients, resolve_owners
-    from core.sdis.screens import covers, link_weights, same_screen
+    from core.sdis.screens import link_weights
 
     if sources is None:
         sources = link_map.all_sources()
@@ -475,49 +475,49 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
         screen_client_maps: List[Dict[str, link_map.LinkMap]] = []
 
         for lm in lms_sorted:
-            client = lm.client
-            flat = lm.to_flat()
-
-            if not screen_mems:
-                page_name = f"{base_link} [{browser}]" if browser else base_link
-                pm = PageMemory(page_name, n_promote=2, screen=1, link=base_link, browser=browser)
-                pm.add(flat, client, lm.read_info)
-                screen_mems.append(pm)
-                screen_client_maps.append({client: lm})
-                continue
-
-            best_pm = None
-            best_idx = -1
-            best_max_cover = -1.0
-
-            for idx, pm in enumerate(screen_mems):
-                if client in screen_client_maps[idx]:
-                    continue
-                cur = pm._view(pm.order)
-                pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
-                c_new, c_old = covers(flat, cur, pairs, weights)
-                mc = max(c_new, c_old)
-                if mc > best_max_cover:
-                    best_max_cover = mc
-                    best_pm = pm
-                    best_idx = idx
-
-            if best_pm is not None and same_screen(best_max_cover, 0.0):
-                screen_client_maps[best_idx][client] = lm
-                best_pm.add(flat, client, lm.read_info)
-            else:
-                n_screen = len(screen_mems) + 1
-                prefix = f"{base_link} [{browser}]" if browser else base_link
-                page_name = f"{prefix} [screen {n_screen}]"
-                pm = PageMemory(page_name, n_promote=2, screen=n_screen, link=base_link, browser=browser)
-                pm.add(flat, client, lm.read_info)
-                screen_mems.append(pm)
-                screen_client_maps.append({client: lm})
+            taken = {i for i, cm in enumerate(screen_client_maps) if lm.client in cm}
+            _pm, idx = place_map(screen_mems, lm, base_link, browser, weights, taken)
+            if idx == len(screen_client_maps):
+                screen_client_maps.append({})
+            screen_client_maps[idx][lm.client] = lm
 
         for pm, cm in zip(screen_mems, screen_client_maps):
             out[pm.page] = cm
 
     return out
+
+
+def place_map(screen_mems: List[PageMemory], lm: link_map.LinkMap, base_link: str, browser: str,
+              weights: Any, taken: Iterable[int] = (), rejected: Optional[Iterable[Tuple[str, str, str]]] = None
+              ) -> Tuple[PageMemory, int]:
+    """Part G: add one client's map to the screen memory of (base_link, browser) it is the same screen as
+    (best weighted cover; screens in `taken` already hold another map of this client), else to a new
+    screen appended to `screen_mems`. Returns (that memory, its index in screen_mems)."""
+    from core.sdis.screens import covers, same_screen
+
+    flat = lm.to_flat()
+    taken = set(taken)
+    prefix = f"{base_link} [{browser}]" if browser else base_link
+    best_idx, best_max_cover = -1, -1.0
+    for idx, pm in enumerate(screen_mems):
+        if idx in taken:
+            continue
+        cur = pm._view(pm.order)
+        pairs = pair_moved(flat, cur, align(flat, cur, _always), _always) if cur else {}
+        c_new, c_old = covers(flat, cur, pairs, weights)
+        mc = max(c_new, c_old)
+        if mc > best_max_cover:
+            best_max_cover, best_idx = mc, idx
+    if best_idx >= 0 and same_screen(best_max_cover, 0.0):
+        pm = screen_mems[best_idx]
+    else:
+        best_idx = len(screen_mems)
+        n_screen = best_idx + 1
+        pm = PageMemory(prefix if n_screen == 1 else f"{prefix} [screen {n_screen}]", n_promote=2, screen=n_screen,
+                        link=base_link, browser=browser, rejected=rejected)
+        screen_mems.append(pm)
+    pm.add(flat, lm.client, lm.read_info)
+    return pm, best_idx
 
 
 def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int,
@@ -538,10 +538,27 @@ def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int
     return mem
 
 
+def _main_state(state_path: Optional[str]) -> int:
+    from core.sdis import mine
+    r = mine.mine(OUT_DIR, state_path, progress=lambda done, total, page: print(f"  client map {done}/{total}"))
+    print(f"new snapshots {r['processed']} in {r['files']} files, client maps added {r['clients']}, "
+          f"pages {r['pages']}, rebuilt {len(r['rebuilt'])}{' (all)' if r['rebuild_all'] else ''}, "
+          f"{'CANCELLED, ' if r['cancelled'] else ''}{r['skipped']} unreadable files, {r['seconds']} s")
+    for k, n in sorted(r["verdicts"].items()):
+        print(f"      {k:36s} {n:5d} text nodes")
+    print(f"datapoints {r['datapoints']}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="SDIS page memory over every client's map in output/.")
     ap.add_argument("--n", type=int, default=2, help="different clients a pending node needs to join memory")
+    ap.add_argument("--state", nargs="?", const="", default=None, metavar="PATH",
+                    help="use the incremental miner (Part O): only new captures are taken, the state is saved at PATH"
+                         " (default: memory.json.gz in the data folder); prints counts only")
     args = ap.parse_args(argv)
+    if args.state is not None:
+        return _main_state(args.state or None)
     pages = {p: cm for p, cm in client_maps().items() if len(cm) >= 2}
     if not pages:
         raise SystemExit("No page link has two clients yet - capture it for another client first.")

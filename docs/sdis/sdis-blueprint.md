@@ -1125,5 +1125,19 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   Decisions (recorded): moves come in as `moves={key: class}` (override, reason "moved by the user"); the stored `sdis_decisions` read and the
   "never into the rejected container again" feed-back belong to W4-4 (no table exists yet). Next WP must know: the period of a page text and of
   a link segment are normalised separately (lower-case), so one period shown both ways counts as two; observations pool every page a datapoint is on.
+- **W3-3** (2026-10-04, claude-sonnet-5-5): Part O engine. NEW `core/sdis/store.py` (gzip JSON `data_dir()/memory.json.gz`, `STATE_VERSION` 1, `save` atomic via
+  .tmp + `os.replace`, `load` -> None for missing/corrupt/other version) and `core/sdis/mine.py`: `mine(captures_dir, state_path=None, progress=None, cancel=None,
+  rebuild=False)` -> {processed, files, clients, pages, rebuilt, rebuild_all, cancelled, skipped, verdicts, datapoints, seconds}; `progress(done, total, page)` and a
+  save after EACH client map; `cancel.is_set()` between clients; unfinished clients stay in `state["todo"]` and the next run resumes. State keys: files {name: [size, mtime]},
+  stamps, sessions {files, links, ids}, link_of, owners, session_maps, todo, memories, rejected/picked/rejected_triples (survive a rebuild), datapoints (dicts).
+  Edited: `link_map.file_sources/all_reads`, `build_maps(weights=)`; `memory.place_map` (extracted from `client_maps`, same result), `_see` keeps `last_ci` = max (a
+  client added again is not a miss), `memory.py --state`; `tools/sdis_regress.py --state` (also runs mine(rebuild) and prints "mine agrees"; temp dir by default).
+  Tests: `tests/test_sdis_mine.py` (12; incremental == fresh rebuild, cancel/resume, corrupt/old state, add-again counts once, owner change rebuilds the page, grown file,
+  half-written file), +1 regress, +2 modules in the PySide6-free import test; SDIS + align 265 passed. Regression before -> after: every line identical (11 maps,
+  41 snapshots, 2367 nodes, 0/0/28; owners 4; verdicts, statuses, datapoints 93, suggested class 0/3/7/83); `--state`: "mine agrees: yes" (7 client maps, 3 pages with 2+ clients).
+  Decisions: ids are taken from NEW sources only and unioned; the maps of a client are rebuilt from ALL its sessions' files (dirty client); an owner or link change of an
+  already-added session drops the whole (link, browser) group and re-adds its clients; screen weights on an incremental run = new batch + stored session maps (can
+  split a screen differently from a rebuild in rare cases); a vanished file keeps its old maps. Next (W4-3) must know: call `mine()` in the child and read the state
+  with `store.load`; the full rebuild of the real folder takes ~15 s (state saved per client map); `pm.views` is stored, so the file grows with clients.
 
 

@@ -11,6 +11,7 @@ both client orders) over a folder of captures and prints numbers: never a text, 
 
     python tools/sdis_regress.py                          # ../APP/tools/pre_dev/class_diff/output
     python tools/sdis_regress.py --captures DIR --save docs/sdis/sdis-regress-baseline.txt
+    python tools/sdis_regress.py --state                  # also through core.sdis.mine (Part O), must agree
 
 The captures are read in place and never copied. Every WP runs this before and after its change.
 """
@@ -44,7 +45,7 @@ def _map_report(sources: List[Any], lm: Any, flatten: Any, shape: Any) -> Dict[s
             "multi": sum(1 for ent in lm.entries.values() if len(ent["values"]) > 1)}
 
 
-def run(captures: Path, out: List[str]) -> bool:
+def run(captures: Path, out: List[str], state: Optional[Path] = None) -> bool:
     os.environ["SDIS_DATA_DIR"] = str(captures)
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
@@ -121,20 +122,56 @@ def run(captures: Path, out: List[str]) -> bool:
     counts = Counter(dp.suggested_class or "none" for dp in dps)
     say("suggested class: " + ", ".join(f"{c} {counts[c]}" for c in ("profile", "dataset", "info", "none")))
     say(f"orders agree: {'yes' if agree_all else 'no'}")
+    if state is not None:
+        agree_all = _mine_report(captures, state, forward_mems, dps, say) and agree_all
     return agree_all
+
+
+def _mine_report(captures: Path, state: Path, forward_mems: List[Any], dps: List[Any], say: Any) -> bool:
+    """The same captures through mine() (rebuild), compared with the printout above: counts only."""
+    from core.sdis import mine, store
+    r = mine.mine(captures, state, rebuild=True)
+    st = store.load(state)
+    said = sorted(tuple(sorted(m.summary().items())) for m in forward_mems)
+    got = sorted(tuple(sorted(pm.summary().items())) for pm in st["memories"] if len(pm.clients) >= 2)
+    stat_said = sorted(tuple(sorted(Counter(m.status(i) for i, nd in enumerate(m.nodes) if nd["text"]).items()))
+                       for m in forward_mems)
+    stat_got = sorted(tuple(sorted(Counter(pm.status(i) for i, nd in enumerate(pm.nodes) if nd["text"]).items()))
+                      for pm in st["memories"] if len(pm.clients) >= 2)
+    top = [d["relevance_pct"] for d in st["datapoints"][:10]]
+    classes_said = Counter(dp.suggested_class or "none" for dp in dps)
+    classes_got = Counter(d["suggested_class"] or "none" for d in st["datapoints"])
+    same = (said == got and stat_said == stat_got and len(st["datapoints"]) == len(dps)
+            and top == [dp.relevance_pct for dp in dps[:10]] and classes_said == classes_got)
+    say()
+    say(f"== through mine(): {r['processed']} snapshots, {r['clients']} client maps, {r['pages']} memories, "
+        f"{len(got)} with 2+ clients, datapoints {len(st['datapoints'])} ==")
+    say("  suggested class: " + ", ".join(f"{c} {classes_got[c]}" for c in ("profile", "dataset", "info", "none")))
+    say(f"mine agrees: {'yes' if same else 'no'}")
+    return same
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="SDIS regression runner: counts only.")
     ap.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES, help="folder with the captures")
     ap.add_argument("--save", type=Path, help="also write the printout to this file")
+    ap.add_argument("--state", nargs="?", const="", default=None, metavar="PATH",
+                    help="also mine the captures with mine() and compare (the state goes to PATH, default a temp"
+                         " folder - never into the captures folder)")
     args = ap.parse_args(argv)
     if not args.captures.is_dir():
         print("no captures")
         return 0
     t0 = time.time()
     out: List[str] = []
-    run(args.captures, out)
+    if args.state is None:
+        run(args.captures, out)
+    elif args.state:
+        run(args.captures, out, Path(args.state))
+    else:
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="sdis_regress_") as tmp:
+            run(args.captures, out, Path(tmp) / "memory.json.gz")
     out.append(f"total seconds: {time.time() - t0:.1f}")
     print(out[-1])
     if args.save:

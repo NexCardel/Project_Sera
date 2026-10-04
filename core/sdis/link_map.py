@@ -212,24 +212,31 @@ def _blocks(flat: List[Dict[str, Any]], idx: set) -> List[Dict[str, Any]]:
     return blocks
 
 
-def all_reads() -> List[Tuple[Path, Dict[str, Any]]]:
-    return [(p, json.loads(p.read_text(encoding="utf-8"))) for p in sorted(OUT_DIR.glob("key_probe_*.json"))]
+def all_reads(directory: Optional[Path] = None) -> List[Tuple[Path, Dict[str, Any]]]:
+    return [(p, json.loads(p.read_text(encoding="utf-8"))) for p in sorted((directory or OUT_DIR).glob("key_probe_*.json"))]
 
 
-def all_sources() -> List[Tuple[str, str, str, Dict[str, Any]]]:
+def file_sources(path: Path) -> List[Tuple[str, str, str, Dict[str, Any]]]:
+    """The sources of ONE file: a key_probe_*.json is one single read, a capture_*.json one per snapshot."""
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    if not path.name.startswith("capture_"):
+        rec.setdefault("browser", "")
+        return [(read_stamp(path), client_of(rec, path), page_of(rec), rec)]
+    session = rec.get("session") or path.stem
+    browser = rec.get("browser", "")
+    return [(f"{session}+{snap['t']:06.1f}", f"capture {session}", page_of(rec),
+             {"docs": snap["docs"], "browser": snap.get("browser", browser)}) for snap in rec.get("snapshots") or []]
+
+
+def all_sources(directory: Optional[Path] = None) -> List[Tuple[str, str, str, Dict[str, Any]]]:
     """(stamp, session, page link, read) for every single read and every capture snapshot, in
     time order. A capture snapshot's stamp is its session time + seconds into the capture."""
     out: List[Tuple[str, str, str, Dict[str, Any]]] = []
-    for path, rec in all_reads():
+    for path, rec in all_reads(directory):
         rec.setdefault("browser", "")
         out.append((read_stamp(path), client_of(rec, path), page_of(rec), rec))
-    for path in sorted(OUT_DIR.glob("capture_*.json")):
-        rec = json.loads(path.read_text(encoding="utf-8"))
-        session = rec.get("session") or path.stem
-        browser = rec.get("browser", "")
-        for snap in rec.get("snapshots") or []:
-            out.append((f"{session}+{snap['t']:06.1f}", f"capture {session}", page_of(rec),
-                        {"docs": snap["docs"], "browser": snap.get("browser", browser)}))
+    for path in sorted((directory or OUT_DIR).glob("capture_*.json")):
+        out.extend(file_sources(path))
     return sorted(out, key=lambda x: x[0])
 
 
@@ -237,13 +244,15 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
                until: Optional[str] = None,
                client_of_session: Optional[Dict[str, str]] = None,
                sources: Optional[List[Tuple[str, str, str, Dict[str, Any]]]] = None,
-               link_of: Optional[Dict[str, str]] = None) -> Dict[Tuple[str, str], LinkMap]:
+               link_of: Optional[Dict[str, str]] = None,
+               weights: Optional[Any] = None) -> Dict[Tuple[str, str], LinkMap]:
     """Every (session, page link) map, merged in time order (only up to `until`, a stamp, when
     given). `reads`: only these single reads instead of everything in output/.
     `client_of_session` (group_clients): one map per (CLIENT, page link) instead - every session
     of one client merged into one map, so a client is one vote per page (R8).
     Candidate maps are the owner's maps of that link; weighted matching splits into screens (Part G).
-    `link_of`: optional mapping from raw link to resolved link (Part N)."""
+    `link_of`: optional mapping from raw link to resolved link (Part N).
+    `weights`: screen weights to use instead of those of `sources` (mine.py: the whole corpus, not just this batch)."""
     from core.sdis.screens import covers, link_weights, same_screen
 
     if sources is not None:
@@ -258,7 +267,8 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
         sources = [s for s in sources if s[0] <= until]
 
     sources_for_weights = [(s[0], s[1], link_of.get(s[2], s[2]), s[3]) for s in sources] if link_of else sources
-    weights = link_weights(sources_for_weights)
+    if weights is None:
+        weights = link_weights(sources_for_weights)
     maps: Dict[Tuple[str, str], LinkMap] = {}
     owner_link_maps: Dict[Tuple[str, str], List[LinkMap]] = {}
 
