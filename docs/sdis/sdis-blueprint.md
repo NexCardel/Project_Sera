@@ -877,3 +877,17 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   compares snapshot texts with the entries' `values` (capped at MAX_VALUES 5). The runner prints session names (capture
   times / "client n") and page links only. When W0-2 moves the engine to `core/sdis/`, the runner's `import link_map`
   etc. go through the pre-dev aliases; keep `link_map.OUT_DIR` assignment working through the alias.
+- **W0-2** (2026-10-04, claude-sonnet-5-5): engine package `core/sdis/`: `__init__` (pipeline in five lines), `paths.py`
+  (`data_dir()`, `write_csv`), `keys/align/link_map/memory/tables` moved (absolute `core.sdis` imports; `keys.LEARNED_FILE`,
+  `link_map/tables/memory.OUT_DIR` = `data_dir()`), new `labels.py` (value types, period rule, `composites`, `_end`, CT_*)
+  and `identity.py` (`client_ids`, `masked`) moved unchanged out of `compare.py`, which imports them back. The five pre-dev
+  files are aliases (`sys.modules[__name__] = core.sdis.<name>`; `memory/link_map/tables` still run as scripts via `_m.main()`).
+  `tools/sdis_regress.py` imports `core.sdis` directly. Tests: `test_sdis_package.py` (5, new); SDIS tests + align: 70 passed.
+  Regression before = after: printout identical to `sdis-regress-baseline.txt` except the timing line (diffed); 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28, orders agree yes on all 5 links - no number changed.
+  `compare.py/memory.py/tables.py/snapshot_diff.py --help` all start. Decisions: `git mv` is not on the shell allow-list, so
+  files were `cp`ed then the pre-dev copies overwritten with aliases (git sees them as new core files; history stays on the
+  pre-dev path). `SERA_DATA_DIR_NAME` (core.vsdc.vsdc_alerts) is imported INSIDE `data_dir()` only when `SDIS_DATA_DIR` is
+  unset, and identity's SGT/VSDC imports are inside `client_ids`: importing `core.vsdc` loads PySide6 (~0.8 s), which the
+  "core.sdis imports without PySide6" test forbids. Next WP must know: set `SDIS_DATA_DIR` before importing `core.sdis.*`
+  (LEARNED_FILE / OUT_DIR are read at import); a stray counts-only `../sdis_regress_after.txt` (outside the repo) can be deleted.

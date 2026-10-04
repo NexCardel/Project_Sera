@@ -57,12 +57,10 @@ lists are matched card n to card n.
 """
 
 import argparse
-import csv
 import json
-import re
+import os
 import sys
 from collections import Counter
-from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -72,26 +70,19 @@ ROOT = HERE.parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sgt_i.pairs import classify_type                     # noqa: E402
-from core.sgt.sgt_resolver import resolve_page                  # noqa: E402
-from core.sgt.sgt_specs import load_registry                    # noqa: E402
-from core.vsdc.vsdc_scope import portal_for_url                 # noqa: E402
-
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
-import keys                                                      # noqa: E402
-from keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
-import link_map                                                  # noqa: E402
-from align import align, shape                                   # noqa: E402
+os.environ.setdefault("SDIS_DATA_DIR", str(OUT_DIR))
 
-# Only these value types can be FIXED (template). Any other type (number, date, period, code,
-# alphanumeric, amount, email, phone, percentage, yes/no, control) is data-shaped: a bare number is
-# a count or balance two clients can share (0 = 0), never template. When both sessions show the
-# same value it is SEMI-VARIABLE - a value the clients compared so far happened to share - until a
-# session with a different value makes it variable. "control" = a choice the user makes (dropdown,
-# radio, checkbox - keys.CHOICE_CTYPES). Buttons are actions, not data: left out of the comparison.
-FIXABLE_TYPES = frozenset({"text", "label", "sentence"})
-SENTENCE_WORDS = 8
+from core.sdis import keys                                       # noqa: E402
+from core.sdis import link_map                                   # noqa: E402
+from core.sdis.align import align, shape                         # noqa: E402
+from core.sdis.identity import CLIENT_FIELDS, client_ids, masked   # noqa: E402,F401
+from core.sdis.keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
+from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, NEVER_LABEL_CTYPES,   # noqa: E402,F401
+                              SENTENCE_WORDS, _MONTH, _PERIOD_RES, _YEAR_PREFIX, _end, composites,
+                              element_type, is_period, value_type)
+from core.sdis.paths import write_csv                            # noqa: E402
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
     "fixed", "semi-variable", "variable", "only latest", "only previous")
@@ -100,55 +91,6 @@ STATUSES = (FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS)
 
 def page_key(rec: Dict[str, Any]) -> str:
     return rec.get("page") or ("title: " + (rec.get("title") or ""))
-
-
-# Period: a span of time rather than one day. Month words must be real month names, so a hyphenated
-# word ("Non-filer", "e-Verify") never matches.
-_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
-          r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?")
-_YEAR_PREFIX = r"(?:(?:a\.?\s?y\.?|f\.?\s?y\.?|assessment\s+year|financial\s+year|tax\s+year|year)\s*:?\s*)?"
-_PERIOD_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
-    rf"^{_YEAR_PREFIX}(?:19|20)\d\d\s?[-–/]\s?(?:(?:19|20)\d\d|\d\d)$",   # A.Y. 2026-27, FY 2025-2026
-    r"^(?:a\.?\s?y\.?|f\.?\s?y\.?)\s*:?\s*\d\d\s?[-–/]\s?\d\d$",          # AY 26-27, F.Y. 25-26 (prefix needed)
-    rf"^{_MONTH}\s?[-–/',]?\s?(?:(?:19|20)\d\d|\d\d)$",                   # April 2026, Apr-2026, Apr'26
-    rf"^{_MONTH}\s?[-–]\s?(?:19|20)\d\d$",                                 # January - 2021
-    r"^(?:0?[1-9]|1[0-2])\s?[-/]\s?(?:19|20)\d\d$",                        # 04/2026, 4-2026
-    rf"^q[1-4]\b.*$",                                                      # Q1 2026, Q1 (Apr-Jun)
-    rf"^{_MONTH}\s?[-–]\s?{_MONTH}(?:\s?,?\s?(?:(?:19|20)\d\d|\d\d))?$",   # Apr-Jun 2026, April - June
-))
-
-
-def is_period(text: str) -> bool:
-    v = " ".join(text.split())
-    return any(r.match(v) for r in _PERIOD_RES)
-
-
-def value_type(text: str) -> str:
-    """SGT-I's generic type (core/sgt_i/pairs.classify_type: text, number, amount, date, code,
-    email, phone, percentage, yes/no), plus four for this comparison: "period" (a year, month or
-    quarter span - A.Y. 2026-27, AY 26-27, April 2026, Q1), "label" (text ending in ':'),
-    "sentence" (SENTENCE_WORDS+ words) - those two almost always furniture - and "alphanumeric"
-    (digits mixed with letters or punctuation that no other type claimed: 139(1), Flat 4B, Tower 2;
-    "text" is then only words). The more
-    specific type wins: a single letters+digits token stays "code" (PAN, ARN), a date stays
-    "date", a period "period"; a label or sentence holding a digit stays label / sentence."""
-    t = classify_type(text)
-    if t != "text":
-        return t
-    if is_period(text):
-        return "period"
-    if text.rstrip().endswith(":"):
-        return "label"
-    if len(text.split()) >= SENTENCE_WORDS:
-        return "sentence"
-    if any(c.isdigit() for c in text):
-        return "alphanumeric"      # digits mixed with letters or punctuation: 139(1), Flat 4B, 26-27
-    return "text"
-
-
-def element_type(e: Dict[str, Any]) -> str:
-    """The value type of a flat entry: "control" for a choice element, else value_type(text)."""
-    return "control" if e["node"].get("ctype") in CHOICE_CTYPES else value_type(e["text"])
 
 
 def _compared(e: Dict[str, Any]) -> bool:
@@ -176,35 +118,8 @@ def _container(flat: List[Dict[str, Any]], i: int) -> str:
     return ""
 
 
-CT_HYPERLINK, CT_IMAGE, CT_TABLE = 50005, 50006, 50036
-NEVER_LABEL_CTYPES = frozenset({CT_HYPERLINK, CT_IMAGE}) | BUTTON_CTYPES
-
-
-def _end(flat: List[Dict[str, Any]], i: int) -> int:
-    """The index just past element i's subtree."""
-    j = i + 1
-    while j < len(flat) and flat[j]["depth"] > flat[i]["depth"]:
-        j += 1
-    return j
-
-
 def _children(flat: List[Dict[str, Any]], p: int) -> List[int]:
     return [j for j in range(p + 1, _end(flat, p)) if flat[j]["parent"] == p]
-
-
-def composites(flat: List[Dict[str, Any]]) -> set:
-    """Elements whose text is only their descendants' texts joined - at least two of them -
-    ("<name> <GSTIN>", "79,99,235.00 View/Update"). Worked bottom-up, so a composite inside a
-    composite is not counted twice: its parts are."""
-    out: set = set()
-    for i in range(len(flat) - 1, -1, -1):
-        text = " ".join(flat[i]["text"].split())
-        if not text:
-            continue
-        parts = [flat[j]["text"] for j in range(i + 1, _end(flat, i)) if flat[j]["text"] and j not in out]
-        if len(parts) >= 2 and " ".join(" ".join(parts).split()) == text:
-            out.add(i)
-    return out
 
 
 def _first_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
@@ -258,31 +173,6 @@ def _table_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
             if col_label:
                 break
     return " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
-
-
-CLIENT_FIELDS = ("pan", "gstin")
-_registry = None
-
-
-def client_ids(m: "link_map.LinkMap") -> set:
-    """Who the client of one map is: the PAN / GSTIN that SGT-C's own specs (sgt_fields.json,
-    checksums included) find in the text SGT sees there, as {"gstin:...", "pan:..."}. Empty when
-    the page never shows them, or the link is no portal."""
-    global _registry
-    url = "https://" + m.page
-    portal = portal_for_url(url)
-    if not portal:
-        return set()
-    if _registry is None:
-        _registry = load_registry()
-    lines = [e["text"] for e in m.to_flat() if e["text"] and e["node"].get("sgt")]
-    res = resolve_page(_registry, lines, portal, url, date.today())
-    return {f"{k}:{h.value}" for k, h in res.profile.items() if k in CLIENT_FIELDS}
-
-
-def masked(ids: set) -> str:
-    """Client ids for the console: first and last 2 characters only."""
-    return ", ".join(sorted(f"{i.split(':', 1)[0]} {v[:2]}..{v[-2:]}" for i in ids for v in [i.split(":", 1)[1]])) or "unknown"
 
 
 LABEL_LOOKBACK = 6     # fallback: how many elements back a label may sit when no box holds one
@@ -405,23 +295,6 @@ def pick(latest: Optional[str], previous: Optional[str]) -> Tuple[Path, Path]:
 
 FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "values_seen", "value_type", "previous_type", "element", "classes",
           "container", "id", "sgt_sees", "key"]
-
-
-def write_csv(out: Path, fields: List[str], rows: List[Dict[str, Any]]) -> Path:
-    """Write rows (UTF-8 with BOM, so Excel reads it right). When `out` is open in Excel (locked),
-    write beside it as _2, _3... Returns the path written."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    stem = out.stem
-    for n in range(2, 100):
-        try:
-            with open(out, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-                w.writeheader()
-                w.writerows(rows)
-            return out
-        except PermissionError:
-            out = out.with_name(f"{stem}_{n}.csv")
-    raise SystemExit(f"Could not write {out} - close it in Excel and run again.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

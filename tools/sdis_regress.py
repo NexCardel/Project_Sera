@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 REPO = Path(__file__).resolve().parents[1]
-PRE_DEV = REPO / "tools" / "pre_dev" / "class_diff"
 DEFAULT_CAPTURES = REPO.parent / "APP" / "tools" / "pre_dev" / "class_diff" / "output"
 
 
@@ -47,14 +46,12 @@ def _map_report(sources: List[Any], lm: Any, flatten: Any, shape: Any) -> Dict[s
 
 def run(captures: Path, out: List[str]) -> bool:
     os.environ["SDIS_DATA_DIR"] = str(captures)
-    for p in (str(PRE_DEV), str(REPO)):
-        if p not in sys.path:
-            sys.path.insert(0, p)
-    import link_map
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    from core.sdis import link_map, memory
+    from core.sdis.align import shape
+    from core.sdis.keys import flatten
     link_map.OUT_DIR = captures
-    import memory
-    from align import shape
-    from keys import flatten
 
     def say(line: str = "") -> None:
         out.append(line)

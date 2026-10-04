@@ -1,1 +1,2 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
+20261004-135607,W0-1,claude-sonnet-5-5,1,2026-10-04 13:54,1.7,Done,34,9088,1060548,77481,1.0138535999999998,30,"W0-1 is done and committed (36e67ef, plus 96a379e for the tracker). The SDIS tests pass (16 tests), and the regression run matches the numbers you expected.  - **Step 1:** `tests/test_sdis_memory.py` and `tests/test_class_diff_align.py` gave 14 passed. - **Runner:** `tools/sdis_regress.py` prints co"
