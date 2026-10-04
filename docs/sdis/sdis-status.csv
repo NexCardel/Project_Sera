@@ -22,7 +22,7 @@ W3-4,3,Part R.4: SDIS on Firefox trees,Done,claude-sonnet-5-5,1,128efd5,"alignme
 W3-5,3,Part S.1: class suggestion (what a value stays the same with),Done,claude-sonnet-5-5,1,76d79f7,"classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed",2026-10-04 17:49
 W3-3,3,"Part O engine: memory on disk, incremental mining",Done,claude-sonnet-5-5,1,eb2abfa,"store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees",2026-10-04 18:03
 W4-1,4,"Part K: SDIS's own recorder (raw view, session id, browser)",Done,claude-opus-5-5,1,f6dd800,"SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests + regression unchanged",2026-10-04 18:14
-W4-2,4,Part P: captures travel to the admin PC,Not started,claude-opus-5-5,0,,,
+W4-2,4,Part P: captures travel to the admin PC,In progress,claude-opus-5-5,1,,,2026-10-04 18:14
 W4-3,4,Part O: mining in its own process (no CPU cap),Not started,claude-opus-5-5,0,,,
 W4-4,4,Part Q: registration on every PC (synced tables),Not started,claude-opus-5-5,0,,,
 W4-5,4,Part L: the Distill dialog + loading dialog + containers,Not started,claude-sonnet-5-5,0,,,

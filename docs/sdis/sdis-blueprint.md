@@ -1154,5 +1154,19 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   `sgt <id> <started>` so `identity._by_time` sorts them. Hands-on check 3 added (real browsers). Next (W4-2) must know: nodes carry no "sgt" mark
   (raw only, keys.VIEW "sgt" treats them as raw); ISO stamps sort before pre-dev `2026...` stamps if both share a folder; a wedged UIA call stalls only
   the recorder thread; files on staff PCs are deleted only by the cap until Part P deletes after ack. A counts-only `../sdis_regress_w41_after.txt` can go.
+- **W4-2** (2026-10-04, claude-opus-5-5): Part P (D14). NEW `core/sdis/transfer.py`: `FRAME_PUSH`/`FRAME_ACK`, `push(session, files)` (manifest
+  {name,size,sha256} -> send_file each -> read ack, returns only manifest names), `handle_push(session, app_dir)` (empty ack unless
+  `sync_admin.is_admin_pc`, bad manifest or odd device id; receives into `data_dir()/corpus/<peer device id>/<name>.part`, `os.replace` when the
+  SHA-256 matches, acks those only), `finished_files` (past days' `sdis_YYYY-MM-DD.jsonl`, untouched 60 s, <= 200 files / 200 MB), `Pusher`
+  (`on_synced()` at most every 15 min on a daemon thread; skips on the admin PC; admin id from `get_office_admin`; session via
+  `engine._open_session_to`; deletes exactly the acked files). `sync_office.dispatch_session`: `elif t == "sdis_push"` (lazy import).
+  main.py: `self._sdis_pusher = Pusher(self.sync_engine)` before `start()`, `on_sync_engine_event("synced")` calls `on_synced()` (also in shadow mode).
+  Tests: NEW `tests/test_sdis_transfer.py` 6 (loopback mutual TLS through dispatch_session: two files acked + stored; a bad hash not acked and not
+  deleted, today's file kept; non-admin acks nothing; bad manifest refused; finished_files; throttle/admin skip); transfer added to the PySide6-free
+  import test. SDIS + align 286 passed; sync_office + sync_transport 48 passed. Regression before = after, every line identical (11 maps, 41
+  snapshots, 2367 nodes, 0/0/28; owners 4; 3 links, all verdicts/statuses; datapoints 93; class 0/3/7/83; orders agree) - no code on its path changed.
+  Decision recorded (trigger/batch/repeat files). Hands-on check 4 added. Next (W4-3) must know: pushed files sit one level down in
+  `corpus/<device id>/` with the SAME day names on every PC; `mine()` globs one folder flat, so feed it each device folder (or walk them) plus the
+  admin's own `sdis_capture`. A `../sdis_regress_w42_after.txt` (counts + page links, from `--save`) can go.
 
 

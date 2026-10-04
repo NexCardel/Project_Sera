@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 18:03)
+# Sera Distill — report (2026-10-04 18:14)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 8 |
+| Not started | 7 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 22 |
+| Done | 23 |
 | Blocked | 0 |
 
-Runs: 23   output tokens: 1229825   API-equivalent cost: $28.37
+Runs: 24   output tokens: 1264566   API-equivalent cost: $31.09
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -36,7 +36,7 @@ Runs: 23   output tokens: 1229825   API-equivalent cost: $28.37
 | W3-4 | Done | gemini_first | 128efd5 | Part R.4: SDIS on Firefox trees | alignment + label tests parametrized over edge/msedge/chrome/firefox fixtures; all pass, no core change |
 | W3-5 | Done | gemini_first | 76d79f7 | Part S.1: class suggestion (what a value stays the same with) | classes.py suggest/annotate (S.1), read_info per read, 9 tests, regress: suggested class profile 0 dataset 3 info 7 none 83, nothing else changed |
 | W3-3 | Done | sonnet | eb2abfa | Part O engine: memory on disk, incremental mining | store.py + mine.py: incremental mining with per-client save/cancel/resume; 265 SDIS tests pass; regression identical, mine agrees |
-| W4-1 | Not started | opus |  | Part K: SDIS's own recorder (raw view, session id, browser) |  |
+| W4-1 | Done | opus | f6dd800 | Part K: SDIS's own recorder (raw view, session id, browser) | SdisRecorder (own UIA thread, 1.5 s budget, 500 MB cap) offered by SgtShadow after SGT's read; sdis_record setting; sources.py feeds mine/link_map; SGT tests +  |
 | W4-2 | Not started | opus |  | Part P: captures travel to the admin PC |  |
 | W4-3 | Not started | opus |  | Part O: mining in its own process (no CPU cap) |  |
 | W4-4 | Not started | opus |  | Part Q: registration on every PC (synced tables) |  |
@@ -62,8 +62,11 @@ Runs: 23   output tokens: 1229825   API-equivalent cost: $28.37
 - **W3-1** Which verdicts may a label candidate come from, given probably furniture asks for labels while verdicts are being computed? → Base verdict 'same for all clients' with a fixable or alphanumeric type, plus unpaired repeats of such a (shape, text) (Same set as compare.py's fixed + variable_alignment + semi-variable alphanumeric (variable_alignment only ever comes from a fixable text); avoids the label -> verdict -> furniture -> label loop)
 - **W3-1** A node in a real table whose column has no name (or a header cell): what label? → Fall back to the screen-box rules (labels._label, which still tries the structural _table_label first) (Blueprint: box rules apply to values outside any table and to tables without table markup; a nameless column gives the table nothing to say)
 - **W3-5** How do container moves reach suggest()? → moves={key: class} argument; override with reason 'moved by the user' (sdis_decisions table does not exist before W4-4; the dict is what that reader will pass)
+- **W4-1** Which UIA worker does SDIS's raw read use? → Its own: the recorder thread joins the MTA and creates its own CUIAutomation8 (as sgt_i/uia_events); new uia_nodes.read_page_nodes_here reads on that thread; read_page_nodes unchanged (read_page_nodes runs on vsdc_uia_text's single shared worker; a raw read still in flight when SGT's next read starts would make SGT abandon that worker and count toward UIA switching off (5 per run), which would change SGT capture (rule 6))
+- **W4-1** How is a recorder session named for the engine? → record carries started (time of the session's first record this run); sources names it 'sgt <session id> <started>' (identity._by_time orders sessions by their last word as a time; a bare SGT session id is random hex, so client order and retirement (time order) would be random)
 
 ## Checks waiting for you
 
 - #1 (W1-6) Real GST and ITR sessions in Firefox: the HUD/SGT sees the portal (URL read) and captures the same fields as the same pages in Chrome — Not run
 - #2 (W1-8) Admin PC: Manage Services, add a service with a non-GST/ITR login link (e.g. EPF), confirm the domain prompt, open that portal in Chrome and check SGT/VSDC now reads it; delete the service and check capture stops there; also edit a link to a shared sign-in site listed in never_register and check the 'not registered' message — Not run
+- #3 (W4-1) Real Chrome, Edge and Firefox on a GST page: sdis_capture gets one record per changed page with the right browser; SGT capture behaves as before — Not run
