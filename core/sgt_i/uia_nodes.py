@@ -26,6 +26,7 @@ PID_NAME = 30005
 PID_AUTOMATION_ID = 30011
 PID_IS_OFFSCREEN = 30022
 PID_IS_PASSWORD = 30019
+PID_FRAMEWORK_ID = 30024
 PID_VALUE = 30045
 PID_GRID_ROW = 30064
 PID_GRID_COLUMN = 30065
@@ -37,7 +38,7 @@ PID_HEADING_LEVEL = 30173
 
 _CACHED_PROPERTIES = (
     PID_BOUNDING_RECT, PID_CONTROL_TYPE, PID_NAME, PID_AUTOMATION_ID, PID_IS_OFFSCREEN, PID_IS_PASSWORD,
-    PID_VALUE, PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
+    PID_FRAMEWORK_ID, PID_VALUE, PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
     PID_LANDMARK_TYPE, PID_HEADING_LEVEL,
 )
 
@@ -55,6 +56,7 @@ _CONTAINERS = frozenset({50025, 50026, 50033})      # Custom, Group, Pane: what 
 OWN_ID_PREFIX = "sera-"                             # element ids Sera's browser extension gives its UI
 _CHOICE = frozenset({CT_RADIOBUTTON, CT_CHECKBOX})
 SELECTED_PREFIX = "Selected: "      # same as vsdc_uia_text.SELECTED_PREFIX
+GECKO_KEY = "gecko"                 # set on a Firefox document's first node
 
 # UIA HeadingLevel_None = 80050, HeadingLevel1..9 = 80051..80059.
 _HEADING_NONE = 80050
@@ -178,6 +180,8 @@ def read_page_nodes(hwnd: int, timeout_sec: float = 3.0, raw_view: bool = False)
         for element in uia_text.onscreen_only(elements):     # never a background tab's page
             nodes: List[Dict[str, Any]] = []
             _walk(element, -1, 0, nodes)
+            if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
+                nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
             docs.append(nodes)
         return {"docs": docs}
 
@@ -190,10 +194,23 @@ def lines_from_nodes(docs: List[List[Dict[str, Any]]], include_selection: bool =
     """Today's read_page_text lines, rebuilt from nodes - the 14.2 identity gate compares these."""
     lines: List[str] = []
     for nodes in docs:
-        for n in nodes:
+        gecko = bool(nodes and nodes[0].get(GECKO_KEY))
+        in_dropdown: set = set()        # Gecko: indexes of a dropdown's option elements
+        container_name = ""             # Gecko: the container read just before this node
+        for idx, n in enumerate(nodes):
             if max_lines is not None and len(lines) >= max_lines:
                 return lines[:max_lines]
             name, ctype = n["name"], n["ctype"]
+            if gecko:
+                parent = n["parent"]
+                if parent in in_dropdown or (parent >= 0 and nodes[parent]["ctype"] == CT_COMBOBOX):
+                    in_dropdown.add(idx)
+                    continue
+                echoed, container_name = container_name, ""
+                if ctype in _CONTAINERS:
+                    container_name = name
+                elif name and name == echoed and ctype in _CHOICE and lines and lines[-1] == name:
+                    lines.pop()
             if name:
                 lines.append(name)
             value = n.get("value", "")

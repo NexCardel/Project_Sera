@@ -103,7 +103,7 @@ BROWSER_EXE_NAMES = (
 )
 
 # " - Google Chrome", " – ...", " — Mozilla Firefox": the browser's suffix on a window title
-BROWSER_SUFFIX_RE = re.compile(r"[-–—]\s*(?:google chrome|microsoft edge|mozilla firefox|brave|opera).*$",
+BROWSER_SUFFIX_RE = re.compile(r"[-–—]\s*(?:google chrome|microsoft[\s​]*edge|mozilla firefox|brave|opera).*$",
                                re.IGNORECASE)
 
 

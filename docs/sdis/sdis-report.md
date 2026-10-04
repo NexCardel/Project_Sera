@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 16:25)
+# Sera Distill — report (2026-10-04 16:32)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 16 |
+| Not started | 15 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 14 |
+| Done | 15 |
 | Blocked | 0 |
 
-Runs: 14   output tokens: 864689   API-equivalent cost: $13.10
+Runs: 15   output tokens: 932896   API-equivalent cost: $13.10
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ Runs: 14   output tokens: 864689   API-equivalent cost: $13.10
 | W2-1 | Done | gemini_first | 33f376c | Part E: look-alikes scored, AMBIGUOUS | Part E: look-alikes scored pairing, ambiguous detection under margin 0.5, wired into memory and compare |
 | W2-2 | Done | gemini_first | f5e5d3d | Part C: noise over time | Part C: noise over time, changes_with_time, probably_furniture heuristic, wired into memory.py |
 | W2-3 | Done | gemini_first | c9d12c0 | Part F: the variable_alignment state | Part F: variable_alignment state, rejected hook, compare_flat shared labels |
-| W2-4 | Not started | gemini_first |  | Part H: memory upkeep (retire) |  |
+| W2-4 | Done | gemini_first | ede141d | Part H: memory upkeep (retire) | Part H: memory upkeep (retire), RETIRE_P = 0.01, client history and misses |
 | W2-5 | Not started | sonnet |  | Part R.3: Firefox line parity fixes (SGT-C) |  |
 | W2-R | Not started | opus |  | Phase 2 review |  |
 | W3-1 | Not started | sonnet |  | Part I: statuses + labels from memory |  |

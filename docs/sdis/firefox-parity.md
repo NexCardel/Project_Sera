@@ -1,30 +1,29 @@
 # Browser parity (fictional pages)
 
-Written by `tools/browser_parity.py` on 2026-10-04 15:26. Every page and value here is fictional.
+Written by `tools/browser_parity.py` on 2026-10-04 (rerun after W2-5's fixes). Every page and value here is fictional.
 Chrome, Edge and Firefox each ran alone with a throwaway profile; client A was opened with client B
 in a second tab.
 
-## What W2-5 must fix (found by W1-7)
+## What W2-5 fixed (found by W1-7)
 
-1. **Firefox: a closed dropdown's options are lines.** The form's `<select>` adds `April`, `May`,
-   `June` (Chrome/Edge: only the chosen value `May`). Kind: list items under a collapsed ComboBox
-   (option elements of a select) are not page text; the value and the `Selected:` line stay.
-2. **Firefox: a radio button's / checkbox's label is read twice** (`Monthly`, `Quarterly`, `Yearly`,
-   `Nil return` x2). Firefox exposes the control's name and the label's text node beside it;
-   Chromium folds the label into the control. Kind: a text node whose text equals its parent or
-   sibling choice control's name (a `<label>` wrapping its input) is one line.
-3. **Firefox: `read_page_nodes` keeps background-tab Documents** (client A: 3 documents = A, B and
-   Firefox's hidden New Tab page; the form: 2). `vsdc_uia_text.onscreen_only` reads
-   `CurrentIsOffscreen`, which raises on the cache-only elements `read_page_nodes` gets
-   (`AutomationElementMode_None`), so every Document is kept. Fix: read the cached
-   `IsOffscreen` (30022, already in `_CACHED_PROPERTIES`) when the live one is not available.
-   SGT's lines are not affected (`read_page_text` uses live elements: 52 lines, A only).
-   key_probe's `read_keys` already uses the cached value (W1-7), so the Firefox fixtures hold one
-   Document.
-4. **Edge's window title** in a profile with a name is `<page> - Profile 1 - Microsoft​ Edge`
-   (a zero-width space inside "Microsoft Edge"): `vsdc_router.BROWSER_SUFFIX_RE` strips nothing.
-   UIA's window name has neither (`<page> - Microsoft Edge`). Chrome/Edge behaviour must not
-   change, so this is a question for W2-5 (title cleanup is shared), not a Firefox line fix.
+1. **Firefox: a closed dropdown's options were lines** (`April`, `May`, `June`; Chrome/Edge: only the
+   chosen value). Fixed as a kind for Gecko elements: the descendants of a ComboBox are not page text
+   (`vsdc_uia_text._collect_descendant_lines`, `uia_nodes.lines_from_nodes`); the value and the
+   `Selected:` line stay.
+2. **Firefox: a radio button's / checkbox's label was read twice.** Firefox gives the `<label>` as a named
+   container right before the control; a container whose name is repeated by the choice control
+   directly after it is one line (Gecko only; a text box labelled by a same-named container keeps both).
+3. **`onscreen_only` kept background-tab Documents in `read_page_nodes`** (Firefox: 3 documents).
+   `CurrentIsOffscreen` raises on cache-only elements; it now falls back to the cached `IsOffscreen`
+   (30022). After the fix every page reads 1 Document in all three browsers.
+4. **Edge's window title** `<page> - Profile 1 - Microsoft<zero-width space> Edge`: the title cleanup
+   (`vsdc_router.BROWSER_SUFFIX_RE`) now allows zero-width spaces inside "Microsoft Edge", so
+   the suffix is stripped. The profile name ("- Profile 1") stays in the cleaned title; it only matters
+   when the address bar cannot be read, and it is stable for the window.
+
+Gecko is recognised by the element's framework id (`Gecko`), never by the window title. Node trees
+carry `gecko: true` on a Firefox document's first node so `lines_from_nodes` gives the same lines as
+the live reader. The node tree itself still holds the option elements (SDIS's alignment sees them; W3-4).
 
 Same in all three: every client A/B line, in the same order; the three `Selected:` lines; the
 fictional password is never read; client B's values never appear while A is in front; the address
@@ -45,9 +44,9 @@ to refresh them (that rewrites this file, so keep the section above).
 
 | browser | window | URL read | SGT lines | Selected: | password read | other client's lines | nodes control (documents) | nodes raw | ms url / lines / control / raw |
 | :--- | :--- | :--- | ---: | ---: | :--- | :--- | ---: | ---: | :--- |
-| chrome | yes | yes | 52 | 0 | no | 0 | 65 (1) | 103 | 22 / 48 / 30 / 37 |
-| msedge | yes | yes | 52 | 0 | no | 0 | 65 (1) | 103 | 25 / 97 / 39 / 38 |
-| firefox | yes | yes | 52 | 0 | no | 0 | 247 (3) | 335 | 21 / 38 / 77 / 65 |
+| chrome | yes | yes | 52 | 0 | no | 0 | 65 (1) | 103 | 69 / 88 / 95 / 90 |
+| msedge | yes | yes | 52 | 0 | no | 0 | 65 (1) | 103 | 32 / 48 / 39 / 42 |
+| firefox | yes | yes | 52 | 0 | no | 0 | 66 (1) | 98 | 18 / 46 / 40 / 46 |
 
 Lines that differ between browsers: none; common lines in the same order: yes
 
@@ -59,9 +58,9 @@ Lines that differ between browsers: none; common lines in the same order: yes
 
 | browser | window | URL read | SGT lines | Selected: | password read | other client's lines | nodes control (documents) | nodes raw | ms url / lines / control / raw |
 | :--- | :--- | :--- | ---: | ---: | :--- | :--- | ---: | ---: | :--- |
-| chrome | yes | yes | 69 | 0 | no |  | 82 (1) | 129 | 25 / 56 / 69 / 56 |
-| msedge | yes | yes | 69 | 0 | no |  | 82 (1) | 129 | 25 / 74 / 105 / 80 |
-| firefox | yes | yes | 69 | 0 | no |  | 123 (2) | 171 | 61 / 84 / 64 / 75 |
+| chrome | yes | yes | 69 | 0 | no |  | 82 (1) | 129 | 23 / 52 / 36 / 43 |
+| msedge | yes | yes | 69 | 0 | no |  | 82 (1) | 129 | 29 / 54 / 40 / 49 |
+| firefox | yes | yes | 69 | 0 | no |  | 83 (1) | 124 | 16 / 54 / 31 / 36 |
 
 Lines that differ between browsers: none; common lines in the same order: yes
 
@@ -73,23 +72,12 @@ Lines that differ between browsers: none; common lines in the same order: yes
 
 | browser | window | URL read | SGT lines | Selected: | password read | other client's lines | nodes control (documents) | nodes raw | ms url / lines / control / raw |
 | :--- | :--- | :--- | ---: | ---: | :--- | :--- | ---: | ---: | :--- |
-| chrome | yes | yes | 25 | 3 | no |  | 25 (1) | 43 | 31 / 32 / 24 / 121 |
-| msedge | yes | yes | 25 | 3 | no |  | 25 (1) | 43 | 22 / 40 / 28 / 68 |
-| firefox | yes | yes | 32 | 3 | no |  | 162 (2) | 199 | 21 / 33 / 45 / 79 |
+| chrome | yes | yes | 25 | 3 | no |  | 25 (1) | 43 | 22 / 35 / 26 / 36 |
+| msedge | yes | yes | 25 | 3 | no |  | 25 (1) | 43 | 24 / 42 / 27 / 46 |
+| firefox | yes | yes | 25 | 3 | no |  | 40 (1) | 56 | 17 / 32 / 23 / 22 |
 
-Lines that differ between browsers: 7; common lines in the same order: yes
-
-| line | chrome | msedge | firefox |
-| :--- | ---: | ---: | ---: |
-| `May` | 1 | 1 | 2 |
-| `Monthly` | 1 | 1 | 2 |
-| `Quarterly` | 1 | 1 | 2 |
-| `Yearly` | 1 | 1 | 2 |
-| `Nil return` | 1 | 1 | 2 |
-| `April` | 0 | 0 | 1 |
-| `June` | 0 | 0 | 1 |
+Lines that differ between browsers: none; common lines in the same order: yes
 
 - chrome Selected: lines: `Selected: Return period = May`; `Selected: Quarterly`; `Selected: Nil return`
 - msedge Selected: lines: `Selected: Return period = May`; `Selected: Quarterly`; `Selected: Nil return`
 - firefox Selected: lines: `Selected: Return period = May`; `Selected: Quarterly`; `Selected: Nil return`
-

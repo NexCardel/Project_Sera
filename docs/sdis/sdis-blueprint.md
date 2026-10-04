@@ -1042,5 +1042,18 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   2 clients cannot retire anything (`misses < 2` and unconfirmed nodes never retire). Decisions taken: none (followed Part H exact formulas
   and worked examples). Next WP must know: `PageMemory` has `self.clients` list; node `status` and `verdict(nid)` are 'retired' for retired
   nodes; retired nodes are removed from `self.order`.
+- **W2-5** (2026-10-04, claude-sonnet-5-5): Part R.3, all four W1-7 differences fixed as kinds. `core/vsdc/vsdc_uia_text.py`: `_is_offscreen`
+  (live, else cached 30022; `onscreen_only` uses it, so `read_page_nodes` now drops background tabs: Firefox 3 docs -> 1);
+  `_framework_is_gecko`; in `_collect_descendant_lines`, ONLY for Gecko documents: a ComboBox's descendants (closed `<select>`
+  options) are skipped, and a named container directly before a same-named radio/checkbox is dropped (wrapped `<label>`).
+  `core/sgt_i/uia_nodes.py`: caches FrameworkId (30024), sets `gecko: True` on a Gecko document's first node, and `lines_from_nodes`
+  applies the same two rules (so the 14.2 identity gate still agrees); the node tree keeps the option elements (W3-4 / SDIS see
+  them). `vsdc_router.BROWSER_SUFFIX_RE` allows zero-width spaces in "Microsoft Edge" (profile name "- Profile 1" stays; fallback
+  path only). Tests: +9 in `tests/test_firefox_support.py` (21); SGT+VSDC+Firefox+parity 935 passed 1 skipped; SDIS+align 177 passed.
+  Real run (D16 yes): `tools/browser_parity.py` - Chrome, Edge, Firefox give identical lines on client A/B/form (52/69/25, same
+  order, 3 `Selected:` lines); `firefox-parity.md` updated. `sgt_replay.py diff` prints the same pre-existing "newly written"
+  list as W1-6/W1-8 (shared baseline; replay never touches these files). Regression before = after (11 maps, 41 snapshots, 2367
+  text nodes, 0/0/28; owners 4; memory 3 links, same counts); nothing changed. Decisions recorded: key on framework id; Edge title.
+  Next: W3-4 may want to drop `ctype` ListItems under a ComboBox from SDIS's Firefox node matching (nodes still hold them).
 
 
