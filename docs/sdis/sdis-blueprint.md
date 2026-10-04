@@ -927,7 +927,18 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; exactly 0 numbers changed on real captures
   (static links carry no per-client values). Decisions: none. Next WP must know: `resolve(links_by_client)` lives in
   `core.sdis.links`; `link_map.build_maps(..., link_of=...)` keys maps by resolved link; `memory.client_maps` resolves links
-  before `resolve_owners`.
+- **W1-5** (2026-10-04, gemini-3.8-flash-high): built Part M per-browser memory. Files: `tools/pre_dev/class_diff/key_probe.py`
+  (`browser_name_of_hwnd` via `OpenProcess`/`QueryFullProcessImageNameW`; saves `'browser'` in capture and read records),
+  `core/sdis/link_map.py` (`all_sources` yields `'browser'`; `LinkMap` has attribute `browser` from first read, parses `[browser]`;
+  `build_maps` groups candidates by browser), `core/sdis/memory.py` (`PageMemory` has attribute `browser`; `client_maps` groups
+  by `(link, browser)` and names pages with `[browser]`; `build` and `main` propagate and display browser), `tools/sdis_regress.py`
+  (prints browser when not ''), `tests/test_sdis_memory.py` (4 tests). Tests: 105 passed (101 previous + 4 new).
+  Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided,
+  client 1, client 2); memory 3 links (return dashboard 90/6/7 + 5 wait, gstr1 92/13/18 + 1 changes + 4 wait, services dashboard
+  115/39/11); orders agree yes everywhere; exactly 0 numbers changed on real captures (all pre-dev captures have browser "").
+  Decisions taken: none (followed Part M blueprint directly). Next WP must know: `LinkMap` and `PageMemory` carry attribute `browser`
+  (str: 'chrome', 'msedge', 'firefox', or ''); `client_maps()` keys memories by resolved link + `[browser]` when not empty; memories only
+  compare the same browser. Joining datapoints across browsers happens in W3-2.
 
 
 

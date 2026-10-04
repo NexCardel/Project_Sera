@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-04 14:39)
+# Sera Distill — report (2026-10-04 14:50)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 25 |
+| Not started | 24 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 5 |
+| Done | 6 |
 | Blocked | 0 |
 
-Runs: 5   output tokens: 314801   API-equivalent cost: $3.60
+Runs: 6   output tokens: 393591   API-equivalent cost: $3.60
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -19,7 +19,7 @@ Runs: 5   output tokens: 314801   API-equivalent cost: $3.60
 | W1-1 | Done | gemini_first | 6260bab | Part B: value history with times | value history in LinkMap and PageMemory, core/sdis/history.py with day_of, 76 SDIS tests pass, regression identical |
 | W1-2 | Done | gemini_first | 2a52bda | Part G: screens (one link, several pages) by weighted matching | Part G screens by weighted matching; 82 SDIS tests pass; regression identical |
 | W1-3 | Done | gemini_first | 18a9998 | Part D: identity by session id + data fingerprint | Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay |
-| W1-4 | Not started | gemini_first |  | Part N: smart page link resolution |  |
+| W1-4 | Done | gemini_first | 2b2b592 | Part N: smart page link resolution | Part N smart page link resolution; 101 tests pass; regression identical |
 | W1-5 | Not started | gemini_first |  | Part M: per-browser memory |  |
 | W1-6 | Not started | opus |  | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) |  |
 | W1-7 | Not started | opus |  | Part R.2: browser parity tool + Firefox fixtures |  |

@@ -62,6 +62,7 @@ def _always(e: Dict[str, Any]) -> bool:
 
 
 _SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
+_BROWSER_RE = re.compile(r" \[([a-zA-Z0-9_-]+)\]$")
 
 
 class LinkMap:
@@ -69,7 +70,8 @@ class LinkMap:
     with "#n" if a later, different element arrives under a key already taken. An entry's "key" is
     its LATEST key - counters can change between snapshots, the entry stays the same one."""
 
-    def __init__(self, client: str, page: str, screen: Optional[int] = None, link: Optional[str] = None) -> None:
+    def __init__(self, client: str, page: str, screen: Optional[int] = None, link: Optional[str] = None,
+                 browser: str = "") -> None:
         self.client, self.page = client, page
         m = _SCREEN_RE.search(page)
         if screen is not None:
@@ -78,7 +80,16 @@ class LinkMap:
             self.screen = int(m.group(1))
         else:
             self.screen = 1
-        self.link = link if link is not None else _SCREEN_RE.sub("", page)
+        clean = _SCREEN_RE.sub("", page)
+        mb = _BROWSER_RE.search(clean)
+        if browser:
+            self.browser = browser
+        elif mb:
+            self.browser = mb.group(1)
+        else:
+            self.browser = ""
+        clean = _BROWSER_RE.sub("", clean)
+        self.link = link if link is not None else clean
         self.entries: Dict[str, Dict[str, Any]] = {}
         self.children: Dict[Optional[str], List[str]] = {}
         self.reads: List[str] = []
@@ -103,6 +114,9 @@ class LinkMap:
         between anchors) - not by key, so a re-render that renumbers a footer, or one more row
         above it, updates the entries the map has instead of storing them a second time (P16, R8).
         Only what pairs nothing is new. Returns {"new": the new entry ids, "blocks": their blocks}."""
+        if not self.reads:
+            if not getattr(self, "browser", "") and rec.get("browser"):
+                self.browser = rec.get("browser", "")
         if precomputed is not None:
             flat, pairs = precomputed
             cur = self.to_flat() if (pairs and self.entries) else []
@@ -203,12 +217,15 @@ def all_sources() -> List[Tuple[str, str, str, Dict[str, Any]]]:
     time order. A capture snapshot's stamp is its session time + seconds into the capture."""
     out: List[Tuple[str, str, str, Dict[str, Any]]] = []
     for path, rec in all_reads():
+        rec.setdefault("browser", "")
         out.append((read_stamp(path), client_of(rec, path), page_of(rec), rec))
     for path in sorted(OUT_DIR.glob("capture_*.json")):
         rec = json.loads(path.read_text(encoding="utf-8"))
         session = rec.get("session") or path.stem
+        browser = rec.get("browser", "")
         for snap in rec.get("snapshots") or []:
-            out.append((f"{session}+{snap['t']:06.1f}", f"capture {session}", page_of(rec), {"docs": snap["docs"]}))
+            out.append((f"{session}+{snap['t']:06.1f}", f"capture {session}", page_of(rec),
+                        {"docs": snap["docs"], "browser": snap.get("browser", browser)}))
     return sorted(out, key=lambda x: x[0])
 
 
@@ -228,6 +245,8 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
     if sources is not None:
         pass
     elif reads is not None:
+        for _p, r in reads:
+            r.setdefault("browser", "")
         sources = [(read_stamp(p), client_of(r, p), page_of(r), r) for p, r in reads]
     else:
         sources = all_sources()
@@ -243,12 +262,14 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
         owner = (client_of_session or {}).get(session, session)
         resolved_page = link_of.get(page, page) if link_of else page
         flat = flatten(rec)
-        candidates = owner_link_maps.get((owner, resolved_page), [])
+        browser = rec.get("browser", "")
+        candidates = [m for m in owner_link_maps.get((owner, resolved_page), [])
+                      if getattr(m, "browser", "") == browser]
 
         if not candidates:
-            m = LinkMap(owner, resolved_page, screen=1, link=resolved_page)
+            m = LinkMap(owner, resolved_page, screen=1, link=resolved_page, browser=browser)
             m.add(rec, stamp, session, precomputed=(flat, {}))
-            owner_link_maps[(owner, resolved_page)] = [m]
+            owner_link_maps.setdefault((owner, resolved_page), []).append(m)
             maps[(owner, resolved_page)] = m
             continue
 
@@ -271,9 +292,10 @@ def build_maps(reads: Optional[List[Tuple[Path, Dict[str, Any]]]] = None,
         else:
             n = len(candidates) + 1
             page_key = f"{resolved_page} [screen {n}]"
-            m = LinkMap(owner, page_key, screen=n, link=resolved_page)
+            m = LinkMap(owner, page_key, screen=n, link=resolved_page, browser=browser)
             m.add(rec, stamp, session, precomputed=(flat, {}))
             candidates.append(m)
+            owner_link_maps.setdefault((owner, resolved_page), []).append(m)
             maps[(owner, page_key)] = m
 
     return maps

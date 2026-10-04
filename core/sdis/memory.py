@@ -55,6 +55,7 @@ OUT_DIR = data_dir()
 SAME_MATCH, SAME_NEW = 0.95, 3        # same screen: >= 95% of the map matched, <= 3 new
 RADICAL_MATCH = 0.50                  # radical: under half of the map matched memory
 _SCREEN_RE = re.compile(r" \[screen (\d+)\]$")
+_BROWSER_RE = re.compile(r" \[([a-zA-Z0-9_-]+)\]$")
 
 
 def _always(e: Dict[str, Any]) -> bool:
@@ -67,7 +68,8 @@ def _match(flat: List[Dict[str, Any]], other: List[Dict[str, Any]]) -> Dict[int,
 
 
 class PageMemory:
-    def __init__(self, page: str, n_promote: int, screen: Optional[int] = None, link: Optional[str] = None) -> None:
+    def __init__(self, page: str, n_promote: int, screen: Optional[int] = None,
+                 link: Optional[str] = None, browser: str = "") -> None:
         self.page, self.n = page, n_promote
         m = _SCREEN_RE.search(page)
         if screen is not None:
@@ -76,7 +78,16 @@ class PageMemory:
             self.screen = int(m.group(1))
         else:
             self.screen = 1
-        self.link = link if link is not None else _SCREEN_RE.sub("", page)
+        clean = _SCREEN_RE.sub("", page)
+        mb = _BROWSER_RE.search(clean)
+        if browser:
+            self.browser = browser
+        elif mb:
+            self.browser = mb.group(1)
+        else:
+            self.browser = ""
+        clean = _BROWSER_RE.sub("", clean)
+        self.link = link if link is not None else clean
         self.nodes: List[Dict[str, Any]] = []      # every node, memory or pending
         self.order: List[int] = []                 # memory, in page order (indexes into nodes)
         self.pending: List[int] = []               # pending, in the order they were first seen
@@ -225,14 +236,16 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
         all_client_maps = {k: v for k, v in client_link_maps.items() if not k[0].startswith("undecided")}
 
 
-    by_link: Dict[str, List[link_map.LinkMap]] = {}
-    for (client, page_key), lm in all_client_maps.items():
+    by_link_browser: Dict[Tuple[str, str], List[link_map.LinkMap]] = {}
+    for key, lm in all_client_maps.items():
+        page_key = key[1] if isinstance(key, tuple) else getattr(lm, "page", "")
         base_link = getattr(lm, "link", page_key)
-        by_link.setdefault(base_link, []).append(lm)
+        browser = getattr(lm, "browser", "")
+        by_link_browser.setdefault((base_link, browser), []).append(lm)
 
     out: Dict[str, Dict[str, link_map.LinkMap]] = {}
 
-    for base_link, lms in by_link.items():
+    for (base_link, browser), lms in by_link_browser.items():
         lms_sorted = sorted(lms, key=lambda m: m.reads[0] if m.reads else "")
         screen_mems: List[PageMemory] = []
         screen_client_maps: List[Dict[str, link_map.LinkMap]] = []
@@ -242,7 +255,8 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
             flat = lm.to_flat()
 
             if not screen_mems:
-                pm = PageMemory(base_link, n_promote=2, screen=1, link=base_link)
+                page_name = f"{base_link} [{browser}]" if browser else base_link
+                pm = PageMemory(page_name, n_promote=2, screen=1, link=base_link, browser=browser)
                 pm.add(flat, client)
                 screen_mems.append(pm)
                 screen_client_maps.append({client: lm})
@@ -269,8 +283,9 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
                 best_pm.add(flat, client)
             else:
                 n_screen = len(screen_mems) + 1
-                page_name = f"{base_link} [screen {n_screen}]"
-                pm = PageMemory(page_name, n_promote=2, screen=n_screen, link=base_link)
+                prefix = f"{base_link} [{browser}]" if browser else base_link
+                page_name = f"{prefix} [screen {n_screen}]"
+                pm = PageMemory(page_name, n_promote=2, screen=n_screen, link=base_link, browser=browser)
                 pm.add(flat, client)
                 screen_mems.append(pm)
                 screen_client_maps.append({client: lm})
@@ -282,13 +297,16 @@ def client_maps(client_link_maps: Optional[Dict[Tuple[str, str], link_map.LinkMa
 
 
 def build(page: str, maps: Dict[str, link_map.LinkMap], order: List[str], n: int,
-          screen: Optional[int] = None, link: Optional[str] = None) -> PageMemory:
+          screen: Optional[int] = None, link: Optional[str] = None,
+          browser: Optional[str] = None) -> PageMemory:
     first_lm = next(iter(maps.values())) if maps else None
     if screen is None and first_lm is not None:
         screen = getattr(first_lm, "screen", None)
     if link is None and first_lm is not None:
         link = getattr(first_lm, "link", None)
-    mem = PageMemory(page, n, screen=screen, link=link)
+    if browser is None and first_lm is not None:
+        browser = getattr(first_lm, "browser", "")
+    mem = PageMemory(page, n, screen=screen, link=link, browser=browser or "")
     for client in order:
         if client in maps:
             mem.add(maps[client].to_flat(), client)
@@ -307,7 +325,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     for page in sorted(pages):
         cm = pages[page]
         order = sorted(cm, key=lambda c: cm[c].reads[0])
-        print(f"Page: {page}")
+        first_lm = next(iter(cm.values())) if cm else None
+        b = getattr(first_lm, "browser", "")
+        b_str = f" [{b}]" if (b and f"[{b}]" not in page) else ""
+        print(f"Page: {page}{b_str}")
         sums = []
         for label, o in (("forward", order), ("reversed", order[::-1])):
             m = build(page, cm, o, args.n)

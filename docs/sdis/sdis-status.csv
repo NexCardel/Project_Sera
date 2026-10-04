@@ -5,7 +5,7 @@ W1-1,1,Part B: value history with times,Done,gemini-3.8-flash-high,1,6260bab,"va
 W1-2,1,"Part G: screens (one link, several pages) by weighted matching",Done,gemini-3.8-flash-high,1,2a52bda,Part G screens by weighted matching; 82 SDIS tests pass; regression identical,2026-10-04 14:20
 W1-3,1,Part D: identity by session id + data fingerprint,Done,gemini-3.8-flash-high,1,18a9998,Part D identity resolution by session id and data fingerprinting; 91 tests pass; regression 5 links -> 3 links (fictional dropped per D4); real GST clients stay two,2026-10-04 14:38
 W1-4,1,Part N: smart page link resolution,Done,gemini-3.8-flash-high,1,2b2b592,Part N smart page link resolution; 101 tests pass; regression identical,2026-10-04 14:49
-W1-5,1,Part M: per-browser memory,Not started,gemini-3.8-flash-high -> claude-sonnet-5-5,0,,,
+W1-5,1,Part M: per-browser memory,In progress,gemini-3.8-flash-high,1,,,2026-10-04 14:50
 W1-6,1,"Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C)",Not started,claude-opus-5-5,0,,,
 W1-7,1,Part R.2: browser parity tool + Firefox fixtures,Not started,claude-opus-5-5,0,,,
 W1-8,1,Part T: portal registration from service-settings login links,Not started,claude-opus-5-5,0,,,
@@ -23,7 +23,7 @@ W3-5,3,Part S.1: class suggestion (what a value stays the same with),Not started
 W3-3,3,"Part O engine: memory on disk, incremental mining",Not started,claude-sonnet-5-5,0,,,
 W4-1,4,"Part K: SDIS's own recorder (raw view, session id, browser)",Not started,claude-opus-5-5,0,,,
 W4-2,4,Part P: captures travel to the admin PC,Not started,claude-opus-5-5,0,,,
-W4-3,4,Part O: mining process capped at 10% CPU,Not started,claude-opus-5-5,0,,,
+W4-3,4,Part O: mining in its own process (no CPU cap),Not started,claude-opus-5-5,0,,,
 W4-4,4,Part Q: registration on every PC (synced tables),Not started,claude-opus-5-5,0,,,
 W4-5,4,Part L: the Distill dialog + loading dialog + containers,Not started,claude-sonnet-5-5,0,,,
 W4-6,4,"Parts U + S.3: sdis_mcl, the containers file (sync + checks)",Not started,claude-opus-5-5,0,,,

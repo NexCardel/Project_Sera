@@ -87,7 +87,10 @@ def run(captures: Path, out: List[str]) -> bool:
     for page in sorted(pages):
         cm = pages[page]
         order = sorted(cm, key=lambda c: cm[c].reads[0])
-        say(f"Page: {page} | clients {len(cm)}")
+        first_lm = next(iter(cm.values())) if cm else None
+        b = getattr(first_lm, "browser", "")
+        b_str = f" [{b}]" if (b and f"[{b}]" not in page) else ""
+        say(f"Page: {page}{b_str} | clients {len(cm)}")
         sums = []
         for label, o in (("forward", order), ("reversed", order[::-1])):
             m = memory.build(page, cm, o, 2)
