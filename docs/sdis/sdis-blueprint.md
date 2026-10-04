@@ -1006,3 +1006,14 @@ rules 5–8 of the runner kept. Decisions are asked by the WP named in section 1
   90/6/7 + 5 wait, gstr1 92/13/18 + 1 changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; 0 numbers changed on real
   captures (no look-alikes uneven on real captures). Decisions taken: none (followed Part E blueprint directly). Next WP must know: `align`
   takes `ambiguous: Optional[set] = None`; `memory.nodes[nid]['clients'][c]['sure']` is bool; `compare_flat` flags ambiguous look-alike rows in `check`.
+- **W2-2** (2026-10-04, gemini-3.8-flash-high): built Part C noise over time and furniture heuristics. Files: `core/sdis/noise.py`
+  (`LABEL_LOOKBACK` = 6, `changes_within_client` moved from memory.py, `changes_with_time` grouping last text per day per client across 2+ days,
+  `probably_furniture` heuristic for sentence/label without confirmed label in 6 lookback nodes), `tools/pre_dev/class_diff/noise.py` (alias),
+  `core/sdis/memory.py` (verdict order: composite, changes within one client, changes with time, unconfirmed, same for all clients, probably furniture,
+  differs between clients), `tests/test_sdis_noise.py` (12 tests), `tests/test_sdis_package.py` (alias and PySide6-free import tests).
+  Tests: 164 passed (151 previous + 13). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28;
+  owners 4 (2 undecided, client 1, client 2); memory 3 links; return dashboard confirmed differs between clients 6 → 5 and confirmed probably furniture 0 → 1
+  (1 unlabelled sentence node reclassified); gstr1 (92/13/18 + 1 changes + 4 wait) and services dashboard (115/39/11) unchanged; orders agree yes on all links.
+  Decisions taken: none (D5 taken previously; followed Part C blueprint directly). Next WP must know: `changes_within_client`, `changes_with_time`, and
+  `probably_furniture` live in `core.sdis.noise`; `PageMemory.verdict(nid)` returns 'probably furniture' for differing sentence/label nodes lacking preceding labels.
+

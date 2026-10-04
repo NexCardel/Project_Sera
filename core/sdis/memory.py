@@ -28,9 +28,11 @@ new), CHANGED (some new), RADICAL (most of it matched nothing - another screen a
 Each node gets a verdict from the counts only:
     composite                   its text is its children's texts joined (a tile title + its count)
     changes within one client   more than one value for the same client (noise - notices, dates)
+    changes with time           differed between days, agreed within each day (noise - dates, notices)
     repeat                      pending, shaped like a memory node (one more row)
     only one client so far      waiting for more clients
     same for all clients        template
+    probably furniture          differs between clients, sentence/label shaped, no label beside it
     differs between clients     data
 
     python tools/pre_dev/class_diff/memory.py            # N = 2; both client orders
@@ -48,6 +50,7 @@ from core.sdis import link_map
 from core.sdis.align import align, pair_moved, shape
 from core.sdis.keys import page_slug
 from core.sdis.labels import composites
+from core.sdis.noise import changes_within_client, changes_with_time, probably_furniture
 from core.sdis.paths import data_dir, write_csv
 
 OUT_DIR = data_dir()
@@ -195,15 +198,21 @@ class PageMemory:
         cl = nd["clients"]
         if nd["composite"]:
             return "composite"
-        if any(len(c["texts"]) > 1 for c in cl.values()):
+        if changes_within_client(nd):
             return "changes within one client"
+        if changes_with_time(nd):
+            return "changes with time"
         if not self.confirmed(nid):
             if any(not c.get("sure", True) for c in cl.values()):
                 return "ambiguous"
             shapes = {self.nodes[m]["shape"] for m in range(len(self.nodes)) if self.confirmed(m)}
             return "repeat" if nd["shape"] in shapes else "only one client so far"
         last = {c["texts"][-1] if c["texts"] else "" for c in cl.values()}
-        return "same for all clients" if len(last) == 1 else "differs between clients"
+        if len(last) == 1:
+            return "same for all clients"
+        if probably_furniture(self, nid):
+            return "probably furniture"
+        return "differs between clients"
 
     def summary(self) -> Counter:
         return Counter(("confirmed" if self.confirmed(i) else "waiting", self.verdict(i))
