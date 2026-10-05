@@ -1,16 +1,16 @@
-# Sera Distill — report (2026-10-05 02:08)
+# Sera Distill — report (2026-10-05 02:25)
 
 Deadline: 2026-10-06T01:30:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 1 |
+| Not started | 0 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 29 |
+| Done | 30 |
 | Blocked | 0 |
 
-Runs: 30   output tokens: 1585318   API-equivalent cost: $55.96
+Runs: 31   output tokens: 1612645   API-equivalent cost: $59.32
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -43,7 +43,7 @@ Runs: 30   output tokens: 1585318   API-equivalent cost: $55.96
 | W4-5 | Done | sonnet | e97b6f2 | Part L: the Distill dialog + loading dialog + containers | Part L: Distill dialog + loading dialog + containers panel/editors; 18 new tests, SDIS+align 362 pass, regression unchanged |
 | W4-6 | Done | opus | 82c13ca | Parts U + S.3: sdis_mcl, the containers file (sync + checks) | sdis_mcl + sdis_config synced tables, all S.3 load checks, level_for, edit helpers, file on every PC, register_field; 42 new tests; regression unchanged |
 | W4-7 | Done | opus | a9d515d | Part S.2 in SGT: container instances, completion, Others values | S.2/S.4 in SGT: sgt_containers instances + levels from the file, carrier rows, SRPF fold, views; SGT 628+21, SDIS 362 pass; replay and regression unchanged |
-| W5-R | Not started | opus |  | Final review and merge-readiness note |  |
+| W5-R | Done | opus | d071327 | Final review and merge-readiness note | Merge-readiness note in section 11; SDIS CLIs print counts only; all SDIS/SGT tests pass, sync failures pre-existing; regression unchanged |
 
 ## Decisions taken for you
 
@@ -78,6 +78,7 @@ Runs: 30   output tokens: 1585318   API-equivalent cost: $55.96
 - **W4-7** A dataset container's tracker row is keyed by the canonical key (portal, client, form = container name, period). A container named after a built-in form (e.g. 'GSTR-3B submission') gets the SAME key as SGT's built-in GSTR-3B row. A: share that row (the tracker keeps one row per key and never lowers its status; the latest writer's details show). B: keep container rows apart by keying the form as the container name squeezed to letters+digits (e.g. GSTR3BSUBMISSION), so they never merge with built-in rows. → A (asked as Q2)
 - **W4-7** How do SGT capture dataset and Others fields, and keep them out of its built-in dataset? → They register as current_dataset specs named sdis.<field>; SGT splits res.current by that name prefix and feeds those hits only to core/sgt/sgt_containers.py. A period-typed datapoint drafts the shape pattern of its values (miner type code). (Profile specs latch, so dataset values must not be profile specs; the name prefix is the one global, already-reserved mark; a container needs its period field capturable.)
 - **W4-7** Carrier rows and the SRPF fold: key, status, when written, history → Carrier key = compute_dataset_key(portal, client, 'SDIS info', '') with status Not Submitted, written at session end only when no dispatched row carried the latest values (else the last sent row is re-queued). raw_aggregates history keeps changes only (an unchanged value carried again is no change); portal_profiles latch, a longer value containing the held one replaces it. core/sgt_i/sera_data.py is not filtered: carriers have no form or period, so SGT-I never matches them. (One row per (client, portal), stable across sessions; the fold gives the same columns on re_resolve; keeps core/sgt_i untouched.)
+- **W5-R** core/sdis command lines (tables.py, link_map.py) printed page texts to the console → console gets counts only; tables.py --text writes the grids to output/tables_<file>.txt, link_map's texts stay in its CSV (section 9.3: logs and console print counts, never values; the local output folder already holds the CSVs)
 
 ## Checks waiting for you
 
@@ -90,3 +91,5 @@ Runs: 30   output tokens: 1585318   API-equivalent cost: $55.96
 - #7 (W4-6) Two PCs: put the containers document and add/rename an sdis_mcl field on one PC; after sync the other PC's <Sera data>/sdis_containers.json matches (same version) and both sdis_fields.json notes show the new label. Edit on both PCs at once: one sdis_config row (fixed gid) survives, never two. — Not run
 - #8 (W4-5) Admin PC: Tracker dump -> Tools -> Distill...: Find datapoints shows the loading dialog and locks the app; Cancel works; rename a label, register a datapoint, and see it captured on another PC after sync — Not run
 - #9 (W4-7) Write levels and a 4-field dataset container into the containers file; on a portal, capture its fields one by one and see the tracker row climb the levels you wrote — Not run
+- #10 (W5-R) After merging into main: the tracker list (slim rows from client_raw_container_light) with a session that wrote only an SGT_sdis_info carrier row - total captures does not rise, no filing appears, and the container inspector and client detail still show the PORTAL VALUES — Not run
+- #11 (W5-R) Frozen installer build of the merge: core/sdis/sdis_containers.json is shipped (no 'refused' line at start-up), and Find datapoints starts the exe with --sdis-mine and gets progress through the pipe — Not run
