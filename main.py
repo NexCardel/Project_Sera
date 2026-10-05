@@ -1071,6 +1071,11 @@ class SeraApp:
                 )
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
+            try:
+                from core.ltt import feed as _ltt_feed
+                _ltt_feed.schedule_export(self.db)
+            except Exception:
+                pass
 
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:

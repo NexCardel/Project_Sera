@@ -111,6 +111,11 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     try:
         with db._connect() as conn:
             sync_admin.init_office_membership(app_dir, conn, cert_pem, device_name)
+        # A brand-new office has no legacy data to protect, so there is nothing for shadow mode
+        # to compare: start live. Left in "off", no PC captures or applies changes until the
+        # shadow week and go-live (meant for migrating an existing office). Joiners inherit
+        # "live" from the snapshot (sync_snapshot).
+        db.set_sync_mode("live")
     finally:
         del db
 

@@ -122,15 +122,54 @@ def safe_compile(pattern: Any, flags: int = 0, what: str = "pattern") -> "re.Pat
     return compiled
 
 
+_MIN_TOLERANT_WORD = 4      # PAN / TAN / ARN / No / FY are matched exactly - a loose short word hits everything
+
+
+def _word_regex(word: str) -> str:
+    """One label word, tolerant of the spelling slips a portal or a translator makes: the
+    -ement/-ment and -ise/-ize pairs (Acknowledgement / Acknowledgment), a doubled or single
+    letter (Assessment / Assesment) and an e-Verify / eVerify / e Verify hyphen. Case is the
+    caller's flag. Short words stay exact."""
+    low = word.lower()
+    if len(low) < _MIN_TOLERANT_WORD or not any(ch.isalpha() for ch in low):
+        return re.escape(word)
+    tail = ""
+    for suffix, loose in (("ement", "e?ment"), ("ment", "e?ment"), ("ise", "i[sz]e"), ("ize", "i[sz]e")):
+        if low.endswith(suffix) and len(low) > len(suffix) + 1:
+            low, tail = low[:-len(suffix)], loose
+            break
+    out, i = [], 0
+    while i < len(low):
+        ch = low[i]
+        if ch == "-":
+            out.append(r"[\s\-]?")
+        elif ch.isalpha():
+            j = i
+            while j < len(low) and low[j] == ch:
+                j += 1
+            out.append(ch + ("{1,2}" if j - i >= 2 else ""))
+            i = j
+            continue
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return "".join(out) + tail
+
+
+def _label_phrase(label: str) -> str:
+    words = str(label).split()
+    if not words:
+        raise SpecError("a label is empty")
+    return r"[\s\-–]*".join(_word_regex(w) for w in words)
+
+
 def label_regex(labels: Sequence[str], at: str) -> "re.Pattern[str]":
-    """Labels are plain words, not regex: 'Acknowledgement No' matches 'Acknowledgement  No :'."""
+    """Labels are plain words, not regex: 'Acknowledgement No' matches 'Acknowledgement  No :',
+    'Acknowledgment No' and 'acknowledgement-no' (see _word_regex)."""
     phrases = []
     # Longest first, so "Date of Birth / Formation" is tried before its prefix "Date of Birth".
     for lab in sorted(labels, key=len, reverse=True):
-        words = [re.escape(w) for w in str(lab).split()]
-        if not words:
-            raise SpecError("a label is empty")
-        phrases.append(r"\s+".join(words))
+        phrases.append(_label_phrase(lab))
     lead = r"^\s*" if at == "start" else r"(?<![A-Za-z0-9])"
     return re.compile(lead + "(?:" + "|".join(phrases) + r")(?![A-Za-z0-9])\s*(?P<sep>[:\-–]*)\s*(?P<rest>.*)$",
                       re.IGNORECASE)
@@ -138,8 +177,7 @@ def label_regex(labels: Sequence[str], at: str) -> "re.Pattern[str]":
 
 def stop_regex(labels: Any) -> Optional["re.Pattern[str]"]:
     """A line that is nothing but one of `labels` (with an optional ':' or '-' after it)."""
-    phrases = sorted({r"\s+".join(re.escape(w) for w in str(l).split()) for l in labels if str(l).split()},
-                     key=len, reverse=True)
+    phrases = sorted({_label_phrase(l) for l in labels if str(l).split()}, key=len, reverse=True)
     if not phrases:
         return None
     return re.compile(r"^\s*(?:" + "|".join(phrases) + r")\s*[:\-–]*\s*$", re.IGNORECASE)

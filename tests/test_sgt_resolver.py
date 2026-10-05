@@ -523,3 +523,23 @@ class TestGstSubmission:
         rec = next(r for r in self.reg().records if r.name == "itr_submit_success")
         ds = resolve_records(rec, ["successfully submitted", "Acknowledgement Number :", "123456789150726", "ITR-4"], TODAY)[0]
         assert ds.confidence == 80                                   # the form spec's 80
+
+
+class TestLabelSpellingTolerance:
+    """Labels survive the spelling slips real portals make; short words stay exact."""
+
+    def _hit(self, labels, line):
+        from core.sgt.sgt_specs import label_regex
+        return bool(label_regex(labels, "start").search(line))
+
+    def test_ement_ment_pair(self):
+        assert self._hit(["Acknowledgement No"], "Acknowledgment No: 123")
+        assert self._hit(["Acknowledgment Reference Number"], "Acknowledgement Reference Number")
+
+    def test_doubled_letter_and_hyphen(self):
+        assert self._hit(["Assessment Year"], "Assesment Year - 2026-27")
+        assert self._hit(["Acknowledgement No"], "acknowledgement-no 5")
+
+    def test_short_words_stay_exact(self):
+        assert self._hit(["PAN"], "PAN: ABCDE1234F")
+        assert not self._hit(["PAN"], "PANEL")

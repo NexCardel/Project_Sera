@@ -607,7 +607,7 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["ARN", "Acknowledgement Reference Number", "Application Reference Number"],
+          "labels": ["ARN", "Acknowledgement Reference Number", "Acknowledgment Reference Number", "Application Reference Number"],
           "label_at": "anywhere",
           "within": 2,
           "pattern": "(?<![0-9A-Za-z])([A-Z]{2}[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
@@ -653,7 +653,7 @@
         {
           "field": "form",
           "take": "nearest_above",
-          "pattern": "^(GSTR-? ?[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
+          "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
           "transforms": ["dash_form"],
           "confidence": 90,
           "examples": ["GSTR-1 / IFF", "GSTR-3B"],
@@ -882,7 +882,7 @@
         "source": "link",
         "take": "anywhere",
         "case": "insensitive",
-        "pattern": "/returns/auth/(gstr[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
+        "pattern": "/returns/auth/(gstr(?!2[ab])[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
         "transforms": ["dash_form"],
         "confidence": 95,
         "examples": [{"link": "https://return.gst.gov.in/returns/auth/gstr3b", "expect": "GSTR-3B"}],
@@ -893,7 +893,7 @@
         "field": "form",
         "portals": ["GST Portal"],
         "take": "anywhere",
-        "pattern": "^(GSTR-? ?[0-9]{1,2}[A-Z]?)Q? - ",
+        "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?)Q? - ",
         "transforms": ["dash_form"],
         "confidence": 85,
         "examples": ["GSTR-3BQ - Quarterly Return", "GSTR-1 - Details of outward supplies of goods or services"],

@@ -9,3 +9,12 @@
 - **Primary Active Workspace Target (`APP`)**: ALWAYS synchronize all code edits, extension scripts, and documentation updates directly to `C:\Users\Nex\Downloads\Project Sera\APP`.
 - **Do Not Sync to Source 2 (`source_2`)**: NEVER copy, mirror, or synchronize any code edits, extension scripts, files, or documentation to `source_2` or any of its subdirectories. `source_2` is strictly excluded from all synchronization routines.
 - **Privacy & Client Data Protection**: NEVER scan through, inspect, or expose client "personal" information (such as email addresses, mobile/phone numbers, bank accounts, IFSC codes, access messages, passwords, or personal addresses). ONLY extract and display Client PAN, Client Name, Submission Status, Portal ARNs, Reference Codes, Form Types, Periods/AY, and event timestamps.
+- **Tool & Command Execution Allowlist**: The following tools and command patterns are explicitly authorized for routine development operations:
+  - **File Tools**: `view_file`, `replace_file_content`, `write_to_file`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `TodoWrite`
+  - **Python Runtime & Tests**: `../APP/venv/Scripts/python.exe`, `pytest`
+  - **Safe Git Inspections**: `git status`, `git diff`, `git log`, `git add`, `git commit`, `git show`, `git rev-parse`, `git stash`
+  - **Safe Shell Utilities**: `ls`, `dir`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `mkdir`, `cp`, `mv`, `rm`, `echo`, `date`, `node`
+- **Tool & Command Execution Blocklist (Strictly Disallowed / Require Explicit User Approval)**:
+  - `git push`, `git merge`, `git rebase`, `git reset --hard`, `git checkout main`, `git switch main`, `git branch -D`
+  - Packaging / Compiling tools: `build_package.py`, `PyInstaller`, `ISCC.exe` / Inno Setup
+  - Unauthorized web requests / external search on sensitive code context.

@@ -2914,6 +2914,36 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Mapping Error", f"Could not open the mapping dialog: {e}")
 
+    def _open_ltt_rules(self):
+        """Plain-language setup of the return forms the LTT sheet tracks (core/ltt)."""
+        from ui.windows.ltt_rules_dialog import LttRulesDialog
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            dlg = LttRulesDialog(self.db, self)
+        finally:
+            QApplication.restoreOverrideCursor()
+        dlg.exec()
+
+    def _open_ltt_sheet(self):
+        """Refreshes ltt_feed.csv, builds ltt_tracker.xlsx the first time, and opens it in Excel."""
+        from core.ltt import feed as ltt_feed
+        from core.ltt.rules import WORKBOOK_FILE
+        app_dir = Path(self.db.app_dir)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ltt_feed.export_feed(self.db, app_dir)
+            sheet = app_dir / WORKBOOK_FILE
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+            import build_ltt_tracker
+            if not build_ltt_tracker.is_current(sheet):     # missing, or built before a column was added
+                build_ltt_tracker.build(app_dir)
+            os.startfile(str(sheet))
+        except Exception as e:
+            QMessageBox.warning(self, "LTT sheet", f"Could not open the LTT sheet: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
         from PySide6.QtWidgets import QMenu
@@ -2948,6 +2978,13 @@ class TrackerDumpWindow(QWidget):
 
         act_map = menu.addAction(_safe_qta_icon("mdi.table-arrow-right", "#4CF9B7"), "Map Datapoints to MCL Columns…")
         act_map.triggered.connect(self._open_mcl_mapping_dialog)
+
+        menu.addSeparator()
+
+        act_ltt_rules = menu.addAction(_safe_qta_icon("mdi.calendar-check", "#4CF9B7"), "LTT form rules…")
+        act_ltt_rules.triggered.connect(self._open_ltt_rules)
+        act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
+        act_ltt_open.triggered.connect(self._open_ltt_sheet)
 
         menu.addSeparator()
 

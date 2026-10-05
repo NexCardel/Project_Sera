@@ -104,3 +104,8 @@ tools/vsdc_uia_probe_output/
 # Local VSDC configuration (the alert topic is a secret; this repo is public)
 vsdc_alert.json
 vsdc_scope.json
+
+# LTT tracker: client PANs in plain text
+ltt_feed.csv
+ltt_tracker.xlsx
+ltt_rules.json
