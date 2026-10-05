@@ -119,3 +119,8 @@ ltt_tracker.xlsx
 ltt_rules.json
 .ui-overhaul.lock
 logs/ui-overhaul/
+!docs/ui_overhaul/ui-overhaul-status.csv
+!docs/ui_overhaul/ui-overhaul-runs.csv
+!docs/ui_overhaul/ui-overhaul-decisions.csv
+!docs/ui_overhaul/ui-overhaul-checks.csv
+!docs/ui_overhaul/ui-overhaul-questions.csv
