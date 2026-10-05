@@ -118,3 +118,16 @@ def test_spec_store_loads_the_third_file_and_a_missing_one_is_fine(fields_path):
     plain = sgt_specs.load_registry(sgt_specs.default_paths()[:2])
     with_missing = sgt_specs.SpecStore(log=lambda *_: None).get()
     assert set(with_missing.by_name()) == set(plain.by_name())
+
+
+def test_mixed_shapes_are_refused_unless_the_user_overrides(tmp_path):
+    dp, mems = _datapoint("Filing Section", "alphanumeric")
+    mems[0]["nodes"][7]["clients"]["client 1"]["texts"] = ["139(1)"]
+    mems[0]["nodes"][7]["clients"]["client 2"]["texts"] = ["Filing under section 139, 2026"]
+    with pytest.raises(register.NotRegistrable, match=register.MIXED_SHAPES):
+        register.draft_spec(dp, mems, "Fictional Portal", base_paths=BASE)
+    row = register.draft_spec(dp, mems, "Fictional Portal", base_paths=BASE, loose=True)
+    assert row["spec"]["checks"] == ["not_ui_chrome"]
+    out = register.write_fields_file([dict(row, status="active")], tmp_path / "sdis_fields.json")
+    reg = sgt_specs.load_registry(BASE + [out])
+    assert row["name"] in reg.by_name() and not [e for e in reg.errors if "sdis." in e]

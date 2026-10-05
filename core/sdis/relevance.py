@@ -12,6 +12,7 @@ Counting only, no AI. What counts, and how:
     = distinct clients / FULL_SURE_CLIENTS (D3, capped at 100);
   - slots: slot_type_pct = share of the most common value type among all the datapoint's values;
     surprise = that share is >= 90% and some value has another type;
+  - a node whose text is a slide position ("Site Map 3 of 4") is left out (noise.is_slide_position);
   - D8: a picked key counts x1.5, a rejected key is left out.
 """
 
@@ -22,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from core.sdis.keys import CHOICE_CTYPES
 from core.sdis.labels import value_type
+from core.sdis.noise import is_slide_position
 
 N = 2                      # clients that confirm a node (D3)
 FULL_SURE_CLIENTS = 5      # clients that give Sure 100% (D3)
@@ -43,6 +45,7 @@ class Datapoint:
     surprise: bool
     suggested_class: Optional[str] = None          # Part S.1, set by classes.annotate
     class_reason: str = ""
+    status: str = ""
 
 
 def clean_label(label: str) -> str:
@@ -88,6 +91,8 @@ def datapoints(memories: Iterable[Any], rejected: Iterable[Any] = (), picked: It
                 text = next(iter(v["texts"][-1] for v in votes.values() if v.get("texts")), "")
                 if (m.link, nd["shape"], text) in rej or (m.page, nd["shape"], text) in rej:
                     continue
+            if is_slide_position(nd["text"]):
+                continue
             label = m.label(nid)
             key = (clean_label(label), _node_type(nd)) if clean_label(label) else (m.link, nd["shape"])
             if key in rejected_keys:
@@ -112,10 +117,21 @@ def datapoints(memories: Iterable[Any], rejected: Iterable[Any] = (), picked: It
         slot_pct = round(100 * types[top] / len(g["values"])) if types else 0
         label = min(g["labels"], key=lambda t: (-g["labels"][t], t)) if g["labels"] else ""
         vtype = key[1] if label else top
+        st_counter = Counter()
+        for mi, nid in g["nodes"]:
+            try:
+                if mi < len(mems):
+                    s = mems[mi].status(nid)
+                    if s:
+                        st_counter[s] += 1
+            except Exception:
+                pass
+        st_str = ", ".join(sorted(st_counter.keys())) if st_counter else ""
         raw.append((relevance, Datapoint(
             key=key, label=label, value_type=vtype, relevance_pct=0,
             sure_pct=round(100 * min(1.0, len(who) / FULL_SURE_CLIENTS)), pages=pages, nodes=g["nodes"],
-            slot_type_pct=slot_pct, surprise=bool(types) and slot_pct >= SURPRISE_SHARE and len(types) > 1)))
+            slot_type_pct=slot_pct, surprise=bool(types) and slot_pct >= SURPRISE_SHARE and len(types) > 1,
+            status=st_str)))
     best = max((r for r, _ in raw), default=0)
     out = []
     for relevance, dp in sorted(raw, key=lambda x: (-x[0], -x[1].sure_pct, str(x[1].key))):

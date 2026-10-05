@@ -486,7 +486,7 @@ class SeraApp:
                 self.db.set_seal_timing_callback(_seal_timing_cb)
                 # SDIS Part P: finished capture files go to the admin PC after a sync round.
                 from core.sdis.transfer import Pusher
-                self._sdis_pusher = Pusher(self.sync_engine)
+                self._sdis_pusher = Pusher(self.sync_engine, on_event=self.sync_service.log_activity)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -1693,7 +1693,7 @@ class SeraApp:
             sgt = read_sgt_mode(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
-                                                sgt_i=read_sgt_i_mode(self.db.get_setting) == "on",
+                                                sgt_i=False,   # SGT-I unhooked: never attached, whatever the sgt_i_mode setting says
                                                 scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
                                                 sdis_record=read_sdis_record(self.db.get_setting))
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():

@@ -60,10 +60,10 @@ class FakeDb:
         return self.version
 
 
-def _dp(label, rel=80, sure=90, cls="profile", pages=2, reason=""):
+def _dp(label, rel=80, sure=90, cls="profile", pages=2, reason="", status=""):
     return Datapoint(key=(label, "text"), label=label, value_type="text", relevance_pct=rel, sure_pct=sure,
                      pages=[(LINK + str(i), 1, "chrome", 0.8) for i in range(pages)], nodes=[],
-                     slot_type_pct=90, surprise=False, suggested_class=cls, class_reason=reason)
+                     slot_type_pct=90, surprise=False, suggested_class=cls, class_reason=reason, status=status)
 
 
 def _state(*dps):
@@ -84,8 +84,9 @@ def app():
 def _dialog(app, db=None, dps=None, **kw):
     from ui.dialogs.sdis_dialog import SdisDialog
     db = db or FakeDb()
-    dps = dps if dps is not None else [_dp("Legal name"), _dp("Trade name", rel=60, cls="dataset"),
-                                        _dp("Status", rel=40, sure=50, cls=None, reason="clients disagree")]
+    dps = dps if dps is not None else [_dp("Legal name", status="variable"),
+                                        _dp("Trade name", rel=60, cls="dataset", status="semi-variable"),
+                                        _dp("Status", rel=40, sure=50, cls=None, reason="clients disagree", status="fixed")]
     return SdisDialog(db, state=_state(*dps), portals=[PORTAL, "Income Tax"], portal_of=lambda dp: PORTAL, **kw), db
 
 
@@ -107,11 +108,13 @@ def test_dialog_builds_from_a_fake_state_with_three_datapoints(app):
 
 
 def test_a_datapoint_row_has_its_page_children(app):
+    from ui.dialogs.sdis_dialog import C_FOUND, C_STATUS
     dlg, _ = _dialog(app)
     top = dlg.tree.topLevelItem(0)
     assert top.childCount() == 2
     assert "% of clients" in top.child(0).text(0)
-    assert top.text(5) == "2 pages"
+    assert top.text(C_STATUS) == "variable"
+    assert top.text(C_FOUND) == "2 pages"
 
 
 def test_relevance_filter_and_search(app):
@@ -121,6 +124,44 @@ def test_relevance_filter_and_search(app):
     dlg.rel_f.setCurrentIndex(dlg.rel_f.findData(0))
     dlg.search.setText("trade")
     assert dlg.tree.topLevelItemCount() == 1
+
+
+def test_status_filter(app):
+    dlg, _ = _dialog(app)
+    dlg.rel_f.setCurrentIndex(dlg.rel_f.findData(0))
+    assert dlg.tree.topLevelItemCount() == 3
+    i = dlg.status_f.findData("variable")
+    assert i > 0
+    dlg.status_f.setCurrentIndex(i)
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "Legal name"
+    i = dlg.status_f.findData("semi-variable")
+    assert i > 0
+    dlg.status_f.setCurrentIndex(i)
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "Trade name"
+    i = dlg.status_f.findData("fixed")
+    assert i > 0
+    dlg.status_f.setCurrentIndex(i)
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "Status"
+    dlg.status_f.setCurrentIndex(0)
+    assert dlg.tree.topLevelItemCount() == 3
+
+
+def test_status_filter_multi_status(app):
+    dps = [_dp("P1", status="variable, variable_alignment"), _dp("P2", status="semi-variable")]
+    dlg, _ = _dialog(app, dps=dps)
+    dlg.rel_f.setCurrentIndex(dlg.rel_f.findData(0))
+    dlg.status_f.setCurrentIndex(dlg.status_f.findData("variable"))
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "P1"
+    dlg.status_f.setCurrentIndex(dlg.status_f.findData("variable_alignment"))
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "P1"
+    dlg.status_f.setCurrentIndex(dlg.status_f.findData("semi-variable"))
+    assert dlg.tree.topLevelItemCount() == 1
+    assert dlg.tree.topLevelItem(0).text(0) == "P2"
 
 
 def test_editing_a_label_saves_it_at_once(app):
@@ -206,6 +247,48 @@ def test_please_check_keep_and_template(app):
     assert triple in dlg.state["rejected_triples"]
     dlg.answer(triple, distill.KEEP)
     assert triple not in dlg.state["rejected_triples"]
+
+
+def test_please_check_filters(app):
+    dlg, db = _dialog(app)
+    t1 = (LINK + "/page1", "shape1", "Aadhaar Number")
+    t2 = (LINK + "/page2", "shape2", "Follow us on")
+    t3 = (LINK + "/page2", "shape3", "Other than PAN users")
+    dlg.items = [
+        {"triple": t1, "text": "Aadhaar Number", "where": LINK + "/page1 · chrome", "saw": "saw aadhaar", "page": LINK + "/page1", "browser": "chrome"},
+        {"triple": t2, "text": "Follow us on", "where": LINK + "/page2 · edge", "saw": "saw follow", "page": LINK + "/page2", "browser": "edge"},
+        {"triple": t3, "text": "Other than PAN users", "where": LINK + "/page2 · chrome", "saw": "saw pan", "page": LINK + "/page2", "browser": "chrome"},
+    ]
+    dlg._fill_filters()
+    dlg._fill_check()
+    assert dlg.check_tree.topLevelItemCount() == 3
+
+    # Filter by search
+    dlg.check_search.setText("aadhaar")
+    assert dlg.check_tree.topLevelItemCount() == 1
+    assert dlg.check_tree.topLevelItem(0).text(0) == "Aadhaar Number"
+
+    # Clear search
+    dlg.check_search.setText("")
+    assert dlg.check_tree.topLevelItemCount() == 3
+
+    # Filter by page
+    idx = dlg.check_page_f.findData(LINK + "/page2")
+    assert idx >= 0
+    dlg.check_page_f.setCurrentIndex(idx)
+    assert dlg.check_tree.topLevelItemCount() == 2
+
+    # Filter by browser along with page
+    b_idx = dlg.check_browser_f.findData("edge")
+    assert b_idx >= 0
+    dlg.check_browser_f.setCurrentIndex(b_idx)
+    assert dlg.check_tree.topLevelItemCount() == 1
+    assert dlg.check_tree.topLevelItem(0).text(0) == "Follow us on"
+
+    # Tab showing update
+    dlg.tabs.setCurrentIndex(1)
+    assert "Showing 1 of 3 items to check" in dlg.showing.text()
+
 
 
 def test_the_loading_dialog_is_application_modal_and_never_starts_by_itself(app):

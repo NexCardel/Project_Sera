@@ -239,7 +239,7 @@
   function createCoordinator(env) {
     // env: { postNative(msg) -> bool, postDesktop(msg), getSettings() -> Promise<{scaEnabled,
     //        scaMode, allowedDomains, assistTabs: {tabId: "smti"|"mecp"}}>,
-    //        executeScript(details) -> Promise,
+    //        waitForConnection(ms) -> Promise<bool> (optional), executeScript(details) -> Promise,
     //        sessionStore (chrome.storage.session or null), now() }
     const now = env.now || (() => Date.now());
     let arm = null;
@@ -337,7 +337,10 @@
       }
     }
 
-    function requestPassword(a, service, tabId, frameId, pageHost, matchedUid, key, confirmed) {
+    // A woken-up service worker has no socket yet (it is still reconnecting when the page's
+    // message arrives), so a first failed send waits for the connection and sends once more
+    // instead of dropping the request - that dropped the first fill after every worker sleep.
+    async function requestPassword(a, service, tabId, frameId, pageHost, matchedUid, key, confirmed) {
       const requestId = "req_" + Math.random().toString(16).slice(2) + now().toString(16);
       const timer = setTimeout(() => {
         if (pending.delete(requestId)) {
@@ -347,11 +350,17 @@
         }
       }, REQUEST_TIMEOUT_MS);
       pending.set(requestId, { tabId, frameId, service, key, armId: a.arm_id, timer });
-      const sent = env.postNative({
+      const message = {
         type: "SCA_PASSWORD_REQUEST", request_id: requestId, arm_id: a.arm_id,
         service_id: service.service_id, page_host: pageHost, matched_uid: matchedUid,
         confirmed: confirmed === true,   // only from a click on the page card
-      });
+      };
+      let sent = env.postNative(message);
+      if (!sent && env.waitForConnection) {
+        let connected = false;
+        try { connected = await env.waitForConnection(5000); } catch (_) {}
+        if (connected && pending.has(requestId)) sent = env.postNative(message);
+      }
       if (!sent) {
         clearTimeout(timer);
         pending.delete(requestId);
@@ -430,7 +439,7 @@
         } catch (_) { busy.delete(key); return "widget-failed"; }
         return "widget-shown";
       }
-      return requestPassword(a, service, sender.tab.id, frameId, frameHost, normalizeUid(req.candidate), key)
+      return (await requestPassword(a, service, sender.tab.id, frameId, frameHost, normalizeUid(req.candidate), key))
         ? "password-requested" : "desktop-unreachable";
     }
 
@@ -445,7 +454,7 @@
       const settings = await env.getSettings();
       const frameHost = hostOf(sender.tab.url);
       if (!pickService(a, frameHost, settings.allowedDomains)) return "not-a-portal-of-this-client";
-      return requestPassword(a, service, sender.tab.id, frameId, frameHost, a.matched_uid, key, true)
+      return (await requestPassword(a, service, sender.tab.id, frameId, frameHost, a.matched_uid, key, true))
         ? "password-requested" : "desktop-unreachable";
     }
 

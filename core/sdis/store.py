@@ -32,7 +32,7 @@ from core.sdis.link_map import LinkMap
 from core.sdis.memory import PageMemory
 from core.sdis.paths import data_dir
 
-STATE_VERSION = 1
+STATE_VERSION = 2       # 2: client ids now read from recorder reads (identity.client_ids); older states hold them undecided
 STATE_NAME = "memory.json.gz"
 log = logging.getLogger(__name__)
 

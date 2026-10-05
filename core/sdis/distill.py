@@ -83,7 +83,8 @@ def datapoint_of(d: Any) -> Any:
                      relevance_pct=int(d.get("relevance_pct", 0)), sure_pct=int(d.get("sure_pct", 0)),
                      pages=[tuple(p) for p in d.get("pages") or ()], nodes=[tuple(n) for n in d.get("nodes") or ()],
                      slot_type_pct=int(d.get("slot_type_pct", 0)), surprise=bool(d.get("surprise", False)),
-                     suggested_class=d.get("suggested_class"), class_reason=d.get("class_reason", ""))
+                     suggested_class=d.get("suggested_class"), class_reason=d.get("class_reason", ""),
+                     status=d.get("status", ""))
 
 
 def datapoints_of(state: Dict[str, Any]) -> List[Any]:
@@ -111,6 +112,24 @@ def example_of(dp: Any, memories: List[Any]) -> str:
         except (IndexError, AttributeError, KeyError, TypeError):
             continue
     return ""
+
+
+def status_of(dp: Any, memories: List[Any]) -> str:
+    """The datapoint's status (fixed / variable / semi-variable / variable_alignment etc.)."""
+    from collections import Counter
+    st = getattr(dp, "status", "")
+    if st:
+        return st
+    counts: Counter = Counter()
+    for mi, nid in getattr(dp, "nodes", ()):
+        try:
+            if mi < len(memories):
+                s = memories[mi].status(nid)
+                if s:
+                    counts[s] += 1
+        except Exception:
+            continue
+    return ", ".join(sorted(counts.keys())) if counts else ""
 
 
 def portal_of(link: str) -> str:
@@ -146,7 +165,8 @@ def alignment_items(state: Dict[str, Any], decided: Decided) -> List[Dict[str, A
             where = pm.link + (" · " + pm.browser if pm.browser else "")
             items.append({"triple": triple, "text": text, "where": where,
                           "saw": f"The same text for {pct}% of the clients, in a slot whose kind of text "
-                                 f"differs between clients elsewhere on this page"})
+                                 f"differs between clients elsewhere on this page",
+                          "page": pm.link, "browser": pm.browser, "pct": pct})
     return items
 
 

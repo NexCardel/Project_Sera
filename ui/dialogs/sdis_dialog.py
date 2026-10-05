@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QMimeData, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu,
@@ -32,13 +32,14 @@ from ui.dialogs.sdis_containers_dialog import (
 
 MIME = "application/x-sera-sdis-datapoint"
 KEY_ROLE = Qt.UserRole
-C_LABEL, C_EXAMPLE, C_TYPE, C_REL, C_SURE, C_FOUND, C_SUGGEST, C_ADD = range(8)
-HEADERS = ("Label", "Example", "Type", "Relevance", "Sure", "Found on", "Suggested", "")
+C_LABEL, C_EXAMPLE, C_TYPE, C_STATUS, C_REL, C_SURE, C_FOUND, C_SUGGEST, C_ADD = range(9)
+HEADERS = ("Label", "Example", "Type", "Status", "Relevance", "Sure", "Found on", "Suggested", "")
 CHIPS = {"profile": ("● Profile", "#5aa9ff", "#16304d"), "dataset": ("◆ Dataset", "#3fd17f", "#173d28"),
          "info": ("▲ Others", "#b48cff", "#2c2147"), "": ("? not sure", MUTED, "#26262a")}
 LOW_SURE = 60
 ROW_CAP = 1000
 RELEVANCE_STEPS = (0, 10, 20, 30, 50, 70)
+STATUS_ORDER = ("variable", "semi-variable", "variable_alignment", "fixed", "furniture", "waiting", "ambiguous", "retired", "composite")
 STATES = ("Hide captured", "Any state", "Captured only", "New since last run", "Too little evidence")
 
 STYLE = f"""
@@ -339,9 +340,14 @@ class SdisDialog(QDialog):
         self.items: List[Dict[str, Any]] = []
         self._by_key: Dict[tuple, Any] = {}
         self._examples: Dict[tuple, str] = {}
+        self._statuses: Dict[tuple, str] = {}
         self._portal_cache: Dict[tuple, str] = {}
         self._new: set = set()
         self._building = False
+        self._dirty = False                     # decisions not yet written to the state file (_persist)
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._flush)
         self._loading_dlg: Optional[SdisLoadingDialog] = None
         self._side_portal = ""
         self._refused = ""
@@ -409,6 +415,7 @@ class SdisDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_datapoints(), "Datapoints")
         self.tabs.addTab(self._build_check(), "Please check")
+        self.tabs.currentChanged.connect(self._tab_changed)
         split.addWidget(self.tabs)
         self.side = self._build_side()
         split.addWidget(self.side)
@@ -447,11 +454,12 @@ class SdisDialog(QDialog):
         for v in RELEVANCE_STEPS:
             self.rel_f.addItem(f"Relevance ≥ {v}%", v)
         self.rel_f.setCurrentIndex(RELEVANCE_STEPS.index(20))
+        self.status_f = QComboBox()
         self.page_f = QComboBox()
         self.browser_f = QComboBox()
         self.state_f = QComboBox()
         self.state_f.addItems(STATES)
-        for combo in (self.rel_f, self.page_f, self.browser_f, self.state_f):
+        for combo in (self.rel_f, self.status_f, self.page_f, self.browser_f, self.state_f):
             combo.currentIndexChanged.connect(lambda _i: self._populate())
             bar.addWidget(combo)
         self.register_btn = QPushButton("Register")
@@ -474,8 +482,8 @@ class SdisDialog(QDialog):
         self.tree.setDragDropMode(QTreeWidget.DragOnly)
         hdr = self.tree.header()
         hdr.setSectionResizeMode(C_LABEL, QHeaderView.Interactive)
-        for col, w in ((C_LABEL, 300), (C_EXAMPLE, 150), (C_TYPE, 80), (C_REL, 170), (C_SURE, 60), (C_FOUND, 80),
-                       (C_SUGGEST, 110), (C_ADD, 90)):
+        for col, w in ((C_LABEL, 280), (C_EXAMPLE, 140), (C_TYPE, 75), (C_STATUS, 125), (C_REL, 160), (C_SURE, 55),
+                       (C_FOUND, 75), (C_SUGGEST, 105), (C_ADD, 85)):
             self.tree.setColumnWidth(col, w)
         hdr.setStretchLastSection(False)
         self.tree.itemChanged.connect(self._item_changed)
@@ -499,9 +507,22 @@ class SdisDialog(QDialog):
     def _build_check(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(22, 12, 22, 8)
+        lay.setContentsMargins(22, 12, 16, 8)
         lay.addWidget(self._hint("Short, plain sentences; one decision per row. Keep = treat as data (a status or "
                                  "form word); Template = never a datapoint again. Both are saved and synced."))
+        bar = QHBoxLayout()
+        self.check_search = QLineEdit()
+        self.check_search.setPlaceholderText("⌕  Search text, page link, saw…")
+        self.check_search.textChanged.connect(lambda _t: self._fill_check())
+        bar.addWidget(self.check_search, 1)
+
+        self.check_page_f = QComboBox()
+        self.check_browser_f = QComboBox()
+        for combo in (self.check_page_f, self.check_browser_f):
+            combo.currentIndexChanged.connect(lambda _i: self._fill_check())
+            bar.addWidget(combo)
+        lay.addLayout(bar)
+
         self.check_tree = QTreeWidget()
         self.check_tree.setColumnCount(4)
         self.check_tree.setHeaderLabels(["Text", "Where", "What SDIS saw", ""])
@@ -571,32 +592,96 @@ class SdisDialog(QDialog):
         self._by_key = {dp.key: dp for dp in self.dps}
         mems = (self.state or {}).get("memories") or []
         self._examples = {dp.key: distill.example_of(dp, mems) for dp in self.dps}
+        self._statuses = {dp.key: distill.status_of(dp, mems) for dp in self.dps}
         self._portal_cache = {}
         self._fill_filters()
         self._refresh_all()
 
     def _persist(self) -> None:
+        """The state file is big (seconds to write), so a decision only marks it dirty and the write happens
+        once, a moment after the last click, before mining starts, and when the dialog closes. The decisions
+        themselves are in the database at once."""
         if self._injected is None and self.state is not None:
-            try:
-                store.save(self.state, self.path())
-            except OSError:
-                self._say("The mining state could not be saved.", bad=True)
+            self._dirty = True
+            self._save_timer.start(3000)
+
+    def _flush(self) -> None:
+        self._save_timer.stop()
+        if not self._dirty or self._injected is not None or self.state is None:
+            return
+        self._dirty = False
+        try:
+            store.save(self.state, self.path())
+        except OSError:
+            self._dirty = True
+            self._say("The mining state could not be saved.", bad=True)
 
     def _fill_filters(self) -> None:
-        for combo, first, values in ((self.page_f, "Page: all", sorted({p[0] for dp in self.dps for p in dp.pages})),
-                                     (self.browser_f, "Browser: all",
-                                      sorted({p[2] for dp in self.dps for p in dp.pages if p[2]}))):
-            keep = combo.currentText()
+        statuses = set()
+        has_empty = False
+        for dp in self.dps:
+            st = self._statuses.get(dp.key, "") or getattr(dp, "status", "")
+            if not st.strip():
+                has_empty = True
+            for s in st.split(","):
+                s = s.strip()
+                if s:
+                    statuses.add(s)
+        ordered_statuses = sorted(statuses, key=lambda s: (STATUS_ORDER.index(s) if s in STATUS_ORDER else 99, s))
+        status_items = [(f"Status: {s}", s) for s in ordered_statuses]
+        if has_empty:
+            status_items.append(("Status: (none)", "__none__"))
+
+        for combo, first, values in (
+            (self.status_f, "Status: all", status_items),
+            (self.page_f, "Page: all", [(_short(v, 60), v) for v in sorted({p[0] for dp in self.dps for p in dp.pages})]),
+            (self.browser_f, "Browser: all", [(v, v) for v in sorted({p[2] for dp in self.dps for p in dp.pages if p[2]})]),
+        ):
+            keep_data = combo.currentData()
+            keep_text = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
             combo.addItem(first, "")
-            for v in values:
-                combo.addItem(_short(v, 60), v)
-            i = combo.findText(keep)
+            for label, data in values:
+                combo.addItem(label, data)
+            i = combo.findData(keep_data) if keep_data else -1
+            if i < 0 and keep_text:
+                i = combo.findText(keep_text)
             combo.setCurrentIndex(max(0, i))
             combo.blockSignals(False)
 
+        if hasattr(self, "check_page_f") and hasattr(self, "check_browser_f"):
+            check_pages = sorted({(item.get("page") or (item.get("triple", ("",))[0] if item.get("triple") else ""))
+                                  for item in self.items
+                                  if (item.get("page") or (item.get("triple") and item["triple"][0]))})
+            if not check_pages:
+                check_pages = sorted({p[0] for dp in self.dps for p in dp.pages})
+
+            check_browsers = sorted({(item.get("browser") or (item.get("where", "").split(" · ")[1].strip() if " · " in item.get("where", "") else ""))
+                                    for item in self.items
+                                    if (item.get("browser") or " · " in item.get("where", ""))})
+            if not check_browsers:
+                check_browsers = sorted({p[2] for dp in self.dps for p in dp.pages if p[2]})
+
+            for combo, first, values in (
+                (self.check_page_f, "Page: all", [(_short(v, 60), v) for v in check_pages]),
+                (self.check_browser_f, "Browser: all", [(v, v) for v in check_browsers]),
+            ):
+                keep_data = combo.currentData()
+                keep_text = combo.currentText()
+                combo.blockSignals(True)
+                combo.clear()
+                combo.addItem(first, "")
+                for label, data in values:
+                    combo.addItem(label, data)
+                i = combo.findData(keep_data) if keep_data else -1
+                if i < 0 and keep_text:
+                    i = combo.findText(keep_text)
+                combo.setCurrentIndex(max(0, i))
+                combo.blockSignals(False)
+
     def _refresh_all(self) -> None:
+        self._fill_filters()
         self._populate()
         self._fill_check()
         self._refresh_cards()
@@ -624,11 +709,21 @@ class SdisDialog(QDialog):
     def _visible(self) -> List[Any]:
         q = self.search.text().strip().lower()
         rel = self.rel_f.currentData() or 0
+        status_sel = self.status_f.currentData() or ""
         page, browser, state = self.page_f.currentData() or "", self.browser_f.currentData() or "", self.state_f.currentText()
         out = []
         for dp in self.dps:
             if dp.key in self.decided.dismissed or dp.relevance_pct < rel:
                 continue
+            if status_sel:
+                st = self._statuses.get(dp.key, "") or getattr(dp, "status", "")
+                if status_sel == "__none__":
+                    if st.strip():
+                        continue
+                else:
+                    parts = {p.strip() for p in st.split(",") if p.strip()}
+                    if status_sel not in parts:
+                        continue
             if page and not any(p[0] == page for p in dp.pages):
                 continue
             if browser and not any(p[2] == browser for p in dp.pages):
@@ -639,6 +734,7 @@ class SdisDialog(QDialog):
                     or (state == "Too little evidence" and dp.class_reason != "not enough evidence"):
                 continue
             if q and not (q in self.shown_label(dp).lower() or q in self._examples.get(dp.key, "").lower()
+                          or q in self._statuses.get(dp.key, "").lower()
                           or any(q in p[0].lower() for p in dp.pages)):
                 continue
             out.append(dp)
@@ -664,6 +760,9 @@ class SdisDialog(QDialog):
             top.setData(C_LABEL, KEY_ROLE + 1, self.decided.registered.get(dp.key, ""))
             top.setText(C_EXAMPLE, self._examples.get(dp.key, ""))
             top.setText(C_TYPE, dp.value_type)
+            st_text = self._statuses.get(dp.key, "") or getattr(dp, "status", "")
+            top.setText(C_STATUS, st_text)
+            top.setToolTip(C_STATUS, f"Status: {st_text}" if st_text else "")
             top.setData(C_REL, KEY_ROLE, dp.relevance_pct)
             top.setText(C_SURE, f"{dp.sure_pct}%")
             if dp.sure_pct < LOW_SURE:
@@ -683,9 +782,7 @@ class SdisDialog(QDialog):
             if keep == dp.key:
                 self.tree.setCurrentItem(top)
         self._building = False
-        total = len([dp for dp in self.dps if dp.key not in self.decided.dismissed])
-        self.showing.setText(f"Showing {min(len(visible), ROW_CAP)} of {total} datapoints · every number is a "
-                             "percentage of the clients who visited that page")
+        self._update_showing()
         self.stack.setCurrentWidget(self.tree if visible else self.empty)
         if not visible:
             looked = self.state is not None
@@ -766,43 +863,91 @@ class SdisDialog(QDialog):
         self.decided.dismissed.add(dp.key)
         self._decided_changed()
 
-    def _decided_changed(self) -> None:
+    def _decided_changed(self, check_changed: bool = False) -> None:
         if self.state is not None:
             if distill.apply_decisions(self.state, self.decided):
                 if self.state.get("memories"):
                     distill.recount(self.state, self.decided, config.class_exceptions())
                 self._persist()
             self.dps = distill.refresh_datapoints(self.state, self.decided, config.class_exceptions())
-            self.items = distill.alignment_items(self.state, self.decided)
+            if check_changed:                   # only a Please check answer changes that list (2 s)
+                self.items = distill.alignment_items(self.state, self.decided)
             self._by_key = {dp.key: dp for dp in self.dps}
             mems = self.state.get("memories") or []
             self._examples = {dp.key: distill.example_of(dp, mems) for dp in self.dps}
+            self._statuses = {dp.key: distill.status_of(dp, mems) for dp in self.dps}
         self._refresh_all()
 
     def answer(self, triple: tuple, decision: str) -> None:
         """Please check: Keep as data / Template (reject, sent to the next mining run)."""
         self.db.set_sdis_decision(distill.signature(distill.VA, triple), decision, "")
         self.decided.va[triple] = decision
-        self._decided_changed()
+        self._decided_changed(check_changed=True)
+
+    def _tab_changed(self, _index: int = 0) -> None:
+        self._update_showing()
+
+    def _update_showing(self) -> None:
+        if not hasattr(self, "showing") or not hasattr(self, "tabs"):
+            return
+        if self.tabs.currentIndex() == 1:
+            visible_check = self._visible_check() if hasattr(self, "check_tree") else self.items
+            self.showing.setText(f"Showing {min(len(visible_check), ROW_CAP)} of {len(self.items)} items to check")
+        else:
+            visible = self._visible() if hasattr(self, "tree") else self.dps
+            total = len([dp for dp in self.dps if dp.key not in self.decided.dismissed])
+            self.showing.setText(f"Showing {min(len(visible), ROW_CAP)} of {total} datapoints · every number is a "
+                                 "percentage of the clients who visited that page")
+
+    def _visible_check(self) -> List[Dict[str, Any]]:
+        q = self.check_search.text().strip().lower() if hasattr(self, "check_search") else ""
+        page = self.check_page_f.currentData() or "" if hasattr(self, "check_page_f") else ""
+        browser = self.check_browser_f.currentData() or "" if hasattr(self, "check_browser_f") else ""
+        out = []
+        for item in self.items:
+            item_page = item.get("page") or (item.get("triple", ("",))[0] if item.get("triple") else "")
+            if page:
+                if item_page != page and page not in item.get("where", ""):
+                    continue
+            item_browser = item.get("browser") or ""
+            if not item_browser and " · " in item.get("where", ""):
+                item_browser = item["where"].split(" · ")[1].strip()
+            if browser:
+                if item_browser.lower() != browser.lower() and browser.lower() not in item.get("where", "").lower():
+                    continue
+            if q:
+                text = item.get("text", "").lower()
+                where = item.get("where", "").lower()
+                saw = item.get("saw", "").lower()
+                if q not in text and q not in where and q not in saw:
+                    continue
+            out.append(item)
+        return out
 
     def _fill_check(self) -> None:
+        if not hasattr(self, "check_tree"):
+            return
         self.check_tree.clear()
-        for item in self.items[:300]:
+        visible = self._visible_check()
+        for item in visible[:ROW_CAP]:
             row = QTreeWidgetItem(self.check_tree)
-            row.setText(0, item["text"])
-            row.setText(1, _short(item["where"], 70))
-            row.setText(2, item["saw"])
-            row.setToolTip(2, item["saw"])
-            box = QWidget()
-            bl = QHBoxLayout(box)
-            bl.setContentsMargins(0, 0, 0, 0)
-            for text, decision in (("Keep as data", distill.KEEP), ("Template", distill.REJECT)):
-                b = QPushButton(text)
-                b.setObjectName("small")
-                b.setProperty("decision", decision)
-                b.clicked.connect(lambda _c=False, t=item["triple"], d=decision: self.answer(t, d))
-                bl.addWidget(b)
-            self.check_tree.setItemWidget(row, 3, box)
+            row.setText(0, item.get("text", ""))
+            row.setText(1, _short(item.get("where", ""), 70))
+            saw = item.get("saw", "")
+            row.setText(2, saw)
+            row.setToolTip(2, saw)
+            if "triple" in item:
+                box = QWidget()
+                bl = QHBoxLayout(box)
+                bl.setContentsMargins(0, 0, 0, 0)
+                for text, decision in (("Keep as data", distill.KEEP), ("Template", distill.REJECT)):
+                    b = QPushButton(text)
+                    b.setObjectName("small")
+                    b.setProperty("decision", decision)
+                    b.clicked.connect(lambda _c=False, t=item["triple"], d=decision: self.answer(t, d))
+                    bl.addWidget(b)
+                self.check_tree.setItemWidget(row, 3, box)
+        self._update_showing()
 
     # ── containers: the side panel ───────────────────────────────────────────
     def portal_list(self) -> List[str]:
@@ -1046,8 +1191,16 @@ class SdisDialog(QDialog):
         cls = distill.where_class(where)
         mems = (self.state or {}).get("memories") or []
         try:
-            name = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls=cls,
-                                           created_by=self.who)["field"]
+            try:
+                name = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls=cls,
+                                               created_by=self.who)["field"]
+            except register.NotRegistrable as e:
+                if str(e) != register.MIXED_SHAPES or not self._ask(
+                        "Register", f"{label}: its values have no common shape.\n\nRegister it anyway? Sera will "
+                                    "take any one-line value beside the label, so check what it captures."):
+                    raise
+                name = register.register_field(self.db, dp, mems, portal, field=self._field_for(dp), cls=cls,
+                                               created_by=self.who, loose=True)["field"]
             self.put(config.add_field(self.doc(), where, name, **self.known()))
         except (register.NotRegistrable, config.ConfigError) as e:
             return False, f"Not registered: {e}"
@@ -1069,6 +1222,7 @@ class SdisDialog(QDialog):
         starts mining by itself."""
         if self._loading_dlg is not None:
             return
+        self._flush()                           # the child reads the state file: it must be up to date
         try:
             captures = distill.stage_default()
         except OSError:
@@ -1096,4 +1250,9 @@ class SdisDialog(QDialog):
         if self._loading_dlg is not None:
             event.ignore()
             return
+        self._flush()
         super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        self._flush()
+        super().done(result)

@@ -116,8 +116,10 @@ class Pusher:
     session; at most every PUSH_EVERY_S it starts one background push of finished files to the
     admin PC and deletes exactly the acked ones. Never raises, never blocks the caller."""
 
-    def __init__(self, engine, folder: Optional[Path] = None, every_s: float = PUSH_EVERY_S):
+    def __init__(self, engine, folder: Optional[Path] = None, every_s: float = PUSH_EVERY_S,
+                 on_event=None):
         self.engine = engine
+        self.on_event = on_event          # on_event(category, title, detail): the live activity log
         self._folder = folder
         self.every_s = every_s
         self._last: Optional[float] = None
@@ -191,7 +193,18 @@ class Pusher:
                     pass
         self.stats["deleted"] += deleted
         _log.info("SDIS push: %d files sent, %d acked, %d deleted", len(batch), len(acked), deleted)
+        self._emit("Corpus sent to admin PC", f"{len(acked)} of {len(batch)} files acknowledged")
+        if deleted:
+            self._emit("Corpus deleted on this PC", f"{deleted} file(s) removed after the admin PC's ack")
         return deleted
+
+    def _emit(self, title: str, detail: str) -> None:
+        if self.on_event is None:
+            return
+        try:
+            self.on_event("SDIS", title, detail)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- admin side

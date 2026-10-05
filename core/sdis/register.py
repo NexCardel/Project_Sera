@@ -38,6 +38,9 @@ MINER_TYPES = {"text": "text", "number": "number", "amount": "amount", "date": "
                "yes/no": "yes/no", "period": "code"}
 
 
+MIXED_SHAPES = "mixed shapes"                  # the miner's Drop reason that "register anyway" overrides
+
+
 class NotRegistrable(ValueError):
     """The datapoint cannot become a spec; the reason holds no page text or value."""
 
@@ -94,10 +97,12 @@ def field_name(label: str, taken: Iterable[str]) -> str:
 
 
 def draft_spec(datapoint: Any, memories: Sequence[Any], portal: str, container: str = PROFILE,
-               field: Optional[str] = None, base_paths: Optional[Sequence[Path]] = None) -> Dict[str, Any]:
+               field: Optional[str] = None, base_paths: Optional[Sequence[Path]] = None,
+               loose: bool = False) -> Dict[str, Any]:
     """The `sdis_fields` row for a picked datapoint: {name, field, portal, section, spec, label}.
     Raises NotRegistrable (a counts-only reason) when it cannot be drafted or the SGT loader
-    refuses the drafted spec beside the existing ones."""
+    refuses the drafted spec beside the existing ones. `loose` is the user's override for values
+    with no common shape ("mixed shapes"): the spec then takes any one-line value beside the label."""
     from core.sgt import sgt_specs
     from core.sgt_i import miner
 
@@ -118,7 +123,12 @@ def draft_spec(datapoint: Any, memories: Sequence[Any], portal: str, container: 
     try:
         spec = miner.draft_field(label, typ, shapes, field, section, portal)
     except miner.Drop as e:
-        raise NotRegistrable(str(e))
+        if not (loose and str(e) == MIXED_SHAPES):
+            raise NotRegistrable(str(e))
+        try:
+            spec = miner.draft_field(label, "any", shapes, field, section, portal)
+        except miner.Drop as e2:
+            raise NotRegistrable(str(e2))
     spec["name"] = NAME_PREFIX + field
     spec["note"] = label
     err = miner.check_spec(section, spec, base)
@@ -187,7 +197,7 @@ def spec_name_for(field: str, taken_names: Iterable[str]) -> str:
 
 def register_field(db: Any, datapoint: Any, memories: Sequence[Any], portal: str,
                    field: Optional[str] = None, cls: str = PROFILE, created_by: str = "",
-                   base_paths: Optional[Sequence[Path]] = None) -> Dict[str, Any]:
+                   base_paths: Optional[Sequence[Path]] = None, loose: bool = False) -> Dict[str, Any]:
     """Part U: a picked datapoint becomes a datapoint of a field. `field` names an existing
     sdis_mcl field (PAN picked again on another page); None makes a new field from the label.
     The spec goes into sdis_fields linked to the field (mcl_gid), named sdis.<field>[.n]. Which
@@ -208,7 +218,7 @@ def register_field(db: Any, datapoint: Any, memories: Sequence[Any], portal: str
             raise NotRegistrable("the datapoint has no label")
         name_for = field_name(label, _taken_fields(base) | set(library))
     # the same page again re-registers its spec; another page of the field gets a new spec
-    row = draft_spec(datapoint, memories, portal, cls, field=name_for, base_paths=base)
+    row = draft_spec(datapoint, memories, portal, cls, field=name_for, base_paths=base, loose=loose)
     mcl = library.get(name_for)
     same = [s for s in specs if mcl and s.get("mcl_gid") == mcl["gid"] and s.get("portal") == portal
             and (s.get("spec") or {}).get("labels") == row["spec"].get("labels")]

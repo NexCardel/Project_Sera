@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable
 
-APP_VERSION = "2.12.2"
+APP_VERSION = "2.12.4"
 GITHUB_REPO = "NexCardel/Project_Sera"
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/version.json"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -76,7 +76,9 @@ def check_for_updates(timeout_seconds: int = 5) -> Optional[Dict]:
                         "release_notes": data.get("release_notes", "A new security and feature update is available for Project Sera.")
                     }
     except Exception as e:
-        print(f"[Updater] version.json check error: {e}")
+        # A missing version.json (404) is a normal "nothing published" state, not an error.
+        if not (isinstance(e, urllib.error.HTTPError) and e.code == 404):
+            print(f"[Updater] version.json check error: {e}")
 
     # 2. Secondary fallback: Query GitHub Releases API directly
     # This prevents missed updates if version.json wasn't bumped on the main branch.
@@ -109,7 +111,8 @@ def check_for_updates(timeout_seconds: int = 5) -> Optional[Dict]:
                         "release_notes": rel_data.get("body") or "A new release is available on GitHub."
                     }
     except Exception as e:
-        print(f"[Updater] GitHub Releases API fallback error: {e}")
+        if not (isinstance(e, urllib.error.HTTPError) and e.code == 404):
+            print(f"[Updater] GitHub Releases API fallback error: {e}")
 
     return None
 

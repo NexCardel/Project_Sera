@@ -6,11 +6,21 @@ Implements Blueprint Part C (Noise over time):
   2. changes_with_time: differs between days, but on each day all clients agreed.
   3. probably_furniture: differs between clients, sentence or label shaped, and
      has no label beside it.
+  4. is_slide_position: a carousel / menu position read aloud, "Media Reports 7 of 8".
 """
 
+import re
 from typing import Any, Dict, List, Optional, Set
 
 from core.sdis import history, labels
+
+
+_SLIDE_POSITION = re.compile(r"^\S.*\s\d+\s+of\s+\d+$", re.IGNORECASE)
+
+
+def is_slide_position(text: str) -> bool:
+    """True for "<name> <n> of <m>": the position of a slide, tab or menu item, never client data."""
+    return bool(_SLIDE_POSITION.match((text or "").strip()))
 
 
 def changes_within_client(node: Dict[str, Any]) -> bool:

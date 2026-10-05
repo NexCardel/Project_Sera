@@ -67,6 +67,7 @@ try {
 } catch (_) {}
 const scaCoordinator = self.SeraSCA.createCoordinator({
   postNative: (msg) => wsSendNow(msg),
+  waitForConnection: (ms) => waitForConnection(ms),
   postDesktop: (msg) => { sendToDesktop(msg); },
   getSettings: () => new Promise((resolve) => {
     chrome.storage.local.get(["scaEnabled", "scaMode", "allowedDomains"], (d) => {

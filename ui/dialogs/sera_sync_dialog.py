@@ -1387,6 +1387,9 @@ class SeraSyncDialog(QDialog):
         elif "PUSH" in cat_upper:
             icon_badge = "📤"
             color = "#D2A8FF"
+        elif "SDIS" in cat_upper:
+            icon_badge = "🗂️"
+            color = "#F778BA"
         elif "SSAL" in cat_upper:
             icon_badge = "📋"
             color = "#79C0FF"

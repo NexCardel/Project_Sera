@@ -37,7 +37,8 @@ class TestPurgeDuplicates(unittest.TestCase):
         cid1 = self.db.add_client(c1_vals, notes="", service_ids=[])
 
         # Client 2 (Legacy duplicate created directly in DB)
-        now = "2026-08-24T12:00:00"
+        import datetime
+        now = (datetime.datetime.utcnow() + datetime.timedelta(days=1)).isoformat()
         with self.db._connect() as conn:
             cur = conn.execute("INSERT INTO clients (notes, created_at, updated_at) VALUES ('', ?, ?)", (now, now))
             cid2 = cur.lastrowid

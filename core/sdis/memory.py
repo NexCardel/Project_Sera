@@ -124,6 +124,7 @@ class PageMemory:
         self._view_pos: Dict[str, Dict[int, int]] = {}
         self._label_cache: Dict[str, Tuple[set, Dict[int, str]]] = {}
         self._differs_shapes_cache: Optional[set] = None
+        self._confirmed_shapes_cache: Optional[set] = None
 
     def _node(self, e: Dict[str, Any], anchor: Optional[int], status: str,
               first_ci: Optional[int] = None, last_ci: Optional[int] = None) -> int:
@@ -188,6 +189,7 @@ class PageMemory:
         ci = self.clients.index(client)
 
         self._differs_shapes_cache = None
+        self._confirmed_shapes_cache = None
         self._label_cache = {}
         comp = composites(flat)
         nid_of: List[int] = [-1] * len(flat)
@@ -283,6 +285,7 @@ class PageMemory:
                 retired_any = True
         if retired_any:
             self._differs_shapes_cache = None
+            self._confirmed_shapes_cache = None
             self._label_cache = {}
 
     def confirmed(self, nid: int) -> bool:
@@ -314,9 +317,10 @@ class PageMemory:
         if not self.confirmed(nid):
             if any(not c.get("sure", True) for c in nd["clients"].values()):
                 return "ambiguous"
-            shapes = {m["shape"] for i, m in enumerate(self.nodes)
-                      if m.get("status") != "retired" and self.confirmed(i)}
-            return "repeat" if nd["shape"] in shapes else "only one client so far"
+            if self._confirmed_shapes_cache is None:      # once per change of the nodes, not once per node
+                self._confirmed_shapes_cache = {m["shape"] for i, m in enumerate(self.nodes)
+                                                if m.get("status") != "retired" and self.confirmed(i)}
+            return "repeat" if nd["shape"] in self._confirmed_shapes_cache else "only one client so far"
         return "same for all clients" if len(_last_texts(votes)) == 1 else "differs between clients"
 
     def verdict(self, nid: int, differs_shapes: Optional[set] = None,

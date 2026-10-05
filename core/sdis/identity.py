@@ -36,7 +36,8 @@ def client_ids(m: Any) -> set:
     if _registry is None:
         _registry = load_registry()
     flat = m.to_flat() if hasattr(m, "to_flat") else m
-    lines = [e["text"] for e in flat if e["text"] and e.get("node", {}).get("sgt")]
+    marked = any("sgt" in e.get("node", {}) for e in flat)      # key_probe marks it; the recorder's raw reads do not
+    lines = [e["text"] for e in flat if e["text"] and (e.get("node", {}).get("sgt") or not marked)]
     res = resolve_page(_registry, lines, portal, url, date.today())
     return {f"{k}:{h.value}" for k, h in res.profile.items() if k in CLIENT_FIELDS}
 

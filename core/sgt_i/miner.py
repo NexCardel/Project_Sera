@@ -92,6 +92,9 @@ _TYPE_PATTERNS: Dict[str, Tuple[str, Tuple[str, ...], Tuple[str, ...]]] = {
     "yes/no": (r"^(yes|no|y|n)$", ("Yes", "No"), ()),
     "text": (r"^([A-Za-z][A-Za-z0-9 .,&'()/-]{0,79})$", ("Sample Trading Co", "Example Enterprises"),
              ("not_ui_chrome",)),
+    # never drafted by the miner itself: Sera Distill's "register anyway" for a field whose values
+    # have no common shape (core/sdis/register.py, loose=True)
+    "any": (r"^(\S.{0,119})$", ("Sample value one", "Example value 2"), ("not_ui_chrome",)),
 }
 
 
@@ -239,7 +242,7 @@ def _checks_for(typ: str, identity: Optional[str], rules: Dict[str, Any]) -> Tup
         checks.append("gstin_checksum")
     if rules.get("date_tail"):
         checks.extend(["all_digits", "ddmmyy_tail_real"])
-    if typ == "text":
+    if typ in ("text", "any"):
         checks.append("not_ui_chrome")
     return tuple(transforms), tuple(dict.fromkeys(checks))
 

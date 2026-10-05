@@ -965,7 +965,10 @@ def test_directed_broadcast_addresses_skips_loopback_and_link_local():
         ]),
     ]
 
-    with patch("ifaddr.get_adapters", return_value=mock_adapters):
+    import sys
+    import types
+    fake_ifaddr = types.SimpleNamespace(get_adapters=lambda: mock_adapters)
+    with patch.dict(sys.modules, {"ifaddr": fake_ifaddr}):
         addrs = _get_directed_broadcast_addresses()
         assert "192.168.1.255" in addrs
         assert "10.0.255.255" in addrs

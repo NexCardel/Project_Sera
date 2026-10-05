@@ -76,6 +76,7 @@
   .label .reg { font-size: 11px; color: var(--green-hi); font-weight: 500; margin-left: 6px; }
   .ex { color: var(--muted); font-family: Consolas, monospace; font-size: 12px; }
   .type { color: var(--muted); font-size: 12px; }
+  .status { color: var(--muted); font-size: 12px; }
   .bar { display: flex; align-items: center; gap: 8px; min-width: 120px; }
   .bar .track { flex: 1; height: 6px; background: #2a2a2e; border-radius: 4px; overflow: hidden; }
   .bar .fill { height: 100%; background: var(--green); border-radius: 4px; }
@@ -186,19 +187,20 @@ on the right.</p>
         <div class="search">⌕  Search label, page link, example…</div>
         <span class="pill">Portal: GST Portal ▾</span>
         <span class="pill">Relevance ≥ 20% ▾</span>
+        <span class="pill">Status: all ▾</span>
         <span class="pill">Suggested: any ▾</span>
         <span class="pill hide-sm">Browser: all ▾</span>
         <span class="pill on">Hide captured ✓</span>
       </div>
       <table>
         <thead><tr>
-          <th style="width:30%">Label</th><th class="hide-sm">Example</th><th>Type</th>
+          <th style="width:30%">Label</th><th class="hide-sm">Example</th><th>Type</th><th>Status</th>
           <th>Relevance</th><th>Sure</th><th class="hide-sm">Found on</th><th>Suggested</th><th></th>
         </tr></thead>
         <tbody>
           <tr class="dp sel">
             <td><span class="arrow">▾</span><span class="label">Tax period <span class="pen">✎</span></span></td>
-            <td class="ex hide-sm">Aug 2026</td><td class="type">period</td>
+            <td class="ex hide-sm">Aug 2026</td><td class="type">period</td><td class="status">variable</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:100%"></div></div><span class="pct">100%</span></div></td>
             <td class="sure">100%</td><td class="hide-sm">3 pages</td>
             <td><span class="chip dataset">◆ Dataset</span></td>
@@ -216,42 +218,42 @@ on the right.</p>
               </div>
             </td>
           </tr>
-          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr3b/summary · <span style="color:var(--text)">38 of 41 clients (93%)</span> · Chrome, Edge</td></tr>
-          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr1/summary · <span style="color:var(--text)">29 of 33 clients (88%)</span> · Chrome</td></tr>
-          <tr class="child"><td colspan="8" style="padding-left:30px">↳ return.gst.gov.in/returns/dashboard · <span style="color:var(--text)">40 of 41 clients (98%)</span> · Chrome, Edge, Firefox</td></tr>
-          <tr class="why"><td colspan="8" style="padding-left:30px">Why Dataset: changes between a client's periods, the same within each period — 91% of 22 clients. &nbsp;Slot holds a period 100% of the time.</td></tr>
+          <tr class="child"><td colspan="9" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr3b/summary · <span style="color:var(--text)">38 of 41 clients (93%)</span> · Chrome, Edge</td></tr>
+          <tr class="child"><td colspan="9" style="padding-left:30px">↳ return.gst.gov.in/returns/{value}/gstr1/summary · <span style="color:var(--text)">29 of 33 clients (88%)</span> · Chrome</td></tr>
+          <tr class="child"><td colspan="9" style="padding-left:30px">↳ return.gst.gov.in/returns/dashboard · <span style="color:var(--text)">40 of 41 clients (98%)</span> · Chrome, Edge, Firefox</td></tr>
+          <tr class="why"><td colspan="9" style="padding-left:30px">Why Dataset: changes between a client's periods, the same within each period — 91% of 22 clients. &nbsp;Slot holds a period 100% of the time.</td></tr>
 
           <tr class="dp">
             <td><span class="arrow">▸</span><span class="label">Tax paid in cash <span class="pen">✎</span></span></td>
-            <td class="ex hide-sm">12,450.00</td><td class="type">amount</td>
+            <td class="ex hide-sm">12,450.00</td><td class="type">amount</td><td class="status">variable</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:78%"></div></div><span class="pct">78%</span></div></td>
             <td class="sure">100%</td><td class="hide-sm">1 page</td>
             <td><span class="chip dataset">◆ Dataset</span></td><td><span class="btn small">Add to ▾</span></td>
           </tr>
           <tr class="dp">
             <td><span class="arrow">▸</span><span class="label">Trade name <span class="pen">✎</span></span></td>
-            <td class="ex hide-sm">Fictional Traders</td><td class="type">text</td>
+            <td class="ex hide-sm">Fictional Traders</td><td class="type">text</td><td class="status">semi-variable</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:71%"></div></div><span class="pct">71%</span></div></td>
             <td class="sure">100%</td><td class="hide-sm">4 pages</td>
             <td><span class="chip profile">● Profile</span></td><td><span class="btn small">Add to ▾</span></td>
           </tr>
           <tr class="dp">
             <td><span class="arrow">▸</span><span class="label">Aggregate turnover <span class="pen">✎</span></span></td>
-            <td class="ex hide-sm">1,20,00,000</td><td class="type">amount</td>
+            <td class="ex hide-sm">1,20,00,000</td><td class="type">amount</td><td class="status">variable</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:44%"></div></div><span class="pct">44%</span></div></td>
             <td class="sure">80%</td><td class="hide-sm">1 page</td>
             <td><span class="chip others">▲ Others</span></td><td><span class="btn small">Add to ▾</span></td>
           </tr>
           <tr class="dp">
             <td><span class="arrow">▸</span><span class="label">Filing date <span class="pen">✎</span></span></td>
-            <td class="ex hide-sm">18/09/2026</td><td class="type">date</td>
+            <td class="ex hide-sm">18/09/2026</td><td class="type">date</td><td class="status">variable</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:39%"></div></div><span class="pct">39%</span></div></td>
             <td class="sure">100%</td><td class="hide-sm">2 pages</td>
             <td><span class="chip dataset">◆ Dataset</span></td><td><span class="btn small">Add to ▾</span></td>
           </tr>
           <tr class="dp">
             <td><span class="arrow">▸</span><span class="label" style="color:var(--muted)">(no label) <span class="pen">✎ name it</span></span></td>
-            <td class="ex hide-sm">REF-0042-X</td><td class="type">code</td>
+            <td class="ex hide-sm">REF-0042-X</td><td class="type">code</td><td class="status">variable_alignment</td>
             <td><div class="bar"><div class="track"><div class="fill" style="width:22%"></div></div><span class="pct">22%</span></div></td>
             <td class="sure low">40%</td><td class="hide-sm">1 page</td>
             <td><span class="chip none" title="Only 2 clients have it on 2+ periods">? not sure</span></td><td><span class="btn small">Add to ▾</span></td>

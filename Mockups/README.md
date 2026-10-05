@@ -13,7 +13,11 @@ Live, clickable version (all 6 tabs in one page): https://claude.ai/artifact/1G4
 - [Settings — General](05-settings-general.md)
 - [Settings — Columns](06-settings-columns.md)
 
-## Two things to decide
+## Decided
 
-- **Theme setting** in Settings → General says "Light Mode (Default)" although the app is dark. The mockup shows "Dark" as the only option — confirm that's right, or say if a light theme is planned.
-- **EMAIL and TAN column types**: in the current Master Column List, both are set to `password` [Secret]. TAN is usually an identifier like PAN, not a secret — check if that was deliberate.
+- **Theme setting:** shows "Dark" as the only option; no light theme planned.
+- **EMAIL and TAN column types:** left as they are (`password` [Secret]) for now.
+
+## Build plan
+
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the work packages, rollout order, rules and checks.
