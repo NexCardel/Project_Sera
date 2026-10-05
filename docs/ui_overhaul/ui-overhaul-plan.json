@@ -1,0 +1,546 @@
+{
+  "about": "UI overhaul work packages (plan: Mockups/IMPLEMENTATION.md). Fixed data: edit by hand only to re-plan. Live status is in ui-overhaul-status.csv, written only by tools/ui_overhaul.py.",
+  "deadline": "2026-10-12T23:00:00+05:30",
+  "models": {
+    "sonnet": {
+      "runner": "claude",
+      "id": "claude-sonnet-5-5"
+    },
+    "opus": {
+      "runner": "claude",
+      "id": "claude-opus-5-5"
+    },
+    "haiku": {
+      "runner": "claude",
+      "id": "claude-haiku-4-5-20251001"
+    },
+    "gemini-flash": {
+      "runner": "antigravity",
+      "id": "gemini-3.8-flash-high"
+    },
+    "gemini-pro": {
+      "runner": "antigravity",
+      "id": "gemini-3.1-pro-high"
+    }
+  },
+  "tiers": {
+    "_note": "Claude only (owner decision 2026-09-29: the Gemini fallback was unnecessary).",
+    "sonnet": [
+      "sonnet"
+    ],
+    "haiku": [
+      "haiku"
+    ],
+    "opus": [
+      "opus"
+    ]
+  },
+  "runners": {
+    "claude": {
+      "enabled": true,
+      "exe": "claude",
+      "prompt": "stdin",
+      "args": [
+        "-p",
+        "--model",
+        "{model}",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "{permission_mode}",
+        "--allowedTools",
+        "{allowed_tools}",
+        "--disallowedTools",
+        "{disallowed_tools}"
+      ],
+      "coauthor": "Claude <noreply@anthropic.com>"
+    },
+    "antigravity": {
+      "enabled": false,
+      "exe": "agy",
+      "prompt": "arg",
+      "args": [
+        "--model",
+        "{model}",
+        "--output-format",
+        "json",
+        "--dangerously-skip-permissions",
+        "-p"
+      ],
+      "coauthor": "Gemini (Antigravity) <noreply@google.com>",
+      "_note": "agy 1.2.12 (Go flags; the prompt is the value of -p, so it goes last). Kept to the restricted mode (accept-edits + sandbox). Disabled until a test shows workers can run the tests in that mode; the unrestricted --dangerously-skip-permissions mode is the owner's decision, not the dispatcher's."
+    }
+  },
+  "cli": {
+    "permission_mode": "acceptEdits",
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "TodoWrite",
+      "Bash(../APP/venv/Scripts/python.exe:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git stash:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(sed -n:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(echo:*)",
+      "Bash(date:*)",
+      "Bash(node:*)"
+    ],
+    "disallowed_tools": [
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout main:*)",
+      "Bash(git switch main:*)",
+      "Bash(git branch -D:*)",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "run_timeout_min": 150,
+    "max_attempts": 2
+  },
+  "wps": [
+    {
+      "wp": "W0-1",
+      "phase": 0,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "S",
+      "deps": [],
+      "what": "Baseline: full test suite, start-up and memory numbers, current snapshots",
+      "focus": "Change no code. Run the full suite with the live T/F/S plugin from CLAUDE.md and record pass/fail counts and the NAMES of pre-existing failures in your hand-off note. Run tests/test_startup_speed.py and tests/test_memory_tuning.py and record their numbers. Run ../APP/venv/Scripts/python.exe tools/ui_snapshots.py Mockups/baseline (renders every screen offscreen on fake data; never touches master.db) and note how many PNGs it wrote and any screen it failed on. Confirm the worktree is on branch ui-overhaul."
+    },
+    {
+      "wp": "W0-2",
+      "phase": 0,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W0-1"
+      ],
+      "what": "Behaviour lock: tests for every 'must still work' item, green on the unchanged code",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 5 (all of R1-R6); and the mockup spec(s) named below. For each R item with no test today, write an offscreen Qt test (QT_QPA_PLATFORM=offscreen, throwaway DB as in tools/ui_snapshots.py, fictional clients) in tests/test_ui_lock_*.py: search keys and Enter, Alt+n and Alt+Ctrl+n per service, masking First N / Last N, clipboard wipe rule, settings save keys (golden dict of every setting written for a fixed sequence of inputs), visibility save, audit filters and CSV export (store a golden export file in tests/data/), sync dialog columns and attributes. They MUST pass on the unchanged code; if the old code shows a bug, record it as a decision and test the current behaviour. Do not change app code. Record R items that cannot be tested without a real desktop as checks (check-add)."
+    },
+    {
+      "wp": "W0-3",
+      "phase": 0,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W0-1"
+      ],
+      "what": "Screen inventory",
+      "focus": "Write Mockups/INVENTORY.md: for every PNG in Mockups/current/ give the file and class, how it is opened, the tests that cover it, and a table of its controls (attribute name, type, what it triggers). Mark every attribute name that a test under tests/ reaches (grep tests for it). This is the basis for phase 7 and for the 'where every control goes' checks. Change no code."
+    },
+    {
+      "wp": "W0-R",
+      "phase": 0,
+      "model": "opus",
+      "kind": "review",
+      "size": "S",
+      "deps": [
+        "W0-2",
+        "W0-3"
+      ],
+      "what": "Review the safety net",
+      "focus": "For each area of W0-2 (search, detail, settings, audit, sync) mutate ONE behaviour in the app code (e.g. change the Alt key map, drop a setting key from the save, remove Enter handling), confirm a lock test goes red, then undo with git checkout of that file only. List areas whose tests did not catch the mutation and fix the tests. Confirm INVENTORY.md covers every PNG in Mockups/current/."
+    },
+    {
+      "wp": "W1-1",
+      "phase": 1,
+      "model": "opus",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W0-R"
+      ],
+      "what": "Token audit and ui/utils/tokens.py",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 3 phase 1, 6; and the mockup spec(s) named below. Read the :root block of Mockups/redesign/index.html, every colour and size in ui/utils/theme.py and docs/Sera_UI.md. Create ui/utils/tokens.py (colours, radii 6/8/12, spacing scale, font sizes, control height, setting-control width) where the mockup wins any conflict; record each conflict as a decision (e.g. danger text vs fill). Make theme.py read from tokens so the generated stylesheet is visually identical until a screen opts in (prove it: compare get_theme_stylesheet() output before and after, whitespace aside, and the tools/ui_snapshots.py output for Manage Clients and Tracker Dump)."
+    },
+    {
+      "wp": "W1-2",
+      "phase": 1,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W1-1"
+      ],
+      "what": "Component kit: ui/components/kit.py",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 6; and the mockup spec(s) named below. Build Chip/ChipBar (with More menu and popup chip), Switch, Card, Pill (tones), Tag, StatusStrip, SelectionBar, LabelledAction (primary/secondary/ghost/danger), UnsavedBar, EmptyState, SettingRow. Promote the existing ToggleSwitch (ui/shell/sidebar.py) and FilterChip (ui/windows/admin_window.py) instead of writing new ones, and migrate their users with identical behaviour (keep attribute names, rule 5). Plain Qt only, tokens only, icons via the existing icon-font path, no timers, NoFocus on bar buttons. Keep import time unchanged (test_startup_speed)."
+    },
+    {
+      "wp": "W1-3",
+      "phase": 1,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W1-2"
+      ],
+      "what": "UI gallery tool and component tests",
+      "focus": "Write tools/ui_gallery.py: renders every kit component in every state (normal, hover, focus, disabled, checked, long text, empty) offscreen to PNGs in Mockups/gallery/ with fictional data. Write tests/test_ui_kit.py: state, signals, keyboard (Tab, Space, Enter), tooltip, elision of long text, SelectionBar height constant and buttons NoFocus, UnsavedBar show and hide."
+    },
+    {
+      "wp": "W1-R",
+      "phase": 1,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W1-3"
+      ],
+      "what": "Review phase 1",
+      "focus": "Review W1-1..W1-3 against Mockups/IMPLEMENTATION.md sections 1 and 6: tokens only (grep for new hex outside tokens.py), no focus stealing, import time and memory vs W0-1, tools/ui_snapshots.py output for Manage Clients and Tracker Dump unchanged, all lock tests green. Fix defects; list them."
+    },
+    {
+      "wp": "W2-1",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W1-R"
+      ],
+      "what": "Client detail: header and Services card first",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 3 phase 2, 5 R2; and the mockup spec(s) named below. Mockups/02-client-detail-panel.md. In ui/windows/client_detail_window.py build the header (name; '#ID . PAN . proprietor' line; service pills; last activity; Edit) and the Services card FIRST, with labelled 'Assist login' / 'Copy login' buttons. The per-row Alt label must be generated from the same number used to register the QShortcut (around lines 540 and 562), never typed separately. 'Off' becomes a dimmed grey button with a reason tooltip. Fix the old clipping of name and PAN at the top of the scroll area. Keep every attribute name tests use."
+    },
+    {
+      "wp": "W2-2",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W2-1"
+      ],
+      "what": "Client detail: Identity, Logins, Notes cards",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 5 R2; and the mockup spec(s) named below. Mockups/02-client-detail-panel.md. Identity card (copy icon directly after the value; empty fields collapse into one 'Not set: ...' line), Logins card (same masking, show/copy, clipboard wipe via clipboard_clear_seconds, logic unchanged), Notes card (taller box, still auto-saves, including when leaving with Esc straight after typing)."
+    },
+    {
+      "wp": "W2-R",
+      "phase": 2,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W2-2"
+      ],
+      "what": "Review phase 2",
+      "focus": "Re-run all R2 lock tests; read the old and new _copy_to_clipboard and confirm the wipe rule is unchanged; confirm Alt labels equal real shortcuts for 1..9 services; render the screen with tools/ui_snapshots.py and compare with Mockups/images/client-detail-panel.png (describe differences). Fix defects; check-add the real-client Alt+number test."
+    },
+    {
+      "wp": "W3-1",
+      "phase": 3,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W2-R"
+      ],
+      "what": "All Clients: header, count, search box, filter chips",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 3 phase 3; and the mockup spec(s) named below. Mockups/01-all-clients-search.md. Header with live count, Refresh, + Add client; search box with the Enter hint inside; filter chips plus More menu for the 9 presets. The QComboBox self.service_filter stays as the hidden source of truth (as Manage Clients does); chips only drive it; same preset ids, same results. Do not change the search box eventFilter."
+    },
+    {
+      "wp": "W3-2",
+      "phase": 3,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W3-1"
+      ],
+      "what": "All Clients: selection bar",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.1; and the mockup spec(s) named below. Mockups/01-all-clients-search.md. Build exactly as specified in 4.1: first read the old handlers _request_edit_client, _request_delete_client, _request_manage_services and archive to learn which work on several rows; fixed-height bar, NoFocus buttons, Delete alone and disabled with no selection, cell group driving the existing formatting engine unchanged. Write the state-matrix tests of 4.1."
+    },
+    {
+      "wp": "W3-3",
+      "phase": 3,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W3-1"
+      ],
+      "what": "All Clients: Columns menu and column widths",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.2; and the mockup spec(s) named below. Mockups/01-all-clients-search.md. Build as specified in 4.2: the menu edits show_in_search through the SAME db method Settings uses (bulk_update_mcl_visibility); a signal so the grid and an open Settings page refresh; find from search_window.py whether any column is forced visible; width function with narrow kinds fixed; Services column as pills with '+N'. Tests of 4.2 at 1366 and 1920 px."
+    },
+    {
+      "wp": "W3-R",
+      "phase": 3,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W3-2",
+        "W3-3"
+      ],
+      "what": "Review phase 3",
+      "focus": "Re-run all R1 lock tests. Write a keyboard-only walk through the screen as a test (Tab order search, chips, grid, bar; arrows; Enter; Ctrl+C/Z/Y). Confirm no layout jump when the selection changes (bar height constant) and no horizontal scrollbar at 1366 px with the default columns. Fix defects; check-add the day-of-real-use check."
+    },
+    {
+      "wp": "W4-1",
+      "phase": 4,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W3-R"
+      ],
+      "what": "Settings: dirty tracking and unsaved bar",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.4; and the mockup spec(s) named below. Mockups/05-settings-general.md. In ui/dialogs/unified_settings_dialog.py implement dirty = snapshot differs from current values, for every control type on every page including lazily built pages (a page registers its controls and snapshot at build time; _on_control_changed is the single entry). UnsavedBar with Discard and Save (footer Save enabled only when dirty); Discard restores controls without closing and without recursive dirty events; close, Esc or X with changes asks Save / Discard / Keep editing. No page layout changes yet. Keep tests/test_unified_settings_lazy.py green. Write the tests of 4.4."
+    },
+    {
+      "wp": "W4-2",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W4-1"
+      ],
+      "what": "Settings: General page",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 3 phase 4; and the mockup spec(s) named below. Mockups/05-settings-general.md. Real Switches, SettingRow with equal-width controls, four cards (Display, Passwords & clipboard, Start-up, Capture engines incl. SDC DOM crosshair, SCA mode, SCA uses per UID and Schema info), plainer wording, live masking preview (fictional sample). Theme combo shows 'Dark' only (decided). Every setting key keeps its name and value format."
+    },
+    {
+      "wp": "W4-3",
+      "phase": 4,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W4-1"
+      ],
+      "what": "Settings: Columns table and Shows-on write-through",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.3; and the mockup spec(s) named below. Mockups/06-settings-columns.md. Implement as specified in 4.3: ONE in-memory model (mcl_columns) that the Columns table and the three visibility pages all read and write, staged until Save, Save through the existing two db calls only. Pages built lazily AFTER a tick must show the ticked value. Type and Role tags read-only; Edit opens the existing column editor; Move and Delete act on the selected row, Delete visually apart with its confirmation. EMAIL and TAN keep type password. Write the tests of 4.3."
+    },
+    {
+      "wp": "W4-R",
+      "phase": 4,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W4-2",
+        "W4-3"
+      ],
+      "what": "Review phase 4",
+      "focus": "Re-run R3 lock tests; run the golden settings diff (same input sequence, old vs new build must write identical settings); verify lazy build; verify Discard and double-toggle leave the dialog clean; check-add the manual close-without-saving and Shows-on checks. Fix defects."
+    },
+    {
+      "wp": "W5-1",
+      "phase": 5,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W4-R"
+      ],
+      "what": "Audit log: data helpers (names, times, elision, counts)",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.5; and the mockup spec(s) named below. Mockups/03-audit-log.md. Implement and unit-test only the helpers in 4.5: service id to name map (removed -> 'Service #n (removed)', several -> joined and elided), time labels with a fixed clock across midnight, month and year, middle-elision, per-workstation counts, action group to pill tone for all 18 action types with a grey fallback. No layout change."
+    },
+    {
+      "wp": "W5-2",
+      "phase": 5,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W5-1"
+      ],
+      "what": "Audit log: layout",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 3 phase 5; and the mockup spec(s) named below. Mockups/03-audit-log.md. One filter row (search plus Action, Staff and Date chips; the Date popup holds presets and custom From/To), aggregator status pill (text still reflects the real state), workstation column with counts, table with readable values, details panel on the right with Copy details and 'Show only this client'. Chips drive the same _apply_client_side_filter and date presets as the old combos. Export CSV: existing columns untouched, one 'Service name' column added at the end."
+    },
+    {
+      "wp": "W5-R",
+      "phase": 5,
+      "model": "sonnet",
+      "kind": "review",
+      "size": "S",
+      "deps": [
+        "W5-2"
+      ],
+      "what": "Review phase 5",
+      "focus": "Re-run R4 lock tests; compare the new export with the golden old export on the same data (only the added last column may differ); every old filter result equals the new chip result on a fixture; check-add the real-history check. Fix defects."
+    },
+    {
+      "wp": "W6-1",
+      "phase": 6,
+      "model": "opus",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W5-R"
+      ],
+      "what": "Sera Sync: feature map",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.6; and the mockup spec(s) named below. Mockups/04-sera-sync.md. ui/dialogs/sera_sync_dialog.py is about 1,700 lines and does much more than the mockup shows (office members, shadow mode start/reset/go-live, conflicts, add/remove workstation, hand-over of admin, recovery kit, rejoin, manual peers by IP, network warning, context menu, admin PIN). List EVERY control (button, menu action, context-menu item) with its handler and who may see it, give each a place in the new layout, and add the result as an addendum to Mockups/04-sera-sync.md. Nothing is dropped. List the widget attributes the tests/test_sync_*_ui.py files use. Change no app code."
+    },
+    {
+      "wp": "W6-2",
+      "phase": 6,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W6-1"
+      ],
+      "what": "Sera Sync: status strip, switch, buttons",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.6; and the mockup spec(s) named below. Mockups/04-sera-sync.md. Status strip (Sync on pill, PCs online from the same source as before, this PC's name, version and revision), the 'Don't accept incoming syncs' Switch with 'Inv-Frames' underneath (same setting, same side effects, same tooltip), Sync selected (N) primary and disabled at 0, Sync to all secondary with its existing confirmation, Refresh becomes 'Scan again'. Keep attribute names; the existing test_sync_*_ui.py must pass unchanged."
+    },
+    {
+      "wp": "W6-3",
+      "phase": 6,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W6-2"
+      ],
+      "what": "Sera Sync: device cards, activity card, remaining features",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2, 5 and 4.6; and the mockup spec(s) named below. Mockups/04-sera-sync.md and its W6-1 addendum. Device cards with all eight facts, elision with tooltips, tick selection feeding the same selection logic, the old context menu on the card, ahead / behind / in step / unknown label exactly as in 4.6, empty state; activity card with Clear; place every remaining feature as mapped in W6-1; admin-only controls stay admin-only and keep their PIN confirmation."
+    },
+    {
+      "wp": "W6-R",
+      "phase": 6,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W6-3"
+      ],
+      "what": "Review phase 6",
+      "focus": "Re-run R5 lock tests and every tests/test_sync_*_ui.py unchanged; verify a non-admin sees no admin controls; verify every control in the W6-1 map exists and is wired; check-add the two-PC check. Fix defects."
+    },
+    {
+      "wp": "W7-1",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W6-R"
+      ],
+      "what": "Other screens 1: security dialogs",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1, 7 and Mockups/INVENTORY.md. Restyle with the section-7 recipes: change master password, office recovery, rejoin office, first run, force update, startup loading, shadow start. They handle passwords and keys: masking, focus and Enter/Esc behaviour unchanged, no value ever shown or logged. If a layout would change materially, add a small mockup to Mockups/redesign/index.html, record a question with the ask command and carry on with the default."
+    },
+    {
+      "wp": "W7-2",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W7-1"
+      ],
+      "what": "Other screens 2: data dialogs",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1, 7 and Mockups/INVENTORY.md. Restyle with the section-7 recipes: MCL manager, MCL column edit, service manager, service edit, CSV import. Keep attribute names and behaviour."
+    },
+    {
+      "wp": "W7-3",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W4-R"
+      ],
+      "what": "Other screens 3: remaining Settings pages",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1, 7 and Mockups/INVENTORY.md. Restyle with the recipes the remaining Settings pages: actions, SCC, services, tracker, export, backup, purge, QC, and the three visibility pages (kept). Use SettingRow, Switch and Card; purge and backup keep their confirmations; admin-only pages stay admin-only. Check whether ui/dialogs/settings_dialog.py (legacy) is still used anywhere; if not, only note it."
+    },
+    {
+      "wp": "W7-4",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W7-2"
+      ],
+      "what": "Other screens 4: SGT lab, SDIS, LTT rules, SCA diagnostics, update dialog",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1, 7 and Mockups/INVENTORY.md. Restyle with the section-7 recipes: ui/dialogs/sgt_lab_dialog.py, sdis_dialog.py, sdis_containers_dialog.py, ui/windows/ltt_rules_dialog.py, sca_diagnostics_dialog.py, update_dialog.py. Their own tests (test_sdis_dialog, test_sgt_i_lab...) stay green."
+    },
+    {
+      "wp": "W7-5",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W7-4"
+      ],
+      "what": "Other screens 5: shell consistency",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 and 7. Sidebar active item and icons from tokens; Manage Clients and Tracker Dump moved onto kit components where they duplicate them (visual output identical or closer to the mockups); toast colours from tokens."
+    },
+    {
+      "wp": "W7-R",
+      "phase": 7,
+      "model": "sonnet",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "W7-5",
+        "W7-3"
+      ],
+      "what": "Review phase 7",
+      "focus": "grep for hard-coded colours outside ui/utils/tokens.py and list or fix them; render everything with tools/ui_snapshots.py and compare with the section-7 recipes; confirm every screen in Mockups/INVENTORY.md is restyled or consciously skipped (recorded); run the full suite and compare with the W0-1 baseline."
+    },
+    {
+      "wp": "W8-1",
+      "phase": 8,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W7-R"
+      ],
+      "what": "Docs: rewrite Sera_UI.md",
+      "focus": "Rewrite docs/Sera_UI.md to describe the new system as current: tokens, the kit with usage notes, the five older primitives, the layout of each redesigned screen. Update Mockups/README.md status to built. Do not edit the mockup specs otherwise."
+    },
+    {
+      "wp": "W8-2",
+      "phase": 8,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "S",
+      "deps": [
+        "W8-1"
+      ],
+      "what": "Built screenshots",
+      "focus": "Run ../APP/venv/Scripts/python.exe tools/ui_snapshots.py Mockups/built (fake data only) and list which screens rendered and which failed. Do not change app code."
+    },
+    {
+      "wp": "W8-R",
+      "phase": 8,
+      "model": "opus",
+      "kind": "review",
+      "size": "L",
+      "deps": [
+        "W8-2"
+      ],
+      "what": "Final review and merge-readiness report",
+      "focus": "Full suite vs the W0-1 baseline; start-up time and memory vs baseline; tick every row of every 'where every current control goes' table in Mockups/*.md against the code; list every open check in the checks file; list files changed and anything risky. Write the merge-readiness note in your hand-off note. Do NOT merge."
+    }
+  ]
+}

@@ -117,3 +117,5 @@ vsdc_scope.json
 ltt_feed.csv
 ltt_tracker.xlsx
 ltt_rules.json
+.ui-overhaul.lock
+logs/ui-overhaul/
