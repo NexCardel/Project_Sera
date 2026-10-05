@@ -479,4 +479,4 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 Each WP replaces its line with a note of at most 12 lines: `- **WPx-y** (date, model): what was built,
 files, tests, decisions taken, what the next WP must know.`
 
-*(none yet)*
+- **W0-1** (2026-10-06, claude-haiku-4-5-20251001): Baseline established on cloud Linux session. No code changes. test_startup_speed.py: 13✓; test_memory_tuning.py: 6✓; full suite: ~2636 tests (pytest collection), running; ui_snapshots.py Mockups/baseline: 31 PNG screens rendered offscreen, no errors. Branch ui-overhaul confirmed. Cloud environment can render Qt offscreen (QT_QPA_PLATFORM=offscreen works); pytest cleanup has temp-dir permission issues but tests pass. Next WP gets full test baseline numbers.
