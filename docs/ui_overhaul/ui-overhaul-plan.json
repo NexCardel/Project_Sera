@@ -128,7 +128,7 @@
       "size": "S",
       "deps": [],
       "what": "Baseline: full test suite, start-up and memory numbers, current snapshots",
-      "focus": "Change no code. Run the full suite with the live T/F/S plugin from CLAUDE.md and record pass/fail counts and the NAMES of pre-existing failures in your hand-off note. Run tests/test_startup_speed.py and tests/test_memory_tuning.py and record their numbers. Run ../APP/venv/Scripts/python.exe tools/ui_snapshots.py Mockups/baseline (renders every screen offscreen on fake data; never touches master.db) and note how many PNGs it wrote and any screen it failed on. Confirm the worktree is on branch ui-overhaul."
+      "focus": "Change no code. Run the full test suite and record pass/fail counts and the NAMES of failures in your hand-off note (locally: the live T/F/S plugin from CLAUDE.md; in a cloud Linux session: QT_QPA_PLATFORM=offscreen python -m pytest -q tests with a per-test timeout, and say which test modules could not even be collected and why - Windows-only imports are expected). Run tests/test_startup_speed.py and tests/test_memory_tuning.py and record their numbers or why they could not run. Run tools/ui_snapshots.py Mockups/baseline (renders every screen offscreen on fake data; never touches master.db; use the Python your prompt names) and note how many PNGs it wrote and any screen it failed on. Confirm you are on branch ui-overhaul. In your hand-off note state clearly whether this environment can run the offscreen UI tests, so the owner knows if cloud sessions are viable for later packages."
     },
     {
       "wp": "W0-2",
