@@ -7,7 +7,7 @@ Split out of database.py; methods are unchanged. Mixed into SeraDatabase.
 import datetime
 import json
 import time
-from core.dataset_key import compute_dataset_key as _compute_dataset_key
+from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_dataset_key
 
 from sera_db.common import SKELETON_NAME_REGEX
 
@@ -820,7 +820,7 @@ class TrackerDumpMixin:
                             period_label, arn_number, capture_method, status,
                             raw_payload_json, captured_by, created_at, dataset_key, notes
                      FROM tracker_dump
-                     WHERE 1=1"""
+                     WHERE """ + NOT_CARRIER_SQL     # SDIS carrier rows are not datasets (S.4)
             params = []
             if client_id:
                 sql += " AND client_id = ?"

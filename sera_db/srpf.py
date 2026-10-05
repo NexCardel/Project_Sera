@@ -39,8 +39,82 @@ def _latest_payload_status(hist: list) -> Optional[str]:
     inner = obj.get("raw_payload") if isinstance(obj.get("raw_payload"), dict) else {}
     return obj.get("status") or inner.get("status") or None
 
+from core.dataset_key import SDIS_INFO_METHOD
+
+
+def _json_obj(raw) -> dict:
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) and raw else raw
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def sdis_info_of(payload: dict):
+    """A tracker row's SDIS key (blueprint S.4): {portal, portal_profile, others, at}, or None."""
+    raw = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
+    info = raw.get("sdis") or payload.get("sdis")
+    return info if isinstance(info, dict) else None
+
+
+def fold_sdis(aggregates: dict, profiles: dict, info) -> None:
+    """Folds one row's SDIS key into the container's two JSON columns, in place:
+    raw_aggregates {portal: {field: {value, updated_at, history: [{value, at}]}}} - the value with
+    the latest `at` wins and every change is kept (D20); a value carried again unchanged is no
+    change - and portal_profiles {portal: {field: value}}, latching (a longer value that contains
+    the held one replaces it). The same rows give the same columns in any rebuild."""
+    if not isinstance(info, dict) or not info.get("portal"):
+        return
+    portal, at = str(info["portal"]), str(info.get("at") or "")
+    for fld, value in (info.get("others") or {}).items():
+        if value in (None, ""):
+            continue
+        value = str(value)
+        held = (aggregates.get(portal) or {}).get(fld) or {}
+        hist = [h for h in held.get("history") or () if isinstance(h, dict)]
+        if not any(h.get("value") == value and h.get("at") == at for h in hist):
+            hist.append({"value": value, "at": at})
+        hist.sort(key=lambda h: str(h.get("at") or ""))
+        changes = []
+        for h in hist:
+            if not changes or changes[-1]["value"] != h["value"]:
+                changes.append(h)
+        aggregates.setdefault(portal, {})[fld] = {"value": changes[-1]["value"], "updated_at": changes[-1]["at"],
+                                                  "history": changes}
+    for fld, value in (info.get("portal_profile") or {}).items():
+        if value in (None, ""):
+            continue
+        value = str(value)
+        pp = profiles.setdefault(portal, {})
+        held = pp.get(fld)
+        if not held or (len(value) > len(held) and held in value):
+            pp[fld] = value
+
+
+def sdis_value_rows(aggregates: dict, profiles: dict, labels: dict) -> list:
+    """[(portal, [(label, shown value)])] for the client detail window and the container view:
+    Profile builder values first, then Others values (with how many values were seen)."""
+    out = []
+    for portal in sorted(set(aggregates or {}) | set(profiles or {})):
+        pairs = [(labels.get(f) or f, str(v)) for f, v in sorted((profiles.get(portal) or {}).items()) if v]
+        for f, slot in sorted((aggregates.get(portal) or {}).items()):
+            if not isinstance(slot, dict) or slot.get("value") in (None, ""):
+                continue
+            n = len(slot.get("history") or ())
+            pairs.append((labels.get(f) or f, str(slot["value"]) + (f"  ({n} values seen)" if n > 1 else "")))
+        if pairs:
+            out.append((portal, pairs))
+    return out
+
 
 class SrpfMixin:
+
+    def sdis_field_labels(self) -> dict:
+        """{sdis_mcl field name: label}; {} when the table cannot be read."""
+        try:
+            return {r["name"]: r.get("label") or r["name"] for r in self.list_sdis_mcl()}
+        except Exception:
+            return {}
 
     # ---------------- Tracker Dump Subsystem (VSDC & Extension) ----------------
 
@@ -133,6 +207,9 @@ class SrpfMixin:
         raw_for_profile = dump_row.get("raw_payload_json")
         new_profile = (_profile_of_json(raw_for_profile) if isinstance(raw_for_profile, str) and raw_for_profile
                        else extract_profile_from_payload(payload_obj))
+        sdis = sdis_info_of(payload_obj) if isinstance(payload_obj, dict) else None
+        # An SDIS carrier row only carries Others / Profile builder values: never a filing, never a capture.
+        carrier = dump_row.get("capture_method") == SDIS_INFO_METHOD
 
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
@@ -152,15 +229,19 @@ class SrpfMixin:
             except Exception:
                 hist = []
 
-            tot_caps = (existing[14] or 0) + 1
+            tot_caps = (existing[14] or 0) + (0 if carrier else 1)
             existing_ts = str(existing[15] or "")
             final_last_updated = max(existing_ts, dump_ts) if existing_ts else dump_ts
+            profiles, aggregates = _json_obj(existing[11]), _json_obj(existing[13])
+            fold_sdis(aggregates, profiles, sdis)
 
             arn_str = dump_row.get("arn_number")
             status_val = dump_row.get("status") or ""
             payload_str = dump_row.get("raw_payload_json") or ""
 
-            if arn_str:
+            if carrier:
+                pass
+            elif arn_str:
                 matched_idx = None
                 for idx, h in enumerate(hist):
                     if h.get("arn") == arn_str:
@@ -199,16 +280,21 @@ class SrpfMixin:
 
             r_conn.execute("""
                 UPDATE client_raw_containers
-                SET client_id = ?, company_name = ?, proprietor_name = ?, pan = ?, gstin = ?, tan = ?, phone = ?, email = ?, dob = ?, user_id = ?, filing_history = ?, total_captures = ?, last_updated = ?
+                SET client_id = ?, company_name = ?, proprietor_name = ?, pan = ?, gstin = ?, tan = ?, phone = ?, email = ?, dob = ?, user_id = ?, portal_profiles = ?, filing_history = ?, raw_aggregates = ?, total_captures = ?, last_updated = ?
                 WHERE identity_key = ?
-            """, (cid, comp, prop, pan_val, gst_val, tan_val, ph_val, em_val, dob_val, uid_val, json.dumps(hist), tot_caps, final_last_updated, clean_key))
+            """, (cid, comp, prop, pan_val, gst_val, tan_val, ph_val, em_val, dob_val, uid_val, json.dumps(profiles),
+                  json.dumps(hist), json.dumps(aggregates), tot_caps, final_last_updated, clean_key))
             self._write_container_light(r_conn, clean_key, hist, tot_caps, final_last_updated)
         else:
             hist = []
+            profiles, aggregates = {}, {}
+            fold_sdis(aggregates, profiles, sdis)
             arn_str = dump_row.get("arn_number")
             status_val = dump_row.get("status") or ""
             payload_str = dump_row.get("raw_payload_json") or ""
-            if arn_str:
+            if carrier:
+                pass
+            elif arn_str:
                 hist.append({
                     "portal": dump_row.get("portal"),
                     "arn": arn_str,
@@ -237,9 +323,10 @@ class SrpfMixin:
                 new_profile.get("company_name", ""), new_profile.get("proprietor_name", ""),
                 new_profile.get("pan", ""), new_profile.get("gstin", ""), new_profile.get("tan", ""),
                 new_profile.get("phone", ""), new_profile.get("email", ""), new_profile.get("dob", ""),
-                new_profile.get("user_id", ""), "{}", json.dumps(hist), "{}", 1, dump_ts
+                new_profile.get("user_id", ""), json.dumps(profiles), json.dumps(hist), json.dumps(aggregates),
+                0 if carrier else 1, dump_ts
             ))
-            self._write_container_light(r_conn, clean_key, hist, 1, dump_ts)
+            self._write_container_light(r_conn, clean_key, hist, 0 if carrier else 1, dump_ts)
 
     def get_client_raw_container(self, client_id: int = None, identity_key: str = None) -> Optional[dict]:
         """SRPF Stage 1: Retrieves unified raw container by client_id or identity_key (PAN/GSTIN/TAN) from rawPayload.db."""
@@ -498,6 +585,8 @@ class SrpfMixin:
                 "capture_method": capture_method,
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
+                "portal_profiles": _json_obj(r[11]),
+                "raw_aggregates": _json_obj(r[13]),
                 "last_updated": r[15],
                 "notes": r[16] if len(r) > 16 else "",
                 "payload_status": payload_status,

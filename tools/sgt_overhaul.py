@@ -132,6 +132,8 @@ class Tracker:
                        for wp in self.order}
         for wp, row in self.status.items():     # plan columns, so the live sheet explains itself
             row["Phase"], row["What"] = str(self.wps[wp]["phase"]), self.wps[wp]["what"]
+            if row["Status"] == "Not started" and (row.get("Attempts") or "0") == "0":
+                row["Model"] = self.planned_models(wp)   # follows a re-plan until the WP first runs
         for p, fields in ((self.p_runs, RUN_FIELDS), (self.p_decisions, DECISION_FIELDS),
                           (self.p_checks, CHECK_FIELDS), (self.p_questions, QUESTION_FIELDS)):
             if not p.exists():                  # the viewer's queries need every file, even empty
@@ -141,9 +143,13 @@ class Tracker:
 
     # plan
     def model_id(self, wp: str) -> str:
-        """The model a WP last ran on, else its tier's last-resort (Claude) model."""
+        """The model a WP last ran on, else the models its tier will try, in order."""
         used = getattr(self, "status", {}).get(wp, {}).get("Model")
-        return used or self.plan["models"][self.plan["tiers"][self.wps[wp]["model"]][-1]]["id"]
+        return used or self.planned_models(wp)
+
+    def planned_models(self, wp: str) -> str:
+        """The tier's models in the order the dispatcher tries them: "gemini-3.8-flash-high -> claude-sonnet-5-5"."""
+        return " -> ".join(self.plan["models"][k]["id"] for k in self.plan["tiers"][self.wps[wp]["model"]])
 
     def deadline(self) -> dt.datetime:
         return dt.datetime.fromisoformat(self.plan["deadline"])
@@ -304,6 +310,7 @@ class Tracker:
         out = self.docs / f"{PREFIX}-agents.xlsx"
         if out.with_name("~$" + out.name).exists():
             raise Refused(f"{out.name} is open in Excel - close it and run again")
+        self.save()                             # the Status sheet lists every WP of the current plan
         wb = Workbook()
         ws = wb.active
         ws.title = "How to use"
@@ -312,13 +319,15 @@ class Tracker:
                      "file opens and every minute (or Data -> Refresh All). Nothing typed here is saved back.",
                      "Answer a worker's question in the pop-up window, or:",
                      "  ..\\APP\\venv\\Scripts\\python.exe " + CLI.replace("/", "\\") + " answer <Q> <choice>",
+                     "Model: a WP not started yet shows the models it will try, in order (Plan sheet: always);",
+                     "once it runs, Status shows the model that actually ran it.",
                      f"Deadline: {self.plan['deadline']}"):
             ws.append([line])
         ws.column_dimensions["A"].width = 100
         plan = wb.create_sheet("Plan")
         plan.append(["WP", "Phase", "What", "Model", "Kind", "Size", "Deps", "Focus"])
         for w in self.plan["wps"]:
-            plan.append([w["wp"], w["phase"], w["what"], self.model_id(w["wp"]), w["kind"], w["size"],
+            plan.append([w["wp"], w["phase"], w["what"], self.planned_models(w["wp"]), w["kind"], w["size"],
                          ", ".join(w["deps"]), w["focus"]])
         plan.freeze_panes = "A2"
         links = [("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
@@ -437,9 +446,15 @@ def runner_exe(t: Tracker, runner: str) -> Optional[List[str]]:
 def pick_model(t: Tracker, wp: str, held: Dict[str, dt.datetime]) -> Optional[str]:
     """The model key to run `wp` with now, or None if every allowed runner is unavailable."""
     w = t.wp(wp)
-    for key in t.plan["tiers"][w["model"]]:
+    tier = t.plan["tiers"][w["model"]]
+    attempts = int(getattr(t, "status", {}).get(wp, {}).get("Attempts") or 0)
+    claude_later = any(t.plan["models"][k]["runner"] == "claude" for k in tier)
+    for key in tier:
         runner = t.plan["models"][key]["runner"]
         if w.get("claude_only") and runner != "claude":
+            continue
+        # A retry goes to Claude once the other runner has had its tries (plan cli.non_claude_attempts).
+        if runner != "claude" and claude_later and attempts >= t.plan["cli"].get("non_claude_attempts", 99):
             continue
         if held.get(runner) and held[runner] > now():
             continue

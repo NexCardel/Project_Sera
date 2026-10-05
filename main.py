@@ -5,6 +5,10 @@ App entry point for Project Sera.
 """
 
 import sys
+# SDIS "Find datapoints" (Part O): the app's own program started as a mining child, before Qt or the database.
+if '--sdis-mine' in sys.argv:
+    from core.sdis.mine_process import run
+    sys.exit(run(sys.argv))
 import os
 import socket
 import json
@@ -480,6 +484,9 @@ class SeraApp:
                         target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
                         name="shadow-mirror-catch-up", daemon=True).start()
                 self.db.set_seal_timing_callback(_seal_timing_cb)
+                # SDIS Part P: finished capture files go to the admin PC after a sync round.
+                from core.sdis.transfer import Pusher
+                self._sdis_pusher = Pusher(self.sync_engine)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -637,7 +644,12 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
-            from core.vsdc import VSDCWorker
+            from core.vsdc import VSDCWorker, vsdc_scope
+            # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
+            vsdc_scope.set_services_source(self.db.get_services)
+            # SDIS Part Q / S.3: the synced sdis_fields table -> sdis_fields.json, SGT's third spec
+            # file; the sdis_config row -> sdis_containers.json.
+            threading.Thread(target=self._write_sdis_files, name="sdis-fields", daemon=True).start()
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
@@ -1668,7 +1680,7 @@ class SeraApp:
             # pill is shown, so it applies even when no engine is on.
             from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
                                                 read_scc_detect_mode, read_sgt_i_mode, read_sgt_mode,
-                                                read_sgt_record_pages)
+                                                read_sdis_record, read_sgt_record_pages)
             # Once per office: SGT live becomes the capture engine, the other three go off.
             apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
@@ -1682,7 +1694,8 @@ class SeraApp:
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
                                                 sgt_i=read_sgt_i_mode(self.db.get_setting) == "on",
-                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on")
+                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
+                                                sdis_record=read_sdis_record(self.db.get_setting))
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "
@@ -2116,7 +2129,32 @@ class SeraApp:
     def _on_sync_received(self):
         """Called from SyncPeerService background TCP thread when an incoming
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
+        try:
+            from core.vsdc import vsdc_scope
+            vsdc_scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
+        except Exception:
+            pass
         self.sync_bridge.sync_received_signal.emit()
+
+    def _write_sdis_fields(self):
+        """SDIS Part Q: rewrite <Sera data>/sdis_fields.json from the synced table (SGT reloads it)."""
+        try:
+            from core.sdis.register import refresh
+            refresh(self.db)
+        except Exception as e:
+            print(f"[SDIS] sdis_fields.json not written: {type(e).__name__}")
+
+    def _write_sdis_containers(self):
+        """SDIS Part S.3: rewrite <Sera data>/sdis_containers.json from the synced sdis_config row."""
+        try:
+            from core.sdis.config import refresh
+            refresh(self.db)
+        except Exception as e:
+            print(f"[SDIS] sdis_containers.json not written: {type(e).__name__}")
+
+    def _write_sdis_files(self):
+        self._write_sdis_fields()
+        self._write_sdis_containers()
 
     def _on_live_sync_received(self, sender_username: str = "", sender_host: str = ""):
         """Called from SyncPeerService background thread. Under v3 (P0-4), live in-place replacement
@@ -2180,6 +2218,8 @@ class SeraApp:
                 "This PC was away from the office for a long time. Sera Sync has downloaded a fresh "
                 "copy of the office data; restart Sera to finish (your own changes are kept).", "warning")
             return
+        if kind == "synced" and getattr(self, "_sdis_pusher", None) is not None:
+            self._sdis_pusher.on_synced()   # SDIS Part P: at most every 15 min, own thread
         if kind == "synced":
             # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
             # for the UI to reload, and refreshing anyway would falsely tell the user a live
@@ -2188,6 +2228,10 @@ class SeraApp:
             if db is not None and db.get_sync_mode() != "live":
                 return
             self._queue_synced_tables(info.get("tables") or ())
+            if "sdis_fields" in (info.get("tables") or ()):
+                self._write_sdis_fields()   # SDIS Part Q: another PC registered/renamed/retired a field
+            if "sdis_config" in (info.get("tables") or ()):
+                self._write_sdis_containers()   # SDIS Part S.3: another PC edited the containers
         elif kind == "clock_ahead":
             name = info.get("name") or info.get("device_id") or "Peer"
             ahead_ms = info.get("ahead_ms", 0)

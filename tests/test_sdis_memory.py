@@ -142,3 +142,108 @@ def test_client_order_changes_no_verdict():
     # Every label of the fictional page is template for both clients.
     assert fwd[("confirmed", "same for all clients")] > 0
     assert fwd[("confirmed", "differs between clients")] > 0
+
+
+def test_link_map_browser_attribute_from_first_read():
+    """LinkMap gets attribute browser from the first read."""
+    a = _load("A")
+    rec_chrome = dict(a, browser="chrome")
+    m = link_map.LinkMap("client1", "portal.gov.in/page")
+    assert m.browser == ""
+    m.add(rec_chrome, "1")
+    assert m.browser == "chrome"
+
+    # Subsequent reads do not change the initial browser attribute
+    rec_edge = dict(a, browser="msedge")
+    m.add(rec_edge, "2")
+    assert m.browser == "chrome"
+
+
+def test_page_memory_browser_attribute():
+    """PageMemory gets attribute browser and parses it correctly."""
+    pm = memory.PageMemory("portal.gov.in/page", 2, browser="chrome")
+    assert pm.browser == "chrome"
+    assert pm.link == "portal.gov.in/page"
+
+    pm2 = memory.PageMemory("portal.gov.in/page [firefox]", 2)
+    assert pm2.browser == "firefox"
+    assert pm2.link == "portal.gov.in/page"
+
+    pm3 = memory.PageMemory("portal.gov.in/page [firefox] [screen 2]", 2)
+    assert pm3.browser == "firefox"
+    assert pm3.screen == 2
+    assert pm3.link == "portal.gov.in/page"
+
+
+def test_two_fixture_reads_different_browsers_produce_two_memories_both_empty_one():
+    """Two fixture reads of one link marked chrome and firefox -> two memories; both '' -> one."""
+    a = _load("A")
+    b = _load("B")
+
+    # 1. Both marked '' -> one memory
+    rec_a_empty = dict(a, browser="")
+    rec_b_empty = dict(b, browser="")
+    sources_empty = [
+        ("20261001_100000", "client A", "portal.gov.in/page", rec_a_empty),
+        ("20261001_100001", "client B", "portal.gov.in/page", rec_b_empty),
+    ]
+    cm_empty = memory.client_maps(sources=sources_empty)
+    assert len(cm_empty) == 1
+    assert "portal.gov.in/page" in cm_empty
+    assert len(cm_empty["portal.gov.in/page"]) == 2
+
+    # Verify PageMemory built from cm_empty has browser ''
+    order_empty = ["client A", "client B"]
+    mem_empty = memory.build("portal.gov.in/page", cm_empty["portal.gov.in/page"], order_empty, 2)
+    assert mem_empty.browser == ""
+
+    # 2. Marked chrome and firefox -> two memories. Identity is compared per browser too, so each
+    # browser shows both clients (A in Chrome alone and B in Firefox alone share no page: undecided).
+    sources_diff = [
+        ("20261001_100000", "client A", "portal.gov.in/page", dict(a, browser="chrome")),
+        ("20261001_100001", "client B", "portal.gov.in/page", dict(b, browser="chrome")),
+        ("20261001_100002", "client C", "portal.gov.in/page", dict(a, browser="firefox")),
+        ("20261001_100003", "client D", "portal.gov.in/page", dict(b, browser="firefox")),
+    ]
+    cm_diff = memory.client_maps(sources=sources_diff)
+    assert len(cm_diff) == 2
+    assert "portal.gov.in/page [chrome]" in cm_diff
+    assert "portal.gov.in/page [firefox]" in cm_diff
+    assert len(cm_diff["portal.gov.in/page [chrome]"]) == 2
+    assert len(cm_diff["portal.gov.in/page [firefox]"]) == 2
+
+    # Verify PageMemory built from each has respective browser attribute
+    cm_c, cm_f = cm_diff["portal.gov.in/page [chrome]"], cm_diff["portal.gov.in/page [firefox]"]
+    mem_chrome = memory.build("portal.gov.in/page [chrome]", cm_c, sorted(cm_c), 2)
+    assert mem_chrome.browser == "chrome"
+    mem_firefox = memory.build("portal.gov.in/page [firefox]", cm_f, sorted(cm_f), 2)
+    assert mem_firefox.browser == "firefox"
+    lone = memory.client_maps(sources=[sources_diff[0], sources_diff[3]])
+    assert lone == {}
+
+
+def test_one_client_in_two_browsers_keeps_both_maps():
+    """A session that reads one link in Chrome, then Firefox: two maps (the first is not
+    overwritten), and that client is one vote in EACH browser's memory."""
+    a = _load("A")
+    b = _load("B")
+    sources = [
+        ("20261001_100000", "client A", "portal.gov.in/page", dict(a, browser="chrome")),
+        ("20261001_100001", "client A", "portal.gov.in/page", dict(a, browser="firefox")),
+        ("20261001_100002", "client B", "portal.gov.in/page", dict(b, browser="chrome")),
+    ]
+    maps = link_map.build_maps(sources=sources)
+    assert set(maps) == {("client A", "portal.gov.in/page [chrome]"), ("client A", "portal.gov.in/page [firefox]"),
+                         ("client B", "portal.gov.in/page [chrome]")}
+    assert all(m.link == "portal.gov.in/page" for m in maps.values())
+    cm = memory.client_maps(sources=sources)
+    assert len(cm["portal.gov.in/page [chrome]"]) == 2
+    assert len(cm["portal.gov.in/page [firefox]"]) == 1
+    assert set(cm["portal.gov.in/page [firefox]"]) < set(cm["portal.gov.in/page [chrome]"])
+
+
+def test_key_probe_browser_name_of_hwnd():
+    """Verify key_probe.browser_name_of_hwnd returns empty string on invalid/0 hwnd."""
+    import key_probe
+    assert key_probe.browser_name_of_hwnd(0) == ""
+

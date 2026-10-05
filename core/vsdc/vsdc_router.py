@@ -19,7 +19,7 @@ from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
-    sanitize_page_url,
+    sanitize_page_url, registered_domain,
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
@@ -371,7 +371,8 @@ class VSDCRouter:
         return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
-                              sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False) -> None:
+                              sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False,
+                              sdis_record: bool = True) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -399,6 +400,9 @@ class VSDCRouter:
         self._sgt_record = bool(sgt_record)
         if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
             self._sgt._recorder.enabled = self._sgt_record
+        self._sdis_record = bool(sdis_record)
+        if self._sgt is not None and getattr(self._sgt, "_sdis", None) is not None:
+            self._sgt._sdis.enabled = self._sdis_record
         self._sgt_i_on = bool(sgt_i)
         self._apply_sgt_i()
         self._scc_on = bool(scc_detect)
@@ -468,14 +472,17 @@ class VSDCRouter:
         """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
         hands them out one per tick), never through this tick's result."""
         if self._sgt is None:
+            from core.sdis.recorder import SdisRecorder
             from core.sgt.sgt_corpus import PageRecorder
             from core.sgt.sgt_health import SpecStats
             from core.sgt.sgt_shadow import SgtShadow, shadow_dir
             folder = shadow_dir()
-            # recorder: pages for replay; stats: portal-change watch; state: crash recovery;
-            # alert: a live submission whose client never became known (phone, like VSDC247)
+            # recorder: pages for replay; sdis: raw pages for Sera Distill; stats: portal-change
+            # watch; state: crash recovery; alert: a live submission whose client never became
+            # known (phone, like VSDC247)
             self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt,
                                   recorder=PageRecorder(enabled=getattr(self, "_sgt_record", True)),
+                                  sdis=SdisRecorder(enabled=getattr(self, "_sdis_record", True)),
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
@@ -521,6 +528,8 @@ class VSDCRouter:
         self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
         print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
               f"Add it to vsdc_scope.json if this is the real portal.")
+        # SDIS Part T: the domain a 'watch it too' offer (W4-5) would add as an extra_domains entry.
+        print(f"[VSDC Scope] tripwire registered domain: {registered_domain(host) or host} (portal {cue})")
         self.notify_activity("prompt", "Portal address looks new - VSDC paused",
                              f"{host} shows the {cue} logo but is not on the allowed list")
 

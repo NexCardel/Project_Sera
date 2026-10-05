@@ -194,9 +194,12 @@ def read_keys(hwnd: int, raw_view: bool, timeout_sec: float = READ_TIMEOUT) -> L
         condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, uia_nodes.CT_DOCUMENT)
         found = root.FindAllBuildCache(4, condition, request)       # TreeScope_Descendants
         docs = []
-        for d in range(found.Length if found else 0):
+        elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
+        # Never a background tab's page. The request caches elements only (no live reference), so
+        # CurrentIsOffscreen cannot be read here: the cached IsOffscreen decides.
+        for element in [e for e in elements if not _cached(e, uia_nodes.PID_IS_OFFSCREEN)]:
             nodes: List[Dict[str, Any]] = []
-            _walk(found.GetElement(d), -1, 0, nodes)
+            _walk(element, -1, 0, nodes)
             docs.append(nodes)
         return docs
 
@@ -212,7 +215,9 @@ def read_url(hwnd: int, timeout_sec: float = 5.0) -> str:
         root = uia.ElementFromHandle(hwnd) if uia else None
         if not root:
             return ""
-        edits = root.FindAll(4, uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50004))
+        edits = root.FindAll(4, uia.CreateOrCondition(           # Edit, or Firefox's ComboBox
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50004),
+            uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, 50003)))
         for i in range(edits.Length if edits else 0):
             edit = edits.GetElement(i)
             if "address" in (edit.CurrentName or "").lower():
@@ -384,6 +389,33 @@ def _window_title(hwnd: int) -> str:
     return buf.value.strip()
 
 
+def browser_name_of_hwnd(hwnd: int) -> str:
+    """Returns the process executable name of hwnd without .exe, lower case."""
+    if not hwnd:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        hproc = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        proc_name = ""
+        if hproc:
+            name_buff = ctypes.create_unicode_buffer(512)
+            size = wintypes.DWORD(512)
+            if kernel32.QueryFullProcessImageNameW(hproc, 0, name_buff, ctypes.byref(size)):
+                full_path = name_buff.value
+                proc_name = full_path.split("\\")[-1].lower()
+            kernel32.CloseHandle(hproc)
+        if proc_name.endswith(".exe"):
+            proc_name = proc_name[:-4]
+        return proc_name
+    except Exception:
+        return ""
+
+
 def _typed(docs: List[List[Dict[str, Any]]], in_control: Optional[set] = None) -> List[List[Dict[str, Any]]]:
     """The raw-view nodes as stored: type name added, rect as a list, and (when the control view
     was read) whether SGT's control view has the node."""
@@ -409,8 +441,9 @@ def capture(hwnd: int, seconds: float, interval: float) -> Dict[str, Dict[str, A
             title = _window_title(hwnd)
             page = page_link(url) if url else "title: " + title
             raw = read_keys(hwnd, True)
+            browser = browser_name_of_hwnd(hwnd)
             st = pages.setdefault(page, {"title": title, "polls": 0, "snapshots": [], "last": None,
-                                         "map": link_map.LinkMap("", page)})
+                                         "map": link_map.LinkMap("", page, browser=browser)})
             st["polls"] += 1
             if raw:
                 docs = _typed(raw)
@@ -547,9 +580,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             path = os.path.join(OUT_DIR, f"capture_{session}_{n}__{page_slug(page)}.txt")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(capture_report(page, st, started, args.seconds, args.interval)) + "\n")
+            browser = browser_name_of_hwnd(hwnd)
             record = {"capture": True, "session": session, "page": page, "title": st["title"],
                       "read_at": started.isoformat(timespec="seconds"), "seconds": args.seconds,
-                      "interval": args.interval, "polls": st["polls"], "snapshots": st["snapshots"]}
+                      "interval": args.interval, "polls": st["polls"], "snapshots": st["snapshots"],
+                      "browser": browser}
             with open(path[:-4] + ".json", "w", encoding="utf-8") as f:
                 json.dump(record, f, ensure_ascii=False)
             _say(f"  {page[-50:]}: {st['polls']} polls, {len(st['snapshots'])} kept, "
@@ -573,9 +608,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(path, "w", encoding="utf-8") as f:
         crumb = breadcrumb(key_flatten({"docs": _typed(raw)}))
         f.write(f"Page link    : {page}\nBreadcrumb   : {crumb or '(none on this page)'}\n" + "\n".join(lines) + "\n")
+    browser = browser_name_of_hwnd(hwnd)
     # The raw-view nodes for compare.py, each marked whether SGT's control view has it.
     record = {"title": title, "page": page, "read_at": stamp.isoformat(timespec="seconds"),
-              "docs": _typed(raw, {_identity(n) for doc in control for n in doc})}
+              "docs": _typed(raw, {_identity(n) for doc in control for n in doc}),
+              "browser": browser}
     with open(path[:-4] + ".json", "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False)
     for line in lines[4:20]:

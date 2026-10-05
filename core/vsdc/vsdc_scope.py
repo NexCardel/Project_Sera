@@ -4,7 +4,8 @@ core/vsdc/vsdc_scope.py — Which websites VSDC may look at
 VSDC and VSDC-X are cleared to observe exactly two sites: the Income Tax e-Filing
 portal and the GST portal. Everything else a browser shows — a bank, a mail client, a
 video, another client's accounting software — is out of scope and must never be
-screenshotted, OCR'd or read through UI Automation.
+screenshotted, OCR'd or read through UI Automation. The only other portals are the ones the
+admin registers by saving a service's login link and confirming its domain (SDIS Part T).
 
 The decision is made on the PARSED HOSTNAME of the address bar, never on a substring or
 a regex over the whole URL: "https://www.google.com/search?q=incometax+home" contains the
@@ -20,7 +21,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # Registered domains; the domain itself and any subdomain of it is in scope.
 INCOME_TAX_DOMAIN = "incometax.gov.in"
@@ -38,6 +39,13 @@ _CONFIG_KEYS = {"income_tax": "Income Tax", "gst": "GST Portal"}
 # Never accepted as an entry, whatever the file says: a bare registry suffix would put every
 # site under it in scope.
 _FORBIDDEN_ENTRIES = frozenset({"in", "gov.in", "nic.in", "co.in", "org.in", "net.in", "edu.in", "ac.in", "res.in"})
+
+# Part T (SDIS): a portal registered from a service's login link is watched on its registered
+# domain = the host down to one label above one of these suffixes. A host whose suffix is not
+# listed keeps its full host (the narrowest scope).
+PUBLIC_SUFFIXES = ("gov.in", "nic.in", "co.in", "org.in", "net.in", "edu.in", "ac.in", "res.in", "gen.in",
+                   "firm.in", "ind.in", "com", "org", "net", "in", "io", "gov")
+_IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 _SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.\-]*):", re.IGNORECASE)
 _HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)*$")
@@ -145,14 +153,126 @@ def extra_domains() -> Dict[str, Tuple[str, ...]]:
 
 
 def reload_extra_domains() -> Dict[str, Tuple[str, ...]]:
-    """Forget the cached config (tests, or after an admin edits the file)."""
-    global _extra_domains
+    """Forget the cached config and service domains (tests, after an admin edits the file, or after
+    a service is saved or deleted)."""
+    global _extra_domains, _service_domains
     _extra_domains = None
+    _service_domains = None
     return extra_domains()
 
 
+# ── Portals registered from service settings (SDIS Part T, D21) ──────────────────────
+def registered_domain(host: str) -> Optional[str]:
+    """
+    The registered domain of a hostname: services.gst.gov.in -> gst.gov.in. A host whose suffix
+    is not in PUBLIC_SUFFIXES keeps its full host. None for a bare suffix, a forbidden entry,
+    localhost, a single label, or an IP (an IP is kept only while local test pages are allowed).
+    """
+    h = (host or "").strip().lower().rstrip(".")
+    if not h or h in _LOCAL_HOSTS or h == "localhost" or h.endswith(".localhost"):
+        return None
+    if _IPV4_RE.match(h) or ":" in h or h.startswith("["):
+        return h if local_test_pages_allowed() else None
+    if len(h) > 253 or not _HOSTNAME_RE.match(h) or h in _FORBIDDEN_ENTRIES or h in PUBLIC_SUFFIXES:
+        return None
+    labels = h.split(".")
+    if len(labels) < 2:
+        return None
+    suffix = max((s for s in PUBLIC_SUFFIXES if h.endswith("." + s)), key=len, default=None)
+    if suffix is None:
+        return h
+    return ".".join(labels[-(suffix.count(".") + 2):])
+
+
+def domain_for_link(link: str) -> Optional[str]:
+    """The registered domain a service's login link would put in scope (parsed hostname only)."""
+    host = extract_host(link)
+    return registered_domain(host) if host else None
+
+
+def _overlaps(a: str, b: str) -> bool:
+    return _in_domain(a, b) or _in_domain(b, a)
+
+
+def never_registered(domain: str) -> bool:
+    """True when `domain` covers or lies under a portal_exceptions.never_register entry."""
+    from core.sdis import config
+    return any(_overlaps(domain, str(d).strip().lower().rstrip("."))
+               for d in config.portal_exceptions()["never_register"])
+
+
+def builtin_portal_for_domain(domain: str) -> Optional[str]:
+    """'Income Tax' / 'GST Portal' when `domain` overlaps a built-in portal (the built-in wins)."""
+    for portal, dom in (("Income Tax", INCOME_TAX_DOMAIN), ("GST Portal", GST_DOMAIN)):
+        if _overlaps(domain, dom):
+            return portal
+    return None
+
+
+# Where the service rows come from: set by the app once its database is open
+# (set_services_source(db.get_services)). Unset (tests, tools, replay) means no services.
+_services_source: Optional[Callable[[], Sequence[dict]]] = None
+_service_domains: Optional[Dict[str, Tuple[str, ...]]] = None
+
+
+def set_services_source(source: Optional[Callable[[], Sequence[dict]]]) -> None:
+    global _services_source, _service_domains
+    _services_source = source
+    _service_domains = None
+
+
+def _compute_service_domains(services: Sequence[dict]) -> Dict[str, Tuple[str, ...]]:
+    if not services:
+        return {}
+    from core.sdis import config
+    out: Dict[str, List[str]] = {}
+    claimed: List[str] = []
+    names = set()
+    for s in services:
+        name = str(s.get("name") or "").strip()
+        if not name:
+            continue
+        names.add(name)
+        dom = domain_for_link(s.get("login_page_link") or "")
+        if (not dom or never_registered(dom) or builtin_portal_for_domain(dom)
+                or any(_overlaps(dom, c) for c in claimed)):
+            continue
+        claimed.append(dom)
+        out.setdefault(name, []).append(dom)
+    for portal, doms in config.portal_exceptions()["extra_domains"].items():
+        if portal not in names:
+            continue
+        for raw in doms:
+            dom = str(raw).strip().lower().rstrip(".")
+            if registered_domain(dom) and not builtin_portal_for_domain(dom) and not any(_overlaps(dom, c) for c in claimed):
+                claimed.append(dom)
+                out.setdefault(portal, []).append(dom)
+    return {k: tuple(v) for k, v in out.items()}
+
+
+def service_domains() -> Dict[str, Tuple[str, ...]]:
+    """
+    {portal name: (domains,)} registered from the services table's login links, minus
+    portal_exceptions.never_register, plus portal_exceptions.extra_domains. A domain that overlaps
+    Income Tax / GST, or one an earlier service already claimed, is skipped. Read on first use from
+    the database the app opened, cached until reload_extra_domains().
+    """
+    global _service_domains
+    if _service_domains is None:
+        services: Sequence[dict] = ()
+        if _services_source is not None:
+            try:
+                services = list(_services_source() or ())
+            except Exception as e:
+                print(f"[VSDC Scope] could not read the services: {e} - no registered portals")
+        _service_domains = _compute_service_domains(services)
+        if _service_domains:
+            print(f"[VSDC Scope] registered portals from service settings: {len(_service_domains)}")
+    return _service_domains
+
+
 def portal_for_url(url: str) -> Optional[str]:
-    """'Income Tax', 'GST Portal', or None when the URL is not one of the two portals."""
+    """'Income Tax', 'GST Portal', a portal registered from service settings, or None."""
     host = extract_host(url)
     if not host:
         return None
@@ -161,6 +281,9 @@ def portal_for_url(url: str) -> Optional[str]:
     if _in_domain(host, GST_DOMAIN):
         return "GST Portal"
     for portal, domains in extra_domains().items():
+        if any(_in_domain(host, d) for d in domains):
+            return portal
+    for portal, domains in service_domains().items():
         if any(_in_domain(host, d) for d in domains):
             return portal
     return None
@@ -189,7 +312,8 @@ def sanitize_page_url(url: str, max_len: int = 300) -> str:
 
 
 def is_in_scope_url(url: str) -> bool:
-    """True only for the two portals (or, with VSDC_ALLOW_LOCAL_TEST=1, a local test page)."""
+    """True only for the two portals, a portal registered from service settings (or, with
+    VSDC_ALLOW_LOCAL_TEST=1, a local test page)."""
     if portal_for_url(url):
         return True
     return local_test_pages_allowed() and is_local_reference(url)

@@ -1,0 +1,1318 @@
+# Sera Distill (SDIS) — blueprint
+
+**Status:** approved 2026-10-03 for building; Parts S–U (containers, portal registration, the field
+library) and decisions D3–D16 added 2026-10-04. **Parts A–U are built on branch `sdis` (2026-10-05, not
+merged; see the merge-readiness note in §11).** Baseline: `main` at
+`0f30543` (the pre-dev engine). Worktree `../APP-sdis`, branch `sdis`. Deadline **2026-10-06 01:30 IST** (Tuesday; moved from 2026-10-04 23:00 by the user). It is written from the
+design conversation of 2026-10-03 and builds on `docs/datapoint-engine-goal.md` (the pre-dev record:
+rules R1–R10, measurements, problems P1–P24, questions Q1–Q11). It is built the way Autofill tweaks
+was: one set of rules, parts that each say *what is wrong → what changes*, and work packages run one
+per fresh session by a dispatcher (`tools/sdis.py` = `tools/sgt_overhaul.py` via `use_project()`),
+each ending with a hand-off note in §12.
+
+**What SDIS is:** an engine that finds a portal page's useful datapoints by itself: what is template
+and what is client data, and how relevant each datapoint is. It works by comparing the same page
+across clients, using **counting and statistics only, with no AI**. The user sees the result in a
+**Distill… dialog** in the Tracker dump window's Tools menu.
+
+**What SDIS is for** *(user, 2026-10-03)*: a **quick datapoint-choosing feature**. It gets rid of the
+usual useless fluff so the user can pick datapoints fast. It does not need to show absolute
+confidence, and there is no truth set to score it against: the user is the final filter. It is a
+**learning** feature, not real-time capture: it mines **on one PC (the admin PC), when the user asks**
+("Find datapoints", like SGT-I), behind a loading dialog, at full speed (admin PC only).
+
+**What already exists (pre-dev, `tools/pre_dev/class_diff/`, not wired into the app):**
+
+| Stage | File | Does |
+| :--- | :--- | :--- |
+| read | `key_probe.py` | snapshots of a page (raw view + control-view flags) |
+| key | `keys.py` | a key per element (types, ids, classes, `[n]` counters) |
+| merge | `link_map.py` | one client's snapshots of one link → one map, by **alignment** (shape + face) + moved blocks; `group_clients` joins captures sharing a PAN/GSTIN |
+| pair | `align.py` | anchors (same shape + same text) in page order, shape between anchors, `pair_moved` for moved blocks |
+| memory | `memory.py` | the user's page-memory method: every client's map → memory + flat pending pool, confirmed by N clients, a verdict per node |
+| compare | `compare.py` | latest client vs previous client: statuses, labels, checks (CSV) |
+| tables | `tables.py` | every table on a read as a **grid**: texts, row/column spans, header rows, a matrix's header column, caption (or the heading above), nested tables linked to their cell; re-rendered as a text grid and an HTML page (`--counts` = shapes only). The raw view has no row/column numbers or header flag in any browser, so the grid is rebuilt from the cells' boxes (added 2026-10-04) |
+| tests | `tests/test_class_diff_align.py`, `tests/test_sdis_memory.py`, `tests/test_sdis_tables.py` | 14 tests (alignment labels; R8) + 49 table tests: a fictional page of hard tables read live in Edge, Chrome and Firefox (`tests/class_diff_tables/`, `capture_fixtures.py`) must come back as the page defines them, and its HTML re-render must parse back the same |
+
+---
+
+## 0. Rules over everything
+
+1. **Fix the kind, not the case** (R1). Every rule is global: element structure, value types and
+   counts. Never a portal name, class name or piece of wording.
+2. **No AI.** Counting, matching, percentages and simple statistics only (`docs/sgt-blueprint.md` §14).
+3. **One client = one vote per page** (R8). Snapshots, repeat visits and re-renders are never votes.
+4. **Matching is by shape and face** (R9): shape = the key without counters, face = the text. A key
+   alone never decides that two elements are the same.
+5. **Bare numbers are data** (R2). Only text, labels and sentences can be template.
+6. **Never fake confidence.** Anything SDIS cannot decide (ambiguous pairing, unknown identity, too
+   few clients) is shown with a low percentage or not counted. It is never a silent guess.
+7. **Monitoring phase privacy** *(user, 2026-10-03)*: no hashing yet. SDIS runs **only on the admin
+   PC**, over the corpus stored **only on the admin PC**. Every other PC deletes its copy once it has
+   synced to the admin PC. Hashing comes back before SDIS leaves the monitoring phase.
+8. **SGT capture must not change** unless a Part says so explicitly. Anything touching `core/sgt/`,
+   `core/sgt_i/` or `core/vsdc/` passes the SGT tests and shows no change in `tools/sgt_replay.py diff`.
+9. **Strictly passive toward portals.** SDIS only reads what was already captured.
+10. Real captures (`tools/pre_dev/class_diff/output/`) hold client data. They stay on this PC, are
+    never committed, and are never pasted into docs, hand-off notes or test fixtures. Tests use fictional pages.
+
+---
+
+## 1. The whole plan on one page
+
+```
+ Part A  Baseline: commit the pre-dev engine, engine package, regression runner
+            |
+            v
+ Part B  Value history  ──>  Part C  Noise over time (furniture vs data)          [problem 1]
+ Part D  Identity: SGT session id, then a data fingerprint for the rest          [problem 2]
+ Part E  Look-alikes: scored pairing + AMBIGUOUS                                 [problem 3]
+ Part F  variable_alignment: shared text in a data slot, user can reject         [problem 4]
+ Part G  Screens: one link, several pages, told apart by weighted matching       [problem 5]
+ Part H  Memory upkeep: retire what stopped appearing, by statistics             [problem 6]
+            |
+            v
+ Part I  Statuses + labels from memory (compare.py becomes a view of memory)
+            |
+            v
+ Part J  Relevance ranking (maths + statistics) -> Relevance %, Sure %, Found on
+            |
+            v
+ Part K  SDIS's own input (raw view + session id + browser), tuned for SDIS (not SGT-I)
+ Part M  Every browser captured; compared per browser at mining   Part N  Smart page link resolution
+ Part O  "Find datapoints" on demand: loading dialog, app locked, own process (no CPU cap), memory on disk
+ Part P  Captures travel staff PC -> admin PC (Sera Sync v3 transport), deleted after receipt
+ Part Q  A picked datapoint is registered on EVERY PC (synced table -> spec file SGT loads)
+ Part R  Firefox support for SGT-C and SDIS (address bar, title, line parity, Firefox fixtures)
+ Part S  Classes and containers: Profile builder + Others per portal, Dataset containers; all in one JSON
+ Part T  Portal registration from the login links in service settings, same scope gate
+ Part U  sdis_mcl: the field library every registered datapoint is a field of
+            |
+            v
+ Part L  Distill… dialog
+```
+
+OCR portals (TRACES) are out of scope: SDIS needs an element tree (problem 8, later).
+
+---
+
+## 2. What is wrong or missing today
+
+| # | Problem | Doc ref | Part |
+| :--- | :--- | :--- | :--- |
+| 1 | **Furniture looks like data.** A rotating notice or a "last updated" date differs between clients, so it reads as data. Only a change *within one client* exposes it today | P5, Q11 | B, C |
+| 2 | **Voting needs identity.** A capture with no PAN/GSTIN is "unidentified". If it is a client already counted, that client's data looks like template. Solved by the SGT session id, plus maths for the rest (user, 2026-10-03) | P18, Q10 | D |
+| 3 | **Look-alikes are paired silently.** Two values of one shape, no anchor between them, one missing: the first one is paired, with no warning | P15 | E |
+| 4 | **Shared values look like template** ("Filed" for most clients). Words in controls are already safe; status words are not | P7 | F |
+| 5 | **One link, several pages** (form / result / error) is one memory; truly different screens would wait forever | Q5 | G |
+| 6 | **Memory never forgets.** After a portal redesign the old template stays forever | — | H |
+| 7 | Privacy: memory and CSVs hold plain values | Q6 | rule 7, K |
+| 8 | OCR portals have no tree | Q7 | later |
+| 9 | `compare.py` still compares only two clients, with its own same-client skip; it uses neither memory, client grouping nor `pair_moved` | P14, P17 | I |
+| 10 | Labels exist only in `compare.py`, not in memory | — | I |
+| 11 | Relevance ranking is not built: the core idea's second half is untested | §6 | J |
+| 12 | Production input is undecided: the pre-dev probe reads the raw view, SGT-I's corpus is the control view (R4 says production reads raw) | R4, P8 | K |
+| 13 | The dialog is not built | R5–R7 | L |
+| 14 | Pre-dev code is uncommitted in a checkout other sessions also commit from | P20 | A |
+| 15 | Fixture tests were designed by Claude; the real proof is the real captures | P21 | A (regression runner) |
+| 16 | **Different browsers give the same page different trees** (shapes differ), so a mixed corpus splits one page's votes. Only GST in Chrome is measured | Q7 | M |
+| 17 | **Page links that carry client values in the path** (`/returns/2026-27/…`): every client becomes its own link and nothing is compared. `page_link` drops only the query | — | N |
+| 18 | Memory is rebuilt from scratch on every run, so mining gets slower as the corpus grows, and a cancelled run loses its work | — | O |
+| 19 | Sera Sync v3 replicates **database rows**, not files; nothing moves capture files to the admin PC | — | P |
+| 20 | A field rule accepted today (SGT lab) goes into `sgt_fields.json` **on that PC only** (`sgt_specs.override_path()`); nothing spreads it to the other PCs | — | Q |
+| 21 | The installed app is a frozen program: "run mining in a separate process" cannot start `python -m …` | — | O |
+| 22 | **SGT gets no URL in Firefox.** Firefox's address bar is a ComboBox (automation id `urlbar-input`); both address readers (`vsdc_router` and `key_probe.read_url`) only look at Edit controls | measured 2026-10-03 | R |
+| 23 | Firefox window titles end in " — Mozilla Firefox" (em dash); the title cleanup only strips "-" | measured 2026-10-03 | R |
+| 24 | SGT-C has never been checked on Firefox: lines, dropdown/radio "Selected:" lines, the password guard, timing | — | R |
+| 25 | **Firefox: SGT reads BACKGROUND TABS too, mixing clients.** Firefox exposes every tab's page (and its hidden New Tab page) as a Document; `read_page_text` and `uia_nodes` read every Document. Verified: client A in front, client B in a background tab → 227 lines holding **both** clients | verified 2026-10-03 | R |
+| 26 | **A picked datapoint has no class.** Nothing says whether it is part of the client's profile, part of a dataset (one filing / application / refund), or a standalone value. Only SGT's hand-written specs know (sections `profile`, `records`, `current_dataset`) | user, 2026-10-04 | S |
+| 27 | **Datasets cannot be built from picked datapoints.** SGT's datasets are hand-written (form + period + the submit ladder); SDIS has no way to group picked datapoints into one dataset or tell how complete it is | user, 2026-10-04 | S |
+| 28 | **Portals are hard-coded.** The scope gate knows two domains (`vsdc_scope.IN_SCOPE_DOMAINS`) plus an optional file; the portals the office actually uses are already typed in as login links in service settings (`services.login_page_link`) | user, 2026-10-04 | T |
+| 29 | **The same field on many pages is many datapoints.** PAN on the GST page and PAN on the ITR page are picked, labelled and registered separately; nothing makes them one reusable field | user, 2026-10-04 | U |
+
+Not problems for SDIS any more: P19 (SDIS learns offline on the admin PC, rule 7; its own raw read is guarded in Part K) and Q9 (answered by rule 7: offline over the corpus, never inside SGT-I's thread).
+
+---
+
+## Part A — Baseline
+
+**What changes:**
+1. Commit the approved pre-dev work (alignment merge, `pair_moved`, `memory.py`, client grouping,
+   `tests/test_sdis_memory.py`, the doc) **with an explicit file list**, before the worktree is made (D10).
+2. **Engine package** (D1, taken): the engine moves to `core/sdis/`:
+
+   | Module | From / for |
+   | :--- | :--- |
+   | `core/sdis/__init__.py` | package doc: the pipeline in five lines |
+   | `core/sdis/paths.py` | `data_dir()`: env `SDIS_DATA_DIR`, else `~/AmanAssociates_Sera/sdis/` (admin PC data) |
+   | `core/sdis/keys.py` | from `tools/pre_dev/class_diff/keys.py` (its learned-state file path comes from `paths`) |
+   | `core/sdis/align.py` | from pre-dev `align.py` |
+   | `core/sdis/link_map.py` | from pre-dev `link_map.py` (the capture-file readers stay in pre-dev) |
+   | `core/sdis/memory.py` | from pre-dev `memory.py` (engine part; its `main()` stays a pre-dev front end) |
+   | `core/sdis/tables.py` | from pre-dev `tables.py` (its output folder comes from `paths`; `is_period` from `core/sdis/labels.py`) |
+   | later | `history` (B), `noise` (C), `identity` (D), `screens` (G), `links` (N), `labels` (I), `relevance` (J), `store` + `mine` (O), `recorder` (K), `transfer` (P), `register` (Q) |
+
+   The pre-dev files `keys.py`, `align.py`, `link_map.py` and `memory.py` become **module aliases** of the
+   core ones: `sys.modules[__name__] = core.sdis.<name>`. A plain `from core.sdis.keys import *` is NOT
+   enough, because tests and `compare.py` set `keys.VIEW` and that must reach the real module.
+   Every pre-dev command still works. No behaviour change: same tests, same regression numbers.
+3. **Regression runner** `tools/sdis_regress.py` (reads the real captures **in place** from
+   `../APP/tools/pre_dev/class_diff/output/`, never copies them): runs the whole engine over the real captures in
+   `output/` and prints **counts only** (double count, texts lost, verdict counts, both client orders
+   equal, flagged counts per state). Every WP runs it before and after its change, and its hand-off note
+   records the difference. This answers P21 with real data, without new captures (rule 10: the numbers
+   go in notes, never the values).
+
+## Part B — Value history
+
+**Wrong:** a map keeps the distinct values of an element, but not *when* each was seen, so "changes
+over days" cannot be computed.
+**Change:** every map entry keeps `history`: a list of (time, text), one item each time the text
+changes. Memory keeps it per client. This costs nothing to matching and is needed by C.
+
+## Part C — Noise over time (problem 1)
+
+Decided per node, from counts only. The first rule that applies wins:
+
+1. **Changes within one client**: one client, several texts (a rotating notice). Already built.
+2. **Changes with time**: on every day it was seen, all clients seen that day agree, **and** it
+   changed between days ("Site last updated on …"). This is furniture, not data. Only days seen by
+   2+ clients show the change (W2-R): one client per day proves nothing.
+3. **Probably furniture** (low %): differs between clients, but is sentence- or label-shaped and has
+   **no label** beside it. An address with a label stays data.
+4. Otherwise the verdicts of `memory.py` stand.
+
+Rules 1–2 are certain and rule 3 is a weak signal, so it only lowers the percentage. With few visits,
+rule 3 is the only one available; that is stated in the dialog, not hidden. Days come from the capture
+time, so the corpus must hold captures from different days (D5).
+
+## Part D — Identity: SGT session id + maths (problem 2)
+
+*(user, 2026-10-03: "easily solved by session id and maths")*
+
+**1. Session id first.** SGT already gives every window session an id (`_Session.session_id` in
+`core/sgt/sgt_shadow.py`). The corpus recorder stores it with every page (`record(session=…)`), and
+the session's profile collects the PAN/GSTIN from whichever of its pages showed it. So a page with no
+PAN/GSTIN on it is still identified: it belongs to its SGT session, and the session's PAN/GSTIN names
+the client. Sessions that share a PAN/GSTIN are one client (`group_clients`, chained).
+
+SGT already ends a session at a login page, at a logout, on moving to another portal, and when a
+**different PAN/GSTIN** appears (`SgtShadow._observe`, `_identity_conflict`). So one session id
+normally means one client. The pre-dev captures have no SGT session id: there, one capture session
+stands in for one SGT session.
+
+**2. Maths for what the session id cannot settle:**
+* a session that never showed a PAN/GSTIN on any page;
+* a session that may hold **two** clients. SGT already ends the session at a login page, a logout,
+  or a different PAN/GSTIN, so this is only possible in a session that never shows a PAN/GSTIN. If
+  such a session visited **the same page link twice** and the two visits' data disagree (fingerprint
+  similarity ≤ 0.5), the session is **undecided** (no vote) rather than split by guesswork.
+
+The maths is the data fingerprint. A client's data is its fingerprint. For such a capture (U),
+against every other capture (S) that shares a page with it:
+
+* Pair their maps (alignment). Take only the **data-shaped** pairs (numbers, codes, dates, amounts,
+  periods: never text, labels or sentences, rule 5).
+* Each value gets a **rarity weight** = 1 / (number of captures that show it). A "0" that everyone
+  has weighs almost nothing; an ARN weighs 1.
+* similarity = weight of equal pairs / weight of all pairs.
+* **Same client** if similarity ≥ 0.9 over at least 3 data values. **Different** if ≤ 0.5 over at
+  least 3. Otherwise **undecided**.
+* U is merged into S's client if it is the same as any S. It is its own client only if it is
+  different from **every** capture it shares a page with. Undecided → **no vote** (D4).
+
+Chained like `group_clients`. Check on today's captures: the two fictional sessions (no ids, the same
+fictional page) must come out as **one** client, and the two real GST clients as two.
+
+## Part E — Look-alikes (problem 3)
+
+Between two anchors, when one side has **more** elements of a shape than the other, page order cannot
+tell which one is missing. Those elements are paired by **score** instead, keeping page order:
+
+* same **value pattern** (letters → A, digits → 9, runs collapsed: `AB1234` → `A9`, `Filed` → `A`): +1;
+* same **screen column** (sideways overlap of the boxes, 0–1): + overlap.
+
+The best order-keeping pairing wins. An element whose best partner beats its best alternative by
+less than **0.5** is **AMBIGUOUS**: it gets no vote in memory, shows a low "Sure %", and `compare`
+flags it. Where counts are equal, nothing changes (page order is unambiguous).
+(A version of this was written and reverted on 2026-10-03 to plan first. It passed the 14 tests and
+left the merge numbers unchanged.)
+
+## Part F — variable_alignment (problem 4)
+
+A new state, **`variable_alignment`**: a text **shared by all clients** (would be template) whose
+**shape also holds differing values** for some clients, i.e. it sits in a slot that is data elsewhere
+("Filed" in a Status column where another row shows "Not filed").
+
+* It is **flagged, not decided**. The dialog lists it, and the user keeps or rejects it (rejections are
+  stored, D6). A rejected one is template from then on, for every client.
+* It **stays usable as a label** (row names like "Cash ledger" share a shape with values too and will
+  be flagged; the user rejects them once).
+* Not flagged: label-shaped text (ending in `:`), composites, controls (already data).
+
+## Part G — Screens (problem 5)
+
+One link can show truly different pages. Telling them apart is done by **weighted matching**:
+
+* **Weight** of a node = how rare its (shape, text) is **across links**:
+  `log((1 + links) / links showing it)`. Site furniture (header, menu, footer) is on every link and
+  weighs about 0; text found only on this link weighs the most. Nodes without text weigh 0.
+* For a new snapshot against a screen's map: **cover_new** = weight of the snapshot that matched /
+  its total weight; **cover_old** = weight of the map that matched / its total weight.
+* **Same screen** if either cover is ≥ 0.5 (a popup on top keeps the old page; a page that grew keeps
+  the old part), or if the map weighs ~0 (a loading shell). **New screen** if both are low: the page's
+  own content was replaced.
+* `link_map` splits a client's snapshots into screens this way. `memory` assigns each client's
+  screens to the link's screen memories the same way: best cover, else a new screen memory.
+
+Check: on today's captures, no link splits (none has a real screen change); the fictional popup and
+success screens stay one screen; a test page whose content is replaced splits.
+
+## Part H — Memory upkeep (problem 6)
+
+For each **confirmed** memory node: chances = clients since it first appeared; seen = clients that
+had it; misses = clients in a row that did not.
+`p = (seen + 1) / (chances + 2)` (how often it shows up, smoothed).
+**Retire** it when misses ≥ 2 and `(1 − p)^misses < 1%`: the chance that a node this regular is
+missing this often by luck is under 1%. Worked examples: a node all of 10 clients had retires after
+**4** misses in a row (`p = 11/16`, `(5/16)^4 = 0.0095`); after 3 it stays (`p = 11/15`, `0.019`).
+A node 5 of 10 clients had needs about 30. Rarer nodes need more evidence before they are dropped;
+that is intended.
+Retired nodes leave the matching order (kept in the record as "retired"). If the page goes back, they
+return through pending like anything new. Unconfirmed nodes never retire (they may be one client's
+own data).
+
+## Part I — Statuses and labels from memory
+
+`compare.py`'s two-client logic becomes a **view of memory**: statuses (fixed, semi-variable,
+variable, `variable_alignment`, ambiguous, furniture, waiting) and labels (table row/column, nearest
+fixed text in the box, composites never labels, a real letter required, all from the pre-dev rules)
+are computed once per node from memory, over every client, not one pair. It uses client grouping,
+`pair_moved` and screens. The CSV stays as a debugging view.
+
+**Labels inside real tables come from `core/sdis/tables.py`:** a cell's column label is its
+column's header text top-down ("Tax / IGST" under a two-level header), and in a matrix (empty corner,
+labels down the first column) its row label is that row's first cell. The screen-box rules apply only
+to values outside any table (and to tables a page builds without table markup).
+
+## Part J — Relevance ranking
+
+*(user, 2026-10-03: "use the total number of occurrences as comparison weight")*
+
+**The weight is the number of occurrences, counted the right way:**
+
+* **fixed values are ignored** *(user, 2026-10-03)*, so menus, headers and other high-frequency
+  template never count, however common they are. **Noise counts as fixed** for this: Part C's
+  "changes within one client" and "changes with time" are ignored too. Without that, furniture that is
+  *not* fixed ("Site last updated on …": the same for everyone on a day, different between days, on
+  every page) would have the most occurrences of all and rank first. Ambiguous pairings (Part E) and
+  rejected `variable_alignment` (Part F) are not counted either;
+* **once per (client, page)** (R8). Never per row or per snapshot, or a 50-row list would outweigh
+  everything;
+* **as a share of the clients who visited that page**, so a field on a rarely visited page that every
+  visitor has is not ranked below a field on a busy page;
+* a datapoint found on several pages (R5) adds up its pages.
+
+**Relevance %** = that share, summed over the pages it was found on and scaled to the best datapoint.
+**Found on** = the page links (R5). A datapoint with too few votes (D3) or any undecided-identity
+votes shows a low %, never a hidden or confident one (rule 6). No absolute confidence is promised:
+the aim is to drop the fluff, and the user picks.
+
+**Slots** learn what they usually hold ("a date 98% of the time"), and a surprise is flagged.
+
+## Part K — SDIS's own input (rule 7)
+
+*(user, 2026-10-03: "fine tune according to SDIS; SGT-I is irrelevant; make sure the core functions work")*
+
+SDIS gets **its own recorder**, built for what SDIS needs. It does not depend on SGT-I or its corpus.
+Each record holds:
+
+* the page's **raw-view tree** with parents and screen boxes (R4; `uia_nodes.read_page_nodes(raw_view=True)`
+  already reads it);
+* **SGT's session id** (SGT core `_Session.session_id`, for Part D);
+* the **browser** (from the window's process, for Part M);
+* the page link and title, and the time (Part B).
+
+**The cost, and the guards for it:**
+* SGT keeps reading the control view (rule 8), so a changed page is read twice. That is about 2.2–2.5×
+  SGT's read time, so the heavy GST page goes from 478 ms to about 1 s.
+  Guards: the raw read runs **only after SGT's change gate says the page changed**, never on its own
+  timer; it runs **after SGT's own read**, never before or inside it; it has a **time budget**, and a
+  read over budget is dropped, not retried; and a setting turns it off.
+  Reading once and rebuilding SGT's lines from the raw read is not allowed (it would change SGT capture).
+* **Retention:** raw trees are big. Each staff PC keeps them only until they have synced to the admin
+  PC, then deletes them (rule 7). There is a size cap: past it, the oldest are dropped.
+* Sync to the admin PC rides on Sera Sync v3 (`docs/sera-sync-v3-blueprint.md`); this Part only
+  defines what SDIS needs from it.
+
+**Core functions must keep working on this input.** The regression runner (Part A) runs over this
+recorder's output exactly as over the pre-dev captures.
+
+## Part M — Every browser captured, compared per browser (problem 16)
+
+*(user, 2026-10-03: capture both, as SGT-C already does, tuned for SDIS; SDIS sorts it out when
+mining starts)*
+
+* The recorder (Part K) captures the page in **every browser**, each record carrying its browser.
+* At mining time, pages are compared **only with the same browser** (the trees differ), so memory is
+  per (page, browser).
+* The datapoints found are then **joined across browsers** at the datapoint level (same label and
+  value type, or the same spec once picked), and their occurrences (Part J) add up.
+* Cost: each browser has fewer clients per page, so a thin page shows a lower %. The results are not
+  lost, they are only spread out. The dialog shows the clients per browser.
+
+## Part N — Smart page link resolution (problem 17)
+
+Statistics over the links of one host, per path position:
+
+* a segment that **differs between clients** while every other segment stays the same is a **value**
+  (a year, an ARN, an id). It is masked, and those links become one page;
+* a segment that **differs within one client** (the same person visits `gstr1` and `gstr2b`) is a
+  **different page**. It is never masked;
+* until enough clients have been seen to tell the two apart, links stay as they are (nothing is merged
+  on a guess).
+
+It never uses SGT-I's digit masking (`atlas.url_hint`), which already merges `gstr1` with `gstr2b`.
+Page link resolution comes before screens (Part G): Part G splits one link into pages, and Part N joins
+links that are one page.
+
+## Part O — "Find datapoints": mining on demand
+
+*(user, 2026-10-03: no idle-time learning. It works like SGT-I's "Look for new datapoints", but faster,
+with a loading dialog that locks the screen)* *(user, 2026-10-04: "since mining will be done in the admin
+PC, don't cap it")*
+
+* Mining runs **only when the user asks**: a **Find datapoints** button (in the Distill… dialog), on
+  the admin PC only (rule 7).
+* A **loading dialog** shows progress (captures done / total, the current page) and **locks the app**
+  (modal) until mining ends. It locks the app, not Windows. It has a **Cancel** button: everything
+  finished so far is already saved, so cancelling loses nothing.
+* **No CPU cap** (2026-10-04, replacing the 10% cap of 2026-10-03): mining runs only on the admin PC,
+  so it runs as fast as that PC allows - no Job Object, no priority change. It still runs in a
+  **separate process**, so Sera stays responsive behind the dialog and Cancel is instant. The installed
+  app is frozen, so the child is **the app's own program started with a flag** (`<exe> --sdis-mine <args>`), handled at the very top of `main.py` before Qt or
+  the database load. From source it is `python main.py --sdis-mine …`. Progress comes back as JSON lines
+  on the child's stdout; Cancel ends the process. The app and SGT capture keep running normally; the dialog
+  only reads progress.
+* **Fast because it is incremental:** memory is **saved on disk** (admin PC) and each run processes
+  only the captures that arrived since the last run, one client map at a time (merge → link
+  resolution (N) → identity (D) → per browser (M) → memory (G, H) → relevance (J)).
+  Measured on today's 11 pre-dev captures: the whole engine takes 1.8 s with Python start-up included.
+  The first run over a big corpus is the slow one; the dialog shows it honestly.
+* Opening the dialog never starts mining by itself; it shows the last saved results.
+
+## Part P — Captures travel to the admin PC (rule 7)
+
+Sera Sync v3 replicates database rows, not files, but its mutual-TLS transport
+(`sync_transport.Session.send_file` / `recv_file`, port 49159) can carry files between office members,
+and `sync_office.dispatch_session` routes an incoming session by its first frame type.
+
+* **Admin side:** a new frame type `sdis_push` in `sync_office.dispatch_session` →
+  `core/sdis/transfer.py: handle_push(session, app_dir)`: receive a manifest (file names, sizes,
+  SHA-256), receive each file into `data_dir()/corpus/<device id>/`, check every hash, and reply
+  `{"t": "sdis_ack", "files": [...]}` listing only the files that arrived whole.
+* **Staff side:** after each sync round (or every 15 minutes while the app runs), push the finished
+  capture files to the admin PC. **Delete each file only after the admin's ack names it.** The day's
+  open file is pushed only after the day ends.
+* **On the admin PC itself,** captures are written straight into the corpus folder (no push).
+* Never logs file contents. A member that is not the admin never accepts `sdis_push`.
+
+## Part Q — Registration on every PC
+
+A datapoint the user picks becomes a field spec **on every PC** (D7):
+
+* A new **synced table** in the office database, `sdis_fields`: name, portal, section, the spec as
+  JSON, the **label** (user-edited, R6), status (`active` / `retired`), who and when. It replicates
+  like other office tables, so every PC gets it.
+* Each PC writes the active rows to `<Sera data>/sdis_fields.json` whenever the table changes.
+  `sgt_specs.SpecStore` loads it as a **third spec file** after the built-in file and the local override.
+  This is the only change to SGT capture in this Part: a datapoint the user registered is now captured.
+  It must pass the SGT tests and show no change in `tools/sgt_replay.py diff` while the table is empty.
+* The spec is drafted the same way the SGT lab drafts a mined one (`core/sgt_i/lab.py`
+  `accept()` / `merge_into_override`, `core/sgt_i/miner.py` spec drafting); SDIS supplies the label
+  and the values' type.
+* **Renaming** a registered datapoint updates only its label (row + file); what is captured does not
+  change. A later mining run never overwrites a label the user edited.
+* Rejections (`variable_alignment` rejected, datapoints dismissed) live in a second synced table,
+  `sdis_decisions`, so mining on the admin PC remembers them (D6).
+* No tracker column is added automatically (D15), the same as the SGT lab today.
+* `sdis_fields.json` holds only **how a field is captured** (its specs, named by their `sdis_mcl`
+  field). **Which container a field is in** lives in the containers file (Part S.3), so moving a field
+  between containers never touches its capture spec.
+
+## Part R — Firefox support for SGT-C and SDIS
+
+*(user, 2026-10-03: "we need the Firefox support for SGT-C and SDIS")*
+
+**Measured 2026-10-03** (a fictional page, `tests/class_diff_align/client_A.html`, in a throwaway
+Firefox profile, never a real tab):
+
+| | Firefox |
+| :--- | :--- |
+| UI Automation | exposed natively (framework "Gecko"); the page is a Document under `tabbrowser-tabpanels` |
+| SGT's text reader (`read_page_text`) | **works**: 82 lines, the right page text, 68 ms |
+| SDIS's node tree (`uia_nodes`) | **works**: control view 174 nodes, raw view 225; ids, classes and screen boxes present; **no grid (column) info**, so tables use the screen-box fallback |
+| Address bar | **not read**: it is a ComboBox (50003), automation id `urlbar-input`, name "Search with Google or enter address", ValuePattern = the full URL. Both readers look only at Edit (50004) |
+| Window title | "<page> — Mozilla Firefox" (em dash) |
+| Background tabs | **every tab's page is a Document** (plus a hidden "New Tab" page); the tab in front has `IsOffscreen = false`, every other `IsOffscreen = true` |
+
+**Verified 2026-10-03** (scratch scripts, no repo change; fictional pages; throwaway profile with
+Firefox's first-run screens turned off by a `user.js` in the profile - without it Firefox's
+"Welcome / Terms of Use" screen covers the page):
+
+| Check | Result |
+| :--- | :--- |
+| Planned address reader (Edit **or** ComboBox, same keyword test, ValuePattern) | returns `http://127.0.0.1:8765/client_A.html` from `urlbar-input` in 40 ms |
+| SGT lines on client A (front tab only) vs Edge's texts for the same page | all 52 Edge texts present, **same order**; nothing missing |
+| SGT today, A in front, B in a background tab | 227 lines, **clients A and B mixed** |
+| Same window, reading only Documents with `IsOffscreen = false` | 52 lines, **client A only** (= Edge) |
+
+**R.1 Address bar, title and background tabs** (W1-6). The address readers accept an Edit **or a
+ComboBox** whose name or automation id says address / url / search, exactly as they treat an Edit
+today, so Chrome and Edge are unchanged. The title cleanup strips " - ", " – " and " — " browser
+suffixes. **Both page readers read only Documents that are on screen** (`IsOffscreen` false):
+`vsdc_uia_text._find_document_elements` (SGT's lines) and `core/sgt_i/uia_nodes.read_page_nodes`
+(node trees, SDIS's recorder). This is a fix of a kind, not of Firefox: a page nobody can see is never
+read, in any browser. If every Document is offscreen (a minimised window), nothing is read, which is
+correct. With the URL, SGT-C's
+portal detection and specs work in Firefox, and SDIS gets page links (Part N) from Firefox captures.
+
+**R.2 Parity tool and Firefox fixtures** (W1-7). `tools/browser_parity.py` serves the fictional pages
+(the two `class_diff_align` clients plus a new fictional form page with a dropdown, radio buttons, a
+checkbox and a password box holding a fictional password) on 127.0.0.1, opens each installed browser
+(Chrome, Edge, Firefox) with a **throwaway profile**, reads the page the way SGT and SDIS do, closes
+**only the processes it started**, deletes the profiles, and prints a parity table: URL read, SGT
+lines (plus "Selected:" lines), password value never read, node counts, timings. It also saves the
+fictional reads as test fixtures, `tests/class_diff_align/client_{A,B}_{browser}.json`.
+Opening browser windows takes focus for about half a minute, so the worker asks first (D16).
+
+**R.3 Line parity fixes** (W2-5). Every difference R.2 finds in SGT's lines for Firefox is fixed **as a
+kind** in `core/vsdc/vsdc_uia_text.py` / `core/sgt_i/uia_nodes.py`, never per page. Chrome and Edge lines
+must not change (`tools/sgt_replay.py diff` unchanged).
+
+**R.4 SDIS on Firefox trees** (W3-4). The alignment and label tests run on the Chrome **and** Firefox
+fixtures: 0 template pairing errors and every value labelled, in both browsers. Part M keeps the
+browsers' memories apart; this proves the engine itself works on Firefox's tree.
+
+Hands-on: a real GST and ITR session in Firefox captures the same fields as in Chrome (W1-6's check).
+
+## Part S — Classes and containers (problems 26, 27)
+
+*(user, 2026-10-04: "a container called dataset; we add whatever datapoints we want into it")*
+
+Every registered datapoint lives in exactly **one container**. There are three kinds:
+
+| Container | Holds | How many | What SGT does with it |
+| :--- | :--- | :--- | :--- |
+| **Profile builder** | profile datapoints (PAN, name, address…) | **one per registered portal** (D19, Part T) | adds the value to the session's **profile context** on that portal, exactly like today's `profile` specs (latches; identity, Part D, uses it too) |
+| **Dataset** containers | whatever datapoints the user adds | as many as the user makes ("GSTR-3B submission", "Refund application"…) | builds one **instance** per (client, key) (D17) and gives it a **completion level** defined in the containers file (S.3); written to the tracker dump |
+| **Others** | info datapoints (aggregate turnover…) | **one per registered portal** (Part T) | a standalone value per client and portal; the latest wins and the history is kept (D20); stored in the client's **SRPF container** as JSON (S.4) |
+
+### S.1 Class suggestion: "what does this value stay the same with?"
+
+*(user, 2026-10-04: "I like idea 1, apply it too")*
+
+SDIS suggests a container for each datapoint from counts over its value history (Part B), per client
+(Part D) and per period:
+
+| The value stays the same for… | Suggested container |
+| :--- | :--- |
+| the same **client**, on every page, day and period it was seen | Profile builder |
+| the same **client + period**, but changes between that client's periods | a Dataset container |
+| neither | Others |
+
+* **Period** of an observation: the period-shaped value (`labels.is_period`) shown **once** on that page,
+  or the masked link segment (Part N) when it is period-shaped; none → the observation is not used for
+  the dataset test.
+* A class is suggested only when **≥ 90%** of the clients with enough evidence agree, where "enough" is
+  two or more observations (profile test: on 2+ days or 2+ periods; dataset test: 2+ periods). Too
+  little evidence → **no suggestion** (rule 6); the dialog says why.
+* It is **only a suggestion**: it preselects the container in the Distill dialog. The user moves the
+  datapoint anywhere. A move is stored (`sdis_decisions`, D6) and fed back like a pick (D8): that
+  kind is never suggested into the rejected container again.
+* Known limit: a value fixed per client per year (aggregate turnover) can pass the dataset test. The
+  user moves it to Others once.
+
+### S.2 Dataset containers and completion
+
+*(user, 2026-10-04)*
+
+* The user **creates** a dataset container, names it, and **adds datapoints** to it from the Distill
+  list or from the field library (Part U). A container holds **fields** (Part U), so a field picked on
+  several pages fills the same slot from any of them.
+* **Completion levels are not in code.** *(user, 2026-10-04: "drop the dataset level I told above, it
+  will be added to the JSON")* Which levels exist, when each is reached and how each maps onto the
+  tracker's submit ladder are written in the containers file (S.3: `levels`, `level_map`). The code
+  only evaluates them; it assumes no level names and no thresholds. A container with no levels shows
+  only "k of n" (k = captured counted fields, n = counted fields) and is written to the tracker under
+  SGT's existing rule: a keyed dataset is at least a Draft.
+* **Levels only promote**, like the submit ladder: a value that disappears later never lowers the level.
+  The fields that made the level are kept as its evidence, with "k of n".
+* **Editing a container** (adding or removing a field, changing its levels) recomputes instances; an
+  instance never moves down.
+* Which instance a value belongs to is the **key** (D17).
+* **SGT side** (rule 8): containers are defined in the containers file (S.3); SGT builds container
+  instances the way it builds `current_dataset` today (a value shown once on a page belongs to the
+  instance being worked on; a new key starts a new instance) and writes each instance to the tracker
+  dump under the canonical key (`core/dataset_key.py`). With no containers registered, `tools/sgt_replay.py
+  diff` shows no change. SGT's built-in GST/ITR datasets and their ladder are untouched.
+* Pages listing **several instances** (a table of filings) are D22: the first version builds one
+  instance per page and key, like `current_dataset`.
+* **Key** (D17, taken): the container's name is the dataset's form, unless a field is marked `form`;
+  one field is marked `period`; an instance = (client, form, period). Values seen before the period is
+  known wait in the session, as SGT's current dataset does.
+* **Tracker ladder:** each level names the ladder status it writes (`level_map`, S.3). The mapping the
+  user agreed as D18 (Draft → Draft, In progress → Submitted (Not Verified), Complete → Submitted &
+  Verified) is what goes into the file; it is not built in.
+
+### S.3 The containers file: `sdis_containers.json`
+
+*(user, 2026-10-04: "we will require a json to maintain containers and establish exceptions")*
+
+One JSON document holds every container and every exception, in the same spirit as
+`sgt_fields.json`: edit it to change behaviour, no code change; every exception carries examples; a
+file that fails its own examples is **refused at load and the previous version keeps running**.
+
+* **Where it lives:** the office copy is one row of a synced table (`sdis_config`, the whole document +
+  a version number), so every PC gets the same file. Each PC writes it to
+  `<Sera data>/sdis_containers.json` when the row changes, and SGT and SDIS load that file. The Distill
+  dialog edits it (creating a container, adding a field, marking key fields); an admin can also
+  **export it, edit it by hand and import it** (the import runs the same checks). A built-in copy
+  shipped with the app (`core/sdis/sdis_containers.json`) is empty: no levels, no containers; the
+  office copy is laid over it.
+* **Shape** (field names are `sdis_mcl` names, Part U):
+
+```json
+{
+  "version": 1,
+  "levels": [{"name": "Draft",       "when": {"captured": 1}},
+             {"name": "In progress", "when": {"captured": "51%"}},
+             {"name": "Complete",    "when": {"captured": "all"}}],
+  "level_map": {"Draft": "Draft", "In progress": "Submitted (Not Verified)",
+                "Complete": "Submitted & Verified"},
+  "profile": {"GST Portal": ["pan", "legal_name"], "Income Tax": ["pan", "name"]},
+  "containers": [
+    {"name": "GSTR-3B submission", "portal": "GST Portal",
+     "form_field": null, "period_field": "tax_period",
+     "fields": ["tax_period", "tax_paid", "arn", "filing_date"],
+     "exceptions": {"optional": ["filing_date"],
+                    "proves": {"arn": "Complete"},
+                    "levels": null, "level_map": null},
+     "examples": [{"captured": ["tax_period"], "level": "Draft"},
+                  {"captured": ["tax_period", "filing_date"], "level": "Draft"},
+                  {"captured": ["tax_period", "tax_paid"], "level": "In progress"},
+                  {"captured": ["tax_period", "arn"], "level": "Complete"}]}
+  ],
+  "others": {"GST Portal": ["aggregate_turnover"]},
+  "class_exceptions": {"aggregate_turnover": "info"},
+  "portal_exceptions": {"extra_domains": {"Some Portal": ["work.example.gov.in"]},
+                        "never_register": ["login.microsoftonline.com"]}
+}
+```
+
+  The levels above only illustrate the syntax; the real ones are whatever the user writes.
+
+* **Levels** (`levels`, file-wide; a container's own `levels` replaces them): an ordered list, lowest
+  first. Each level has a `name` and a `when`; the instance is at the **highest** level whose `when`
+  holds (and never lower than it has been). `when` may hold:
+  * `captured`: a number of counted fields (`2`), a share of n (`"51%"`, rounded up), or `"all"`;
+  * `fields`: a list of fields that must all be captured;
+  both, when given, must hold.
+
+* **The exceptions:**
+
+  | Exception | Where | Does |
+  | :--- | :--- | :--- |
+  | `optional` | a container | the field is captured and shown, but **not counted in n** (a field many instances never have) |
+  | `proves` | a container | capturing this field alone lifts the instance to **at least** that level (the same idea as SGT's `identifier_proves`: an ARN may prove the filing is done even if other fields were never seen). The level is the higher of the count and every `proves` hit; it still only promotes |
+  | `levels` / `level_map` | file, or a container | a container's own levels, and its own mapping onto the tracker's submit ladder, replace the file's |
+  | `form_field` | a container | the form comes from this field instead of the container's name (D17) |
+  | `class_exceptions` | file | a field is always in this class, whatever S.1 suggests |
+  | `portal_exceptions.extra_domains` | file | extra domains for a registered portal (a portal that moves to another domain after login, Part T) |
+  | `portal_exceptions.never_register` | file | domains a login link may never register (shared sign-in sites); checked before Part T's confirmation |
+
+* **Load checks** (refuse the whole file, keep the previous one, say why in the log and the dialog):
+  every field name exists in `sdis_mcl`; `profile` and `others` name registered portals; `period_field` and `form_field` are fields of their container;
+  `optional` and `proves` name fields of their container; `optional` never names the period field;
+  level names are unique; a `when` uses only `captured` / `fields`, with a share between 1% and 100%
+  and fields of the container; every `proves` level is a defined level; every `level_map` key is a
+  defined level and every value a real status of the ladder; at least one field counts
+  (n ≥ 1); a field is in at most one container per portal; every container's `examples` give the levels
+  they claim; `never_register` and `extra_domains` entries pass Part T's domain checks.
+
+### S.4 Where Others and Profile builder values are kept: the SRPF container
+
+*(user, 2026-10-04: "keep it in the SRPF container, JSON payload")*
+
+* The client's SRPF container (`client_raw_containers`, `sera_db/srpf.py`) already has two JSON columns
+  that are created and always written as `{}`: **`raw_aggregates`** and **`portal_profiles`**. They
+  become:
+  * `raw_aggregates` = the **Others** values: `{portal: {field: {"value", "updated_at", "history":
+    [{"value", "at"}]}}}`. The latest value wins and every change is kept in `history` (D20).
+  * `portal_profiles` = the **Profile builder** values per portal (D19): `{portal: {field: value}}`,
+    latching like SGT's profile (a `promote_longer` field may replace a value with a longer one).
+* **They must travel inside `tracker_dump`.** SRPF containers are a local cache rebuilt from
+  `tracker_dump` (`re_resolve_all_tracker_dumps()` deletes and re-inserts them; the table is `local`
+  in `sync_schema.py`), so anything written only into the container is lost at the next rebuild and
+  never reaches another PC. Therefore:
+  * SGT puts the values in the payload JSON of the rows it writes for that client, under one key:
+    `"sdis": {"portal": …, "portal_profile": {field: value}, "others": {field: value}, "at": …}`;
+  * a session that captured Others or profile values but wrote no dataset row writes one **carrier
+    row** per (client, portal): capture method `SGT_sdis_info`, no form, no period. Every tracker view,
+    counter and status resolver ignores carrier rows (they are not datasets);
+  * `_update_srpf_container` folds every row's `sdis` key into the two columns (latest `at` wins,
+    history appended), so a rebuild gives the same result and every PC gets the values through
+    `tracker_dump`'s sync.
+* Shown in the client detail window and the Tracker dump's container view, per portal, labelled with
+  the `sdis_mcl` labels.
+
+## Part T — Portal registration from service settings (problem 28)
+
+*(user, 2026-10-04: "take the link and dissect it to obtain the domain and use the gates as SGT-I")*
+
+* **Source:** the login links the user already types in **service settings**
+  (`ui/dialogs/service_manager_dialog.py` → `services.login_page_link`, `sera_db/mcl_services.py`;
+  the `services` table already replicates to every PC, `sync_schema.py`).
+* **Dissect:** `vsdc_scope.extract_host(link)` (parsed hostname, never a substring), then the
+  **registered domain** = the host down to one label above its public suffix
+  (`services.gst.gov.in` → `gst.gov.in`, `unifiedportal-mem.epfindia.gov.in` → `epfindia.gov.in`).
+  Suffixes come from a short built-in list (`gov.in`, `nic.in`, `co.in`, `org.in`, `net.in`,
+  `edu.in`, `ac.in`, `res.in`, `com`, `org`, `net`, `in`…); a host whose suffix is not on the list
+  keeps its **full host** (the narrowest scope). A bare suffix is never accepted
+  (`_FORBIDDEN_ENTRIES`), nor `localhost` or an IP outside tests.
+* **The same gates:** the domain joins the scope gate exactly as the built-in two do (`is_in_scope_url`,
+  `portal_for_url`: the domain or a subdomain of it, by parsed hostname). Income Tax and GST stay
+  built in. The portal's name is the service's name.
+* **What registration gives:** the portal is in scope for SGT-C and the SDIS recorder (D21), it gets
+  its **Others** container (Part S), and it is the `portal` of every spec registered on it.
+* **Exceptions** come from the containers file (S.3): `never_register` domains are refused, and
+  `extra_domains` add a working domain to a registered portal.
+* **Shown to the user** (D21, taken): saving a service shows the domain that will be watched and asks
+  once; the confirmed domain is in scope for **both** SGT-C and the SDIS recorder.
+  Deleting the service unregisters the portal: capture stops there; its registered datapoints stay,
+  marked inactive.
+* **Login domain ≠ working domain** (a portal that moves to another domain after login): the existing
+  tripwire (`vsdc_router` `_tripwire_hosts`, a portal title on an out-of-scope host) already notices
+  it; it offers "watch <domain> for <portal> too?" instead of only warning.
+
+## Part U — `sdis_mcl`: the field library (problem 29)
+
+*(user, 2026-10-04: "the fields that are approved or entered go into sdis_mcl so that we can reuse them
+for multiple datapoints")*
+
+* A synced office table **`sdis_mcl`**: one row per **field** (gid, name, label, value type, class =
+  profile / dataset / info, portal or "all", status, who, when). Every field the user approves in the
+  Distill dialog, or types in by hand, goes in.
+* A registered datapoint **is a field** of the library: PAN picked on the GST page and PAN picked on
+  the ITR page are two datapoints (two specs, two pages) of **one** field. Containers (Part S) list
+  fields, not datapoints. Part M's join across browsers uses the field once it is picked.
+* Naming a datapoint in the dialog **offers the existing fields first** (type-ahead); a new name
+  creates a new field. Renaming a field renames it everywhere (R6); what is captured does not change.
+* Its relation to Sera's existing **Master Column List** (`mcl_columns`, the client columns) is D23.
+
+## Part L — The Distill… dialog
+
+Tracker dump window → Tools ▾ → **Distill…**. Clear visibility, **not like the SGT lab** screen:
+
+* one row per datapoint, shown **once**, with a **collapsible arrow** listing the page links it was
+  found on (R5);
+* a **suggested label the user can edit** (R6); every number a **percentage** (R7). *(user,
+  2026-10-03: the label must be editable because SDIS may not get it right.)* The edited label is the
+  one registered and shown everywhere. It **stays editable after registration**: renaming a registered
+  datapoint changes only its name, never what is captured. An edited label is never overwritten by a
+  later mining run;
+* a `variable_alignment` list with keep / reject;
+* **containers** (Part S): beside the datapoint list, one Profile builder per registered portal, the Dataset containers
+  (create, rename, delete; each shows its datapoints and n) and one Others per registered portal
+  (Part T). Each datapoint shows its **suggested container** (S.1); the user adds it to a container,
+  which registers it (D7) as a field of `sdis_mcl` (Part U); the label box offers existing fields first;
+* filters: relevance, sure, page, state, browser, suggested container;
+* the **Find datapoints** button and the time of the last mining run (Part O).
+
+Accepting a datapoint is D7.
+
+**The design** *(user, 2026-10-04: "make a good dialog design, I trust you")* is
+`docs/sdis/distill-dialog-mockup.html` (fictional data only), in the Tracker Dump window's dark theme
+and green accent. W4-5 builds to it:
+
+* **A · Main view:** a header with the last run (time, captures, clients, browsers) and **Find
+  datapoints**; five stat cards (found, new since last run, please check, already captured, too little
+  evidence); two tabs (Datapoints, Please check). The datapoint table has these columns: Label (edited
+  in place) · Example · Type · Relevance (bar + %) · Sure % (amber below 60%) · Found on · Suggested
+  (a Profile / Dataset / Others chip, or "? not sure") · **Add to ▾**. An expanded row lists its pages
+  ("38 of 41 clients (93%)", browsers) and one plain "why" line for the suggestion. The Add to menu
+  puts the suggested container first (★), then the portal's containers, "New dataset container…" and
+  "Dismiss". The **containers side panel** on the right shows the portal tabs and, for each portal, its
+  Profile builder, its Dataset containers (period key outlined, optional fields in italics, a `proves`
+  badge, the levels in use) and its Others. Datapoints can be dragged in. At the bottom: Levels…,
+  Export JSON, Import JSON, and the file version with its check state.
+* **B · Container editor:** name and portal; a fields table (Period / Form radio buttons, Optional
+  tick, Proves level); a levels table (the file's levels or the container's own; reached when
+  captured: n / % / all; also needs fields; tracker status); a **live preview** strip (0 … n →
+  level); the checks run live, and Save stays disabled with the reason in words while a check fails.
+* **C · Please check:** one row per `variable_alignment` text: the text, where it is, what SDIS saw in
+  one sentence, and **Keep as data** / **Template**.
+* **D · Loading dialog:** application-modal; a progress bar, "128 of 312 captures", the time left, the
+  current page link, "finished work is saved as it goes", Cancel.
+* **E · States:** not mined yet; not the admin PC; containers file refused (the reason in words, the
+  version still in use).
+
+---
+
+## 9. Privacy, all in one place
+
+1. Monitoring phase: SDIS runs only on the admin PC, over its own corpus; other PCs delete after sync
+   (rule 7). No hashing yet.
+2. Real captures and their CSVs never leave this PC and are never committed (rule 10).
+3. Logs, hand-off notes and the regression runner print counts, never values.
+4. Before leaving the monitoring phase: salted hashes for faces (equal texts give equal hashes, so
+   matching and fingerprints still work), values shown live only.
+
+## 10. Decisions
+
+**Taken (2026-10-03):** rules R1–R10; problems 1–6 solved as Parts C–H describe; identity by the
+SGT session id + maths (Part D); rule 7 (no hashing, admin PC only); OCR later; plan first, then build
+like Autofill tweaks; every browser captured and compared per browser (M); smart page link resolution
+(N); "Find datapoints" on demand with a locking loading dialog, no idle learning (O; no CPU cap since
+2026-10-04, admin PC only);
+relevance by occurrences of non-fixed values, noise counted as fixed (J); no truth set, no absolute confidence; SDIS's own input, SGT-I
+irrelevant (K); "Filed" is mitigated by `variable_alignment`, not solved; Firefox support for SGT-C and
+SDIS (R). **2026-10-04:** containers (Profile builder and Others per portal, Dataset containers whose
+completion levels are written in the containers file) and the class suggestion (S); portal registration from service-settings login
+links through the same scope gate (T); the `sdis_mcl` field library (U); D3–D23 answered (below).
+
+| # | Decision | Taken (user, 2026-10-04 unless marked) |
+| :--- | :--- | :--- |
+| D1 | Engine location | `core/sdis/` package, pre-dev scripts as module aliases (Part A) (2026-10-03) |
+| D2 | Production input | SDIS's own recorder, SGT-I irrelevant (Part K) (2026-10-03) |
+| D3 | Confirm threshold N, and the minimum clients for a full Sure % (Q2) | N = 2 to confirm; 5 for full Sure % |
+| D4 | Capture whose identity stays undecided (Q10) | **no vote** |
+| D5 | Captures on different days (Q11) | automatic, by SDIS's recorder |
+| D6 | Where rejections, edited labels and container moves are stored (Q4) | office DB tables, synced (Part Q) |
+| D7 | An accepted datapoint becomes an SGT-C spec (Q4); its label stays editable | yes, by the user's approval only |
+| D8 | Picks, rejections and container moves feed back into the ranking (Q3) | yes: a picked kind ×1.5, a rejected kind left out |
+| D9 | Truth set | none; SDIS removes the fluff and the user picks (2026-10-03) |
+| D10 | Baseline | committed on `main` as `0f30543` (2026-10-03) |
+| D11 | Thresholds: screen 0.5, retire 1%, identity 0.9 / 0.5 over 3 values, ambiguity margin 0.5 | these; changed only when the regression runner shows a reason |
+| D12 | Idle time before learning | no idle learning; "Find datapoints" on demand (Part O) (2026-10-03) |
+| D13 | Raw-read budget per changed page; staff-PC size cap | 1.5 s; 500 MB |
+| D14 | How captures reach the admin PC | push over Sera Sync v3's transport, `sdis_push`, delete after ack (Part P) |
+| D15 | Tracker column added automatically for a registered datapoint | no |
+| D16 | A worker may open Chrome, Edge and Firefox (throwaway profiles, fictional local pages) | **yes** (no pop-up needed) |
+| D17 | Dataset key | the container's name is the form (unless a field is marked `form`); one field is marked `period`; instance = (client, form, period) (Part S.2) |
+| D18 | Completion → tracker ladder | **superseded the same day:** levels and their ladder mapping are written in the containers file (S.3), not built in. Agreed mapping, for the file: Draft → Draft; In progress → Submitted (Not Verified); Complete → Submitted & Verified; "k of n" kept; overridable per container (S.3) |
+| D21 | Portal registration | the domain is confirmed once on save; it is in scope for SGT-C **and** SDIS; exceptions in the containers file (Part T, S.3) |
+| — | Declining the D21 domain prompt (W1-8) | **Taken** (default, no answer in time): No saves nothing; the edit dialog stays open so the link can be changed |
+| — | Containers and exceptions | one JSON document, `sdis_containers.json`, synced, validated with examples like `sgt_fields.json` (Part S.3) |
+| D19 | Profile builder | **one per registered portal** |
+| D20 | An Others value that changes | the latest wins; the history is kept |
+| — | Where Others and Profile builder values are kept | the client's SRPF container, JSON (`raw_aggregates`, `portal_profiles`), carried in `tracker_dump` payloads (S.4) |
+| — | Ideas 2–4 (role tagging, session stickiness, ARN cross-check) | dropped; containers are filled by the user (Part S) |
+| D22 | Pages that list several instances of a container | later; first version: one instance per page and key |
+| D23 | `sdis_mcl` and Sera's Master Column List (`mcl_columns`) | separate tables; a field may be linked to a column later |
+| — | Dataset completion levels | not in code: defined in the containers file (`levels`, `level_map`) |
+| — | S.3 details (W4-6, recorded) | **Taken:** Profile builder, Others and dataset containers all count for "one container per portal"; loading the file skips the sdis_mcl/portal membership checks (put and import run them); removing a field drops the examples that captured it; a user's move beats `class_exceptions`; the `sdis_config` row has a fixed gid; specs of one field are `sdis.<field>`, `.2`, `.3`… |
+| — | A container named after a built-in form (W4-7) | **Taken** (user, 2026-10-05): **A** - its tracker row shares the canonical key (form = container name) with SGT's built-in row; the tracker keeps one row per key and never lowers its status |
+| — | Deadline | moved to **2026-10-06 01:30 IST** (Tuesday) |
+
+No decision is open. Workers record any new choice with `decide` and ask with `ask`.
+
+## 11. Build order
+
+Run by `tools/sdis.py` (the SGT-overhaul dispatcher via `use_project()`), in the worktree `../APP-sdis`
+on branch `sdis`. One fresh session per WP, with retries, usage-limit sleeps, questions by pop-up,
+CSV trackers, and nothing merged automatically. The step-by-step instructions for each WP are in
+`sdis-plan.json` (generated by `make_plan.py`). Deadline **2026-10-06 01:30 IST** (Tuesday).
+
+| Phase | WP | What | Model | Needs |
+| :--- | :--- | :--- | :--- | :--- |
+| 0 | W0-1 | Baseline: tests + the regression runner tools/sdis_regress.py | sonnet | - |
+| 0 | W0-2 | Engine package core/sdis/ (pre-dev files become module aliases) | sonnet | W0-1 |
+| 1 | W1-1 | Part B: value history with times | gemini → sonnet | W0-2 |
+| 1 | W1-2 | Part G: screens (one link, several pages) by weighted matching | gemini → sonnet | W0-2 |
+| 1 | W1-3 | Part D: identity by session id + data fingerprint | gemini → sonnet | W0-2 |
+| 1 | W1-4 | Part N: smart page link resolution | gemini → sonnet | W0-2 |
+| 1 | W1-5 | Part M: per-browser memory | gemini → sonnet | W0-2 |
+| 1 | W1-6 | Part R.1: Firefox address bar, title, and never reading background tabs (SGT-C) | opus | W0-1 |
+| 1 | W1-7 | Part R.2: browser parity tool + Firefox fixtures | opus | W1-6 |
+| 1 | W1-8 | Part T: portal registration from service-settings login links | opus | W0-1 |
+| 1 | W1-R | Phase 1 review | opus | W1-1, W1-2, W1-3, W1-4, W1-5, W1-6, W1-7, W1-8 |
+| 2 | W2-1 | Part E: look-alikes scored, AMBIGUOUS | gemini → sonnet | W1-R |
+| 2 | W2-2 | Part C: noise over time | gemini → sonnet | W1-R |
+| 2 | W2-3 | Part F: the variable_alignment state | gemini → sonnet | W2-1 |
+| 2 | W2-4 | Part H: memory upkeep (retire) | gemini → sonnet | W1-R |
+| 2 | W2-5 | Part R.3: Firefox line parity fixes (SGT-C) | sonnet | W1-R |
+| 2 | W2-R | Phase 2 review | opus | W2-1, W2-2, W2-3, W2-4, W2-5 |
+| 3 | W3-1 | Part I: statuses + labels from memory | sonnet | W2-R |
+| 3 | W3-2 | Part J: relevance by occurrences + slots | gemini → sonnet | W3-1 |
+| 3 | W3-4 | Part R.4: SDIS on Firefox trees | gemini → sonnet | W3-1 |
+| 3 | W3-5 | Part S.1: class suggestion (what a value stays the same with) | gemini → sonnet | W3-2 |
+| 3 | W3-3 | Part O engine: memory on disk, incremental mining | sonnet | W3-2 |
+| 4 | W4-1 | Part K: SDIS's own recorder (raw view, session id, browser) | opus | W3-3 |
+| 4 | W4-2 | Part P: captures travel to the admin PC | opus | W4-1 |
+| 4 | W4-3 | Part O: mining in its own process (no CPU cap) | opus | W3-3 |
+| 4 | W4-4 | Part Q: registration on every PC (synced tables) | opus | W3-3 |
+| 4 | W4-6 | Parts U + S.3: `sdis_mcl`, the containers file (sync + checks) | opus | W4-4, W1-8 |
+| 4 | W4-7 | Part S.2 in SGT: container instances, completion, Others values | opus | W4-6 |
+| 4 | W4-5 | Part L: the Distill dialog + loading dialog + containers | sonnet | W3-5, W4-3, W4-6 |
+| 5 | W5-R | Final review and merge-readiness note | opus | W4-2, W4-5, W4-7, W3-4 |
+
+**Models (owner decision 2026-10-04):** the twelve engine-only WPs marked "gemini → sonnet" run on Gemini
+3.8 Flash High first (Antigravity CLI, unrestricted, following GEMINI.md's allow/blocklist; `git push` is
+refused by the pre-push hook). Claude Sonnet takes over on Gemini's quota or from the second attempt.
+Everything else, every review and anything touching SGT, sync, the database or the UI is Claude only.
+
+Every WP: tests green, the regression runner before and after in its hand-off note (counts only),
+rules 5–8 of the runner kept. Decisions are asked by the WP named in section 10.
+
+### Merge readiness (W5-R, 2026-10-05)
+
+**Verdict:** ready to merge by hand, after the conflict work and hands-on checks below. Nothing was
+merged; branch `sdis` is 30 WPs on top of `0f30543`.
+
+**What is built (all Parts A–U, Parts in `core/sdis/`, pre-dev files are aliases):** value history
+(B), noise over time (C), identity by session id + fingerprint, undecided = no vote (D), scored
+look-alikes / AMBIGUOUS (E), `variable_alignment` (F), screens (G), retirement (H), statuses + labels
+from memory (I), relevance / Sure % (J), SDIS's own raw recorder behind SGT's change gate (K),
+per-browser memory (M), link resolution (N), on-disk incremental mining in a child process
+(`main.py --sdis-mine`, O), push of finished capture files to the admin PC over Sera Sync v3 (P),
+synced `sdis_fields` / `sdis_decisions` / `sdis_mcl` / `sdis_config` tables written to
+`sdis_fields.json` + `sdis_containers.json` on every PC (Q, S.3, U), Firefox address bar, title and
+background tabs + line parity (R), class suggestion, containers and completion levels, Others /
+Profile builder values in SRPF (S), portal registration from service login links (T), the Distill…
+dialog in Tracker dump → Tools, admin PC only (L). Tests: 364 SDIS + align tests pass.
+
+**What changed for SGT (rule 8):** (1) Firefox only: ComboBox address bar, em-dash titles,
+background tabs dropped (`onscreen_only`), Gecko-only line rules for closed `<select>` options and
+wrapped labels (`vsdc_uia_text`, `uia_nodes`); Chrome/Edge lines are byte-identical (parity tool).
+(2) `vsdc_scope` also accepts the domains of registered service login links. (3) `SgtShadow` offers
+each page that passed its change gate to the SDIS recorder (own thread, never blocks, setting
+`sdis_record`, default on). (4) Specs named `sdis.*` (from `sdis_fields.json`) feed container
+instances, rows with capture method `SGT_sdis_info` carry Others values, and rows carry
+`raw_payload.sdis`; **with no registered field and the built-in empty containers file none of
+this runs**. `tools/sgt_replay.py diff` prints only the "newly written" list every WP since W1-6
+has seen (the baseline in `~/AmanAssociates_Sera` is shared with `../APP`'s newer SGT; replay never
+runs any of the paths above). All `tests/test_sgt_*.py` pass.
+
+**Files that will conflict with `main`.** Main has committed changes since `0f30543` in 14 files this
+branch also edits. Identical on both sides (no conflict): `core/vsdc/vsdc_uia_text.py`,
+`tests/test_firefox_support.py`. Expected conflicts and how to resolve them:
+
+| File | Main did | Resolve |
+| :--- | :--- | :--- |
+| `core/sgt_i/uia_nodes.py` | took W2-5's Gecko change inline in `read_page_nodes` | keep the branch (`_read_docs` holds the same lines + `read_page_nodes_here`) |
+| `core/vsdc/vsdc_router.py` | took W1-6's address bar + `BROWSER_SUFFIX_RE` | same hunks; add the branch's `sdis_record`, `SdisRecorder`, tripwire line |
+| `sera_db/srpf.py` | `client_raw_container_light` cache, `slim` list reads, capture → MCL enrichment | keep both; **pass `0 if carrier else 1` to `_write_container_light`** for a new container; slim rows return `'{}'` for `raw_aggregates`, so the container inspector must fetch the full container (`identity_key=`) before showing SDIS values |
+| `sera_db/tracker_dump.py` | `enrich_client_from_capture` on insert, light-cache upkeep | keep both; carriers then enrich the MCL record from their profile (wanted) |
+| `sera_db/schema.py`, `sync_schema.py`, `tests/test_sync_schema.py` | `client_raw_container_light` (local) + `services.browser` | keep both sets of tables; the expected-table sets in the test need both |
+| `main.py`, `ui/windows/tracker_dump_window.py`, `ui/windows/client_detail_window.py`, `ui/dialogs/service_manager_dialog.py`, `ui/dialogs/unified_settings_dialog.py` | UI and start-up work | keep both; branch adds are self-contained blocks (Distill menu item, PORTAL VALUES, D21 prompt, recorder checkbox, `--sdis-mine`, writers on "synced") |
+
+On top of that, `../APP` has **uncommitted** edits to `sync_schema.py`, `sera_db/schema.py`, `main.py`,
+`ui/dialogs/unified_settings_dialog.py` and `ui/windows/tracker_dump_window.py`: commit them on main
+first, then merge, and re-check these five files.
+
+**Before merging, run:** `tests/test_sdis_*.py`, `tests/test_class_diff_align.py`, `tests/test_sgt_*.py`,
+`tests/test_sync_*.py`, `tests/test_raw_payload_db_and_srpf.py`, `tests/test_firefox_support.py`,
+`tests/test_browser_parity.py` and `tools/sdis_regress.py` on the merge result. Known before this
+branch: 54 failures + 43 errors in `tests/test_sync_*` (`sera_db/clients.py` internal-PK check, a
+missing seeded "EPFO" service), none in files the branch touches. Then the hands-on checks in
+`sdis-checks.csv` (1–11): real Firefox sessions, a registered EPF-type portal, the recorder in three
+browsers, two-PC push / registration / containers sync, Find datapoints with Cancel, a container
+climbing its levels, and on the merged build the tracker list with a carrier row and the frozen
+installer (`--sdis-mine`, the built-in `sdis_containers.json` shipped). Rule 7 stays: SDIS runs on
+the admin PC only and hashing must come before it leaves the monitoring phase (section 9.4).
+
+## 12. Hand-off notes
+
+- **W0-1** (2026-10-04, claude-sonnet-5-5): added `tools/sdis_regress.py` (counts only; `--captures DIR`, default
+  `../APP/tools/pre_dev/class_diff/output`, "no captures" + exit 0 if missing; `--save PATH`; sets `SDIS_DATA_DIR` and
+  `link_map.OUT_DIR` before use; `main(argv)` returns 0), `tests/test_sdis_regress.py` (2 tests: fictional clients A/B →
+  "orders agree: yes", "double count 0"; missing folder → "no captures"), and `docs/sdis/sdis-regress-baseline.txt`.
+  Tests: step 1 gave 14 passed; with the new tests 16 passed. No engine file changed, so regression before = after.
+  Regression (11 maps, 41 snapshots, 2367 text nodes): double count 0, lost 0 everywhere; MULTI 28 in total (returns
+  gstr1: 13 per session; local fictional gstr1: 1). Memory, confirmed same/differs/composite: services dashboard
+  115/39/11; returns dashboard 90/6/7 + 5 waiting (2 only-one-client, 3 repeat); GSTR-1 92/13/18 + 1 "changes within
+  one client" + 4 waiting; fictional GSTR-1 48/8 + 1 changes-within-one-client; fictional GSTR-3B 55/8; orders agree yes
+  on all 5 links. All as expected. Run time ~2-3 s.
+  Next WP must know: double count = sum over (shape, text) of merged count minus the most any one snapshot showed; LOST
+  compares snapshot texts with the entries' `values` (capped at MAX_VALUES 5). The runner prints session names (capture
+  times / "client n") and page links only. When W0-2 moves the engine to `core/sdis/`, the runner's `import link_map`
+  etc. go through the pre-dev aliases; keep `link_map.OUT_DIR` assignment working through the alias.
+- **W0-2** (2026-10-04, claude-sonnet-5-5): engine package `core/sdis/`: `__init__` (pipeline in five lines), `paths.py`
+  (`data_dir()`, `write_csv`), `keys/align/link_map/memory/tables` moved (absolute `core.sdis` imports; `keys.LEARNED_FILE`,
+  `link_map/tables/memory.OUT_DIR` = `data_dir()`), new `labels.py` (value types, period rule, `composites`, `_end`, CT_*)
+  and `identity.py` (`client_ids`, `masked`) moved unchanged out of `compare.py`, which imports them back. The five pre-dev
+  files are aliases (`sys.modules[__name__] = core.sdis.<name>`; `memory/link_map/tables` still run as scripts via `_m.main()`).
+  `tools/sdis_regress.py` imports `core.sdis` directly. Tests: `test_sdis_package.py` (5, new); SDIS tests + align: 70 passed.
+  Regression before = after: printout identical to `sdis-regress-baseline.txt` except the timing line (diffed); 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28, orders agree yes on all 5 links - no number changed.
+  `compare.py/memory.py/tables.py/snapshot_diff.py --help` all start. Decisions: `git mv` is not on the shell allow-list, so
+  files were `cp`ed then the pre-dev copies overwritten with aliases (git sees them as new core files; history stays on the
+  pre-dev path). `SERA_DATA_DIR_NAME` (core.vsdc.vsdc_alerts) is imported INSIDE `data_dir()` only when `SDIS_DATA_DIR` is
+  unset, and identity's SGT/VSDC imports are inside `client_ids`: importing `core.vsdc` loads PySide6 (~0.8 s), which the
+  "core.sdis imports without PySide6" test forbids. Next WP must know: set `SDIS_DATA_DIR` before importing `core.sdis.*`
+  (LEARNED_FILE / OUT_DIR are read at import); a stray counts-only `../sdis_regress_after.txt` (outside the repo) can be deleted.
+- **W1-1** (2026-10-04, gemini-3.8-flash-high): built Part B value history with times. Files: `core/sdis/link_map.py` (`LinkMap.add`
+  tracks entry `history` as `[stamp, text]` on text change; `to_flat` includes `history`), `core/sdis/memory.py` (`PageMemory._see`
+  records `c['history']` per client, appending incoming items while skipping exact duplicates), `core/sdis/history.py` (`day_of(stamp)`
+  extracts 'YYYYMMDD' for snapshot, single read, or ISO stamps), `tests/test_sdis_history.py` (6 tests). Updated `test_sdis_package.py`.
+  Tests: 76 passed (70 previous + 6 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0,
+  lost 0, multi 28; orders agree yes on all 5 links; memory confirmed/waiting breakdown identical everywhere (0 numbers changed).
+  Decisions: none (Part B specification followed directly). Next WP must know: `day_of` lives in `core.sdis.history`; `to_flat()` items
+  and `mem.nodes[nid]["clients"][client]["history"]` carry `[[stamp, text], ...]`.
+- **W1-2** (2026-10-04, gemini-3.8-flash-high): built Part G screens by weighted matching. Files: `core/sdis/screens.py`
+  (`link_weights`, `covers`, `same_screen`, `WeightDict`, `SCREEN_MIN` = 0.5), `core/sdis/link_map.py` (`build_maps` computes
+  weights and matches candidates, splitting into screens; `LinkMap` `link`/`screen` attributes; `add` accepts `precomputed`),
+  `core/sdis/memory.py` (`client_maps` groups by base link and `PageMemory` screens; `build` sets `screen`/`link`),
+  `tools/pre_dev/class_diff/screens.py` (alias), `tools/sdis_regress.py` (fallback to base link), `tests/test_sdis_screens.py`
+  (5 tests: tiny math, `link_weights` formula, A+block, shell+A, replacement split). Updated `tests/test_sdis_package.py`.
+  Tests: 82 passed (76 previous + 6 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0,
+  lost 0, multi 28; orders agree yes on all 5 links; 0 numbers changed; no real link splits. Decisions: none (Part G followed directly).
+  Next WP must know: `LinkMap` and `PageMemory` have attributes `link` (base link) and `screen` (int >= 1); screens >= 2 are keyed/printed
+  as `'link [screen n]'`.
+- **W1-3** (2026-10-04, gemini-3.8-flash-high): Part D identity by session id + data fingerprinting. Files: `core/sdis/identity.py`
+  (`_by_time`, `group_clients` moved from `link_map`; `fingerprint`, `decide`, `resolve_owners`), `core/sdis/link_map.py` (re-exports
+  `_by_time`, `group_clients`), `core/sdis/memory.py` (`client_maps` uses `resolve_owners` and drops undecided owners per D4),
+  `tools/pre_dev/class_diff/identity.py` (alias), `tools/sdis_regress.py` (prints owners per session), `tests/test_sdis_identity.py`
+  (7 tests), `tests/test_sdis_package.py` (2 new tests). Tests: 91 passed (82 + 9). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28 unchanged. Owners: 4 sessions (2 undecided captures, client 1,
+  client 2). Memory: 5 links → 3 links (fictional GSTR-1 and GSTR-3B drop out of memory because both fictional captures have no IDs
+  and sim=0.556 is undecided, so they are dropped from voting per D4, leaving 0 voting clients; real GST clients stay two on 3 links).
+- **W1-4** (2026-10-04, gemini-3.8-flash-high): Part N smart page link resolution. Files: `core/sdis/links.py` (`resolve`:
+  groups by host, segment count, route existence; pair-wise voting on diffs=1; masks to `{v}` if value votes >= 2 and
+  page votes == 0; protects letters-only same-client variation and host), `tools/pre_dev/class_diff/links.py` (alias),
+  `core/sdis/link_map.py` (`build_maps` takes `link_of`, keys maps by resolved link), `core/sdis/memory.py` (`client_maps`
+  computes raw links, calls `resolve()`, resolves links before identity/owners and builds with `link_of`),
+  `tests/test_sdis_links.py` (9 tests), `tests/test_sdis_package.py` (package alias & import tests). Tests: 101 passed
+  (91 + 10 new). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0,
+  multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links (return dashboard 90/6/7 + 5 wait, gstr1 92/13/18 + 1
+  changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; exactly 0 numbers changed on real captures
+  (static links carry no per-client values). Decisions: none. Next WP must know: `resolve(links_by_client)` lives in
+  `core.sdis.links`; `link_map.build_maps(..., link_of=...)` keys maps by resolved link; `memory.client_maps` resolves links
+- **W1-5** (2026-10-04, gemini-3.8-flash-high): built Part M per-browser memory. Files: `tools/pre_dev/class_diff/key_probe.py`
+  (`browser_name_of_hwnd` via `OpenProcess`/`QueryFullProcessImageNameW`; saves `'browser'` in capture and read records),
+  `core/sdis/link_map.py` (`all_sources` yields `'browser'`; `LinkMap` has attribute `browser` from first read, parses `[browser]`;
+  `build_maps` groups candidates by browser), `core/sdis/memory.py` (`PageMemory` has attribute `browser`; `client_maps` groups
+  by `(link, browser)` and names pages with `[browser]`; `build` and `main` propagate and display browser), `tools/sdis_regress.py`
+  (prints browser when not ''), `tests/test_sdis_memory.py` (4 tests). Tests: 105 passed (101 previous + 4 new).
+  Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided,
+  client 1, client 2); memory 3 links (return dashboard 90/6/7 + 5 wait, gstr1 92/13/18 + 1 changes + 4 wait, services dashboard
+  115/39/11); orders agree yes everywhere; exactly 0 numbers changed on real captures (all pre-dev captures have browser "").
+  Decisions taken: none (followed Part M blueprint directly). Next WP must know: `LinkMap` and `PageMemory` carry attribute `browser`
+  (str: 'chrome', 'msedge', 'firefox', or ''); `client_maps()` keys memories by resolved link + `[browser]` when not empty; memories only
+  compare the same browser. Joining datapoints across browsers happens in W3-2.
+- **W1-6** (2026-10-04, claude-opus-5-5): Part R.1. `core/vsdc/vsdc_router.py` `extract_browser_url` finds Edit OR ComboBox
+  (`CreateOrCondition`, same keyword test / ValuePattern / per-hwnd cache, tree order); title cleanup is now module constant
+  `BROWSER_SUFFIX_RE` accepting `-`, `–`, `—`. `tools/pre_dev/class_diff/key_probe.py` `read_url`: same Or condition. Background
+  tabs: new `vsdc_uia_text.onscreen_only(documents)` (drops `CurrentIsOffscreen` true, keeps unreadable) used by
+  `_find_document_elements` and `core/sgt_i/uia_nodes.read_page_nodes`. Left alone: `core/sgt_i/uia_events.register` still hooks
+  every Document (events only trigger a read; the read is filtered). No other 50004 address-bar search in core/ or tools/.
+  Tests: `tests/test_firefox_support.py` 12 (fake UIA); SGT+VSDC+Firefox 913 passed 1 skipped; SDIS 105 passed.
+  `sgt_replay.py diff` prints a list of "newly written" rows: not from this WP - replay feeds the saved corpus through `core/sgt`
+  only (no file there changed; no UIA/title path is used); the baseline in ~/AmanAssociates_Sera is shared with ../APP's newer
+  SGT. A later WP should re-take the baseline on this branch before relying on the diff.
+  Regression before → after: identical (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts).
+  Decisions: none asked. Hands-on check 1 added (real GST/ITR in Firefox). Next: W1-7's parity tool can use `onscreen_only`.
+- **W1-7** (2026-10-04, claude-opus-5-5): Part R.2. `tools/browser_parity.py` (serves regenerated client A/B + new
+  `tests/class_diff_align/make_form.py` form on 127.0.0.1; each browser alone per page, throwaway profile; A opened with B
+  as a 2nd tab; closes only its own PID tree via a Toolhelp snapshot, same-exe descendants; `--browsers`, `--md`,
+  `--no-fixtures`, `--show-lines`), fixtures `client_{A,B}_{chrome,msedge,firefox}.json` (key_probe format, test.local),
+  `docs/sdis/firefox-parity.md`, `tests/test_browser_parity.py` (13). key_probe `read_keys` now skips Documents whose CACHED
+  IsOffscreen is true. Tests: SDIS+align 105 passed, parity 13 passed. No core/ file changed. Regression before = after
+  (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts).
+  Result: client A/B lines identical in all 3 browsers (52/69, same order); B never read while A in front; password never
+  read; 3 `Selected:` lines everywhere. **W2-5 must fix** (details in firefox-parity.md): (1) Firefox reads a closed
+  `<select>`'s options as lines; (2) Firefox doubles a wrapped radio/checkbox label; (3) `onscreen_only` uses
+  `CurrentIsOffscreen`, which raises on `read_page_nodes`' cache-only elements, so node reads keep background tabs (Firefox
+  3 docs) - use cached 30022; (4) Edge title `- Profile 1 - Microsoft​ Edge` is not stripped by `BROWSER_SUFFIX_RE`.
+  Decisions recorded: occlusion off in the throwaway browsers (an occluded window gives 0 lines in Chromium and Firefox), 4
+  extra Firefox first-run prefs; fixtures via key_probe. Rerunning the tool rewrites firefox-parity.md (keep its top section).
+- **W1-8** (2026-10-04, claude-opus-5-5): Part T. `core/sdis/config.py` (`load(paths, previous)` -> (config, errors): built-in
+  `core/sdis/sdis_containers.json` (new, empty) then the office file (`<Sera data>/sdis_containers.json`, env `SDIS_CONTAINERS_PATH`);
+  a top-level section replaces the built-in one; `check()` covers ONLY `version` (1) and `portal_exceptions` (keys
+  extra_domains/never_register, Part T domain checks); a refused file keeps the previous good config; `current()`/`reload()`/
+  `portal_exceptions()`). `core/vsdc/vsdc_scope.py`: `PUBLIC_SUFFIXES`, `registered_domain`, `domain_for_link`, `never_registered`,
+  `builtin_portal_for_domain`, `set_services_source(fn)` (main.py sets `db.get_services` next to VSDCWorker), `service_domains()`
+  (cached; `reload_extra_domains()` clears it; also called after service add/edit/delete and on sync received); `portal_for_url`
+  checks them after the built-ins and `vsdc_scope.json`. `core/sdis/portals.py` `registered_portals()` / `portal_names()`.
+  Dialog: `ServiceEditDialog._confirm_watched_domain` (D21). Tripwire logs the host's registered domain. Tests:
+  `tests/test_sdis_portals.py` 31; VSDC scope + SGT 636 passed; SDIS + align + Firefox 148 passed. `sgt_replay.py diff`: the
+  same pre-existing "newly written" list W1-6 described (shared baseline; replay sets no services source, so scope is unchanged).
+  Regression before = after: 11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, same counts.
+  Next: W4-6 adds the other sections' checks to `config.check()`; Part S's Others/profile and spec portals must use
+  `portals.registered_portals()`; sgt_specs does not validate portal names (left unchanged). Installer packaging of the new json not checked.
+- **W1-R** (2026-10-04, claude-opus-5-5): Phase 1 review. Order in `memory.client_maps` is right (session ids -> resolve links
+  (N) -> owners (D) on resolved maps -> per (owner, link, browser) maps -> screens across clients (G)); memories vote one map per
+  client per screen (R8). Fixed: (1) `link_map.build_maps` keyed a client's maps by (owner, link) only, so its 2nd browser
+  OVERWROTE the 1st: keys are now `link [browser]` / `link [browser] [screen n]` (unchanged when browser ''); (2) `identity.
+  resolve_owners` compared sessions by page key, pairing per-session screen numbers and mixing browsers: now per (link,
+  browser), and a link where either side has 2+ screens gives no evidence; `client_ids` builds its URL from `m.link`;
+  (3) `fingerprint` halved every agreement (an equal value is shown by both compared captures): equal pairs weigh
+  1/(rarity-1); (4) `links.resolve` counted value votes per link PAIR: now distinct clients, `VALUE_CLIENTS` = 3 (decisions
+  recorded). Tests: +1 links, +2 identity (rarity test updated), +1 memory (one client in 2 browsers; the chrome/firefox
+  test now gives each browser both clients - lone sessions sharing no page are undecided, per D4), +1 screens (2nd client's
+  screens paired by cover). SDIS + align: 140 passed. Regression before = after (11 maps, 41 snapshots, 2367 text nodes,
+  0/0/28; owners 4, the 2 fictional sessions still undecided: sim 0.56 -> 0.70, they differ in 3 codes + 2 periods per page,
+  so Part D's "one client" expectation was wrong; memory 3 links, same counts). Not built (needs visit boundaries, W4-1):
+  Part D's "one session, same link twice, data disagree -> undecided". `client_maps(client_link_maps=...)` without
+  `sources` still reads all_sources() from disk for weights.
+- **W2-1** (2026-10-04, gemini-3.8-flash-high): built Part E look-alikes scored pairing and AMBIGUOUS detection. Files: `core/sdis/align.py`
+  (`AMBIGUOUS_MARGIN` = 0.5, `_MAX_CELLS` = 40000, `_pattern`, `_column` sideways overlap, `_score`, `_best_injection` DP with banned pair,
+  `_look_alikes` injection & unsure check, `align` finds uneven shapes between anchors, skips from LCS, and calls `_look_alikes`),
+  `core/sdis/memory.py` (`_match` passes `ambiguous` set, `_see` tracks `c['sure']` with later sure setting it True, `confirmed()` counts only
+  clients with `sure` True, `verdict()` returns 'ambiguous' for not confirmed node with not-sure client), `tools/pre_dev/class_diff/compare.py`
+  (`compare_flat` passes `ambiguous` set and sets `check = 'ambiguous pairing - look-alikes, one side has fewer'`), `tests/test_sdis_lookalikes.py`
+  (10 tests), `tests/test_sdis_package.py` (alias test). Tests: 151 passed (140 previous + 11). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links (return dashboard
+  90/6/7 + 5 wait, gstr1 92/13/18 + 1 changes + 4 wait, services dashboard 115/39/11); orders agree yes everywhere; 0 numbers changed on real
+  captures (no look-alikes uneven on real captures). Decisions taken: none (followed Part E blueprint directly). Next WP must know: `align`
+  takes `ambiguous: Optional[set] = None`; `memory.nodes[nid]['clients'][c]['sure']` is bool; `compare_flat` flags ambiguous look-alike rows in `check`.
+- **W2-2** (2026-10-04, gemini-3.8-flash-high): built Part C noise over time and furniture heuristics. Files: `core/sdis/noise.py`
+  (`LABEL_LOOKBACK` = 6, `changes_within_client` moved from memory.py, `changes_with_time` grouping last text per day per client across 2+ days,
+  `probably_furniture` heuristic for sentence/label without confirmed label in 6 lookback nodes), `tools/pre_dev/class_diff/noise.py` (alias),
+  `core/sdis/memory.py` (verdict order: composite, changes within one client, changes with time, unconfirmed, same for all clients, probably furniture,
+  differs between clients), `tests/test_sdis_noise.py` (12 tests), `tests/test_sdis_package.py` (alias and PySide6-free import tests).
+  Tests: 164 passed (151 previous + 13). Regression before → after (counts): 11 maps, 41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28;
+  owners 4 (2 undecided, client 1, client 2); memory 3 links; return dashboard confirmed differs between clients 6 → 5 and confirmed probably furniture 0 → 1
+  (1 unlabelled sentence node reclassified); gstr1 (92/13/18 + 1 changes + 4 wait) and services dashboard (115/39/11) unchanged; orders agree yes on all links.
+  Decisions taken: none (D5 taken previously; followed Part C blueprint directly). Next WP must know: `changes_within_client`, `changes_with_time`, and
+  `probably_furniture` live in `core.sdis.noise`; `PageMemory.verdict(nid)` returns 'probably furniture' for differing sentence/label nodes lacking preceding labels.
+- **W2-3** (2026-10-04, gemini-3.8-flash-high): built Part F variable_alignment state and rejected hook. Files: `core/sdis/memory.py`
+  (`_differs_shapes` computed once per call and cached; `verdict()` transitions 'same for all clients' to 'variable_alignment' if
+  `labels.value_type(text) != 'label'`, not composite, ctype not in `CHOICE_CTYPES`, and shape in `_differs_shapes`; rejected hook
+  restores 'same for all clients'; `summary()` passes differs_shapes; `build()` accepts `rejected`), `core/sdis/noise.py`
+  (recognizes 'variable_alignment' as preceding label in `probably_furniture`), `tools/pre_dev/class_diff/compare.py`
+  (added `VARIABLE_ALIGNMENT = 'variable_alignment'` to `STATUSES`; `compare_flat` classifies FIXED sharing shape with VARIABLE as
+  VARIABLE_ALIGNMENT and includes in `shared`), `tests/test_sdis_variable_alignment.py` (5 tests), `tests/test_sdis_package.py`.
+  Tests: 169 passed (164 previous + 5 new); `test_class_diff_align.py` passed unchanged. Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links;
+  return dashboard confirmed same 90 → 87, variable_alignment 0 → 3; gstr1 confirmed same 92 → 72, variable_alignment 0 → 20;
+  services dashboard confirmed same 115 → 89, variable_alignment 0 → 26; orders agree yes on all links (reclassified nodes share shapes
+  with client data). Decisions: rejected signature `(link, shape, text)` matches either `self.link` or `self.page`. Next WP must know:
+  `PageMemory.verdict(nid, differs_shapes=..., rejected=...)` returns `'variable_alignment'`; rejections stored in W4-4.
+- **W2-4** (2026-10-04, gemini-3.8-flash-high): built Part H memory upkeep (retire). Files: `core/sdis/memory.py`
+  (`RETIRE_P` = 0.01; `PageMemory` tracks `self.clients` in addition order; each node keeps `first_ci` and `last_ci`; after each
+  `add()`, confirmed nodes in `self.order` evaluate `chances = len(self.clients) - first_ci`, `seen = len(nd["clients"])`,
+  `misses = len(self.clients) - 1 - last_ci`, `p = (seen + 1) / (chances + 2)`; retire when `misses >= 2` and
+  `(1 - p) ** misses < 0.01`: removed from `self.order`, status 'retired', verdict 'retired'; unconfirmed nodes never retire;
+  retired node returning through later client becomes new pending node; summary and main CSV updated), `tests/test_sdis_retire.py`
+  (7 tests), `tests/test_sdis_package.py`. Tests: 177 passed (169 previous + 8 new). Regression before → after (counts): 11 maps,
+  41 snapshots, 2367 text nodes, double count 0, lost 0, multi 28; owners 4 (2 undecided, client 1, client 2); memory 3 links
+  (return dashboard 87 same / 5 diff / 7 comp / 1 furn / 3 var_align + 5 wait, gstr1 72 same / 13 diff / 18 comp / 1 changes / 20 var_align + 4 wait,
+  services dashboard 89 same / 39 diff / 11 comp / 26 var_align); orders agree yes on all links; exactly 0 numbers changed because
+  2 clients cannot retire anything (`misses < 2` and unconfirmed nodes never retire). Decisions taken: none (followed Part H exact formulas
+  and worked examples). Next WP must know: `PageMemory` has `self.clients` list; node `status` and `verdict(nid)` are 'retired' for retired
+  nodes; retired nodes are removed from `self.order`.
+- **W2-5** (2026-10-04, claude-sonnet-5-5): Part R.3, all four W1-7 differences fixed as kinds. `core/vsdc/vsdc_uia_text.py`: `_is_offscreen`
+  (live, else cached 30022; `onscreen_only` uses it, so `read_page_nodes` now drops background tabs: Firefox 3 docs -> 1);
+  `_framework_is_gecko`; in `_collect_descendant_lines`, ONLY for Gecko documents: a ComboBox's descendants (closed `<select>`
+  options) are skipped, and a named container directly before a same-named radio/checkbox is dropped (wrapped `<label>`).
+  `core/sgt_i/uia_nodes.py`: caches FrameworkId (30024), sets `gecko: True` on a Gecko document's first node, and `lines_from_nodes`
+  applies the same two rules (so the 14.2 identity gate still agrees); the node tree keeps the option elements (W3-4 / SDIS see
+  them). `vsdc_router.BROWSER_SUFFIX_RE` allows zero-width spaces in "Microsoft Edge" (profile name "- Profile 1" stays; fallback
+  path only). Tests: +9 in `tests/test_firefox_support.py` (21); SGT+VSDC+Firefox+parity 935 passed 1 skipped; SDIS+align 177 passed.
+  Real run (D16 yes): `tools/browser_parity.py` - Chrome, Edge, Firefox give identical lines on client A/B/form (52/69/25, same
+  order, 3 `Selected:` lines); `firefox-parity.md` updated. `sgt_replay.py diff` prints the same pre-existing "newly written"
+  list as W1-6/W1-8 (shared baseline; replay never touches these files). Regression before = after (11 maps, 41 snapshots, 2367
+  text nodes, 0/0/28; owners 4; memory 3 links, same counts); nothing changed. Decisions recorded: key on framework id; Edge title.
+  Next: W3-4 may want to drop `ctype` ListItems under a ComboBox from SDIS's Firefox node matching (nodes still hold them).
+- **W2-R** (2026-10-04, claude-opus-5-5): Phase 2 review. `memory.PageMemory.verdict` is now the one verdict function, its order in
+  its docstring (retired, composite, noise, ambiguous, waiting, variable_alignment, probably furniture, same/differs); new
+  `base_verdict` (no refinements) feeds `_differs_shapes` and `noise.probably_furniture`, so verdicts no longer recurse through a
+  half-filled cache. Fixed: (1) an unsure look-alike's texts still voted in confirmed nodes (`memory.voters`: only sure clients
+  count, Part E); (2) memory's `_view` dropped rects, so look-alikes vs memory never scored the screen column; (3) probably
+  furniture typed only the FIRST client's text (order-dependent): now every voting client's text must be sentence/label;
+  (4) `changes_with_time` accepted days seen by one client (clients captured on different days became noise): only days with
+  2+ clients count; (5) a retired node's shape still made pending nodes 'repeat'; (6) retirement follows time, so
+  `PageMemory/build(retire=False)` and the runner's / memory.py's order check build both orders without it; the runner prints
+  `retired (time order)`. D11 thresholds checked as module constants: `screens.SCREEN_MIN`, `memory.RETIRE_P`,
+  `identity.SAME/DIFF/MIN_VALUES`, `align.AMBIGUOUS_MARGIN` (unchanged). Tests: `tests/test_sdis_verdict.py` (6); SDIS + align 183
+  passed 1 skipped. Regression before = after (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all
+  verdict counts identical, retired 0; orders agree yes). Decisions recorded: the two above. Next: W3-1 replaces
+  `noise.probably_furniture`'s 6-node lookback with real labels; use `base_verdict` for any rule that looks at neighbours.
+- **W3-1** (2026-10-04, claude-sonnet-5-5): Part I. `core/sdis/labels.py` now holds (moved unchanged from compare.py, imported back)
+  `_container _children _first_label _same_column _table_label LABEL_LOOKBACK _label`, plus new `cell_labels(flat)` (real tables via
+  `core.sdis.tables` on a doc rebuilt from the flat: column name top-down, matrix row name in front; header cells / nameless columns get
+  nothing). `memory.PageMemory`: `views[client] = (flat, node id per index)` set in `add()`; `status(nid)` (fixed / semi-variable /
+  variable / variable_alignment / ambiguous / furniture / waiting / retired / composite); `label(nid)` from the latest client view that
+  holds the node (table label, else `labels._label` over candidates; candidates cached per view, reset by add/retire). `noise.
+  probably_furniture` is now `label(nid) == ""` (W2-2's lookback and `noise.LABEL_LOOKBACK` removed). `compare.py`: default = memory view
+  (`compare_memory__<page>.csv`: status, label, value_type, clients, example_value, key), old mode under `--two` (or --latest/--previous).
+  Tests: `tests/test_sdis_labels.py` (27: EXPECTED labels from memory in both client orders, ledger/matrix cells, statuses, furniture,
+  lookback 5/6, compare CSV); the 6 furniture tests of test_sdis_noise.py moved there rewritten on real views; SDIS + align 204 passed.
+  Regression (`sdis_regress.py` now also prints statuses + "data nodes / labelled" per page): before = after on every earlier line (11 maps,
+  41 snapshots, 2367 text nodes, 0/0/28; owners 4; all verdict counts and furniture 1 on returns dashboard identical; orders agree yes).
+  New lines: returns dashboard fixed 73, semi-variable 14, variable 5, var_align 3, furniture 1, waiting 5, composite 7, data 22 / labelled 21;
+  GSTR-1 fixed 56, semi 16, variable 13, var_align 20, furniture 1 (the within-client noise), waiting 4, composite 18, data 49 / labelled 48;
+  services dashboard fixed 84, semi 5, variable 39, var_align 26, composite 11, data 70 / labelled 70. Decisions recorded (2): candidates =
+  base verdict 'same' with fixable/alphanumeric type + unpaired repeats of such (shape, text) (= compare.py's set, no verdict loop); a
+  nameless table column falls back to the box rules. Next WP must know: `memory.label` / `status` need `add()`'d views (hand-made nodes
+  have none -> label ''); `main_memory()` was only tested on fictional fixtures (real output stays untouched).
+- **W3-2** (2026-10-04, claude-sonnet-5-5): Part J. `core/sdis/relevance.py` (+ pre-dev alias): `datapoints(memories, rejected=(), picked=())`
+  -> `Datapoint(key, label, value_type, relevance_pct, sure_pct, pages[(link, screen, browser, share)], nodes[(memory idx, nid)],
+  slot_type_pct, surprise)`, best first. Counts nodes with status variable / semi-variable / variable_alignment (unrejected); a rejected
+  variable_alignment (memory.rejected) is skipped; share = sure clients / `len(m.clients)` of that PageMemory; joined by (label lower-cased
+  without trailing ':' / spaces, node type = most common last-value type, ties by name so runs agree), no label -> (link, shape). picked x1.5,
+  rejected keys left out (keys are (label, type) or (link, shape); labels are cleaned before compare). N = 2, FULL_SURE_CLIENTS = 5, surprise
+  at >= 90%. memory.main() and sdis_regress.py print "datapoints N, top 10 relevance %" (numbers only). Tests: `tests/test_sdis_relevance.py`
+  (8) + package test; SDIS + align 213 passed. Regression before = after on every earlier line (11 maps, 41 snapshots, 2367 text nodes,
+  0/0/28; owners 4; verdicts, statuses, retired 0, orders agree yes). New line: datapoints 93 (from 141 data nodes joined by label), top 10 =
+  [100, 100, 100, 67, 67, 67, 33, 33, 33, 33] (a label found on all 3 pages with both clients leads; 2 pages 67, 1 page 33).
+  Next WP must know: `datapoints()` needs `add()`'d PageMemory objects (labels come from views); unsure-pairing clients never vote;
+  container moves (Part S) must be passed in as rejected keys of the other containers.
+- **W3-4** (2026-10-04, claude-sonnet-5-5): Part R.4. Firefox fixtures exist (W1-7), so tests only: `tests/test_class_diff_align.py` gets
+  `ALIGN_BROWSERS` (edge = the original client_A/B.json, plus msedge / chrome / firefox where both files exist) and `_load(c, browser)`;
+  the `setup` fixture is parametrized, so every alignment test (pairing errors 0, every EXPECTED labelled, keys still shift without
+  alignment, extra rows only-latest) runs in raw + sgt view on all 4. `tests/test_sdis_labels.py`: the three memory-label tests
+  (labels from memory in both client orders, values are data, template texts fixed) run per browser. All pass first time, Firefox
+  included: no change to `core/sdis` was needed (the fixtures hold identical lines, W2-5 already dropped the ComboBox option
+  duplicates for the line view; the form page has no SDIS fixture). Tests: SDIS + align 243 passed (was 213 + the new browser cases).
+  Regression before = after, identical in every line (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all
+  verdicts/statuses, datapoints 93, orders agree yes); nothing changed. Decisions: none asked or recorded.
+  Next: the table fixtures (`class_diff_tables/tables_*.json`) already parametrize over the browsers present; W1-7's real Firefox GST/ITR
+  read is still a hands-on check.
+- **W3-5** (2026-10-04, claude-sonnet-5-5): Part S.1. `core/sdis/classes.py`: `suggest(datapoints, memory_state, moves=None)` ->
+  {key: (profile | dataset | info | None, reason)}, `annotate()` (also sets `Datapoint.suggested_class` / `class_reason`, new fields in
+  relevance.py), `client_class(obs)`, `read_period(raw link, resolved link, texts)`, `CLASS_AGREE` = 0.9. Observation = (day, period,
+  value) per read of the page: `LinkMap.read_info` (new; `{stamp, period}` per read, filled in `add`) -> `PageMemory.read_info[client]`
+  (`add(flat, client, reads=None)`; `memory.build` and `client_maps` pass it); the value at a read = latest history item at or before
+  it, from the read the history starts. Period = the one period-shaped text on that read, else the one period-shaped masked link segment.
+  No reads (hand-made data) -> the history items are the observations. A constant value seen on one day in <= 1 period, or < 2
+  observations, is "no evidence", not info. Reasons are counts only ("... for 2 of 2 clients", "not enough evidence", "clients disagree").
+  Tests: `tests/test_sdis_classes.py` (9); SDIS + align 252 passed. Regression before -> after: every earlier line identical (11 maps, 41
+  snapshots, 2367 text nodes, 0/0/28; owners 4; verdicts, statuses, datapoints 93, orders agree yes); new line "suggested class: profile 0,
+  dataset 3, info 7, none 83" (counts only; the 3 dataset ones pool 2 pages with 1 period each per client, so they are weak, as expected from 2 clients).
+  Decisions (recorded): moves come in as `moves={key: class}` (override, reason "moved by the user"); the stored `sdis_decisions` read and the
+  "never into the rejected container again" feed-back belong to W4-4 (no table exists yet). Next WP must know: the period of a page text and of
+  a link segment are normalised separately (lower-case), so one period shown both ways counts as two; observations pool every page a datapoint is on.
+- **W3-3** (2026-10-04, claude-sonnet-5-5): Part O engine. NEW `core/sdis/store.py` (gzip JSON `data_dir()/memory.json.gz`, `STATE_VERSION` 1, `save` atomic via
+  .tmp + `os.replace`, `load` -> None for missing/corrupt/other version) and `core/sdis/mine.py`: `mine(captures_dir, state_path=None, progress=None, cancel=None,
+  rebuild=False)` -> {processed, files, clients, pages, rebuilt, rebuild_all, cancelled, skipped, verdicts, datapoints, seconds}; `progress(done, total, page)` and a
+  save after EACH client map; `cancel.is_set()` between clients; unfinished clients stay in `state["todo"]` and the next run resumes. State keys: files {name: [size, mtime]},
+  stamps, sessions {files, links, ids}, link_of, owners, session_maps, todo, memories, rejected/picked/rejected_triples (survive a rebuild), datapoints (dicts).
+  Edited: `link_map.file_sources/all_reads`, `build_maps(weights=)`; `memory.place_map` (extracted from `client_maps`, same result), `_see` keeps `last_ci` = max (a
+  client added again is not a miss), `memory.py --state`; `tools/sdis_regress.py --state` (also runs mine(rebuild) and prints "mine agrees"; temp dir by default).
+  Tests: `tests/test_sdis_mine.py` (12; incremental == fresh rebuild, cancel/resume, corrupt/old state, add-again counts once, owner change rebuilds the page, grown file,
+  half-written file), +1 regress, +2 modules in the PySide6-free import test; SDIS + align 265 passed. Regression before -> after: every line identical (11 maps,
+  41 snapshots, 2367 nodes, 0/0/28; owners 4; verdicts, statuses, datapoints 93, suggested class 0/3/7/83); `--state`: "mine agrees: yes" (7 client maps, 3 pages with 2+ clients).
+  Decisions: ids are taken from NEW sources only and unioned; the maps of a client are rebuilt from ALL its sessions' files (dirty client); an owner or link change of an
+  already-added session drops the whole (link, browser) group and re-adds its clients; screen weights on an incremental run = new batch + stored session maps (can
+  split a screen differently from a rebuild in rare cases); a vanished file keeps its old maps. Next (W4-3) must know: call `mine()` in the child and read the state
+  with `store.load`; the full rebuild of the real folder takes ~15 s (state saved per client map); `pm.views` is stored, so the file grows with clients.
+- **W4-1** (2026-10-04, claude-opus-5-5): Part K. NEW `core/sdis/recorder.py` `SdisRecorder` (size-1 slot, `offer` never blocks/raises, daemon
+  worker, budget 1.5 s / 500 MB cap per D13, slow/empty reads dropped, `stats` counts; `browser_of(hwnd)`; default folder `<Sera data>/sdis_capture`)
+  and `core/sdis/sources.py` (`read_records`, `file_records`; a half-written line is skipped). Record = {v, ts, started, session, portal, url, link,
+  title, browser, docs}. `sgt_shadow.SgtShadow(sdis=)`: one guarded `offer` right after the PageRecorder block, nothing else changed.
+  `vsdc_engines.SDIS_RECORD_SETTING` 'sdis_record' (default '1') + `read_sdis_record`; router `apply_engine_settings(sdis_record=)`, built in
+  `_run_sgt`; main.py passes it; Settings checkbox "Record pages for Sera Distill (SDIS)" under the SGT one. `link_map.file_sources/all_sources`
+  and `mine()` take `sdis_*.jsonl`. `uia_nodes`: body moved into `_read_docs`, new `read_page_nodes_here` (read_page_nodes behaves the same).
+  Tests: `tests/test_sdis_recorder.py` 15; SDIS + align 280 passed; SGT 608 passed; Firefox/VSDC settings/HUD/SGT-I/SCC/office 135 passed.
+  `sgt_replay.py diff`: the same pre-existing "newly written" list as W1-6/W1-8/W2-5 (shared baseline; replay passes no sdis, so the new line never runs).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 text nodes, 0/0/28; owners 4; memory 3 links, all verdicts/statuses;
+  datapoints 93; suggested class 0/3/7/83; orders agree yes): no recorder files are in the pre-dev folder. Decisions recorded (2): the raw read uses the
+  recorder's OWN MTA UIA object, not vsdc_uia_text's shared worker (an in-flight SDIS read would make SGT abandon it); sessions are named
+  `sgt <id> <started>` so `identity._by_time` sorts them. Hands-on check 3 added (real browsers). Next (W4-2) must know: nodes carry no "sgt" mark
+  (raw only, keys.VIEW "sgt" treats them as raw); ISO stamps sort before pre-dev `2026...` stamps if both share a folder; a wedged UIA call stalls only
+  the recorder thread; files on staff PCs are deleted only by the cap until Part P deletes after ack. A counts-only `../sdis_regress_w41_after.txt` can go.
+- **W4-2** (2026-10-04, claude-opus-5-5): Part P (D14). NEW `core/sdis/transfer.py`: `FRAME_PUSH`/`FRAME_ACK`, `push(session, files)` (manifest
+  {name,size,sha256} -> send_file each -> read ack, returns only manifest names), `handle_push(session, app_dir)` (empty ack unless
+  `sync_admin.is_admin_pc`, bad manifest or odd device id; receives into `data_dir()/corpus/<peer device id>/<name>.part`, `os.replace` when the
+  SHA-256 matches, acks those only), `finished_files` (past days' `sdis_YYYY-MM-DD.jsonl`, untouched 60 s, <= 200 files / 200 MB), `Pusher`
+  (`on_synced()` at most every 15 min on a daemon thread; skips on the admin PC; admin id from `get_office_admin`; session via
+  `engine._open_session_to`; deletes exactly the acked files). `sync_office.dispatch_session`: `elif t == "sdis_push"` (lazy import).
+  main.py: `self._sdis_pusher = Pusher(self.sync_engine)` before `start()`, `on_sync_engine_event("synced")` calls `on_synced()` (also in shadow mode).
+  Tests: NEW `tests/test_sdis_transfer.py` 6 (loopback mutual TLS through dispatch_session: two files acked + stored; a bad hash not acked and not
+  deleted, today's file kept; non-admin acks nothing; bad manifest refused; finished_files; throttle/admin skip); transfer added to the PySide6-free
+  import test. SDIS + align 286 passed; sync_office + sync_transport 48 passed. Regression before = after, every line identical (11 maps, 41
+  snapshots, 2367 nodes, 0/0/28; owners 4; 3 links, all verdicts/statuses; datapoints 93; class 0/3/7/83; orders agree) - no code on its path changed.
+  Decision recorded (trigger/batch/repeat files). Hands-on check 4 added. Next (W4-3) must know: pushed files sit one level down in
+  `corpus/<device id>/` with the SAME day names on every PC; `mine()` globs one folder flat, so feed it each device folder (or walk them) plus the
+  admin's own `sdis_capture`. A `../sdis_regress_w42_after.txt` (counts + page links, from `--save`) can go.
+- **W4-3** (2026-10-04, claude-opus-5-5): Part O child process, no CPU cap (no Job Object, no priority). NEW `core/sdis/mine_process.py`
+  `run(argv)`: `--captures` (required, must be a folder), `--state`, `--rebuild`; JSON lines on stdout, ASCII, flushed: `{"done","total","page"}`
+  per client map, last `{"result":"ok", **mine() summary}` (exit 0) or `{"result":"error","message"}` (exit 1; exception TYPE only, never its text).
+  main.py: `if '--sdis-mine' in sys.argv` right after `import sys`, before os/Qt/database. NEW `core/sdis/miner_client.py` `MinerClient(on_progress,
+  on_done)`: `start(captures, state=None, rebuild=False)` (state resolved in the parent: `store.default_path()` loads core.vsdc/Qt), `command()` =
+  `[exe, --sdis-mine, ...]` frozen else `[python, <repo>/main.py, --sdis-mine, ...]`, CREATE_NO_WINDOW, stderr to DEVNULL; `cancel()` kills;
+  `wait(timeout)`; `running()`. Callbacks run ON THE READER THREAD (Qt: re-emit via a signal); a cancel gives on_done({"result":"cancelled"}).
+  Tests: NEW `tests/test_sdis_mine_process.py` 8 (run progress+ok, --rebuild, bad folder, missing arg, frozen/source command, client end to end via
+  a wrapper script applying the fictional ids, cancel mid-run -> loadable state + next run adds the rest, real `main.py --sdis-mine` answers ok);
+  the two modules added to the PySide6-free import test. SDIS + align 294 passed. Regression before = after, every line identical (11 maps, 41
+  snapshots, 2367 nodes, 0/0/28; owners 4; 3 links, all verdicts/statuses; datapoints 93; class 0/3/7/83; orders agree) - mining code unchanged.
+  Decisions recorded (2): no spec edit (no .spec / hiddenimports in build_tools; main.py imports it statically); one --captures folder per run -
+  W4-5 must feed `corpus/<device id>/` folders + `sdis_capture`, but mine() keys files by bare NAME, so same-named day files from two PCs collide:
+  key by relative path (engine change) before walking several folders. Hands-on check 5 added; it should also confirm the windowed frozen exe
+  writes to the pipe (run() skips output when sys.stdout is None).
+- **W4-4** (2026-10-05, claude-opus-5-5): Part Q. Tables `sdis_fields` (gid, name, portal, section, spec_json, label, status, created_by,
+  updated_at) and `sdis_decisions` (gid, signature, decision, label, updated_at) in rawPayload.db (`sera_db/schema.py`, beside tracker_dump),
+  registered LWW on gid in `sync_schema.py`; NEW mixin `sera_db/sdis.py` (`add/rename/retire/list_sdis_fields`, `set/list_sdis_decisions`;
+  retire = status update; add keeps a label the user edited; every local field change rewrites the file). NEW `core/sdis/register.py`:
+  `value_shapes` (mask_shape, each client's distinct values once, sure pairings only), `draft_spec(datapoint, memories, portal, container)` ->
+  row via `miner.draft_field` + `miner.check_spec`, spec name `sdis.<field>`, user label in `note` (rename never touches capture),
+  `write_fields_file` (atomic; no active rows -> file removed), `refresh(db)`. `sgt_specs.sdis_fields_path()` (env `SDIS_FIELDS_PATH`, else
+  ~/AmanAssociates_Sera/sdis_fields.json) + `default_paths()` used by load_registry and SpecStore. main.py: `_write_sdis_fields` on a thread at
+  start-up and on engine "synced" (live mode) when `sdis_fields` is among the tables. **Only Profile builder fields register** (dataset/others
+  raise NotRegistrable until W4-7); period/label/sentence/control types are not registrable. Tests: NEW `test_sdis_register.py` 8;
+  test_sync_schema 22; SGT + sync_schema 630; SDIS + align 302. test_sync_capture/apply/tables: 6 fail in `clients.py` internal-PK validation
+  (untouched file, pre-existing). `sgt_replay.py diff`: only the pre-existing "newly written" list (replay passes its own spec paths).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 nodes, 0/0/28; owners 4; 3 links; datapoints 93; class 0/3/7/83).
+  Decisions recorded (2). Hands-on check 6 (two PCs). **Merge:** main has uncommitted edits to `sync_schema.py` and `sera_db/schema.py`; check both
+  and `tests/test_sync_schema.py`'s expected sets there. W4-5/W4-6: read `list_sdis_decisions()` into mining's rejected/moves; a counts-only
+  `../sdis_regress_w44_after.txt` can go.
+- **W4-6** (2026-10-05, claude-opus-5-5): Parts U + S.3. Tables `sdis_mcl` (gid, name, label, value_type, class, portal, status,
+  created_by, updated_at) and `sdis_config` (ONE row, name 'containers', fixed gid = md5('sdis_config:containers'), doc_json, version,
+  updated_by, updated_at) in rawPayload.db, LWW on gid; `sdis_fields.mcl_gid` (`_ensure_column`). `sera_db/sdis.py`: `add/rename/retire/
+  list_sdis_mcl` (rename = label, also every sdis_fields row of it, R6; a 2nd portal makes the field 'all'), `get/put_sdis_containers` (put runs
+  `config.check` with sdis_mcl names + registered portals, refuses, version + 1, writes the file). `core/sdis/config.py`: every S.3 load check,
+  `level_for` / `k_of_n` / `levels_of` / `level_map_of` (no level name or threshold in code), helpers `add/rename/delete_container`, `add/remove/
+  move_field` (where = container name or ("profile"|"others", portal)), `mark_key`, `set_exception`, `set_levels` (each returns a checked copy),
+  `write_file` (atomic, same bytes or no row -> untouched), `refresh(db)` (+ reload), `export(db, path)` / `import_file(db, path)`. Loading the file
+  skips only the two membership checks (decided). main.py writes it at start-up (with sdis_fields) and on "synced" with `sdis_config`.
+  `register.register_field(db, dp, memories, portal, field=None)`: mcl row + spec `sdis.<field>[.n]`; still Profile builder only (W4-4 rule).
+  `classes.suggest(..., class_exceptions, field_of)`: move > class exception > suggestion. Tests: NEW `test_sdis_containers.py` 42; SDIS + align
+  344 passed; SGT + sync_schema 630 passed. `sgt_replay.py diff`: only the pre-existing "newly written" list (no core/sgt file changed).
+  Regression before = after, every line identical (11 maps, 41 snapshots, 2367 nodes, 0/0/28; owners 4; 3 links; datapoints 93; class 0/3/7/83).
+  Decisions recorded (4). Check 7 (two PCs). Next: W4-7 reads `config.current()` + `level_for` (promotion over time is the caller's); W4-5 edits
+  via the helpers + `db.put_sdis_containers` and passes `class_exceptions` / `field_of` (from sdis_fields.mcl_gid) to `classes.annotate`.
+- **W4-5** (2026-10-05, claude-sonnet-5-5): Part L. Tracker dump -> Tools -> Distill... (`_open_distill`; non-admin PC gets the message). NEW
+  `core/sdis/distill.py` (Qt-free: decision rows -> `Decided`, `shown_label`, `apply_decisions` pushes dismissed/registered/rejected triples into the
+  state before a run, `recount`, `counts`, `roll_seen`, container helpers, `stage_inputs`), `ui/dialogs/sdis_dialog.py` (`SdisDialog` mockup frames A/C/E +
+  side panel, `SdisLoadingDialog` application-modal over `MinerClient`, signals only), `ui/dialogs/sdis_containers_dialog.py` (frame B: `ContainerEditor`,
+  `LevelsDialog`, `LevelsTable`; a refused edit shows the check's reason). Label edit = `label|key` decision, never overwritten; Register / Add to / drag =
+  `reg|key` decision + `register_field` (profile) or `add_sdis_mcl` (dataset / Others) + `config.add_field` + `put_sdis_containers`. `register.value_shapes`
+  fixed for real `PageMemory` (list nodes). Tests: NEW `test_sdis_dialog.py` 18; SDIS + align 362 passed. Regression before = after, every line identical
+  (41 snapshots, 2367 nodes; datapoints 93; class 0/3/7/83). Check 8 (admin PC + a second PC after sync). core/sgt* untouched.
+  Decisions: (1) mine() reads ONE folder keyed by bare name, so Find datapoints hard-links every device's `sdis_*.jsonl` into `mine_input/` as
+  `sdis_<tag>__<name>`; (2) Dataset / Others register = sdis_mcl + containers file only, captured once SGT reads containers (W4-7); (3) Please check
+  buttons: Keep as data / Template. W4-7 must: read `reg|` rows for dataset/Others fields, since no spec exists for them yet.
+- **W4-7** (2026-10-05, claude-opus-5-5): Part S.2/S.4 in SGT. NEW `core/sgt/sgt_containers.py` (pure: `load_doc` via `config.current()`,
+  `Instance` (form = name or form_field, period, values, evidence, level, status, k/n, proves, sent_key), `evaluate`/`apply` (level_for,
+  promote-only level AND status; no level or unmapped -> Draft), `ContainerSession` (feed: one instance per (form, period), values before
+  the period wait, a new period opens/returns to an instance; feed_others; recompute; json), `split_hits`, `sdis_info`). `sgt_shadow`: SDIS
+  hits (spec name `sdis.`) are split off `res.current` before `_update_draft` and fed to containers after `_absorb` (no list pages; page text
+  ignored while another PAN shows); a changed document re-evaluates every instance; instance rows (canonical key, mode's method) and one
+  carrier row (`SGT_sdis_info`, key form "SDIS info") go through the outbox; every row carries `raw_payload.sdis` once there are values;
+  sessions snapshot `sdis`. `register.py`: dataset/Others -> `current_dataset` specs, period -> shape pattern; dialog registers every class.
+  `sera_db/srpf.py`: `fold_sdis` (history of changes, latest `at`), carriers add no filing/capture, `get_srpf_containers` returns both
+  columns, `sdis_value_rows`, `sdis_field_labels`; `get_tracker_dumps` + database.py's count skip carriers (`core/dataset_key.NOT_CARRIER_SQL`).
+  Shown in the container inspector and client detail ("PORTAL VALUES"). Tests: NEW `test_sgt_containers.py` 21; register/dialog updated;
+  SGT 628 + 21, SDIS + align 362 passed; tracker/DB files: only the pre-existing clients.py internal-PK (7) and 2 SRPF UI-format failures.
+  `sgt_replay.py diff`: identical to HEAD's sgt_shadow output (85 lines, random session id masked). Regression before = after, every line.
+  Decisions: Q (A, shared key, section 10) + 2 recorded. Check 9. Next: W4-5's dataset/Others fields registered before W4-7 have no spec
+  (re-register them); SGT-I `sera_data` sees carriers (no form/period, harmless).
+- **W5-R** (2026-10-05, claude-opus-5-5): final review. Merge-readiness note written in §11 (built Parts, SGT changes, conflict
+  table vs main's commits since `0f30543` + main's uncommitted files, tests and checks to run); status line at the top updated.
+  Fixed: `core/sdis/tables.py` command line printed every table's cell texts (console now counts only; `--text` writes the
+  grids to `output/tables_<file>.txt`, `--counts` kept as a no-op); `core/sdis/link_map.py` command line printed the first
+  texts of each new block (now counts; texts stay in its CSV; `BLOCK_TEXTS` removed); a lost space in tracker_dump_window.
+  Grep of core/sdis: every other print/log is counts, page links, types or field/container names. Tests: +1
+  `test_sdis_tables.py`, +1 `test_sdis_screens.py`; SDIS + align 364 passed; SGT + sync: 1275 passed, 54 failed + 43 errors,
+  all in `test_sync_*` (`sera_db/clients.py` internal-PK check, missing seeded "EPFO" service; files this branch never touched),
+  no SGT failure. `sgt_replay.py diff`: the same pre-existing "newly written" list. Regression before = after, identical in
+  every line. Against `sdis-regress-baseline.txt` (W0-1) every difference is a WP's: owners section (W1-3), memory 5 -> 3 links
+  (W1-3, D4: the fictional captures stay undecided), differs 6 -> 5 + furniture 1 (W2-2), same -> variable_alignment 3/20/26
+  (W2-3), statuses/data nodes (W3-1), retired line (W2-R), datapoints 93 (W3-2), suggested class (W3-5); maps, snapshots,
+  2367 nodes, 0/0/28 unchanged. Decision recorded (console counts only). Checks 10-11 added (merged tracker list, frozen build).
+  Next: the merge itself is the user's; main's `client_raw_container_light` needs the carrier fix named in §11.
+
+

@@ -56,6 +56,7 @@ def test_registry_covers_expected_tables():
     expected_raw = {
         "tracker_dump", "sdc_session_timelines", "client_raw_containers",
         "client_raw_container_light", "client_container_notes",
+        "sdis_fields", "sdis_decisions", "sdis_mcl", "sdis_config",
     }
 
     assert {t.name for t in sync_schema.tables_for(MASTER_DB)} == expected_master
@@ -94,6 +95,10 @@ def test_modes_match_blueprint_section_5():
         "client_raw_containers": LOCAL,
         "client_raw_container_light": LOCAL,
         "client_container_notes": LWW,
+        "sdis_fields": LWW,
+        "sdis_decisions": LWW,
+        "sdis_mcl": LWW,
+        "sdis_config": LWW,
     }
     for name, mode in expect.items():
         assert sync_schema.get(name).mode == mode, name

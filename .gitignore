@@ -94,6 +94,14 @@ logs/sgt-overhaul/
 !docs/autofill_tweaks/autofill-tweaks-questions.csv
 .autofill-tweaks.lock
 logs/autofill-tweaks/
+# Sera Distill tracker (same machinery, task status only, no client data)
+!docs/sdis/sdis-status.csv
+!docs/sdis/sdis-runs.csv
+!docs/sdis/sdis-decisions.csv
+!docs/sdis/sdis-checks.csv
+!docs/sdis/sdis-questions.csv
+.sdis.lock
+logs/sdis/
 *.tmp
 ~*
 scratch/

@@ -34,8 +34,13 @@ when the page gave none), or a COMPOSITE - an element whose text is just its chi
 joined ("79,99,235.00 View/Update"). A composite row is kept but flagged in check: its parts are
 listed on their own.
 
-    python tools/pre_dev/class_diff/compare.py                         # latest client vs previous client
+    python tools/pre_dev/class_diff/compare.py                         # every page link's MEMORY (all clients)
+    python tools/pre_dev/class_diff/compare.py --two                   # latest client vs previous client
     python tools/pre_dev/class_diff/compare.py --latest A.json --previous B.json   # two single reads
+
+The default is a view of core/sdis/memory.py (Part I): one row per node with a text, its status
+(memory.status), label (memory.label), type, number of clients, the latest client's value and key,
+in output/compare_memory__<page>.csv. Everything below describes the two-client mode (--two).
 
 Writes output/compare_<latest read's timestamp>.csv (opens in Excel). example_value is from the
 latest read; an "only previous" row has none there, so it shows the previous read's value. It holds real values from
@@ -57,12 +62,10 @@ lists are matched card n to card n.
 """
 
 import argparse
-import csv
 import json
-import re
+import os
 import sys
 from collections import Counter
-from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -72,83 +75,28 @@ ROOT = HERE.parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.sgt_i.pairs import classify_type                     # noqa: E402
-from core.sgt.sgt_resolver import resolve_page                  # noqa: E402
-from core.sgt.sgt_specs import load_registry                    # noqa: E402
-from core.vsdc.vsdc_scope import portal_for_url                 # noqa: E402
-
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
-import keys                                                      # noqa: E402
-from keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
-import link_map                                                  # noqa: E402
-from align import align, shape                                   # noqa: E402
+os.environ.setdefault("SDIS_DATA_DIR", str(OUT_DIR))
 
-# Only these value types can be FIXED (template). Any other type (number, date, period, code,
-# alphanumeric, amount, email, phone, percentage, yes/no, control) is data-shaped: a bare number is
-# a count or balance two clients can share (0 = 0), never template. When both sessions show the
-# same value it is SEMI-VARIABLE - a value the clients compared so far happened to share - until a
-# session with a different value makes it variable. "control" = a choice the user makes (dropdown,
-# radio, checkbox - keys.CHOICE_CTYPES). Buttons are actions, not data: left out of the comparison.
-FIXABLE_TYPES = frozenset({"text", "label", "sentence"})
-SENTENCE_WORDS = 8
+from core.sdis import keys                                       # noqa: E402
+from core.sdis import link_map                                   # noqa: E402
+from core.sdis.align import align, shape                         # noqa: E402
+from core.sdis.identity import CLIENT_FIELDS, client_ids, masked   # noqa: E402,F401
+from core.sdis.keys import BUTTON_CTYPES, CHOICE_CTYPES, flatten, page_slug   # noqa: E402
+from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, LABEL_LOOKBACK,   # noqa: E402,F401
+                              NEVER_LABEL_CTYPES, SENTENCE_WORDS, _MONTH, _PERIOD_RES, _YEAR_PREFIX,
+                              _children, _container, _end, _first_label, _label, _same_column,
+                              _table_label, composites, element_type, is_period, value_type)
+from core.sdis.paths import write_csv                            # noqa: E402
 
-FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS = (
-    "fixed", "semi-variable", "variable", "only latest", "only previous")
-STATUSES = (FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS)
+FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT = (
+    "fixed", "semi-variable", "variable", "only latest", "only previous", "variable_alignment")
+STATUSES = (FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT)
 
 
 def page_key(rec: Dict[str, Any]) -> str:
     return rec.get("page") or ("title: " + (rec.get("title") or ""))
-
-
-# Period: a span of time rather than one day. Month words must be real month names, so a hyphenated
-# word ("Non-filer", "e-Verify") never matches.
-_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
-          r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?")
-_YEAR_PREFIX = r"(?:(?:a\.?\s?y\.?|f\.?\s?y\.?|assessment\s+year|financial\s+year|tax\s+year|year)\s*:?\s*)?"
-_PERIOD_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
-    rf"^{_YEAR_PREFIX}(?:19|20)\d\d\s?[-–/]\s?(?:(?:19|20)\d\d|\d\d)$",   # A.Y. 2026-27, FY 2025-2026
-    r"^(?:a\.?\s?y\.?|f\.?\s?y\.?)\s*:?\s*\d\d\s?[-–/]\s?\d\d$",          # AY 26-27, F.Y. 25-26 (prefix needed)
-    rf"^{_MONTH}\s?[-–/',]?\s?(?:(?:19|20)\d\d|\d\d)$",                   # April 2026, Apr-2026, Apr'26
-    rf"^{_MONTH}\s?[-–]\s?(?:19|20)\d\d$",                                 # January - 2021
-    r"^(?:0?[1-9]|1[0-2])\s?[-/]\s?(?:19|20)\d\d$",                        # 04/2026, 4-2026
-    rf"^q[1-4]\b.*$",                                                      # Q1 2026, Q1 (Apr-Jun)
-    rf"^{_MONTH}\s?[-–]\s?{_MONTH}(?:\s?,?\s?(?:(?:19|20)\d\d|\d\d))?$",   # Apr-Jun 2026, April - June
-))
-
-
-def is_period(text: str) -> bool:
-    v = " ".join(text.split())
-    return any(r.match(v) for r in _PERIOD_RES)
-
-
-def value_type(text: str) -> str:
-    """SGT-I's generic type (core/sgt_i/pairs.classify_type: text, number, amount, date, code,
-    email, phone, percentage, yes/no), plus four for this comparison: "period" (a year, month or
-    quarter span - A.Y. 2026-27, AY 26-27, April 2026, Q1), "label" (text ending in ':'),
-    "sentence" (SENTENCE_WORDS+ words) - those two almost always furniture - and "alphanumeric"
-    (digits mixed with letters or punctuation that no other type claimed: 139(1), Flat 4B, Tower 2;
-    "text" is then only words). The more
-    specific type wins: a single letters+digits token stays "code" (PAN, ARN), a date stays
-    "date", a period "period"; a label or sentence holding a digit stays label / sentence."""
-    t = classify_type(text)
-    if t != "text":
-        return t
-    if is_period(text):
-        return "period"
-    if text.rstrip().endswith(":"):
-        return "label"
-    if len(text.split()) >= SENTENCE_WORDS:
-        return "sentence"
-    if any(c.isdigit() for c in text):
-        return "alphanumeric"      # digits mixed with letters or punctuation: 139(1), Flat 4B, 26-27
-    return "text"
-
-
-def element_type(e: Dict[str, Any]) -> str:
-    """The value type of a flat entry: "control" for a choice element, else value_type(text)."""
-    return "control" if e["node"].get("ctype") in CHOICE_CTYPES else value_type(e["text"])
 
 
 def _compared(e: Dict[str, Any]) -> bool:
@@ -166,158 +114,6 @@ def check(status: str, latest_type: str, previous_type: str, label: str = "") ->
     return "ok"
 
 
-def _container(flat: List[Dict[str, Any]], i: int) -> str:
-    """The nearest ancestor that has a class - the box the element sits in."""
-    p = flat[i]["parent"]
-    while p >= 0:
-        if flat[p]["cls"]:
-            return flat[p]["cls"]
-        p = flat[p]["parent"]
-    return ""
-
-
-CT_HYPERLINK, CT_IMAGE, CT_TABLE = 50005, 50006, 50036
-NEVER_LABEL_CTYPES = frozenset({CT_HYPERLINK, CT_IMAGE}) | BUTTON_CTYPES
-
-
-def _end(flat: List[Dict[str, Any]], i: int) -> int:
-    """The index just past element i's subtree."""
-    j = i + 1
-    while j < len(flat) and flat[j]["depth"] > flat[i]["depth"]:
-        j += 1
-    return j
-
-
-def _children(flat: List[Dict[str, Any]], p: int) -> List[int]:
-    return [j for j in range(p + 1, _end(flat, p)) if flat[j]["parent"] == p]
-
-
-def composites(flat: List[Dict[str, Any]]) -> set:
-    """Elements whose text is only their descendants' texts joined - at least two of them -
-    ("<name> <GSTIN>", "79,99,235.00 View/Update"). Worked bottom-up, so a composite inside a
-    composite is not counted twice: its parts are."""
-    out: set = set()
-    for i in range(len(flat) - 1, -1, -1):
-        text = " ".join(flat[i]["text"].split())
-        if not text:
-            continue
-        parts = [flat[j]["text"] for j in range(i + 1, _end(flat, i)) if flat[j]["text"] and j not in out]
-        if len(parts) >= 2 and " ".join(" ".join(parts).split()) == text:
-            out.add(i)
-    return out
-
-
-def _first_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
-    """Element i's own text if it can be a label, else the first one inside it."""
-    for j in range(i, _end(flat, i)):
-        if j in labels and flat[j]["text"]:
-            return flat[j]["text"]
-    return ""
-
-
-def _same_column(a: Dict[str, Any], b: Dict[str, Any]) -> float:
-    """How surely two cells sit in the same column: the browser's own column number when both
-    carry one (SGT's reader keeps it as "grid"), else how much their screen boxes overlap
-    sideways (0..1). Never the cell's count in its row: a view can drop a cell (SGT's control
-    view drops an empty corner cell), and counting would shift every column by one."""
-    ga, gb = a.get("grid"), b.get("grid")
-    if ga and gb:
-        return 1.0 if ga[1] == gb[1] else 0.0
-    ra, rb = a.get("rect"), b.get("rect")
-    if not ra or not rb or ra[2] <= 0 or rb[2] <= 0:
-        return 0.0
-    overlap = min(ra[0] + ra[2], rb[0] + rb[2]) - max(ra[0], rb[0])
-    return max(0.0, overlap) / min(ra[2], rb[2])
-
-
-def _table_label(flat: List[Dict[str, Any]], i: int, labels: set) -> str:
-    """A table cell's label: its row's first cell and its column's header (the first earlier row
-    that holds a label in that column), "row / column". Structure only: Table -> row -> cell."""
-    a = i
-    while a >= 0:
-        r = flat[a]["parent"]
-        t = flat[r]["parent"] if r >= 0 else -1
-        if t >= 0 and flat[t]["node"].get("ctype") == CT_TABLE:
-            break
-        a = r
-    else:
-        return ""
-    cells = _children(flat, r)
-    row_label = _first_label(flat, cells[0], labels) if cells[0] != a else ""
-    col_label = ""
-    for other in _children(flat, t):
-        if other == r:
-            break
-        best, best_cell = 0.5, -1
-        for oc in _children(flat, other):
-            score = _same_column(flat[a]["node"], flat[oc]["node"])
-            if score > best:
-                best, best_cell = score, oc
-        if best_cell >= 0:
-            col_label = _first_label(flat, best_cell, labels)
-            if col_label:
-                break
-    return " / ".join(x for x in (row_label.strip(), col_label.strip()) if x)
-
-
-CLIENT_FIELDS = ("pan", "gstin")
-_registry = None
-
-
-def client_ids(m: "link_map.LinkMap") -> set:
-    """Who the client of one map is: the PAN / GSTIN that SGT-C's own specs (sgt_fields.json,
-    checksums included) find in the text SGT sees there, as {"gstin:...", "pan:..."}. Empty when
-    the page never shows them, or the link is no portal."""
-    global _registry
-    url = "https://" + m.page
-    portal = portal_for_url(url)
-    if not portal:
-        return set()
-    if _registry is None:
-        _registry = load_registry()
-    lines = [e["text"] for e in m.to_flat() if e["text"] and e["node"].get("sgt")]
-    res = resolve_page(_registry, lines, portal, url, date.today())
-    return {f"{k}:{h.value}" for k, h in res.profile.items() if k in CLIENT_FIELDS}
-
-
-def masked(ids: set) -> str:
-    """Client ids for the console: first and last 2 characters only."""
-    return ", ".join(sorted(f"{i.split(':', 1)[0]} {v[:2]}..{v[-2:]}" for i in ids for v in [i.split(":", 1)[1]])) or "unknown"
-
-
-LABEL_LOOKBACK = 6     # fallback: how many elements back a label may sit when no box holds one
-
-
-def _label(flat: List[Dict[str, Any]], i: int, fixed: set) -> str:
-    """The label of element i (fixed = the indexes that may be labels): a table cell's row and
-    column (_table_label), else inside the smallest box around it that holds a fixed text, the
-    fixed text NEAREST BEFORE it (else the first after it). When no box around it holds one - the
-    browser can flatten a card, leaving "GSTIN OF TAXPAYER" and the value's box as plain siblings -
-    the nearest fixed text at most LABEL_LOOKBACK elements before it in page order."""
-    in_table = _table_label(flat, i, fixed)
-    if in_table:
-        return in_table
-    a = flat[i]["parent"]
-    while a >= 0:
-        before, after = "", ""
-        j = a + 1
-        while j < len(flat) and flat[j]["depth"] > flat[a]["depth"]:
-            if j != i and j in fixed and flat[j]["text"]:
-                if j < i:
-                    before = flat[j]["text"]
-                else:
-                    after = after or flat[j]["text"]
-                    break
-            j += 1
-        if before or after:
-            return before or after
-        a = flat[a]["parent"]
-    for j in range(i - 1, max(-1, i - 1 - LABEL_LOOKBACK), -1):
-        if j in fixed and flat[j]["text"]:
-            return flat[j]["text"]
-    return ""
-
-
 def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Two single reads."""
     return compare_flat(flatten(latest), flatten(previous))
@@ -326,17 +122,20 @@ def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, 
 ALIGN = True      # pair elements by align.py (content + shape); False = by exact key, the old way
 
 
-def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> Dict[int, int]:
+def _partners(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
+              ambiguous: Optional[set] = None) -> Dict[int, int]:
     """{index in fl: index in fp} - by alignment, or by exact key when ALIGN is off."""
     if ALIGN:
-        return align(fl, fp, _compared)
+        return align(fl, fp, _compared, ambiguous=ambiguous)
     by_key = {e["key"]: j for j, e in enumerate(fp) if _compared(e)}
     return {i: by_key[e["key"]] for i, e in enumerate(fl) if _compared(e) and e["key"] in by_key}
 
 
-def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
+                 rejected: Optional[set] = None) -> List[Dict[str, Any]]:
     """One row per text element of either side (a read's or a map's flat list), latest first."""
-    partner = _partners(fl, fp)
+    ambiguous: set = set()
+    partner = _partners(fl, fp, ambiguous=ambiguous)
     paired_prev = set(partner.values())
     status: Dict[int, str] = {}
     for i, e in enumerate(fl):
@@ -349,11 +148,27 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
             status[i] = VARIABLE
         else:
             status[i] = FIXED if element_type(e) in FIXABLE_TYPES else SEMI_VARIABLE
-    fixed = {i for i, s in status.items() if s == FIXED}
     comp = {id(fl): composites(fl), id(fp): composites(fp)}
+    var_shapes = {shape(fl[j]) for j, s in status.items() if s == VARIABLE}
+    for i, s in list(status.items()):
+        if s == FIXED:
+            e = fl[i]
+            txt = e["text"]
+            node = e.get("node") or {}
+            ctype = node.get("ctype")
+            if (value_type(txt) != "label"
+                    and not txt.rstrip().endswith(":")
+                    and i not in comp[id(fl)]
+                    and ctype not in CHOICE_CTYPES
+                    and shape(e) in var_shapes):
+                if rejected and any((link, shape(e), txt) in rejected for link in ("", fl[i].get("page", ""))):
+                    continue
+                status[i] = VARIABLE_ALIGNMENT
+    fixed = {i for i, s in status.items() if s == FIXED}
     # A label is a text both clients show alike: the fixed texts, plus words-with-digits both share
     # ("9B - Credit / Debit Notes") - never a bare number, date, code or amount.
-    shared = fixed | {i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
+    shared = fixed | {i for i, s in status.items() if s == VARIABLE_ALIGNMENT} | {
+        i for i, s in status.items() if s == SEMI_VARIABLE and element_type(fl[i]) == "alphanumeric"}
     # An unpaired text (one more list row, card) that repeats a template text of the same shape is
     # template too: a repeated card repeats its labels ("Period", "ARN" in rows 4 and 5).
     template = {(shape(fl[i]), fl[i]["text"]) for i in shared}
@@ -368,7 +183,12 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]]) -> List[Dic
         vt = element_type(e)
         pt = element_type(other) if other else ""
         label = _label(flat, i, labels) if st != FIXED and flat is fl else ""
-        flag = "composite - its parts are listed on their own" if i in comp[id(flat)] else check(st, vt, pt, label)
+        if flat is fl and i in ambiguous:
+            flag = "ambiguous pairing - look-alikes, one side has fewer"
+        elif i in comp[id(flat)]:
+            flag = "composite - its parts are listed on their own"
+        else:
+            flag = check(st, vt, pt, label)
         matched = "no" if other is None else ("yes" if other["key"] == e["key"] else "aligned")
         return {"status": st, "key_matched": matched,
                 "value_type": vt, "previous_type": pt, "check": flag,
@@ -407,25 +227,49 @@ FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "v
           "container", "id", "sgt_sees", "key"]
 
 
-def write_csv(out: Path, fields: List[str], rows: List[Dict[str, Any]]) -> Path:
-    """Write rows (UTF-8 with BOM, so Excel reads it right). When `out` is open in Excel (locked),
-    write beside it as _2, _3... Returns the path written."""
-    out.parent.mkdir(parents=True, exist_ok=True)
-    stem = out.stem
-    for n in range(2, 100):
-        try:
-            with open(out, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-                w.writeheader()
-                w.writerows(rows)
-            return out
-        except PermissionError:
-            out = out.with_name(f"{stem}_{n}.csv")
-    raise SystemExit(f"Could not write {out} - close it in Excel and run again.")
+MEMORY_FIELDS = ["status", "label", "value_type", "clients", "example_value", "key"]
+
+
+def memory_rows(m: Any) -> List[Dict[str, Any]]:
+    """One row per memory node with a text: example_value is the latest client's, from its own view."""
+    rows = []
+    for nid, nd in enumerate(m.nodes):
+        if not nd["text"]:
+            continue
+        client, i = m._view_of(nid)
+        example = m.views[client][0][i]["text"]
+        rows.append({"status": m.status(nid), "label": m.label(nid), "value_type": m._type_of(nid, example),
+                     "clients": len(nd["clients"]), "example_value": example, "key": nd["key"]})
+    return rows
+
+
+def main_memory() -> int:
+    """The default: every page link's memory over all its clients (not one pair)."""
+    from core.sdis import memory
+    pages = {p: cm for p, cm in memory.client_maps().items() if len(cm) >= 2}
+    if not pages:
+        raise SystemExit(f"No page link has two clients in {OUT_DIR} yet - capture it for another client first.")
+    for page in sorted(pages):
+        cm = pages[page]
+        m = memory.build(page, cm, sorted(cm, key=lambda c: cm[c].reads[0]), 2)
+        page_rows = memory_rows(m)
+        print(f"Page     : {page}   clients {len(cm)}")
+        counts = Counter(r["status"] for r in page_rows)
+        for st in sorted(counts):
+            print(f"  {st:18s} {counts[st]:5d}")
+        data = [r for r in page_rows if r["status"] in ("semi-variable", "variable", VARIABLE_ALIGNMENT)]
+        print(f"  data nodes {len(data)}, labelled {sum(1 for r in data if r['label'])}")
+        out = write_csv(OUT_DIR / f"compare_memory__{page_slug(page)}.csv", MEMORY_FIELDS, page_rows)
+        print(f"CSV      : {out.name}")
+        print()
+    print("(the CSVs hold real page values - keep them on this PC)")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    ap = argparse.ArgumentParser(description="Compare two clients' maps of the same page link (or two single reads).")
+    ap = argparse.ArgumentParser(description="Page memory view (default), or --two: two clients' maps of the same "
+                                             "page link (or two single reads).")
+    ap.add_argument("--two", action="store_true", help="the old mode: the latest client vs the previous one")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
     ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
@@ -438,6 +282,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     global ALIGN
     ALIGN = args.align == "on"
     print(f"View     : {args.view}    Align: {args.align}")
+    if not (args.two or args.latest or args.previous):
+        return main_memory()
 
     # One comparison per page link: (page, latest side's name, other side's name, rows).
     results: List[Tuple[str, str, str, List[Dict[str, Any]]]] = []

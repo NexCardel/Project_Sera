@@ -39,16 +39,25 @@ for _ledger, _vals in (("Cash ledger", ("404", "505", "606")), ("Credit ledger",
         EXPECTED[_v] = f"{_ledger} / {_col}"
 
 
-def _load(c):
-    return json.loads((FIX / f"client_{c}.json").read_text(encoding="utf-8"))
+def _fixture_name(c, browser):
+    return f"client_{c}.json" if browser == "edge" else f"client_{c}_{browser}.json"
 
 
-@pytest.fixture
-def setup(monkeypatch):
+# "edge" = the original client_A/B.json; the others are W1-7's reads (tools/browser_parity.py).
+ALIGN_BROWSERS = [b for b in ("edge", "msedge", "chrome", "firefox") if (FIX / _fixture_name("A", b)).exists()
+                  and (FIX / _fixture_name("B", b)).exists()]
+
+
+def _load(c, browser="edge"):
+    return json.loads((FIX / _fixture_name(c, browser)).read_text(encoding="utf-8"))
+
+
+@pytest.fixture(params=ALIGN_BROWSERS)
+def setup(monkeypatch, request):
     def _run(view, aligned):
         monkeypatch.setattr(keys, "VIEW", view)
         monkeypatch.setattr(compare, "ALIGN", aligned)
-        fl, fp = keys.flatten(_load("B")), keys.flatten(_load("A"))
+        fl, fp = keys.flatten(_load("B", request.param)), keys.flatten(_load("A", request.param))
         return fl, fp, compare._partners(fl, fp), compare.compare_flat(fl, fp)
     return _run
 
