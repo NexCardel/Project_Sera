@@ -2,7 +2,7 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.12.4"
+#define MyAppVersion "2.12.5"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
 #define ShortcutName "CompanyInfo1"
