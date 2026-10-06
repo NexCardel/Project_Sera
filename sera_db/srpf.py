@@ -254,6 +254,8 @@ class SrpfMixin:
                         hist[matched_idx]["raw_payload_json"] = payload_str
                     if dump_row.get("period_label"):
                         hist[matched_idx]["period_label"] = dump_row.get("period_label")
+                    if dump_row.get("captured_by"):
+                        hist[matched_idx]["captured_by"] = dump_row.get("captured_by")
                     hist[matched_idx]["created_at"] = dump_ts
                 else:
                     hist.append({
@@ -263,6 +265,7 @@ class SrpfMixin:
                         "capture_method": dump_row.get("capture_method"),
                         "status": status_val,
                         "raw_payload_json": payload_str,
+                        "captured_by": dump_row.get("captured_by"),
                         "created_at": dump_ts
                     })
             elif dump_row.get("period_label"):
@@ -273,6 +276,7 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
+                    "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts
                 })
 
@@ -302,6 +306,7 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
+                    "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts
                 })
             elif dump_row.get("period_label"):
@@ -312,6 +317,7 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
+                    "captured_by": dump_row.get("captured_by"),
                     "created_at": dump_ts
                 })
             r_conn.execute("""
@@ -520,11 +526,11 @@ class SrpfMixin:
             except Exception:
                 filing_hist = []
 
-            # Format summary of filings
             latest_arn = filing_hist[-1].get("arn", "N/A") if filing_hist else "N/A"
             latest_portal = filing_hist[-1].get("portal", "Portal") if filing_hist else "Portal"
             latest_period = filing_hist[-1].get("period_label", "") if filing_hist else ""
             capture_method = filing_hist[-1].get("capture_method", "") if filing_hist else ""
+            captured_by_val = filing_hist[-1].get("captured_by", "") if filing_hist else ""
 
             periods = [h.get("period_label") for h in filing_hist if h.get("period_label") and h.get("period_label") != "N/A"]
             if len(periods) > 1:
@@ -583,6 +589,8 @@ class SrpfMixin:
                 "latest_status": latest_status,
                 "raw_payload_json": latest_payload,
                 "capture_method": capture_method,
+                "captured_by": captured_by_val,
+                "device_name": captured_by_val,
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
                 "portal_profiles": _json_obj(r[11]),

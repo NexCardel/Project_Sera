@@ -336,6 +336,35 @@ def _method_short(method: str) -> str:
     return "Extension" if head.lower().startswith("extension") else head
 
 
+def _extract_device_name(record: dict) -> str:
+    """Extracts device_name from payload JSON or captured_by field, with sensible fallback."""
+    if not isinstance(record, dict):
+        return "Unknown"
+    # 1. Direct device_name in record
+    dev = record.get("device_name")
+    if dev:
+        return str(dev).strip()
+    # 2. Check raw_payload_json
+    raw_json = record.get("raw_payload_json")
+    if raw_json:
+        try:
+            p = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+            if isinstance(p, dict):
+                dev = p.get("device_name") or (p.get("raw_payload", {}).get("device_name") if isinstance(p.get("raw_payload"), dict) else None)
+                if dev:
+                    return str(dev).strip()
+        except Exception:
+            pass
+    # 3. Check filing_history for containers
+    for fh in reversed(record.get("filing_history") or []):
+        dev = _extract_device_name(fh)
+        if dev and dev != "Unknown":
+            return dev
+    # 4. Fallback to captured_by or Unknown
+    cb = record.get("captured_by")
+    return str(cb).strip() if cb else "Unknown"
+
+
 def _short_local_time(ts_raw) -> str:
     """'Today 14:02', 'Yesterday 09:10', '20 Sep 11:42', or '20 Sep 2025' for older years."""
     dt = _parse_record_datetime(ts_raw)
@@ -943,10 +972,10 @@ class PayloadInspectorDialog(QDialog):
             port_item.setToolTip(portal_full)
             hist_table.setItem(idx, 3, port_item)
 
-            method = fh.get("capture_method") or "Unknown"
-            m_item = QTableWidgetItem(_method_short(method))
-            m_item.setForeground(QColor(_capture_method_color(method)))
-            m_item.setToolTip(method)
+            method = _extract_device_name(fh)
+            m_item = QTableWidgetItem(method)
+            m_item.setForeground(QColor("#FFA657"))
+            m_item.setToolTip(f"Device: {method}")
             hist_table.setItem(idx, 4, m_item)
 
             ts_raw = fh.get("created_at") or ""
@@ -1600,7 +1629,8 @@ class TrackerDumpWindow(QWidget):
     service_action_requested = Signal(int, dict)
 
     # Table columns (same order in both views)
-    COL_CLIENT, COL_FILING, COL_PERIOD, COL_STATUS, COL_ACTIONS, COL_UPDATED, COL_METHOD = range(7)
+    COL_CLIENT, COL_FILING, COL_PERIOD, COL_STATUS, COL_ACTIONS, COL_UPDATED, COL_DEVICE = range(7)
+    COL_METHOD = COL_DEVICE  # Backwards compatibility alias
     COLUMN_COUNT = 7
     
     def __init__(self, db, parent=None, defer_first_load: bool = False):
@@ -2066,7 +2096,7 @@ class TrackerDumpWindow(QWidget):
             self.COL_FILING: 120,
             self.COL_PERIOD: 250 if is_grouped else 170,
             self.COL_STATUS: 280,
-            self.COL_METHOD: 130,
+            self.COL_DEVICE: 130,
             self.COL_UPDATED: 150,
             self.COL_ACTIONS: 120,
         }
@@ -2766,10 +2796,11 @@ class TrackerDumpWindow(QWidget):
             _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
                              tooltip="\n".join(tooltip_lines))
 
+            dev_name = _extract_device_name(r)
+            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item.setText(dev_name)
             method_val = r.get("capture_method", "Unknown")
-            method_item = _get_item(self.COL_METHOD, color=_capture_method_color(method_val))
-            method_item.setText(_method_short(method_val))
-            method_item.setToolTip(method_val)
+            dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method_val}")
 
             ts_raw = r.get("last_updated", "")
             ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
@@ -2831,10 +2862,11 @@ class TrackerDumpWindow(QWidget):
             _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
                              tooltip="\n".join(tooltip_lines))
 
+            dev_name = _extract_device_name(r)
+            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item.setText(dev_name)
             method = r.get("capture_method", "DOM_Tracker")
-            method_item = _get_item(self.COL_METHOD, color=_capture_method_color(method))
-            method_item.setText(_method_short(method))
-            method_item.setToolTip(method)
+            dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method}")
 
             ts_raw = r.get("created_at", "")
             ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
