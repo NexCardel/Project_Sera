@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from core.sgt.sgt_shadow import IDLE_END_SEC, REREAD_AFTER_SEC, SgtShadow, is_blind
+from core.sgt.sgt_shadow import IDLE_END_SEC, RESUME_WINDOW_SEC, REREAD_AFTER_SEC, SgtShadow, is_blind
 from core.sgt.sgt_specs import BUILTIN_FIELDS_PATH, SpecStore
 from core.vsdc.vsdc_engines import SGT_DEFAULT, read_sgt_mode
 from core.vsdc.vsdc_router import SGT_OFF, SGT_SHADOW
@@ -362,11 +362,13 @@ class TestReturnInProgress:
         r.see(FILED_URL, filed_page(), shade=100)
         assert r.events("current") == []
 
-    def test_gst_return_built_from_the_dashboard_then_the_return_page(self, tmp_path):
+    def test_gst_return_comes_from_its_own_return_page_never_the_dashboard(self, tmp_path):
         r = Rig(tmp_path)
-        r.see(GST_RET_DASH, ["File Returns", "Financial Year", "2026-27", "Period", "August", "SEARCH"],
-              shade=100, portal=GST)
-        r.see(GST_R1, ["GSTR-1 - Details of outward supplies", "Status -", "Filed", "x"], shade=110, portal=GST)
+        r.see(GST_RET_DASH, ["File Returns", "Financial Year", "2026-27", "Period", "August", "Status -", "Filed",
+                             "SEARCH"], shade=100, portal=GST)
+        assert r.events("current") == []                    # the dashboard's dropdown and tiles say nothing
+        r.see(GST_R1, ["GSTR-1 - Details of outward supplies", "FY -", "2026-27", "Tax Period -", "August",
+                       "Status -", "Filed", "x"], shade=110, portal=GST)
         ds = self.end(r)
         assert ds == [{"fy": "2026-27", "tax_period": "August", "form": "GSTR-1", "status": "Submitted & Verified",
                        "status_evidence": "Filed", "period": "August (FY 2026-27)", "record": "current_dataset"}]
@@ -814,3 +816,140 @@ class TestLadderClimbsWithDatapoints:
         r.sgt.end_all("test")
         ds = r.events("session_end")[0]["payload"]["datasets"]
         assert len(ds) == 1 and (ds[0]["arn"], ds[0]["status"]) == ("123456789180925", "Submitted & Verified")
+
+
+class TestIdleResume:
+    """Idle timeout remembers identity so the same window can resume within RESUME_WINDOW_SEC."""
+
+    def test_idle_gap_resumes_profile_and_prevents_unattributed(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        # Gap > 20 min, then a page with no client PAN/GSTIN or header name
+        r.see(FILED_URL, filed_page()[1:], shade=100, advance=25 * 60)
+        r.sgt.end_all("test")
+        resumed = r.events("session_resumed")
+        assert len(resumed) == 1
+        assert resumed[0]["idle_sec"] == 1500.0
+        ends = r.events("session_end")
+        assert len(ends) == 2
+        assert ends[0]["reason"] == "idle 20 min"
+        payload = ends[1]["payload"]
+        assert payload["client_known"] is True
+        assert payload["client_profile"]["pan"] == "ABCPD1234E"
+        assert payload["client_profile"]["name"] == "ASHOK KUMAR SEN"
+        assert len(payload["datasets"]) == 1
+        row = r.sgt.drain()[-1]
+        assert row["pan"] == "ABCPD1234E"
+        assert row["client_name"] == "ASHOK KUMAR SEN"
+        assert row["identity_resolved"] is True
+
+    def test_draft_pieces_survive_idle_resume(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
+        # Idle > 20 min, then success page with ARN joins to earlier form + period
+        r.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
+              ["Return submission", "Acknowledgement Number :", "123456789150726", "OK"],
+              shade=110, advance=25 * 60)
+        r.sgt.end_all("test")
+        payload = r.events("session_end")[1]["payload"]
+        assert len(payload["datasets"]) == 1
+        ds = payload["datasets"][0]
+        assert ds["form"] == "ITR-4"
+        assert ds["period"] == "AY 2026-27"
+        assert ds["arn"] == "123456789150726"
+
+    def test_gap_exceeding_resume_window_does_not_resume(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        # Gap > RESUME_WINDOW_SEC (4 hours + 1s)
+        r.see(FILED_URL, filed_page()[1:], shade=100, advance=RESUME_WINDOW_SEC + 1)
+        r.sgt.end_all("test")
+        assert len(r.events("session_resumed")) == 0
+        ends = r.events("session_end")
+        payload = ends[1]["payload"]
+        assert payload["client_known"] is False
+        assert payload["client_profile"].get("pan") is None
+
+    def test_first_page_after_gap_is_login_url_does_not_resume(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(LOGIN_URL, ["Login to e-Filing", "Enter User ID"], shade=100, advance=25 * 60)
+        assert len(r.events("session_resumed")) == 0
+        assert 1 not in r.sgt._parked
+        s = r.sgt._sessions[1]
+        assert s.profile == {}
+
+    def test_first_page_after_gap_shows_different_pan_ends_resumed_session(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        other_page = ["MEERA DAS Individual", "Profile", "Name", "MEERA DAS", "PAN", "XYZAB9876C"]
+        r.see(PROFILE_URL, other_page, shade=100, advance=25 * 60)
+        assert len(r.events("session_resumed")) == 1
+        ends = r.events("session_end")
+        assert any("a different PAN appeared" in e["reason"] for e in ends)
+        s = r.sgt._sessions[1]
+        assert s.strict is True
+        assert (s.profile.get("pan") or {}).get("value") != "ABCPD1234E"
+
+    def test_portal_differs_does_not_resume(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90, portal=ITR)
+        r.see(GST_R1, ["GSTR-1 - Details of outward supplies"], shade=100, portal=GST, advance=25 * 60)
+        assert len(r.events("session_resumed")) == 0
+        s = r.sgt._sessions[1]
+        assert s.portal == GST
+        assert "pan" not in s.profile
+
+    def test_non_idle_endings_never_park(self, tmp_path):
+        # Logout
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(LOGOUT_URL, ["Logged out"], shade=100)
+        assert 1 not in r.sgt._parked
+
+        # Login page - next client
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(LOGIN_URL, ["Login to e-Filing"], shade=100)
+        assert 1 not in r.sgt._parked
+
+        # Moved to another portal
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90, portal=ITR)
+        r.see(GST_R1, ["GST Login"], shade=100, portal=GST)
+        assert 1 not in r.sgt._parked
+
+        # Shutdown / explicit end_session
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.sgt.end_session(1, "shutdown")
+        assert 1 not in r.sgt._parked
+
+    def test_parked_entry_removed_after_use_no_resurrect(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        # First idle gap: resumes and pops parked entry
+        r.see(FILED_URL, filed_page()[1:], shade=100, advance=25 * 60)
+        assert len(r.sgt._parked) == 0
+        # Now clear session 1 profile so second idle has no client PAN/GSTIN
+        r.sgt._sessions[1].profile.clear()
+        r.clock[0] += 25 * 60
+        r.sgt._end_idle(r.clock[0])
+        # Nothing parked; old snapshot was not resurrected
+        assert len(r.sgt._parked) == 0
+
+    def test_idle_end_logs_session_end_and_dispatches_rows(self, tmp_path):
+        r = Rig(tmp_path)
+        r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
+        r.see(FILED_URL, filed_page(), shade=100)
+        r.clock[0] += 25 * 60
+        r.sgt._end_idle(r.clock[0])
+        ends = r.events("session_end")
+        assert len(ends) == 1
+        assert ends[0]["reason"] == "idle 20 min"
+        assert r.sgt.pending() > 0
+        dispatched = r.sgt.drain()
+        assert len(dispatched) >= 1
+        assert dispatched[0]["arn"] == "123456789150925"
+        assert dispatched[0]["pan"] == "ABCPD1234E"

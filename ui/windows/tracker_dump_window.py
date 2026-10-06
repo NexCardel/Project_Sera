@@ -141,18 +141,30 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         else:
             ltt_status = "Submitted & E-verified"
 
+    # The acknowledgement is what makes it "& E-verified": a submit message on its own (form + period +
+    # message) is only "Submitted"; form + period + message + ARN is "Submitted & E-verified".
+    if ltt_status == "Submitted & E-verified" and not (arn and arn.upper() != "N/A"):
+        ltt_status = "Submitted"
+
     # Assign color palette matching Google Material / Sera design
     theme = _get_status_theme(ltt_status)
     return ltt_status, theme
 
 
 STATUS_THEMES = {
-    "Submitted & E-verified": {
+    "Submitted & E-verified": {                  # dark green
         "fg": "#39FF14",
-        "bg": "#11281E",
-        "border": "#2E9B5F",
+        "bg": "#0B2A17",
+        "border": "#1E7A43",
         "cell_bg": "#1A5936",
         "icon": "mdi.check-circle"
+    },
+    "Submitted": {                               # light green: a submit message, no ARN yet
+        "fg": "#0A2616",
+        "bg": "#7FD8A0",
+        "border": "#A8EBC0",
+        "cell_bg": "#7FD8A0",
+        "icon": "mdi.check"
     },
     "Submitted (e-verification pending)": {
         "fg": "#F1E05A",
@@ -305,6 +317,12 @@ def _portal_short(text: str) -> tuple[str, str]:
     if any(k in low for k in ("traces", "tds", "26q", "24q", "27q")):
         return "TDS", "#D2A8FF"
     return str(text or "—"), "#8B949E"
+
+
+def _filing_type(portal: str, fallback: str) -> str:
+    """'GST Portal (GSTR-3B)' -> 'GSTR-3B'; a portal text without a filing type shows the short portal name."""
+    m = re.search(r"\(([^()]+)\)\s*$", str(portal or ""))
+    return m.group(1).strip() if m else fallback
 
 
 def _method_short(method: str) -> str:
@@ -1582,7 +1600,7 @@ class TrackerDumpWindow(QWidget):
     service_action_requested = Signal(int, dict)
 
     # Table columns (same order in both views)
-    COL_CLIENT, COL_PORTAL, COL_PERIOD, COL_STATUS, COL_METHOD, COL_UPDATED, COL_ACTIONS = range(7)
+    COL_CLIENT, COL_FILING, COL_PERIOD, COL_STATUS, COL_ACTIONS, COL_UPDATED, COL_METHOD = range(7)
     COLUMN_COUNT = 7
     
     def __init__(self, db, parent=None, defer_first_load: bool = False):
@@ -1877,6 +1895,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_status.addItems([
             "All Statuses",
             "Submitted & E-verified",
+            "Submitted",
             "Pending e-Verification",
             "Other EVC",
             "Not submitted"
@@ -1927,7 +1946,7 @@ class TrackerDumpWindow(QWidget):
         # Filter chips: "Status ▾" etc.; a chip that's switched on shows its value, e.g. "Client: Unregistered".
         self._filter_chips = []
         for combo, label, short in (
-            (self.cmb_status, "Status", {"Submitted & E-verified": "E-verified", "Pending e-Verification": "Pending e-verification"}),
+            (self.cmb_status, "Status", {"Submitted & E-verified": "E-verified", "Submitted": "Submitted (no ARN)", "Pending e-Verification": "Pending e-verification"}),
             (self.cmb_portal, "Portal", {"Income Tax (ITR)": "Income Tax", "GST Portal": "GST", "TRACES / TDS": "TDS"}),
             (self.cmb_client, "Client", {"Registered Clients": "Registered", "Unregistered / Action Required": "Unregistered"}),
             (self.cmb_date, "Time", {}),
@@ -2044,7 +2063,7 @@ class TrackerDumpWindow(QWidget):
             return
         is_grouped = self.cmb_view_mode.currentIndex() == 0 if hasattr(self, "cmb_view_mode") else True
         widths = {
-            self.COL_PORTAL: 120,
+            self.COL_FILING: 120,
             self.COL_PERIOD: 250 if is_grouped else 170,
             self.COL_STATUS: 280,
             self.COL_METHOD: 130,
@@ -2299,6 +2318,8 @@ class TrackerDumpWindow(QWidget):
             if status_filter != "All Statuses":
                 res_status, _ = _resolve_ltt_submission_status(d)
                 if status_filter == "Submitted & E-verified" and res_status != "Submitted & E-verified":
+                    continue
+                elif status_filter == "Submitted" and res_status != "Submitted":
                     continue
                 elif status_filter == "Pending e-Verification" and res_status != "Submitted (e-verification pending)":
                     continue
@@ -2678,8 +2699,8 @@ class TrackerDumpWindow(QWidget):
         """Sets headers and widths for the current view."""
         self.table.setColumnCount(self.COLUMN_COUNT)
         self.table.setHorizontalHeaderLabels([
-            "Client", "Portal", "Filings & History" if is_grouped else "Period",
-            "Submission Status", "Captured by", "Updated", ""
+            "Client", "Filing type", "Filings & History" if is_grouped else "Period",
+            "Submission Status", "", "Updated", "Captured by"
         ])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -2726,8 +2747,8 @@ class TrackerDumpWindow(QWidget):
 
             portal_str = r.get("portal") or "Income Tax Portal"
             short, color = _portal_short(portal_str)
-            p_item = _get_item(self.COL_PORTAL, color=color)
-            p_item.setText(short)
+            p_item = _get_item(self.COL_FILING, color=color)
+            p_item.setText(_filing_type(portal_str, short))
             p_item.setToolTip(portal_str)
 
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
@@ -2791,8 +2812,8 @@ class TrackerDumpWindow(QWidget):
 
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
             short, color = _portal_short(portal_str)
-            portal_item = _get_item(self.COL_PORTAL, color=color)
-            portal_item.setText(short)
+            portal_item = _get_item(self.COL_FILING, color=color)
+            portal_item.setText(_filing_type(portal_str, short))
             portal_item.setToolTip(portal_str)
 
             period_val = r.get("period_label") or "N/A"

@@ -245,11 +245,16 @@ class CurrentRules:
                        the status given to a complete dataset nothing has submitted yet
                        ("Draft") - only when some piece came from the page LINK (the portals
                        only put the form / year in the link while you are inside that filing)
+      scoped_portals   portals where every return page is one self-contained return (GST): a
+                       dataset's pieces must come from the page of its own form, a changed form
+                       or period starts a new dataset, and a dataset already written is never
+                       moved to another period. Wizard portals (ITR) leave this out.
     """
     compose: Tuple[Tuple[str, str], ...] = ()
     complete_when: Tuple[str, ...] = ("form", "period")
     in_progress_status: Optional[str] = "Draft"
     in_progress_needs_link: bool = True
+    scoped_portals: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -846,7 +851,8 @@ def build_profile_rules(raw: Any) -> ProfileRules:
 def build_current_rules(raw: Any) -> CurrentRules:
     if not isinstance(raw, dict):
         raise SpecError("'rules' must be a JSON object")
-    unknown = set(raw) - {"compose", "complete_when", "in_progress_status", "in_progress_needs_link", "note"}
+    unknown = set(raw) - {"compose", "complete_when", "in_progress_status", "in_progress_needs_link",
+                          "scoped_portals", "note"}
     if unknown:
         raise SpecError(f"unknown key(s) {sorted(unknown)} - check the spelling")
     status = raw.get("in_progress_status", "Draft")
@@ -857,6 +863,7 @@ def build_current_rules(raw: Any) -> CurrentRules:
         complete_when=_str_list(raw.get("complete_when", ["form", "period"]), "'complete_when'"),
         in_progress_status=status,
         in_progress_needs_link=bool(raw.get("in_progress_needs_link", True)),
+        scoped_portals=_str_list(raw.get("scoped_portals", []), "'scoped_portals'"),
     )
 
 

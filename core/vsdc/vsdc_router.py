@@ -485,7 +485,8 @@ class VSDCRouter:
                                   sdis=SdisRecorder(enabled=getattr(self, "_sdis_record", True)),
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
-                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
+                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
+                                  ask_demotion=self.notify_demotion)
             self._apply_sgt_i()
             self._apply_scc()
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
@@ -549,6 +550,18 @@ class VSDCRouter:
             self._hud_buffer.append((event_type, title, subtitle, snapshot))
             return
         self._emit_activity(event_type, title, subtitle, snapshot)
+
+    on_demotion = None          # set by the app: shows the "lower this status?" dialog (called from SGT's thread)
+
+    def notify_demotion(self, info: Dict[str, Any]) -> None:
+        """SGT saw a lower status for a filing that has an ARN and asks the user before lowering it."""
+        cb = self.on_demotion
+        if callable(cb):
+            cb(info)
+
+    def answer_demotion(self, token: str, lower: bool) -> None:
+        if self._sgt is not None:
+            self._sgt.answer_demotion(token, lower)
 
     def notify_sgt(self, event_type: str, title: str, subtitle: str, context: Dict[str, Optional[str]]) -> None:
         """

@@ -157,6 +157,8 @@ class TrackerDumpMixin:
         # Resolve incoming dataset key components
         page_url_norm = None
         incoming_form = filing_type or ""
+        incoming_pref = ""
+        status_correction = False
         cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
         taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
@@ -167,6 +169,8 @@ class TrackerDumpMixin:
                     raw_p = p_obj.get("raw_payload") if isinstance(p_obj.get("raw_payload"), dict) else {}
                     dataset_key = dataset_key or p_obj.get("dataset_key") or raw_p.get("dataset_key")
                     incoming_form = p_obj.get("filing_type") or raw_p.get("filing_type") or incoming_form
+                    incoming_pref = p_obj.get("filing_preference") or raw_p.get("filing_preference") or ""
+                    status_correction = bool(p_obj.get("status_correction"))
                     taxpayer_id = p_obj.get("gstin") or p_obj.get("pan") or raw_p.get("gstin") or raw_p.get("pan") or taxpayer_id
                     page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
                     if page_url and isinstance(page_url, str):
@@ -187,7 +191,8 @@ class TrackerDumpMixin:
                 portal=portal,
                 identifier=taxpayer_id,
                 form_type=incoming_form or filing_type,
-                period_label=period_label
+                period_label=period_label,
+                preference=incoming_pref
             )
 
         # 2. Write capture to rawPayload.db and update SRPF container
@@ -247,7 +252,7 @@ class TrackerDumpMixin:
                     ex_status, ex_arn = ex_row
                     try:
                         from core.vsdc.vsdc_assembler import get_status_rank
-                        if get_status_rank(ex_status) > get_status_rank(status):
+                        if get_status_rank(ex_status) > get_status_rank(status) and not status_correction:
                             status = ex_status
                             if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A":
                                 arn_number = ex_arn

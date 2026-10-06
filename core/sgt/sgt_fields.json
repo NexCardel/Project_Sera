@@ -653,7 +653,7 @@
         {
           "field": "form",
           "take": "nearest_above",
-          "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
+          "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
           "transforms": ["dash_form"],
           "confidence": 90,
           "examples": ["GSTR-1 / IFF", "GSTR-3B"],
@@ -714,7 +714,8 @@
       "compose": {"period": "{tax_period} (FY {fy})"},
       "complete_when": ["form", "period"],
       "in_progress_status": "Draft",
-      "in_progress_needs_link": false
+      "in_progress_needs_link": false,
+      "scoped_portals": ["GST Portal"]
     },
     "fields": [
       {
@@ -882,22 +883,24 @@
         "source": "link",
         "take": "anywhere",
         "case": "insensitive",
-        "pattern": "/returns/auth/(gstr(?!2[ab])[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
+        "pattern": "/returns/auth/(gstr(?!2(?![0-9]))[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
         "transforms": ["dash_form"],
         "confidence": 95,
         "examples": [{"link": "https://return.gst.gov.in/returns/auth/gstr3b", "expect": "GSTR-3B"}],
-        "counter_examples": [{"link": "https://services.gst.gov.in/services/auth/fowelcome"}]
+        "counter_examples": [{"link": "https://services.gst.gov.in/services/auth/fowelcome"},
+                             {"link": "https://return.gst.gov.in/returns/auth/gstr2/preview"},
+                             {"link": "https://return.gst.gov.in/returns/auth/gstr2b"}]
       },
       {
         "name": "cur_gst_form_page",
         "field": "form",
         "portals": ["GST Portal"],
         "take": "anywhere",
-        "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?)Q? - ",
+        "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?)Q? - ",
         "transforms": ["dash_form"],
         "confidence": 85,
         "examples": ["GSTR-3BQ - Quarterly Return", "GSTR-1 - Details of outward supplies of goods or services"],
-        "counter_examples": ["GSTR-1 / IFF"]
+        "counter_examples": ["GSTR-1 / IFF", "GSTR-2A - Auto Drafted details", "GSTR-2 - Inward supplies"]
       },
       {
         "name": "cur_gst_fy",
@@ -912,15 +915,49 @@
         "counter_examples": [{"lines": ["FY -", "Return Period -"]}]
       },
       {
+        "name": "cur_gst_fy_bare",
+        "field": "fy",
+        "portals": ["GST Portal"],
+        "take": "anywhere",
+        "pattern": "^(20[0-9]{2}-[0-9]{2})$",
+        "checks": ["years_consecutive"],
+        "confidence": 80,
+        "note": "The GSTR-1 page draws its financial year as a bare line above 'Tax Period -', with no FY label. Two different bare years on one page are a conflict and none is taken.",
+        "examples": [{"lines": ["Returns", "2026-27", "Tax Period -", "September(Q)"], "expect": "2026-27"}],
+        "counter_examples": [{"lines": ["(c) 2026-27 Goods and Services Tax Network"]}, {"lines": ["2026-27", "2025-26"]}]
+      },
+      {
         "name": "cur_gst_tax_period",
         "field": "tax_period",
         "portals": ["GST Portal"],
         "labels": ["Tax Period", "Return Period", "Period"],
         "within": 1,
-        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December)$",
+        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December|(?:Jan|Apr|Jul|Oct) ?[-–] ?(?:Mar|Jun|Sep|Dec))(?: ?\\(Q\\))?$",
+        "map": [
+          ["^apr ?[-–] ?jun$", "June"],
+          ["^jul ?[-–] ?sep$", "September"],
+          ["^oct ?[-–] ?dec$", "December"],
+          ["^jan ?[-–] ?mar$", "March"],
+          ["^january$", "January"],
+          ["^february$", "February"],
+          ["^march$", "March"],
+          ["^april$", "April"],
+          ["^may$", "May"],
+          ["^june$", "June"],
+          ["^july$", "July"],
+          ["^august$", "August"],
+          ["^september$", "September"],
+          ["^october$", "October"],
+          ["^november$", "November"],
+          ["^december$", "December"]
+        ],
         "confidence": 90,
-        "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"}],
-        "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}]
+        "note": "A quarterly filer's period is a quarter: 'Apr-Jun' (GSTR-3B) or 'September(Q)' (GSTR-1). It is recorded as the quarter's END month (Apr-Jun = June), the evidence keeps what the page printed. Never read from the returns dashboard: its dropdown is only a selection, not a return being worked on.",
+        "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"},
+                     {"lines": ["Tax Period -", "September(Q)"], "expect": "September"},
+                     {"lines": ["Return Period - Apr-Jun"], "expect": "June"},
+                     {"lines": ["Return Period -", "Jan-Mar"], "expect": "March"}],
+        "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}, {"lines": ["Tax Period -", "Feb-Apr"]}]
       },
       {
         "name": "cur_gst_status",

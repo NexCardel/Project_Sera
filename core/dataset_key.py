@@ -1,7 +1,8 @@
 """
 core/dataset_key.py - the one canonical key for a tracker dataset
 =================================================================
-PORTAL:IDENTIFIER:FORM:PERIOD, e.g. GST:19BHPPM3529R1ZB:GSTR1:AY_2026_27_MAY. The tracker
+PORTAL:IDENTIFIER:FORM:PERIOD[:PREFERENCE], e.g. GST:19BHPPM3529R1ZB:GSTR1:AY_2026_27_MAY, or
+ITR:ABCPD1234E:ITR4:AY_2026_27:REVISED (the filing preference is added unless it is Original or absent). The tracker
 keeps one row per key (database.insert_tracker_dump), so every engine that wants its rows to
 merge with the others' must build the key with this function - the database (for VSDC and
 the extension) and SGT in live mode both do. Pure: depends on nothing but `re`.
@@ -15,7 +16,8 @@ SDIS_INFO_METHOD = "SGT_sdis_info"
 NOT_CARRIER_SQL = "(capture_method IS NULL OR capture_method != 'SGT_sdis_info')"
 
 
-def compute_dataset_key(portal: str, identifier: str, form_type: str, period_label: str) -> str:
+def compute_dataset_key(portal: str, identifier: str, form_type: str, period_label: str,
+                        preference: str = "") -> str:
     """Generates a canonical, deterministic dataset key for instant O(1) deduplication & promotion:
        Format: PORTAL:IDENTIFIER:FORM:PERIOD
        e.g. GST:19BHPPM3529R1ZB:GSTR1:MAY_2026
@@ -88,10 +90,20 @@ def compute_dataset_key(portal: str, identifier: str, form_type: str, period_lab
         elif m_mon and m_yr:
             mon_3 = m_mon.group(1)[:3].upper()
             per_canon = f"{mon_3}_{m_yr.group(1)}"
+        elif m_qtr:
+            # A quarter with no year in the label: the whole range is the period. Taking its first month
+            # would make "Apr-Jun" the same dataset as April.
+            per_canon = re.sub(r"[^A-Z0-9]+", "_", m_qtr.group(1).upper())
         elif m_mon:
             mon_3 = m_mon.group(1)[:3].upper()
             per_canon = mon_3
         else:
             per_canon = re.sub(r"[^A-Z0-9]+", "_", per_clean.upper()).strip("_") or "CURRENT"
 
-    return f"{p_canon}:{id_str}:{f_canon}:{per_canon}"
+    key = f"{p_canon}:{id_str}:{f_canon}:{per_canon}"
+    # The filing preference (Original / Revised / Belated / Updated) tells two filings of the same form and
+    # period apart. Original (or none) adds nothing, so every key made before this stays valid.
+    pref = re.sub(r"[^A-Z0-9]", "", str(preference or "").upper())
+    if pref and pref != "ORIGINAL":
+        key += f":{pref}"
+    return key

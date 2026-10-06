@@ -64,6 +64,8 @@ class SyncSignalBridge(QObject):
     engine_alert_signal = Signal(str, str)
     # An SCC save (core/scc/save.py) from SCC-U's thread: client id, client name, PAN, outcome.
     scc_saved_signal = Signal(int, str, str, str)
+    # SGT saw a LOWER status for a filing that has an ARN: ask before lowering it (info dict).
+    sgt_demotion_signal = Signal(dict)
 
 import security
 from database import SeraDatabase
@@ -215,6 +217,7 @@ class SeraApp:
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
         self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
+        self.sync_bridge.sgt_demotion_signal.connect(self._ask_sgt_demotion)
         self.sync_bridge.engine_alert_signal.connect(
             lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
@@ -661,6 +664,7 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
             from core.scc import manual as scc_manual
             scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
@@ -1093,6 +1097,28 @@ class SeraApp:
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
+
+    def _ask_sgt_demotion(self, info: dict):
+        """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
+        the default is to keep the status that is recorded."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(getattr(self, "shell", None))
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Lower this filing's status?")
+        what = " ".join(x for x in (info.get("form"), info.get("period")) if x)
+        box.setText(f"{info.get('client') or 'This client'} - {what}\n\n"
+                    f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
+                    f"status than the one recorded.")
+        box.setInformativeText(f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
+                               f"\"{info.get('evidence') or ''}\"\n\n"
+                               f"Keep the recorded status unless you are sure the page is right.")
+        keep = box.addButton("Keep current status", QMessageBox.RejectRole)
+        lower = box.addButton("Lower the status", QMessageBox.AcceptRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        router = getattr(getattr(self, "vsdc_worker", None), "router", None)
+        if router is not None:
+            router.answer_demotion(info.get("token"), box.clickedButton() is lower)
 
     def _make_scc_handlers(self):
         """SCC-U's handlers (once, when its host is created)."""

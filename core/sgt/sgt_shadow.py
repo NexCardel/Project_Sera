@@ -68,6 +68,8 @@ The log holds resolved values only; page TEXT is kept separately, for replay, on
 recording is on (sgt_corpus.py - local, 30 days).
 """
 
+import collections
+import copy
 import json
 import os
 import re
@@ -97,6 +99,12 @@ CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
 IDLE_END_SEC = 20 * 60
+IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
+RESUME_WINDOW_SEC = 4 * 3600
+# Portals whose pages are never read by OCR: a canvas read there loses the label markers
+# ("Period •") and used to clear values the accessibility tree had just set (GST bug, 2026-10-06).
+# A blind page of these portals is simply not read.
+NO_OCR_PORTALS = frozenset({"GST Portal"})
 REREAD_AFTER_SEC = 15.0
 MIN_UIA_LINES = 3               # fewer than this and the page is treated as blind
 MISSES_TO_CLEAR = 2             # reads in a row a piece must be missing from its page to be cleared
@@ -155,6 +163,12 @@ class _Slot:
     # whose text built it). Once the client is known, it must be one of them.
     claimed: Optional[List[str]] = None
     alerted: bool = False               # live: the client-unknown phone alert went out for it
+    # field -> the page that last set it. A value belongs to the page that supplied it: when that same
+    # page later shows a different one, the row follows it (a corrected misread, a status that changed).
+    owner: Dict[str, str] = field(default_factory=dict)
+    waived: bool = False                # written without form + period: the session ended before they came
+    lowered: bool = False               # its status was just lowered on purpose: the tracker must accept it
+    demotion_asked: Set[str] = field(default_factory=set)   # (status, page visit) pairs already put to the user
 
     @property
     def arn(self) -> Optional[str]:
@@ -176,6 +190,9 @@ class _Draft:
     pieces: Dict[str, Dict[str, str]] = field(default_factory=dict)   # field -> {value, page, source, spec}
     slot: Optional["_Slot"] = None      # the row this dataset was written as, once complete
     claims: List[str] = field(default_factory=list)   # PANs printed on the pages whose TEXT built it
+    # The last period this dataset had. A piece can be cleared for a moment while a page redraws;
+    # the "a different period was opened" check must still compare against what it was.
+    last_period: str = ""
 
     def values(self, rules: Any = None) -> Dict[str, str]:
         vals = {k: p["value"] for k, p in self.pieces.items()}
@@ -212,6 +229,9 @@ class _Session:
     blind_pages: int = 0
     read_ms: float = 0.0
     conflicts: int = 0
+    ocr_skips: int = 0                  # blind reads of a no-OCR portal (see NO_OCR_PORTALS)
+    visit: int = 0                      # +1 whenever the page link changes: one stay on one page
+    untied: Set[str] = field(default_factory=set)   # page visits whose bare submit message was already reported
     draft: _Draft = field(default_factory=_Draft)
     # (field, value) pairs already logged as "not promoted": a truncated header name is seen on
     # every page, and one log line about it is enough.
@@ -249,8 +269,14 @@ class SgtShadow:
         intelligence: Any = None,
         scc: Any = None,
         sdis: Any = None,
+        ask_demotion: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # A page now shows a LOWER status than a filing that has an ARN: never applied on its own. The
+        # user is asked (this callback shows the dialog); confirm_demotion / decline_demotion answer.
+        self._ask_demotion = ask_demotion
+        self._demotions: Dict[str, Tuple[_Session, _Slot, str, str]] = {}
+        self._demotion_answers: "collections.deque[Tuple[str, bool]]" = collections.deque()   # from the UI thread
         # SDIS's own recorder (core.sdis.recorder.SdisRecorder), or None. It is only offered the
         # pages SGT's change gate let through, after SGT's own read; see _observe.
         self._sdis = sdis
@@ -294,6 +320,7 @@ class SgtShadow:
         self._today = today
         self._echo = echo
         self._sessions: Dict[int, _Session] = {}
+        self._parked: Dict[int, Tuple[float, Dict[str, Any]]] = {}
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
@@ -333,6 +360,7 @@ class SgtShadow:
             return None
 
     def end_session(self, hwnd: int, reason: str) -> None:
+        self._parked.pop(hwnd, None)
         s = self._sessions.pop(hwnd, None)
         if s is not None:
             self._finish(s, reason)
@@ -341,12 +369,14 @@ class SgtShadow:
             self._stats.save()
 
     def end_all(self, reason: str) -> None:
+        self._parked.clear()
         for hwnd in list(self._sessions):
             self.end_session(hwnd, reason)
 
     # ── One tick ─────────────────────────────────────────────────────────────────
     def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "") -> Optional[PageResult]:
         now = self._clock()
+        self._apply_demotion_answers()
         self._end_idle(now)
         self._daily_health_check()
         s = self._sessions.get(hwnd)
@@ -368,7 +398,38 @@ class SgtShadow:
             else:
                 s.portal = portal
         if s is None:
-            s = self._sessions[hwnd] = _Session(portal=portal)
+            parked = self._parked.pop(hwnd, None)
+            resumed = False
+            if parked is not None:
+                parked_at, snap = parked
+                age = now - parked_at
+                gap = now - float(snap.get("last_seen") or parked_at)
+                snap_portal = snap.get("portal") or ""
+                portal_ok = not portal or not snap_portal or portal == snap_portal
+                url_ok = not (_LOGIN.search(url) or _LOGOUT.search(url)) if url else True
+                if 0 <= age <= RESUME_WINDOW_SEC and gap <= RESUME_WINDOW_SEC and portal_ok and url_ok:
+                    resumed = True
+                    s = _session_from_json(snap)
+                    old_id = snap.get("session_id", s.session_id)
+                    s.session_id = uuid.uuid4().hex[:12]
+                    s.started = now
+                    s.last_seen = now
+                    s.slots = []
+                    s.draft.slot = None
+                    if portal:
+                        s.portal = portal
+                    if s.sdis is not None:
+                        if s.sdis.instances:
+                            s.sdis.instances = [inst for inst in s.sdis.instances if not inst.sent_key]
+                            s.sdis.current = {k: v for k, v in s.sdis.current.items() if v in s.sdis.instances}
+                        if s.sdis.carrier and s.sdis.carrier.sent_key:
+                            s.sdis.carrier = None
+                    self._sessions[hwnd] = s
+                    idle_sec = max(0.0, round(gap, 1))
+                    self._event(s, "session_resumed", from_session=old_id, idle_sec=idle_sec)
+                    self._echo(f"[SGT] {self._tag} session resumed (from session {old_id}, idled {int(idle_sec)}s)")
+            if not resumed:
+                s = self._sessions[hwnd] = _Session(portal=portal)
         if not s.portal:
             s.portal = portal
         s.last_seen = now
@@ -376,6 +437,7 @@ class SgtShadow:
         url_changed = url != s.last_url
         if url_changed:
             s.last_url = url
+            s.visit += 1
             if url and (not s.timeline or s.timeline[-1] != url) and len(s.timeline) < TIMELINE_CAP:
                 s.timeline.append(url)
         if _LOGOUT.search(url):
@@ -403,7 +465,11 @@ class SgtShadow:
         if is_blind(lines):
             s.blind_pages += 1
             lines = []
-            if ocr is not None and frame is not None:
+            if portal in NO_OCR_PORTALS:
+                s.ocr_skips += 1
+                if s.ocr_skips == 1:
+                    self._echo(f"[SGT] {self._tag} {portal}: page unreadable by UI Automation - OCR is off here, skipped")
+            elif ocr is not None and frame is not None:
                 lines = list((ocr.scan_image(frame, region_type="full") or {}).get("lines") or [])
                 source = "ocr"
                 s.ocr_reads += 1
@@ -522,6 +588,14 @@ class SgtShadow:
             # Another client's PAN is readable on this page: its TEXT may be about them, so only
             # what the link and window title say (the filing wizard's form and year) is used.
             seen = {f: h for f, h in seen.items() if h.source != "page"}
+        scoped = (s.portal or "") in getattr(rules, "scoped_portals", ())
+        if scoped:
+            # A GST return page is one self-contained return. A page that does not name its own
+            # form (a comparison tool, a menu) says nothing about the dataset being built: its
+            # year, period or status could belong to any form.
+            named = (d.pieces.get("form") or {}).get("page") == url
+            if "form" not in seen and not named:
+                seen = {}
         if self._page_pans and not self._client_pan(s) and any(h.source == "page" for h in seen.values()):
             # The client is not known yet and this page's text prints PANs: remember them, so the
             # dataset is only ever written for a client whose PAN was among them.
@@ -549,7 +623,17 @@ class SgtShadow:
         if not seen:
             return
         # A different period is a different dataset: close the one being built, start afresh.
-        before = d.values(rules).get("period")
+        if scoped and "form" in seen:
+            old_form = (d.pieces.get("form") or {}).get("value")
+            if old_form and old_form != seen["form"].value:
+                # Another return: nothing read for the old one (year, period, status) is carried over.
+                old_period = d.values(rules).get("period") or d.last_period
+                self._close_draft(s, rules, f"a different form was opened ({old_form} -> {seen['form'].value})", url)
+                d = s.draft
+                d.last_period = ""
+                if old_period:
+                    self._echo(f"[SGT] {self._tag} dataset in progress closed: {old_form} {old_period}")
+        before = d.values(rules).get("period") or d.last_period
         trial = dict(d.values())
         trial.update({f: h.value for f, h in seen.items()})
         after = compose(trial, rules).get("period")
@@ -564,19 +648,26 @@ class SgtShadow:
             d.pieces[fld] = {"value": hit.value, "page": url, "source": hit.source, "spec": hit.spec,
                              "evidence": hit.evidence, "misses": 0, "missing_since": None}
             self._event(s, "current", change="changed" if old else "set", field=fld, value=hit.value,
-                        previous=old["value"] if old else None, spec=hit.spec, via=hit.source, page=url, source=source)
+                        previous=old["value"] if old else None, spec=hit.spec, via=hit.source, page=url, source=source,
+                        evidence=hit.evidence if hit.evidence != hit.value else None)
             self._echo(f"[SGT] {self._tag} dataset in progress: {fld} = {hit.value}"
                        f"{' (was ' + old['value'] + ')' if old else ''}  [{hit.spec}, {hit.source}]")
+        period_now = d.values(rules).get("period")
+        if period_now:
+            d.last_period = period_now
         # Complete already? Then it is a dataset now - written at once rather than when it
         # closes, so quitting the app (or a crash) in the middle of a filing loses nothing.
         # It keeps building; later pieces update the same row.
         vals, missing = self._draft_as_dataset(d, rules)
         if not missing:
             prev = d.slot
-            if (prev is not None and prev in s.slots and not prev.arn
+            if (prev is not None and prev in s.slots and not prev.arn and not scoped
+                    and submit_level(prev.values.get("status")) <= submit_level("Draft")
                     and prev.form_period != (vals.get("form"), vals.get("period"))):
-                # The CA went back and changed the form (or year) of this same dataset: move its
-                # row rather than leave a stale one behind (the old key is superseded on send).
+                # The CA went back and changed the form (or year) of this same dataset, still only a
+                # draft in a wizard: move its row rather than leave a stale one behind (the old key is
+                # superseded on send). A return that was submitted, or a portal where each period is
+                # its own return (GST), is never moved: a new period is a new dataset.
                 old = dict(prev.values)
                 prev.values.update(vals)
                 self._queue(s, prev)
@@ -584,7 +675,9 @@ class SgtShadow:
                             values=prev.values, page=url, source=source)
                 self._echo(f"[SGT] {self._tag} dataset in progress moved: {self._label(old)} -> {self._label(prev.values)}")
             else:
-                d.slot = self._merge_values(s, vals, CURRENT_RECORD, 85, url, source, claimed=d.claims or None)
+                st = d.pieces.get("status")
+                d.slot = self._merge_values(s, vals, CURRENT_RECORD, 85, url, source, claimed=d.claims or None,
+                                            follow=True, status_explicit=bool(st and st.get("page") == url))
 
     @staticmethod
     def _draft_as_dataset(d: _Draft, rules: Any) -> Tuple[Dict[str, str], List[str]]:
@@ -787,6 +880,9 @@ class SgtShadow:
             self._outbox.move_to_end(id(slot))
             return
         problems = self.store.get().dataset_rules.problems(s.portal, slot.values, self._today())
+        if not slot.waived and not (slot.values.get("form") and slot.values.get("period")):
+            # Identity first: an ack or a message with no form and period of its own waits for them.
+            problems.insert(0, IDENTITY_PROBLEM)
         if slot.claimed:
             client = self._client_pan(s)
             named = ", ".join(slot.claimed)
@@ -860,7 +956,7 @@ class SgtShadow:
         form, period = values.get("form") or "", values.get("period") or ""
         if not (form and period):
             form, period = "", f"ARN {values.get('arn') or ''}"
-        return compute_dataset_key(s.portal, ident, form, period)
+        return compute_dataset_key(s.portal, ident, form, period, values.get("filing_type") or "")
 
     @staticmethod
     def dataset_key(s: _Session, values: Dict[str, str]) -> str:
@@ -905,6 +1001,7 @@ class SgtShadow:
         key = self.row_key(s, v)
         supersedes = slot.sent_key if slot.sent_key and slot.sent_key != key else None
         slot.sent_key = key
+        lowered, slot.lowered = slot.lowered, False        # the tracker is told once; later rows are ordinary
         gstin = prof.get("gstin") or ""
         pan = prof.get("pan") or (gstin[2:12] if len(gstin) == 15 else "")
         status = v.get("status") or SUBMIT_LEVELS[0]
@@ -933,6 +1030,7 @@ class SgtShadow:
             "page_url": slot.first_page,
             "dataset_key": key,
             "supersedes_dataset_key": supersedes,
+            "status_correction": lowered,
             "raw_payload": {
                 "source": {"engine": "SGT", "mode": self.mode, "record": slot.record, "confidence": slot.confidence,
                            "identity": s.confirm_note or "not confirmed yet"},
@@ -1101,9 +1199,9 @@ class SgtShadow:
         self._announce_profile(s, before_identity=not had_client)
         rules = registry.current_rules if registry is not None else None
         for ds in res.datasets:
-            self._merge(s, ds, url, source, rules)
+            self._merge(s, ds, url, source, rules, registry)
 
-    def _find_slot(self, s: _Session, values: Dict[str, str]) -> Optional[_Slot]:
+    def _find_slot(self, s: _Session, values: Dict[str, str], stamp: str = "", follow: bool = False) -> Optional[_Slot]:
         arn = values.get("arn")
         if arn:
             for slot in s.slots:
@@ -1113,6 +1211,12 @@ class SgtShadow:
         if all(fp):
             for slot in s.slots:
                 if slot.form_period == fp and (not arn or not slot.arn):
+                    return slot
+        if follow and arn and stamp:
+            # The same confirmation page, still in view, now shows another ack: a corrected read of the
+            # first one - unless the page names a different return.
+            for slot in s.slots:
+                if slot.arn and slot.owner.get("arn") == stamp and (not all(fp) or slot.form_period in (None, fp)):
                     return slot
         return None
 
@@ -1136,7 +1240,39 @@ class SgtShadow:
             values["status_evidence"] = ("ARN captured" if submit_level(proven) == 2
                                          else f"ARN captured ({s.portal} issues it only at this level)")
 
-    def _merge(self, s: _Session, ds: Dataset, url: str, source: str, rules: Any = None) -> None:
+    @staticmethod
+    def _is_whole_page(registry: Any, record: str) -> bool:
+        """A whole-page record (a confirmation, a verification message) as against a card of a list."""
+        for r in getattr(registry, "records", ()) or ():
+            if r.name == record:
+                return r.start is None
+        return False
+
+    def _tie_message(self, s: _Session, values: Dict[str, str], url: str, source: str) -> bool:
+        """
+        A submit message with no ack on its page counts only for a return that already has one: the one
+        its form + period name, or the only one in this session still waiting for verification. It never
+        creates a dataset and never uses the return being built. True when it was tied (values then carry
+        that return's ack).
+        """
+        fp = (values.get("form"), values.get("period"))
+        acked = [sl for sl in s.slots if sl.arn]
+        pool = [sl for sl in acked if sl.form_period == fp] if all(fp) else acked
+        if len(pool) != 1:
+            pool = [sl for sl in pool if submit_level(sl.values.get("status")) == 2]
+        if len(pool) == 1:
+            values["arn"] = pool[0].arn
+            return True
+        stamp = f"{url}#{s.visit}"
+        if stamp not in s.untied:
+            s.untied.add(stamp)
+            why = "no return with an ack in this session" if not acked else "more than one return could be meant"
+            self._event(s, "dataset", change="message not tied - ignored", status=values.get("status"),
+                        reason=why, page=url, source=source)
+            self._echo(f"[SGT] {self._tag} a submit message on this page was ignored: {why}")
+        return False
+
+    def _merge(self, s: _Session, ds: Dataset, url: str, source: str, rules: Any = None, registry: Any = None) -> None:
         values = ds.values()
         other = self._other_client(s, values) or ("page" if self._foreign_pans else None)
         if other:
@@ -1151,33 +1287,108 @@ class SgtShadow:
             values.pop(k, None)
         if values.get("status"):
             values["status_evidence"] = ds.evidence("status")
-        if rules is not None and self._fill_from_draft(s, values, rules):
+        whole = self._is_whole_page(registry, ds.record)
+        message_only = whole and bool(values.get("status")) and not values.get("arn")
+        if message_only:
+            if not self._tie_message(s, values, url, source):
+                return
+        elif rules is not None and self._fill_from_draft(s, values, rules):
             self._echo(f"[SGT] {self._tag} {ds.record}: form/period taken from the dataset in progress")
             if values.get("arn"):
                 # Submitted: the dataset being built is this one, and it is finished.
                 s.draft = _Draft()
                 self._event(s, "current", change="completed by a submission", arn=values["arn"], page=url)
-        self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed)
+        self._merge_values(s, values, ds.record, ds.confidence, url, source, claimed=claimed, follow=whole,
+                           status_explicit=bool(values.get("status")))
+
+    def _request_demotion(self, s: _Session, slot: _Slot, old: str, new: str, evidence: str,
+                          stamp: str, url: str) -> None:
+        mark = f"{new}|{stamp}"
+        if mark in slot.demotion_asked:
+            return                              # already put to the user for this stay on this page
+        slot.demotion_asked.add(mark)
+        token = uuid.uuid4().hex[:12]
+        self._demotions[token] = (s, slot, new, evidence)
+        info = {"token": token, "client": self._who(s), "form": slot.values.get("form") or "",
+                "period": slot.values.get("period") or "", "arn": slot.arn, "from": old, "to": new,
+                "evidence": evidence, "portal": s.portal}
+        self._event(s, "dataset", change="status demotion needs confirmation", key=self._label(slot.values),
+                    **{"from": old, "to": new, "evidence": evidence}, page=url)
+        self._echo(f"[SGT] {self._tag} a page shows {new!r} for {self._label(slot.values)}, which was {old!r} "
+                   f"with an ARN - asking before lowering it")
+        if self._ask_demotion is not None:
+            try:
+                self._ask_demotion(info)
+            except Exception as e:              # a dialog problem must never stop capture; the status is kept
+                self._echo(f"[SGT] {self._tag} could not ask about the demotion: {e}")
+
+    def answer_demotion(self, token: str, lower: bool) -> None:
+        """The user's answer, from the UI thread: it is applied on SGT's own thread at its next tick."""
+        self._demotion_answers.append((token, bool(lower)))
+
+    def _apply_demotion_answers(self) -> None:
+        while self._demotion_answers:
+            token, lower = self._demotion_answers.popleft()
+            (self.confirm_demotion if lower else self.decline_demotion)(token)
+
+    def confirm_demotion(self, token: str) -> bool:
+        """The user agreed to lower the status: apply it and send the row (the tracker accepts it)."""
+        got = self._demotions.pop(token, None)
+        if got is None:
+            return False
+        s, slot, new, evidence = got
+        old = slot.values.get("status")
+        slot.values["status"] = new
+        if evidence:
+            slot.values["status_evidence"] = evidence
+        slot.lowered = True
+        self._event(s, "dataset", change="status lowered - confirmed by the user", key=self._label(slot.values),
+                    **{"from": old, "to": new})
+        self._queue(s, slot)
+        return True
+
+    def decline_demotion(self, token: str) -> bool:
+        got = self._demotions.pop(token, None)
+        if got is not None:
+            s, slot, new, _ = got
+            self._event(s, "dataset", change="status kept - lowering declined", key=self._label(slot.values),
+                        to=new)
+        return got is not None
+
+    # Fields a page may correct once it shows another value (form and period are the dataset's identity:
+    # a different one is a different dataset, not a correction).
+    _FOLLOW = ("arn", "filing_type", "filing_preference", "fy", "tax_period", "filing_date")
 
     def _merge_values(self, s: _Session, values: Dict[str, str], record: str, confidence: int,
-                      url: str, source: str, claimed: Optional[List[str]] = None) -> Optional[_Slot]:
+                      url: str, source: str, claimed: Optional[List[str]] = None, follow: bool = False,
+                      status_explicit: bool = False) -> Optional[_Slot]:
+        """
+        follow: this is a page read of one dataset (a whole-page record, the return being built), not a card
+        of a list: a value the SAME page, still in view, now shows differently replaces the one it set.
+        status_explicit: the page itself shows a status right now (not a default the dataset was lifted to).
+        """
         if not values.get("arn") and not (values.get("form") and values.get("period")):
             return None                         # nothing to key it on - not a dataset yet
         values = dict(values)
         self._apply_identifier(s, values)
         if not values.get("status"):
             values["status"] = SUBMIT_LEVELS[0]     # the ladder's default: nothing shows any work
-        slot = self._find_slot(s, values)
+        stamp = f"{url}#{s.visit}"
+        slot = self._find_slot(s, values, stamp, follow)
         if slot is not None and claimed:
             slot.claimed = sorted(set(slot.claimed or []) | set(claimed))
         if slot is None:
             slot = _Slot(dict(values), record, confidence, url, claimed=claimed)
+            slot.owner = {k: stamp for k in values}
             s.slots.append(slot)
             self._queue(s, slot)
             self._event(s, "dataset", change="new", record=record, values=values,
                         confidence=confidence, page=url, source=source)
             self._echo(f"[SGT] {self._tag} dataset {self._label(values)}  [{record}]")
             if slot.held:
+                if any(IDENTITY_PROBLEM in p for p in slot.held):
+                    self._hud(s, "prompt", "Submission seen - return not identified",
+                              "open the return's page so SGT can place it")
                 return slot                     # not written - the pill stays quiet about it
             submitted = submit_level(values.get("status")) >= 2
             detail = f"ARN: {values['arn']} • {values['status']}" if values.get("arn") else values["status"]
@@ -1191,17 +1402,34 @@ class SgtShadow:
             old = slot.values.get(k)
             if k == "status_evidence":
                 continue                        # travels with the status, below
+            mine = follow and slot.owner.get(k) == stamp
             if k == "status":
-                if old is None or submit_level(v) > submit_level(old):
+                up = old is None or submit_level(v) > submit_level(old)
+                corrected = (not up) and mine and status_explicit and v != old
+                if corrected and slot.arn:
+                    # A filing with an ARN: lowering its status is risky - ask, never assume.
+                    self._request_demotion(s, slot, old, v, values.get("status_evidence") or "", stamp, url)
+                    corrected = False
+                    continue
+                if up or corrected:
                     slot.values[k] = v
+                    slot.owner[k] = stamp
                     changes[k] = [old, v]
+                    if corrected:
+                        slot.lowered = True
                     if values.get("status_evidence"):
                         slot.values["status_evidence"] = values["status_evidence"]
             elif old is None:
                 slot.values[k] = v
+                slot.owner[k] = stamp
                 changes[k] = [None, v]
             elif old != v:
-                changes[k] = [old, v, "disagrees - kept the first"]
+                if mine and k in self._FOLLOW:
+                    slot.values[k] = v
+                    slot.owner[k] = stamp
+                    changes[k] = [old, v]
+                else:
+                    changes[k] = [old, v, "disagrees - kept the first"]
         if any(len(c) == 2 for c in changes.values()):     # a real change, not just a disagreement
             self._queue(s, slot)
         if changes:
@@ -1209,9 +1437,9 @@ class SgtShadow:
                         changes=changes, page=url, source=source)
             self._echo(f"[SGT] {self._tag} dataset {self._label(slot.values)} updated: "
                        + ", ".join(f"{k} {c[0]!r}->{c[1]!r}" for k, c in changes.items()))
-            if "status" in changes and changes["status"][0]:        # a status that moved forward
+            if "status" in changes and changes["status"][0]:        # a status that moved
                 self._hud(s, "update", "Dataset status updated",
-                          f"{changes['status'][0]} → {changes['status'][1]}", slot.values)
+                          f"{changes['status'][0]} \u2192 {changes['status'][1]}", slot.values)
         return slot
 
     @staticmethod
@@ -1220,9 +1448,26 @@ class SgtShadow:
 
     # ── Ending ───────────────────────────────────────────────────────────────────
     def _end_idle(self, now: float) -> None:
+        for h, (parked_at, _) in list(self._parked.items()):
+            if now - parked_at > RESUME_WINDOW_SEC:
+                self._parked.pop(h, None)
         for hwnd, s in list(self._sessions.items()):
             if now - s.last_seen > IDLE_END_SEC:
+                snap = copy.deepcopy(_session_to_json(s))
+                has_content = s.has_content
+                gap = now - s.last_seen
                 self.end_session(hwnd, "idle 20 min")
+                prof = snap.get("profile") or {}
+                pan_val = prof.get("pan")
+                if isinstance(pan_val, dict):
+                    pan_val = pan_val.get("value")
+                gstin_val = prof.get("gstin")
+                if isinstance(gstin_val, dict):
+                    gstin_val = gstin_val.get("value")
+                if has_content and (pan_val or gstin_val) and gap <= RESUME_WINDOW_SEC:
+                    self._parked[hwnd] = (now, snap)
+                else:
+                    self._parked.pop(hwnd, None)
 
     def would_be_payload(self, s: _Session) -> Dict[str, Any]:
         dispatched: Set[str] = {str(x) for x in (self._dispatched_ids() or ())}
@@ -1257,13 +1502,21 @@ class SgtShadow:
                 if slot.held and slot.claimed:
                     slot.claimed = None
                     self._queue(s, slot)
+        # A row still waiting for its form and period is written now, flagged: a filing is never lost.
+        for slot in s.slots:
+            if slot.held and not slot.waived and any(IDENTITY_PROBLEM in p for p in slot.held):
+                slot.waived = True
+                self._queue(s, slot)
+                self._event(s, "dataset", change="written without form and period - session ended",
+                            values=dict(slot.values))
+                self._echo(f"[SGT] {self._tag} {self._label(slot.values)} written without form and period")
         # The dataset still being built is dispatched only if it is complete.
         self._close_draft(s, self.store.get().current_rules, f"session end ({reason})", s.last_url)
         self._carry_sdis(s)
         self._alert_unknown_client(s)
         payload = self.would_be_payload(s)
         stats = {"reads": s.reads, "ocr_reads": s.ocr_reads, "blind_pages": s.blind_pages,
-                 "read_ms_total": round(s.read_ms, 1), "conflicts": s.conflicts,
+                 "read_ms_total": round(s.read_ms, 1), "conflicts": s.conflicts, "ocr_skipped": s.ocr_skips,
                  "minutes": round((s.last_seen - s.started) / 60, 1)}
         self._event(s, "session_end", reason=reason, payload=payload, stats=stats)
         who = payload["client_profile"].get("name") or payload["client_profile"].get("pan") \
@@ -1400,7 +1653,7 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
         "confirmed": s.confirmed, "confirm_note": s.confirm_note, "strict": s.strict,
         "slots": [{"values": sl.values, "record": sl.record, "confidence": sl.confidence,
                    "first_page": sl.first_page, "sent_key": sl.sent_key, "held": sl.held,
-                   "claimed": sl.claimed} for sl in s.slots],
+                   "claimed": sl.claimed, "waived": sl.waived} for sl in s.slots],
         "draft": {f: {k: v for k, v in piece.items() if isinstance(v, (str, int, float, bool, type(None)))}
                   for f, piece in s.draft.pieces.items()},
         "draft_slot": s.slots.index(s.draft.slot) if s.draft.slot in s.slots else None,
@@ -1418,7 +1671,8 @@ def _session_from_json(raw: Dict[str, Any]) -> _Session:
     s.confirmed, s.confirm_note, s.strict = bool(raw.get("confirmed")), str(raw.get("confirm_note") or ""), bool(raw.get("strict"))
     for sl in raw.get("slots") or []:
         s.slots.append(_Slot(dict(sl["values"]), sl.get("record") or CURRENT_RECORD, int(sl.get("confidence") or 0),
-                             sl.get("first_page") or "", sl.get("sent_key"), sl.get("held"), sl.get("claimed")))
+                             sl.get("first_page") or "", sl.get("sent_key"), sl.get("held"), sl.get("claimed"),
+                             waived=bool(sl.get("waived"))))
     s.draft = _Draft(pieces={f: dict(pc) for f, pc in (raw.get("draft") or {}).items()},
                      claims=list(raw.get("draft_claims") or []))
     idx = raw.get("draft_slot")
