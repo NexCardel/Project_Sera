@@ -25,7 +25,9 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest's progress bar slows downloads ~10x
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$AppId = "{D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B}_is1"
+# installer_setup.iss has AppId={{GUID}}: Inno unescapes only the "{{", so the uninstall key
+# ends in "}}_is1". The single-brace form is kept in case a future installer fixes the AppId.
+$AppIds = @("{D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B}}_is1", "{D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B}_is1")
 $AssetPrefix = "https://github.com/NexCardel/Project_Sera/releases/download/"
 $ProcessName = "Amas_Sera"
 $MaxAttemptsPerVersion = 3
@@ -74,10 +76,12 @@ function Test-Newer([string]$Candidate, [string]$Current) {
 function Get-InstalledVersion {
     foreach ($root in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
-        $key = Join-Path $root $AppId
-        if (Test-Path $key) {
-            $v = (Get-ItemProperty $key -ErrorAction SilentlyContinue).DisplayVersion
-            if ($v) { return [string]$v }
+        foreach ($id in $AppIds) {
+            $key = Join-Path $root $id
+            if (Test-Path -LiteralPath $key) {
+                $v = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).DisplayVersion
+                if ($v) { return [string]$v }
+            }
         }
     }
     return $null
