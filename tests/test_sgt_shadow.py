@@ -129,15 +129,16 @@ class TestPortal:
         ends = r.events("session_end")
         assert len(ends) == 1 and ends[0]["payload"]["portal"] == ITR and ends[0]["portal"] == ITR
 
-    def test_moving_to_the_other_portal_with_a_client_ends_the_session(self, tmp_path):
+    def test_moving_to_the_other_portal_never_ends_the_session(self, tmp_path):
+        # A tab switch is not a boundary: the ITR session is set aside, not ended.
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         r.see("https://services.gst.gov.in/services/auth/fowelcome",
               ["Welcome ASHOK KUMAR SEN to GST Common Portal", "19ABCPD1234E1ZB", "x"], portal=GST, shade=100)
+        assert r.events("session_end") == []
         r.sgt.end_all("quit")
         ends = r.events("session_end")
-        assert [(e["reason"], e["payload"]["portal"]) for e in ends] == [
-            ("moved to GST Portal", ITR), ("quit", GST)]
+        assert sorted((e["reason"], e["payload"]["portal"]) for e in ends) == [("quit", GST), ("quit", ITR)]
 
 
 class TestProfile:
@@ -502,7 +503,7 @@ class TestSessions:
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE)
         r.see(PROFILE_URL, PROFILE_PAGE, advance=IDLE_END_SEC + 1)
-        assert r.events("session_end")[0]["reason"] == "idle 20 min"
+        assert r.events("session_end")[0]["reason"] == "idle 2 hr"
 
     def test_two_windows_are_two_sessions(self, tmp_path):
         r = Rig(tmp_path)
@@ -824,15 +825,15 @@ class TestIdleResume:
     def test_idle_gap_resumes_profile_and_prevents_unattributed(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
-        # Gap > 20 min, then a page with no client PAN/GSTIN or header name
-        r.see(FILED_URL, filed_page()[1:], shade=100, advance=25 * 60)
+        # Gap > the idle limit, then a page with no client PAN/GSTIN or header name
+        r.see(FILED_URL, filed_page()[1:], shade=100, advance=IDLE_END_SEC + 60)
         r.sgt.end_all("test")
         resumed = r.events("session_resumed")
         assert len(resumed) == 1
-        assert resumed[0]["idle_sec"] == 1500.0
+        assert resumed[0]["idle_sec"] == float(IDLE_END_SEC + 60)
         ends = r.events("session_end")
         assert len(ends) == 2
-        assert ends[0]["reason"] == "idle 20 min"
+        assert ends[0]["reason"] == "idle 2 hr"
         payload = ends[1]["payload"]
         assert payload["client_known"] is True
         assert payload["client_profile"]["pan"] == "ABCPD1234E"
@@ -847,10 +848,10 @@ class TestIdleResume:
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         r.see(WIZ_PI, ["Personal Information", "x", "y"], shade=100)
-        # Idle > 20 min, then success page with ARN joins to earlier form + period
+        # Idle > the idle limit, then success page with ARN joins to earlier form + period
         r.see(SUBMITTED.replace("fo-itr4-ay2026/fo-submit-success", "x/done"),
               ["Return submission", "Acknowledgement Number :", "123456789150726", "OK"],
-              shade=110, advance=25 * 60)
+              shade=110, advance=IDLE_END_SEC + 60)
         r.sgt.end_all("test")
         payload = r.events("session_end")[1]["payload"]
         assert len(payload["datasets"]) == 1
@@ -874,28 +875,29 @@ class TestIdleResume:
     def test_first_page_after_gap_is_login_url_does_not_resume(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
-        r.see(LOGIN_URL, ["Login to e-Filing", "Enter User ID"], shade=100, advance=25 * 60)
+        r.see(LOGIN_URL, ["Login to e-Filing", "Enter User ID"], shade=100, advance=IDLE_END_SEC + 60)
         assert len(r.events("session_resumed")) == 0
         assert 1 not in r.sgt._parked
         s = r.sgt._sessions[1]
         assert s.profile == {}
 
-    def test_first_page_after_gap_shows_different_pan_ends_resumed_session(self, tmp_path):
+    def test_first_page_after_gap_shows_different_pan_sets_the_resumed_session_aside(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         other_page = ["MEERA DAS Individual", "Profile", "Name", "MEERA DAS", "PAN", "XYZAB9876C"]
-        r.see(PROFILE_URL, other_page, shade=100, advance=25 * 60)
+        r.see(PROFILE_URL, other_page, shade=100, advance=IDLE_END_SEC + 60)
         assert len(r.events("session_resumed")) == 1
-        ends = r.events("session_end")
-        assert any("a different PAN appeared" in e["reason"] for e in ends)
+        # Another client's page is not a boundary: the resumed session waits, nothing is ended.
+        assert not any("different" in e["reason"] for e in r.events("session_end"))
         s = r.sgt._sessions[1]
         assert s.strict is True
         assert (s.profile.get("pan") or {}).get("value") != "ABCPD1234E"
+        assert len(r.sgt._shelf[1]) == 1
 
     def test_portal_differs_does_not_resume(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90, portal=ITR)
-        r.see(GST_R1, ["GSTR-1 - Details of outward supplies"], shade=100, portal=GST, advance=25 * 60)
+        r.see(GST_R1, ["GSTR-1 - Details of outward supplies"], shade=100, portal=GST, advance=IDLE_END_SEC + 60)
         assert len(r.events("session_resumed")) == 0
         s = r.sgt._sessions[1]
         assert s.portal == GST
@@ -930,11 +932,11 @@ class TestIdleResume:
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         # First idle gap: resumes and pops parked entry
-        r.see(FILED_URL, filed_page()[1:], shade=100, advance=25 * 60)
+        r.see(FILED_URL, filed_page()[1:], shade=100, advance=IDLE_END_SEC + 60)
         assert len(r.sgt._parked) == 0
         # Now clear session 1 profile so second idle has no client PAN/GSTIN
         r.sgt._sessions[1].profile.clear()
-        r.clock[0] += 25 * 60
+        r.clock[0] += IDLE_END_SEC + 60
         r.sgt._end_idle(r.clock[0])
         # Nothing parked; old snapshot was not resurrected
         assert len(r.sgt._parked) == 0
@@ -943,11 +945,11 @@ class TestIdleResume:
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
         r.see(FILED_URL, filed_page(), shade=100)
-        r.clock[0] += 25 * 60
+        r.clock[0] += IDLE_END_SEC + 60
         r.sgt._end_idle(r.clock[0])
         ends = r.events("session_end")
         assert len(ends) == 1
-        assert ends[0]["reason"] == "idle 20 min"
+        assert ends[0]["reason"] == "idle 2 hr"
         assert r.sgt.pending() > 0
         dispatched = r.sgt.drain()
         assert len(dispatched) >= 1

@@ -307,7 +307,12 @@ class TestHeaderIdentityAndPureRegexAcks:
                  "GSTR-3B has been filed successfully"]
         res = self._res(lines)
         assert res.datasets and res.datasets[0].values()["arn"] == "AA290121001228S"
-        assert not self._res(["Filing Successful", "AB290121001228S"]).datasets
+        # any two letters + 12 digits + a check character: AA and AB are both real (AB190626708598H)
+        ab = self._res(["Filing Successful", "AB190626708598H", "GSTR-3B has been filed successfully"])
+        assert ab.datasets and ab.datasets[0].values()["arn"] == "AB190626708598H"
+        assert self._res(["Filing Successful", "XB290121001228S", "GSTR-3B has been filed successfully"]).datasets
+        assert not self._res(["Filing Successful", "A1290121001228S"]).datasets      # the first two must be letters
+        assert not self._res(["Filing Successful", "XAB290121001228S"]).datasets     # exactly 15 characters
 
     def test_itr_ack_by_shape_needs_a_real_date_tail(self):
         lines = ["You have successfully submitted your return!", "Your reference is 123456789150726"]

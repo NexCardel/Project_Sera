@@ -206,7 +206,8 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+# Two hours, the same idle limit as SGT's sessions (core/sgt/sgt_shadow.py IDLE_END_SEC).
+_SESSION_IDLE_TIMEOUT_SEC = 2 * 3600
 
 
 class VSDCRouter:

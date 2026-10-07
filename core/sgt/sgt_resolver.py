@@ -194,6 +194,8 @@ def _hits(spec: FieldSpec, lines: Sequence[str], lo: int, hi: int, today: date) 
         rest = m.group("rest").strip()
         if rest and _LABEL_FILLER.match(rest):
             rest = ""                   # "...Number (ARN) is:" - the label's own tail; the value is on the next line
+        if spec.label_sep == "required" and not m.group("sep"):
+            continue                    # "GSTIN of Supplier ..." / a bare "GSTIN" header: not this field
         if rest and spec.label_rest != "ignore":
             if spec.label_rest == "value" or m.group("sep"):
                 got = extract_value(spec, rest, today)

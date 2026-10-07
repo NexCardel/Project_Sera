@@ -629,11 +629,11 @@
         {
           "field": "arn",
           "take": "anywhere",
-          "pattern": "(?<![0-9A-Za-z])(AA[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
+          "pattern": "(?<![0-9A-Za-z])([A-Z]{2}[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
           "confidence": 90,
-          "note": "Pure regex, no label: 'AA' + 12 digits + a check character (15 in all) wherever it is on the page, whatever words sit around it ('ARN:', 'The Acknowledgment Reference Number (ARN) is:' ...). No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
-          "examples": ["AA070826000001Z", "AA0708260000012"],
-          "counter_examples": ["AA07082600000", "12070826000001Z", "AB070826000001Z", "XAA070826000001Z"]
+          "note": "Pure regex, no label: any two letters (AA and AB are both real) + 12 digits + a check character (15 in all) wherever it is on the page, whatever words sit around it ('ARN:', 'The Acknowledgment Reference Number (ARN) is:' ...). No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
+          "examples": ["AA070826000001Z", "AA0708260000012", "AB190626708598H", "XB070826000001Z"],
+          "counter_examples": ["AA07082600000", "12070826000001Z", "XAA070826000001Z", "A1070826000001Z", "AB19062670859"]
         },
         {
           "field": "status",
@@ -659,6 +659,16 @@
           "lines": ["Filing Successful", "GSTR-1 of GSTIN 19ABCPD1234E1ZB has been successfully filed.",
                     "The Acknowledgment Reference Number (ARN) is:", "AA290121001228S", "."],
           "expect": [{"arn": "AA290121001228S", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["GSTR1", "of GSTIN -", "19ABCPD1234E1ZB", "for the Return Period - '", "September", "-", "2026-27",
+                    "has been successfully filed. The Acknowledgment Reference Number is", "AA190926191296I", ". The", "GSTR1",
+                    "can be viewed on your Dashboard Login=>Taxpayer Dashboard=>Returns. This message is sent to your registered Email ID and Mobile Number."],
+          "expect": [{"arn": "AA190926191296I", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["has been successfully filed. The Acknowledgment Reference Number is", ". The", "GSTR1", "can be viewed on your Dashboard"],
+          "expect": []
         },
         {
           "lines": ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"],
@@ -925,6 +935,31 @@
         "confidence": 85,
         "examples": ["GSTR-3BQ - Quarterly Return", "GSTR-1 - Details of outward supplies of goods or services"],
         "counter_examples": ["GSTR-1 / IFF", "GSTR-2A - Auto Drafted details", "GSTR-2 - Inward supplies"]
+      },
+      {
+        "name": "cur_gst_form_return_type",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "labels": ["Return Type"],
+        "within": 1,
+        "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?|CMP-? ?08)$",
+        "transforms": ["dash_form"],
+        "confidence": 85,
+        "note": "The filing and success page (/returns/auth/file) has no form in its link and no 'GSTR-1 - ...' heading; it prints 'Return Type - GSTR1' (GSTR3B the same way).",
+        "examples": [{"lines": ["Return Type - GSTR1"], "expect": "GSTR-1"},
+                     {"lines": ["Return Type -", "GSTR3B"], "expect": "GSTR-3B"}],
+        "counter_examples": [{"lines": ["Return Type - Regular"]}, {"lines": ["Return Type - GSTR2A"]}]
+      },
+      {
+        "name": "cur_gst_form_filing_heading",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "take": "anywhere",
+        "pattern": "^Returns Filing for GST (GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?)$",
+        "transforms": ["dash_form"],
+        "confidence": 80,
+        "examples": ["Returns Filing for GST GSTR1", "Returns Filing for GST GSTR-3B"],
+        "counter_examples": ["Returns Filing for GST", "Returns Filing for GST GSTR2A"]
       },
       {
         "name": "cur_gst_fy",

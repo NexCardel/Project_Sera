@@ -4,6 +4,18 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [2.12.6] - 2026-10-06
+
+### Changed
+- **SGT session boundaries.** A session ends only on a login page, a logout page, 2 hours idle, a closed window or shutdown. Switching tabs (another portal, a mail tab, another client of the same portal) no longer ends it: the session is set aside and comes back when the window returns to it. Each window keeps one session per portal and per client; a login or logout ends only the session it belongs to, and a closed window or shutdown writes every session of the window. The idle limit is 2 hours (SGT was 20 minutes, the VSDC window prune 30 minutes).
+- A different PAN/GSTIN appearing in a window no longer ends its session: the session is set aside untouched and the window's own session for that client comes back when it returns.
+
+### Fixed
+- GST filing / success page (`/returns/auth/file`, GSTR-1 and GSTR-3B): the form is read from `Return Type - GSTR1` and from the "Returns Filing for GST" heading; the GSTIN from `GSTIN - ...` and from the banner "... of GSTIN ... has been successfully filed"; the legal name from `Legal Name - ...` / `Legal Name / Trade Name`; the period from the success message itself ("for the period January - 2021 has been successfully filed"). Without the form and period the dataset gate held the submission, so a live GST submission was not detected.
+- Tests: `tests/test_sgt_boundaries.py` (tab switches, boundaries, two clients in a window, randomized stress run).
+
+---
+
 ## [Unreleased] - SGT live
 
 ### Changed
