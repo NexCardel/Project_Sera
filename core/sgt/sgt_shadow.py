@@ -99,6 +99,7 @@ CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
 IDLE_END_SEC = 20 * 60
+CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
 RESUME_WINDOW_SEC = 4 * 3600
 # Portals whose pages are never read by OCR: a canvas read there loses the label markers
@@ -236,6 +237,7 @@ class _Session:
     # (field, value) pairs already logged as "not promoted": a truncated header name is seen on
     # every page, and one log line about it is enough.
     not_promoted: Set[Tuple[str, str]] = field(default_factory=set)
+    linked: Set[str] = field(default_factory=set)   # portal user IDs already looked up in the saved clients
     confirmed: bool = False             # the client's identity may go on rows
     confirm_note: str = ""
     strict: bool = False                # born from a contradiction: a single sighting never confirms
@@ -270,8 +272,12 @@ class SgtShadow:
         scc: Any = None,
         sdis: Any = None,
         ask_demotion: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        resolve_client: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # (portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None
+        # (core/sgt/sgt_client_link.ClientLink). Names the client where the page itself does not.
+        self._resolve_client = resolve_client
         # A page now shows a LOWER status than a filing that has an ARN: never applied on its own. The
         # user is asked (this callback shows the dialog); confirm_demotion / decline_demotion answer.
         self._ask_demotion = ask_demotion
@@ -337,6 +343,10 @@ class SgtShadow:
     def set_intelligence(self, host: Any) -> None:
         """Attaches SGT-I's host (or None). It never changes what the Core captures."""
         self._sgt_i = host
+
+    def set_client_lookup(self, lookup: Optional[Callable[[str, str], Optional[Dict[str, Any]]]]) -> None:
+        """Attaches the saved-client lookup by portal user ID (or None)."""
+        self._resolve_client = lookup
 
     def set_scc(self, host: Any) -> None:
         """Attaches SCC-U's host (or None). It never changes what the Core captures."""
@@ -1116,6 +1126,8 @@ class SgtShadow:
             note = "PAN and GSTIN agree"
         else:
             note = f"{fld.upper()} seen once"
+        if note.endswith("seen once") and (s.profile.get(fld) or {}).get("spec") == CLIENT_LINK_SPEC:
+            note = "portal user ID matched a saved client"
         first = not s.confirmed
         if not first and note == s.confirm_note:
             return
@@ -1196,10 +1208,34 @@ class SgtShadow:
             held = {k: v["value"] for k, v in s.profile.items()}
             for fld, value in compose_values(held, prules.compose).items():
                 self._offer_profile(s, fld, value, f"compose:{fld}", 92, url, source, registry)
+        self._link_client(s, url, source, registry)
         self._announce_profile(s, before_identity=not had_client)
         rules = registry.current_rules if registry is not None else None
         for ds in res.datasets:
             self._merge(s, ds, url, source, rules, registry)
+
+    def _link_client(self, s: _Session, url: str, source: str, registry: Any) -> None:
+        """A page that shows the portal's user ID (an SDIS profile datapoint, "username") but not the
+        client's GSTIN: the saved client who owns that user ID names the session. Once per user ID per
+        session. Only fills a gap - a GSTIN / PAN the pages gave is never overridden - and a later header
+        GSTIN that disagrees still ends the session like any other contradiction."""
+        user_id = (s.profile.get("username") or {}).get("value")
+        if not user_id or self._resolve_client is None or any(k in s.profile for k in _CLIENT_KEYS):
+            return
+        if user_id in s.linked:
+            return
+        s.linked.add(user_id)
+        try:
+            found = self._resolve_client(s.portal, user_id)
+        except Exception:
+            found = None
+        if not found:
+            self._event(s, "identity", change="user id not matched to a saved client")
+            return
+        for fld in ("gstin", "pan"):            # a GST session is keyed by the GSTIN; the PAN only when that is all there is
+            if found.get(fld):
+                self._offer_profile(s, fld, found[fld], CLIENT_LINK_SPEC, 85, url, source, registry)
+                break
 
     def _find_slot(self, s: _Session, values: Dict[str, str], stamp: str = "", follow: bool = False) -> Optional[_Slot]:
         arn = values.get("arn")

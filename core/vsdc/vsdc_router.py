@@ -447,6 +447,13 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
 
+    def set_client_lookup(self, lookup) -> None:
+        """lookup(portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None.
+        SGT uses it where a page shows the user ID but not the client's GSTIN."""
+        self._client_lookup = lookup
+        if self._sgt is not None:
+            self._sgt.set_client_lookup(lookup)
+
     def set_scc_handlers(self, factory) -> None:
         """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
         self._scc_handlers = factory
@@ -486,7 +493,8 @@ class VSDCRouter:
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
                                   alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
-                                  ask_demotion=self.notify_demotion)
+                                  ask_demotion=self.notify_demotion,
+                                  resolve_client=getattr(self, "_client_lookup", None))
             self._apply_sgt_i()
             self._apply_scc()
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,

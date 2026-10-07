@@ -664,6 +664,8 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            from core.sgt.sgt_client_link import ClientLink
+            self.vsdc_worker.router.set_client_lookup(ClientLink(self.db))   # portal user ID -> saved client
             self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
             from core.scc import manual as scc_manual
             scc_manual.set_opener(self._open_scc_manual)
