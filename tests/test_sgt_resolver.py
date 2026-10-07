@@ -583,3 +583,25 @@ class TestLabelSpellingTolerance:
     def test_short_words_stay_exact(self):
         assert self._hit(["PAN"], "PAN: ABCDE1234F")
         assert not self._hit(["PAN"], "PANEL")
+
+
+class TestRefundTimelineStatus:
+    """A filed-return card whose status history is only refund steps still proves the return was processed."""
+
+    CARD = ["A.Y. 2025-26", "Filing Type", "Original", "done", "{msg}", "Nov 29, 2025", "done", "ITR Filed",
+            "Jul 31, 2025", "ITR :", "ITR-1", "Acknowledgement No :", "987654321310725", "Filing Date :", "Jul 31, 2025"]
+
+    def test_each_refund_step_is_submitted_and_verified(self):
+        reg = load_registry([BUILTIN_FIELDS_PATH])
+        for msg in ("Refund Credited to your Bank A/c. For details, Check “Know Your Refund Status”",
+                    "Refund determined has been adjusted fully/partially as per the communication issued. For details, Check “Know Your Refund Status”",
+                    "Refund is kept on hold as Taxpayer’s response and/or JAO’s response is awaited as per the communication issued."):
+            lines = [ln.replace("{msg}", msg) for ln in self.CARD]
+            res = resolve_page(reg, lines, ITR, "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus", TODAY)
+            assert [d.values()["status"] for d in res.datasets] == ["Submitted & Verified"], msg
+
+    def test_the_menu_entry_alone_is_not_a_status(self):
+        reg = load_registry([BUILTIN_FIELDS_PATH])
+        lines = [ln.replace("{msg}", "Know Your Refund Status") for ln in self.CARD]
+        res = resolve_page(reg, lines, ITR, "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus", TODAY)
+        assert [d.values()["status"] for d in res.datasets] == ["Submitted (Not Verified)"]

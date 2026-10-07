@@ -426,16 +426,19 @@
           "field": "status",
           "take": "anywhere",
           "case": "insensitive",
-          "pattern": "^(pending for e-?verification|itr filed|e-?verified|successfully e-?verified|return verified|under processing|processed.*)$",
+          "pattern": "^(pending for e-?verification|itr filed|e-?verified|successfully e-?verified|return verified|under processing|processed.*|refund (?:credited|determined|is kept on hold).*)$",
           "pick": "map_order",
           "map": [
-            ["processed|under processing|verified", "Submitted & Verified"],
+            ["processed|under processing|verified|refund", "Submitted & Verified"],
             ["pending for e-?verification|itr filed", "Submitted (Not Verified)"]
           ],
           "confidence": 90,
-          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along level on the card wins. 'Processed ...' / 'Under Processing' come after verification, so they prove it.",
-          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund", "Successfully e-Verified"],
-          "counter_examples": ["done", "Filing Type"]
+          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along level on the card wins. 'Processed ...' / 'Under Processing' come after verification, so they prove it, and so do the refund steps ('Refund Credited to your Bank A/c...', 'Refund determined has been adjusted...', 'Refund is kept on hold...'), which only follow a processed return.",
+          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund", "Successfully e-Verified",
+                       "Refund Credited to your Bank A/c. For details, Check “Know Your Refund Status”",
+                       "Refund determined has been adjusted fully/partially as per the communication issued. For details, Check “Know Your Refund Status”",
+                       "Refund is kept on hold as Taxpayer’s response and/or JAO’s response is awaited as per the communication issued."],
+          "counter_examples": ["done", "Filing Type", "Know Your Refund Status", "Refund Status"]
         },
         {
           "field": "status",
