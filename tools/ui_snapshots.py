@@ -1,8 +1,14 @@
 """Render every Sera window/dialog offscreen to PNG, using a throwaway DB with fake data.
 
 Usage:  venv\\Scripts\\python.exe tools\\ui_snapshots.py [out_dir]
+        venv\\Scripts\\python.exe tools\\ui_snapshots.py out_dir --size 1024x720 --size 1920x1000 [--scale 0.8]
+
+--size WxH (repeatable) renders only the Tracker Dump, inside the app shell, at each on-screen size.
+--scale F sets QT_SCALE_FACTOR before the app is created, like a PC with that scale; the app then
+lays out in size / F logical px (1024x720 at 0.80 = a 1280-px-wide layout drawn at 1024 px).
 Never touches master.db: everything runs against a temp database.
 """
+import argparse
 import os
 import sys
 import shutil
@@ -14,10 +20,22 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
+_ap = argparse.ArgumentParser()
+_ap.add_argument("out_dir", nargs="?", default=None)
+_ap.add_argument("--size", action="append", default=[])
+_ap.add_argument("--scale", type=float, default=None)
+ARGS = _ap.parse_args(sys.argv[1:])
+if ARGS.scale is not None:
+    os.environ["QT_SCALE_FACTOR"] = f"{ARGS.scale:.2f}"
+if ARGS.size:
+    # A visible window is clamped to the real screen (a 1536-logical-px screen cannot show 1920 px),
+    # and a hidden one never re-lays out. The offscreen platform takes the requested size as it is.
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer
 
-OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "Mockups" / "current"
+OUT = Path(ARGS.out_dir) if ARGS.out_dir else ROOT / "Mockups" / "current"
 OUT.mkdir(parents=True, exist_ok=True)
 
 app = QApplication.instance() or QApplication(sys.argv)
@@ -89,6 +107,82 @@ def build(name, factory, size=None):
         return
     snap(name, w, size)
 
+
+# --- tracker dump at chosen window sizes (--size) ---------------------------------------------
+if ARGS.size:
+    import json
+    from ui.shell.app_shell import AppShell
+    from ui.windows.tracker_dump_window import TrackerDumpWindow
+
+    # Fake rows so all seven columns have real-looking text (names, PANs and ARNs are placeholders).
+    fake_rows = [
+        ("Income Tax (ITR-4)", "AY 2025-26", "DEMO-ARN-0001", "VSDC-X_itr_submitted", "Submitted", "ABCDE1001F", "ITR-4", "DEMO-PC-01"),
+        ("Income Tax (ITR-1)", "AY 2025-26", "DEMO-ARN-0002", "SGT_live", "Submitted", "ABCDE1002F", "ITR-1", "DEMO-PC-02"),
+        ("GST Portal", "GSTR-3B Jul 2026", "", "DOM_Tracker", "Pending e-Verification", "ABCDE1003F", "GSTR-3B", "DEMO-PC-01"),
+        ("TRACES / TDS", "Q2 2026-27 (26Q)", "", "SGT_shadow", "Not submitted", "ABCDE1004F", "26Q", "DEMO-PC-03"),
+        ("Income Tax (ITR-4)", "AY 2026-27", "DEMO-ARN-0005", "VSDC_itr_submitted", "Submitted", "ABCDE1005F", "ITR-4", "DEMO-PC-02"),
+        ("GST Portal", "GSTR-1 Aug 2026", "DEMO-ARN-0006", "SGT_live", "Submitted", "ABCDE1006F", "GSTR-1", "DEMO-PC-01"),
+    ]
+    for portal, period, arn, method, status, pan, ftype, device in fake_rows * 2:
+        try:
+            db.insert_tracker_dump(portal=portal, period_label=period, arn_number=arn or None,
+                                   capture_method=method, status=status, pan=pan, filing_type=ftype,
+                                   raw_payload_json=json.dumps({"pan": pan, "device_name": device}))
+        except Exception as e:
+            print("tracker seed skip", pan, e)
+
+    # The pages a small screen has to hold: Tracker Dump, Search and Manage Clients (admin view).
+    from ui.windows.search_window import SearchWindow
+    from ui.windows.admin_window import AdminWindow
+    shell = AppShell()
+    pages = [("search", SearchWindow(db)), ("admin", AdminWindow(db, actor="Admin")), ("tracker_dump", TrackerDumpWindow(db))]
+    for _name, page in pages:
+        shell.add_page(page)
+    pages[1][1].refresh()
+
+    # --size is the window as it appears on screen. With --scale F the app lays out in w/F logical px,
+    # the way a 1024 px screen at 80 % gives Sera 1280 px to work with.
+    factor = ARGS.scale or 1.0
+    suffix = f"_scale{ARGS.scale:.2f}" if ARGS.scale is not None else ""
+    for size in ARGS.size:
+        w, h = (int(v) for v in size.lower().split("x"))
+        try:
+            shell.resize(round(w / factor), round(h / factor))
+            shell.show()
+            for name, page in pages:
+                shell.set_current_page(page)
+                for _ in range(40):
+                    app.processEvents()
+                if name == "tracker_dump":
+                    page._adjust_table_columns()
+                    hidden = [c for c in range(7) if page.table.isColumnHidden(c)]
+                    print("    tracker hidden cols:", hidden)
+                for _ in range(6):
+                    app.processEvents()
+                out = f"{name}_{w}x{h}{suffix}"
+                shell.grab().save(str(OUT / f"{out}.png"))
+                print("ok  ", out)
+            shell.hide()
+        except Exception:
+            failed.append(f"size {size}")
+            traceback.print_exc()
+
+    # Dialogs: their preferred and minimum sizes, so a dialog bigger than the screen shows up here.
+    from ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog
+    from ui.dialogs.display_scale_dialog import DisplayScaleDialog
+    for label, factory in (("settings_general", lambda: UnifiedSettingsDialog(db, actor="Admin", page="general")),
+                           ("display_scale", lambda: DisplayScaleDialog())):
+        try:
+            dlg = factory()
+            hint, mins = dlg.sizeHint(), dlg.minimumSizeHint()
+            print(f"dialog {label}: sizeHint {hint.width()}x{hint.height()}, minimum {mins.width()}x{mins.height()}")
+            dlg.close()
+        except Exception:
+            failed.append(f"dialog {label}")
+            traceback.print_exc()
+    print("FAILED:", failed)
+    shutil.rmtree(tmp, ignore_errors=True)
+    os._exit(0)
 
 # --- main shell with each page + slide panel ---------------------------------------------------
 try:

@@ -36,6 +36,7 @@ except Exception:
     qta = None
 # Only the Material Design icon font is used; loading qtawesome's other 11 costs ~15 MB.
 from ui.utils.icon_fonts import restrict_icon_fonts
+from ui.utils.ui_scale import choose_startup_scale, next_manual_value, read_settings, write_settings, MODE_MANUAL
 restrict_icon_fonts()
 from core.memlog import mark as memory_mark
 
@@ -182,6 +183,11 @@ class SeraApp:
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AmanAssociates.ProjectSera.Vault.2.3.3")
             except Exception:
                 pass
+
+        # Per-PC UI scale for small screens (ui/utils/ui_scale.py). Must run before QApplication reads
+        # QT_SCALE_FACTOR; it never raises, and falls back to 100 %.
+        self.ui_scale, _scale_note = choose_startup_scale()
+        memory_mark(f"[UI] scale={self.ui_scale:.2f} ({_scale_note})")
 
         # Enable High-DPI and smooth fractional scaling (125%, 150%, etc.)
         if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
@@ -1665,6 +1671,7 @@ class SeraApp:
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
+        sidebar.action_display_scale.connect(self._open_display_scale_dialog)
         sidebar.action_enter_admin.connect(self._request_admin_mode)
         sidebar.action_exit_admin.connect(self._exit_admin_mode)
         
@@ -1678,6 +1685,14 @@ class SeraApp:
         # Toggle Sidebar Hotkey (Ctrl+B)
         self.sc_ctrl_b = QShortcut(QKeySequence("Ctrl+B"), self.shell)
         self.sc_ctrl_b.activated.connect(self.shell.toggle_sidebar)
+
+        # Per-PC display scale: Ctrl+= / Ctrl+- step it by 5 %, Ctrl+0 returns to Automatic. Next start.
+        self.sc_scale_up = QShortcut(QKeySequence("Ctrl+="), self.shell)
+        self.sc_scale_up.activated.connect(lambda: self._step_display_scale(0.05))
+        self.sc_scale_down = QShortcut(QKeySequence("Ctrl+-"), self.shell)
+        self.sc_scale_down.activated.connect(lambda: self._step_display_scale(-0.05))
+        self.sc_scale_reset = QShortcut(QKeySequence("Ctrl+0"), self.shell)
+        self.sc_scale_reset.activated.connect(self._reset_display_scale)
 
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
@@ -2023,6 +2038,24 @@ class SeraApp:
                 version.apply_and_restart(installer, silent=True)
                 return
         self.app.quit()
+
+    def _step_display_scale(self, delta: float):
+        """Ctrl+= / Ctrl+-: steps the saved manual value (or the scale in use, when still on Automatic)."""
+        mode, saved = read_settings()
+        base = saved if mode == MODE_MANUAL and saved is not None else self.ui_scale
+        value = next_manual_value(base, delta)
+        write_settings(MODE_MANUAL, value)
+        self.shell.show_alert(f"Display scale {round(value * 100)} % — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _reset_display_scale(self):
+        write_settings("auto")
+        self.shell.show_alert("Display scale set back to Automatic — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _open_display_scale_dialog(self):
+        from ui.dialogs.display_scale_dialog import DisplayScaleDialog
+        DisplayScaleDialog(parent=self.shell).exec()
 
     def _global_search_shortcut(self):
         self.shell.dismiss_detail_on_outside = False

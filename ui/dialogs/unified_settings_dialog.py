@@ -633,6 +633,12 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Window Display Mode",
             "Controls how the app window opens on launch.", self.window_mode_combo))
 
+        # Per PC, not saved with the other settings (app_settings syncs to every PC); saves on its own buttons.
+        from ui.dialogs.display_scale_dialog import DisplayScaleControl
+        lay.addWidget(_setting_row("Screen Scale",
+            "Makes text and layout smaller or larger on this PC only. Applies after restarting Sera.",
+            DisplayScaleControl()))
+
         lay.addWidget(_sub_header("Security & Masking"))
 
         self.mask_mode_combo = QComboBox()
