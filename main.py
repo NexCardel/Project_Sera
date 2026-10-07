@@ -2260,6 +2260,17 @@ class SeraApp:
                 self._write_sdis_fields()   # SDIS Part Q: another PC registered/renamed/retired a field
             if "sdis_config" in (info.get("tables") or ()):
                 self._write_sdis_containers()   # SDIS Part S.3: another PC edited the containers
+            if "tracker_dump" in (info.get("tables") or ()):
+                # Another PC filed something or its status changed. The containers the LTT sheet
+                # and tracker list read are a local cache of tracker_dump that sync does not touch:
+                # rebuild them, rewrite the LTT sheet, then refresh the windows with the new data.
+                try:
+                    from core.ltt import monthly as _ltt_monthly
+                    _ltt_monthly.refresh_after_sync(
+                        db, on_done=lambda: self.sync_bridge.engine_synced_signal.emit(
+                            ["tracker_dump", "client_raw_containers"]))
+                except Exception as e:
+                    print(f"[ltt] could not schedule the refresh after sync: {e}")
         elif kind == "clock_ahead":
             name = info.get("name") or info.get("device_id") or "Peer"
             ahead_ms = info.get("ahead_ms", 0)

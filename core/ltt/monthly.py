@@ -528,8 +528,11 @@ def _export_month(db, app_dir: Path, today: date, create: bool, excel: bool) -> 
     month = month_start(today)
     xlsx = workbook_path(app_dir, month)
     data = latest_rows(db.get_srpf_containers(limit=1_000_000, slim=True), month)
-    if not write_csvs(xlsx, data):
-        print("[ltt] the month's CSV is busy in Excel; the sheet keeps its last data until the next capture")
+    if write_csvs(xlsx, data):
+        _busy.clear()
+    else:
+        _busy.set()                    # schedule_export tries again in a little while
+        print("[ltt] the month's CSV is busy in Excel; trying again shortly")
     try:
         return ensure_workbook(xlsx, month, data.keys(), excel)
     except Exception:
@@ -541,22 +544,30 @@ def _export_month(db, app_dir: Path, today: date, create: bool, excel: bool) -> 
 
 _timer = None
 _timer_lock = threading.Lock()
+_busy = threading.Event()          # set while the month's CSV could not be replaced (Excel holds it open)
+RETRY_AFTER = 20.0                 # seconds between tries while the CSV is busy
+MAX_RETRIES = 6                    # ... about two minutes in all; the next capture starts afresh
 
 
-def schedule_export(db, delay: float = 10.0) -> None:
+def schedule_export(db, delay: float = 10.0, retry_after: float | None = None, _attempt: int = 0):
     """Rewrites this month's workbook `delay` seconds after the last capture (bursts collapse into
     one write). Does nothing until the LTT folder exists. Never raises - a background refresh must
-    not disturb the app, and a workbook open in Excel is simply tried again after the next capture."""
+    not disturb the app. A CSV that Excel still holds open is tried again every `retry_after`
+    seconds (RETRY_AFTER) up to MAX_RETRIES times, so a status that changed just before the file
+    was locked does not wait for some later capture. Returns the timer (None if nothing was set up)."""
     global _timer
     try:
         if not (Path(db.app_dir) / FOLDER).is_dir():
-            return
+            return None
+        wait = RETRY_AFTER if retry_after is None else retry_after
 
         def run():
             try:
                 export_month(db)
             except Exception as e:
                 print(f"[ltt] monthly sheet refresh skipped: {e}")
+            if _busy.is_set() and _attempt < MAX_RETRIES:
+                schedule_export(db, wait, retry_after, _attempt + 1)
 
         with _timer_lock:
             if _timer is not None:
@@ -564,5 +575,47 @@ def schedule_export(db, delay: float = 10.0) -> None:
             _timer = threading.Timer(delay, run)
             _timer.daemon = True
             _timer.start()
+            return _timer
     except Exception:
-        pass
+        return None
+
+
+_sync_timer = None
+
+
+def refresh_after_sync(db, delay: float = 5.0, on_done=None):
+    """Another PC's tracker rows (a new filing, a changed status or ARN) have just arrived through
+    sync. The tracker's client containers are a LOCAL cache rebuilt from tracker_dump, and sync
+    writes tracker_dump directly, so the LTT would keep reading the old status until something
+    rebuilt them. `delay` seconds after the last such batch (bursts collapse into one run) this
+    rebuilds the containers, rewrites the sheet, then calls `on_done` (the app refreshes its
+    windows then, with the rebuilt data). Never raises. Returns the timer."""
+    global _sync_timer
+
+    def run():
+        try:
+            db.re_resolve_all_tracker_dumps()
+        except Exception as e:
+            print(f"[ltt] container rebuild after sync skipped: {e}")
+        try:
+            export_month(db)
+            if _busy.is_set():
+                schedule_export(db, RETRY_AFTER, None, 1)
+        except Exception as e:
+            print(f"[ltt] monthly sheet refresh after sync skipped: {e}")
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:
+                pass
+
+    try:
+        with _timer_lock:
+            if _sync_timer is not None:
+                _sync_timer.cancel()
+            _sync_timer = threading.Timer(delay, run)
+            _sync_timer.daemon = True
+            _sync_timer.start()
+            return _sync_timer
+    except Exception:
+        return None
