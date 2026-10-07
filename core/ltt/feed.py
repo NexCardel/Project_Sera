@@ -133,12 +133,27 @@ def _pan_of(c: dict) -> str:
     return gst[2:12] if len(gst) >= 12 and _PAN.match(gst[2:12]) else ""
 
 
-def _name_of(c: dict) -> str:
-    """Trade name when there is one, else the person's/legal name."""
-    name = (c.get("company_name") or c.get("proprietor_name") or "").strip()
-    if name:
-        return name
-    return re.sub(r"\s*\([^()]*\)\s*$", "", str(c.get("display_name") or "")).strip()
+_LABEL = re.compile(r"^\s*(?:(?:trade|legal|business|company|party|client|firm)\s*name(?:\s+of\s+business)?|name)(?![A-Za-z0-9])"
+                    r"\s*[-:–—.]*\s*", re.I)
+
+
+def clean_name(text) -> str:
+    """A captured name without the page's label: "Trade Name -" is a label with no value (""),
+    "Trade Name - ABC Traders" is ABC Traders, and bare punctuation is nothing."""
+    t = _LABEL.sub("", str(text or ""), count=1).strip(" -:–—.")
+    return t if re.search(r"[A-Za-z0-9]", t) else ""
+
+
+def name_of(c: dict) -> tuple[str, int]:
+    """(name, rank) of a client container, best first (a lower rank is a better source):
+    0 the name saved for the registered client, 1 the captured trade/company name, 2 the captured
+    proprietor name, 3 whatever the container is displayed as. ("", 9) when it has none."""
+    for rank, key in enumerate(("registered_name", "company_name", "proprietor_name")):
+        name = clean_name(c.get(key))
+        if name:
+            return name, rank
+    name = clean_name(re.sub(r"\s*\([^()]*\)\s*$", "", str(c.get("display_name") or "")))
+    return (name, 3) if name and not name.lower().startswith("unregistered") else ("", 9)
 
 
 def clients_from(containers: list) -> dict:
@@ -148,8 +163,10 @@ def clients_from(containers: list) -> dict:
         pan = _pan_of(c)
         if not pan:
             continue
-        cur = out.setdefault(pan, {"name": "", "history": []})
-        cur["name"] = cur["name"] or _name_of(c)
+        cur = out.setdefault(pan, {"name": "", "rank": 9, "history": []})
+        name, rank = name_of(c)
+        if name and rank < cur["rank"]:
+            cur["name"], cur["rank"] = name, rank
         cur["history"].extend(c.get("filing_history") or [])
     return out
 

@@ -1090,8 +1090,8 @@ class SeraApp:
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
             try:
-                from core.ltt import feed as _ltt_feed
-                _ltt_feed.schedule_export(self.db)
+                from core.ltt import monthly as _ltt_monthly
+                _ltt_monthly.schedule_export(self.db)
             except Exception:
                 pass
 

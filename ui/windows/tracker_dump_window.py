@@ -3003,20 +3003,12 @@ class TrackerDumpWindow(QWidget):
         dlg.exec()
 
     def _open_ltt_sheet(self):
-        """Refreshes ltt_feed.csv, builds ltt_tracker.xlsx the first time, and opens it in Excel."""
-        from core.ltt import feed as ltt_feed
-        from core.ltt.rules import WORKBOOK_FILE
-        app_dir = Path(self.db.app_dir)
+        """Writes this month's LTT workbook (latest period filed per client, a sheet per form) and opens it."""
+        from core.ltt import monthly as ltt_monthly
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            ltt_feed.export_feed(self.db, app_dir)
-            sheet = app_dir / WORKBOOK_FILE
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-            import build_ltt_tracker
-            if not build_ltt_tracker.is_current(sheet):     # missing, or built before a column was added
-                build_ltt_tracker.build(app_dir)
-            os.startfile(str(sheet))
+            path = ltt_monthly.export_month(self.db, create=True)
+            os.startfile(str(path))
         except Exception as e:
             QMessageBox.warning(self, "LTT sheet", f"Could not open the LTT sheet: {e}")
         finally:
@@ -3072,8 +3064,6 @@ class TrackerDumpWindow(QWidget):
 
         menu.addSeparator()
 
-        act_ltt_rules = menu.addAction(_safe_qta_icon("mdi.calendar-check", "#4CF9B7"), "LTT form rules…")
-        act_ltt_rules.triggered.connect(self._open_ltt_rules)
         act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
 

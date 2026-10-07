@@ -541,8 +541,10 @@ class SrpfMixin:
                 period_summary = f"{len(filing_hist) or r[14] or 1} Capture(s)"
 
             is_unassigned = not bool(cid)
+            registered_name = ""
             if cid and cid in client_map:
                 c_info = client_map[cid]
+                registered_name = str(c_info.get("name") or "").strip()
                 c_pan = c_info.get("pan") or pan_val or ""
                 if len(c_pan) == 15 and re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]", c_pan):
                     c_pan = c_pan[2:12]
@@ -574,6 +576,7 @@ class SrpfMixin:
                 "display_name": display_name,
                 "company_name": comp_name,
                 "proprietor_name": prop_name,
+                "registered_name": registered_name,
                 "pan": display_pan,
                 "gstin": gst_val,
                 "tan": tan_val,
