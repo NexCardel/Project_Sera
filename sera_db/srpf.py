@@ -19,6 +19,48 @@ def _profile_of_json(raw_payload_json: str) -> dict:
     return extract_profile_from_payload(raw_payload_json)
 
 
+_NO_ARN = {"", "N/A", "NA", "-", "NONE", "NULL"}
+
+
+def _real_arn(arn) -> str:
+    """The ARN/ack number, or "" for the placeholders a capture without one carries ("N/A")."""
+    a = str(arn or "").strip()
+    return "" if a.upper() in _NO_ARN else a
+
+
+def _form_key(portal) -> str:
+    """The return form of a history portal, canonical: "GST Portal (GSTR-3B)" -> "GSTR3B"."""
+    p = str(portal or "")
+    m = re.search(r"\(([^()]*)\)\s*$", p)
+    return re.sub(r"[^A-Z0-9]", "", (m.group(1) if m else p).upper())
+
+
+def _same_filing_form(a, b) -> bool:
+    """One filing re-captured: the same form, or a generic name and its numbered variant
+    ("ITR" / "ITR4"). Different forms never share a history entry, even with the same ARN."""
+    x, y = _form_key(a), _form_key(b)
+    if not x or not y or x == y:
+        return True
+    short, long_ = sorted((x, y), key=len)
+    return not short[-1].isdigit() and re.fullmatch(re.escape(short) + r"\d{1,2}", long_) is not None
+
+
+_GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def valid_gstin(text) -> str:
+    """The GSTIN when it is well-formed and its check character agrees, else "". A misread
+    GSTIN (one wrong character) must not become a second registration of the client."""
+    g = str(text or "").strip().upper()
+    if not re.fullmatch(r"\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]", g):
+        return ""
+    total = 0
+    for i, ch in enumerate(g[:14]):
+        v = _GSTIN_CHARS.index(ch) * (2 if i % 2 else 1)
+        total += v // 36 + v % 36
+    return g if _GSTIN_CHARS[(36 - total % 36) % 36] == g[14] else ""
+
+
 def _light_history(hist: list) -> list:
     """A filing history without the (large) raw payload of each filing."""
     return [{k: v for k, v in h.items() if k != "raw_payload_json"} for h in hist]
@@ -210,6 +252,9 @@ class SrpfMixin:
         sdis = sdis_info_of(payload_obj) if isinstance(payload_obj, dict) else None
         # An SDIS carrier row only carries Others / Profile builder values: never a filing, never a capture.
         carrier = dump_row.get("capture_method") == SDIS_INFO_METHOD
+        # the registration this filing belongs to (a PAN can hold several GSTINs, each filing its own returns)
+        entry_gstin = (valid_gstin(payload_obj.get("gstin") if isinstance(payload_obj, dict) else "")
+                       or valid_gstin(new_profile.get("gstin")))
 
         if existing:
             # existing schema: (identity_key, client_id, company_name, proprietor_name, pan, gstin, tan, phone, email, dob, user_id, portal_profiles, filing_history, raw_aggregates, total_captures, last_updated)
@@ -235,26 +280,34 @@ class SrpfMixin:
             profiles, aggregates = _json_obj(existing[11]), _json_obj(existing[13])
             fold_sdis(aggregates, profiles, sdis)
 
-            arn_str = dump_row.get("arn_number")
+            arn_str = _real_arn(dump_row.get("arn_number"))
             status_val = dump_row.get("status") or ""
             payload_str = dump_row.get("raw_payload_json") or ""
 
             if carrier:
                 pass
             elif arn_str:
+                # A re-capture of the same filing updates its entry. "N/A" is not an ARN (it used to
+                # match the first ARN-less entry of ANY form and overwrite it), and the form must agree.
                 matched_idx = None
                 for idx, h in enumerate(hist):
-                    if h.get("arn") == arn_str:
+                    if _real_arn(h.get("arn")) == arn_str and _same_filing_form(h.get("portal"), dump_row.get("portal")):
                         matched_idx = idx
                         break
                 if matched_idx is not None:
+                    if dump_row.get("portal") and len(_form_key(dump_row.get("portal"))) >= len(_form_key(hist[matched_idx].get("portal"))):
+                        hist[matched_idx]["portal"] = dump_row.get("portal")
                     if status_val:
                         hist[matched_idx]["status"] = status_val
                     if payload_str:
                         hist[matched_idx]["raw_payload_json"] = payload_str
                     if dump_row.get("period_label"):
                         hist[matched_idx]["period_label"] = dump_row.get("period_label")
+                    if dump_row.get("captured_by"):
+                        hist[matched_idx]["captured_by"] = dump_row.get("captured_by")
                     hist[matched_idx]["created_at"] = dump_ts
+                    if entry_gstin:
+                        hist[matched_idx]["gstin"] = entry_gstin
                 else:
                     hist.append({
                         "portal": dump_row.get("portal"),
@@ -263,7 +316,9 @@ class SrpfMixin:
                         "capture_method": dump_row.get("capture_method"),
                         "status": status_val,
                         "raw_payload_json": payload_str,
-                        "created_at": dump_ts
+                        "captured_by": dump_row.get("captured_by"),
+                        "created_at": dump_ts,
+                        "gstin": entry_gstin
                     })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -273,7 +328,9 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
-                    "created_at": dump_ts
+                    "captured_by": dump_row.get("captured_by"),
+                    "created_at": dump_ts,
+                    "gstin": entry_gstin
                 })
 
             hist.sort(key=lambda h: str(h.get("created_at") or ""))
@@ -302,7 +359,9 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
-                    "created_at": dump_ts
+                    "captured_by": dump_row.get("captured_by"),
+                    "created_at": dump_ts,
+                    "gstin": entry_gstin
                 })
             elif dump_row.get("period_label"):
                 hist.append({
@@ -312,7 +371,9 @@ class SrpfMixin:
                     "capture_method": dump_row.get("capture_method"),
                     "status": status_val,
                     "raw_payload_json": payload_str,
-                    "created_at": dump_ts
+                    "captured_by": dump_row.get("captured_by"),
+                    "created_at": dump_ts,
+                    "gstin": entry_gstin
                 })
             r_conn.execute("""
                 INSERT INTO client_raw_containers
@@ -520,11 +581,11 @@ class SrpfMixin:
             except Exception:
                 filing_hist = []
 
-            # Format summary of filings
             latest_arn = filing_hist[-1].get("arn", "N/A") if filing_hist else "N/A"
             latest_portal = filing_hist[-1].get("portal", "Portal") if filing_hist else "Portal"
             latest_period = filing_hist[-1].get("period_label", "") if filing_hist else ""
             capture_method = filing_hist[-1].get("capture_method", "") if filing_hist else ""
+            captured_by_val = filing_hist[-1].get("captured_by", "") if filing_hist else ""
 
             periods = [h.get("period_label") for h in filing_hist if h.get("period_label") and h.get("period_label") != "N/A"]
             if len(periods) > 1:
@@ -535,8 +596,10 @@ class SrpfMixin:
                 period_summary = f"{len(filing_hist) or r[14] or 1} Capture(s)"
 
             is_unassigned = not bool(cid)
+            registered_name = ""
             if cid and cid in client_map:
                 c_info = client_map[cid]
+                registered_name = str(c_info.get("name") or "").strip()
                 c_pan = c_info.get("pan") or pan_val or ""
                 if len(c_pan) == 15 and re.match(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]", c_pan):
                     c_pan = c_pan[2:12]
@@ -568,6 +631,7 @@ class SrpfMixin:
                 "display_name": display_name,
                 "company_name": comp_name,
                 "proprietor_name": prop_name,
+                "registered_name": registered_name,
                 "pan": display_pan,
                 "gstin": gst_val,
                 "tan": tan_val,
@@ -583,6 +647,8 @@ class SrpfMixin:
                 "latest_status": latest_status,
                 "raw_payload_json": latest_payload,
                 "capture_method": capture_method,
+                "captured_by": captured_by_val,
+                "device_name": captured_by_val,
                 "total_captures": len(filing_hist) or r[14] or 1,
                 "filing_history": filing_hist,
                 "portal_profiles": _json_obj(r[11]),

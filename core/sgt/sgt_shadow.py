@@ -39,7 +39,9 @@ Per browser window (one client per session, two windows = two sessions):
             becomes a dataset when a submission completes it, when another period is
             opened, or at session end - and only if complete; otherwise it is logged as
             incomplete and never dispatched. List pages never feed it.
-  session   ends on a login/logout keyword in the link, 20 minutes idle, or app quit.
+  session   ends on a login/logout keyword in the link, 2 hours idle, a closed window or app
+            quit - nothing else. Another tab (another portal, another client of the same
+            portal) only sets the session aside; it comes back when the window returns to it.
             The session's payload is logged then, with a note of which of its ARNs the
             other engines also dispatched - the comparison shadow mode exists for.
   identity  a dataset filed under the WRONG client is worse than a missed one - and a missed
@@ -98,7 +100,9 @@ HUD_TAGS = {MODE_SHADOW: "SGT (Shadow)", MODE_LIVE: "SGT (Live)"}
 CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
-IDLE_END_SEC = 20 * 60
+IDLE_END_SEC = 2 * 3600
+IDLE_REASON = "idle 2 hr"
+CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
 RESUME_WINDOW_SEC = 4 * 3600
 # Portals whose pages are never read by OCR: a canvas read there loses the label markers
@@ -236,6 +240,7 @@ class _Session:
     # (field, value) pairs already logged as "not promoted": a truncated header name is seen on
     # every page, and one log line about it is enough.
     not_promoted: Set[Tuple[str, str]] = field(default_factory=set)
+    linked: Set[str] = field(default_factory=set)   # portal user IDs already looked up in the saved clients
     confirmed: bool = False             # the client's identity may go on rows
     confirm_note: str = ""
     strict: bool = False                # born from a contradiction: a single sighting never confirms
@@ -270,8 +275,12 @@ class SgtShadow:
         scc: Any = None,
         sdis: Any = None,
         ask_demotion: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        resolve_client: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
     ) -> None:
         self.mode = MODE_SHADOW
+        # (portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None
+        # (core/sgt/sgt_client_link.ClientLink). Names the client where the page itself does not.
+        self._resolve_client = resolve_client
         # A page now shows a LOWER status than a filing that has an ARN: never applied on its own. The
         # user is asked (this callback shows the dialog); confirm_demotion / decline_demotion answer.
         self._ask_demotion = ask_demotion
@@ -320,7 +329,11 @@ class SgtShadow:
         self._today = today
         self._echo = echo
         self._sessions: Dict[int, _Session] = {}
-        self._parked: Dict[int, Tuple[float, Dict[str, Any]]] = {}
+        # Sessions of a window that are set aside, not ended: the same window shows another portal
+        # (a GST tab, an Income Tax tab, a mail tab) or another client of the same portal. Only a
+        # login or logout page, the idle limit, shutdown and a closed window end a session.
+        self._shelf: Dict[int, List[_Session]] = {}
+        self._parked: Dict[int, List[Tuple[float, Dict[str, Any]]]] = {}
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
@@ -337,6 +350,10 @@ class SgtShadow:
     def set_intelligence(self, host: Any) -> None:
         """Attaches SGT-I's host (or None). It never changes what the Core captures."""
         self._sgt_i = host
+
+    def set_client_lookup(self, lookup: Optional[Callable[[str, str], Optional[Dict[str, Any]]]]) -> None:
+        """Attaches the saved-client lookup by portal user ID (or None)."""
+        self._resolve_client = lookup
 
     def set_scc(self, host: Any) -> None:
         """Attaches SCC-U's host (or None). It never changes what the Core captures."""
@@ -360,18 +377,63 @@ class SgtShadow:
             return None
 
     def end_session(self, hwnd: int, reason: str) -> None:
+        """Ends EVERY session of this window - the one in view and the ones set aside. For a
+        closed window, shutdown and switching SGT off; a login / logout page or the idle limit
+        end only the session they belong to (``_end_one``)."""
         self._parked.pop(hwnd, None)
         s = self._sessions.pop(hwnd, None)
-        if s is not None:
-            self._finish(s, reason)
+        aside = self._shelf.pop(hwnd, [])
+        for x in ([s] if s is not None else []) + aside:
+            self._finish(x, reason)
+        if s is not None or aside:
             self._save_state(force=True)
         if self._stats is not None:
             self._stats.save()
 
     def end_all(self, reason: str) -> None:
         self._parked.clear()
-        for hwnd in list(self._sessions):
+        for hwnd in list(self._sessions) + [h for h in self._shelf if h not in self._sessions]:
             self.end_session(hwnd, reason)
+
+    def _end_one(self, s: _Session, reason: str) -> None:
+        """Ends one session; the window's other sessions carry on."""
+        self._finish(s, reason)
+        self._save_state(force=True)
+        if self._stats is not None:
+            self._stats.save()
+
+    def _all_sessions(self) -> List[_Session]:
+        return list(self._sessions.values()) + [x for lst in self._shelf.values() for x in lst]
+
+    def _shelve(self, hwnd: int, s: _Session) -> None:
+        """Sets the window's session in view aside. An empty one has nothing to keep."""
+        if s.has_content:
+            self._shelf.setdefault(hwnd, []).append(s)
+
+    def _bring_back(self, hwnd: int, back: _Session, url: str, h: Any, now: float) -> _Session:
+        """`back` (a session this window had set aside) is the one in view again."""
+        self._sessions[hwnd] = back
+        back.last_url, back.last_hash, back.last_read, back.last_seen = url, h, now, now
+        if url and (not back.timeline or back.timeline[-1] != url) and len(back.timeline) < TIMELINE_CAP:
+            back.timeline.append(url)
+        self._echo(f"[SGT] {self._tag} back on this window's session for the client on this page")
+        return back
+
+    def _unshelve(self, hwnd: int, portal: str, key: Optional[str] = None,
+                  value: Optional[str] = None) -> Optional[_Session]:
+        """The most recently seen set-aside session of this window for `portal` (and, with
+        `key`/`value`, for that client PAN / GSTIN), taken off the shelf - or None."""
+        aside = self._shelf.get(hwnd) or []
+        fit = [x for x in aside
+               if (not portal or not x.portal or x.portal == portal)
+               and (key is None or (x.profile.get(key) or {}).get("value") == value)]
+        if not fit:
+            return None
+        pick = max(fit, key=lambda x: x.last_seen)
+        aside.remove(pick)
+        if not aside:
+            self._shelf.pop(hwnd, None)
+        return pick
 
     # ── One tick ─────────────────────────────────────────────────────────────────
     def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "") -> Optional[PageResult]:
@@ -380,34 +442,59 @@ class SgtShadow:
         self._end_idle(now)
         self._daily_health_check()
         s = self._sessions.get(hwnd)
+        if s is not None and portal and s.portal and portal != s.portal:
+            # The window is on another portal (another tab). That is NOT a boundary: this
+            # session is set aside, and the one the window had on that portal comes back. An
+            # empty session (say, opened on the GST login page before going to the ITR portal)
+            # just takes the portal it is on.
+            back = self._unshelve(hwnd, portal)
+            if s.has_content:
+                self._shelve(hwnd, s)
+                s = back
+            elif back is not None:
+                s = back
+            else:
+                s.portal = portal
+            if s is None:
+                self._sessions.pop(hwnd, None)
+            else:
+                self._sessions[hwnd] = s
         if s is not None and url and url != s.last_url:
             if _LOGOUT.search(url):
                 if len(s.timeline) < TIMELINE_CAP:
                     s.timeline.append(url)      # how the session ended belongs on its timeline
-                self.end_session(hwnd, "logout")
+                self._sessions.pop(hwnd, None)
+                self._end_one(s, "logout")
                 s = None
             elif _LOGIN.search(url) and s.has_content:
-                self.end_session(hwnd, "login page - next client")
+                self._sessions.pop(hwnd, None)
+                self._end_one(s, "login page - next client")
                 s = None
-        if s is not None and portal and s.portal and portal != s.portal:
-            # The other portal is another login. An empty session (say, opened on the GST
-            # login page before going to the ITR portal) just takes the new portal.
-            if s.has_content:
-                self.end_session(hwnd, f"moved to {portal}")
-                s = None
-            else:
-                s.portal = portal
+        if s is None and not (url and (_LOGIN.search(url) or _LOGOUT.search(url))):
+            # A session of this window that was set aside for this portal comes back.
+            s = self._unshelve(hwnd, portal)
+            if s is not None:
+                self._sessions[hwnd] = s
         if s is None:
-            parked = self._parked.pop(hwnd, None)
             resumed = False
-            if parked is not None:
-                parked_at, snap = parked
+            picked = None
+            cands = self._parked.get(hwnd) or []
+            if cands:
+                fit = [c for c in cands
+                       if not portal or not c[1].get("portal") or portal == c[1].get("portal")]
+                rest = [c for c in cands if c not in fit]
+                if rest:
+                    self._parked[hwnd] = rest
+                else:
+                    self._parked.pop(hwnd, None)
+                if fit:
+                    picked = max(fit, key=lambda c: float(c[1].get("last_seen") or c[0]))
+            if picked is not None:
+                parked_at, snap = picked
                 age = now - parked_at
                 gap = now - float(snap.get("last_seen") or parked_at)
-                snap_portal = snap.get("portal") or ""
-                portal_ok = not portal or not snap_portal or portal == snap_portal
                 url_ok = not (_LOGIN.search(url) or _LOGOUT.search(url)) if url else True
-                if 0 <= age <= RESUME_WINDOW_SEC and gap <= RESUME_WINDOW_SEC and portal_ok and url_ok:
+                if 0 <= age <= RESUME_WINDOW_SEC and gap <= RESUME_WINDOW_SEC and url_ok:
                     resumed = True
                     s = _session_from_json(snap)
                     old_id = snap.get("session_id", s.session_id)
@@ -506,14 +593,31 @@ class SgtShadow:
         clash = None if res.is_list else self._identity_conflict(s, res)
         if clash:
             # Another client's PAN/GSTIN: this window moved to someone else without passing a
-            # login page. End the session here - nothing already captured is touched - and
-            # start one that must see its client twice. The clashing value is NOT taken from
-            # this page: a stray GSTIN (a supplier in a table) must not name the new session.
-            self.end_session(hwnd, f"a different {clash.upper()} appeared - treated as another client")
-            s = self._sessions[hwnd] = _Session(portal=portal, strict=True, last_url=url, last_hash=h,
-                                                last_read=now, timeline=[url] if url else [])
+            # login page (another tab). That is not a boundary either: the session is set aside
+            # untouched, and the window's own session for that client comes back if it has one.
+            # Otherwise a new one starts that must see its client twice; the clashing value is NOT
+            # taken from this page - a stray GSTIN (a supplier in a table) must not name it.
+            seen = getattr(res.profile.get(clash), "value", None)
+            self._shelve(hwnd, s)
+            back = self._unshelve(hwnd, portal, key=clash, value=seen) if seen else None
+            if back is not None:
+                s = self._bring_back(hwnd, back, url, h, now)
+            else:
+                s = self._sessions[hwnd] = _Session(portal=portal, strict=True, last_url=url, last_hash=h,
+                                                    last_read=now, timeline=[url] if url else [])
+                for k in _CLIENT_KEYS:
+                    res.profile.pop(k, None)
+        elif not res.is_list:
+            # A session that has no client yet (one born from a stray PAN/GSTIN, say) meets the
+            # page of a client this window already has a session for: that session comes back.
             for k in _CLIENT_KEYS:
-                res.profile.pop(k, None)
+                v = getattr(res.profile.get(k), "value", None)
+                if v and not (s.profile.get(k) or {}).get("value"):
+                    back = self._unshelve(hwnd, portal, key=k, value=v)
+                    if back is not None:
+                        self._shelve(hwnd, s)       # nothing to keep when it is still empty
+                        s = self._bring_back(hwnd, back, url, h, now)
+                        break
         s.conflicts += len(res.conflicts)
         self._page_pans = {p for ln in lines for p in _PAN_TOKEN.findall(ln or "")}
         self._foreign_pans = self._other_pans_on_page(s, res, lines)
@@ -740,12 +844,12 @@ class SgtShadow:
         Built like the dataset in progress: list pages never feed it, and while another client's
         PAN is readable only the link and title count. A changed containers document re-evaluates
         every open instance first; nothing moves down."""
-        if not hits and not any(x.sdis.instances for x in self._sessions.values()):
+        if not hits and not any(x.sdis.instances for x in self._all_sessions()):
             return
         doc = load_doc()
         if doc is not self._sdis_doc:
             if self._sdis_doc is not None:
-                for other in list(self._sessions.values()):
+                for other in self._all_sessions():
                     for inst in other.sdis.recompute(doc):
                         self._event(other, "container", change="re-evaluated (containers file changed)",
                                     container=inst.container, level=inst.level, status=inst.status)
@@ -1116,6 +1220,8 @@ class SgtShadow:
             note = "PAN and GSTIN agree"
         else:
             note = f"{fld.upper()} seen once"
+        if note.endswith("seen once") and (s.profile.get(fld) or {}).get("spec") == CLIENT_LINK_SPEC:
+            note = "portal user ID matched a saved client"
         first = not s.confirmed
         if not first and note == s.confirm_note:
             return
@@ -1196,10 +1302,34 @@ class SgtShadow:
             held = {k: v["value"] for k, v in s.profile.items()}
             for fld, value in compose_values(held, prules.compose).items():
                 self._offer_profile(s, fld, value, f"compose:{fld}", 92, url, source, registry)
+        self._link_client(s, url, source, registry)
         self._announce_profile(s, before_identity=not had_client)
         rules = registry.current_rules if registry is not None else None
         for ds in res.datasets:
             self._merge(s, ds, url, source, rules, registry)
+
+    def _link_client(self, s: _Session, url: str, source: str, registry: Any) -> None:
+        """A page that shows the portal's user ID (an SDIS profile datapoint, "username") but not the
+        client's GSTIN: the saved client who owns that user ID names the session. Once per user ID per
+        session. Only fills a gap - a GSTIN / PAN the pages gave is never overridden - and a later header
+        GSTIN that disagrees still ends the session like any other contradiction."""
+        user_id = (s.profile.get("username") or {}).get("value")
+        if not user_id or self._resolve_client is None or any(k in s.profile for k in _CLIENT_KEYS):
+            return
+        if user_id in s.linked:
+            return
+        s.linked.add(user_id)
+        try:
+            found = self._resolve_client(s.portal, user_id)
+        except Exception:
+            found = None
+        if not found:
+            self._event(s, "identity", change="user id not matched to a saved client")
+            return
+        for fld in ("gstin", "pan"):            # a GST session is keyed by the GSTIN; the PAN only when that is all there is
+            if found.get(fld):
+                self._offer_profile(s, fld, found[fld], CLIENT_LINK_SPEC, 85, url, source, registry)
+                break
 
     def _find_slot(self, s: _Session, values: Dict[str, str], stamp: str = "", follow: bool = False) -> Optional[_Slot]:
         arn = values.get("arn")
@@ -1448,26 +1578,37 @@ class SgtShadow:
 
     # ── Ending ───────────────────────────────────────────────────────────────────
     def _end_idle(self, now: float) -> None:
-        for h, (parked_at, _) in list(self._parked.items()):
-            if now - parked_at > RESUME_WINDOW_SEC:
+        for h in list(self._parked):
+            kept = [c for c in self._parked[h] if now - c[0] <= RESUME_WINDOW_SEC]
+            if kept:
+                self._parked[h] = kept
+            else:
                 self._parked.pop(h, None)
-        for hwnd, s in list(self._sessions.items()):
-            if now - s.last_seen > IDLE_END_SEC:
-                snap = copy.deepcopy(_session_to_json(s))
-                has_content = s.has_content
-                gap = now - s.last_seen
-                self.end_session(hwnd, "idle 20 min")
-                prof = snap.get("profile") or {}
-                pan_val = prof.get("pan")
-                if isinstance(pan_val, dict):
-                    pan_val = pan_val.get("value")
-                gstin_val = prof.get("gstin")
-                if isinstance(gstin_val, dict):
-                    gstin_val = gstin_val.get("value")
-                if has_content and (pan_val or gstin_val) and gap <= RESUME_WINDOW_SEC:
-                    self._parked[hwnd] = (now, snap)
-                else:
-                    self._parked.pop(hwnd, None)
+        idle = [(hwnd, s, False) for hwnd, s in self._sessions.items() if now - s.last_seen > IDLE_END_SEC]
+        idle += [(hwnd, s, True) for hwnd, lst in self._shelf.items() for s in lst
+                 if now - s.last_seen > IDLE_END_SEC]
+        for hwnd, s, aside in idle:
+            snap = copy.deepcopy(_session_to_json(s))
+            has_content = s.has_content
+            gap = now - s.last_seen
+            if aside:
+                lst = self._shelf.get(hwnd) or []
+                if s in lst:
+                    lst.remove(s)
+                if not lst:
+                    self._shelf.pop(hwnd, None)
+            else:
+                self._sessions.pop(hwnd, None)
+            self._end_one(s, IDLE_REASON)
+            prof = snap.get("profile") or {}
+            pan_val = prof.get("pan")
+            if isinstance(pan_val, dict):
+                pan_val = pan_val.get("value")
+            gstin_val = prof.get("gstin")
+            if isinstance(gstin_val, dict):
+                gstin_val = gstin_val.get("value")
+            if has_content and (pan_val or gstin_val) and gap <= RESUME_WINDOW_SEC:
+                self._parked.setdefault(hwnd, []).append((now, snap))
 
     def would_be_payload(self, s: _Session) -> Dict[str, Any]:
         dispatched: Set[str] = {str(x) for x in (self._dispatched_ids() or ())}
@@ -1566,7 +1707,7 @@ class SgtShadow:
             return
         self._state_saved = now
         try:
-            live = [s for s in self._sessions.values() if s.has_content]
+            live = [s for s in self._all_sessions() if s.has_content]
             if not live:
                 if self._state_path.exists():
                     self._state_path.unlink()

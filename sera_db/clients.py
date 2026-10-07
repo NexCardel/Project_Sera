@@ -396,6 +396,20 @@ class ClientsMixin:
                     matches.append(val)
             return matches
 
+    def find_client_ids_by_column_value(self, column_id: int, value: str) -> list[int]:
+        """Ids of the active clients whose value in one column equals `value` (case and surrounding
+        spaces ignored) - e.g. who owns a portal user ID, through a service's user-ID column."""
+        clean = str(value or "").strip().upper()
+        if not column_id or not clean:
+            return []
+        with self._connect() as conn:
+            cur = conn.execute(
+                """SELECT DISTINCT cv.client_id FROM client_values cv
+                   JOIN clients c ON c.id = cv.client_id
+                   WHERE cv.column_id = ? AND c.is_archived = 0 AND UPPER(TRIM(cv.value)) = ?""",
+                (column_id, clean))
+            return [r[0] for r in cur.fetchall()]
+
     def get_client_by_pan(self, pan: str) -> dict | None:
         """Finds active client by PAN and returns full client dict, or None."""
         if not pan or not str(pan).strip():

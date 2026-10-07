@@ -371,6 +371,7 @@ class TrackerDumpMixin:
                     "capture_method": capture_method,
                     "status": status,
                     "raw_payload_json": raw_payload_json,
+                    "captured_by": captured_by,
                     "created_at": now
                 }
             )
@@ -796,6 +797,7 @@ class TrackerDumpMixin:
                         "capture_method": d["capture_method"],
                         "status": d.get("status"),
                         "raw_payload_json": d["raw_payload_json"],
+                        "captured_by": d.get("captured_by"),
                         "created_at": d["created_at"]
                     }
                 )

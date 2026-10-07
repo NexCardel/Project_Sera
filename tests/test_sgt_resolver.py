@@ -277,9 +277,54 @@ class TestResolver:
 
     def test_output_carries_values_never_page_text(self):
         reg = load_registry([BUILTIN_FIELDS_PATH])
-        lines = ["Some private note on screen", "Welcome ASHOK KUMAR SEN to GST Common Portal", "19ABCPD1234E1ZB"]
+        lines = ["Some private note on screen", " ASHOK KUMAR SEN 19ABCPD1234E1ZB"]
         out = json.dumps(resolve_page(reg, lines, GST, "https://services.gst.gov.in/services/auth/fowelcome", TODAY).as_dict())
         assert "private note" not in out and "19ABCPD1234E1ZB" in out
+
+
+class TestHeaderIdentityAndPureRegexAcks:
+    """The GST client is named by the top header line only; ARN / ack are read by shape, not by label."""
+
+    def _res(self, lines, portal=GST, url="https://return.gst.gov.in/returns/auth/gstr1"):
+        return resolve_page(load_registry([BUILTIN_FIELDS_PATH]), lines, portal, url, TODAY)
+
+    def test_header_names_the_client_on_any_page(self):
+        res = self._res([" ASHOK KUMAR SEN 19ABCPD1234E1ZB", "GSTR-1 - Details of outward supplies"])
+        assert res.profile["gstin"].value == "19ABCPD1234E1ZB"
+        assert res.profile["name"].value == "ASHOK KUMAR SEN"
+
+    def test_a_gstin_outside_the_header_is_never_the_clients(self):
+        for lines in (["Supplier GSTIN", "27AAACZ9876K1ZE"], ["GSTIN: 27AAACZ9876K1ZE"], ["GSTIN of Supplier 27AAACZ9876K1ZE"],
+                      ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"]):
+            assert "gstin" not in self._res(lines).profile, lines
+
+    def test_two_different_header_gstins_are_a_conflict(self):
+        res = self._res([" ASHOK KUMAR SEN 19ABCPD1234E1ZB", " RAVI MEHTA 27AAACZ9876K1ZE"])
+        assert "gstin" not in res.profile
+
+    def test_gst_arn_by_shape_wherever_it_sits(self):
+        lines = ["Filing Successful", "The Acknowledgment Reference Number (ARN) is:", "AA290121001228S", ".",
+                 "GSTR-3B has been filed successfully"]
+        res = self._res(lines)
+        assert res.datasets and res.datasets[0].values()["arn"] == "AA290121001228S"
+        # any two letters + 12 digits + a check character: AA and AB are both real (AB190626708598H)
+        ab = self._res(["Filing Successful", "AB190626708598H", "GSTR-3B has been filed successfully"])
+        assert ab.datasets and ab.datasets[0].values()["arn"] == "AB190626708598H"
+        assert self._res(["Filing Successful", "XB290121001228S", "GSTR-3B has been filed successfully"]).datasets
+        assert not self._res(["Filing Successful", "A1290121001228S"]).datasets      # the first two must be letters
+        assert not self._res(["Filing Successful", "XAB290121001228S"]).datasets     # exactly 15 characters
+
+    def test_itr_ack_by_shape_needs_a_real_date_tail(self):
+        lines = ["You have successfully submitted your return!", "Your reference is 123456789150726"]
+        res = self._res(lines, ITR, "https://eportal.incometax.gov.in/iec/foservices/#/x")
+        assert res.datasets and res.datasets[0].values()["arn"] == "123456789150726"
+        bad = self._res(["You have successfully submitted your return!", "123456789320726"], ITR,
+                        "https://eportal.incometax.gov.in/iec/foservices/#/x")
+        assert not bad.datasets
+
+    def test_tax_period_with_a_year_and_the_harness_label(self):
+        res = self._res(["GSTR-1 - Details of outward supplies", "FINANCIAL YEAR", "2020-21", "RETURN / TAX PERIOD", "January - 2021"])
+        assert res.current["tax_period"].value == "January"
 
 
 class TestNewBuildingBlocks:
@@ -543,3 +588,25 @@ class TestLabelSpellingTolerance:
     def test_short_words_stay_exact(self):
         assert self._hit(["PAN"], "PAN: ABCDE1234F")
         assert not self._hit(["PAN"], "PANEL")
+
+
+class TestRefundTimelineStatus:
+    """A filed-return card whose status history is only refund steps still proves the return was processed."""
+
+    CARD = ["A.Y. 2025-26", "Filing Type", "Original", "done", "{msg}", "Nov 29, 2025", "done", "ITR Filed",
+            "Jul 31, 2025", "ITR :", "ITR-1", "Acknowledgement No :", "987654321310725", "Filing Date :", "Jul 31, 2025"]
+
+    def test_each_refund_step_is_submitted_and_verified(self):
+        reg = load_registry([BUILTIN_FIELDS_PATH])
+        for msg in ("Refund Credited to your Bank A/c. For details, Check “Know Your Refund Status”",
+                    "Refund determined has been adjusted fully/partially as per the communication issued. For details, Check “Know Your Refund Status”",
+                    "Refund is kept on hold as Taxpayer’s response and/or JAO’s response is awaited as per the communication issued."):
+            lines = [ln.replace("{msg}", msg) for ln in self.CARD]
+            res = resolve_page(reg, lines, ITR, "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus", TODAY)
+            assert [d.values()["status"] for d in res.datasets] == ["Submitted & Verified"], msg
+
+    def test_the_menu_entry_alone_is_not_a_status(self):
+        reg = load_registry([BUILTIN_FIELDS_PATH])
+        lines = [ln.replace("{msg}", "Know Your Refund Status") for ln in self.CARD]
+        res = resolve_page(reg, lines, ITR, "https://eportal.incometax.gov.in/iec/foservices/#/dashboard/itrStatus", TODAY)
+        assert [d.values()["status"] for d in res.datasets] == ["Submitted (Not Verified)"]

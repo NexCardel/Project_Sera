@@ -436,10 +436,13 @@
             <div class="portal-logo-emblem">GST</div>
             <div class="portal-title">Goods and Services Tax (Government of India)</div>
         </div>
-        <div class="taxpayer-badge" id="taxpayerBadge">
-            <div class="taxpayer-name" id="displayLegalName">AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA)</div>
-            <div class="taxpayer-gstin" id="displayGstin">GSTIN: 29ABACD1191FAZK</div>
-        </div>
+        <!-- The real portal's top header: ONE list item reading "NAME GSTIN" (the GSTIN repeats inside its dropdown). -->
+        <ul class="taxpayer-badge" id="taxpayerBadge" style="list-style:none;margin:0;padding:0;">
+            <li aria-label=" AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA) 29ABACD1191FAZK">
+                <div class="taxpayer-name" id="displayLegalName">AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA)</div>
+                <div class="taxpayer-gstin" id="displayGstin">29ABACD1191FAZK</div>
+            </li>
+        </ul>
     </header>
 
     <!-- Test Harness Interactive Controls -->
@@ -474,7 +477,7 @@
         <!-- Underlying Page View: GST Return Filing Table -->
         <div class="form-details-card">
             <div class="card-header-title">
-                <span id="cardFormHeading">GSTR-1 / IFF - Details of Outward Supplies</span>
+                <span id="cardFormHeading">GSTR-1 - Details of outward supplies of goods or services</span>
                 <span class="status-pill" id="cardStatusPill">Status: Ready for Filing</span>
             </div>
 
@@ -573,7 +576,7 @@
             document.getElementById('btnTabGstr1').classList.toggle('active', isGstr1);
             document.getElementById('btnTabGstr3b').classList.toggle('active', !isGstr1);
 
-            document.getElementById('cardFormHeading').innerText = isGstr1 ? 'GSTR-1 / IFF - Details of Outward Supplies' : 'GSTR-3B - Monthly Return';
+            document.getElementById('cardFormHeading').innerText = isGstr1 ? 'GSTR-1 - Details of outward supplies of goods or services' : 'GSTR-3B - Monthly Return';
             document.getElementById('succForm').innerText = formType;
             document.getElementById('succForm2').innerText = formType;
 

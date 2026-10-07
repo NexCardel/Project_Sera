@@ -36,6 +36,7 @@ listed on their own.
 
     python tools/pre_dev/class_diff/compare.py                         # every page link's MEMORY (all clients)
     python tools/pre_dev/class_diff/compare.py --two                   # latest client vs previous client
+    python tools/pre_dev/class_diff/compare.py --comp                  # experiment 1: comp page vs comp page
     python tools/pre_dev/class_diff/compare.py --latest A.json --previous B.json   # two single reads
 
 The default is a view of core/sdis/memory.py (Part I): one row per node with a text, its status
@@ -114,9 +115,14 @@ def check(status: str, latest_type: str, previous_type: str, label: str = "") ->
     return "ok"
 
 
+def flat_of(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A read's flat list, or a comp page's nodes (snapshot_diff.py) as they are."""
+    return rec["nodes"] if rec.get("comp_page") else flatten(rec)
+
+
 def compare(latest: Dict[str, Any], previous: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Two single reads."""
-    return compare_flat(flatten(latest), flatten(previous))
+    """Two single reads (or two comp pages)."""
+    return compare_flat(flat_of(latest), flat_of(previous))
 
 
 ALIGN = True      # pair elements by align.py (content + shape); False = by exact key, the old way
@@ -196,7 +202,9 @@ def compare_flat(fl: List[Dict[str, Any]], fp: List[Dict[str, Any]],
                 "element": n.get("type_name") or n.get("ctype"), "classes": e["cls"],
                 "container": _container(flat, i), "id": n.get("id", ""),
                 "sgt_sees": "yes" if n.get("sgt") else "no", "example_value": example,
+                "previous_example": other["text"] if other else (example if flat is fp else ""),
                 "values_seen": " || ".join(e.get("values") or []),
+                "origin": e.get("origin", ""), "present": {True: "yes", False: "no"}.get(e.get("present"), ""),
                 "key": e["key"]}
 
     rows = [row(fl, i, st, fl[i]["text"]) for i, st in status.items()]
@@ -223,8 +231,8 @@ def pick(latest: Optional[str], previous: Optional[str]) -> Tuple[Path, Path]:
     raise SystemExit(f"No earlier read of the same page ({key}) - run key_probe.py on it for another client first.")
 
 
-FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "values_seen", "value_type", "previous_type", "element", "classes",
-          "container", "id", "sgt_sees", "key"]
+FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "previous_example", "values_seen", "value_type", "previous_type", "element", "classes",
+          "container", "id", "sgt_sees", "origin", "present", "key"]
 
 
 MEMORY_FIELDS = ["status", "label", "value_type", "clients", "example_value", "key"]
@@ -266,10 +274,71 @@ def main_memory() -> int:
     return 0
 
 
+class _Comp:
+    """A comp page as client_ids() wants it: .link and .to_flat()."""
+
+    def __init__(self, rec: Dict[str, Any]) -> None:
+        self.link, self.rec = rec.get("page") or "", rec
+
+    def to_flat(self) -> List[Dict[str, Any]]:
+        return self.rec["nodes"]
+
+
+def main_comp(stamp_out: bool = True) -> int:
+    """Experiment 1: for every page link, the LATEST comp page vs the latest comp page of the same
+    link from another client (another session whose PAN / GSTIN differ; a session with none is
+    compared anyway, with a warning)."""
+    comps = []
+    for p in sorted(OUT_DIR.glob("comp_*.json")):
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        if rec.get("comp_page"):
+            comps.append((p, rec, client_ids(_Comp(rec))))
+    if not comps:
+        raise SystemExit(f"No comp_*.json in {OUT_DIR} - run key_probe.py, or snapshot_diff.py --comp on old captures.")
+    by_page: Dict[str, list] = {}
+    for c in comps:
+        by_page.setdefault(page_key(c[1]), []).append(c)
+    done = 0
+    for page in sorted(by_page):
+        cs = sorted(by_page[page], key=lambda c: c[1].get("session") or c[0].name)
+        lp, lrec, lids = cs[-1]
+        others = [c for c in cs[:-1] if c[1].get("session") != lrec.get("session") and not (c[2] & lids and lids)]
+        print(f"Page     : {page}")
+        if not others:
+            print(f"  only one client has a comp page of it ({masked(lids)}) - capture it for another client")
+            print()
+            continue
+        pp, prec, pids = others[-1]
+        print(f"Latest   : {lp.name}  [{masked(lids)}]  {len(lrec['nodes'])} nodes")
+        print(f"Previous : {pp.name}  [{masked(pids)}]  {len(prec['nodes'])} nodes")
+        if not (lids and pids):
+            print("  WARNING: no PAN / GSTIN on one side - it may be the same client")
+        page_rows = compare(lrec, prec)
+        counts = Counter(r["status"] for r in page_rows)
+        for st in STATUSES:
+            print(f"  {st:18s} {counts.get(st, 0):5d}")
+        matched = sum(1 for r in page_rows if r["key_matched"] in ("yes", "aligned"))
+        print(f"  paired             {matched:5d} of {len(page_rows)}")
+        data = [r for r in page_rows if r["status"] in (VARIABLE, SEMI_VARIABLE, VARIABLE_ALIGNMENT)]
+        print(f"  data nodes {len(data)}, labelled {sum(1 for r in data if r['label'])}")
+        flags = Counter(r["check"] for r in page_rows if r["check"] != "ok")
+        for msg, k in flags.most_common():
+            print(f"  check: {k:4d} x {msg}")
+        out = write_csv(OUT_DIR / f"compare_comp_{lrec.get('session', '')}__{page_slug(page)}.csv", FIELDS,
+                        [dict(r, page=page) for r in page_rows])
+        print(f"CSV      : {out.name}")
+        print()
+        done += 1
+    print("(the CSVs hold real page values - keep them on this PC)")
+    return 0 if done else 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Page memory view (default), or --two: two clients' maps of the same "
                                              "page link (or two single reads).")
     ap.add_argument("--two", action="store_true", help="the old mode: the latest client vs the previous one")
+    ap.add_argument("--comp", action="store_true",
+                    help="experiment 1: each link's latest comp page (snapshot_diff.py) vs another client's")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
     ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
@@ -282,6 +351,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     global ALIGN
     ALIGN = args.align == "on"
     print(f"View     : {args.view}    Align: {args.align}")
+    if args.comp:
+        return main_comp()
     if not (args.two or args.latest or args.previous):
         return main_memory()
 
