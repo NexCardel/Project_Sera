@@ -4,6 +4,17 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [2.12.7] - 2026-10-07
+
+2.12.6 was built and merged but never released; 2.12.7 is the first release that carries it. Everything under 2.12.6 below ships in 2.12.7 too, together with the `home-work` work merged with it (SGT header-only GSTIN, ARN read by shape, user-ID client link; LTT monthly workbook, rules and wording; tracker-dump "Captured by"; SDIS class_diff tooling).
+
+### Fixed
+- **LTT sheet did not update an entry when it was submitted or its status changed.** Sync v3 writes `tracker_dump` directly and only refreshed windows, so the client containers the LTT sheet and tracker list read (a local cache of `tracker_dump`) kept the old status when another PC filed or changed a return. After a live sync batch that touches `tracker_dump`, the app now rebuilds the containers, rewrites the month's LTT CSVs, then refreshes the windows (debounced; a burst of batches makes one run).
+- **A locked LTT CSV is retried.** If Excel held the month's CSV open past the 6 seconds the swap waits, the export gave up until some later capture. It now retries every 20 seconds, up to 6 times.
+- Known limit: the sheet is still written only once the `LTT` folder exists (Tools > Open LTT sheet); the older `ltt_feed.csv` is no longer refreshed.
+
+---
+
 ## [2.12.6] - 2026-10-06
 
 ### Changed
