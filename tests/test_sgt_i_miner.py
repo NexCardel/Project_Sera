@@ -170,13 +170,14 @@ def _row(pan, synonyms=(), opinions=(), portal="Income Tax"):
 
 
 def test_a_new_wording_for_a_known_field_is_proposed_from_three_clients():
-    syn = {"field": "ack", "container": ["Filing Details", "Acknowledgement Ref"]}
+    # (The ack is read by shape now, with no label, so it has no wording to learn: use a labelled field.)
+    syn = {"field": "filing_type", "container": ["Filing Details", "Kind Of Filing"]}
     rows = [_row(pan, [syn]) for pan, *_ in CLIENTS]
     props = miner.from_synonyms(rows, registry(), cfg())
     assert len(props) == 1
     p = props[0]
-    assert p["source"] == "known_value" and p["type"] == "arn" and p["section"] == "records"
-    assert p["spec"]["fields"][0]["labels"] == ["Acknowledgement Ref"]
+    assert p["source"] == "known_value" and p["type"] == "filing_type" and p["section"] == "records"
+    assert p["spec"]["fields"][0]["labels"] == ["Kind Of Filing"]
     assert miner.check_spec(p["section"], p["spec"], BASE) is None, p["spec"]
     dropped = Counter()
     assert miner.from_synonyms(rows[:2], registry(), cfg(), dropped) == [] and dropped["support"] == 1

@@ -210,19 +210,40 @@
       "name": "gst_gstin",
       "field": "gstin",
       "portals": ["GST Portal"],
-      "urls": ["fowelcome", "/auth/dashboard"],
       "take": "anywhere",
-      "pattern": "(?<![A-Z0-9])([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])(?![A-Z0-9])",
+      "pattern": "^\\s*(?!GSTIN)[^\\s0-9][^0-9]*?\\s([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\\s*$",
       "checks": ["gstin_checksum"],
       "confidence": 90,
-      "note": "The welcome page prints the logged-in GSTIN under the name. Two different GSTINs on one page are a conflict and neither is taken.",
+      "note": "The client's GSTIN comes from the portal's top header only, which prints 'NAME GSTIN' as one line on every logged-in page - no page link needed. A GSTIN alone on a line, or after a label, is a supplier / recipient / table cell and is never the client's. Two different header GSTINs on one page are a conflict and neither is taken.",
       "examples": [
-        "19ABCPD1234E1ZB",
-        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"], "expect": "19ABCPD1234E1ZB"}
+        {"lines": [" ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "19ABCPD1234E1ZB"},
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile", "ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "19ABCPD1234E1ZB"}
       ],
       "counter_examples": [
-        "19ABCPD1234E1ZC",
-        {"lines": ["19ABCPD1234E1ZB", "27AAACZ9876K1ZE"]}
+        "19ABCPD1234E1ZB",
+        "ASHOK KUMAR SEN 19ABCPD1234E1ZC",
+        "GSTIN 27AAACZ9876K1ZE",
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"]},
+        {"lines": ["ASHOK KUMAR SEN 19ABCPD1234E1ZB", "RAVI MEHTA 27AAACZ9876K1ZE"]}
+      ]
+    },
+    {
+      "name": "gst_header_name",
+      "field": "name",
+      "merge": "promote_longer",
+      "portals": ["GST Portal"],
+      "take": "anywhere",
+      "pattern": "^\\s*(?!GSTIN)([^\\s0-9][^0-9]*?)\\s[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\\s*$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["looks_like_name", "not_ui_chrome"],
+      "confidence": 88,
+      "note": "The client's name from the same top-header line as gst_gstin ('NAME GSTIN').",
+      "examples": [
+        {"lines": [" ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "ASHOK KUMAR SEN"}
+      ],
+      "counter_examples": [
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB"]},
+        "GSTIN 19ABCPD1234E1ZB"
       ]
     },
     {
@@ -363,8 +384,7 @@
         },
         {
           "field": "arn",
-          "labels": ["Acknowledgement No", "Acknowledgement Number"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_real"],
@@ -482,8 +502,7 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["Acknowledgement Number", "Acknowledgement No"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_today"],
@@ -544,8 +563,7 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["Acknowledgement Number", "Acknowledgement No"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_real"],
@@ -607,14 +625,12 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["ARN", "Acknowledgement Reference Number", "Acknowledgment Reference Number", "Application Reference Number"],
-          "label_at": "anywhere",
-          "within": 2,
-          "pattern": "(?<![0-9A-Za-z])([A-Z]{2}[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
+          "take": "anywhere",
+          "pattern": "(?<![0-9A-Za-z])(AA[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
           "confidence": 90,
-          "note": "No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
-          "examples": ["AA070826000001Z", "AB0708260000012"],
-          "counter_examples": ["AA07082600000", "12070826000001Z"]
+          "note": "Pure regex, no label: 'AA' + 12 digits + a check character (15 in all) wherever it is on the page, whatever words sit around it ('ARN:', 'The Acknowledgment Reference Number (ARN) is:' ...). No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
+          "examples": ["AA070826000001Z", "AA0708260000012"],
+          "counter_examples": ["AA07082600000", "12070826000001Z", "AB070826000001Z", "XAA070826000001Z"]
         },
         {
           "field": "status",
@@ -635,6 +651,11 @@
         {
           "lines": ["Filing Successful", "GSTR-3B filed successfully. ARN: AA070826000001Z", "OK"],
           "expect": [{"arn": "AA070826000001Z", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["Filing Successful", "GSTR-1 of GSTIN 19ABCPD1234E1ZB has been successfully filed.",
+                    "The Acknowledgment Reference Number (ARN) is:", "AA290121001228S", "."],
+          "expect": [{"arn": "AA290121001228S", "status": "Submitted & Verified"}]
         },
         {
           "lines": ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"],
@@ -930,9 +951,9 @@
         "name": "cur_gst_tax_period",
         "field": "tax_period",
         "portals": ["GST Portal"],
-        "labels": ["Tax Period", "Return Period", "Period"],
+        "labels": ["Tax Period", "Return Period", "Return / Tax Period", "Period"],
         "within": 1,
-        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December|(?:Jan|Apr|Jul|Oct) ?[-–] ?(?:Mar|Jun|Sep|Dec))(?: ?\\(Q\\))?$",
+        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December|(?:Jan|Apr|Jul|Oct) ?[-–] ?(?:Mar|Jun|Sep|Dec))(?: ?\\(Q\\))?(?: ?[-–] ?20[0-9]{2})?$",
         "map": [
           ["^apr ?[-–] ?jun$", "June"],
           ["^jul ?[-–] ?sep$", "September"],
@@ -956,7 +977,8 @@
         "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"},
                      {"lines": ["Tax Period -", "September(Q)"], "expect": "September"},
                      {"lines": ["Return Period - Apr-Jun"], "expect": "June"},
-                     {"lines": ["Return Period -", "Jan-Mar"], "expect": "March"}],
+                     {"lines": ["Return Period -", "Jan-Mar"], "expect": "March"},
+                     {"lines": ["RETURN / TAX PERIOD", "January - 2021"], "expect": "January"}],
         "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}, {"lines": ["Tax Period -", "Feb-Apr"]}]
       },
       {
