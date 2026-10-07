@@ -43,8 +43,15 @@ def ladder(status: str, arn: str = "") -> str:
             return lvl
     if "option expired" in s or re.search(r"\b(?:not applicable|na)\b", s):
         return NOT_APPLICABLE
-    pending = any(k in s for k in ("not e-verified", "not verified", "pending", "verify later", "unverified"))
-    if "not filed" in s or "unfiled" in s or "not submitted" in s or "to be filed" in s:
+    # Only verification is "pending" after a submission; "Submission pending" / "Payment pending"
+    # mean the return has not gone in yet.
+    unverified = any(k in s for k in ("not e-verified", "not verified", "verify later", "unverified",
+                                      "verification pending", "e-verification pending"))
+    done_word = re.search(r"\b(?:filed|submitted|arn|ack)\b", s) is not None
+    pending = unverified or ("pending" in s and done_word and not re.search(r"\b(?:filing|submission|payment)\s+pending\b", s))
+    if (re.search(r"\bnot\b(?:\s+yet)?\s+(?:been\s+)?(?:filed|submitted)\b", s) or "unfiled" in s
+            or re.search(r"\b(?:yet\s+)?to\s+be\s+(?:filed|submitted)\b", s) or re.search(r"\byet\s+to\s+(?:file|submit)\b", s)
+            or re.search(r"\b(?:filing|submission|payment)\s+pending\b", s)):
         lvl = LEVELS[0]
     elif any(k in s for k in ("draft", "visited", "in progress", "form selected", "personal info")):
         lvl = LEVELS[1]

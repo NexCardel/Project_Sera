@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from pathlib import Path
 
 from core.ltt import feed, rules
 from core.ltt.engine import LTTEngine, parse_date, parse_gap
@@ -281,3 +282,173 @@ def test_latest_capture_is_on_top():
           _c("DDDDD4444D", "Delta", ("GST (GSTR-3B)", "September (FY 2026-27)", "Filed", "4", "2026-10-04T08:00:00+00:00"))]
     names = [r["Name"] for r in monthly.latest_rows(cs)["GSTR-3B"]]
     assert names == ["Bravo", "Charlie", "Delta", "Alpha"]
+
+
+def _real_db(tmp_path):
+    import security
+    from database import SeraDatabase
+    salt = str(tmp_path / "t.salt")
+    security.generate_and_save_salt(salt)
+    key = security.derive_key_hex("testpass123", security.load_salt(salt))
+    return SeraDatabase(str(tmp_path / "m.db"), key, raw_db_path=str(tmp_path / "r.db"))
+
+
+def test_captures_without_an_arn_never_overwrite_another_forms_entry(tmp_path):
+    """"N/A" is not an ARN: GSTR-1 and GSTR-3B captured together (no ARN yet) both reach the
+    client's history and the LTT sheet, in the order captured; a re-resolve rebuilds the same."""
+    import json
+    db = _real_db(tmp_path)
+    pan = "ABCPD1234E"
+
+    def cap(form, period, status, arn="N/A"):
+        db.insert_tracker_dump(portal=f"GST Portal ({form})", period_label=period, arn_number=arn,
+                               capture_method="SGT_live", status=status, pan=pan, filing_type=form,
+                               raw_payload_json=json.dumps({"pan": pan}))
+
+    cap("GSTR-1", "June (FY 2026-27)", "Submitted & Verified")
+    cap("GSTR-3B", "June (FY 2026-27)", "Submitted & Verified")
+    cap("GSTR-1", "September (FY 2026-27)", "Not Submitted")
+    cap("GSTR-3B", "September (FY 2026-27)", "Draft")
+    cap("GSTR-3B", "September (FY 2026-27)", "Submitted (Not Verified)", arn="AA2709260001234")
+    cap("GSTR-3B", "September (FY 2026-27)", "Submitted & Verified", arn="AA2709260001234")   # same filing, re-captured
+
+    def sheet():
+        rows = monthly.latest_rows(db.get_srpf_containers(limit=1000, slim=True))
+        return {f: [(r["Latest period"], r["Status"]) for r in rs] for f, rs in rows.items()}
+
+    want = {"GSTR-1": [("September (FY 2026-27)", "Not Submitted")],
+            "GSTR-3B": [("September (FY 2026-27)", "Submitted & Verified")]}
+    assert sheet() == want
+    hist = db.get_srpf_containers(limit=1000, slim=True)[0]["filing_history"]
+    assert [(feed.entry_form(h), h["period_label"][:4]) for h in hist] == [
+        ("GSTR-1", "June"), ("GSTR-3B", "June"), ("GSTR-1", "Sept"), ("GSTR-3B", "Sept"), ("GSTR-3B", "Sept")]
+    db.re_resolve_all_tracker_dumps()
+    assert sheet() == want
+
+
+def test_the_same_arn_on_another_form_is_a_separate_filing():
+    from sera_db.srpf import _real_arn, _same_filing_form
+    assert _real_arn(" n/a ") == "" and _real_arn("AA2709260001234") == "AA2709260001234"
+    assert _same_filing_form("Income Tax (ITR)", "Income Tax (ITR-4)")
+    assert _same_filing_form("GST Portal (GSTR3B)", "GST Portal (GSTR-3B)")
+    assert not _same_filing_form("Income Tax (ITR-3)", "Income Tax (ITR-4)")
+    assert not _same_filing_form("GST Portal (GSTR-1)", "GST Portal (GSTR-3B)")
+
+
+# ── Serious-bug fixes (2026-10-07) ───────────────────────────────────────────────
+G27, G29 = "27ABCPD1234E1ZE", "29ABCPD1234E1ZA"      # one PAN, two states (valid check characters)
+
+
+def _h(form, period, status, at, gstin="", arn="N/A"):
+    return {"portal": f"GST Portal ({form})", "period_label": period, "status": status, "arn": arn,
+            "created_at": at, "gstin": gstin}
+
+
+def test_ladder_does_not_promote_returns_that_have_not_gone_in():
+    assert feed.ladder("Not yet filed") == "Not Submitted"
+    assert feed.ladder("Yet to be filed") == "Not Submitted"
+    assert feed.ladder("Submission pending") == "Not Submitted"
+    assert feed.ladder("Payment pending") == "Not Submitted"
+    assert feed.ladder("Filed - ARN pending") == "Submitted (Not Verified)"
+    assert feed.ladder("Filed, e-verification pending") == "Submitted (Not Verified)"
+    assert feed.ladder("Filed") == "Submitted & Verified"
+    assert feed.ladder("Submitted (Not Verified)") == "Submitted (Not Verified)"
+
+
+def test_each_gstin_of_a_pan_gets_its_own_row():
+    """A filed registration must never hide an unfiled one of the same PAN."""
+    c = {"pan": "ABCPD1234E", "gstin": G27, "company_name": "Asha Traders", "filing_history": [
+        _h("GSTR-3B", "September (FY 2026-27)", "Submitted & Verified", "2026-10-05T10:00:00+00:00", G27),
+        _h("GSTR-3B", "September (FY 2026-27)", "Draft", "2026-10-06T10:00:00+00:00", G29),
+        _h("ITR-4", "AY 2026-27", "Draft", "2026-10-06T11:00:00+00:00", G29)]}
+    c["filing_history"][2]["portal"] = "Income Tax (ITR-4)"
+    d = monthly.latest_rows([c])
+    assert sorted((r["GSTIN"], r["Status"]) for r in d["GSTR-3B"]) == [(G27, "Submitted & Verified"), (G29, "Draft")]
+    assert [r["GSTIN"] for r in d["ITR-4"]] == [""]                  # income tax is per PAN
+
+
+def test_filings_from_before_gstins_were_recorded_join_the_only_gstin():
+    c = {"pan": "ABCPD1234E", "gstin": G27, "company_name": "Asha", "filing_history": [
+        _h("GSTR-3B", "August (FY 2026-27)", "Filed", "2026-09-05T10:00:00+00:00"),            # older entry: no gstin key
+        _h("GSTR-3B", "June (FY 2026-27)", "Filed", "2026-10-05T10:00:00+00:00", G27)]}
+    rows = monthly.latest_rows([c])["GSTR-3B"]
+    assert [(r["GSTIN"], r["Latest period"]) for r in rows] == [(G27, "August (FY 2026-27)")]
+
+
+def test_a_label_without_a_month_never_outranks_a_real_month():
+    c = {"pan": "ABCPD1234E", "gstin": "", "company_name": "Asha", "filing_history": [
+        _h("GSTR-3B", "September (FY 2026-27)", "Draft", "2026-10-05T10:00:00+00:00"),
+        _h("GSTR-3B", "Status-Due (FY 2026-27)", "Due Date", "2026-10-06T10:00:00+00:00")]}
+    assert monthly.latest_rows([c])["GSTR-3B"][0]["Latest period"] == "September (FY 2026-27)"
+    assert monthly.period_key("AY 2026-27", "ITR-4") == date(2026, 3, 1)          # a year-only label is fine for annual forms
+    assert monthly.period_key("FY 2025-26", "GSTR-9") == date(2026, 3, 1)
+
+
+def test_valid_gstin_rejects_a_misread_check_character():
+    from sera_db.srpf import valid_gstin
+    assert valid_gstin(G27.lower()) == G27
+    assert valid_gstin(G27[:-1] + "F") == ""
+
+
+def test_a_build_that_fails_in_excel_leaves_no_workbook_behind(tmp_path, monkeypatch):
+    """Without the swap-in-at-the-end, the half-built shell looked current and was never rebuilt."""
+    x = tmp_path / "LTT_2026-10.xlsx"
+    forms = list(_sample())
+
+    def broken(*a, **k):
+        raise OSError("Excel went away")
+    monkeypatch.setattr(monthly, "attach_queries", broken)
+    try:
+        monthly.ensure_workbook(x, date(2026, 10, 1), forms, excel=True)
+    except OSError:
+        pass
+    assert not x.exists() and not list(tmp_path.glob("*.xlsx"))
+    monkeypatch.setattr(monthly, "attach_queries", lambda *a, **k: None)
+    monthly.ensure_workbook(x, date(2026, 10, 1), forms, excel=True)
+    assert monthly.workbook_matches(x, forms)
+
+
+def test_gst_sheets_show_the_gstin_and_others_do_not():
+    assert "GSTIN" in monthly.sheet_columns("GSTR-3B") and "GSTIN" in monthly.sheet_columns("CMP-08")
+    assert "GSTIN" not in monthly.sheet_columns("ITR-4")
+
+
+def test_a_locked_summary_is_rewritten_once_free_even_if_the_data_did_not_change(tmp_path, monkeypatch):
+    x = tmp_path / "LTT_2026-10.xlsx"
+    data = _sample()
+    assert monthly.write_csvs(x, data)
+    data_csv, over_csv = monthly.csv_paths(x)
+    real = monthly.os.replace
+
+    def summary_locked(src, dst):
+        if Path(dst) == over_csv:
+            raise PermissionError(5, "Access is denied")
+        return real(src, dst)
+    monkeypatch.setattr(monthly.os, "replace", summary_locked)
+    changed = {k: v[:1] for k, v in data.items()}
+    assert monthly.write_csvs(x, changed) is False
+    monkeypatch.setattr(monthly.os, "replace", real)
+    assert monthly.write_csvs(x, changed) is True
+    import csv
+    over = {r["Form"]: r for r in csv.DictReader(open(over_csv, encoding="utf-8-sig"))}
+    assert over["GSTR-3B"]["Clients"] == "1"
+
+
+def test_the_menu_and_the_capture_timer_never_export_at_once(tmp_path, monkeypatch):
+    import threading
+    import time
+    (tmp_path / monthly.FOLDER).mkdir()
+    inside, overlap = [0], []
+
+    def slow(*a, **k):
+        inside[0] += 1
+        overlap.append(inside[0])
+        time.sleep(0.2)
+        inside[0] -= 1
+    monkeypatch.setattr(monthly, "_export_month", slow)
+    ts = [threading.Thread(target=monthly.export_month, args=(None, tmp_path)) for _ in range(3)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert overlap == [1, 1, 1]

@@ -32,15 +32,15 @@ from .feed import (LEVELS, NOT_APPLICABLE, _rank, clients_from, entry_form, ladd
 from .rules import FY_START_MONTH, canon
 
 FOLDER = "LTT"
-COLUMNS = ("PAN", "Name", "Latest period", "Status", "ARN", "Captured on")
-WIDTHS = (14, 38, 26, 26, 24, 18)
+COLUMNS = ("PAN", "GSTIN", "Name", "Latest period", "Status", "ARN", "Captured on")
+WIDTHS = {"PAN": 14, "GSTIN": 19, "Name": 38, "Latest period": 26, "Status": 26, "ARN": 24, "Captured on": 18}
 OVERVIEW_WIDTHS = (24, 12, 28, 20, 12, 28, 24, 18)
 
 HEAD_FILL = "FF1F6F4A"            # evergreen, the Sera colour
 BAND_FILL = "FFF4F8F5"
-STATUS_FILL = {LEVELS[0]: "FFF4A99B", LEVELS[1]: "FFFFDB70", LEVELS[2]: "FF8FC1EC",
+STATUS_FILL = {LEVELS[0]: "FFF4A99B", LEVELS[1]: "FFFFDB70", LEVELS[2]: "FFC9E06F",
                LEVELS[3]: "FF86D4A0", NOT_APPLICABLE: "FFDADADA"}
-STATUS_TEXT = {LEVELS[0]: "FF7A1F12", LEVELS[1]: "FF6B4A00", LEVELS[2]: "FF173F6B",
+STATUS_TEXT = {LEVELS[0]: "FF7A1F12", LEVELS[1]: "FF6B4A00", LEVELS[2]: "FF4A5A0A",
                LEVELS[3]: "FF0F4F2A", NOT_APPLICABLE: "FF555555"}
 
 
@@ -67,6 +67,35 @@ def period_end(label: str, itr: bool = False) -> date | None:
     return date(fy + (1 if last < FY_START_MONTH else 0), last, 1)
 
 
+GST_FORMS = ("GSTR", "CMP", "ITC", "IFF")      # filed per GSTIN, not per PAN
+ANNUAL_FORMS = ("ITR", "GSTR9", "GSTR4")        # a label naming only the year is a whole period for these
+
+
+def is_gst_form(form: str) -> bool:
+    return canon(form).startswith(GST_FORMS)
+
+
+def sheet_columns(form: str) -> tuple:
+    """The columns a form's sheet shows: GST returns are filed per registration, so they add the GSTIN."""
+    return COLUMNS if is_gst_form(form) else tuple(c for c in COLUMNS if c != "GSTIN")
+
+
+def period_key(label: str, form: str) -> date | None:
+    """Where a period sits in time, for picking the latest. A label naming no month ("Status-Due
+    (FY 2026-27)", a misread) only counts as the whole year for annual forms; for monthly and
+    quarterly forms it is unplaced, so it never outranks a real month."""
+    key = canon(form)
+    itr = key.startswith("ITR")
+    if not key.startswith(ANNUAL_FORMS) and not parse_period(label, itr)[0]:
+        return None
+    return period_end(label, itr)
+
+
+def _gstin_of(h: dict, fallback: str) -> str:
+    g = str(h.get("gstin") or "").strip().upper()
+    return g or fallback
+
+
 def _form_names(containers_clients: dict) -> dict:
     """canon(form) -> display spelling. Prefers the hyphenated, upper-case spelling (GSTR-3B)."""
     names: dict = {}
@@ -91,7 +120,14 @@ def latest_rows(containers: list, month: date | None = None) -> dict:
     names = _form_names(clients)
     out: dict = defaultdict(list)
     for pan, c in clients.items():
-        groups: dict = {}                 # (canon form, period key) -> entries of that period
+        # GST returns are filed per registration: a PAN with two GSTINs gets a row for each. A
+        # filing captured before GSTINs were recorded belongs to the client's only GSTIN, if one.
+        known: dict = defaultdict(set)    # canon form -> GSTINs seen for it
+        for h in c["history"]:
+            g = _gstin_of(h, "")
+            if g:
+                known[canon(entry_form(h))].add(g)
+        groups: dict = {}                 # (canon form, gstin, period key) -> entries of that period
         for h in c["history"]:
             label = str(h.get("period_label") or "").strip()
             form = canon(entry_form(h))
@@ -100,19 +136,22 @@ def latest_rows(containers: list, month: date | None = None) -> dict:
             at = str(h.get("created_at") or "")
             if cutoff and local_time(at)[:10] > cutoff and at:
                 continue
-            itr = form.startswith("ITR")
-            end = period_end(label, itr)
-            groups.setdefault((form, end or label.lower()), []).append((h, end, at, label))
-        best_per_form: dict = {}          # form -> (sort key, group key)
-        for (form, gk), entries in groups.items():
+            gstin = ""
+            if is_gst_form(form):
+                only = known[form]
+                gstin = _gstin_of(h, next(iter(only)) if len(only) == 1 else "")
+            end = period_key(label, form)
+            groups.setdefault((form, gstin, end or label.lower()), []).append((h, end, at, label))
+        best_per_form: dict = {}          # (form, gstin) -> (sort key, group key)
+        for (form, gstin, gk), entries in groups.items():
             end = entries[0][1]
             newest = max(e[2] for e in entries)
             key = (end or date.min, newest)
-            if form not in best_per_form or key > best_per_form[form][0]:
-                best_per_form[form] = (key, gk)
-        for form, (_, gk) in best_per_form.items():
+            if (form, gstin) not in best_per_form or key > best_per_form[(form, gstin)][0]:
+                best_per_form[(form, gstin)] = (key, gk)
+        for (form, gstin), (_, gk) in best_per_form.items():
             pick = None
-            for h, _, at, label in groups[(form, gk)]:
+            for h, _, at, label in groups[(form, gstin, gk)]:
                 lvl = ladder(h.get("status"), h.get("arn"))
                 rank = _rank(lvl) if lvl != NOT_APPLICABLE else -1
                 if pick is None or (rank, at) > (pick[0], pick[1]):
@@ -120,10 +159,10 @@ def latest_rows(containers: list, month: date | None = None) -> dict:
             _, at, lvl, h, label = pick
             arn = str(h.get("arn") or "").strip()
             out[names.get(form, form)].append({
-                "PAN": pan, "Name": c["name"], "Latest period": label, "Status": lvl,
+                "PAN": pan, "GSTIN": gstin, "Name": c["name"], "Latest period": label, "Status": lvl,
                 "ARN": "" if arn.upper() == "N/A" else arn, "Captured on": local_time(at)})
     for rows in out.values():
-        rows.sort(key=lambda r: (r["Name"].lower(), r["PAN"]))
+        rows.sort(key=lambda r: (r["Name"].lower(), r["PAN"], r["GSTIN"]))
         rows.sort(key=lambda r: r["Captured on"], reverse=True)       # newest capture on top (stable: ties stay A-Z)
     return dict(sorted(out.items(), key=lambda kv: (kv[0].startswith("ITR"), kv[0])))
 
@@ -140,8 +179,7 @@ def _sheet_name(form: str, used: set) -> str:
 
 def _latest_label(rows: list, form: str = "") -> str:
     """The newest period on a sheet, for the Overview."""
-    itr = canon(form).startswith("ITR")
-    best = max(rows, key=lambda r: (period_end(r["Latest period"], itr) or date.min, r["Captured on"]))
+    best = max(rows, key=lambda r: (period_key(r["Latest period"], form) or date.min, r["Captured on"]))
     return best["Latest period"]
 
 
@@ -153,7 +191,7 @@ def _latest_label(rows: list, form: str = "") -> str:
 
 DATA_FIELDS = ("Form", *COLUMNS)
 OVERVIEW_FIELDS = ("Form", "Clients", "Latest period", *LEVELS, "Updated")
-FORMAT = "LTT live v4"             # stamped in the workbook; any other stamp means an older layout: rebuild
+FORMAT = "LTT live v5"             # stamped in the workbook; any other stamp means an older layout: rebuild
 MAX_ROWS = 20000                   # how far down the sheet's colouring reaches
 
 
@@ -208,8 +246,9 @@ def write_csvs(xlsx, data: dict, updated: datetime | None = None) -> bool:
         {"Form": f, "Clients": len(rows), "Latest period": _latest_label(rows, f),
          **{lvl: sum(1 for r in rows if r["Status"] == lvl) for lvl in LEVELS},
          "Updated": f"{updated:%d %b %Y %H:%M}"} for f, rows in data.items()))
-    ok = _replace_file(data_csv, body)
-    return _replace_file(over_csv, over) and ok
+    # The summary first, the data last: the unchanged-data check above then only skips a write
+    # when both files made it (a locked summary is retried, never left stale behind new data).
+    return _replace_file(over_csv, over) and _replace_file(data_csv, body)
 
 
 def sheet_names(forms) -> dict:
@@ -252,6 +291,7 @@ def build_shell(path, month: date, forms) -> Path:
 
     def frame(ws, widths):
         ws.sheet_view.showGridLines = False
+        widths = tuple(widths)
         for i, w in enumerate(widths):
             ws.column_dimensions[chr(65 + i)].width = w
         ws.page_setup.orientation = "landscape"
@@ -261,7 +301,7 @@ def build_shell(path, month: date, forms) -> Path:
 
     for form, name in names.items():
         ws = wb.create_sheet(name)
-        frame(ws, WIDTHS)
+        frame(ws, (WIDTHS[c] for c in sheet_columns(form)))
         ws["A1"] = form
         ws["A1"].font = font(size=16, bold=True, color=HEAD_FILL)
         ws.row_dimensions[3].height = 22
@@ -292,14 +332,14 @@ def _rgb(argb: str) -> int:
     return int(argb[2:4], 16) + int(argb[4:6], 16) * 256 + int(argb[6:8], 16) * 65536
 
 
-def _style_table(ws, lo, r, first_row: int, centre: tuple, status_col: str | None) -> None:
+def _style_table(ws, lo, r, first_row: int, centre: tuple, status_col: str | None, mono: tuple = ()) -> None:
     """Body fonts and the conditional colouring, applied through Excel once the table exists: Excel
     moves cells when it creates a table, so formatting laid down beforehand ends up misaligned."""
     last_col = chr(64 + r(lambda: lo.ListColumns.Count))
     for i in range(1, r(lambda: lo.ListColumns.Count) + 1):
         body = r(lambda: lo.ListColumns(i).DataBodyRange)
         f = r(lambda: body.Font)
-        r(lambda: setattr(f, "Name", "Consolas" if i == 1 and status_col else "Calibri"))
+        r(lambda: setattr(f, "Name", "Consolas" if i in mono else "Calibri"))
         r(lambda: setattr(f, "Size", 10))
         r(lambda: setattr(body, "HorizontalAlignment", -4108 if i in centre else -4131))
         r(lambda: setattr(body, "IndentLevel", 0 if i in centre else 1))
@@ -328,9 +368,10 @@ def _style_table(ws, lo, r, first_row: int, centre: tuple, status_col: str | Non
     r(lambda: setattr(edge, "Color", _rgb("FFD9D9D9")))
 
 
-def attach_queries(xlsx, forms) -> None:
+def attach_queries(xlsx, forms, month_file=None) -> None:
     """Uses Excel itself (COM) to add one Power Query per sheet over the month's CSVs, load each as
-    a table, refresh, and set refresh-on-open / every-minute. Needs Excel installed."""
+    a table, refresh, and set refresh-on-open / every-minute. Needs Excel installed. `month_file` is
+    the workbook's final path when `xlsx` is a copy being built (the CSVs are named after it)."""
     import time
     import comtypes
     import comtypes.client
@@ -351,7 +392,7 @@ def attach_queries(xlsx, forms) -> None:
                 time.sleep(0.5)
 
     xlsx = Path(xlsx)
-    data_csv, over_csv = csv_paths(xlsx)
+    data_csv, over_csv = csv_paths(month_file or xlsx)
     esc = lambda t: str(t).replace('"', '""')       # noqa: E731
     head = ('let Source = Csv.Document(File.Contents("%s"),[Delimiter=",", Encoding=65001, '
             'QuoteStyle=QuoteStyle.Csv]), Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars=true]), '
@@ -359,19 +400,21 @@ def attach_queries(xlsx, forms) -> None:
             'each {_, type text}))')
     ints = ", ".join('{"%s", Int64.Type}' % c for c in ("Clients", *LEVELS))
     over_m = head % esc(over_csv.resolve()) + f', Out = Table.TransformColumnTypes(AsText, {{{ints}}}) in Out'
-    jobs = [("Overview", "A4", "Overview", over_m)]
+    jobs = [("Overview", "A4", "Overview", over_m, None)]
     for i, (form, sheet) in enumerate(sheet_names(forms).items(), 1):
+        drop = ", ".join(f'"{c}"' for c in DATA_FIELDS if c == "Form" or c not in sheet_columns(form))
         m = (head % esc(data_csv.resolve())
              + f', Rows = Table.SelectRows(AsText, each [Form] = "{esc(form)}"), '
-               'Out = Table.RemoveColumns(Rows, {"Form"}) in Out')
-        jobs.append((sheet, "A3", f"Form{i}", m))
+               f'Out = Table.RemoveColumns(Rows, {{{drop}}}) in Out')
+        jobs.append((sheet, "A3", f"Form{i}", m, sheet_columns(form)))
 
     xl = comtypes.client.CreateObject("Excel.Application")
+    wb = None
     try:
         r(lambda: setattr(xl, "Visible", False))
         r(lambda: setattr(xl, "DisplayAlerts", False))
         wb = r(lambda: xl.Workbooks.Open(str(xlsx.resolve())))
-        for sheet, anchor, query, m in jobs:
+        for sheet, anchor, query, m, cols in jobs:
             r(lambda: wb.Queries.Add(query, m))
             ws = r(lambda: wb.Worksheets(sheet))
             lo = r(lambda: ws.ListObjects.Add(
@@ -393,8 +436,11 @@ def attach_queries(xlsx, forms) -> None:
             r(lambda: setattr(r(lambda: hdr.Font), "Color", _rgb("FFFFFFFF")))
             r(lambda: setattr(r(lambda: hdr.Font), "Bold", True))
             r(lambda: setattr(hdr, "VerticalAlignment", -4108))
-            _style_table(ws, lo, r, 5 if sheet == "Overview" else 4,
-                         centre=(2, 4, 5, 6, 7) if sheet == "Overview" else (), status_col=None if sheet == "Overview" else "D")
+            if cols is None:
+                _style_table(ws, lo, r, 5, centre=(2, 4, 5, 6, 7), status_col=None)
+            else:
+                _style_table(ws, lo, r, 4, centre=(), status_col=chr(65 + cols.index("Status")),
+                             mono=tuple(i + 1 for i, c in enumerate(cols) if c in ("PAN", "GSTIN")))
             tbl = "LTT_" + query
             if sheet == "Overview":
                 f = (f'=IF(INDEX({tbl}[Updated],1)="","Waiting for the first capture…",'
@@ -414,8 +460,15 @@ def attach_queries(xlsx, forms) -> None:
         r(lambda: wb.Worksheets("Overview").Activate())
         r(lambda: wb.Save())
         r(lambda: wb.Close(False))
+        wb = None
     finally:
-        r(lambda: xl.Quit())
+        # a failed build must not leave a hidden Excel holding the half-built file
+        for step in ((lambda: wb.Close(False)) if wb is not None else None, lambda: xl.Quit()):
+            if step is not None:
+                try:
+                    r(step, tries=10)
+                except Exception:
+                    pass
 
 
 def _open_in_excel(xlsx: Path) -> bool:
@@ -439,10 +492,23 @@ def ensure_workbook(xlsx, month: date, forms, excel: bool = True) -> Path:
         return xlsx
     if _open_in_excel(xlsx):
         raise RuntimeError(f"{xlsx.name} is open in Excel and needs updating - close it and open the LTT sheet again.")
-    build_shell(xlsx, month, forms)
-    if excel:
-        attach_queries(xlsx, forms)
+    # Built aside and swapped in only once complete: a shell whose queries never attached (Excel
+    # missing, busy or killed) would otherwise look current and never be rebuilt.
+    work = xlsx.with_name(xlsx.stem + ".building.xlsx")
+    try:
+        build_shell(work, month, forms)
+        if excel:
+            attach_queries(work, forms, month_file=xlsx)
+        os.replace(work, xlsx)
+    finally:
+        try:
+            work.unlink(missing_ok=True)
+        except OSError:                # still held by an Excel that did not let go; the next build overwrites it
+            pass
     return xlsx
+
+
+_export_lock = threading.Lock()
 
 
 def export_month(db, app_dir=None, today: date | None = None, create: bool = False,
@@ -454,6 +520,11 @@ def export_month(db, app_dir=None, today: date | None = None, create: bool = Fal
     app_dir = Path(app_dir or db.app_dir)
     if not create and not (app_dir / FOLDER).is_dir():
         return None
+    with _export_lock:                 # the capture timer and the menu never build the same files at once
+        return _export_month(db, app_dir, today, create, excel)
+
+
+def _export_month(db, app_dir: Path, today: date, create: bool, excel: bool) -> Path | None:
     month = month_start(today)
     xlsx = workbook_path(app_dir, month)
     data = latest_rows(db.get_srpf_containers(limit=1_000_000, slim=True), month)
