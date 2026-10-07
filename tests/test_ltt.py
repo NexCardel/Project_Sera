@@ -452,3 +452,114 @@ def test_the_menu_and_the_capture_timer_never_export_at_once(tmp_path, monkeypat
     for t in ts:
         t.join()
     assert overlap == [1, 1, 1]
+
+
+# ---------------------------------------------------------------------------------------------
+# An entry whose status changed must reach the sheet: from another PC (sync), and past a CSV that
+# Excel holds open. Reported 2026-10-07: "LTT does not update an entry when it is submitted or its
+# status is changed".
+# ---------------------------------------------------------------------------------------------
+
+def _filing(db, status, arn="N/A", pan="ABCPD1234E", form="GSTR-1", period="September (FY 2026-27)"):
+    import json
+    from core.dataset_key import compute_dataset_key
+    key = compute_dataset_key("GST Portal", "19ABCPD1234E1ZB", form, period)
+    return db.insert_tracker_dump(
+        portal=f"GST Portal ({form})", period_label=period, arn_number=arn, capture_method="SGT_live",
+        status=status, pan=pan, filing_type=form, dataset_key=key, session_id="s1", captured_by="PC1",
+        raw_payload_json=json.dumps({"pan": pan, "gstin": "19ABCPD1234E1ZB", "dataset_key": key}))
+
+
+def _sheet(db):
+    rows = monthly.latest_rows(db.get_srpf_containers(limit=1000, slim=True))
+    return [(f, r["Status"], r["ARN"]) for f, rs in rows.items() for r in rs]
+
+
+def _wait(timer):
+    if timer is not None:
+        timer.join(15)
+
+
+def test_a_status_changed_on_another_pc_reaches_the_sheet(tmp_path):
+    """Sync writes tracker_dump directly; the containers the sheet reads are a local cache built
+    from it. Without a rebuild the sheet keeps the old status."""
+    db = _real_db(tmp_path)
+    _filing(db, "Draft")
+    assert _sheet(db) == [("GSTR-1", "Draft", "")]
+    with db._connect_raw() as c:                     # what sync_apply does when PC2 files the return
+        c.execute("UPDATE tracker_dump SET status = 'Submitted & Verified', arn_number = 'AA190926191296I'")
+        c.commit()
+    assert _sheet(db) == [("GSTR-1", "Draft", "")]   # the cache is stale: this is the bug
+    _wait(monthly.refresh_after_sync(db, delay=0))
+    assert _sheet(db) == [("GSTR-1", "Submitted & Verified", "AA190926191296I")]
+
+
+def test_a_filing_from_another_pc_reaches_the_csv_and_the_windows_are_told_after(tmp_path, monkeypatch):
+    import csv
+    db = _real_db(tmp_path)
+    _filing(db, "Draft")
+    (tmp_path / monthly.FOLDER).mkdir()
+    monkeypatch.setattr(monthly, "ensure_workbook", lambda xlsx, month, forms, excel=True: xlsx)
+    with db._connect_raw() as c:
+        c.execute("UPDATE tracker_dump SET status = 'Submitted & Verified', arn_number = 'AA190926191296I'")
+        c.commit()
+    order = []
+    real = monthly.export_month
+    monkeypatch.setattr(monthly, "export_month", lambda *a, **k: (order.append("export"), real(*a, **k))[1])
+    _wait(monthly.refresh_after_sync(db, delay=0, on_done=lambda: order.append("windows")))
+    assert order == ["export", "windows"]            # the windows refresh with the rebuilt data
+    data = Path(db.app_dir) / monthly.FOLDER
+    text = "".join(open(p, encoding="utf-8-sig").read() for p in data.glob("*.csv") if "overview" not in p.name)
+    assert "Submitted & Verified" in text and "AA190926191296I" in text and "Draft" not in text
+
+
+def test_a_burst_of_sync_batches_makes_one_refresh(tmp_path):
+    db = _real_db(tmp_path)
+    runs = []
+    db.re_resolve_all_tracker_dumps = lambda: runs.append(1)
+    timers = [monthly.refresh_after_sync(db, delay=0.3) for _ in range(5)]
+    _wait(timers[-1])
+    import time
+    time.sleep(0.3)
+    assert len(runs) == 1
+
+
+def test_a_csv_held_open_by_excel_is_tried_again(tmp_path, monkeypatch):
+    """The CSV was locked past the 6 s of _replace_file when the status changed: the export used
+    to give up until some later capture. It retries."""
+    import time
+    db = _real_db(tmp_path)
+    _filing(db, "Submitted & Verified", arn="AA190926191296I")
+    (tmp_path / monthly.FOLDER).mkdir()
+    monkeypatch.setattr(monthly, "ensure_workbook", lambda xlsx, month, forms, excel=True: xlsx)
+    tries = []
+    real = monthly.write_csvs
+
+    def flaky(xlsx, data, updated=None):
+        tries.append(1)
+        return False if len(tries) < 3 else real(xlsx, data, updated)       # locked twice, then free
+    monkeypatch.setattr(monthly, "write_csvs", flaky)
+    monthly._busy.clear()
+    _wait(monthly.schedule_export(db, delay=0, retry_after=0))
+    deadline = time.time() + 15
+    while len(tries) < 3 and time.time() < deadline:
+        time.sleep(0.05)
+        _wait(monthly._timer)
+    assert len(tries) == 3 and not monthly._busy.is_set()
+
+
+def test_a_csv_that_stays_locked_stops_retrying(tmp_path, monkeypatch):
+    import time
+    db = _real_db(tmp_path)
+    _filing(db, "Draft")
+    (tmp_path / monthly.FOLDER).mkdir()
+    monkeypatch.setattr(monthly, "ensure_workbook", lambda xlsx, month, forms, excel=True: xlsx)
+    tries = []
+    monkeypatch.setattr(monthly, "write_csvs", lambda *a, **k: (tries.append(1), False)[1])
+    _wait(monthly.schedule_export(db, delay=0, retry_after=0))
+    deadline = time.time() + 15
+    while time.time() < deadline and (monthly._timer is not None and monthly._timer.is_alive()):
+        _wait(monthly._timer)
+    time.sleep(0.2)
+    assert len(tries) == monthly.MAX_RETRIES + 1     # the first try and the retries, then it stops
+    monthly._busy.clear()
