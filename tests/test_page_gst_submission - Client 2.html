@@ -436,10 +436,13 @@
             <div class="portal-logo-emblem">GST</div>
             <div class="portal-title">Goods and Services Tax (Government of India)</div>
         </div>
-        <div class="taxpayer-badge" id="taxpayerBadge">
-            <div class="taxpayer-name" id="displayLegalName">AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA)</div>
-            <div class="taxpayer-gstin" id="displayGstin">GSTIN: 29GHJCD1191FAZK</div>
-        </div>
+        <!-- The real portal's top header: ONE list item reading "NAME GSTIN" (the GSTIN repeats inside its dropdown). -->
+        <ul class="taxpayer-badge" id="taxpayerBadge" style="list-style:none;margin:0;padding:0;">
+            <li aria-label=" AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA) 29GHJCD1191FAZT">
+                <div class="taxpayer-name" id="displayLegalName">AMAN ASSOCIATES (Prop. ARIF MOHAMMAD MOLLA)</div>
+                <div class="taxpayer-gstin" id="displayGstin">29GHJCD1191FAZT</div>
+            </li>
+        </ul>
     </header>
 
     <!-- Test Harness Interactive Controls -->
@@ -460,7 +463,7 @@
         <!-- Matches the exact green box alert template from the user's screenshot -->
         <div class="gstr1-green-success-box hidden" id="gstr1GreenBox">
             <p>
-                <strong>GSTR-1</strong> of GSTIN <strong>29GHJCD1191FAZK</strong> for the period <strong>January - 2021</strong> has been successfully filed on <span id="gstr1Date">16/02/2021</span> at <span id="gstr1Time">17:39</span>.
+                <strong>GSTR-1</strong> of GSTIN <strong>29GHJCD1191FAZT</strong> for the period <strong>January - 2021</strong> has been successfully filed on <span id="gstr1Date">16/02/2021</span> at <span id="gstr1Time">17:39</span>.
             </p>
             <p>
                 The Acknowledgment Reference Number (ARN) is: <span class="arn-highlight" id="gstr1Arn">AA290121000069S</span>.
@@ -474,14 +477,14 @@
         <!-- Underlying Page View: GST Return Filing Table -->
         <div class="form-details-card">
             <div class="card-header-title">
-                <span id="cardFormHeading">GSTR-1 / IFF - Details of Outward Supplies</span>
+                <span id="cardFormHeading">GSTR-1 - Details of outward supplies of goods or services</span>
                 <span class="status-pill" id="cardStatusPill">Status: Ready for Filing</span>
             </div>
 
             <div class="grid-2">
                 <div class="info-field">
                     <span class="info-label">GSTIN of Taxpayer</span>
-                    <span class="info-value" id="lblGstin">29GHJCD1191FAZK</span>
+                    <span class="info-value" id="lblGstin">29GHJCD1191FAZT</span>
                 </div>
                 <div class="info-field">
                     <span class="info-label">Legal Name / Trade Name</span>
@@ -536,7 +539,7 @@
             
             <div class="success-text-content" id="successDescription">
                 <p>
-                    <span id="succForm">GSTR-3B</span> of GSTIN <span class="highlight-bold" id="succGstin">29GHJCD1191FAZK</span> for the period <span class="highlight-bold" id="succPeriod">January - 2021</span> has been successfully filed on <span class="highlight-bold" id="succDate">16/02/2021</span> at <span class="highlight-bold" id="succTime">17:39</span>.
+                    <span id="succForm">GSTR-3B</span> of GSTIN <span class="highlight-bold" id="succGstin">29GHJCD1191FAZT</span> for the period <span class="highlight-bold" id="succPeriod">January - 2021</span> has been successfully filed on <span class="highlight-bold" id="succDate">16/02/2021</span> at <span class="highlight-bold" id="succTime">17:39</span>.
                 </p>
                 <p>
                     The Acknowledgment Reference Number: is <span class="arn-value" id="succArn">AA290121000069S</span>.
@@ -555,7 +558,7 @@
 
     <script>
         let currentForm = 'GSTR-1';
-        let currentGstin = '29GHJCD1191FAZK';
+        let currentGstin = '29GHJCD1191FAZT';
         let currentPeriod = 'January - 2021';
         let currentFy = '2020-21';
 
@@ -573,7 +576,7 @@
             document.getElementById('btnTabGstr1').classList.toggle('active', isGstr1);
             document.getElementById('btnTabGstr3b').classList.toggle('active', !isGstr1);
 
-            document.getElementById('cardFormHeading').innerText = isGstr1 ? 'GSTR-1 / IFF - Details of Outward Supplies' : 'GSTR-3B - Monthly Return';
+            document.getElementById('cardFormHeading').innerText = isGstr1 ? 'GSTR-1 - Details of outward supplies of goods or services' : 'GSTR-3B - Monthly Return';
             document.getElementById('succForm').innerText = formType;
             document.getElementById('succForm2').innerText = formType;
 
