@@ -493,9 +493,12 @@ class SeraApp:
                         target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
                         name="shadow-mirror-catch-up", daemon=True).start()
                 self.db.set_seal_timing_callback(_seal_timing_cb)
-                # SDIS Part P: finished capture files go to the admin PC after a sync round.
-                from core.sdis.transfer import Pusher
-                self._sdis_pusher = Pusher(self.sync_engine, on_event=self.sync_service.log_activity)
+                # SDIS excavator: on its own timer, sends unsent capture files to the admin PC (or parks
+                # them with a live line in the sync panel); on the admin PC it checks what arrived.
+                from core.sdis.excavator import Excavator
+                self._sdis_excavator = Excavator(self.sync_engine, on_event=self.sync_service.log_activity)
+                self._sdis_excavator.start()
+                self.app.aboutToQuit.connect(self._sdis_excavator.stop)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -2279,8 +2282,8 @@ class SeraApp:
                 "This PC was away from the office for a long time. Sera Sync has downloaded a fresh "
                 "copy of the office data; restart Sera to finish (your own changes are kept).", "warning")
             return
-        if kind == "synced" and getattr(self, "_sdis_pusher", None) is not None:
-            self._sdis_pusher.on_synced()   # SDIS Part P: at most every 15 min, own thread
+        if kind == "synced" and getattr(self, "_sdis_excavator", None) is not None:
+            self._sdis_excavator.nudge()    # peers are reachable: let the excavator look now
         if kind == "synced":
             # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
             # for the UI to reload, and refreshing anyway would falsely tell the user a live

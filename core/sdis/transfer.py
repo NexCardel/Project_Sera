@@ -1,8 +1,8 @@
 """
 core/sdis/transfer.py - captures travel to the admin PC (Part P, D14)
 =====================================================================
-A staff PC pushes its finished recorder files (sdis_YYYY-MM-DD.jsonl, never today's open file)
-to the admin PC over Sera Sync's mutual-TLS transport (port 49159):
+A staff PC pushes its finished recorder files (sdis_YYYY-MM-DD.jsonl, never today's open file;
+core/sdis/excavator.py decides when) to the admin PC over Sera Sync's mutual-TLS transport (port 49159):
 
     staff -> admin   {t: 'sdis_push', files: [{name, size, sha256}, ...]}
     staff -> admin   each file as chunk frames (Session.send_file), in manifest order
@@ -18,7 +18,6 @@ import hashlib
 import logging
 import os
 import re
-import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -30,7 +29,6 @@ _log = logging.getLogger(__name__)
 
 FRAME_PUSH = "sdis_push"
 FRAME_ACK = "sdis_ack"
-PUSH_EVERY_S = 15 * 60
 MAX_FILES = 200
 MAX_BATCH_BYTES = 200 * 1024 * 1024     # one session must finish inside the transport's 600 s deadline
 SETTLE_S = 60.0                          # a file written to in the last minute is not finished yet
@@ -54,9 +52,11 @@ def corpus_dir(device_id: str) -> Path:
     return data_dir() / "corpus" / device_id
 
 
-def finished_files(folder: Path, today: Optional[date] = None, now: Optional[float] = None) -> List[Path]:
+def finished_files(folder: Path, today: Optional[date] = None, now: Optional[float] = None,
+                   cap: bool = True) -> List[Path]:
     """The recorder files of past days, oldest first, at most MAX_FILES / MAX_BATCH_BYTES (always
-    at least one). Today's file and anything written to in the last SETTLE_S are left alone."""
+    at least one) unless cap is False. Today's file and anything written to in the last SETTLE_S
+    are left alone."""
     today_s = (today or date.today()).isoformat()
     now = time.time() if now is None else now
     out, total = [], 0
@@ -74,18 +74,19 @@ def finished_files(folder: Path, today: Optional[date] = None, now: Optional[flo
             continue
         if now - st.st_mtime < SETTLE_S:
             continue
-        if out and (len(out) >= MAX_FILES or total + st.st_size > MAX_BATCH_BYTES):
+        if cap and out and (len(out) >= MAX_FILES or total + st.st_size > MAX_BATCH_BYTES):
             break
         out.append(p)
         total += st.st_size
     return out
 
 
-# ---------------------------------------------------------------- staff side
+# ---------------------------------------------------------------- staff side (driven by core/sdis/excavator.py)
 
-def push(session, files) -> List[str]:
+def push(session, files, progress=None) -> List[str]:
     """Sends the manifest and the files, reads the admin's ack and returns the acked names (only
-    names that were in the manifest). [] when the admin refuses or the session breaks."""
+    names that were in the manifest). [] when the admin refuses or the session breaks.
+    progress(i, n) is called after each file is sent."""
     entries, paths, seen = [], [], set()
     for p in files:
         p = Path(p)
@@ -96,8 +97,13 @@ def push(session, files) -> List[str]:
         paths.append(p)
     session.send({"t": FRAME_PUSH, "files": entries})
     try:
-        for p in paths:
+        for i, p in enumerate(paths, 1):
             session.send_file(p)
+            if progress is not None:
+                try:
+                    progress(i, len(paths))
+                except Exception:
+                    pass
     except TransportError:
         pass                    # a refusing receiver may close early; its ack can still be waiting
     except OSError:
@@ -109,102 +115,6 @@ def push(session, files) -> List[str]:
     if ack.get("t") != FRAME_ACK or not isinstance(ack.get("files"), list):
         return []
     return [n for n in ack["files"] if isinstance(n, str) and n in seen]
-
-
-class Pusher:
-    """Staff side trigger. on_synced() is called on the sync engine's thread after each successful
-    session; at most every PUSH_EVERY_S it starts one background push of finished files to the
-    admin PC and deletes exactly the acked ones. Never raises, never blocks the caller."""
-
-    def __init__(self, engine, folder: Optional[Path] = None, every_s: float = PUSH_EVERY_S,
-                 on_event=None):
-        self.engine = engine
-        self.on_event = on_event          # on_event(category, title, detail): the live activity log
-        self._folder = folder
-        self.every_s = every_s
-        self._last: Optional[float] = None
-        self._thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
-        self.stats = {"pushes": 0, "sent": 0, "acked": 0, "deleted": 0, "failed": 0}
-
-    @property
-    def folder(self) -> Path:
-        if self._folder is None:
-            from core.sdis.recorder import default_dir
-            self._folder = default_dir()
-        return self._folder
-
-    def on_synced(self, *_args) -> bool:
-        with self._lock:
-            now = time.monotonic()
-            if self._thread is not None and self._thread.is_alive():
-                return False
-            if self._last is not None and now - self._last < self.every_s:
-                return False
-            self._last = now
-            self._thread = threading.Thread(target=self._safe_run, name="sdis-push", daemon=True)
-            self._thread.start()
-            return True
-
-    def _admin_device_id(self) -> Optional[str]:
-        import sync_admin
-        engine = self.engine
-        if sync_admin.is_admin_pc(engine.app_dir):
-            return None                                   # the admin PC's mine() reads its own folder
-        with engine._conn("master") as conn:
-            record = sync_admin.get_office_admin(conn, engine.admin_pubkey)
-        dev = (record or {}).get("device_id")
-        if not dev or dev == engine.device_id:
-            return None
-        return dev
-
-    def _safe_run(self) -> None:
-        try:
-            self.run()
-        except Exception:
-            self.stats["failed"] += 1
-            _log.exception("SDIS push failed")
-
-    def run(self) -> int:
-        """One push. Returns the number of files deleted here (= acked by the admin PC)."""
-        batch = finished_files(self.folder)
-        if not batch:
-            return 0
-        admin = self._admin_device_id()
-        if admin is None:
-            return 0
-        try:
-            session = self.engine._open_session_to(admin)
-        except TransportError as exc:
-            _log.info("SDIS push: admin PC not reachable (%s)", type(exc).__name__)
-            return 0
-        with session:
-            acked = set(push(session, batch))
-        self.stats["pushes"] += 1
-        self.stats["sent"] += len(batch)
-        self.stats["acked"] += len(acked)
-        deleted = 0
-        for p in batch:
-            if p.name in acked:
-                try:
-                    p.unlink()
-                    deleted += 1
-                except OSError:
-                    pass
-        self.stats["deleted"] += deleted
-        _log.info("SDIS push: %d files sent, %d acked, %d deleted", len(batch), len(acked), deleted)
-        self._emit("Corpus sent to admin PC", f"{len(acked)} of {len(batch)} files acknowledged")
-        if deleted:
-            self._emit("Corpus deleted on this PC", f"{deleted} file(s) removed after the admin PC's ack")
-        return deleted
-
-    def _emit(self, title: str, detail: str) -> None:
-        if self.on_event is None:
-            return
-        try:
-            self.on_event("SDIS", title, detail)
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------- admin side

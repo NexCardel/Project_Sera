@@ -284,6 +284,14 @@ def test_latest_capture_is_on_top():
     assert names == ["Bravo", "Charlie", "Delta", "Alpha"]
 
 
+def test_a_recaptured_entry_is_on_top_even_within_the_same_minute():
+    """The sheet shows the capture time to the minute, but the newest capture must still come first
+    when another capture landed in that same minute (Zulu sorts last by name, so it used to fall below)."""
+    cs = [_c("ZZZZZ9999Z", "Zulu", ("GST (GSTR-3B)", "September (FY 2026-27)", "Submitted & Verified", "A1", "2026-10-08T08:37:40+00:00"),),
+          _c("AAAAA1111A", "Alpha", ("GST (GSTR-3B)", "September (FY 2026-27)", "Submitted & Verified", "A2", "2026-10-08T08:37:20+00:00"))]
+    assert [r["Name"] for r in monthly.latest_rows(cs)["GSTR-3B"]] == ["Zulu", "Alpha"]
+
+
 def _real_db(tmp_path):
     import security
     from database import SeraDatabase
