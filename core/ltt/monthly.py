@@ -24,7 +24,7 @@ import os
 import re
 import threading
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from .feed import (LEVELS, NOT_APPLICABLE, _rank, clients_from, entry_form, ladder, local_time,
@@ -145,7 +145,7 @@ def latest_rows(containers: list, month: date | None = None) -> dict:
         best_per_form: dict = {}          # (form, gstin) -> (sort key, group key)
         for (form, gstin, gk), entries in groups.items():
             end = entries[0][1]
-            newest = max(e[2] for e in entries)
+            newest = max(_capture_time(e[2]) for e in entries)
             key = (end or date.min, newest)
             if (form, gstin) not in best_per_form or key > best_per_form[(form, gstin)][0]:
                 best_per_form[(form, gstin)] = (key, gk)
@@ -154,17 +154,33 @@ def latest_rows(containers: list, month: date | None = None) -> dict:
             for h, _, at, label in groups[(form, gstin, gk)]:
                 lvl = ladder(h.get("status"), h.get("arn"))
                 rank = _rank(lvl) if lvl != NOT_APPLICABLE else -1
-                if pick is None or (rank, at) > (pick[0], pick[1]):
-                    pick = (rank, at, lvl, h, label)
-            _, at, lvl, h, label = pick
+                when = _capture_time(at)
+                if pick is None or (rank, when) > (pick[0], pick[1]):
+                    pick = (rank, when, at, lvl, h, label)
+            _, when, at, lvl, h, label = pick
             arn = str(h.get("arn") or "").strip()
-            out[names.get(form, form)].append({
+            out[names.get(form, form)].append((when, {
                 "PAN": pan, "GSTIN": gstin, "Name": c["name"], "Latest period": label, "Status": lvl,
-                "ARN": "" if arn.upper() == "N/A" else arn, "Captured on": local_time(at)})
-    for rows in out.values():
-        rows.sort(key=lambda r: (r["Name"].lower(), r["PAN"], r["GSTIN"]))
-        rows.sort(key=lambda r: r["Captured on"], reverse=True)       # newest capture on top (stable: ties stay A-Z)
-    return dict(sorted(out.items(), key=lambda kv: (kv[0].startswith("ITR"), kv[0])))
+                "ARN": "" if arn.upper() == "N/A" else arn, "Captured on": local_time(at)}))
+    for items in out.values():
+        items.sort(key=lambda t: (t[1]["Name"].lower(), t[1]["PAN"], t[1]["GSTIN"]))
+        # newest capture on top, by the second: the sheet shows minutes, but two captures in one minute
+        # must not fall back to name order (stable: exact ties stay A-Z)
+        items.sort(key=lambda t: t[0], reverse=True)
+    ordered = sorted(out.items(), key=lambda kv: (kv[0].startswith("ITR"), kv[0]))
+    return {form: [row for _, row in items] for form, items in ordered}
+
+
+def _capture_time(at: str) -> datetime:
+    """A stored capture time as an instant, to the second. A missing or unreadable time sorts oldest."""
+    clean = str(at or "").strip()
+    if clean.endswith("Z"):
+        clean = clean[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(clean)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _sheet_name(form: str, used: set) -> str:
