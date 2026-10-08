@@ -820,18 +820,42 @@ class TrackerDumpMixin:
 
         return updated_count
 
-    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
-        """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db."""
+    @staticmethod
+    def _payload_field_sql(*paths: str) -> str:
+        """SQL that reads the first non-empty of some JSON paths out of raw_payload_json (NULL when the
+        payload is not JSON at all, so one bad row cannot fail the whole list query)."""
+        parts = [f"NULLIF(json_extract(raw_payload_json, '{p}'), '')" for p in paths]
+        return f"CASE WHEN json_valid(raw_payload_json) THEN COALESCE({', '.join(parts)}) END"
+
+    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None,
+                          slim: bool = False, dump_id: int = None) -> list[dict]:
+        """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db.
+
+        slim=True is for the list view: the payload itself is not transferred. The three things the
+        list shows from it (the submission status, the device name, the client name) are read out of
+        the payload inside SQLite, so the rows are the same as a full read would give them. Slim rows
+        have raw_payload_json == "" and "_slim": True; fetch one row with dump_id=... when its payload
+        is needed. limit=-1 means no limit."""
         with self._connect_raw() as r_conn:
-            sql = """SELECT id, client_id, unassigned_identity, service_id, portal,
-                            period_label, arn_number, capture_method, status,
-                            raw_payload_json, captured_by, created_at, dataset_key, notes
-                     FROM tracker_dump
-                     WHERE """ + NOT_CARRIER_SQL     # SDIS carrier rows are not datasets (S.4)
+            extra = ""
+            if slim:
+                extra = (", " + self._payload_field_sql("$.status", "$.raw_payload.status") + " AS payload_status"
+                         + ", " + self._payload_field_sql("$.device_name", "$.raw_payload.device_name") + " AS device_name"
+                         + ", " + self._payload_field_sql("$.client_name", "$.name", "$.taxpayer_name",
+                                                          "$.raw_payload.client_name", "$.raw_payload.client_temp_name")
+                         + " AS payload_name")
+            payload_col = "''" if slim else "raw_payload_json"
+            sql = ("SELECT id, client_id, unassigned_identity, service_id, portal, "
+                   "period_label, arn_number, capture_method, status, "
+                   f"{payload_col}, captured_by, created_at, dataset_key, notes{extra} "
+                   "FROM tracker_dump WHERE " + NOT_CARRIER_SQL)     # SDIS carrier rows are not datasets (S.4)
             params = []
             if client_id:
                 sql += " AND client_id = ?"
                 params.append(client_id)
+            if dump_id is not None:
+                sql += " AND id = ?"
+                params.append(dump_id)
             if search_query:
                 sql += " AND (arn_number LIKE ? OR portal LIKE ? OR period_label LIKE ? OR unassigned_identity LIKE ? OR dataset_key LIKE ?)"
                 q = f"%{search_query}%"
@@ -883,6 +907,7 @@ class TrackerDumpMixin:
         for r in rows:
             cid = r[1]
             unassigned_id = r[2]
+            slim = len(r) > 14
             raw_json_str = r[9] or ""
             p_obj = None
             if raw_json_str and raw_json_str != "{}":
@@ -890,6 +915,9 @@ class TrackerDumpMixin:
                     p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
                 except Exception:
                     pass
+            elif slim and r[16]:
+                # slim row: the payload's name fields, read in SQL, stand in for the payload below
+                p_obj = {"client_name": r[16]}
 
             if cid and cid in client_map:
                 info = client_map[cid]
@@ -911,7 +939,7 @@ class TrackerDumpMixin:
             else:
                 info = {"name": "Unregistered Client", "pan": "", "is_unassigned": True}
 
-            results.append({
+            row = {
                 "id": r[0], "client_id": cid, "unassigned_identity": unassigned_id,
                 "is_unassigned": info.get("is_unassigned", False),
                 "client_name": info["name"], "pan": info["pan"],
@@ -919,7 +947,10 @@ class TrackerDumpMixin:
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",
                 "status": r[8] or "submitted", "raw_payload_json": r[9] or "{}", "captured_by": r[10] or "System",
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
-            })
+            }
+            if slim:
+                row.update({"_slim": True, "payload_status": r[14], "device_name": r[15] or ""})
+            results.append(row)
 
         # Default chronological entry organisation: latest entry at top
         results.sort(key=lambda x: (str(x.get("created_at") or ""), x.get("id") or 0), reverse=True)

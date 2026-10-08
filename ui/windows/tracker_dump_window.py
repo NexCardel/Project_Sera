@@ -1465,6 +1465,25 @@ class _DatapointScanThread(QThread):
 _LIVE_SCAN_THREADS: set = set()   # a scan outlives a dialog closed mid-scan until it finishes
 
 
+class _ResolveThread(QThread):
+    """Re-resolves every capture into its SRPF container, off the UI thread (the periodic pass)."""
+    done = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self._db = db
+
+    def run(self):
+        try:
+            self.done.emit(self._db.re_resolve_all_tracker_dumps())
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+_LIVE_RESOLVE_THREADS: set = set()   # a pass outlives the window closed mid-pass until it finishes
+
+
 class _McLColumnDelegate(QStyledItemDelegate):
     """One shared combo editor for the "Map to" column instead of a combo widget per row."""
     def __init__(self, options, parent=None):
@@ -1768,6 +1787,11 @@ class TrackerDumpWindow(QWidget):
         self._col_resize_timer.setSingleShot(True)
         self._col_resize_timer.setInterval(40)
         self._col_resize_timer.timeout.connect(self._adjust_table_columns)
+        # Periodic SRPF re-resolve: runs every 30 seconds while this window is open (see showEvent)
+        self._resolve_timer = QTimer(self)
+        self._resolve_timer.setInterval(30_000)
+        self._resolve_timer.timeout.connect(self._start_periodic_resolve)
+        self._resolve_thread = None
         # Width mode (WIDE / COMPACT) follows the page's own width; see ui/utils/responsive.py.
         self._width_mode = WidthMode.WIDE
         self._auto_hidden_cols = set()
@@ -2217,6 +2241,34 @@ class TrackerDumpWindow(QWidget):
             self.load_data()
         if hasattr(self, "_col_resize_timer"):
             self._col_resize_timer.start()
+        if hasattr(self, "_resolve_timer"):
+            self._resolve_timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_resolve_timer"):
+            self._resolve_timer.stop()
+
+    def _start_periodic_resolve(self):
+        """Timer tick: one re-resolve pass in the background, unless the previous pass is still running."""
+        if self._resolve_thread is not None and self._resolve_thread.isRunning():
+            return
+        thread = _ResolveThread(self.db, self)
+        thread.done.connect(self._on_periodic_resolve_done)
+        thread.failed.connect(lambda msg: print(f"[SRPF] periodic re-resolve failed: {msg}"))
+        thread.finished.connect(lambda t=thread: _LIVE_RESOLVE_THREADS.discard(t))
+        _LIVE_RESOLVE_THREADS.add(thread)
+        self._resolve_thread = thread
+        thread.start()
+
+    def _on_periodic_resolve_done(self, updated: int):
+        """Reloads the list only when the pass changed a capture's client, and keeps the page the user is on."""
+        if not updated or not self.isVisible():
+            return
+        page = self._current_page
+        self.load_data()          # resets to page 1 ...
+        self._current_page = page  # ... so put the user's page back
+        self._apply_filters()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -2490,20 +2542,26 @@ class TrackerDumpWindow(QWidget):
     # ---- summary strip / filter indicators ----
 
     _TILE_FILTERS = {
-        # tile key -> (combo attribute, index that tile selects)
-        "unregistered": ("cmb_client", 2),
-        "pending": ("cmb_status", 2),
-        "not_submitted": ("cmb_status", 4),
-        "today": ("cmb_date", 1),
+        # tile key -> (combo attribute, item text that tile selects). Looked up by text, not by
+        # position, so the tile cannot drift from the dropdown when items are added or reordered.
+        "unregistered": ("cmb_client", "Unregistered / Action Required"),
+        "pending": ("cmb_status", "Pending e-Verification"),
+        "not_submitted": ("cmb_status", "Not submitted"),
+        "today": ("cmb_date", "Today"),
     }
+
+    def _tile_index(self, key: str) -> int:
+        attr, text = self._TILE_FILTERS[key]
+        return getattr(self, attr).findText(text)
 
     def _on_summary_tile(self, key: str):
         """A tile sets its filter; clicking the active tile again clears it. 'total' clears all."""
         if key == "total":
             self._reset_filters()
             return
-        attr, idx = self._TILE_FILTERS[key]
+        attr, _ = self._TILE_FILTERS[key]
         combo = getattr(self, attr)
+        idx = self._tile_index(key)
         combo.setCurrentIndex(0 if combo.currentIndex() == idx else idx)  # -> _on_filter_changed
 
     def _update_summary(self):
@@ -2545,8 +2603,8 @@ class TrackerDumpWindow(QWidget):
             if key == "total":
                 tile.setChecked(not any_active)
             else:
-                attr, idx = self._TILE_FILTERS[key]
-                tile.setChecked(getattr(self, attr).currentIndex() == idx)
+                attr, _ = self._TILE_FILTERS[key]
+                tile.setChecked(getattr(self, attr).currentIndex() == self._tile_index(key))
         self.btn_reset_filters.setVisible(any_active)
         for chip, combo, label, short in getattr(self, "_filter_chips", []):
             on = combo.currentIndex() > 0
@@ -2567,12 +2625,14 @@ class TrackerDumpWindow(QWidget):
             gen_at_start = self.db.data_generation() if hasattr(self.db, "data_generation") else None
             raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+            # Every row is loaded so search and the filters see the whole database; the slim reads
+            # keep payloads out of the list, and a dialog fetches its one row's payload on demand.
             if is_grouped:
-                self._dumps_cache = self.db.get_srpf_containers(limit=200, slim=True)
+                self._dumps_cache = self.db.get_srpf_containers(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
             else:
-                self._dumps_cache = self.db.get_tracker_dumps(limit=200)
+                self._dumps_cache = self.db.get_tracker_dumps(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
             self._current_page = 1
@@ -2634,7 +2694,10 @@ class TrackerDumpWindow(QWidget):
 
             # 2. Portal / Jurisdiction Filter
             if portal_filter != "All Portals":
-                p_text = f"{d.get('portal', '')} {d.get('service_name', '')} {d.get('form_type', '')}".lower()
+                # A client container matches when ANY of its filings is on the portal, not just the latest
+                filings = d.get("filing_history") or [d]
+                p_text = " ".join(f"{f.get('portal', '')} {f.get('service_name', '')} {f.get('form_type', '')}"
+                                  for f in filings).lower()
                 if portal_filter == "Income Tax (ITR)":
                     if not any(k in p_text for k in ("income tax", "itr")):
                         continue
@@ -2685,6 +2748,9 @@ class TrackerDumpWindow(QWidget):
                     d.get("company_name", ""), d.get("proprietor_name", ""),
                     d.get("identity_key", ""), d.get("notes", "")
                 ]
+                # a container also matches on any of its earlier filings' ARNs, periods and portals
+                for h in d.get("filing_history") or ():
+                    match_fields += [h.get("arn", ""), h.get("period_label", ""), h.get("portal", "")]
                 if not any(search_txt in str(f).lower() for f in match_fields):
                     continue
 
@@ -3155,9 +3221,15 @@ class TrackerDumpWindow(QWidget):
         self._elide_status_labels()
 
     def _full_container(self, item: dict) -> dict:
-        """List rows are slim (no payloads); dialogs need the whole container."""
-        if item.get("_slim") and item.get("identity_key"):
+        """List rows are slim (no payloads); dialogs need the whole container, or the whole raw row."""
+        if not item.get("_slim"):
+            return item
+        if item.get("identity_key"):
             full = self.db.get_srpf_containers(limit=1, identity_key=item["identity_key"])
+            if full:
+                return full[0]
+        elif item.get("id") is not None:
+            full = self.db.get_tracker_dumps(limit=1, dump_id=item["id"])
             if full:
                 return full[0]
         return item
@@ -3169,6 +3241,7 @@ class TrackerDumpWindow(QWidget):
             self.load_data()
 
     def _show_payload_dialog(self, dump_item: dict):
+        dump_item = self._full_container(dump_item)
         dlg = PayloadInspectorDialog(dump_item, db=self.db, is_container=False, parent=self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
