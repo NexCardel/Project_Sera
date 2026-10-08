@@ -25,7 +25,9 @@ def _emit(letter, nodeid):
     if letter == "F":
         _failed.append(nodeid)
     done = sum(_counts.values())
-    _out.write(f"\r{letter}  {done} of {_total} done   (T={_counts['T']} F={_counts['F']} S={_counts['S']})   ")
+    # One complete line per test, so line-based readers (background task
+    # monitors, tail -f, log files) see progress as each test finishes.
+    _out.write(f"{letter}  {done} of {_total} done   (T={_counts['T']} F={_counts['F']} S={_counts['S']})   {nodeid if letter == 'F' else ''}\n")
     _out.flush()
 
 

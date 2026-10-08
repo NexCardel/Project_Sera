@@ -353,6 +353,7 @@ def test_run_shadow_check_button_disabled_outside_shadow_mode(tmp_path):
     from ui.dialogs.sera_sync_dialog import SeraSyncDialog
 
     db = _office_db(tmp_path)
+    db.set_sync_mode("off")  # create_new_office starts the office "live"
     assert db.get_sync_mode() == "off"
     svc = _office_sync_service(tmp_path)
     dlg = SeraSyncDialog(svc, db=db, actor="Tester")
