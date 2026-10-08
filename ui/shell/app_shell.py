@@ -6,11 +6,17 @@ from ui.shell.sidebar import Sidebar
 from ui.services.alert_service import ActionAlertFormatter
 
 
+SIDEBAR_AUTO_COLLAPSE_BELOW = 1000   # logical px: narrower than this, the sidebar folds away by itself
+SIDEBAR_AUTO_EXPAND_ABOVE = 1060     # wider than this again (the gap stops it flapping at the edge)
+
+
 class AppShell(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Aman Associates — SERA Workspace")
         self.dismiss_detail_on_outside = False
+        # Once the user has toggled the sidebar (button or Ctrl+B) this session, the window width no longer moves it.
+        self._sidebar_user_toggled = False
 
         from pathlib import Path
         from PySide6.QtGui import QIcon
@@ -77,6 +83,16 @@ class AppShell(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "slide_panel") and self.slide_panel:
             self.slide_panel.update_position()
+        self._auto_sidebar_for_width()
+
+    def _auto_sidebar_for_width(self):
+        """Folds the sidebar away on a narrow window, and opens it again on a wide one. Ignored once the user has toggled it."""
+        if getattr(self, "_sidebar_user_toggled", False) or not hasattr(self, "sidebar_collapsed"):
+            return
+        if not self.sidebar_collapsed and self.width() < SIDEBAR_AUTO_COLLAPSE_BELOW:
+            self.collapse_sidebar()
+        elif self.sidebar_collapsed and self.width() > SIDEBAR_AUTO_EXPAND_ABOVE:
+            self.expand_sidebar()
 
     def eventFilter(self, watched, event):
         """Close Client Detail when the area outside the slide panel is clicked."""
@@ -130,6 +146,7 @@ class AppShell(QWidget):
 
     def toggle_sidebar(self):
         """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        self._sidebar_user_toggled = True
         if self.sidebar_collapsed:
             self.expand_sidebar()
         else:
