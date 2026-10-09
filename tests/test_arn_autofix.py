@@ -55,7 +55,7 @@ def test_rows_that_are_not_sure_are_never_touched_and_no_report_is_written(tmp_p
     c = auto.run_once(f.w.db, f.w.app, log=lambda m: None, roots=[tmp_path / "c"])
     assert (c["rows"], c["sure"], c["fixed"], c["left"]) == (1, 0, 0, 1)
     assert table(f.w.db) == before
-    assert not (f.w.app / "mr_fixer").exists() or not list((f.w.app / "mr_fixer").glob("*"))
+    assert not list((f.w.app / "mr_fixer").glob("auto_report_*"))        # only its memory of what it tried is kept
 
 
 def test_the_disabled_flag_switches_it_off(fx):
@@ -99,3 +99,47 @@ def test_a_failure_in_the_thread_does_not_escape(fx, monkeypatch):
     t = auto.start_background(fx.w.db, fx.w.app, delay_s=0, log=lines.append)
     t.join(10)
     assert any("failed" in l for l in lines)
+
+
+def test_a_row_judged_not_sure_is_not_read_again_until_the_corpus_changes(tmp_path, monkeypatch):
+    f, rid = _interleaved(tmp_path)
+    roots = [tmp_path / "c"]
+    first = auto.run_once(f.w.db, f.w.app, log=lambda m: None, roots=roots)
+    assert (first["rows"], first["unchanged"], first["sure"]) == (1, 0, 0)
+    assert (f.w.app / "mr_fixer" / auto.STATE_FILE).exists()
+    monkeypatch.setattr(fx_.Corpus, "records", lambda *a, **k: (_ for _ in ()).throw(AssertionError("corpus was read")))
+    again = auto.run_once(f.w.db, f.w.app, log=lambda m: None, roots=roots)
+    assert (again["rows"], again["unchanged"], again["left"]) == (1, 1, 1)        # no corpus line was read
+    monkeypatch.undo()
+    corpus_file = next((tmp_path / "c").rglob("sdis_2026-10-06.jsonl"))
+    st = corpus_file.stat()
+    os.utime(corpus_file, (st.st_atime, st.st_mtime + 10))                         # the corpus changed
+    third = auto.run_once(f.w.db, f.w.app, log=lambda m: None, roots=roots)
+    assert (third["rows"], third["unchanged"]) == (1, 0)
+
+
+def test_a_damaged_memory_file_only_costs_a_rescan(tmp_path):
+    f, rid = _interleaved(tmp_path)
+    (f.w.app / "mr_fixer").mkdir(parents=True)
+    (f.w.app / "mr_fixer" / auto.STATE_FILE).write_text("{not json", encoding="utf-8")
+    c = auto.run_once(f.w.db, f.w.app, log=lambda m: None, roots=[tmp_path / "c"])
+    assert (c["rows"], c["unchanged"], c["left"]) == (1, 0, 1)
+
+
+def test_the_pass_calls_its_pause_hook_while_it_works(fx):
+    calls = []
+    c = once(fx, pause=lambda: calls.append(1))
+    assert c["fixed"] == 3 and len(calls) > 10
+
+
+def test_the_throttle_rests_after_its_work_budget(monkeypatch):
+    slept = []
+    monkeypatch.setattr(auto.time, "sleep", slept.append)
+    t = auto.Throttle(work_s=0.0, rest_s=0.05)
+    for _ in range(3):
+        t()
+    assert slept == [0.05, 0.05, 0.05]
+    quiet = auto.Throttle(work_s=3600, rest_s=0.05)
+    slept.clear()
+    quiet()
+    assert slept == []

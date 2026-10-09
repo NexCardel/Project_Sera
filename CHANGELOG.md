@@ -4,6 +4,13 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **The unattended ARN-row fixer no longer hogs the CPU.** On the admin PC it re-read the whole SDIS corpus (about 1.7 GB) at every start, for minutes at 50-90% of a core, stalling the app's own thread for 4-7 seconds. It now works in short bursts (a quarter of one core at most), and a row it judged "not sure" is not looked at again until the corpus files for its two days change (remembered in `mr_fixer/auto_state.json`). `core/sdis/arn_autofix.py`, `core/sdis/arn_fixer.py`; tests in `tests/test_arn_autofix.py`.
+
+---
+
 ## [2.12.8] - 2026-10-09
 
 Patch release: 2.12.7 was built before the GST ARN recovery work was merged, so its installer does not carry it. 2.12.8 is the first build that does.

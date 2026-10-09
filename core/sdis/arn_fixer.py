@@ -171,9 +171,13 @@ class Corpus:
     """Corpus files read-only. A day's file is indexed once (one JSON parse per line, times and
     sessions only); a page is resolved only when something needs it."""
 
-    def __init__(self, roots: Sequence[Path], registry: Any, arn_re: "re.Pattern[str]"):
+    def __init__(self, roots: Sequence[Path], registry: Any, arn_re: "re.Pattern[str]",
+                 pause: Optional[Callable[[], None]] = None):
         self.registry = registry
         self.arn_re = arn_re
+        # Called between lines / pages: the unattended pass uses it to give the rest of the app the
+        # interpreter (the app's own thread stalled for seconds while it ran); the CLI passes none.
+        self.breathe: Callable[[], None] = pause or (lambda: None)
         self.files: Dict[date, List[Tuple[str, Path]]] = {}
         seen = set()
         for root in roots:
@@ -201,6 +205,7 @@ class Corpus:
             for device, path in self.files.get(day, ()):
                 with open(path, "rb") as f:                     # read-only
                     while True:
+                        self.breathe()
                         off = f.tell()
                         raw = f.readline()
                         if not raw:
@@ -236,6 +241,7 @@ class Corpus:
     def read(self, rec: Rec) -> Page:
         key = (rec.path, rec.offset)
         if key not in self._pages:
+            self.breathe()
             with open(rec.path, "rb") as f:                     # read-only
                 f.seek(rec.offset)
                 doc = json.loads(f.readline())
@@ -252,6 +258,21 @@ class Corpus:
 
 def days_for(t: Target) -> List[date]:
     return [t.day - timedelta(days=1), t.day]
+
+
+def corpus_fingerprint(corpus: Corpus, days: Sequence[date]) -> str:
+    """Which corpus files hold `days`, and how big / how recent they are - without opening them. The same
+    string later means the corpus has nothing new for a row that was judged from those days."""
+    import hashlib
+    parts = []
+    for d in sorted(set(days)):
+        for device, path in sorted(corpus.files.get(d, ()), key=lambda x: (x[0], str(x[1]))):
+            try:
+                st = path.stat()
+                parts.append(f"{d}|{device}|{path.name}|{st.st_size}|{int(st.st_mtime)}")
+            except OSError:
+                parts.append(f"{d}|{device}|{path.name}|gone")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
 # ── 3. Finding the answer for one row (report) ───────────────────────────────────
@@ -476,6 +497,7 @@ def make_report(db: Any, corpus: Corpus, targets: Sequence[Target],
     builder = builder or PayloadBuilder()
     rows = []
     for t in targets:
+        corpus.breathe()
         f = find_answer(corpus, t)
         row = {c: "" for c in FIX_COLUMNS}
         row.update(row_id=str(t.id), arn=t.arn, row_time=t.when.isoformat(timespec="seconds"), result=f.result,
