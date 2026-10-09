@@ -249,7 +249,9 @@ class _Session:
 
     @property
     def has_content(self) -> bool:
-        return bool(self.profile or self.slots or self.draft.pieces or self.sdis.has_content)
+        # A lone login-box user name (no client, no dataset) is not a session worth ending or setting aside.
+        return bool(any(k != "username" for k in self.profile) or self.slots or self.draft.pieces
+                    or self.sdis.has_content)
 
 
 class SgtShadow:
@@ -301,6 +303,8 @@ class SgtShadow:
         self._stats = stats                 # sgt_health.SpecStats, or None
         self._state_path = state_path       # crash snapshot; None = not kept (tests, replay)
         self._state_saved = 0.0
+        self._state_dirty = False           # a change the 2 s throttle held back from the snapshot
+        self._log_checked: Set[str] = set() # log files already checked for a torn last line
         self._checked_day: Optional[date] = None
         # HUD pill: (event_type, title, subtitle, context). Only real captures reach it - a
         # client identified, a dataset found or promoted, a session with something in it
@@ -438,6 +442,8 @@ class SgtShadow:
     # ── One tick ─────────────────────────────────────────────────────────────────
     def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "") -> Optional[PageResult]:
         now = self._clock()
+        if self._state_dirty:
+            self._save_state()              # the last change before a still page must not wait for the next one
         self._apply_demotion_answers()
         self._end_idle(now)
         self._daily_health_check()
@@ -1204,7 +1210,8 @@ class SgtShadow:
             self._sighted(s, fld, url)
         if fld in ("pan", "gstin", "name"):
             self._queue_all(s)                  # rows written before the client was known get their identity
-        self._new_profile.append(fld)           # the pill announces the page's datapoints together
+        if fld != "username":                   # typed char by char on a login page: never a pill
+            self._new_profile.append(fld)       # the pill announces the page's datapoints together
 
     def _sighted(self, s: _Session, fld: str, url: str) -> None:
         """A page showing the client's PAN/GSTIN. The first one attributes the session's rows
@@ -1316,6 +1323,8 @@ class SgtShadow:
         user_id = (s.profile.get("username") or {}).get("value")
         if not user_id or self._resolve_client is None or any(k in s.profile for k in _CLIENT_KEYS):
             return
+        if url and (_LOGIN.search(url) or _LOGOUT.search(url)):
+            return                              # still being typed (or retyped): link once the portal moves on
         if user_id in s.linked:
             return
         s.linked.add(user_id)
@@ -1330,6 +1339,11 @@ class SgtShadow:
             if found.get(fld):
                 self._offer_profile(s, fld, found[fld], CLIENT_LINK_SPEC, 85, url, source, registry)
                 break
+        if found.get("name"):                   # the company name the client is registered under in the master DB
+            self._offer_profile(s, "name", found["name"], CLIENT_LINK_SPEC, 85, url, source, registry)
+        if found.get("client_id") is not None:
+            self._event(s, "identity", change="user id matched a saved client", user_id=user_id,
+                        client_id=found["client_id"], company=found.get("name") or "")
 
     def _find_slot(self, s: _Session, values: Dict[str, str], stamp: str = "", follow: bool = False) -> Optional[_Slot]:
         arn = values.get("arn")
@@ -1704,19 +1718,28 @@ class SgtShadow:
             return
         now = self._clock()
         if not force and now - self._state_saved < self.STATE_SAVE_EVERY_SEC:
+            self._state_dirty = True        # written on the next tick, even if that page has not changed
             return
         self._state_saved = now
+        self._state_dirty = False
         try:
             live = [s for s in self._all_sessions() if s.has_content]
+            prev = self._state_path.with_suffix(".prev")
             if not live:
-                if self._state_path.exists():
-                    self._state_path.unlink()
+                for f in (self._state_path, prev):
+                    if f.exists():
+                        f.unlink()
                 return
             snap = {"saved": datetime.now().isoformat(timespec="seconds"),
                     "sessions": [_session_to_json(s) for s in live]}
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._state_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(json.dumps(snap, ensure_ascii=False))
+                f.flush()
+                os.fsync(f.fileno())        # on disk before it replaces the good copy: a power cut leaves a whole file
+            if self._state_path.exists():
+                self._state_path.replace(prev)   # the last good snapshot is kept one generation back
             tmp.replace(self._state_path)
         except Exception as e:
             self._echo(f"[SGT] {self._tag} could not snapshot sessions: {e}")
@@ -1724,12 +1747,24 @@ class SgtShadow:
     def _recover(self) -> None:
         """Sessions the app never ended (it crashed or was killed): finish them now and re-write
         their datasets - a dataset key is stable, so a row already saved is simply updated."""
-        try:
-            if not self._state_path.exists():
-                return
-            snap = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            self._echo(f"[SGT] {self._tag} crash snapshot unreadable, ignored: {e}")
+        prev = self._state_path.with_suffix(".prev")
+        snap = None
+        for f in (self._state_path, prev):      # the newest whole snapshot wins; a torn one is set aside, not lost
+            if not f.exists():
+                continue
+            try:
+                snap = json.loads(f.read_text(encoding="utf-8"))
+                if not isinstance(snap, dict):
+                    raise ValueError("not a snapshot")
+                break
+            except Exception as e:
+                snap = None
+                self._echo(f"[SGT] {self._tag} crash snapshot {f.name} unreadable: {e}")
+                try:
+                    f.replace(f.with_suffix(".corrupt"))
+                except OSError:
+                    pass
+        if snap is None:
             return
         n = 0
         for raw in snap.get("sessions") or []:
@@ -1741,10 +1776,11 @@ class SgtShadow:
             self._finish(s, "recovered - the app stopped without ending it")
             self._queue_all(s, every=True)
             n += 1
-        try:
-            self._state_path.unlink()
-        except OSError:
-            pass
+        for f in (self._state_path, prev):
+            try:
+                f.unlink()
+            except OSError:
+                pass
         if n:
             self._echo(f"[SGT] {self._tag} recovered {n} session(s) the app did not end; their datasets are re-written")
 
@@ -1765,26 +1801,38 @@ class SgtShadow:
                 except Exception:
                     pass
 
-    def _log(self, rec: Dict[str, Any]) -> None:
-        rec = {"ts": datetime.now().isoformat(timespec="seconds"), **rec}
+    def _append_log(self, rec: Dict[str, Any]) -> None:
         try:
             d = self._log_dir or shadow_dir()
             d.mkdir(parents=True, exist_ok=True)
-            with open(d / f"sgt_shadow_{date.today().isoformat()}.jsonl", "a", encoding="utf-8") as f:
+            path = d / f"sgt_shadow_{date.today().isoformat()}.jsonl"
+            if str(path) not in self._log_checked:
+                self._log_checked.add(str(path))
+                self._seal_torn_line(path)
+            with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except Exception as e:
             self._echo(f"[SGT] {self._tag} could not write the log: {e}")
 
-    def _event(self, s: _Session, event: str, **data: Any) -> None:
-        rec = {"ts": datetime.now().isoformat(timespec="seconds"), "event": event,
-               "session": s.session_id, "portal": s.portal, **data}
+    @staticmethod
+    def _seal_torn_line(path: Path) -> None:
+        """An app killed mid-write leaves the log's last line without its newline; the next record would
+        be glued onto it and both lines would be unreadable. Ends the torn line first."""
         try:
-            d = self._log_dir or shadow_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            with open(d / f"sgt_shadow_{date.today().isoformat()}.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        except Exception as e:
-            self._echo(f"[SGT] {self._tag} could not write the log: {e}")
+            if path.exists() and path.stat().st_size:
+                with open(path, "rb+") as f:
+                    f.seek(-1, os.SEEK_END)
+                    if f.read(1) != b"\n":
+                        f.write(b"\n")
+        except OSError:
+            pass
+
+    def _log(self, rec: Dict[str, Any]) -> None:
+        self._append_log({"ts": datetime.now().isoformat(timespec="seconds"), **rec})
+
+    def _event(self, s: _Session, event: str, **data: Any) -> None:
+        self._append_log({"ts": datetime.now().isoformat(timespec="seconds"), "event": event,
+                          "session": s.session_id, "portal": s.portal, **data})
 
 
 def _session_to_json(s: _Session) -> Dict[str, Any]:

@@ -247,6 +247,26 @@
       ]
     },
     {
+      "name": "gst_login_username",
+      "field": "username",
+      "merge": "latest",
+      "portals": ["GST Portal"],
+      "urls": ["/services/login"],
+      "labels": ["Username"],
+      "label_at": "start",
+      "within": 3,
+      "pattern": "^(?!(?i:password|login|forgot|first|username|enter|skip|home)\\b)([A-Za-z0-9][A-Za-z0-9_.@$-]{2,29})$",
+      "confidence": 80,
+      "note": "The user name typed on the GST login page (the line after the 'Username' label; the password box is never read). It is followed as it is typed - the last value read before the page changes wins - and links the session to the saved client that holds this user ID (sgt_client_link) once the portal has moved on from the login page.",
+      "examples": [
+        {"lines": ["Login", "Username", "Username", "abcd_2345", "Password", "Password", "LOGIN"], "expect": "abcd_2345"}
+      ],
+      "counter_examples": [
+        {"lines": ["Login", "Username", "Username", "Password", "Password", "LOGIN"]},
+        {"lines": ["Forgot Username", "Forgot Password"]}
+      ]
+    },
+    {
       "name": "gst_aggregate_turnover",
       "field": "aggregate_turnover",
       "portals": ["GST Portal"],

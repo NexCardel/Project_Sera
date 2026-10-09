@@ -266,6 +266,8 @@ MERGES: Dict[str, Merge] = {
     "latch": lambda current, candidate: False,
     # Keeps looking; a longer value replaces the current one only if it extends it.
     "promote_longer": lambda current, candidate: len(candidate) > len(current) and extends(current, candidate),
+    # Follows a value as it is typed or corrected (a login box): the latest reading replaces the held one.
+    "latest": lambda current, candidate: candidate != current,
 }
 
 

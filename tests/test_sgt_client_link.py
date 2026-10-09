@@ -46,11 +46,26 @@ class FakeDb:
     def get_client(self, client_id):
         return {"id": client_id, "values": self.values[client_id]}
 
+    columns = [{"id": 2, "label": "Proprietor Name"}, {"id": 4, "label": "Company Name"}, {"id": 7, "label": "GST User ID"}]
+
+    def get_mcl_columns(self):
+        return self.columns
+
 
 class TestClientLink:
     def test_the_owner_gives_gstin_and_pan(self):
         db = FakeDb({(7, "ABCD_2345"): [1]}, {1: {7: "abcd_2345", 3: "19ABCPD1234E1ZB", 4: "Ashok"}})
-        assert ClientLink(db)(GST, " abcd_2345 ") == {"gstin": "19ABCPD1234E1ZB", "pan": "ABCPD1234E", "client_id": 1}
+        assert ClientLink(db)(GST, " abcd_2345 ") == {"gstin": "19ABCPD1234E1ZB", "pan": "ABCPD1234E", "client_id": 1, "name": "Ashok"}
+
+    def test_the_company_name_comes_from_the_company_column(self):
+        db = FakeDb({(7, "ABCD_2345"): [1]}, {1: {2: "Ashok Sen", 3: "19ABCPD1234E1ZB", 4: "  SEN  TRADING CO ", 7: "ABCD_2345"}})
+        assert ClientLink(db)(GST, "ABCD_2345")["name"] == "SEN TRADING CO"
+
+    def test_no_company_column_or_value_gives_an_empty_name(self):
+        db = FakeDb({(7, "ABCD_2345"): [1]}, {1: {3: "19ABCPD1234E1ZB", 7: "ABCD_2345"}})
+        assert ClientLink(db)(GST, "ABCD_2345")["name"] == ""
+        db.columns = [{"id": 7, "label": "GST User ID"}]
+        assert ClientLink(db)(GST, "ABCD_2345")["name"] == ""
 
     def test_nobody_or_two_owners_links_nothing(self):
         assert ClientLink(FakeDb({}, {}))(GST, "ABCD_2345") is None
@@ -125,3 +140,49 @@ class TestSessionIdentity:
         r = Rig(tmp_path, None)
         s = r.see(["Welcome", "Username", "ABCD_2345"])
         assert "gstin" not in s.profile and not s.confirmed
+
+
+LOGIN = "https://services.gst.gov.in/services/login"
+
+
+def login_page(typed=None):
+    return ["Login", "Username", "Username"] + ([typed] if typed else []) + ["Password", "Password", "LOGIN", "Forgot Username"]
+
+
+class TestLoginPageUsername:
+    """The user name typed on the GST login page is followed as it is typed, and names the client (and its
+    company name from the master DB) once the portal has moved on from the login page."""
+
+    def test_the_typed_user_name_is_followed_and_the_client_is_linked_after_login(self, tmp_path):
+        r = Rig(tmp_path, {"gstin": "19ABCPD1234E1ZB", "pan": "ABCPD1234E", "client_id": 1, "name": "SEN TRADING CO"})
+        s = r.see(login_page("kmsg_7"), LOGIN)
+        assert s.profile["username"]["value"] == "kmsg_7" and r.calls == []
+        s = r.see(login_page("kmsg_7055"), LOGIN)
+        assert s.profile["username"]["value"] == "kmsg_7055" and r.calls == []       # still typing: nothing looked up
+        s = r.see(["Welcome", "Dashboard", "Returns"], URL)
+        assert r.calls == [(GST, "kmsg_7055")]
+        assert s.profile["gstin"]["value"] == "19ABCPD1234E1ZB"
+        assert s.profile["name"]["value"] == "SEN TRADING CO" and s.profile["name"]["spec"] == CLIENT_LINK_SPEC
+
+    def test_a_retyped_user_name_replaces_the_first(self, tmp_path):
+        r = Rig(tmp_path, None)
+        r.see(login_page("wrong_001"), LOGIN)
+        s = r.see(login_page("right_002"), LOGIN)
+        assert s.profile["username"]["value"] == "right_002"
+
+    def test_an_empty_box_captures_nothing(self, tmp_path):
+        r = Rig(tmp_path, None)
+        s = r.see(login_page(), LOGIN)
+        assert "username" not in s.profile
+
+    def test_a_lone_user_name_is_not_a_session_worth_keeping(self, tmp_path):
+        r = Rig(tmp_path, None)
+        s = r.see(login_page("kmsg_7055"), LOGIN)
+        assert not s.has_content
+
+    def test_the_pill_does_not_announce_a_typed_user_name(self, tmp_path):
+        r = Rig(tmp_path, None)
+        seen = []
+        r.sgt._notify = lambda *a: seen.append(a)
+        r.see(login_page("kmsg_7055"), LOGIN)
+        assert seen == []

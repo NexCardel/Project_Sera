@@ -4,6 +4,24 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [2.12.8] - 2026-10-09
+
+Patch release: 2.12.7 was built before the GST ARN recovery work was merged, so its installer does not carry it. 2.12.8 is the first build that does.
+
+### Added
+- **Unattended ARN-row fixer on the admin PC** (`core/sdis/arn_autofix.py`, `core/sdis/arn_fixer.py`) and the `tools/mr_fixer.py` command-line tool (plans in `docs/gst_arn_recovery/`).
+- `tools/inject_unknown_gst_arn.py` injector and shared `tools/sera_tool_common.py`.
+- Tracker dump marks recovered rows.
+- Tests: `tests/test_mr_fixer.py`, `tests/test_arn_autofix.py`, `tests/test_inject_unknown_gst_arn.py`.
+- **GST login user name is captured and linked to the master DB.** SGT reads the user name as it is typed on the GST login page (new spec `gst_login_username`, new profile merge `latest`; the password box is never read). Once the portal moves on from the login page, the saved client that holds that user ID is looked up and the session takes its GSTIN / PAN and the company name registered in the master DB (`core/sgt/sgt_client_link.py`). Before, a session whose pages showed a name but no GSTIN was written unattributed.
+
+### Fixed
+- **SGT lost its last change when the app was closed abruptly.** The crash snapshot is throttled to one write per 2 seconds and a change inside that window was only written on the next page *change*, so a still page left it unsaved. It is now written on the next tick.
+- **A torn crash snapshot or log line no longer costs captures.** The snapshot is flushed to disk before it replaces the good copy, the previous good snapshot is kept and used if the newest one is unreadable (the unreadable one is kept as `.corrupt`), and a log line cut short by a kill is ended before the next record is appended, so the next record is no longer glued onto it.
+- Tests: `tests/test_sgt_crash_safety.py`, and login-page cases in `tests/test_sgt_client_link.py`.
+
+---
+
 ## [2.12.7] - 2026-10-07
 
 2.12.6 was built and merged but never released; 2.12.7 is the first release that carries it. Everything under 2.12.6 below ships in 2.12.7 too, together with the `home-work` work merged with it (SGT header-only GSTIN, ARN read by shape, user-ID client link; LTT monthly workbook, rules and wording; tracker-dump "Captured by"; SDIS class_diff tooling).
