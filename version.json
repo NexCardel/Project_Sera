@@ -1,8 +1,8 @@
 {
-  "version": "2.12.7",
+  "version": "2.12.8",
   "min_required_version": "2.9.9",
   "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.12.7/Amas_Sera_Setup_v2.12.7.exe",
-  "sha256": "4fde305ea0311b6d5356040a867ea0bd5d826243464e6089f9b92b8baeeff1aa",
-  "release_notes": "Project Sera v2.12.7: SGT session boundaries, home-work and LTT sync refresh, unattended ARN-row fixer."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.12.8/Amas_Sera_Setup_v2.12.8.exe",
+  "sha256": "a2054359ea7d21650048b17e350437c83a7d4b15886ddbb25c42515bdef7222a",
+  "release_notes": "Project Sera v2.12.8: GST login username linked to the master DB company, SGT abrupt-close safety, unattended ARN-row fixer."
 }
