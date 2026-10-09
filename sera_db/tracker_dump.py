@@ -12,6 +12,9 @@ from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_da
 from sera_db.common import SKELETON_NAME_REGEX
 
 
+RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
+
+
 class TrackerDumpMixin:
 
     # The canonical key lives in core/dataset_key.py so SGT (live) builds exactly the same one.
@@ -843,7 +846,8 @@ class TrackerDumpMixin:
                          + ", " + self._payload_field_sql("$.device_name", "$.raw_payload.device_name") + " AS device_name"
                          + ", " + self._payload_field_sql("$.client_name", "$.name", "$.taxpayer_name",
                                                           "$.raw_payload.client_name", "$.raw_payload.client_temp_name")
-                         + " AS payload_name")
+                         + " AS payload_name"
+                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool")
             payload_col = "''" if slim else "raw_payload_json"
             sql = ("SELECT id, client_id, unassigned_identity, service_id, portal, "
                    "period_label, arn_number, capture_method, status, "
@@ -919,8 +923,17 @@ class TrackerDumpMixin:
                 # slim row: the payload's name fields, read in SQL, stand in for the payload below
                 p_obj = {"client_name": r[16]}
 
+            # A row mr_fixer corrected (core/sdis/arn_fixer.py) shows "/-" right after the client's name.
+            if slim:
+                recovered = bool(r[17]) if len(r) > 17 else False
+            else:
+                rp = p_obj.get("raw_payload") if isinstance(p_obj, dict) else None
+                recovered = isinstance(rp, dict) and isinstance(rp.get("recovered_by"), dict) and bool(rp["recovered_by"].get("tool"))
+            mark = RECOVERED_NAME_MARK if recovered else ""
+
             if cid and cid in client_map:
-                info = client_map[cid]
+                info = dict(client_map[cid])
+                info["name"] = f"{info['name']}{mark}"
             elif unassigned_id:
                 # 1. Try container map
                 c_name = unassigned_map.get(unassigned_id, "")
@@ -933,7 +946,7 @@ class TrackerDumpMixin:
                             (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
                         )
                 if c_name and not SKELETON_NAME_REGEX.search(c_name):
-                    info = {"name": f"{c_name} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
+                    info = {"name": f"{c_name}{mark} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
                 else:
                     info = {"name": f"Unregistered (PAN: {unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
             else:

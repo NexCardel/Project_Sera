@@ -58,6 +58,8 @@ class SyncSignalBridge(QObject):
     update_found_signal = Signal(dict)
     update_ready_signal = Signal(str, dict)
     maintenance_done_signal = Signal()
+    # The ARN-row fixer (core/sdis/arn_autofix.py) changed tracker rows on its thread: refresh the view.
+    arn_autofix_done_signal = Signal(int)
     join_approval_signal = Signal(str, str, str, object)
     # SyncEngine's "synced" event (P3-5/P3-8): sorted list of tables an applied batch touched.
     engine_synced_signal = Signal(list)
@@ -220,6 +222,7 @@ class SeraApp:
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
+        self.sync_bridge.arn_autofix_done_signal.connect(lambda _n: self._refresh_tracker_dump_ui())
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
         self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
@@ -619,6 +622,17 @@ class SeraApp:
         self.app.processEvents()                      # paint the window now
         memory_mark("start-up: window painted")
         QTimer.singleShot(0, self._start_capture_engines)
+        # Failed ARN-only GST rows are fixed from the corpus on the admin PC, unattended, a while after
+        # start-up (core/sdis/arn_autofix.py); the excavator fills the corpus in the meantime.
+        try:
+            from core.sdis import arn_autofix
+            _svc = getattr(self, "sync_service", None)
+            arn_autofix.start_background(
+                self.db, self.app_dir,
+                on_event=(_svc.log_activity if _svc is not None else None),
+                on_done=lambda n: self.sync_bridge.arn_autofix_done_signal.emit(n))
+        except Exception as exc:
+            print(f"[ARN fixer] not started: {exc}")
 
         # Memory over the working day (~/AmanAssociates_Sera/logs/memory.log): once a minute after
         # start-up, then every 10 minutes - steady growth here is a leak, a jump is a feature
