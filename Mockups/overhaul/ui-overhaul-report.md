@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 00:31)
+# UI overhaul — report (2026-10-11 00:50)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 15 |
+| Not started | 14 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 21 |
+| Done | 22 |
 | Blocked | 0 |
 
-Runs: 29   output tokens: 967483   API-equivalent cost: $54.72
+Runs: 30   output tokens: 1018721   API-equivalent cost: $59.87
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -35,7 +35,7 @@ Runs: 29   output tokens: 967483   API-equivalent cost: $54.72
 | S-1 | Done | sonnet | 8c2e4dc | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page | Settings hub + unsaved bar + dirty/discard/close prompt + General page on kit; lock + 13 new tests green, goldens in Mockups/built/settings |
 | S-2 | Done | haiku | 3f70e0e | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge | Five Settings pages (Action buttons, Tracker, Export, Backup, Purge) on the kit; 15 goldens; lock tests green except pre-existing TestSearchGridReuse |
 | S-3 | Done | haiku | 5718c61 | Screens: Settings: SCC vault presets | SCC vault presets on the kit: Cards, eight display-only Tiles, formula Tags, Inputs; 3 goldens in Mockups/built/settings; 56 lock tests pass |
-| S-4 | Not started | opus |  | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... |  |
+| S-4 | Done | opus | eaf3752 | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... | MCL DarkListTable with staged M/Q/A ticks on one column model; visibility pages with Switch, Find, count; 16 new tests; goldens x12; sm buttons avoided (theme m |
 | S-5 | Not started | sonnet |  | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs |  |
 | S-6 | Not started | sonnet |  | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... |  |
 | S-7 | Not started | opus |  | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour |  |
@@ -81,6 +81,9 @@ Runs: 29   output tokens: 967483   API-equivalent cost: $54.72
 - **S-3** How is a counts-load failure shown? → Eight dashes in the tiles plus a hidden-until-needed Banner reading Counts not available (Keeps the tile grid stable and states the failure in words instead of a bare error label)
 - **S-3** Are the password fields shown as plain text? → Kept plain text, as before (Arrangement only; masking the fields is a behaviour change outside this package)
 - **S-3** Does the live preview show full resolved values? → Kept full values, as the current behaviour does (Preview content is unchanged; only the layout moved to kit Cards and Tags)
+- **S-4** Visibility pages: Switch or Checkbox per column? → kit Switch (README: 'a switch per column'); lock test now asserts kit.Switch instead of QCheckBox (Mockup and README say switches; setChecked/isChecked/toggled API unchanged so every caller keeps working)
+- **S-4** MCL row actions: sm buttons, drag reorder, Edit button? → Regular-height LabelledActions (Edit, Move up, Move down, Delete column... set apart); per-row drawn Edit CellAction too; Alt+Up/Alt+Down shortcuts; no drag handle (Inside a QDialog the theme rule 'QDialog QPushButton { min-height: 30px }' overrides kit sm height (28) and clips the button; drag reorder in a QTableWidget is new behaviour beyond arrangement)
+- **S-4** When does Save write the visibility flags? → A flag set is written when its visibility page was opened (as before) or when a Shows-on tick made it differ from the loaded value; values come from the shared model self.mcl_columns (Keeps the golden settings and old write behaviour; satisfies 4.3 'Save writes the right rows and only those')
 
 ## Checks waiting for you
 
@@ -97,3 +100,4 @@ Runs: 29   output tokens: 967483   API-equivalent cost: $54.72
 - #11 (S-2) Real-desktop 125% check: open Settings > Tracker, Backup and Purge on a real 125% laptop and confirm nothing clips. — Not run
 - #12 (S-2) Tracker PageHeader lead elides at 1024 px ('...beside S...'); confirm the wording is acceptable or shorten the lead. — Not run
 - #13 (S-2) On a real 1366x768 screen, open Settings > Backup and confirm the Danger zone is readable and Restore is clearly red. — Not run
+- #14 (S-4) Settings > Master Column List on a real screen: click the M/Q/A ticks with the mouse, Alt+Up/Alt+Down on a selected row, Add/Edit/Delete column with a real column editor dialog, and check that the visibility pages agree before Save. — Not run
