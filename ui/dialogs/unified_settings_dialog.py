@@ -36,6 +36,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.utils.tokens import TOKENS
+
 try:
     import qtawesome as qta
 except Exception:
@@ -635,9 +637,11 @@ class UnifiedSettingsDialog(QDialog):
 
         # Per PC, not saved with the other settings (app_settings syncs to every PC); saves on its own buttons.
         from ui.dialogs.display_scale_dialog import DisplayScaleControl
-        lay.addWidget(_setting_row("Screen Scale",
-            "Makes text and layout smaller or larger on this PC only. Applies after restarting Sera.",
-            DisplayScaleControl()))
+        scale_wrap = QWidget()
+        scale_lay = QVBoxLayout(scale_wrap)
+        scale_lay.setContentsMargins(TOKENS["s_3"], 0, TOKENS["s_3"], 0)
+        scale_lay.addWidget(DisplayScaleControl())
+        lay.addWidget(scale_wrap)
 
         lay.addWidget(_sub_header("Security & Masking"))
 

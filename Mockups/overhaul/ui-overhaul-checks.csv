@@ -5,3 +5,4 @@ Check,WP,Text,Result,Date,Notes
 4,K-5,"On a real desktop: hover a DataGrid row and its drawn action buttons (hover fill, tooltip per button, click runs the action); drag a column edge and confirm the width survives a window resize",Not run,2026-10-10 17:20,
 5,K-6,"On a real 125% display, open a SlidePanel in a window narrower than 1080 px: it should fill the width with no left edge, and a DialogFrame (normal and full) should show no clipped title or footer.",Not run,2026-10-10 17:31,
 6,K-R,"On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker)",Not run,2026-10-10 17:48,
+7,R-3,"On a real 125 % screen at 1366x768 and 1024x700: open Sidebar Display and Settings General Screen scale, check Apply and Restart now fit, then Restart now really restarts Sera and the new scale applies.",Not run,2026-10-10 18:25,

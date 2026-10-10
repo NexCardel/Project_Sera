@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 18:06)
+# UI overhaul — report (2026-10-10 18:13)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 21 |
+| Not started | 20 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 15 |
+| Done | 16 |
 | Blocked | 0 |
 
-Runs: 24   output tokens: 725845   API-equivalent cost: $35.50
+Runs: 25   output tokens: 770778   API-equivalent cost: $39.16
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@ Runs: 24   output tokens: 725845   API-equivalent cost: $35.50
 | K-7 | Done | sonnet | fd10027 | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... | Gallery states page (hover/focus/disabled), 14 PNGs at 100/125, kit reference docstring, 38 new keyboard/tooltip/elision/gallery tests, Chip Enter |
 | K-R | Done | opus | e9a31bc | Review phase K (kit) | Kit reviewed and frozen; 5 kit fixes, gallery uses real Windows fonts, ToggleSwitch/FilterChip users migrated; only pre-existing PAN + order-leak failures |
 | R-1 | Done | mechanical | 7773fd8 | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... | add WidthAware mixin to ui/utils/responsive.py for kit propagation, column toggling and chip moves |
-| R-2 | Not started | sonnet |  | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... |  |
+| R-2 | Done | sonnet | 5c5ae20 | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... | Sidebar on the kit: real logo, CLIENTS/TOOLS/ADMIN groups, one All Clients, Display for all, Staff Users removed, soft Auto-sync pill; 17 new tests |
 | R-3 | Not started | haiku |  | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... |  |
 | R-R | Not started | sonnet |  | Review phase R (responsive and shell) |  |
 | S-1 | Not started | sonnet |  | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page |  |
