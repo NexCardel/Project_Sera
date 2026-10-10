@@ -26,6 +26,10 @@ _ap.add_argument("--scale", type=float, default=1.0)
 ARGS = _ap.parse_args()
 os.environ["QT_SCALE_FACTOR"] = f"{ARGS.scale:.2f}"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Offscreen Qt on Windows does not see the system fonts and falls back to an all-caps face;
+# point it at them so the PNGs show Segoe UI as the real app does.
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget  # noqa: E402
@@ -243,7 +247,7 @@ def bars_page():
     root = QVBoxLayout(page)
     root.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
     root.setSpacing(TOKENS["s_3"])
-    page.setFixedWidth(820)
+    page.setFixedWidth(1080)        # the WIDE selection bar needs a WIDE page (>= 1080 in the mockup)
 
     # 1. Chips and ChipBar
     root.addWidget(kit.SectionLabel("Chips and ChipBar"))

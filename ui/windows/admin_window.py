@@ -49,6 +49,7 @@ from ui.dialogs.csv_import_dialog import CSVImportDialog
 from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
 from ui.dialogs.settings_dialog import SettingsDialog
+from ui.components.kit import Chip
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
@@ -540,23 +541,13 @@ class AdminWindow(QWidget):
             ("No services", "no_services", False, "Clients with no attached service"),
             ("Archived", None, True, "Archived clients (Restore or Delete permanently)"),
         ):
-            chip = QPushButton(text)
-            chip.setProperty("class", "FilterChip")
-            chip.setCheckable(True)
-            chip.setCursor(Qt.PointingHandCursor)
-            chip.setToolTip(tip)
+            chip = Chip(text, tooltip=tip)
             chip.clicked.connect(lambda _=False, p=preset, a=archived: self._apply_filter(p, a))
             chip.setProperty("filter_preset", preset)
             chip.setProperty("filter_archived", archived)
             chip_row.addWidget(chip)
             self._filter_chips.append(chip)
-        self.more_filters_btn = QToolButton()
-        self.more_filters_btn.setProperty("class", "FilterChip")
-        self.more_filters_btn.setText("More")
-        self.more_filters_btn.setCheckable(True)
-        self.more_filters_btn.setCursor(Qt.PointingHandCursor)
-        self.more_filters_btn.setPopupMode(QToolButton.InstantPopup)
-        self.more_filters_btn.setToolTip("Activity, login and per-service filters")
+        self.more_filters_btn = Chip("More", tooltip="Activity, login and per-service filters")
         self._more_filters_menu = QMenu(self.more_filters_btn)
         self.more_filters_btn.setMenu(self._more_filters_menu)
         chip_row.addWidget(self.more_filters_btn)

@@ -240,15 +240,16 @@ def test_filter_chips_drive_the_hidden_combos_and_show_the_value(make_window):
     win, _ = make_window()
     chips = {label: (chip, combo, short) for chip, combo, label, short in win._filter_chips}
     assert list(chips) == ["Status", "Portal", "Client", "Time", "Source"]
-    assert all(c.text() == f"{label}  ▾" and not c.isChecked() for label, (c, _, _) in chips.items())
+    # K-R: kit Chips draw the ▾ themselves (has_menu), so it left the label text
+    assert all(c.text() == label and c.has_menu() and not c.isChecked() for label, (c, _, _) in chips.items())
     chip, combo, _ = chips["Status"]
     entries = [a.text() for a in chip.menu().actions() if not a.isSeparator()]
     assert entries == [combo.itemText(i) for i in range(combo.count())]
     next(a for a in chip.menu().actions() if a.text() == "Submitted & E-verified").trigger()
     assert combo.currentText() == "Submitted & E-verified" and chip.isChecked()
-    assert chip.text() == "Status: E-verified  ▾" and _names(win) == ["Alpha Traders"]
+    assert chip.text() == "Status: E-verified" and _names(win) == ["Alpha Traders"]
     next(a for a in chips["Client"][0].menu().actions() if a.text() == "Unregistered / Action Required").trigger()
-    assert chips["Client"][0].text() == "Client: Unregistered  ▾" and _names(win) == []
+    assert chips["Client"][0].text() == "Client: Unregistered" and _names(win) == []
     next(a for a in chip.menu().actions() if a.text() == "All Statuses").trigger()
     assert not chip.isChecked() and _names(win) == ["Delta Clinic"]
 

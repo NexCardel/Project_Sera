@@ -291,3 +291,52 @@ def test_empty_states_render_without_content(app):
     assert grid.rowCount() == 0 and log.line_count() == 0
     assert bar.hint_label.isVisibleTo(bar)
     win.close()
+
+
+# ---------------------------------------------------------------- K-R review fixes
+
+def test_chip_text_is_sized_in_pixels_not_points(app):
+    from PySide6.QtGui import QFont, QFontMetrics
+    from ui.utils.tokens import KIT
+    chip = kit.Chip("Has services")
+    font = QFont(chip.font())
+    font.setPixelSize(KIT["f_chip"])
+    font.setWeight(QFont.Medium)
+    text = QFontMetrics(font).horizontalAdvance("Has services")
+    assert chip.sizeHint().width() == max(2 * KIT["pad_chip_h"] + text, 28)
+
+
+def test_selection_bar_name_elides_with_a_tooltip(app):
+    bar = kit.SelectionBar()
+    bar.set_who("Roy Pharma Distributors Private Limited")
+    for text in ("Open", "Edit", "Services", "Archive"):
+        bar.add_action(text)
+    bar.resize(380, bar.height())
+    bar.show()
+    app.processEvents()
+    assert bar.who_label.is_elided() and bar.who_label.toolTip() == bar.who()
+    bar.close()
+
+
+def test_tile_remeasures_when_the_app_font_arrives(app, monkeypatch):
+    from PySide6.QtGui import QFont
+    t = kit.Tile("12", "Worked")
+    calls = []
+    monkeypatch.setattr(t, "_refresh", lambda: calls.append(1))
+    font = QFont(t.font())
+    font.setFamily("Courier New")
+    t.setFont(font)                       # what the app sheet's font does at polish
+    assert calls
+
+
+def test_icon_only_action_is_wide_enough_for_its_swatch(app):
+    a = kit.LabelledAction("Fill", icon="mdi.format-color-fill", sm=True)
+    a.set_swatch("#E3B341")
+    a.set_icon_only(True)
+    assert a.width() >= a.iconSize().width() + 12 > a.height()
+
+
+def test_a_plain_label_in_a_card_body_sits_on_the_card(app):
+    card = kit.Card("Engine")
+    card.add_widget(kit.QLabel("Body"))
+    assert "QWidget#KitCardBody > QLabel { background: transparent; }" in card.styleSheet()

@@ -20,12 +20,13 @@ from PySide6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QMessageBox, QDialog, QTextEdit, QTextBrowser, QFrame,
     QFileDialog, QScrollArea, QFormLayout, QCheckBox, QTabWidget,
-    QApplication, QSizePolicy, QMenu, QButtonGroup, QToolButton, QGridLayout,
+    QApplication, QSizePolicy, QMenu, QButtonGroup, QGridLayout,
     QStyle, QStyledItemDelegate, QStyleOptionViewItem
 )
 
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 from ui.utils.responsive import WidthMode, mode_for
+from ui.components.kit import Chip
 import automation
 
 
@@ -1908,17 +1909,6 @@ class TrackerDumpWindow(QWidget):
             }
             QPushButton#SummaryTile:hover { border-color: #3F3F3F; }
             QPushButton#SummaryTile:checked { border: 2px solid #2E9B5F; }
-            QToolButton#FilterChip {
-                background-color: #1B1B1B;
-                border: 1px solid #333333;
-                border-radius: 12px;
-                padding: 4px 11px;
-                color: #C9D1D9;
-                font-size: 12px;
-            }
-            QToolButton#FilterChip:hover { border-color: #4F4F4F; color: #FFFFFF; }
-            QToolButton#FilterChip:checked { background-color: #1A382B; border-color: #2B5E46; color: #4CF9B7; font-weight: 600; }
-            QToolButton#FilterChip::menu-indicator { image: none; width: 0; }
             QPushButton#ToolsBtn {
                 background-color: #1B1B1B;
                 border: 1px solid #333333;
@@ -2146,12 +2136,7 @@ class TrackerDumpWindow(QWidget):
         ):
             combo.setParent(self)
             combo.hide()
-            chip = QToolButton()
-            chip.setObjectName("FilterChip")
-            chip.setCheckable(True)
-            chip.setCursor(Qt.PointingHandCursor)
-            chip.setPopupMode(QToolButton.InstantPopup)
-            chip.setToolTip(combo.toolTip())
+            chip = Chip(label, tooltip=combo.toolTip())
             menu = QMenu(chip)
             for i in range(combo.count()):
                 act = menu.addAction(combo.itemText(i))
@@ -2617,7 +2602,7 @@ class TrackerDumpWindow(QWidget):
             on = combo.currentIndex() > 0
             chip.setChecked(on)
             value = short.get(combo.currentText(), combo.currentText())
-            chip.setText(f"{label}: {value}  ▾" if on else f"{label}  ▾")
+            chip.setText(f"{label}: {value}" if on else label)     # the chip draws its own ▾
 
     def _sync_view_buttons(self, *_):
         if hasattr(self, "_view_group"):

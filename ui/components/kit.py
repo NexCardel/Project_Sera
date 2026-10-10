@@ -321,7 +321,8 @@ class LabelledAction(_ReasonMixin, QPushButton):
             if not self.toolTip():
                 self.setToolTip(self._text)
             self.setText("")
-            self.setFixedWidth(self.height())
+            # a swatch makes the icon wider than the button is high (Fill / Text in COMPACT)
+            self.setFixedWidth(max(self.height(), self.iconSize().width() + 12))
         else:
             if self.toolTip() == self._text:
                 self.setToolTip("")
@@ -1117,6 +1118,8 @@ def _card_qss(edge):
     return (
         f"QFrame#KitCard {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_l']}px; }}"
         f"QWidget#KitCardHead, QWidget#KitCardBody {{ background: transparent; }}"
+        # the app theme paints every plain widget; a caller's QLabel in the body sits on the card
+        f"QWidget#KitCardBody > QLabel {{ background: transparent; }}"
         f"QLabel#KitCardTitle {{ color: {title}; background: transparent; border: none;"
         f" font-size: {T['f_xs']}px; font-weight: 600; }}"
     )
@@ -1607,15 +1610,11 @@ class Chip(_ReasonMixin, QAbstractButton):
         super().keyPressEvent(event)
 
     def sizeHint(self):
-        font = QFont(T["ff"], K["f_chip"])
-        font.setWeight(QFont.Medium)
-        fm = QFontMetrics(font)
+        fm = QFontMetrics(_px_font(self, K["f_chip"], QFont.Medium))
         display_text = self.text()
         w = K["pad_chip_h"] + fm.horizontalAdvance(display_text)
         if self._count is not None:
-            b_font = QFont(T["ff"], K["f_badge"])
-            b_font.setWeight(QFont.DemiBold)
-            bfm = QFontMetrics(b_font)
+            bfm = QFontMetrics(_px_font(self, K["f_badge"], QFont.DemiBold))
             bw = bfm.horizontalAdvance(str(self._count)) + 2 * K["pad_badge_h"]
             w += K["gap_chip"] + bw
         if self._has_menu:
@@ -1665,8 +1664,7 @@ class Chip(_ReasonMixin, QAbstractButton):
             p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
 
         # Draw text
-        font = QFont(T["ff"], K["f_chip"])
-        font.setWeight(QFont.Medium)
+        font = _px_font(self, K["f_chip"], QFont.Medium)
         p.setFont(font)
         p.setPen(text_col)
         fm = QFontMetrics(font)
@@ -1680,8 +1678,7 @@ class Chip(_ReasonMixin, QAbstractButton):
         # Draw badge
         if self._count is not None:
             cur_x += float(K["gap_chip"])
-            b_font = QFont(T["ff"], K["f_badge"])
-            b_font.setWeight(QFont.DemiBold)
+            b_font = _px_font(self, K["f_badge"], QFont.DemiBold)
             bfm = QFontMetrics(b_font)
             badge_str = str(self._count)
             bw = float(bfm.horizontalAdvance(badge_str) + 2 * K["pad_badge_h"])
@@ -1956,7 +1953,7 @@ class SelectionBar(QFrame):
         self._act_lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         lay.addWidget(self.active_container)
 
-        self.who_label = QLabel("", self.active_container)
+        self.who_label = _ElideLabel("", self.active_container)
         self.who_label.setObjectName("KitSelectionWho")
         self.who_label.setStyleSheet(
             f"QLabel#KitSelectionWho {{ background: transparent; color: {T['text']};"
@@ -3527,6 +3524,12 @@ class Tile(_ReasonMixin, QAbstractButton):
 
     def minimumSizeHint(self):
         return QSize(2 * self._pad()[0] + 24, self._height())
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # the app sheet's font arrives at polish, after __init__ measured the height
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange):
+            self._refresh()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

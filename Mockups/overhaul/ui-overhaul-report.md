@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 17:31)
+# UI overhaul — report (2026-10-10 17:35)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 24 |
+| Not started | 23 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 12 |
+| Done | 13 |
 | Blocked | 0 |
 
-Runs: 21   output tokens: 580227   API-equivalent cost: $28.09
+Runs: 22   output tokens: 604764   API-equivalent cost: $30.15
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -26,7 +26,7 @@ Runs: 21   output tokens: 580227   API-equivalent cost: $28.09
 | K-4 | Done | sonnet | da633a8 | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | kit bars (Chip, ChipBar, StatusStrip, SelectionBar, UnsavedBar), gallery, tests |
 | K-5 | Done | opus | 5c8093b | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | DataGrid (QTableWidget subclass, delegate-drawn white/dark/list tones, pills, service dots, drawn actions, fit_columns), DarkListTable, GridFooter, GridFrame; 9 |
 | K-6 | Done | sonnet | 782bc31 | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... | DialogFrame, Scrim, PageHeader, Tile, LogView, SlidePanel restyle (540 / full width COMPACT); 52 new tests pass; frames gallery page |
-| K-7 | Not started | sonnet |  | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... |  |
+| K-7 | Done | sonnet | fd10027 | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... | Gallery states page (hover/focus/disabled), 14 PNGs at 100/125, kit reference docstring, 38 new keyboard/tooltip/elision/gallery tests, Chip Enter |
 | K-R | Not started | opus |  | Review phase K (kit) |  |
 | R-1 | Not started | mechanical |  | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... |  |
 | R-2 | Not started | sonnet |  | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... |  |

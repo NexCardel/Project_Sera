@@ -2,8 +2,7 @@ try:
     import qtawesome as qta
 except Exception:
     qta = None
-from PySide6.QtCore import Qt, Signal, QSize, Property, QPropertyAnimation, QEasingCurve, QRectF
-from PySide6.QtGui import QPainter, QColor, QBrush, QPen
+from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -13,59 +12,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QWidget,
-    QAbstractButton,
     QScrollArea
 )
 
-class ToggleSwitch(QAbstractButton):
-# (unchanged up to paintEvent end)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setCheckable(True)
-        self.setFixedSize(32, 16)
-        self._position = 0
-        
-        self.animation = QPropertyAnimation(self, b"position")
-        self.animation.setEasingCurve(QEasingCurve.InOutQuad)
-        self.animation.setDuration(150)
-        
-        self.toggled.connect(self._start_animation)
-
-    def _start_animation(self, checked):
-        self.animation.setEndValue(1.0 if checked else 0.0)
-        self.animation.start()
-
-    @Property(float)
-    def position(self):
-        return self._position
-
-    @position.setter
-    def position(self, pos):
-        self._position = pos
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Track background
-        bg_color = QColor("#444444") if not self.isChecked() else QColor("#2E9B5F") # Emerald accent when checked
-        painter.setBrush(QBrush(bg_color))
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(0, 0, self.width(), self.height(), self.height()/2, self.height()/2)
-        
-        # Handle (Thumb)
-        handle_color = QColor("white")
-        painter.setBrush(QBrush(handle_color))
-        
-        handle_radius = self.height() / 2 - 2
-        start_x = 2
-        end_x = self.width() - handle_radius * 2 - 2
-        
-        current_x = start_x + (end_x - start_x) * self._position
-        
-        painter.drawEllipse(QRectF(current_x, 2, handle_radius*2, handle_radius*2))
-        painter.end()
+from ui.components.kit import Switch
 
 
 class AccordionHeader(QWidget):
@@ -225,7 +175,7 @@ class Sidebar(QFrame):
         self.lbl_admin.setObjectName("SidebarSection")
         self.lbl_admin.setStyleSheet("color: #A0A0A0; font-size: 12px; font-weight: 500;")
         
-        self.toggle_admin = ToggleSwitch()
+        self.toggle_admin = Switch(tooltip="Admin Mode")
         self.toggle_admin.toggled.connect(self._on_admin_toggled)
         
         self.admin_layout.addWidget(self.lbl_admin)
@@ -441,7 +391,6 @@ class Sidebar(QFrame):
 
         self.toggle_admin.blockSignals(True)
         self.toggle_admin.setChecked(active)
-        self.toggle_admin.position = 1.0 if active else 0.0
         self.toggle_admin.blockSignals(False)
 
 
@@ -458,7 +407,6 @@ class Sidebar(QFrame):
         
         self.toggle_admin.blockSignals(True)
         self.toggle_admin.setChecked(self._admin_mode)
-        self.toggle_admin.position = 1.0 if self._admin_mode else 0.0
         self.toggle_admin.blockSignals(False)
 
     def _create_accordion_group(self, text, icon_name, expanded=True):
