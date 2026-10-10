@@ -200,7 +200,7 @@ def test_main_screen_visibility_reaches_the_search_grid_after_save(env):
 
 def test_every_settings_entry_is_there_in_order_and_opens_its_page(env):
     db, ids, dlg, written, outside = env
-    labels = [item._lbl.text() for item, _ in dlg._nav_items]
+    labels = [item.text() for item, _ in dlg._nav_items]
     assert labels == ["General", "Action Buttons", "SCC Vault Presets", "Tracker", "Master Column List", "Services",
                       "Main Screen", "Quick-Copy Fields", "Admin Screen", "Export CSV", "Backup & Restore",
                       "Purge Duplicates"]
@@ -213,7 +213,7 @@ def test_every_settings_entry_is_there_in_order_and_opens_its_page(env):
 def test_search_box_filters_the_entries(env):
     db, ids, dlg, written, outside = env
     dlg._search.setText("copy")
-    shown = [item._lbl.text() for item, _ in dlg._nav_items if not item.isHidden()]
+    shown = [item.text() for item, _ in dlg._nav_items if not item.isHidden()]
     assert shown == ["Quick-Copy Fields"]
     dlg._search.setText("")
     assert all(not item.isHidden() for item, _ in dlg._nav_items)
@@ -230,9 +230,12 @@ def test_opening_on_a_named_page(tmp_path, name, idx):
         S.dispose(dlg)
 
 
-def test_unsaved_dialog_closes_without_writing(env):
+def test_unsaved_dialog_closes_without_writing(env, monkeypatch):
     db, ids, dlg, written, outside = env
     dlg.clipboard_spin.setValue(99)
+    monkeypatch.setattr(usd.QMessageBox, "exec", lambda self: 0)
+    monkeypatch.setattr(usd.QMessageBox, "clickedButton",
+                        lambda self: next(b for b in self.buttons() if b.text() == "Discard changes"))
     dlg.reject()
     assert written == [] and db.get_setting("clipboard_clear_seconds") is None
 

@@ -7,3 +7,5 @@ Check,WP,Text,Result,Date,Notes
 6,K-R,"On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker)",Not run,2026-10-10 17:48,
 7,R-3,"On a real 125 % screen at 1366x768 and 1024x700: open Sidebar Display and Settings General Screen scale, check Apply and Restart now fit, then Restart now really restarts Sera and the new scale applies.",Not run,2026-10-10 18:25,
 8,R-R,"Sidebar on a real 1366x768 laptop at Windows 125 % and Sera display scale 1.00 / 1.25: brand, All Clients + Ctrl K hint, Auto-sync pill not clipped; Ctrl+B, Ctrl+=, Ctrl+-, Ctrl+0 pressed on a real keyboard (offscreen only tests the wiring).",Not run,2026-10-10 18:29,
+9,S-1,"On a real 125 % screen, open Settings > General and check nothing clips: nav, five cards, unsaved bar, footer Save.",Not run,2026-10-10 18:50,
+10,S-1,Edit one General setting then press Close or Esc: confirm the wording of the 'Unsaved changes' prompt (Save changes / Discard changes / Keep editing) is what you want.,Not run,2026-10-10 18:50,

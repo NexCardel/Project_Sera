@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 18:25)
+# UI overhaul — report (2026-10-10 18:29)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 19 |
+| Not started | 18 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 17 |
+| Done | 18 |
 | Blocked | 0 |
 
-Runs: 26   output tokens: 807149   API-equivalent cost: $42.19
+Runs: 27   output tokens: 819978   API-equivalent cost: $43.64
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -31,7 +31,7 @@ Runs: 26   output tokens: 807149   API-equivalent cost: $42.19
 | R-1 | Done | mechanical | 7773fd8 | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... | add WidthAware mixin to ui/utils/responsive.py for kit propagation, column toggling and chip moves |
 | R-2 | Done | sonnet | 5c5ae20 | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... | Sidebar on the kit: real logo, CLIENTS/TOOLS/ADMIN groups, one All Clients, Display for all, Staff Users removed, soft Auto-sync pill; 17 new tests |
 | R-3 | Done | haiku | 58c6edd | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... | Display scale on the kit: SettingRow + Apply/Restart LabelledActions, DialogFrame dialog; same QSettings and restart path; tests pass; one real-screen check add |
-| R-R | Not started | sonnet |  | Review phase R (responsive and shell) |  |
+| R-R | Done | sonnet | 8d136ee | Review phase R (responsive and shell) | Phase R reviewed: sidebar clean at 1366/1024/1366@125%; fold thresholds and Ctrl+B / scale shortcuts locked by tests; no app code changed |
 | S-1 | Not started | sonnet |  | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page |  |
 | S-2 | Not started | haiku |  | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge |  |
 | S-3 | Not started | haiku |  | Screens: Settings: SCC vault presets |  |
@@ -80,3 +80,4 @@ Runs: 26   output tokens: 807149   API-equivalent cost: $42.19
 - #5 (K-6) On a real 125% display, open a SlidePanel in a window narrower than 1080 px: it should fill the width with no left edge, and a DialogFrame (normal and full) should show no clipped title or footer. — Not run
 - #6 (K-R) On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker) — Not run
 - #7 (R-3) On a real 125 % screen at 1366x768 and 1024x700: open Sidebar Display and Settings General Screen scale, check Apply and Restart now fit, then Restart now really restarts Sera and the new scale applies. — Not run
+- #8 (R-R) Sidebar on a real 1366x768 laptop at Windows 125 % and Sera display scale 1.00 / 1.25: brand, All Clients + Ctrl K hint, Auto-sync pill not clipped; Ctrl+B, Ctrl+=, Ctrl+-, Ctrl+0 pressed on a real keyboard (offscreen only tests the wiring). — Not run

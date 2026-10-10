@@ -29,13 +29,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ui.components.kit import (
+    Card, DialogFrame, Input, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
+    Switch, UnsavedBar, sidebar_qss,
+)
+from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS
 
 try:
@@ -56,7 +60,6 @@ _DANGER       = "#FF5252"
 _TEXT_PRI     = "#e8e8e8"
 _TEXT_SEC     = "#808080"
 _TEXT_NAV     = "#a0a0a0"
-_TEXT_NAV_ACT = "#ffffff"
 _TEXT_SECTION = "#4a4a4a"
 _BORDER       = "#2a2a2a"
 _INPUT_BG     = "#171717"
@@ -87,85 +90,6 @@ def _divider() -> QFrame:
     f.setFixedHeight(1)
     f.setStyleSheet(f"background: {_BORDER}; border: none;")
     return f
-
-
-# ── Nav Item ──────────────────────────────────────────────────────────────────
-class _NavItem(QWidget):
-    clicked = Signal()
-
-    def __init__(self, icon_name: str, label: str, parent=None):
-        super().__init__(parent)
-        self._active = False
-        self._icon_name = icon_name
-        self._pixmap_normal = _icon(icon_name, color=_TEXT_NAV).pixmap(16, 16)
-        self._pixmap_active = _icon(icon_name, color=_ACCENT_LIGHT).pixmap(16, 16)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(34)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 0, 12, 0)
-        lay.setSpacing(8)
-
-        self._bar = QFrame()
-        self._bar.setFixedWidth(3)
-        self._bar.setFixedHeight(18)
-        self._bar.setStyleSheet("background: transparent; border: none; border-radius: 1px;")
-        lay.addWidget(self._bar)
-
-        self._icon_lbl = QLabel()
-        self._icon_lbl.setFixedSize(16, 16)
-        self._icon_lbl.setPixmap(self._pixmap_normal)
-        lay.addWidget(self._icon_lbl)
-
-        self._lbl = QLabel(label)
-        self._lbl.setStyleSheet(f"color: {_TEXT_NAV}; font-size: 13px; background: transparent;")
-        lay.addWidget(self._lbl)
-        lay.addStretch()
-
-        self._set_style()
-
-    def set_active(self, active: bool):
-        self._active = active
-        self._set_style()
-
-    def _set_style(self):
-        if self._active:
-            self.setStyleSheet(f"background: {_NAV_ACTIVE}; border-radius: 5px;")
-            self._bar.setStyleSheet(f"background: {_ACCENT}; border: none; border-radius: 1px;")
-            self._lbl.setStyleSheet(
-                f"color: {_TEXT_NAV_ACT}; font-size: 13px; font-weight: 600; background: transparent;")
-            self._icon_lbl.setPixmap(self._pixmap_active)
-        else:
-            self.setStyleSheet("background: transparent; border-radius: 5px;")
-            self._bar.setStyleSheet("background: transparent; border: none; border-radius: 1px;")
-            self._lbl.setStyleSheet(f"color: {_TEXT_NAV}; font-size: 13px; background: transparent;")
-            self._icon_lbl.setPixmap(self._pixmap_normal)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
-
-    def enterEvent(self, event):
-        if not self._active:
-            self.setStyleSheet(f"background: {_NAV_HOVER}; border-radius: 5px;")
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        if not self._active:
-            self.setStyleSheet("background: transparent; border-radius: 5px;")
-        super().leaveEvent(event)
-
-
-# ── Section Label ─────────────────────────────────────────────────────────────
-class _SectionLabel(QLabel):
-    def __init__(self, text: str, parent=None):
-        super().__init__(text.upper(), parent)
-        self.setStyleSheet(
-            f"color: {_TEXT_SECTION}; font-size: 10px; font-weight: 700; "
-            f"letter-spacing: 0.8px; padding: 10px 8px 3px 22px; background: transparent;"
-        )
 
 
 # ── Setting row ───────────────────────────────────────────────────────────────
@@ -288,6 +212,26 @@ _PAGE_MAP = {
 
 _SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
 
+# Setting rows stack (title above control) when the page pane gets this narrow; the two limits leave
+# a gap so a pane sitting on the edge does not flip on every resize.
+_PANE_COMPACT_BELOW = 700
+_PANE_WIDE_ABOVE = 740
+
+_MASK_SAMPLE = "Abwf@12345"      # made-up password for the masking preview
+
+# state key -> control attribute, for Discard (see _capture_state)
+_STATE_COMBOS = {"theme": "theme_combo", "window_mode": "window_mode_combo", "mask_mode": "mask_mode_combo",
+                 "sca_mode": "sca_mode_combo", "scc_detect_mode": "scc_detect_combo",
+                 "sgt_mode": "sgt_mode_combo", "sgt_i_mode": "sgt_i_combo"}
+_STATE_STEPPERS = {"reveal_count": "reveal_count_spin", "clipboard": "clipboard_spin",
+                   "sca_max_uses": "sca_max_uses_spin"}
+_STATE_CHECKS = {"quick_copy": "quick_copy_check", "run_in_bg": "run_in_bg_check",
+                 "autostart": "autostart_check", "sca": "sca_check", "show_hide": "show_hide_check",
+                 "scc_enabled": "scc_check", "vsdc_enabled": "vsdc_check", "vsdc_x_enabled": "vsdc_x_check",
+                 "vsdc247_enabled": "vsdc247_check", "vsdc_hud_enabled": "vsdc_hud_check",
+                 "sgt_record_pages": "sgt_record_check", "sdis_record": "sdis_record_check"}
+_STATE_EDITS = {f"scc_opt{n}_{part}": f"scc_opt{n}_{part}_edit" for n in (1, 2, 3, 4) for part in ("label", "str")}
+
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
 class UnifiedSettingsDialog(QDialog):
@@ -309,8 +253,12 @@ class UnifiedSettingsDialog(QDialog):
         self.setMinimumSize(820, 520)
 
         self._nav_items: list = []
+        self._nav_groups: list = []
         self._stack     = None
         self._btn_save  = None
+        self._unsaved   = None
+        self._restoring = False
+        self._compact   = False
 
         self.vis_cbs       = {}
         self.qc_cbs        = {}
@@ -471,73 +419,80 @@ class UnifiedSettingsDialog(QDialog):
 
     # ── Build ─────────────────────────────────────────────────────────────────
     def _build_ui(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        root.addWidget(self._build_nav_panel())
+        self._frame = DialogFrame("Settings", "Project Sera \u00b7 this PC", self, icon="mdi.cog", full=True)
+        self._frame.add_close_button()
+        self._frame.closeRequested.connect(self.reject)
+        outer.addWidget(self._frame)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setFixedWidth(1)
-        sep.setStyleSheet(f"background: {_BORDER}; border: none;")
-        root.addWidget(sep)
+        body = self._frame.body_layout
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        hub = QWidget()
+        row = QHBoxLayout(hub)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._build_nav_panel())
 
-        right_w = QWidget()
-        right_w.setStyleSheet(f"background: {_BG_CONTENT};")
-        rv = QVBoxLayout(right_w)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(0)
-
+        pane = QWidget()
+        pv = QVBoxLayout(pane)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        self._unsaved = UnsavedBar(reserved_space=True)
+        self._unsaved.discard_clicked.connect(self._on_discard)
+        self._unsaved.save_clicked.connect(self._on_save_settings)
+        bar_wrap = QHBoxLayout()
+        bar_wrap.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], 0)
+        bar_wrap.addWidget(self._unsaved)
+        pv.addLayout(bar_wrap)
         self._stack = QStackedWidget()
-        self._stack.setStyleSheet(f"background: {_BG_CONTENT};")
-        rv.addWidget(self._stack, stretch=1)
-        rv.addWidget(self._build_footer())
-        root.addWidget(right_w, stretch=1)
+        pv.addWidget(self._stack, 1)
+        row.addWidget(pane, 1)
+        body.addWidget(hub, 1)
+        body.setAlignment(hub, Qt.AlignmentFlag(0))
+
+        self._build_footer()
 
     def _build_nav_panel(self) -> QWidget:
-        panel = QWidget()
-        panel.setFixedWidth(248)
-        panel.setStyleSheet(f"background: {_BG_NAV};")
+        panel = QFrame()
+        panel.setObjectName("Sidebar")
+        panel.setStyleSheet(sidebar_qss())
+        panel.setFixedWidth(TOKENS["w_setnav"])
 
         v = QVBoxLayout(panel)
-        v.setContentsMargins(8, 14, 8, 14)
-        v.setSpacing(2)
+        v.setContentsMargins(TOKENS["s_3"], TOKENS["s_3"], TOKENS["s_3"], TOKENS["s_3"])
+        v.setSpacing(TOKENS["s_2"])
 
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("Search settings\u2026")
-        self._search.setStyleSheet(f"""
-            QLineEdit {{
-                background: #252525; color: {_TEXT_PRI};
-                border: 1px solid #333333; border-radius: 6px;
-                padding: 7px 10px; font-size: 12px; min-width: 0;
-            }}
-        """)
+        self._search = Input(placeholder="Search settings\u2026", icon="mdi.magnify")
+        self._search.setAccessibleName("Search settings")
         self._search.textChanged.connect(self._filter_nav)
         v.addWidget(self._search)
-        v.addSpacing(8)
 
         scroll = QScrollArea()
+        scroll.setObjectName("SidebarScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("background: transparent;")
 
         nav_w = QWidget()
-        nav_w.setStyleSheet("background: transparent;")
+        nav_w.setObjectName("SidebarScrollContent")
         self._nav_layout = QVBoxLayout(nav_w)
         self._nav_layout.setContentsMargins(0, 0, 0, 0)
         self._nav_layout.setSpacing(1)
 
         def _sec(txt):
-            lbl = _SectionLabel(txt)
+            lbl = NavLabel(txt)
             self._nav_layout.addWidget(lbl)
+            self._nav_groups.append((lbl, []))
 
         def _item(icon, label, page_idx):
-            it = _NavItem(icon, label)
-            it.clicked.connect(lambda idx=page_idx: self._switch_page(idx))
+            it = NavItem(label, icon=icon)
+            it.clicked.connect(lambda _checked=False, idx=page_idx: self._switch_page(idx))
             self._nav_layout.addWidget(it)
             self._nav_items.append((it, page_idx))
+            self._nav_groups[-1][1].append(it)
 
         _sec("App Settings")
         _item("mdi.cog-outline",            "General",            _P_GENERAL)
@@ -561,34 +516,16 @@ class UnifiedSettingsDialog(QDialog):
 
         self._nav_layout.addStretch()
         scroll.setWidget(nav_w)
-        v.addWidget(scroll)
+        v.addWidget(scroll, 1)
         return panel
 
-    def _build_footer(self) -> QWidget:
-        footer = QWidget()
-        footer.setFixedHeight(54)
-        footer.setStyleSheet(f"background: {_BG_DIALOG}; border-top: 1px solid {_BORDER};")
-
-        h = QHBoxLayout(footer)
-        h.setContentsMargins(20, 0, 20, 0)
-        h.setSpacing(10)
-        h.addStretch()
-
-        btn_close = QPushButton("Close")
-        btn_close.setObjectName("UnifiedCloseBtn")
-        btn_close.setIcon(_icon("mdi.close", color=_TEXT_NAV))
-        btn_close.setCursor(Qt.PointingHandCursor)
+    def _build_footer(self):
+        btn_close = self._frame.add_action("Close", icon="mdi.close")
         btn_close.clicked.connect(self.reject)
-        h.addWidget(btn_close)
-
-        self._btn_save = QPushButton("Save Changes")
-        self._btn_save.setObjectName("UnifiedSaveBtn")
-        self._btn_save.setIcon(_icon("mdi.check", color="#ffffff"))
-        self._btn_save.setCursor(Qt.PointingHandCursor)
+        self._btn_save = self._frame.add_action(
+            "Save changes", variant="primary", icon="mdi.check",
+            tooltip="Writes every pending change on every page at once.")
         self._btn_save.clicked.connect(self._on_save_settings)
-        h.addWidget(self._btn_save)
-
-        return footer
 
     def _switch_page(self, page_idx: int):
         if page_idx not in self._page_widgets:
@@ -603,6 +540,7 @@ class UnifiedSettingsDialog(QDialog):
         target_widget = self._page_widgets.get(page_idx)
         if target_widget:
             self._stack.setCurrentWidget(target_widget)
+            self._apply_compact(target_widget)
 
         for item, idx in self._nav_items:
             item.set_active(idx == page_idx)
@@ -612,116 +550,140 @@ class UnifiedSettingsDialog(QDialog):
     def _filter_nav(self, text: str):
         text = text.strip().lower()
         for item, _ in self._nav_items:
-            item.setVisible(not text or text in item._lbl.text().lower())
+            item.setVisible(not text or text in item.text().lower())
+        for label, items in self._nav_groups:
+            label.setVisible(any(not it.isHidden() for it in items))
+
+    def _apply_compact(self, page):
+        for child in page.findChildren(QWidget):
+            if hasattr(child, "set_compact") and callable(child.set_compact):
+                child.set_compact(self._compact)
+
+    def _sync_compact(self):
+        pane_w = self.width() - TOKENS["w_setnav"] - 1
+        if self._compact and pane_w > _PANE_WIDE_ABOVE:
+            self._compact = False
+        elif not self._compact and pane_w < _PANE_COMPACT_BELOW:
+            self._compact = True
+        else:
+            return
+        for page in self._page_widgets.values():
+            self._apply_compact(page)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_compact()
 
     # ── Pages ─────────────────────────────────────────────────────────────────
+    def _kit_page(self, *blocks) -> QScrollArea:
+        """Scrolling settings page: the blocks stacked with kit spacing, no legacy colours."""
+        content = QWidget()
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], TOKENS["s_6"])
+        lay.setSpacing(TOKENS["s_4"])
+        for block in blocks:
+            lay.addWidget(block)
+        lay.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
     def _build_page_general(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("General",
+            lead="Display preferences, masking, automation and start-up behaviour.")
 
-        lay.addWidget(_page_header("General",
-            "Configure display preferences, masking, automation daemons, and startup behaviour."))
-
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem("Light Mode (Default)", "light")
-        lay.addWidget(_setting_row("Application Theme", "Switch between light and dark themes.", self.theme_combo))
-
-        self.window_mode_combo = QComboBox()
+        display = Card("Display")
+        self.theme_combo = Select()
+        self.theme_combo.addItem("Dark", "light")
+        display.add_row(SettingRow("Application theme", "Switch between light and dark themes.",
+                                   self.theme_combo))
+        self.window_mode_combo = Select()
         self.window_mode_combo.addItem("Fullscreen / Maximized", "fullscreen")
         self.window_mode_combo.addItem("Square Mode (1:1 Aspect)", "square")
-        self.window_mode_combo.addItem("Rectangular Mode (950 \u00d7 680)", "rectangular")
-        lay.addWidget(_setting_row("Window Display Mode",
-            "Controls how the app window opens on launch.", self.window_mode_combo))
-
+        self.window_mode_combo.addItem("Rectangular Mode (950 × 680)", "rectangular")
+        display.add_row(SettingRow("Window display mode",
+                                   "Controls how the app window opens on launch.", self.window_mode_combo))
         # Per PC, not saved with the other settings (app_settings syncs to every PC); saves on its own buttons.
         from ui.dialogs.display_scale_dialog import DisplayScaleControl
-        scale_wrap = QWidget()
-        scale_lay = QVBoxLayout(scale_wrap)
-        scale_lay.setContentsMargins(TOKENS["s_3"], 0, TOKENS["s_3"], 0)
-        scale_lay.addWidget(DisplayScaleControl())
-        lay.addWidget(scale_wrap)
+        display.add_row(DisplayScaleControl())
 
-        lay.addWidget(_sub_header("Security & Masking"))
-
-        self.mask_mode_combo = QComboBox()
+        secure = Card("Passwords and clipboard")
+        self.mask_mode_combo = Select()
         self.mask_mode_combo.addItem("Last N characters visible  (e.g. *****1234)", "last_n")
         self.mask_mode_combo.addItem("First N characters visible  (e.g. 1234*****)", "first_n")
-        self.mask_mode_combo.addItem("Full dots masking  (\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf\u25cf)", "full_dots")
-        lay.addWidget(_setting_row("Password Masking Mode",
-            "How passwords are obscured in the Client Detail view.", self.mask_mode_combo))
+        self.mask_mode_combo.addItem("Full dots masking  (●●●●●●●●●●)", "full_dots")
+        self._mask_row = SettingRow("Password masking mode", "", self.mask_mode_combo, width="wide")
+        secure.add_row(self._mask_row)
+        self.reveal_count_spin = Stepper(value=4, minimum=1, maximum=10, step=1)
+        secure.add_row(SettingRow("Visible character count",
+                                  "Number of characters shown when masking is active.", self.reveal_count_spin))
+        self.clipboard_spin = Stepper(value=30, minimum=5, maximum=300, step=5, unit=" s")
+        secure.add_row(SettingRow("Auto clipboard clear",
+                                  "Automatically wipe the clipboard after this many seconds.", self.clipboard_spin))
+        self.quick_copy_check = Switch()
+        self.quick_copy_check.setAccessibleName("Enable Quick-Copy")
+        secure.add_row(SettingRow("Enable Quick-Copy",
+                                  "Master toggle — allows employees to click field values to copy them.",
+                                  self.quick_copy_check))
 
-        self.reveal_count_spin = QSpinBox()
-        self.reveal_count_spin.setRange(1, 10)
-        self.reveal_count_spin.setFixedWidth(72)
-        lay.addWidget(_setting_row("Visible Character Count",
-            "Number of characters shown when masking is active.", self.reveal_count_spin))
+        startup = Card("Start-up")
+        self.run_in_bg_check = Switch()
+        self.run_in_bg_check.setAccessibleName("Keep app running in background")
+        startup.add_row(SettingRow("Keep app running in background",
+                                   "Closing the window minimises Sera to the system tray instead of quitting.",
+                                   self.run_in_bg_check))
+        self.autostart_check = Switch()
+        self.autostart_check.setAccessibleName("Launch at Windows startup")
+        startup.add_row(SettingRow("Launch at Windows startup",
+                                   "Automatically starts Project Sera in the background when Windows boots.",
+                                   self.autostart_check))
 
-        self.clipboard_spin = QSpinBox()
-        self.clipboard_spin.setRange(5, 300)
-        self.clipboard_spin.setSuffix("  sec")
-        self.clipboard_spin.setFixedWidth(90)
-        lay.addWidget(_setting_row("Auto Clipboard Clear",
-            "Automatically wipe the clipboard after this many seconds.", self.clipboard_spin))
-
-        self.quick_copy_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable Quick-Copy",
-            "Master toggle \u2014 allows employees to click field values to copy them.", self.quick_copy_check))
-
-        lay.addWidget(_sub_header("Startup & System"))
-
-        self.run_in_bg_check = QCheckBox()
-        lay.addWidget(_setting_row("Keep app running in background",
-            "Closing the window minimises Sera to the system tray instead of quitting.", self.run_in_bg_check))
-
-        self.autostart_check = QCheckBox()
-        lay.addWidget(_setting_row("Launch at Windows startup",
-            "Automatically starts Project Sera in the background when Windows boots.", self.autostart_check))
-
-        self.sca_check = QCheckBox()
-        lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
-            "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
-            self.sca_check))
-
-        self.sca_mode_combo = QComboBox()
+        assist = Card("Clipboard assist (SCA)")
+        self.sca_check = Switch()
+        self.sca_check.setAccessibleName("SCA — Sera Clipboard Assist")
+        assist.add_row(SettingRow("SCA — Sera Clipboard Assist",
+                                  "When a client User ID is copied from a spreadsheet, arms matching portal credentials automatically.",
+                                  self.sca_check))
+        self.sca_mode_combo = Select()
         self.sca_mode_combo.addItem("Ambient Autofill  (silently fills password on paste)", "autofill")
         self.sca_mode_combo.addItem("SCA Widget  (floating 1-click password prompt on paste)", "widget")
-        lay.addWidget(_setting_row("SCA Action Mode",
-            "Whether SCA silently injects credentials or shows a 1-click floating prompt.", self.sca_mode_combo))
+        assist.add_row(SettingRow("SCA action mode",
+                                  "Whether SCA silently injects credentials or shows a 1-click floating prompt.",
+                                  self.sca_mode_combo, width="wide"))
+        self.sca_max_uses_spin = Stepper(value=1, minimum=1, maximum=20, step=1, unit=" uses")
+        assist.add_row(SettingRow("SCA uses per copied UID",
+                                  "Maximum successful SCA fills allowed after one UID is copied.",
+                                  self.sca_max_uses_spin))
 
-        self.sca_max_uses_spin = QSpinBox()
-        self.sca_max_uses_spin.setRange(1, 20)
-        self.sca_max_uses_spin.setSuffix(" uses")
-        lay.addWidget(_setting_row("SCA Uses per Copied UID",
-            "Maximum successful SCA fills allowed after one UID is copied.", self.sca_max_uses_spin))
-
-        lay.addWidget(_sub_header("Schema Info"))
-
+        schema = Card("Schema info")
         id_col = self.db.get_id_column()
         if id_col:
-            id_ctrl = QLabel(f"'{id_col['label']}' \u2014 Wired to Client Auto-Serial Numbers")
-            id_ctrl.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-weight: 700; font-size: 12px;")
+            id_ctrl = Pill(f"'{id_col['label']}' — wired to client auto-serial numbers", "emerald")
         else:
-            id_ctrl = QLabel("Not assigned \u2014 can be set in Master Column List")
-            id_ctrl.setStyleSheet(f"color: {_TEXT_SEC}; font-style: italic; font-size: 12px;")
-        lay.addWidget(_setting_row("ID / Primary Key Column",
-            "Column used as the client's unique identifier and auto-serial source.", id_ctrl))
+            id_ctrl = Pill("Not assigned — set in Master Column List", "neutral")
+        schema.add_row(SettingRow("ID / Primary Key column",
+                                  "Column used as the client's unique identifier and auto-serial source.",
+                                  id_ctrl, width="auto"))
 
-        self.theme_combo.currentIndexChanged.connect(self._on_control_changed)
-        self.window_mode_combo.currentIndexChanged.connect(self._on_control_changed)
-        self.mask_mode_combo.currentIndexChanged.connect(self._on_control_changed)
-        self.reveal_count_spin.valueChanged.connect(self._on_control_changed)
-        self.clipboard_spin.valueChanged.connect(self._on_control_changed)
-        self.quick_copy_check.toggled.connect(self._on_control_changed)
-        self.run_in_bg_check.toggled.connect(self._on_control_changed)
-        self.autostart_check.toggled.connect(self._on_control_changed)
-        self.sca_check.toggled.connect(self._on_control_changed)
-        self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
-        self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
+        for combo in (self.theme_combo, self.window_mode_combo, self.mask_mode_combo, self.sca_mode_combo):
+            combo.currentIndexChanged.connect(self._on_control_changed)
+        for stepper in (self.reveal_count_spin, self.clipboard_spin, self.sca_max_uses_spin):
+            stepper.valueChanged.connect(self._on_control_changed)
+        for switch in (self.quick_copy_check, self.run_in_bg_check, self.autostart_check, self.sca_check):
+            switch.toggled.connect(self._on_control_changed)
+        self.mask_mode_combo.currentIndexChanged.connect(self._update_mask_preview)
+        self.reveal_count_spin.valueChanged.connect(self._update_mask_preview)
+        self._update_mask_preview()
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, display, secure, startup, assist, schema)
+
+    def _update_mask_preview(self, *args):
+        masked = mask_password(_MASK_SAMPLE, self.mask_mode_combo.currentData() or "last_n",
+                               self.reveal_count_spin.value())
+        self._mask_row.set_sub(f"How passwords are obscured in the Client Detail view. Example: {masked}")
 
     def _build_page_actions(self) -> QScrollArea:
         w = QWidget()
@@ -1351,24 +1313,84 @@ class UnifiedSettingsDialog(QDialog):
         return state
 
     def _on_control_changed(self, *args):
+        if self._restoring:
+            return
         self._update_save_btn_state()
 
+    def _dirty_count(self) -> int:
+        if self._initial_state is None:
+            return 0
+        now = self._capture_state()
+        count = 0
+        for key, value in now.items():
+            base = self._initial_state.get(key)
+            if isinstance(value, dict):
+                base = base or {}
+                count += sum(1 for cid, checked in value.items() if base.get(cid) != checked)
+            elif base != value:
+                count += 1
+        return count
+
     def _update_save_btn_state(self):
-        if not hasattr(self, "_btn_save") or self._btn_save is None:
+        count = self._dirty_count()
+        if self._btn_save is not None:
+            self._btn_save.setEnabled(count > 0)
+        if self._unsaved is not None:
+            self._unsaved.set_count(count)
+
+    def _apply_state(self, state: dict):
+        """Put every built control back to `state` (the baseline) without counting it as an edit."""
+        self._restoring = True
+        try:
+            for key, name in _STATE_COMBOS.items():
+                combo = getattr(self, name, None)
+                if combo is not None and key in state:
+                    idx = combo.findData(state[key])
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+            for key, name in _STATE_STEPPERS.items():
+                stepper = getattr(self, name, None)
+                if stepper is not None and key in state:
+                    stepper.setValue(state[key])
+            for key, name in _STATE_CHECKS.items():
+                check = getattr(self, name, None)
+                if check is not None and key in state:
+                    check.setChecked(state[key])
+            for key, name in _STATE_EDITS.items():
+                edit = getattr(self, name, None)
+                if edit is not None and key in state:
+                    edit.setText(state[key])
+            for key, boxes in (("vis", self.vis_cbs), ("qc", self.qc_cbs), ("admin_vis", self.admin_vis_cbs)):
+                for cid, checked in state.get(key, {}).items():
+                    if cid in boxes:
+                        boxes[cid].setChecked(checked)
+        finally:
+            self._restoring = False
+
+    def _on_discard(self):
+        if self._initial_state is not None:
+            self._apply_state(self._initial_state)
+        self._update_save_btn_state()
+
+    def reject(self):
+        if self._dirty_count() == 0:
+            super().reject()
             return
-        if not hasattr(self, "_initial_state") or self._initial_state is None:
-            self._btn_save.setEnabled(False)
-            self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
-            self._btn_save.setCursor(Qt.ArrowCursor)
-            return
-        is_dirty = (self._capture_state() != self._initial_state)
-        self._btn_save.setEnabled(is_dirty)
-        if is_dirty:
-            self._btn_save.setIcon(_icon("mdi.check", color="#ffffff"))
-            self._btn_save.setCursor(Qt.PointingHandCursor)
-        else:
-            self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
-            self._btn_save.setCursor(Qt.ArrowCursor)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Unsaved changes")
+        box.setText(f"You have {self._dirty_count()} unsaved change(s) in Settings.")
+        save_btn = box.addButton("Save changes", QMessageBox.AcceptRole)
+        discard_btn = box.addButton("Discard changes", QMessageBox.DestructiveRole)
+        box.addButton("Keep editing", QMessageBox.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            self._on_save_settings()
+            if self._dirty_count() == 0:
+                super().reject()
+        elif clicked is discard_btn:
+            super().reject()
 
     def _update_scc_counts_display(self):
         """Update the SCC counts display in the UI."""

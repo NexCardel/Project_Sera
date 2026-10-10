@@ -17,7 +17,7 @@ R-1,3,Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMP
 R-2,3,"Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ...",Done,claude-sonnet-5-5,1,5c5ae20,"Sidebar on the kit: real logo, CLIENTS/TOOLS/ADMIN groups, one All Clients, Display for all, Staff Users removed, soft Auto-sync pill; 17 new tests",2026-10-10 18:13
 R-3,3,Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ...,Done,claude-haiku-5-5,1,58c6edd,"Display scale on the kit: SettingRow + Apply/Restart LabelledActions, DialogFrame dialog; same QSettings and restart path; tests pass; one real-screen check added",2026-10-10 18:25
 R-R,3,Review phase R (responsive and shell),Done,claude-sonnet-5-5,1,8d136ee,Phase R reviewed: sidebar clean at 1366/1024/1366@125%; fold thresholds and Ctrl+B / scale shortcuts locked by tests; no app code changed,2026-10-10 18:29
-S-1,4,Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page,Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
+S-1,4,Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page,In progress,claude-sonnet-5-5,1,,,2026-10-10 18:29
 S-2,4,"Screens: Settings: Action buttons, Tracker, Export, Backup, Purge",Not started,claude-haiku-5-5 -> gemini-3.8-flash-high,0,,,
 S-3,4,Screens: Settings: SCC vault presets,Not started,claude-haiku-5-5 -> gemini-3.8-flash-high,0,,,
 S-4,4,Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ...,Not started,claude-opus-5-5,0,,,
