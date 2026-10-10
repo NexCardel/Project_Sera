@@ -32,7 +32,7 @@ if sys.platform == "win32":
     os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget  # noqa: E402
 
 from ui.components import kit  # noqa: E402
 from ui.utils.tokens import KIT, TOKENS  # noqa: E402
@@ -168,6 +168,19 @@ def primitives_page():
     _row(grid, r, "Tag", [kit.Tag(t.upper(), t) for t in kit.Tag.TONES] + [long_tag])
     r += 1
     _row(grid, r, "StatusDot", [kit.StatusDot(t) for t in kit.StatusDot.TONES])
+    r += 1
+    side = QFrame()
+    side.setObjectName("Sidebar")
+    side.setFixedWidth(TOKENS["w_side"])
+    side.setStyleSheet(kit.sidebar_qss())
+    side_lay = QVBoxLayout(side)
+    side_lay.addWidget(kit.NavLabel("Clients"))
+    on = kit.NavItem("All Clients", icon="mdi.account-multiple-outline", hint="Ctrl K")
+    on.set_active(True)
+    side_lay.addWidget(on)
+    side_lay.addWidget(kit.NavItem("Tracker Dump", icon="mdi.radar"))
+    side_lay.addWidget(kit.NavItem("A navigation entry with a very long name", icon="mdi.monitor"))
+    _row(grid, r, "NavLabel, NavItem (active, hint, plain, elided)", [side])
     return page
 
 

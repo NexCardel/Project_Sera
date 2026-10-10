@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy, QStackedWidget,
 from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt
 
 
-from ui.shell.sidebar import Sidebar
+from ui.shell.sidebar import SIDEBAR_WIDTH, Sidebar
 from ui.services.alert_service import ActionAlertFormatter
 
 
@@ -121,7 +121,7 @@ class AppShell(QWidget):
 
         # 1. Sidebar
         self.sidebar = Sidebar()
-        self.sidebar_target_width = 172
+        self.sidebar_target_width = SIDEBAR_WIDTH
         self.sidebar_collapsed = False
         self.sidebar_anim = QPropertyAnimation(self.sidebar, b"maximumWidth", self)
         self.sidebar_anim.setDuration(220)
@@ -145,7 +145,7 @@ class AppShell(QWidget):
         self.toast = self.alert  # Backward compatibility alias
 
     def toggle_sidebar(self):
-        """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        """Smoothly toggle sidebar between collapsed (0px) and expanded (SIDEBAR_WIDTH)."""
         self._sidebar_user_toggled = True
         if self.sidebar_collapsed:
             self.expand_sidebar()
@@ -162,7 +162,7 @@ class AppShell(QWidget):
         self.sidebar_anim.start()
 
     def expand_sidebar(self):
-        """Expand sidebar to target width (172px)."""
+        """Expand sidebar to target width (SIDEBAR_WIDTH)."""
         self.sidebar_anim.stop()
         self.sidebar_anim.setStartValue(self.sidebar.width())
         self.sidebar_anim.setEndValue(self.sidebar_target_width)

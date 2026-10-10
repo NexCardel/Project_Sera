@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 17:49)
+# UI overhaul — report (2026-10-10 18:06)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 22 |
+| Not started | 21 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 14 |
+| Done | 15 |
 | Blocked | 0 |
 
-Runs: 23   output tokens: 650380   API-equivalent cost: $35.50
+Runs: 24   output tokens: 725845   API-equivalent cost: $35.50
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -28,7 +28,7 @@ Runs: 23   output tokens: 650380   API-equivalent cost: $35.50
 | K-6 | Done | sonnet | 782bc31 | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... | DialogFrame, Scrim, PageHeader, Tile, LogView, SlidePanel restyle (540 / full width COMPACT); 52 new tests pass; frames gallery page |
 | K-7 | Done | sonnet | fd10027 | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... | Gallery states page (hover/focus/disabled), 14 PNGs at 100/125, kit reference docstring, 38 new keyboard/tooltip/elision/gallery tests, Chip Enter |
 | K-R | Done | opus | e9a31bc | Review phase K (kit) | Kit reviewed and frozen; 5 kit fixes, gallery uses real Windows fonts, ToggleSwitch/FilterChip users migrated; only pre-existing PAN + order-leak failures |
-| R-1 | Not started | mechanical |  | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... |  |
+| R-1 | Done | mechanical | 7773fd8 | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... | add WidthAware mixin to ui/utils/responsive.py for kit propagation, column toggling and chip moves |
 | R-2 | Not started | sonnet |  | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... |  |
 | R-3 | Not started | haiku |  | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... |  |
 | R-R | Not started | sonnet |  | Review phase R (responsive and shell) |  |

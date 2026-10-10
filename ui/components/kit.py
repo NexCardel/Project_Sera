@@ -189,6 +189,17 @@ LogView(parent=None, *, max_lines=500)
 SlidePanel (ui/shell/slide_panel.py) is restyled from the same tokens: 540 px, the whole width in
 COMPACT (apply_width_mode / set_compact; derived from the parent's width until one is set).
 
+Shell sidebar (R-2):
+NavItem(text, parent=None, *, icon=None, hint=None, tooltip="")
+    Sidebar entry drawn by the widget: 16 px icon, text, optional Key hint at the right. set_active(on)
+    / is_active() mark the page showing (mint wash + left bar); Tab focus shows the mint edge.
+NavLabel(text, parent=None)
+    Upper-case group label (Clients / Tools / Admin).
+sidebar_qss()
+    Style sheet for the frame named "Sidebar" (surface, brand, admin row, staff row, version), keyed by
+    object names SidebarBrand / SidebarTitle / SidebarSub / SidebarAdminRow / SidebarSection /
+    SidebarDivider / SidebarLogo / SidebarProfile / SidebarProfileName / SidebarProfileRow / SidebarVersion.
+
 Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widget still shows
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
@@ -3662,3 +3673,148 @@ class LogView(QPlainTextEdit):
     def clear_log(self):
         self.clear()
         self._started = False
+
+
+# ---------------------------------------------------------------- Shell sidebar (R-2)
+
+@lru_cache(maxsize=None)
+def _nav_label_qss():
+    return (
+        f"QLabel {{ background: transparent; color: {T['faint']}; font-size: {K['f_nav_label']}px;"
+        f" font-weight: 600; padding: {K['pad_nav_h']}px {T['s_2']}px 4px {T['s_2']}px; }}"
+    )
+
+
+class NavLabel(QLabel):
+    """Upper-case group label of the sidebar (Clients / Tools / Admin)."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(text.upper(), parent)
+        font = self.font()
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+        self.setFont(font)
+        self.setStyleSheet(_nav_label_qss())
+
+
+class NavItem(QPushButton):
+    """Sidebar entry: icon + text (+ optional Key hint), drawn by the widget. set_active(on) marks the
+    page that is showing (mint wash and a bar on the left edge)."""
+
+    def __init__(self, text, parent=None, *, icon=None, hint=None, tooltip=""):
+        super().__init__(text, parent)
+        self._icon_spec = icon
+        self._icons = {}
+        self._active = False
+        self.setFixedHeight(K["h_nav"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setAccessibleName(text)
+        if tooltip:
+            self.setToolTip(tooltip)
+        self._key = None
+        if hint:
+            self._key = Key(hint, self)
+            self._key.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self._place_key()
+
+    def set_active(self, on):
+        on = bool(on)
+        if on != self._active:
+            self._active = on
+            self.setProperty("active", on)
+            self.update()
+
+    def is_active(self):
+        return self._active
+
+    def _place_key(self):
+        if self._key is not None:
+            self._key.adjustSize()
+            self._key.move(self.width() - K["pad_nav_h"] - self._key.width(),
+                           (self.height() - self._key.height()) // 2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_key()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.update()
+
+    def _nav_icon(self, colour):
+        icon = self._icons.get(colour)
+        if icon is None:
+            icon = self._icons[colour] = _icon(self._icon_spec, colour)
+        return icon
+
+    def paintEvent(self, event):
+        hover = self.underMouse() and self.isEnabled()
+        if self._active:
+            bg, fg = T["emdim"], T["text"]
+        elif hover:
+            bg, fg = T["raise"], T["text"]
+        else:
+            bg, fg = None, K["nav_tx"]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if bg:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(bg))
+            p.drawRoundedRect(rect, T["r_m"], T["r_m"])
+        if self._active:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T["em"]))
+            bar = QRectF(0, 8, K["w_nav_bar"], self.height() - 16)
+            p.drawRoundedRect(bar, K["w_nav_bar"], K["w_nav_bar"])
+        if self.hasFocus():
+            p.setPen(QPen(QColor(T["mint"]), 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), T["r_m"], T["r_m"])
+        x = K["pad_nav_h"]
+        icon = self._nav_icon(fg) if self._icon_spec else None
+        if icon is not None and not icon.isNull():
+            side = 16
+            icon.paint(p, x, (self.height() - side) // 2, side, side)
+            x += side + K["gap_nav"]
+        font = QFont(self.font())
+        font.setPixelSize(K["f_nav"])
+        font.setWeight(QFont.DemiBold if self._active else QFont.Medium)
+        p.setFont(font)
+        p.setPen(QColor(fg))
+        right = self.width() - K["pad_nav_h"]
+        if self._key is not None:
+            right -= self._key.width() + K["gap_nav"]
+        text = QFontMetrics(font).elidedText(self.text(), Qt.ElideRight, max(right - x, 0))
+        p.drawText(QRect(x, 0, max(right - x, 0), self.height()), Qt.AlignVCenter | Qt.AlignLeft, text)
+        p.end()
+
+
+@lru_cache(maxsize=None)
+def sidebar_qss():
+    """Style sheet of the shell sidebar frame (#Sidebar): surface, brand, admin row, staff row, version.
+    The app theme paints every plain QWidget, so each container carries its own transparent rule."""
+    transparent = ("QWidget#SidebarBrand, QWidget#SidebarAdminRow, QWidget#SidebarProfileRow,"
+                   " QWidget#SidebarScrollContent, QWidget#SidebarGroup,"
+                   " QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget > QWidget"
+                   " { background: transparent; border: none; }")
+    return (
+        f"QFrame#Sidebar {{ background: {T['side']}; border: none; border-right: 1px solid {T['line']}; }}"
+        + transparent +
+        f"QLabel#SidebarLogo {{ background: transparent; border: none; }}"
+        f"QLabel#SidebarTitle {{ background: transparent; color: {T['text']}; font-size: {K['f_btn']}px;"
+        f" font-weight: 700; }}"
+        f"QLabel#SidebarSub {{ background: transparent; color: {T['muted']}; font-size: {T['f_xs']}px;"
+        f" font-weight: 500; }}"
+        f"QLabel#SidebarSection {{ background: transparent; color: {K['sb_tx']}; font-size: {T['f_s']}px; }}"
+        f"QFrame#SidebarDivider {{ background: {T['line']}; border: none; min-height: 1px; max-height: 1px; }}"
+        f"QLabel#SidebarProfile {{ background: {T['em']}; border-radius: {K['d_avatar'] // 2}px; }}"
+        f"QLabel#SidebarProfileName {{ background: transparent; color: {K['me_tx']}; font-size: {T['f_s']}px;"
+        f" font-weight: 600; }}"
+        f"QLabel#SidebarVersion {{ background: transparent; color: {T['faint']}; font-size: {K['f_sb_ver']}px; }}"
+    )

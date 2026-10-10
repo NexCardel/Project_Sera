@@ -98,7 +98,7 @@ def test_the_display_entry_is_there_for_everyone_and_emits_its_signal(sidebar):
 
 
 def test_admin_only_entries_follow_admin_mode(sidebar):
-    admin_only = [sidebar.btn_manage_clients, sidebar.btn_audit, sidebar.btn_settings, sidebar.btn_manage_staff]
+    admin_only = [sidebar.btn_manage_clients, sidebar.btn_audit, sidebar.btn_settings]
     for w in admin_only:
         assert w in sidebar.admin_widgets
     sidebar.set_admin_mode(False)
@@ -113,11 +113,11 @@ def test_admin_only_entries_follow_admin_mode(sidebar):
 def test_every_entry_emits_its_signal(sidebar):
     seen = []
     for name in ("go_to_search", "action_import_csv", "action_manage_clients", "action_tracker_dump", "action_audit_log",
-                 "action_manage_staff", "action_settings"):
+                 "action_settings"):
         getattr(sidebar, name).connect(lambda n=name: seen.append(n))
     sidebar.set_admin_mode(True)
     for btn in (sidebar.btn_search, sidebar.btn_all_clients, sidebar.btn_new_clients, sidebar.btn_manage_clients,
-                sidebar.btn_tracker_dump, sidebar.btn_audit, sidebar.btn_manage_staff, sidebar.btn_settings):
+                sidebar.btn_tracker_dump, sidebar.btn_audit, sidebar.btn_settings):
         btn.click()
     assert seen == ["go_to_search", "go_to_search", "action_import_csv", "action_manage_clients", "action_tracker_dump",
-                    "action_audit_log", "action_manage_staff", "action_settings"]
+                    "action_audit_log", "action_settings"]

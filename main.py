@@ -1683,7 +1683,6 @@ class SeraApp:
         sidebar.action_manage_clients.connect(self._show_manage_clients)
         sidebar.action_tracker_dump.connect(self._show_tracker_dump)
         sidebar.action_audit_log.connect(self.admin_win._on_view_audit_log)
-        sidebar.action_manage_staff.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_open_sera_sync.connect(self.admin_win._on_open_sera_sync)
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
