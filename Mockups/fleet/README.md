@@ -349,17 +349,14 @@ the screen list after confirming nothing opens it.
 - In the client panel, a per-service "last autofilled" time under the service name.
 - Tracker Dump: a saved-filter chip ("My clients") per staff member.
 - Audit log: an "Only this PC" quick chip beside Staff.
-- Sera Sync: show "ahead / behind / in step" next to the revision on each device card (spec 04 wanted
-  it; the current device payload has no revision score, so it is left out of the drawing).
 - Settings search that filters rows on the page, not only the page list.
 
 ## Open questions for the owner
 
-The first six questions were answered on 2026-10-10 (see Decisions above). Still open:
+None. All questions were answered on 2026-10-10:
 
-1. **Audit Log in Admin mode only**: it is admin-only today and stays so here. Should staff see their
-   own PC's entries?
-2. **Email and TAN** stay type password [Secret] as decided; confirm the Role tags should show them as
-   Secret in the Columns table.
-3. **Sera Sync ahead / behind label**: the current device payload has no revision score; should the
-   build add one (a small protocol change) or leave the label out?
+- The first six are in the Decisions table above.
+- **Audit log** stays admin-only, as today and as drawn.
+- **Email and TAN** types are part of the EAV column schema and are changed in Settings → Columns when
+  wanted; not a design matter. The Columns table simply shows whatever type a column has.
+- **Sera Sync ahead / behind label**: redesign only, no protocol change; the label is not built.

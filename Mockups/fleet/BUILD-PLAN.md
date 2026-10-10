@@ -132,3 +132,5 @@ parallel with S-6…S-12.
 - Sera Sync tabs visible to all; admin actions keep PIN confirmation.
 - COMPACT selection bar: icons with tooltips.
 - Display entry always visible; display scale saved per PC, never synced.
+- Audit log stays admin-only. Column types (Email, TAN) are schema data edited in Settings → Columns, not design.
+- Redesign only: no sync protocol change (no revision score / ahead-behind label).
