@@ -36,8 +36,8 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
-    Card, DialogFrame, Input, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
-    Switch, UnsavedBar, sidebar_qss,
+    Card, DialogFrame, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow,
+    Stepper, Switch, UnsavedBar, sidebar_qss,
 )
 from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS
@@ -686,23 +686,18 @@ class UnifiedSettingsDialog(QDialog):
         self._mask_row.set_sub(f"How passwords are obscured in the Client Detail view. Example: {masked}")
 
     def _build_page_actions(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("Action Buttons",
+            lead="Each service gets one autofill button in Client Detail. Its type (Fast Autofill, "
+                 "SMTI Assist or MECP Copy) is chosen per service in Services \u2192 Automation Mode.")
 
-        lay.addWidget(_page_header("Action Buttons",
-            "Each service gets one autofill button in Client Detail. Its type (Fast Autofill, "
-            "SMTI Assist or MECP Copy) is chosen per service in Services \u2192 Automation Mode."))
-
-        self.show_hide_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Show / Hide\u2019 Eye Buttons",
+        self.show_hide_check = Switch()
+        self.show_hide_check.setAccessibleName("Enable Show / Hide Eye Buttons")
+        self.show_hide_check.toggled.connect(self._on_control_changed)
+        buttons = Card()
+        buttons.add_row(SettingRow("Enable \u2018Show / Hide\u2019 Eye Buttons",
             "Shows a password-reveal toggle next to each credential field in Client Detail.", self.show_hide_check))
 
-        self.show_hide_check.toggled.connect(self._on_control_changed)
-
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, buttons)
 
     def _build_page_scc(self) -> QScrollArea:
         w = QWidget()
@@ -1086,75 +1081,70 @@ class UnifiedSettingsDialog(QDialog):
 
 
     def _build_page_tracker(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("Tracker",
+            lead="SGT (Sera Global Tracker) is the capture engine. VSDC, VSDC-X and VSDC 24/7 are the older "
+                 "engines; they stay off unless you need one beside SGT.")
 
-        lay.addWidget(_page_header("Tracker",
-            "SGT (Sera Global Tracker) is the capture engine. VSDC, VSDC-X and VSDC 24/7 are the older "
-            "engines; they stay off unless you need one beside SGT."))
-
-        lay.addWidget(_sub_header("Visual Sera DOM Crosshair (VSDC)"))
-        self.vsdc_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable VSDC",
-            "Extracts structured data from client-facing compliance portals visually using DOM coordinates.", self.vsdc_check))
-
-        lay.addWidget(_sub_header("VSDC-X (UI Automation)"))
-        self.vsdc_x_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable VSDC-X",
-            "Advanced fallback capture method that navigates modal overlays and complex popups using UI Automation exact-text reading.", self.vsdc_x_check))
-
-        lay.addWidget(_sub_header("VSDC 24/7 (Optical)"))
-        self.vsdc247_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable VSDC 24/7",
-            "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
-
-        lay.addWidget(_sub_header("SGT - Sera Global Tracker"))
-        self.sgt_mode_combo = QComboBox()
+        sgt = Card("SGT - Sera Global Tracker", edge="em")
+        self.sgt_mode_combo = Select()
         self.sgt_mode_combo.addItem("Live (main capture engine)", "live")
         self.sgt_mode_combo.addItem("Shadow (separate rows, for comparison)", "shadow")
         self.sgt_mode_combo.addItem("Off", "off")
-        lay.addWidget(_setting_row("SGT mode",
+        sgt.add_row(SettingRow("SGT mode",
             "Reads every portal page and works out every datapoint from its field list, without crosshairs. "
             "Live saves its captures as the tracker's rows (tagged SGT, orange): a filing another engine "
             "already saved is updated in place, and its status never moves down. A submission whose client "
             "was never identified is saved unassigned and raises the phone alert. Shadow keeps SGT's rows "
             "separate from the other engines' instead, for comparison. Either way the HUD pill shows its "
             "captures and a detailed log stays on this PC (sgt_shadow folder).", self.sgt_mode_combo))
-        self.sgt_record_check = QCheckBox()
-        lay.addWidget(_setting_row("Record pages for SGT testing",
+        self.sgt_record_check = Switch()
+        self.sgt_record_check.setAccessibleName("Record pages for SGT testing")
+        sgt.add_row(SettingRow("Record pages for SGT testing",
             "While SGT is on, keeps the text of each portal page it reads on this PC (sgt_corpus folder, "
             "deleted after 30 days) so a change to SGT's field list can be replayed against real pages "
             "before it is used. The pages contain client details; they never leave this PC.",
             self.sgt_record_check))
-        self.sdis_record_check = QCheckBox()
-        lay.addWidget(_setting_row("Record pages for Sera Distill (SDIS)",
+        self.sdis_record_check = Switch()
+        self.sdis_record_check.setAccessibleName("Record pages for Sera Distill (SDIS)")
+        sgt.add_row(SettingRow("Record pages for Sera Distill (SDIS)",
             "While SGT is on, also keeps the full structure of each changed portal page on this PC "
             "(sdis_capture folder, at most 500 MB - the oldest go first) so Sera Distill can find the "
             "datapoints of a page. Read after SGT's own read and dropped if it takes over 1.5 s, so SGT "
             "captures exactly as before. The pages contain client details; they leave this PC only for "
             "the admin PC.", self.sdis_record_check))
-        self.sgt_i_combo = QComboBox()
+        self.sgt_i_combo = Select()
         self.sgt_i_combo.addItem("Off", "off")
         self.sgt_i_combo.addItem("On", "on")
-        lay.addWidget(_setting_row("SGT-I",
+        sgt.add_row(SettingRow("SGT-I",
             "SGT's Intelligence half: watches the pages SGT reads, on its own, and learns how each portal "
             "is built. It never changes what SGT captures - it may only add its own notes to a row and ask "
             "SGT to read a page again. If it ever fails or runs slow it switches itself off until the app "
             "restarts. Off = SGT exactly as before.", self.sgt_i_combo))
-        lab_btn = QPushButton("Open SGT lab →")
-        lab_btn.setIcon(_icon("mdi.flask-outline", color=_TEXT_PRI))
+        lab_btn = LabelledAction("Open SGT lab →", variant="secondary", icon="mdi.flask-outline")
         lab_btn.clicked.connect(self._on_open_sgt_lab)
-        lay.addWidget(_setting_row("SGT lab",
+        sgt.add_row(SettingRow("SGT lab",
             "New datapoints SGT-I found on portals, drawn only from counting and maths (no AI). "
             "Accept writes one to this PC's local override file; Reject only remembers your choice.",
             lab_btn))
+        self.vsdc_hud_check = Switch()
+        self.vsdc_hud_check.setAccessibleName("Show HUD pill")
+        sgt.add_row(SettingRow("Show HUD pill",
+            "The small bottom-left pop-up that appears when a page, client or submission is captured. Turning it off only hides the pill - capturing and saving carry on as normal.",
+            self.vsdc_hud_check))
 
-        lay.addWidget(_sub_header("HUD Pill"))
-        self.vsdc_hud_check = QCheckBox()
-        lay.addWidget(_setting_row("Show HUD pill",
-            "The small bottom-left pop-up that appears when a page, client or submission is captured. Turning it off only hides the pill - capturing and saving carry on as normal.", self.vsdc_hud_check))
+        older = Card("Older engines")
+        self.vsdc_check = Switch()
+        self.vsdc_check.setAccessibleName("Enable VSDC")
+        older.add_row(SettingRow("Enable VSDC",
+            "Extracts structured data from client-facing compliance portals visually using DOM coordinates.", self.vsdc_check))
+        self.vsdc_x_check = Switch()
+        self.vsdc_x_check.setAccessibleName("Enable VSDC-X")
+        older.add_row(SettingRow("Enable VSDC-X",
+            "Advanced fallback capture method that navigates modal overlays and complex popups using UI Automation exact-text reading.", self.vsdc_x_check))
+        self.vsdc247_check = Switch()
+        self.vsdc247_check.setAccessibleName("Enable VSDC 24/7")
+        older.add_row(SettingRow("Enable VSDC 24/7",
+            "Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.", self.vsdc247_check))
 
         self.vsdc_check.toggled.connect(self._on_control_changed)
         self.vsdc_x_check.toggled.connect(self._on_control_changed)
@@ -1165,56 +1155,33 @@ class UnifiedSettingsDialog(QDialog):
         self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, sgt, older)
 
     def _build_page_export(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("Export CSV", lead="Download client data or a blank import template.")
 
-        lay.addWidget(_page_header("Export CSV", "Download client data or a blank import template."))
-
-        export_btn = QPushButton("Export All Clients \u2192")
-        export_btn.setProperty("class", "primary")
-        export_btn.setIcon(_icon("mdi.download", color="#ffffff"))
+        export_btn = LabelledAction("Export All Clients \u2192", variant="soft", icon="mdi.download")
         export_btn.clicked.connect(self._on_export_csv)
-        lay.addWidget(_setting_row("Export to CSV",
-            "Download all active client records as a CSV spreadsheet file.", export_btn))
-
-        tmpl_btn = QPushButton("Download Template \u2192")
-        tmpl_btn.setIcon(_icon("mdi.file-download-outline", color=_TEXT_PRI))
+        tmpl_btn = LabelledAction("Download Template \u2192", icon="mdi.file-download-outline")
         tmpl_btn.clicked.connect(self._on_download_template)
-        lay.addWidget(_setting_row("Download Import Template",
+        data = Card()
+        data.add_row(SettingRow("Export to CSV",
+            "Download all active client records as a CSV spreadsheet file.", export_btn))
+        data.add_row(SettingRow("Download Import Template",
             "Get a blank CSV template matching your current Master Column List schema.", tmpl_btn))
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, data)
 
     def _build_page_backup(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("Backup & Restore",
+            lead="Protect your data with regular backups or roll back to a previous snapshot.")
 
-        lay.addWidget(_page_header("Backup & Restore",
-            "Protect your data with regular backups or roll back to a previous snapshot."))
-
-        backup_btn = QPushButton("Choose Backup Folder \u2192")
-        backup_btn.setProperty("class", "primary")
-        backup_btn.setIcon(_icon("mdi.database-arrow-up", color="#ffffff"))
+        backup_btn = LabelledAction("Choose Backup Folder \u2192", variant="soft", icon="mdi.database-arrow-up")
         backup_btn.clicked.connect(self._on_backup)
-        lay.addWidget(_setting_row("Backup Database",
+        backup = Card()
+        backup.add_row(SettingRow("Backup Database",
             "Copy the current encrypted database to a folder of your choice.", backup_btn))
-
-        restore_btn = QPushButton("Restore from Backup \u2192")
-        restore_btn.setProperty("class", "danger")
-        restore_btn.setIcon(_icon("mdi.database-arrow-down", color=_DANGER))
-        restore_btn.clicked.connect(self._on_restore_backup)
-        lay.addWidget(_setting_row("Restore Database",
-            "Make a previous backup the data again (in an office: on every PC). The app will restart. Use with caution.",
-            restore_btn, danger=True))
+        blocks = [header, backup]
 
         import sera_keys
         from pathlib import Path
@@ -1226,48 +1193,41 @@ class UnifiedSettingsDialog(QDialog):
             office_info = None
 
         if office_info is not None:
-            lay.addWidget(_divider())
-            lay.addWidget(_page_header("Office Recovery Kit & Security",
-                "Export a secure recovery kit to USB or update the office master password."))
-
-            export_kit_btn = QPushButton("Export Recovery Kit \u2192")
-            export_kit_btn.setProperty("class", "primary")
-            export_kit_btn.setIcon(_icon("mdi.file-key-outline", color="#ffffff"))
+            export_kit_btn = LabelledAction("Export Recovery Kit \u2192", icon="mdi.file-key-outline")
             export_kit_btn.clicked.connect(lambda: self._on_export_recovery_kit(app_dir))
-            lay.addWidget(_setting_row("Export Recovery Kit (.serakit)",
-                "Export encrypted office credentials to a USB drive for disaster recovery.",
-                export_kit_btn))
-
-            change_pw_btn = QPushButton("Change Password \u2192")
-            change_pw_btn.setIcon(_icon("mdi.lock-reset", color=_TEXT_PRI))
+            change_pw_btn = LabelledAction("Change Password \u2192", icon="mdi.lock-reset")
             change_pw_btn.clicked.connect(lambda: self._on_change_master_password(app_dir))
-            lay.addWidget(_setting_row("Change Office Master Password",
+            office = Card("Office Recovery Kit & Security")
+            office.add_row(SettingRow("Export Recovery Kit (.serakit)",
+                "Export encrypted office credentials to a USB drive for disaster recovery.", export_kit_btn))
+            office.add_row(SettingRow("Change Office Master Password",
                 "Update the master password used to recover office credentials without modifying client data.",
                 change_pw_btn))
+            blocks.append(office)
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        restore_btn = LabelledAction("Restore from Backup \u2192", variant="danger", icon="mdi.database-arrow-down")
+        restore_btn.clicked.connect(self._on_restore_backup)
+        danger = Card("Danger zone", edge="danger")
+        danger.add_row(SettingRow("Restore Database",
+            "Make a previous backup the data again (in an office: on every PC). The app will restart. Use with caution.",
+            restore_btn, danger=True))
+        blocks.append(danger)
+
+        return self._kit_page(*blocks)
 
     def _build_page_purge(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("Purge Duplicates",
+            lead="Permanently remove duplicate client records that share identical identity values.")
 
-        lay.addWidget(_page_header("Purge Duplicates",
-            "Permanently remove duplicate client records that share identical identity values."))
-
-        purge_btn = QPushButton("Run Deduplication \u2192")
-        purge_btn.setProperty("class", "danger")
-        purge_btn.setIcon(_icon("mdi.delete-sweep-outline", color=_DANGER))
+        purge_btn = LabelledAction("Run Deduplication \u2192", variant="danger", icon="mdi.delete-sweep-outline")
         purge_btn.clicked.connect(self._on_purge_duplicates)
-        lay.addWidget(_setting_row("Purge Duplicate Clients",
+        danger = Card("Danger zone", edge="danger")
+        danger.add_row(SettingRow("Purge Duplicate Clients",
             "Scans all non-archived clients and deletes duplicates sharing the same identity values. "
             "The oldest record (lowest ID) is kept per group. This cannot be undone.",
             purge_btn, danger=True))
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, danger)
 
     # ── State Tracking & Validation ───────────────────────────────────────────
     def _capture_state(self) -> dict:

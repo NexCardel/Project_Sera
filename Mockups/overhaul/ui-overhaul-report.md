@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 18:29)
+# UI overhaul — report (2026-10-10 18:51)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 18 |
+| Not started | 17 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 18 |
+| Done | 19 |
 | Blocked | 0 |
 
-Runs: 27   output tokens: 819978   API-equivalent cost: $43.64
+Runs: 28   output tokens: 898468   API-equivalent cost: $50.67
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ Runs: 27   output tokens: 819978   API-equivalent cost: $43.64
 | R-2 | Done | sonnet | 5c5ae20 | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... | Sidebar on the kit: real logo, CLIENTS/TOOLS/ADMIN groups, one All Clients, Display for all, Staff Users removed, soft Auto-sync pill; 17 new tests |
 | R-3 | Done | haiku | 58c6edd | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... | Display scale on the kit: SettingRow + Apply/Restart LabelledActions, DialogFrame dialog; same QSettings and restart path; tests pass; one real-screen check add |
 | R-R | Done | sonnet | 8d136ee | Review phase R (responsive and shell) | Phase R reviewed: sidebar clean at 1366/1024/1366@125%; fold thresholds and Ctrl+B / scale shortcuts locked by tests; no app code changed |
-| S-1 | Not started | sonnet |  | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page |  |
+| S-1 | Done | sonnet | 8c2e4dc | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page | Settings hub + unsaved bar + dirty/discard/close prompt + General page on kit; lock + 13 new tests green, goldens in Mockups/built/settings |
 | S-2 | Not started | haiku |  | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge |  |
 | S-3 | Not started | haiku |  | Screens: Settings: SCC vault presets |  |
 | S-4 | Not started | opus |  | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... |  |
@@ -70,6 +70,11 @@ Runs: 27   output tokens: 819978   API-equivalent cost: $43.64
 - **R-3** Button variants and primary → Apply = soft, Restart now = secondary, dialog Close = secondary; no primary in the dialog (Settings General keeps Save changes as the only primary on that screen (rule 4))
 - **R-3** Where the scale row sits on Settings General → DisplayScaleControl added straight to the page layout inside a 12 px side wrapper; the old _setting_row wrapper dropped (The control is now a full SettingRow, so _setting_row would show the title twice; 12 px (s_3) plus the row's 16 px makes the 28 px page rhythm)
 - **R-3** Running-at line and hint → Running-at line is the row sub-label (set_sub after Apply); the hint moves to the dialog purpose line, shortened to fit one elided line (SettingRow has one sub-label and DialogFrame purpose is a single elided line; the design puts the running-at line in the row)
+- **S-1** Theme combo label → Label 'Dark', data stays 'light' (Matches the mockup and the app's real look; the stored value is the golden-tested key so only the label changed.)
+- **S-1** Clipboard-clear stepper step → Step 5 s, range 5-300, setValue is not snapped (Stepper has no setRange/setSuffix; 5 s steps make 5-300 reachable; a saved odd value still loads unchanged.)
+- **S-1** Dialog legacy QSS and compact trigger → Keep _apply_global_style for the 9 unconverted pages and child dialogs; compact is driven by dialog width minus nav (below 700 on, above 740 off) (Arrangement-only package; other pages still need the legacy sheet. Dialog width is deterministic where the stacked pane width is stale before layout.)
+- **S-1** Unsaved bar and two primary Save buttons → Bar shows on every page when dirty (reserved space); footer Save and bar Save both primary, as in the mockup (Dirty tracking spans all pages, so the bar belongs to the shell. The mockup draws two Save buttons while dirty; both call the same save.)
+- **S-1** Close with unsaved changes → Three-way prompt in reject(): Save changes / Discard changes / Keep editing (reject() also serves Esc and the title-bar X, so one override guards all exits; Save closes only if the save left nothing dirty.)
 
 ## Checks waiting for you
 
@@ -81,3 +86,5 @@ Runs: 27   output tokens: 819978   API-equivalent cost: $43.64
 - #6 (K-R) On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker) — Not run
 - #7 (R-3) On a real 125 % screen at 1366x768 and 1024x700: open Sidebar Display and Settings General Screen scale, check Apply and Restart now fit, then Restart now really restarts Sera and the new scale applies. — Not run
 - #8 (R-R) Sidebar on a real 1366x768 laptop at Windows 125 % and Sera display scale 1.00 / 1.25: brand, All Clients + Ctrl K hint, Auto-sync pill not clipped; Ctrl+B, Ctrl+=, Ctrl+-, Ctrl+0 pressed on a real keyboard (offscreen only tests the wiring). — Not run
+- #9 (S-1) On a real 125 % screen, open Settings > General and check nothing clips: nav, five cards, unsaved bar, footer Save. — Not run
+- #10 (S-1) Edit one General setting then press Close or Esc: confirm the wording of the 'Unsaved changes' prompt (Save changes / Discard changes / Keep editing) is what you want. — Not run
