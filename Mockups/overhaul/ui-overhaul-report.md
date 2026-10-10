@@ -1,4 +1,4 @@
-# UI overhaul — report (2026-10-10 17:08)
+# UI overhaul — report (2026-10-10 17:20)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-12T23:00:00+05:30
 | :--- | ---: |
 | Not started | 25 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 10 |
+| Retry | 0 |
+| Done | 11 |
 | Blocked | 0 |
 
-Runs: 19   output tokens: 438009   API-equivalent cost: $19.17
+Runs: 20   output tokens: 514019   API-equivalent cost: $23.78
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -24,7 +24,7 @@ Runs: 19   output tokens: 438009   API-equivalent cost: $19.17
 | K-2 | Done | sonnet | 61833da | Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ... | Kit inputs: FieldLabel, Input, Select, TextArea, Stepper, Checkbox, Switch; 43 kit tests pass; sidebar ToggleSwitch left for the shell WP |
 | K-3 | Done | sonnet | 4169c66 | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... | Kit containers: Card, SettingRow, SectionLabel, Banner, Toast, EmptyState; 58 kit tests pass, gallery containers page |
 | K-4 | Done | sonnet | da633a8 | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | kit bars (Chip, ChipBar, StatusStrip, SelectionBar, UnsavedBar), gallery, tests |
-| K-5 | Retry | opus |  | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | stopped by network/API error, resumes after 16:51 |
+| K-5 | Done | opus | 5c8093b | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | DataGrid (QTableWidget subclass, delegate-drawn white/dark/list tones, pills, service dots, drawn actions, fit_columns), DarkListTable, GridFooter, GridFrame; 9 |
 | K-6 | Not started | sonnet |  | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... |  |
 | K-7 | Not started | sonnet |  | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... |  |
 | K-R | Not started | opus |  | Review phase K (kit) |  |
@@ -63,9 +63,11 @@ Runs: 19   output tokens: 438009   API-equivalent cost: $19.17
 - **K-1** LabelledAction danger: filled #A82424 (today's theme) or the mockup's outlined red? → Outlined: transparent, --dangerline edge, --dangertx text, --dangerdim on hover (The fleet mockup's .btn.dng is outlined and the mockup's tokens win (decision 2026-10-05); the old filled class stays in theme.py for unconverted screens)
 - **K-1** Where do the mockup's component-level literals (outside :root) and half-px font sizes go? → New KIT dict in ui/utils/tokens.py; 12.5px and 10.5px rounded up to 13 and 11 (TOKENS must equal the :root block (test_ui_tokens); kit.py stays hex-free; Qt px font sizes are ints)
 - **K-4** Bar behaviors and COMPACT modes → SelectionBar enforces NoFocus and Open keeps label; ChipBar supports single_select, overflow and second-row; UnsavedBar default hidden when clean (Matches IMPLEMENTATION.md 4.1/4.4 and fleet index.html specs)
+- **K-5** DataGrid base class: QTableView with a new model, or QTableWidget (which is a QTableView)? → DataGrid subclasses QTableWidget; all drawing is in GridDelegate, which also works on any QTableView (Every grid in the app (search, tracker, audit, sync) is a QTableWidget whose items carry the cell-format highlights (BackgroundRole/ForegroundRole); a drop-in subclass keeps the highlight engine and the attribute/item API tests reach untouched)
 
 ## Checks waiting for you
 
 - #1 (W0-2) R1.6 on a real desktop: from Search, use Edit / Archive / Delete / Manage services on one client and confirm each acts on the client that was clicked (offscreen, open_client_editor leaves the table selection empty after setCurrentCell, so Manage services may report 'Select one or more clients first.') — Not run
 - #2 (W0-2) R6.3 on a real PC: open Search, Manage Clients, Tracker Dump, Audit, Settings and Sera Sync at 100 %, 125 % and 150 % Windows scaling and at 1366x768; nothing clipped, no horizontal scroll, text readable — Not run
 - #3 (W0-2) Real keyboard on a real desktop: press Ctrl+= / Ctrl+- / Ctrl+0 (alert appears, restart applies the scale), Alt+n and Alt+Ctrl+n on a search result, Ctrl+B, F5 in Tracker Dump, and Tab order through the Manage Clients form; offscreen tests call the handlers/shortcuts directly — Not run
+- #4 (K-5) On a real desktop: hover a DataGrid row and its drawn action buttons (hover fill, tooltip per button, click runs the action); drag a column edge and confirm the width survives a window resize — Not run

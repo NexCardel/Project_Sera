@@ -139,6 +139,36 @@ GridFrame(grid, footer=None, parent=None)
     The rounded surface around a grid and its footer; set_tone(tone) recolours all three;
     apply_width_mode passes on to both.
 
+Frames (K-6):
+IconTile(icon, tone="emerald", parent=None, *, large=False)
+    The 34 px (40 large) rounded icon square of a dialog header; tones emerald, amber, blue.
+DialogFrame(title, purpose="", parent=None, *, icon="mdi.cog", tone="emerald", full=False, scroll=False)
+    Header (IconTile, title, one-line purpose, right slot) / body / footer. add_widget(w, stretch=0)
+    fills the body (scroll=True wraps the body in a scroll area). The footer appears with its first
+    add_action(text_or_widget, *, variant="secondary", icon=None, tooltip=""); a second primary raises
+    ValueError. add_footer_spacer() splits left items (e.g. a danger action) from the right group.
+    add_header_widget(w) fills the right slot of the header; add_close_button() adds the bordered
+    "Close (Esc)" icon button. Esc anywhere inside emits closeRequested (a QDialog host connects it to
+    reject). full=True: no border, no radius, fills its parent (set_full). set_title(), set_purpose().
+Scrim(parent, dialog=None, *, desk=False)
+    Dimmed layer over `parent` that centres a DialogFrame (a full one fills it). desk=True is the
+    opaque desktop colour of the first-run screens. open() / dismiss(); a click outside the dialog
+    and the dialog's own Esc both emit closeRequested. Follows the parent's size.
+PageHeader(title="", parent=None, *, count="", lead="")
+    Title row of a page: add_leading(w) (sidebar toggle, Back) before the title, a count pill
+    ("16 clients"), a muted lead line under the title, add_action(w) on the right. set_title(),
+    set_count(), set_lead(). set_compact(on) / apply_width_mode(mode): 17 px title, lead hidden.
+Tile(value, label, parent=None, *, tone=None, checked=False, tooltip="")
+    Summary tile (big number over a muted label), clickable and checkable (emerald edge when on);
+    tone colours the number: None, emerald, amber, red, blue. Space / Enter click; put tiles in an
+    exclusive QButtonGroup for one-of-n. set_value(), set_label(), set_tone(), set_compact(on).
+LogView(parent=None, *, max_lines=500)
+    Read-only monospace activity log. add_line(message, tag="", *, tone=None, ts=""): tags guard
+    (amber), sync (emerald), err (red), peer (blue), net (purple), any other neutral; sticks to the
+    bottom unless the user scrolled up. lines(), line_count(), clear_log().
+SlidePanel (ui/shell/slide_panel.py) is restyled from the same tokens: 540 px, the whole width in
+COMPACT (apply_width_mode / set_compact; derived from the parent's width until one is set).
+
 Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widget still shows
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
@@ -148,12 +178,13 @@ from functools import lru_cache
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
-    QPolygonF, QRegion,
+    QPolygonF, QRegion, QTextBlockFormat, QTextCharFormat, QTextCursor,
 )
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QStyle,
-    QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
+    QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout,
+    QWidget,
 )
 
 from ui.utils.tokens import KIT, TOKENS
@@ -2989,3 +3020,618 @@ class GridFrame(QFrame):
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), T["r_l"], T["r_l"])
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+# ---------------------------------------------------------------- frames (K-6)
+
+def _px_font(widget, px, weight=None):
+    font = QFont(widget.font())
+    font.setPixelSize(px)
+    if weight is not None:
+        font.setWeight(weight)
+    return font
+
+
+def _is_compact_mode(mode):
+    return str(getattr(mode, "value", mode)).lower() == "compact"
+
+
+# tone: (background, border, icon colour)
+_ICON_TILE_TONES = {
+    "emerald": (T["emdeep"], T["emline"], T["mint"]),
+    "amber": (T["warndim"], T["warnline"], T["warn"]),
+    "blue": (T["infodim"], T["infoline"], K["blue_tx"]),
+}
+
+
+class IconTile(QLabel):
+    TONES = tuple(_ICON_TILE_TONES)
+
+    def __init__(self, icon, tone="emerald", parent=None, *, large=False):
+        super().__init__(parent)
+        if tone not in _ICON_TILE_TONES:
+            raise ValueError(f"unknown IconTile tone: {tone}")
+        self.tone = tone
+        bg, line, fg = _ICON_TILE_TONES[tone]
+        side = K["d_dlg_ic_lg"] if large else K["d_dlg_ic"]
+        self.setFixedSize(side, side)
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(f"QLabel {{ background: {bg}; border: 1px solid {line};"
+                           f" border-radius: {K['r_dlg_ic']}px; }}")
+        ic = _icon(icon, fg)
+        if ic is not None and not ic.isNull():
+            self.setPixmap(ic.pixmap(side // 2, side // 2))
+
+
+@lru_cache(maxsize=None)
+def _dialog_qss(full):
+    border = "none" if full else f"1px solid {K['dlg_line']}"
+    radius = 0 if full else T["r_l"]
+    return (
+        f"QFrame#KitDialog {{ background: {T['bg']}; border: {border}; border-radius: {radius}px; }}"
+        f"QFrame#KitDlgHead {{ background: transparent; border: none;"
+        f" border-bottom: 1px solid {T['line']}; border-radius: 0; }}"
+        f"QFrame#KitDlgFoot {{ background: {K['dlg_ft_bg']}; border: none;"
+        f" border-top: 1px solid {T['line']}; border-radius: 0; }}"
+        f"QWidget#KitDlgBody, QWidget#KitDlgText {{ background: transparent; }}"
+        f"QScrollArea#KitDlgScroll {{ background: transparent; border: none; }}"
+        f"QScrollArea#KitDlgScroll > QWidget > QWidget#KitDlgBody {{ background: transparent; }}"
+        f"QLabel#KitDlgTitle {{ color: {T['text']}; background: transparent; border: none;"
+        f" font-size: {T['f_xl']}px; font-weight: 700; }}"
+        f"QLabel#KitDlgPurpose {{ color: {T['muted']}; background: transparent; border: none;"
+        f" font-size: {K['f_dlg_purpose']}px; }}"
+    )
+
+
+class DialogFrame(QFrame):
+    closeRequested = Signal()
+
+    def __init__(self, title, purpose="", parent=None, *, icon="mdi.cog", tone="emerald",
+                 full=False, scroll=False):
+        super().__init__(parent)
+        self.setObjectName("KitDialog")
+        self._full = bool(full)
+        self._primary = None
+        self._footer_items = 0
+        self._lead_stretch = None
+        self.setSizePolicy(QSizePolicy.Expanding if full else QSizePolicy.Preferred, QSizePolicy.Expanding)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.header = QFrame(self)
+        self.header.setObjectName("KitDlgHead")
+        hl = QHBoxLayout(self.header)
+        hl.setContentsMargins(K["pad_dlg_h"], K["pad_dlg_hd_v"], K["pad_dlg_h"], K["pad_dlg_hd_v"])
+        hl.setSpacing(T["s_3"])
+        self.icon_tile = IconTile(icon, tone, self.header)
+        hl.addWidget(self.icon_tile)
+        text = QWidget(self.header)
+        text.setObjectName("KitDlgText")
+        tl = QVBoxLayout(text)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(1)
+        self.title_label = _ElideLabel(title, text)
+        self.title_label.setObjectName("KitDlgTitle")
+        tl.addWidget(self.title_label)
+        self.purpose_label = _ElideLabel(purpose, text)
+        self.purpose_label.setObjectName("KitDlgPurpose")
+        self.purpose_label.setVisible(bool(purpose))
+        tl.addWidget(self.purpose_label)
+        hl.addWidget(text, 1)
+        self._header_right = QHBoxLayout()
+        self._header_right.setContentsMargins(0, 0, 0, 0)
+        self._header_right.setSpacing(T["s_2"])
+        hl.addLayout(self._header_right)
+        outer.addWidget(self.header)
+
+        self.body = QWidget()
+        self.body.setObjectName("KitDlgBody")
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(K["pad_dlg_h"], K["pad_dlg_bd_v"], K["pad_dlg_h"], K["pad_dlg_bd_v"])
+        self.body_layout.setSpacing(T["s_3"])
+        self.body_layout.setAlignment(Qt.AlignTop)
+        self.scroll_area = None
+        if scroll:
+            self.scroll_area = QScrollArea(self)
+            self.scroll_area.setObjectName("KitDlgScroll")
+            self.scroll_area.setFrameShape(QFrame.NoFrame)
+            self.scroll_area.setWidgetResizable(True)
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.scroll_area.setWidget(self.body)
+            outer.addWidget(self.scroll_area, 1)
+        else:
+            self.body.setParent(self)
+            outer.addWidget(self.body, 1)
+
+        self.footer = QFrame(self)
+        self.footer.setObjectName("KitDlgFoot")
+        self._footer_layout = QHBoxLayout(self.footer)
+        self._footer_layout.setContentsMargins(K["pad_dlg_h"], K["pad_dlg_ft_v"], K["pad_dlg_h"], K["pad_dlg_ft_v"])
+        self._footer_layout.setSpacing(K["gap_dlg_ft"])
+        self._footer_layout.addStretch(1)
+        self.footer.hide()
+        outer.addWidget(self.footer)
+
+        self.set_full(full)
+
+    def title(self):
+        return self.title_label.text()
+
+    def set_title(self, title):
+        self.title_label.setText(title)
+
+    def purpose(self):
+        return self.purpose_label.text()
+
+    def set_purpose(self, purpose):
+        self.purpose_label.setText(purpose)
+        self.purpose_label.setVisible(bool(purpose))
+
+    def is_full(self):
+        return self._full
+
+    def set_full(self, on):
+        self._full = bool(on)
+        self.setStyleSheet(_dialog_qss(self._full))
+        self.setSizePolicy(QSizePolicy.Expanding if self._full else QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self._update_mask()
+
+    def add_widget(self, widget, stretch=0):
+        self.body_layout.addWidget(widget, stretch)
+        return widget
+
+    def add_header_widget(self, widget):
+        self._header_right.addWidget(widget)
+        return widget
+
+    def add_close_button(self, tooltip="Close (Esc)"):
+        btn = IconButton("mdi.close", tooltip, self.header, variant="bordered")
+        btn.clicked.connect(self.closeRequested)
+        return self.add_header_widget(btn)
+
+    def add_action(self, widget_or_text, *, variant="secondary", icon=None, tooltip=""):
+        if isinstance(widget_or_text, str):
+            widget = LabelledAction(widget_or_text, self.footer, variant=variant, icon=icon, tooltip=tooltip)
+        else:
+            widget = widget_or_text
+        if isinstance(widget, LabelledAction) and widget.variant == "primary":
+            if self._primary is not None:
+                raise ValueError("a dialog footer has one primary action")
+            self._primary = widget
+        self._footer_layout.addWidget(widget)
+        self._footer_items += 1
+        self.footer.show()
+        return widget
+
+    def add_footer_spacer(self):
+        """Left items go before this call; what is added after it sits at the right edge."""
+        self._footer_layout.setStretch(0, 0)
+        self._footer_layout.addStretch(1)
+
+    def primary_action(self):
+        return self._primary
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            self.closeRequested.emit()
+            return
+        super().keyPressEvent(event)
+
+    def _update_mask(self):
+        if self._full or self.width() <= 0:
+            self.clearMask()
+            return
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), T["r_l"], T["r_l"])
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_mask()
+
+
+class Scrim(QWidget):
+    closeRequested = Signal()
+
+    def __init__(self, parent, dialog=None, *, desk=False):
+        super().__init__(parent)
+        self.setObjectName("KitScrim")
+        self.setStyleSheet("QWidget#KitScrim { background: transparent; }")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.desk = bool(desk)
+        self._dialog = None
+        self._lay = QVBoxLayout(self)
+        self.hide()
+        if parent is not None:
+            parent.installEventFilter(self)
+        if dialog is not None:
+            self.set_dialog(dialog)
+
+    def dialog(self):
+        return self._dialog
+
+    def set_dialog(self, dialog):
+        if self._dialog is not None:
+            self._lay.removeWidget(self._dialog)
+            self._dialog.closeRequested.disconnect(self.closeRequested)
+            self._dialog.setParent(None)
+        self._dialog = dialog
+        dialog.setParent(self)
+        dialog.closeRequested.connect(self.closeRequested)
+        if dialog.is_full():
+            self._lay.setContentsMargins(0, 0, 0, 0)
+            self._lay.addWidget(dialog)
+        else:
+            gap = K["gap_scrim"]
+            self._lay.setContentsMargins(gap, gap, gap, gap)
+            self._lay.addWidget(dialog, 0, Qt.AlignCenter)
+
+    def cover_parent(self):
+        if self.parentWidget() is not None:
+            self.setGeometry(self.parentWidget().rect())
+
+    def open(self):
+        self.cover_parent()
+        self.show()
+        self.raise_()
+        if self._dialog is not None:
+            self._dialog.setFocus()
+
+    def dismiss(self):
+        self.hide()
+
+    def eventFilter(self, obj, event):
+        if obj is self.parentWidget() and event.type() == QEvent.Resize and self.isVisible():
+            self.cover_parent()
+        return super().eventFilter(obj, event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        if self.desk:
+            p.fillRect(self.rect(), QColor(K["scrim_desk"]))
+        else:
+            p.fillRect(self.rect(), QColor(0, 0, 0, K["scrim_alpha"]))
+        p.end()
+
+    def mousePressEvent(self, event):
+        event.accept()
+        if self._dialog is None or not self._dialog.geometry().contains(event.position().toPoint()):
+            self.closeRequested.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            event.accept()
+            self.closeRequested.emit()
+            return
+        super().keyPressEvent(event)
+
+
+@lru_cache(maxsize=None)
+def _page_hd_qss(compact):
+    size = T["f_xl"] if compact else T["f_xxl"]
+    return (
+        "QFrame#KitPageHeader, QWidget#KitPageHeadText { background: transparent; border: none; }"
+        f"QLabel#KitPageTitle {{ color: {T['text']}; background: transparent; border: none;"
+        f" font-size: {size}px; font-weight: 700; }}"
+        f"QLabel#KitPageCount {{ color: {T['muted']}; background: {T['card']};"
+        f" border: 1px solid {T['line']}; border-radius: {K['r_count']}px;"
+        f" padding: 1px {K['pad_count_h']}px; font-size: {T['f_s']}px; }}"
+        f"QLabel#KitPageLead {{ color: {T['muted']}; background: transparent; border: none;"
+        f" font-size: {T['f_s']}px; }}"
+    )
+
+
+class PageHeader(QFrame):
+    def __init__(self, title="", parent=None, *, count="", lead=""):
+        super().__init__(parent)
+        self.setObjectName("KitPageHeader")
+        self.setMinimumHeight(K["h_page_hd"])
+        self._compact = False
+        self._leading = 0
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.setSpacing(K["gap_page_hd"])
+        text = QWidget(self)
+        text.setObjectName("KitPageHeadText")
+        col = QVBoxLayout(text)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(K["gap_page_hd"])
+        self.title_label = _ElideLabel(title, text)
+        self.title_label.setObjectName("KitPageTitle")
+        row.addWidget(self.title_label)
+        self.count_label = QLabel(str(count), text)
+        self.count_label.setObjectName("KitPageCount")
+        self.count_label.setVisible(bool(count))
+        row.addWidget(self.count_label)
+        row.addStretch(1)
+        col.addLayout(row)
+        self.lead_label = _ElideLabel(lead, text)
+        self.lead_label.setObjectName("KitPageLead")
+        self.lead_label.setVisible(bool(lead))
+        col.addWidget(self.lead_label)
+        self._lay.addWidget(text, 1)
+        self.setStyleSheet(_page_hd_qss(False))
+
+    def title(self):
+        return self.title_label.text()
+
+    def set_title(self, title):
+        self.title_label.setText(title)
+
+    def count(self):
+        return self.count_label.text()
+
+    def set_count(self, count):
+        self.count_label.setText(str(count) if count not in (None, "") else "")
+        self.count_label.setVisible(count not in (None, ""))
+
+    def lead(self):
+        return self.lead_label.text()
+
+    def set_lead(self, lead):
+        self.lead_label.setText(lead)
+        self.lead_label.setVisible(bool(lead) and not self._compact)
+
+    def add_leading(self, widget):
+        self._lay.insertWidget(self._leading, widget)
+        self._leading += 1
+        return widget
+
+    def add_action(self, widget):
+        self._lay.addWidget(widget)
+        return widget
+
+    def is_compact(self):
+        return self._compact
+
+    def set_compact(self, on):
+        self._compact = bool(on)
+        self.setStyleSheet(_page_hd_qss(self._compact))
+        self.lead_label.setVisible(bool(self.lead_label.text()) and not self._compact)
+
+    def apply_width_mode(self, mode):
+        self.set_compact(_is_compact_mode(mode))
+
+
+_TILE_TONES = {
+    None: T["text"],
+    "emerald": T["mint"],
+    "amber": T["warn"],
+    "red": T["dangertx"],
+    "blue": K["blue_tx"],
+}
+
+
+class Tile(_ReasonMixin, QAbstractButton):
+    TONES = tuple(_TILE_TONES)
+
+    def __init__(self, value="", label="", parent=None, *, tone=None, checked=False, tooltip=""):
+        super().__init__(parent)
+        if tone not in _TILE_TONES:
+            raise ValueError(f"unknown Tile tone: {tone}")
+        self._value = str(value)
+        self._label = label
+        self._tone = tone
+        self._tip = tooltip
+        self._compact = False
+        self._hover = False
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._refresh()
+
+    def value(self):
+        return self._value
+
+    def set_value(self, value):
+        self._value = str(value)
+        self._refresh()
+
+    def label(self):
+        return self._label
+
+    def set_label(self, label):
+        self._label = label
+        self._refresh()
+
+    def tone(self):
+        return self._tone
+
+    def set_tone(self, tone):
+        if tone not in _TILE_TONES:
+            raise ValueError(f"unknown Tile tone: {tone}")
+        self._tone = tone
+        self.update()
+
+    def is_compact(self):
+        return self._compact
+
+    def set_compact(self, on):
+        self._compact = bool(on)
+        self._refresh()
+
+    def apply_width_mode(self, mode):
+        self.set_compact(_is_compact_mode(mode))
+
+    def is_elided(self):
+        return QFontMetrics(self._label_font()).horizontalAdvance(self._label) > self._text_width()
+
+    def _value_font(self):
+        return _px_font(self, K["f_tile_num_sm"] if self._compact else K["f_tile_num"], QFont.Bold)
+
+    def _label_font(self):
+        return _px_font(self, T["f_s"], QFont.Normal)
+
+    def _pad(self):
+        return ((K["pad_tile_h_sm"], K["pad_tile_v_sm"]) if self._compact
+                else (K["pad_tile_h"], K["pad_tile_v"]))
+
+    def _text_width(self):
+        return max(0, self.width() - 2 * self._pad()[0])
+
+    def _value_height(self):
+        return round(QFontMetrics(self._value_font()).height() * 1.1)
+
+    def _height(self):
+        floor = K["h_tile_sm"] if self._compact else K["h_tile"]
+        need = 2 * self._pad()[1] + self._value_height() + QFontMetrics(self._label_font()).height()
+        return max(floor, need)
+
+    def _refresh(self):
+        self.setFixedHeight(self._height())
+        self.setAccessibleName(f"{self._value} {self._label}".strip())
+        self._sync_tip()
+        self.updateGeometry()
+        self.update()
+
+    def _sync_tip(self):
+        if self.disabled_reason:
+            return
+        self.setToolTip(self._tip or (self._label if self.is_elided() else ""))
+
+    def sizeHint(self):
+        w = max(QFontMetrics(self._value_font()).horizontalAdvance(self._value),
+                QFontMetrics(self._label_font()).horizontalAdvance(self._label))
+        return QSize(w + 2 * self._pad()[0], self._height())
+
+    def minimumSizeHint(self):
+        return QSize(2 * self._pad()[0] + 24, self._height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_tip()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        alpha = 1.0 if self.isEnabled() else _DISABLED_ALPHA
+        line = T["em"] if self.isChecked() else (T["line2"] if self._hover and self.isEnabled() else T["line"])
+        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        p.setPen(QPen(_qcolor(line, alpha), 1.0))
+        p.setBrush(QBrush(_qcolor(T["card"], alpha)))
+        p.drawRoundedRect(r, K["r_tile"], K["r_tile"])
+        if self.hasFocus() and self.isEnabled():
+            p.setPen(QPen(QColor(T["mint"]), 2.0))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), K["r_tile"] - 1, K["r_tile"] - 1)
+        pad_h, pad_v = self._pad()
+        width = self._text_width()
+        vfont = self._value_font()
+        p.setFont(vfont)
+        p.setPen(_qcolor(_TILE_TONES[self._tone], alpha))
+        vh = self._value_height()
+        p.drawText(QRectF(pad_h, pad_v, width, vh), Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetrics(vfont).elidedText(self._value, Qt.ElideRight, width))
+        lfont = self._label_font()
+        p.setFont(lfont)
+        p.setPen(_qcolor(T["muted"], alpha))
+        p.drawText(QRectF(pad_h, pad_v + vh, width, QFontMetrics(lfont).height()),
+                   Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetrics(lfont).elidedText(self._label, Qt.ElideRight, width))
+        p.end()
+
+
+_LOG_TAGS = {"guard": "amber", "sync": "emerald", "err": "red", "peer": "blue", "net": "purple"}
+_LOG_TONES = {
+    "neutral": T["text2"],
+    "amber": T["warn"],
+    "emerald": T["mint"],
+    "red": T["dangertx"],
+    "blue": K["blue_tx"],
+    "purple": T["purple"],
+}
+
+
+class LogView(QPlainTextEdit):
+    TONES = tuple(_LOG_TONES)
+
+    def __init__(self, parent=None, *, max_lines=500):
+        super().__init__(parent)
+        self.setObjectName("KitLog")
+        self.setReadOnly(True)
+        self.setUndoRedoEnabled(False)
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.document().setMaximumBlockCount(max_lines)
+        font = QFont(_MONO)
+        font.setStyleHint(QFont.Monospace)
+        font.setPixelSize(K["f_log"])
+        self.setFont(font)
+        self.setStyleSheet(
+            f"QPlainTextEdit#KitLog {{ background: {K['log_bg']}; color: {T['text2']};"
+            f" border: 1px solid {K['log_line']}; border-radius: {K['r_log']}px;"
+            f" padding: {K['pad_log_v']}px {K['pad_log_h']}px; selection-background-color: {T['emdim']}; }}")
+        self._started = False
+        self._stick = False
+        self.verticalScrollBar().rangeChanged.connect(self._follow_range)
+        self.verticalScrollBar().valueChanged.connect(self._track_value)
+        self._block = QTextBlockFormat()
+        self._block.setLineHeight(165.0, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+
+    def _fmt(self, colour, bold=False):
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(colour))
+        fmt.setFontWeight(QFont.Bold if bold else QFont.Normal)
+        return fmt
+
+    def add_line(self, message, tag="", *, tone=None, ts=""):
+        if tone is not None and tone not in _LOG_TONES:
+            raise ValueError(f"unknown LogView tone: {tone}")
+        bar = self.verticalScrollBar()
+        self._stick = bar.value() >= bar.maximum() - 2
+        cur = QTextCursor(self.document())
+        cur.movePosition(QTextCursor.End)
+        if self._started:
+            cur.insertBlock(self._block)
+        else:
+            cur.setBlockFormat(self._block)
+            self._started = True
+        if ts:
+            cur.insertText(ts + " ", self._fmt(K["log_ts"]))
+        if tag:
+            tone = tone or _LOG_TAGS.get(tag.lower(), "neutral")
+            cur.insertText(tag.ljust(K["w_log_tag"]) + " ", self._fmt(_LOG_TONES[tone], bold=True))
+        cur.insertText(message, self._fmt(T["text2"]))
+        if self._stick:
+            bar.setValue(bar.maximum())
+
+    def _follow_range(self, _low, high):
+        # the scroll range grows after the layout catches up with the new line, not inside add_line
+        if self._stick:
+            self.verticalScrollBar().setValue(high)
+
+    def _track_value(self, value):
+        self._stick = value >= self.verticalScrollBar().maximum() - 2
+
+    def lines(self):
+        return self.toPlainText().split("\n") if self._started else []
+
+    def line_count(self):
+        return len(self.lines())
+
+    def clear_log(self):
+        self.clear()
+        self._started = False

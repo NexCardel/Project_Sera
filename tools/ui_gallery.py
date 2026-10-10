@@ -471,6 +471,117 @@ def grid_page():
     return page
 
 
+def _dialog(title, purpose, *, icon, tone="emerald", full=False, danger=False):
+    d = kit.DialogFrame(title, purpose, icon=icon, tone=tone, full=full)
+    d.add_close_button()
+    d.add_widget(kit.FieldLabel("Name of company"))
+    d.add_widget(kit.Input(placeholder="Search clients", icon="mdi.magnify"))
+    d.add_action("Cancel")
+    d.add_action("Delete" if danger else "Save", variant="danger" if danger else "primary")
+    return d
+
+
+def _scrim_demo():
+    desk = QWidget()
+    desk.setFixedSize(520, 300)
+    desk.setStyleSheet(f"background: {TOKENS['bg']};")
+    scrim = kit.Scrim(desk, _dialog("Export clients", "Choose what goes into the file.", icon="mdi.download"))
+    scrim.cover_parent()
+    scrim.show()
+    return desk
+
+
+def _panel_demo(width, compact):
+    host = QWidget()
+    host.setFixedSize(width, 340)
+    host.setStyleSheet(f"background: {TOKENS['bg']};")
+    from ui.shell.slide_panel import SlidePanel
+    panel = SlidePanel(host)
+    body = QLabel("Panel body")
+    body.setStyleSheet(f"color: {TOKENS['text2']}; padding: {TOKENS['s_4']}px; background: transparent;")
+    panel.set_widget(body, "Client details")
+    panel.set_compact(compact)
+    panel_w = panel._calc_panel_width(width)
+    panel.setGeometry(width - panel_w, 0, panel_w, 340)
+    panel.show()
+    return host
+
+
+def frames_page():
+    page = QWidget()
+    page.setObjectName("gallery")
+    page.setStyleSheet(f"QWidget#gallery {{ background: {TOKENS['bg']}; }}")
+    root = QVBoxLayout(page)
+    root.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
+    root.setSpacing(TOKENS["s_3"])
+
+    root.addWidget(kit.SectionLabel("DialogFrame: emerald, amber, danger footer"))
+    row = QHBoxLayout()
+    row.setSpacing(TOKENS["s_4"])
+    for d in (_dialog("Add client", "One line says what this does.", icon="mdi.account-plus"),
+              _dialog("Review changes", "Needs a look before saving.", icon="mdi.alert-outline", tone="amber"),
+              _dialog("Delete client", "This cannot be undone.", icon="mdi.trash-can-outline", danger=True)):
+        d.setFixedSize(340, 220)
+        row.addWidget(d)
+    row.addStretch(1)
+    root.addLayout(row)
+
+    root.addWidget(kit.SectionLabel("DialogFrame full variant, and inside a Scrim"))
+    row = QHBoxLayout()
+    row.setSpacing(TOKENS["s_4"])
+    full = _dialog("Manage clients", "Full-window variant: no rounded corners.", icon="mdi.account-group", full=True)
+    full.setFixedSize(420, 260)
+    row.addWidget(full)
+    row.addWidget(_scrim_demo())
+    row.addStretch(1)
+    root.addLayout(row)
+
+    root.addWidget(kit.SectionLabel("PageHeader WIDE and COMPACT"))
+    for compact in (False, True):
+        hd = kit.PageHeader("Manage Clients", count="16 clients", lead="Search, edit and archive client records.")
+        hd.add_leading(kit.IconButton("mdi.arrow-left", "Back to Search (Esc)", variant="bordered"))
+        hd.add_action(kit.LabelledAction("New client", variant="primary", icon="mdi.plus"))
+        hd.set_compact(compact)
+        root.addWidget(hd)
+
+    root.addWidget(kit.SectionLabel("Tile: neutral, tones, checked, disabled, COMPACT"))
+    row = QHBoxLayout()
+    row.setSpacing(TOKENS["s_2"])
+    tiles = [kit.Tile("12", "Worked"), kit.Tile("4", "Awaiting", tone="amber"),
+             kit.Tile("2", "Not submitted", tone="red"), kit.Tile("38", "Verified", tone="emerald", checked=True),
+             kit.Tile("7", "Syncing", tone="blue"), kit.Tile("9", "A long tile label that must elide")]
+    tiles[4].set_disabled_reason("Offline")
+    small = kit.Tile("21", "Compact", tone="emerald")
+    small.set_compact(True)
+    tiles.append(small)
+    for t in tiles:
+        t.setFixedWidth(130)
+        row.addWidget(t)
+    row.addStretch(1)
+    root.addLayout(row)
+
+    root.addWidget(kit.SectionLabel("LogView: tag colours, timestamps"))
+    log = kit.LogView()
+    log.setFixedSize(720, 170)
+    for ts, tag, msg in (("10:02:11", "sync", "Pulled 4 clients from OFFICE-PC1"),
+                         ("10:02:14", "guard", "Skipped 1 row: PAN already in use (demo)"),
+                         ("10:02:20", "peer", "FRONT-DESK came online"),
+                         ("10:02:31", "net", "Reconnected after 3 s"),
+                         ("10:02:40", "err", "Push failed: timeout (will retry)"),
+                         ("10:02:41", "", "Plain line without a tag")):
+        log.add_line(msg, tag, ts=ts)
+    root.addWidget(log)
+
+    root.addWidget(kit.SectionLabel("SlidePanel 540 px (WIDE), full width (COMPACT)"))
+    row = QHBoxLayout()
+    row.setSpacing(TOKENS["s_4"])
+    row.addWidget(_panel_demo(900, False))
+    row.addWidget(_panel_demo(420, True))
+    row.addStretch(1)
+    root.addLayout(row)
+    return page
+
+
 def main():
     from ui.utils.theme import get_theme_stylesheet
     app = QApplication.instance() or QApplication(sys.argv)
@@ -478,7 +589,8 @@ def main():
     out = Path(ARGS.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for name, build in (("primitives", primitives_page), ("inputs", inputs_page),
-                        ("containers", containers_page), ("bars", bars_page), ("grid", grid_page)):
+                        ("containers", containers_page), ("bars", bars_page), ("grid", grid_page),
+                        ("frames", frames_page)):
         page = build()
         page.resize(page.sizeHint())
         page.show()
