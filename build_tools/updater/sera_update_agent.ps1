@@ -111,8 +111,14 @@ try {
         exit 0
     }
 
-    $feed = Invoke-RestMethod -Uri "$VersionUrl`?_cb=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" `
-        -Headers @{ "Cache-Control" = "no-cache"; "User-Agent" = "AmasSera-UpdateAgent/$installed" } -TimeoutSec 30
+    # No network is not a reason to forget a staged update: pending.json (and its staged_at) stays.
+    try {
+        $feed = Invoke-RestMethod -Uri "$VersionUrl`?_cb=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" `
+            -Headers @{ "Cache-Control" = "no-cache"; "User-Agent" = "AmasSera-UpdateAgent/$installed" } -TimeoutSec 30
+    } catch {
+        Write-Log "Could not read the update feed: $($_.Exception.Message)"
+        exit 0
+    }
     $target = [string]$feed.version
     if (-not $target -or -not (Test-Newer $target $installed)) {
         if (Test-Path $PendingPath) { Remove-Item -Force $PendingPath }
