@@ -19,7 +19,7 @@ R-3,3,Responsive and shell: Display scale: DisplayScaleControl rebuilt as a Sett
 R-R,3,Review phase R (responsive and shell),Done,claude-sonnet-5-5,1,8d136ee,Phase R reviewed: sidebar clean at 1366/1024/1366@125%; fold thresholds and Ctrl+B / scale shortcuts locked by tests; no app code changed,2026-10-10 18:29
 S-1,4,Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page,Done,claude-sonnet-5-5,1,8c2e4dc,"Settings hub + unsaved bar + dirty/discard/close prompt + General page on kit; lock + 13 new tests green, goldens in Mockups/built/settings",2026-10-10 18:50
 S-2,4,"Screens: Settings: Action buttons, Tracker, Export, Backup, Purge",Done,claude-haiku-5-5,1,3f70e0e,"Five Settings pages (Action buttons, Tracker, Export, Backup, Purge) on the kit; 15 goldens; lock tests green except pre-existing TestSearchGridReuse",2026-10-10 18:57
-S-3,4,Screens: Settings: SCC vault presets,In progress,claude-haiku-5-5,1,,,2026-10-11 00:23
+S-3,4,Screens: Settings: SCC vault presets,Done,claude-haiku-5-5,1,5718c61,"SCC vault presets on the kit: Cards, eight display-only Tiles, formula Tags, Inputs; 3 goldens in Mockups/built/settings; 56 lock tests pass",2026-10-11 00:31
 S-4,4,Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ...,Not started,claude-opus-5-5,0,,,
 S-5,4,"Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
 S-6,4,"Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
