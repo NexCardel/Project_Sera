@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -36,8 +37,8 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
-    Card, DialogFrame, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow,
-    Stepper, Switch, UnsavedBar, sidebar_qss,
+    Banner, Card, DialogFrame, FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill,
+    Select, SettingRow, Stepper, Switch, Tag, Tile, UnsavedBar, sidebar_qss,
 )
 from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS
@@ -60,7 +61,6 @@ _DANGER       = "#FF5252"
 _TEXT_PRI     = "#e8e8e8"
 _TEXT_SEC     = "#808080"
 _TEXT_NAV     = "#a0a0a0"
-_TEXT_SECTION = "#4a4a4a"
 _BORDER       = "#2a2a2a"
 _INPUT_BG     = "#171717"
 _INPUT_BORDER = "#333333"
@@ -147,21 +147,6 @@ def _page_header(title: str, subtitle: str = "") -> QWidget:
         sub.setStyleSheet(f"font-size: 12px; color: {_TEXT_SEC};")
         sub.setWordWrap(True)
         v.addWidget(sub)
-    v.addWidget(_divider())
-    return w
-
-
-def _sub_header(title: str) -> QWidget:
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
-    v = QVBoxLayout(w)
-    v.setContentsMargins(28, 16, 28, 0)
-    v.setSpacing(0)
-    lbl = QLabel(title.upper())
-    lbl.setStyleSheet(
-        f"font-size: 10px; font-weight: 700; color: {_TEXT_SECTION}; "
-        "letter-spacing: 0.5px;")
-    v.addWidget(lbl)
     v.addWidget(_divider())
     return w
 
@@ -700,208 +685,113 @@ class UnifiedSettingsDialog(QDialog):
         return self._kit_page(header, buttons)
 
     def _build_page_scc(self) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
+        header = PageHeader("SCC Vault Presets",
+            lead="Configure Sera Credential Capture, the 2 dedicated PAN-based password formulas, and 2 plain fixed passwords.")
 
-        lay.addWidget(_page_header("SCC Vault Presets",
-            "Configure Sera Credential Capture, the 2 dedicated PAN-based password formulas, and 2 plain fixed passwords."))
-
-        self.scc_check = QCheckBox()
+        verify = Card()
+        self.scc_check = Switch()
         self.scc_check.setChecked(self.db.get_setting("scc_enabled", "1") in ("1", "true", "True"))
-        lay.addWidget(_setting_row("Enable SCC One-Time Verification",
+        self.scc_check.setAccessibleName("Enable SCC One-Time Verification")
+        verify.add_row(SettingRow("Enable SCC One-Time Verification",
             "When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
-
-        self.scc_detect_combo = QComboBox()
+        self.scc_detect_combo = Select()
         self.scc_detect_combo.addItem("Off", "off")
         self.scc_detect_combo.addItem("On", "on")
-        lay.addWidget(_setting_row("Detect login automatically",
+        verify.add_row(SettingRow("Detect login automatically",
             "Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never "
             "changes what SGT captures. If it ever fails or runs slow it switches itself off until the app "
             "restarts. Needs SGT on.", self.scc_detect_combo))
 
-        # ── Counts ──────────────────────────────────────────────────────────
-        self.scc_counts_label = QLabel()
+        counts = Card("Counts (local, this session and earlier)")
+        tile_grid = QWidget()
+        tg = QGridLayout(tile_grid)
+        tg.setContentsMargins(0, 0, 0, 0)
+        tg.setSpacing(TOKENS["s_3"])
+        self.scc_count_tiles = []
+        for i, (name, meaning) in enumerate((
+                ("Attempts", "Attempts opened"), ("Worked", "Login succeeded"),
+                ("Failed", "Wrong password"), ("Locked", "Locked out"),
+                ("No conclusion", "Other outcome"), ("Asked", "Card asked which row"),
+                ("Saved", "Password saved"), ("Not understood", "Portal wording not recognized"))):
+            tile = Tile("", name, tooltip=meaning)
+            tile.setCheckable(False)
+            tile.setFocusPolicy(Qt.NoFocus)
+            tile.setCursor(Qt.ArrowCursor)
+            tg.addWidget(tile, i // 4, i % 4)
+            self.scc_count_tiles.append(tile)
+        counts.add_widget(tile_grid)
+        self.scc_counts_note = Banner("Counts not available.", tone="w")
+        self.scc_counts_note.setVisible(False)
+        counts.add_widget(self.scc_counts_note)
         self._update_scc_counts_display()
-        lay.addWidget(_setting_row("Counts (local, this session and earlier)",
-            "Attempts: attempts opened. Worked: login succeeded. Failed: wrong password. Locked: locked out. "
-            "No conclusion: other outcome. Asked: card asked which row. Saved: password saved. "
-            "Not understood: portal wording not recognized.",
-            self.scc_counts_label))
 
-        # ── Option 1 Card ───────────────────────────────────────────────────
-        lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
+        def _formula(parts) -> QWidget:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(TOKENS["s_2"])
+            h.addWidget(QLabel("Formula:"))
+            for text, tone in parts:
+                h.addWidget(Tag(text, tone) if tone else QLabel(text))
+            h.addStretch(1)
+            return row
 
-        opt1_card = QWidget()
-        opt1_lay = QVBoxLayout(opt1_card)
-        opt1_lay.setContentsMargins(0, 0, 0, 0)
-        opt1_lay.setSpacing(8)
+        def _option(n, title, desc, parts, str_label, str_ph):
+            card = Card(title)
+            label_edit = Input(placeholder=f"e.g. Combo {n}")
+            str_edit = Input(placeholder=str_ph)
+            card.add_row(SettingRow(f"Combination Option {n}", desc, _formula(parts), width="auto"))
+            grid = QWidget()
+            g = QGridLayout(grid)
+            g.setContentsMargins(0, 0, 0, 0)
+            g.setSpacing(TOKENS["s_2"])
+            g.addWidget(FieldLabel(f"Option {n} label", for_widget=label_edit), 0, 0)
+            g.addWidget(FieldLabel(str_label, for_widget=str_edit), 0, 1)
+            g.addWidget(label_edit, 1, 0)
+            g.addWidget(str_edit, 1, 1)
+            card.add_widget(grid)
+            return card, label_edit, str_edit
 
-        # Formula badge
-        opt1_formula = QLabel("Formula:  [ pan_letters (4 smallcase) ]  +  [ Fixed String ]  +  [ pan_digits (4) ]")
-        opt1_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
-        opt1_lay.addWidget(opt1_formula)
-
-        opt1_inputs = QWidget()
-        opt1_in_lay = QHBoxLayout(opt1_inputs)
-        opt1_in_lay.setContentsMargins(0, 0, 0, 0)
-        opt1_in_lay.setSpacing(8)
-
-        self.scc_opt1_label_edit = QLineEdit()
-        self.scc_opt1_label_edit.setPlaceholderText("Option 1 Label (e.g. Combo 1)")
-        self.scc_opt1_label_edit.setFixedWidth(140)
-
-        self.scc_opt1_str_edit = QLineEdit()
-        self.scc_opt1_str_edit.setPlaceholderText("Fixed String (e.g. @ or #)")
-        self.scc_opt1_str_edit.setMinimumWidth(180)
-
-        opt1_in_lay.addWidget(self.scc_opt1_label_edit)
-        opt1_in_lay.addWidget(self.scc_opt1_str_edit, stretch=1)
-        opt1_lay.addWidget(opt1_inputs)
-
-        lay.addWidget(_setting_row("Combination Option 1",
+        opt1_card, self.scc_opt1_label_edit, self.scc_opt1_str_edit = _option(1,
+            "Option 1: [4 Letters] + [Fixed String] + [4 Digits]",
             "Generates password with the first 4 lowercase letters of the client's PAN, your fixed string, and the 4 PAN digits.",
-            opt1_card))
-
-        # ── Option 2 Card ───────────────────────────────────────────────────
-        lay.addWidget(_sub_header("Option 2: [Fixed String] + [4 Digits]"))
-
-        opt2_card = QWidget()
-        opt2_lay = QVBoxLayout(opt2_card)
-        opt2_lay.setContentsMargins(0, 0, 0, 0)
-        opt2_lay.setSpacing(8)
-
-        opt2_formula = QLabel("Formula:  [ Fixed String ]  +  [ pan_digits (4) ]")
-        opt2_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
-        opt2_lay.addWidget(opt2_formula)
-
-        opt2_inputs = QWidget()
-        opt2_in_lay = QHBoxLayout(opt2_inputs)
-        opt2_in_lay.setContentsMargins(0, 0, 0, 0)
-        opt2_in_lay.setSpacing(8)
-
-        self.scc_opt2_label_edit = QLineEdit()
-        self.scc_opt2_label_edit.setPlaceholderText("Option 2 Label (e.g. Combo 2)")
-        self.scc_opt2_label_edit.setFixedWidth(140)
-
-        self.scc_opt2_str_edit = QLineEdit()
-        self.scc_opt2_str_edit.setPlaceholderText("Fixed String (e.g. Pass# or Tax@)")
-        self.scc_opt2_str_edit.setMinimumWidth(180)
-
-        opt2_in_lay.addWidget(self.scc_opt2_label_edit)
-        opt2_in_lay.addWidget(self.scc_opt2_str_edit, stretch=1)
-        opt2_lay.addWidget(opt2_inputs)
-
-        lay.addWidget(_setting_row("Combination Option 2",
+            (("pan_letters (4 smallcase)", "neutral"), ("+", None), ("fixed string", "emerald"),
+             ("+", None), ("pan_digits (4)", "neutral")),
+            "Fixed string", "e.g. @ or #")
+        opt2_card, self.scc_opt2_label_edit, self.scc_opt2_str_edit = _option(2,
+            "Option 2: [Fixed String] + [4 Digits]",
             "Generates password starting with your fixed string followed directly by the 4 digits of the client's PAN.",
-            opt2_card))
-
-        # ── Option 3 Card ───────────────────────────────────────────────────
-        lay.addWidget(_sub_header("Option 3: Plain Fixed String"))
-
-        opt3_card = QWidget()
-        opt3_lay = QVBoxLayout(opt3_card)
-        opt3_lay.setContentsMargins(0, 0, 0, 0)
-        opt3_lay.setSpacing(8)
-
-        opt3_formula = QLabel("Formula:  [ Fixed String ]  (No PAN substitution)")
-        opt3_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
-        opt3_lay.addWidget(opt3_formula)
-
-        opt3_inputs = QWidget()
-        opt3_in_lay = QHBoxLayout(opt3_inputs)
-        opt3_in_lay.setContentsMargins(0, 0, 0, 0)
-        opt3_in_lay.setSpacing(8)
-
-        self.scc_opt3_label_edit = QLineEdit()
-        self.scc_opt3_label_edit.setPlaceholderText("Option 3 Label (e.g. Combo 3)")
-        self.scc_opt3_label_edit.setFixedWidth(140)
-
-        self.scc_opt3_str_edit = QLineEdit()
-        self.scc_opt3_str_edit.setPlaceholderText("Plain Fixed Password (e.g. FirmMaster@2026)")
-        self.scc_opt3_str_edit.setMinimumWidth(180)
-
-        opt3_in_lay.addWidget(self.scc_opt3_label_edit)
-        opt3_in_lay.addWidget(self.scc_opt3_str_edit, stretch=1)
-        opt3_lay.addWidget(opt3_inputs)
-
-        lay.addWidget(_setting_row("Combination Option 3",
+            (("fixed string", "emerald"), ("+", None), ("pan_digits (4)", "neutral")),
+            "Fixed string", "e.g. Pass# or Tax@")
+        opt3_card, self.scc_opt3_label_edit, self.scc_opt3_str_edit = _option(3,
+            "Option 3: Plain Fixed String",
             "A static, firm-wide fixed password injected as-is without any PAN components.",
-            opt3_card))
-
-        # ── Option 4 Card ───────────────────────────────────────────────────
-        lay.addWidget(_sub_header("Option 4: Plain Fixed String"))
-
-        opt4_card = QWidget()
-        opt4_lay = QVBoxLayout(opt4_card)
-        opt4_lay.setContentsMargins(0, 0, 0, 0)
-        opt4_lay.setSpacing(8)
-
-        opt4_formula = QLabel("Formula:  [ Fixed String ]  (No PAN substitution)")
-        opt4_formula.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-family: monospace; font-size: 11.5px;")
-        opt4_lay.addWidget(opt4_formula)
-
-        opt4_inputs = QWidget()
-        opt4_in_lay = QHBoxLayout(opt4_inputs)
-        opt4_in_lay.setContentsMargins(0, 0, 0, 0)
-        opt4_in_lay.setSpacing(8)
-
-        self.scc_opt4_label_edit = QLineEdit()
-        self.scc_opt4_label_edit.setPlaceholderText("Option 4 Label (e.g. Combo 4)")
-        self.scc_opt4_label_edit.setFixedWidth(140)
-
-        self.scc_opt4_str_edit = QLineEdit()
-        self.scc_opt4_str_edit.setPlaceholderText("Plain Fixed Password (e.g. BackupPass#1)")
-        self.scc_opt4_str_edit.setMinimumWidth(180)
-
-        opt4_in_lay.addWidget(self.scc_opt4_label_edit)
-        opt4_in_lay.addWidget(self.scc_opt4_str_edit, stretch=1)
-        opt4_lay.addWidget(opt4_inputs)
-
-        lay.addWidget(_setting_row("Combination Option 4",
+            (("fixed string", "emerald"), ("(No PAN substitution)", None)),
+            "Plain fixed password", "e.g. FirmMaster@2026")
+        opt4_card, self.scc_opt4_label_edit, self.scc_opt4_str_edit = _option(4,
+            "Option 4: Plain Fixed String",
             "A second static, firm-wide fixed password injected as-is without any PAN components.",
-            opt4_card))
+            (("fixed string", "emerald"), ("(No PAN substitution)", None)),
+            "Plain fixed password", "e.g. BackupPass#1")
 
-        # ── Live Preview Card ───────────────────────────────────────────────
-        lay.addWidget(_sub_header("Live Combination Preview"))
-
-        preview_card = QWidget()
-        preview_lay = QVBoxLayout(preview_card)
-        preview_lay.setContentsMargins(0, 0, 0, 0)
-        preview_lay.setSpacing(8)
-
-        sample_pan_box = QWidget()
-        sp_lay = QHBoxLayout(sample_pan_box)
-        sp_lay.setContentsMargins(0, 0, 0, 0)
-        sp_lay.setSpacing(8)
-        sp_lbl = QLabel("Test with PAN:")
-        sp_lbl.setStyleSheet(f"color: {_TEXT_SEC}; font-size: 12px;")
-        self.scc_sample_pan_edit = QLineEdit("ABCDE1234F")
-        self.scc_sample_pan_edit.setFixedWidth(140)
-        self.scc_sample_pan_edit.setStyleSheet("text-transform: uppercase; font-family: monospace; font-weight: bold;")
-        sp_lay.addWidget(sp_lbl)
-        sp_lay.addWidget(self.scc_sample_pan_edit)
-        sp_lay.addStretch()
-        preview_lay.addWidget(sample_pan_box)
-
-        self.scc_preview_lbl1 = QLabel()
-        self.scc_preview_lbl1.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
-        self.scc_preview_lbl2 = QLabel()
-        self.scc_preview_lbl2.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
-        self.scc_preview_lbl3 = QLabel()
-        self.scc_preview_lbl3.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
-        self.scc_preview_lbl4 = QLabel()
-        self.scc_preview_lbl4.setStyleSheet(f"font-family: monospace; font-size: 12.5px; color: {_ACCENT_LIGHT};")
-        preview_lay.addWidget(self.scc_preview_lbl1)
-        preview_lay.addWidget(self.scc_preview_lbl2)
-        preview_lay.addWidget(self.scc_preview_lbl3)
-        preview_lay.addWidget(self.scc_preview_lbl4)
-
-        lay.addWidget(_setting_row("Resolved Buttons Preview",
+        preview = Card("Live combination preview")
+        self.scc_sample_pan_edit = Input()
+        self.scc_sample_pan_edit.setText("ABCDE1234F")
+        preview.add_row(SettingRow("Test with PAN",
             "Shows exactly how the 4 combination buttons will appear in the in-browser SMTI widget for the test PAN.",
-            preview_card))
+            self.scc_sample_pan_edit))
+        lines = QWidget()
+        lv = QVBoxLayout(lines)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(TOKENS["s_1"])
+        self.scc_preview_lbl1 = Tag("", "emerald")
+        self.scc_preview_lbl2 = Tag("", "emerald")
+        self.scc_preview_lbl3 = Tag("", "emerald")
+        self.scc_preview_lbl4 = Tag("", "emerald")
+        for tag in (self.scc_preview_lbl1, self.scc_preview_lbl2, self.scc_preview_lbl3, self.scc_preview_lbl4):
+            lv.addWidget(tag, alignment=Qt.AlignLeft)
+        preview.add_widget(lines)
 
         def _update_previews():
             pan = self.scc_sample_pan_edit.text().strip().upper() or "ABCDE1234F"
@@ -953,8 +843,7 @@ class UnifiedSettingsDialog(QDialog):
 
         _update_previews()
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+        return self._kit_page(header, verify, counts, opt1_card, opt2_card, opt3_card, opt4_card, preview)
 
     def _build_page_mcl(self) -> QWidget:
         container = QWidget()
@@ -1353,17 +1242,17 @@ class UnifiedSettingsDialog(QDialog):
             super().reject()
 
     def _update_scc_counts_display(self):
-        """Update the SCC counts display in the UI."""
+        """Update the SCC count tiles."""
         try:
             from core.scc.counts import load_counts
-            counts = load_counts()
-            text = f"Attempts: {counts.attempts}  •  Worked: {counts.worked}  •  Failed: {counts.failed}  •  Locked: {counts.locked}  •  No conclusion: {counts.no_conclusion}  •  Asked: {counts.asked}  •  Saved: {counts.saved}  •  Not understood: {counts.not_understood}"
-            if hasattr(self, "scc_counts_label"):
-                self.scc_counts_label.setText(text)
-                self.scc_counts_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #999999;")
+            c = load_counts()
+            values = (c.attempts, c.worked, c.failed, c.locked, c.no_conclusion, c.asked, c.saved, c.not_understood)
+            self.scc_counts_note.setVisible(False)
         except Exception:
-            if hasattr(self, "scc_counts_label"):
-                self.scc_counts_label.setText("(counts not available)")
+            values = ("–",) * 8
+            self.scc_counts_note.setVisible(True)
+        for tile, value in zip(self.scc_count_tiles, values):
+            tile.set_value(value)
 
     # ── Load settings into controls ───────────────────────────────────────────
     def _pending(self, group: str, sentinel: str, force: bool) -> bool:

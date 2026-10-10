@@ -23,3 +23,7 @@ S-1,Unsaved bar and two primary Save buttons,"Bar shows on every page when dirty
 S-1,Close with unsaved changes,Three-way prompt in reject(): Save changes / Discard changes / Keep editing,agent,"reject() also serves Esc and the title-bar X, so one override guards all exits; Save closes only if the save left nothing dirty.",2026-10-10 18:50
 S-2,Add a Banner on the S-2 pages?,No Banner,agent,The fleet mockup puts no Banner on these pages; kept the layout to the mockup,2026-10-10 18:57
 S-2,Office recovery Card title: mockup casing or existing test text?,Keep 'Office Recovery Kit & Security',agent,test_office_recovery asserts the exact title; changing it would break the lock test,2026-10-10 18:57
+S-3,Are the SCC counts tiles interactive?,"Non-interactive stat tiles (not checkable, no focus, arrow cursor), tooltip gives meaning",agent,Counts are read-only figures; a clickable tile implies an action that does not exist,2026-10-11 00:30
+S-3,How is a counts-load failure shown?,Eight dashes in the tiles plus a hidden-until-needed Banner reading Counts not available,agent,Keeps the tile grid stable and states the failure in words instead of a bare error label,2026-10-11 00:30
+S-3,Are the password fields shown as plain text?,"Kept plain text, as before",agent,Arrangement only; masking the fields is a behaviour change outside this package,2026-10-11 00:30
+S-3,Does the live preview show full resolved values?,"Kept full values, as the current behaviour does",agent,Preview content is unchanged; only the layout moved to kit Cards and Tags,2026-10-11 00:30

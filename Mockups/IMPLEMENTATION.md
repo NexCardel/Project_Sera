@@ -701,3 +701,9 @@ files, tests, decisions taken, what the next WP must know.`
   Goldens: `Mockups/built/settings/{actions,tracker,export,backup,purge}_{1366x768,1024x700,1366x768_scale1.25}.png` (15). Rendered by a scratch script, not a committed tool.
   Tests: settings lock group 84 pass; startup/memory/icon/kit/kit-gallery 152 pass. The 5 failures are the same `TestSearchGridReuse` PAN setUp errors recorded in W0-2 and S-1.
   For the next WP: the Tracker PageHeader lead elides at 1024 logical px ("...beside S..."); the full text is in the tooltip. Human check added.
+- **S-3** (2026-10-11, claude-haiku-5-5): SCC Vault Presets rebuilt on the kit in `ui/dialogs/unified_settings_dialog.py` (`_build_page_scc`, `_update_scc_counts_display`): PageHeader + Cards. Verify card is Switch + Select; Counts card is eight non-interactive Tiles in a 4-wide grid; four option Cards each carry a formula line of Tags and two Inputs (FieldLabels) in a grid; live preview Card keeps the full resolved values. No setStyleSheet, hex or new widget classes in the SCC code; `_sub_header` and `_TEXT_SECTION` removed (no users left).
+  Attribute names, setting keys and `_capture_state`/dirty tracking unchanged.
+  Decisions: counts tiles are display-only; a counts-load failure shows dashes plus a Banner "Counts not available."; password fields stay plain text; preview keeps full values.
+  Goldens: `Mockups/built/settings/scc_{1366x768,1024x700,1366x768_scale1.25}.png`, rendered by a scratch script. Checked at 1024 and 125 %: no clipping.
+  Tests: settings lock group (test_ui_lock_settings, test_ui_settings_hub, test_unified_settings_lazy, test_scc_vault_tagger) 56 pass; test_ui_scale and test_ui_sidebar 49 pass, 1 skip.
+  For the next WP: the four option cards sit below the fold at 1024x700, so check them on a real screen.
