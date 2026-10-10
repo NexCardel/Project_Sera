@@ -15,6 +15,17 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _ui_lock_clipboard_cleared(request):
+    """The tests/test_ui_lock_*.py files copy to the clipboard; a QMimeData still held by it
+    crashes the interpreter at exit (offscreen), so it is emptied after each of those tests."""
+    yield
+    if request.module.__name__.startswith("test_ui_lock"):
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is not None:
+            QApplication.clipboard().clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_phone_alerts(monkeypatch, tmp_path):
     monkeypatch.setenv("VSDC_ALERT_CONFIG", str(tmp_path / "no_such_vsdc_alert.json"))
     for var in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER", "VSDC_ALERT_MACHINE"):

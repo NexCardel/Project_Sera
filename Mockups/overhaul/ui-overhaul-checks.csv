@@ -1,1 +1,4 @@
 Check,WP,Text,Result,Date,Notes
+1,W0-2,"R1.6 on a real desktop: from Search, use Edit / Archive / Delete / Manage services on one client and confirm each acts on the client that was clicked (offscreen, open_client_editor leaves the table selection empty after setCurrentCell, so Manage services may report 'Select one or more clients first.')",Not run,2026-10-10 15:18,
+2,W0-2,"R6.3 on a real PC: open Search, Manage Clients, Tracker Dump, Audit, Settings and Sera Sync at 100 %, 125 % and 150 % Windows scaling and at 1366x768; nothing clipped, no horizontal scroll, text readable",Not run,2026-10-10 15:18,
+3,W0-2,"Real keyboard on a real desktop: press Ctrl+= / Ctrl+- / Ctrl+0 (alert appears, restart applies the scale), Alt+n and Alt+Ctrl+n on a search result, Ctrl+B, F5 in Tracker Dump, and Tab order through the Manage Clients form; offscreen tests call the handlers/shortcuts directly",Not run,2026-10-10 15:18,

@@ -598,3 +598,14 @@ Each WP replaces its line with a note of at most 12 lines: `- **WPx-y** (date, m
 files, tests, decisions taken, what the next WP must know.`
 
 - **W0-1** (2026-10-06, claude-haiku-4-5-20251001): Baseline established on cloud Linux session. No code changes. test_startup_speed.py: 13✓; test_memory_tuning.py: 6✓; full suite: ~2636 tests (pytest collection), running; ui_snapshots.py Mockups/baseline: 31 PNG screens rendered offscreen, no errors. Branch ui-overhaul confirmed. Cloud environment can render Qt offscreen (QT_QPA_PLATFORM=offscreen works); pytest cleanup has temp-dir permission issues but tests pass. Next WP gets full test baseline numbers.
+- **W0-2** (2026-10-10, claude-sonnet-5-5): Behaviour lock, no app code changed. New offscreen tests (throwaway encrypted DB, fictional clients):
+  tests/test_ui_lock_{search,settings,audit,detail,sync,manage,tracker,display}.py + helper tests/ui_lock_support.py + goldens
+  tests/data/ui_lock_audit_export_golden.csv and ui_lock_settings_golden.json (R1-R9 gaps only; R8/R9 reuse test_tracker_dump_*, test_responsive, test_ui_scale).
+  tests/conftest.py gained an autouse fixture that clears the clipboard after test_ui_lock* (a left-over QMimeData crashes exit).
+  Rules for later WPs: static QMessageBox calls must be patched with staticmethod(...) or the run hangs; QMenu.exec cannot be patched on the Qt class,
+  patch the module-level QMenu name with a subclass; use QTest.qWait for the 180 ms search debounce; read the pill's "full_text" property (text is elided).
+  Bugs locked as-is (see decisions): Export Captures (CSV) in Tracker Dump always fails (no `import csv`; flip test_export_csv_currently_fails_...);
+  bulk archive/delete write no audit row; "Save anyway" on a duplicate that also clashes on PAN still fails; offscreen Search>Manage services selection quirk.
+  Human checks added (check-add): real-desktop client actions (R1.6), 100/125/150 % scaling + 1366x768 (R6.3), real keyboard shortcuts (Ctrl+=/-/0, Alt+n, Alt+Ctrl+n, Ctrl+B, F5, Tab order).
+  Run with --basetemp=.pytest_tmp_lock (not committed) and -o faulthandler_timeout=60. Known: creating a SearchWindow before test_tracker_dump_columns.py's
+  TestWidthModes (1000x700 resize) makes 2 of those fail (order leak, they pass alone; alphabetical suite order is unaffected). test_startup_speed::TestSearchGridReuse fails in setUp (PAN pk) - pre-existing.
