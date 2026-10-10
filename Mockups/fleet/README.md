@@ -16,6 +16,19 @@ Settings change shows the unsaved bar and enables the footer Save; Discard / Sav
 open over the screen they come from (Add column, Edit, Change password, Rejoin office, Display, the
 sidebar entries); Esc closes.
 
+## Decisions taken by the owner (2026-10-10)
+
+| Question | Decision | Applied |
+| :--- | :--- | :--- |
+| Tracker Dump grid tone | Keep both: client grids stay white, Tracker Dump keeps its dark table | Grid component gains a dark tone (`.gridwrap.dark`); Tracker Dump uses it |
+| Separate "Search" sidebar entry | Not needed | One "All Clients" entry (both buttons called `go_to_search`) |
+| Hide Sera Sync's Office members / Sync status tabs for non-admins | No | Tabs visible to everyone; admin-only actions keep their PIN confirmation |
+| Manage Staff Users and the legacy settings dialog | Not live features | Both dropped from the sidebar, the mockup and the build list |
+| COMPACT selection bar | Icons with tooltips | As drawn (Open keeps its label) |
+| Sidebar Display entry | Stays visible for all staff | As drawn |
+
+Build order: see **BUILD-PLAN.md** (kit first, screens reuse only the kit).
+
 ## Tokens (`:root` in index.html; `ui/utils/tokens.py` when built)
 
 | Token | Value | Use |
@@ -58,7 +71,7 @@ sidebar entries); Esc closes.
 | Empty state | `.empty` | icon ring, one sentence, optional action |
 | Banner | `.banner` | `w` attention, `r` error, `g` success, `i` information |
 | Toast | `.toast` | bottom centre of the content area |
-| White data grid | `.gridwrap` + `table.grid` | sticky dark header, zebra, mint selection with emerald edge, `.gfoot` hints; `col-lo` / `col-c*` priority classes for COMPACT |
+| Data grid | `.gridwrap` + `table.grid` | white tone (client lists, audit) and `dark` tone (Tracker Dump); sticky header, zebra, mint selection with emerald edge, `.gfoot` hints; `col-lo` / `col-c*` priority classes for COMPACT |
 | Dark list table | `table.dt` | tables inside dialogs and settings |
 | Dialog frame | `.dlg` + `.d-hd` / `.d-bd` / `.d-ft` | icon, title, one-line purpose, body, footer with one primary; `d-full` for full-window dialogs; `.scrim` behind |
 | Client panel | `.panel` | 540 px slide-over, full width in COMPACT |
@@ -69,7 +82,7 @@ sidebar entries); Esc closes.
 ### Shell and sidebar
 The sidebar keeps the real logo (embedded `assets/logo/sera_mark.svg`), the Admin mode switch, and
 every entry, regrouped as Clients (All Clients, Manage Clients*, Tracker Dump, Audit Log*), Tools
-(Import CSV, Display), Admin* (Options, Manage Staff Users), then the staff row, the Auto-sync pill and
+(Import CSV, Display), Admin* (Options), then the staff row, the Auto-sync pill and
 the version. Starred entries show only in Admin mode, as today. New: **Display** (open to everyone)
 opens the per-PC display scale dialog. The sidebar auto-collapses below 1000 logical px and the
 header toggle (Ctrl+B) brings it back; a manual toggle wins until restart.
@@ -79,7 +92,7 @@ Where every control went: logo + "Aman Associates" → brand (name no longer cut
 group label (always open; the accordion chevron goes because the group is three to five items);
 All Clients and Search → one entry, **All Clients** (both buttons call the same `go_to_search` today;
 Ctrl+K / Ctrl+F focus the search box); Tracker Dump, Manage Clients, Audit Log → Clients group;
-Import CSV → Tools; Options, Manage Staff Users → Admin group; profile avatar + name → staff row
+Import CSV → Tools; Options → Admin group; Manage Staff Users → dropped (owner: not a live feature); profile avatar + name → staff row
 (click still opens Sera Sync for admins); "🟢 Auto-Sync Active" pill → soft pill with a status dot
 (click still broadcasts a sync; the "Syncing…", "Synced", "Live Sync" texts keep the same pill);
 version label → unchanged.
@@ -142,8 +155,9 @@ banner + "Inspect Conflicts…" → above the search box when Sera Sync reports 
 Admin PIN dialog → same dialog frame (not drawn).
 
 ### Tracker Dump (`03_tracker_dump.png`)
-Already redesigned; moved onto the kit: tiles, chips showing their value when on, one primary per row,
-white grid instead of the dark table. COMPACT as the app already does: subtitle hidden, chips on a
+Already redesigned; moved onto the kit: tiles, chips showing their value when on, one primary per row.
+The grid keeps its **dark tone** (owner decision); it is the same grid component as the white client
+grids, so header, zebra, selection and row buttons match. COMPACT as the app already does: subtitle hidden, chips on a
 second row, "Raw", smaller tiles, 40 px rows, "Rows per page" label hidden, columns hide Captured by →
 Updated → Filing type with hidden values in the Client tooltip.
 
@@ -153,7 +167,7 @@ Clear All Captures) → Tools ▾, same items; five summary tiles → tiles (cli
 Containers / Raw captures segmented → same (hidden view-mode combo stays the source of truth); search →
 same; Status / Portal / Client / Time / Source chips with their menus → same; Reset → same (ghost);
 grid (Client, Filing type, Filings & History or Period, Submission Status, actions, Updated, Captured
-by) → white grid; row buttons Inspect / Fast Autofill / ⋮ (Inspect, + Create Client, Delete Container
+by) → same columns, grid component in its dark tone; row buttons Inspect / Fast Autofill / ⋮ (Inspect, + Create Client, Delete Container
 or Record) → same; header right-click (Filing type, Updated, Captured by, Automatic) → same; status bar
 (Showing x to y of z, Rows per page, Prev, Page n / m, Next) → footer; Container inspector, Create
 client from capture and Map datapoints dialogs → same dialog frame (not drawn).
@@ -285,17 +299,13 @@ Exit application (asks first), Update now (primary). Cannot be closed; Esc ignor
 Real logo, "Project Sera", the status line, emerald progress, on the dark dialog frame.
 
 ### Legacy settings dialog (`dlg_settings_legacy.png`)
-Same tabs (General, Action buttons, Main screen, Quick-copy, Admin screen) on the dialog frame with
-setting rows and switches; Cancel, Save settings. Every General control (Theme, Window mode, Masking
-mode, Visible characters, Clipboard clear, Quick-Copy, Keep running, Launch at startup, Sera DOM,
-SCA, SCA action mode, SCA uses per UID, ID column) and the four Action-button switches (Ext, Assist,
-Copy, Show/Hide) kept.
+Dropped (owner decision: not a live feature). Not drawn; the build removes `settings_dialog.py` from
+the screen list after confirming nothing opens it.
 
 ## Departures from `Mockups/redesign/index.html` and the 01–06 specs
 
-1. **Tracker Dump gets the white grid.** The earlier work left Tracker Dump as built (dark table). With
-   every other data grid white, a dark one reads as a different app. Status pills keep their colours
-   on white. If the owner prefers the dark table there, only the grid tokens of that screen change.
+1. **Tracker Dump keeps its dark table, as a tone of the one grid component.** The first draft made it
+   white; the owner chose to keep both tones. Header, zebra, selection and row buttons are shared.
 2. **Sera Sync: three tabs plus an always-visible activity column**, not four tabs. The 04 spec drew
    cards only for devices; the redesign HTML drew four tabs with activity as a tab. Today the stream is
    always visible and staff watch it while syncing, so it stays on the right; the admin groups (Members,
@@ -304,8 +314,8 @@ Copy, Show/Hide) kept.
    drawer that hides Service and Detail. The drawer only trades space in COMPACT, where Service and
    Detail do leave the grid.
 4. **Sidebar: "All Clients" and "Search" are one entry**, as the redesign proposed, because both call
-   `go_to_search`. The old redesign also added "Audit Log" to the Tools group; here it stays in
-   Clients, next to where it is today, and a new "Display" entry sits under Tools.
+   `go_to_search` (confirmed by the owner). Audit Log stays in Clients, a new "Display" entry sits
+   under Tools, and Manage Staff Users is dropped (not a live feature).
 5. **Settings keeps the footer Close + Save** beside the unsaved bar (IMPLEMENTATION 4.4 asks for the
    footer Save to stay), and the unsaved bar is amber (attention), not emerald, so the one emerald
    primary on the page stays the Save button.
@@ -345,19 +355,11 @@ Copy, Show/Hide) kept.
 
 ## Open questions for the owner
 
-1. **Tracker Dump grid: white (as drawn) or keep the dark table?**
-2. **Sidebar "Search" entry**: folded into All Clients (both open the same page). Keep a separate
-   "Search" entry anyway?
-3. **Audit Log in Admin mode only**: it is admin-only today and stays so here. Should staff see their own
-   PC's entries?
-4. **Sera Sync admin groups** (Office members, Sync status): are they shown to non-admins at all today?
-   The mockup hides nothing by admin state inside the dialog; the build should follow the code.
-5. **Manage Staff Users** has no screenshot and no dialog file in `ui/dialogs`; is it still a live
-   feature? It is kept as a sidebar entry.
-6. **Legacy settings dialog**: still reachable? If not, it can be dropped from the build list (drawn
-   here so no control is lost).
-7. **Email and TAN** stay type password [Secret] as decided; confirm the Role tags should show them as
+The first six questions were answered on 2026-10-10 (see Decisions above). Still open:
+
+1. **Audit Log in Admin mode only**: it is admin-only today and stays so here. Should staff see their
+   own PC's entries?
+2. **Email and TAN** stay type password [Secret] as decided; confirm the Role tags should show them as
    Secret in the Columns table.
-8. **COMPACT selection bar**: icons with tooltips (as drawn) or short labels ("Edit", "Svc", "Arch")?
-9. **Display scale from the sidebar**: fine for all staff, or should the entry be hidden once a PC is
-   set?
+3. **Sera Sync ahead / behind label**: the current device payload has no revision score; should the
+   build add one (a small protocol change) or leave the label out?

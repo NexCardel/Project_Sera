@@ -250,6 +250,18 @@ table.grid{width:100%;border-collapse:separate;border-spacing:0;table-layout:fix
 .cellbtns .ibtn.pri{background:var(--em);color:#fff;border-color:var(--em2)}
 .cellbtns .ibtn:hover{background:#edf6f1}
 .cellbtns .ibtn.pri:hover{background:var(--em2)}
+/* dark grid variant (Tracker Dump keeps its dark table; owner decision) */
+.gridwrap.dark{background:var(--panel);border-color:var(--line2);box-shadow:none}
+.gridwrap.dark table.grid{color:var(--text2)}
+.gridwrap.dark .grid th{background:#0f1512;color:var(--mint)}
+.gridwrap.dark .grid td{border-bottom-color:#232323}
+.gridwrap.dark .grid tbody tr:nth-child(even) td{background:#171717}
+.gridwrap.dark .grid tbody tr:hover td{background:#1f2a24}
+.gridwrap.dark .grid tbody tr.sel td{background:#14301f;color:var(--text)}
+.gridwrap.dark .grid td.num{color:var(--muted)}
+.gridwrap.dark .cellbtns .ibtn{background:#1a1a1a;border-color:var(--line2);color:var(--text2)}
+.gridwrap.dark .cellbtns .ibtn:hover{background:var(--hover)}
+.gridwrap.dark .cellbtns .ibtn.pri{background:var(--em);color:#fff;border-color:var(--em2)}
 /* dark list table (dialogs, settings) */
 table.dt{width:100%;border-collapse:collapse;font-size:12.5px}
 table.dt th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:9px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -494,7 +506,7 @@ function sidebar(active,st){
   <div class="nav-label">Tools</div>
   ${n('import','db','Import CSV')}
   ${n('display','monitor','Display')}
-  ${admin?`<div class="nav-label">Admin</div>${n('options','cog','Options')}${n('staff','brief','Manage Staff Users')}`:''}
+  ${admin?`<div class="nav-label">Admin</div>${n('options','cog','Options')}`:''}
   <div class="sb-foot">
     <div class="me" title="${admin?'Open Sera Sync (admin only)':''}" data-nav="sync"><span class="avatar">${I('user','s')}</span>${admin?'Admin':'Staff'}</div>
     <button class="btn soft sm" style="justify-content:center" title="Sera LAN mesh · live link active. Click to broadcast a sync to LAN peers.">${dot()}Auto-sync active</button>
@@ -611,8 +623,8 @@ function trackerDump(s){
   ['Reddy Infra','#12 · ABCDE1011F','TDS 26Q','Q2 2026-27 · ARN 987654321098765','Submitted','g2','03 Oct 09:12','ADMIN-PC'],
   ['Iyer Foods','#5 · ABCDE1004F','ITR-4','AY 2026-27 · 3 filings','Other EVC','b','02 Oct 16:40','OFFICE-PC1'],
   ['Patel Jewellers','#7 · ABCDE1006F','GSTR-3B','Aug 2026 · ARN AA1908260987654','Option Expired (NA)','x','28 Sep 12:01','FRONT-DESK']];
- const tone={g:['#e3f3ea','#1c6b43'],g2:['#edf7f0','#2b7d4f'],w:['#fff1d1','#8a6200'],r:['#ffe0e0','#a32121'],b:['#e1ecff','#2456a8'],x:['#eceeed','#4b5a52']};
- const tr=rows.map((r,i)=>`<tr class="${i===0?'sel':''}"><td class="tall" title="Updated ${r[6]} · ${r[7]}"><b style="display:block;${r[0].startsWith('Unreg')?'color:#b35a00':''}">${r[0]}</b><span class="mono" style="color:var(--g-mute);font-size:11px">${r[1]}</span></td><td class="col-c3">${r[2]}</td><td title="${r[3]}">${r[3]}</td><td><span class="gpill" style="background:${tone[r[5]][0]};color:${tone[r[5]][1]}"><i class="dot" style="background:${tone[r[5]][1]};box-shadow:none;width:6px;height:6px"></i>${r[4]}</span></td><td><span class="cellbtns">${ibtn('eye',grouped?'Inspect client container (2 captures)':'View raw payload')}${ibtn('bolt','Fast Autofill: Income Tax','pri')}${ibtn('vdots','More: Inspect · + Create client · Delete container')}</span></td><td class="num col-c2">${r[6]}</td><td class="col-c1">${r[7]}</td></tr>`).join('');
+ const tone={g:['#0f2a1b','#4cf9b7'],g2:['#12301e','#7fe0a8'],w:['#33290f','#e3b341'],r:['#3a1a1a','#ff8d8d'],b:['#16263b','#8bbcff'],x:['#262626','#c4c4be']};
+ const tr=rows.map((r,i)=>`<tr class="${i===0?'sel':''}"><td class="tall" title="Updated ${r[6]} · ${r[7]}"><b style="display:block;${r[0].startsWith('Unreg')?'color:#ffa657':'color:var(--text)'}">${r[0]}</b><span class="mono" style="color:var(--muted);font-size:11px">${r[1]}</span></td><td class="col-c3">${r[2]}</td><td title="${r[3]}">${r[3]}</td><td><span class="gpill" style="background:${tone[r[5]][0]};color:${tone[r[5]][1]}"><i class="dot" style="background:${tone[r[5]][1]};box-shadow:none;width:6px;height:6px"></i>${r[4]}</span></td><td><span class="cellbtns">${ibtn('eye',grouped?'Inspect client container (2 captures)':'View raw payload')}${ibtn('bolt','Fast Autofill: Income Tax','pri')}${ibtn('vdots','More: Inspect · + Create client · Delete container')}</span></td><td class="num col-c2">${r[6]}</td><td class="col-c1">${r[7]}</td></tr>`).join('');
  const tiles=[['6','Client containers','Show everything (clears all filters)',true,''],['1','Need a client','Captures not matched to a registered client',false,'#ffa657'],['1','Awaiting e-verification','Submitted, e-verification still pending',false,'#e3b341'],['2','Not submitted','Not submitted or option expired',false,'#ff8a8a'],['2','Captured today','Updated since midnight',false,'#4cf9b7']];
  const chipsHtml=`<div class="chips">${chip('Status '+I('down','s'),false,'title="All statuses · Submitted & E-verified · Submitted · Pending e-Verification · Other EVC · Not submitted"')}${chip('Portal '+I('down','s'),false,'title="All portals · Income Tax (ITR) · GST portal · TRACES / TDS"')}${chip('Client: Unregistered '+I('down','s'),true,'title="All clients · Registered clients · Unregistered / action required"')}${chip('Time '+I('down','s'),false,'title="All time · Today · Past 7 days · Past 30 days"')}${chip('Source '+I('down','s'),false,'title="All sources · Hide SGT · SGT only"')}${btn('Reset','sm ghost','close','title="Reset all search and filter options"')}</div>`;
  return `${sidebar('tracker',s)}<div class="main">
@@ -620,13 +632,13 @@ function trackerDump(s){
  <div class="tiles">${tiles.map(t=>`<div class="tile ${t[3]?'on':''}" tabindex="0" title="${t[2]}"><b style="color:${t[4]||'var(--text)'}">${t[0]}</b><span>${t[1]}</span></div>`).join('')}</div>
  <div class="row-h chips-row" style="gap:10px"><div class="segbtn"><button class="${grouped?'on':''}" data-act="trk-grouped" title="One row per client (SRPF container)"><span class="hide-c">Containers</span><span class="show-c">Containers</span></button><button class="${grouped?'':'on'}" data-act="trk-raw" title="One row per individual capture"><span class="hide-c">Raw captures</span><span class="show-c">Raw</span></button></div><div class="field" style="flex:1;min-width:180px;max-width:360px">${I('search')}<input class="inp" placeholder="Search client, PAN, GSTIN, ARN, period, portal…" aria-label="Search captures"></div><div class="wide-only" style="display:contents">${chipsHtml}</div></div>
  <div class="compact-only">${chipsHtml}</div>
- <div class="gridwrap"><div class="gridscroll"><table class="grid"><colgroup><col style="min-width:240px"><col class="col-c3" style="width:90px"><col class="${grouped?'w-hist':'w-period'}"><col class="w-status"><col style="width:110px"><col class="col-c2" style="width:120px"><col class="col-c1" style="width:110px"></colgroup>
+ <div class="gridwrap dark"><div class="gridscroll"><table class="grid"><colgroup><col style="min-width:240px"><col class="col-c3" style="width:90px"><col class="${grouped?'w-hist':'w-period'}"><col class="w-status"><col style="width:110px"><col class="col-c2" style="width:120px"><col class="col-c1" style="width:110px"></colgroup>
  <thead title="Right-click: tick Filing type, Updated, Captured by to show or hide · Automatic (fit to width)"><tr><th>Client</th><th class="col-c3">Filing type</th><th>${grouped?'Filings & history':'Period'}</th><th>Submission status</th><th>Actions</th><th class="col-c2">Updated</th><th class="col-c1">Captured by</th></tr></thead><tbody>${tr}</tbody></table></div></div>
  <div class="foot"><span>Showing 1 to 6 of 6 entries</span><span class="sp"></span><span class="hide-c">Rows per page:</span>${sel(['25','50','100'],'25','style="width:72px" aria-label="Rows per page"')}${btn('Prev','sm ghost','left')}<b>Page 1 / 1</b>${btn('Next','sm ghost','right')}</div></div>`;
 }
 S.push({id:'tracker',group:'Shell and daily screens',title:'Tracker Dump',before:'03_tracker_dump.png',
  render:trackerDump,
- about:{c:['Tracker Dump keeps the layout it already has (it was redesigned earlier) and moves onto the kit: summary <b>tiles</b>, the shared <b>chip</b> with a value shown when switched on ("Client: Unregistered"), one primary per row (Fast Autofill), Inspect and a ⋮ menu for the rest.','<b>White grid</b> instead of today\'s dark table, so all data grids in the app read the same way. Status pills keep their colours on white; unregistered clients keep the orange name.','<b>Tools ▾</b> keeps all six items (Re-resolve identities, Map datapoints, Open LTT sheet, Export captures CSV, Distill…, Clear all captures). The header right-click menu (show / hide Filing type, Updated, Captured by; Automatic) stays.','<b>COMPACT</b> (as the app already does): subtitle hidden, chips move to a second row, segment labels shorten ("Raw"), tiles shrink, rows 40 px, "Rows per page" label hidden, and columns hide in the order Captured by → Updated → Filing type. Hidden values go into the Client cell tooltip.'],k:['F5 refresh, the five tiles as filters, search, status bar paging, both view modes (the hidden view-mode combo stays the source of truth), Reset.'],t:['Switch Containers / Raw captures. Toggle COMPACT to see the column and chip changes.']}});
+ about:{c:['Tracker Dump keeps the layout it already has (it was redesigned earlier) and moves onto the kit: summary <b>tiles</b>, the shared <b>chip</b> with a value shown when switched on ("Client: Unregistered"), one primary per row (Fast Autofill), Inspect and a ⋮ menu for the rest.','<b>Dark grid</b> kept (owner decision: Tracker Dump keeps its dark table, the client grids stay white). It is the same grid component with a dark tone, so the header, zebra, selection and row buttons match the white one.','<b>Tools ▾</b> keeps all six items (Re-resolve identities, Map datapoints, Open LTT sheet, Export captures CSV, Distill…, Clear all captures). The header right-click menu (show / hide Filing type, Updated, Captured by; Automatic) stays.','<b>COMPACT</b> (as the app already does): subtitle hidden, chips move to a second row, segment labels shorten ("Raw"), tiles shrink, rows 40 px, "Rows per page" label hidden, and columns hide in the order Captured by → Updated → Filing type. Hidden values go into the Client cell tooltip.'],k:['F5 refresh, the five tiles as filters, search, status bar paging, both view modes (the hidden view-mode combo stays the source of truth), Reset.'],t:['Switch Containers / Raw captures. Toggle COMPACT to see the column and chip changes.']}});
 
 /* ---------- Display scale (per-PC) ---------- */
 function displayDlg(){
@@ -880,19 +892,8 @@ S.push({id:'update',group:'Dialogs',title:'Force update',before:'dlg_force_updat
 S.push({id:'loading',group:'Dialogs',title:'Start-up loading',before:'dlg_startup_loading.png',render:()=>desk(`<div class="dlg" style="width:440px;padding:26px 28px;gap:14px;align-items:center;text-align:center">${LOGO.replace('class="logo"','class="logo" style="width:56px;height:56px"')}<div><h2 style="font-size:var(--f-xl)">Project Sera</h2><div class="mut" style="margin-top:3px">Initializing security vault…</div></div><div class="progress" style="width:260px"><i style="width:38%"></i></div></div>`),
  about:{c:['The green card becomes the same dark dialog frame: the real logo, the app name, the status line that the start-up updates, and an emerald progress bar.'],k:['Title, status text, progress.'],t:[]}});
 
-/* ---------- Legacy settings dialog ---------- */
-function legacy(s){
- const t=s.legTab||'general';
- const tabs=`<div class="tabs2">${[['general','General'],['buttons','Action buttons'],['main','Main screen'],['qc','Quick-copy'],['admin','Admin screen']].map(x=>`<button data-legtab="${x[0]}" aria-selected="${t===x[0]}">${x[1]}</button>`).join('')}</div>`;
- let body;
- if(t==='general')body=`${card(null,`${srow('Application theme','',sel(['Dark'],'Dark','aria-label="Theme"'))}${srow('Window display mode','',sel(['Fullscreen / maximised (default)','Square (1:1)','Rectangular (950 × 680)'],'Fullscreen / maximised (default)','aria-label="Window mode"'))}${srow('Password masking mode','',sel(['First N characters visible','Last N characters visible','Full dots'],'First N characters visible','aria-label="Masking"'))}${srow('Visible characters count','',step(5))}${srow('Auto clipboard clear','',step(30,' s'))}${swrow('Enable Quick-Copy (master toggle)','',1)}${swrow('Keep app running in background when closed','',1)}${swrow('Launch Project Sera automatically on Windows startup','',1)}${swrow('Enable Sera DOM (DOM detector — File Submission Tracker)','',0)}${swrow('Enable SCA (Sera Clipboard Assist)','',1)}${srow('SCA action mode','',sel(['Ambient autofill','SCA widget'],'Ambient autofill','aria-label="SCA mode"'))}${srow('SCA uses per copied UID','',step(1,' uses'))}${srow('ID / primary key column','',pill('No. — auto-serial','g'),'auto')}`)}`;
- else if(t==='buttons')body=card(null,`<div class="srow"><div class="t"><span>Configure visibility of service action buttons in the client panel.</span></div></div>${swrow("Enable 'Ext' button (Extension Autofill)",'',1)}${swrow("Enable 'Assist' button (SMTI Manual Assist)",'',1)}${swrow("Enable 'Copy' button (MECP Manual Copy)",'',1)}${swrow("Enable 'Show / Hide' password eye buttons",'',0)}`);
- else body=colList(t==='main'?3:t==='qc'?4:5);
- return `<div class="scrim" data-close><div class="dlg" style="width:760px;height:640px" onclick="event.stopPropagation()">${dlgHd('cog','Application settings (legacy)','Display preferences, credential masking, automation daemons and column visibility.')}
- <div class="d-bd" style="gap:10px">${tabs}${body}</div><div class="d-ft">${btn('Cancel','','','data-close')}${btn('Save settings','pri','check','data-close')}</div></div></div>`;
-}
-S.push({id:'legacy',group:'Dialogs',title:'Legacy settings dialog',before:'dlg_settings_legacy.png',render:s=>`${sidebar('options',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${legacy(s)}`,
- about:{c:['The old tabbed dialog is still in the code (settings_dialog.py). If it stays reachable, it gets the same frame, tabs, setting rows and switches as the hub; nothing else changes. Its "Light Mode (Default)" entry shows Dark like the hub.','Its Action buttons tab has three extra switches (Ext, Assist, Copy buttons) the hub no longer offers; they are drawn as they are.'],k:['All five tabs and their controls, Cancel, Save settings.'],t:['Click the five tabs.']}});
+/* Legacy settings dialog: dropped (owner decision 2026-10-10: not a live feature). */
+
 
 /* ---------- Foundation: tokens and the kit ---------- */
 S.unshift({id:'kit',group:'Foundation',title:'Tokens and component kit',before:null,render:s=>`<div class="fx" style="grid-column:1/-1">
@@ -908,7 +909,7 @@ ${selbar({admin:true},'Sharma Traders Pvt Ltd')}
 <div class="unsaved">${I('warn')}<span>2 unsaved changes</span><span class="sp"></span>${btn('Discard','sm')}${btn('Save changes','sm pri','check')}</div>
 ${card(null,empty('laptop','No other PCs found yet','Open Sera on another PC on the same network, then press Scan again.',btn('Scan again','sm','refresh')))}
 <div class="banner w">${I('warn')}<span>Attention banner.</span></div><div class="banner r">${I('warn')}<span>Error banner.</span></div><div class="banner i">${I('info')}<span>Information banner.</span></div></div></section>
-<section><h3>The white data grid</h3><div class="gridwrap" style="height:200px;flex:none">${searchGrid(1,false).replace('<div class="gridwrap">','').slice(0,-6)}</div></section>
+<section><h3>The data grid · white tone (client lists) and dark tone (Tracker Dump) are one component</h3><div class="gridwrap" style="height:200px;flex:none">${searchGrid(1,false).replace('<div class="gridwrap">','').slice(0,-6)}</div></section>
 <section><h3>Dialog frame</h3><div class="dlg" style="width:460px;height:200px;position:relative">${dlgHd('shield','Dialog title','One line saying what this does.',ibtn('close','Close','bd'))}<div class="d-bd mut">Body</div><div class="d-ft">${btn('Cancel')}${btn('Primary action','pri','check')}</div></div></section>
 </div>`,
  about:{c:['Everything on every screen is one of these: labelled action, icon button, chip, switch, card, pill, tag, key, input / select / stepper / checkbox, setting row, status strip, selection bar, unsaved bar, empty state, banner, toast, white grid, dark list table, dialog frame.','Icons carry the Material Design name the app uses (hover one).'],k:[],t:[]}});
@@ -996,7 +997,7 @@ app.addEventListener('click',e=>{
  const stab=t.closest('[data-synctab]');if(stab){st.syncTab=stab.dataset.synctab;render();return;}
  const fr=t.closest('[data-frgo],[data-frstep]');if(fr){st.frStep=fr.dataset.frgo||fr.dataset.frstep;render();return;}
  const lt=t.closest('[data-legtab]');if(lt){st.legTab=lt.dataset.legtab;render();return;}
- const nav=t.closest('[data-nav]');if(nav){const m={clients:'search',manage:'manage',tracker:'tracker',audit:'audit',import:'csv',display:'display',options:'set-general',sync:'sync',staff:null};const id=m[nav.dataset.nav];if(id)show(id);return;}
+ const nav=t.closest('[data-nav]');if(nav){const m={clients:'search',manage:'manage',tracker:'tracker',audit:'audit',import:'csv',display:'display',options:'set-general',sync:'sync'};const id=m[nav.dataset.nav];if(id)show(id);return;}
  const stp=t.closest('.stepper button');if(stp){const s=stp.parentElement.querySelector('span');const m=s.textContent.match(/^(\d+)(.*)$/);if(m){s.textContent=(+m[1]+(stp.textContent==='+'?1:-1))+m[2];markDirty(stp);}return;}
 });
 app.addEventListener('change',e=>{markDirty(e.target);});
