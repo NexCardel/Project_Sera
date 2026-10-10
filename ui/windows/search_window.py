@@ -4,122 +4,83 @@ search_window.py
 Window 1: employee-facing search bar + spreadsheet-style results.
 """
 
+import re
 import time
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QSize, QMimeData
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal, QMimeData, QPoint
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QPushButton,
-    QTableWidget,
+    QMenu,
+    QScrollArea,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QStyledItemDelegate,
-    QStyle,
+    QWidgetAction,
 )
-from PySide6.QtGui import QPainter, QColor, QFont, QBrush, QFontMetrics
+from PySide6.QtGui import QBrush, QColor
 try:
     import qtawesome as qta
 except Exception:
     qta = None
+from ui.components.kit import (
+    ROLE_SERVICES, Card, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
+    PageHeader, SettingRow, Switch,
+)
+from ui.utils.responsive import WidthAware
 from ui.utils.theme import SmartTableWidgetItem
+from ui.utils.tokens import KIT, TOKENS as T
+
+# Quick-filter chips: chip id -> service_filter data (the hidden combo stays the source of truth).
+_QUICK_FILTERS = (
+    ("all", "All", None),
+    ("active_today", "Active today", "active_today"),
+    ("has_services", "Has services", "has_services"),
+    ("no_services", "No services", "no_services"),
+    ("has_formatting", "Highlighted", "has_formatting"),
+    ("archived", "Archived", "archived"),
+)
+_MORE_FILTERS = (
+    ("most_viewed", "Most viewed / active"),
+    ("has_passwords", "Has login credentials"),
+    ("missing_passwords", "Missing passwords"),
+)
+_SERVICE_DOTS = (T["em"], T["info"], T["purple"], T["warn"], KIT["orange"])
+_LAST_COLUMN_REASON = "At least one column must stay visible"
 
 
-class ActivityCellDelegate(QStyledItemDelegate):
-    """
-    Renders table cells with a clean, modern spreadsheet-style selection cursor
-    (vivid blue highlight fill with crisp white text when selected), custom formatting support,
-    and activity breadcrumb badges for Client ID cells.
-    """
-    def paint(self, painter: QPainter, option, index):
-        painter.save()
-        self.initStyleOption(option, index)
-
-        is_selected = bool(option.state & QStyle.State_Selected)
-        parent_widget = option.widget
-
-        # Draw cell background (selection, copy-flash, or custom format background)
-        if is_selected:
-            if parent_widget and parent_widget.property("is_flashing"):
-                painter.fillRect(option.rect, QColor("#2E9B5F"))
-            else:
-                painter.fillRect(option.rect, option.palette.highlight())
-        else:
-            bg = index.data(Qt.BackgroundRole)
-            if bg:
-                painter.fillRect(option.rect, bg)
-            else:
-                painter.fillRect(option.rect, option.palette.base())
-
-        rect = option.rect.adjusted(6, 0, -6, 0)
-        main_text = str(index.data(Qt.DisplayRole) or "")
-        activity_tag = index.data(Qt.UserRole + 2)
-
-        main_font = option.font
-        painter.setFont(main_font)
-        fm = painter.fontMetrics()
-
-        # Text color
-        if is_selected:
-            painter.setPen(QColor("#FFFFFF"))
-        else:
-            fg = index.data(Qt.ForegroundRole)
-            if fg:
-                painter.setPen(fg.color() if hasattr(fg, "color") else fg)
-            else:
-                painter.setPen(QColor("#241F1B"))
-
-        y_center = rect.top() + (rect.height() + fm.ascent() - fm.descent()) // 2
-
-        if activity_tag:
-            main_w = fm.horizontalAdvance(main_text)
-            painter.drawText(rect.left(), y_center, main_text)
-
-            # Activity breadcrumb (smaller font, soft grey/light grey when selected)
-            small_font = QFont(main_font)
-            small_font.setPointSize(max(main_font.pointSize() - 2, 8))
-            painter.setFont(small_font)
-            small_fm = painter.fontMetrics()
-
-            tag_color = QColor("#D1D5DB") if is_selected else QColor("#8E8E93")
-            painter.setPen(tag_color)
-
-            tag_x = rect.left() + main_w + 6
-            tag_y = rect.top() + (rect.height() + small_fm.ascent() - small_fm.descent()) // 2
-            painter.drawText(tag_x, tag_y, f"({activity_tag})")
-        else:
-            avail_w = max(rect.width(), 0)
-            elided = fm.elidedText(main_text, Qt.ElideRight, avail_w)
-            painter.drawText(rect.left(), y_center, elided)
-
-        painter.restore()
-
-    def sizeHint(self, option, index):
-        base_size = super().sizeHint(option, index)
-        activity_tag = index.data(Qt.UserRole + 2)
-        if not activity_tag:
-            return base_size
-
-        main_text = str(index.data(Qt.DisplayRole) or "")
-        fm = option.fontMetrics
-        main_w = fm.horizontalAdvance(main_text)
-
-        small_font = QFont(option.font)
-        small_font.setPointSize(max(option.font.pointSize() - 2, 8))
-        small_fm = QFontMetrics(small_font)
-        tag_w = small_fm.horizontalAdvance(f"({activity_tag})")
-
-        return QSize(main_w + tag_w + 20, base_size.height())
+def _column_spec(col):
+    """DataGrid.set_column arguments for one master-column-list column (fixed small widths for the
+    narrow kinds, the rest share what is left; name columns have a maximum share)."""
+    lbl = col.get("label", "").strip().lower()
+    key = f"{lbl} {col.get('field_name', '').lower()}"
+    if (col.get("field_type") == "id"
+            or lbl in {"id", "client id", "token", "no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}):
+        return dict(kind="num", width=52, minimum=44)
+    words = set(re.findall(r"[a-z0-9]+", key))
+    if words & {"password", "pass", "pwd", "pin"}:
+        return dict(kind="mono", width=104, minimum=96, priority=3)
+    if words & {"gst", "gstin"}:
+        return dict(kind="mono", width=140, minimum=110, compact_hidden=True)
+    if words & {"pan", "tan"}:
+        return dict(kind="mono", width=104, minimum=96)
+    if words & {"ph", "phone", "mobile", "contact"}:
+        return dict(kind="num", width=104, minimum=90, compact_hidden=True)
+    if any(k in key for k in ("company", "trade", "firm", "business")):
+        return dict(kind="strong", stretch=3, minimum=130, max_share=0.34)
+    if any(k in key for k in ("name", "client", "proprietor")):
+        return dict(kind="text", stretch=2, minimum=110, max_share=0.28)
+    if "email" in key:
+        return dict(kind="text", stretch=2, minimum=120, priority=2)
+    return dict(kind="text", stretch=1, minimum=90, priority=1)
 
 
-
-class SearchWindow(QWidget):
+class SearchWindow(WidthAware, QWidget):
 
     skip_page_fade = True
+    columns_changed = Signal()      # the Columns menu wrote a show-in-search flag (Settings may refresh)
 
     client_selected = Signal(int)
     add_client_requested = Signal()
@@ -155,11 +116,6 @@ class SearchWindow(QWidget):
         self._activity_refresh_timer.start()
 
         self._current_mcl_cols = []
-        self._current_col_max_lens = []
-        self._column_resize_timer = QTimer(self)
-        self._column_resize_timer.setSingleShot(True)
-        self._column_resize_timer.setInterval(40)
-        self._column_resize_timer.timeout.connect(self._adjust_column_widths)
 
         # _build_ui() ends with set_admin_mode(False), which used to run a full search that
         # refresh() then ran again (~0.1 s of start-up each) - search once.
@@ -170,229 +126,134 @@ class SearchWindow(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(T["s_6"], T["s_6"], T["s_6"], T["s_6"])
+        layout.setSpacing(T["s_4"])
 
-        # Top Header Row
-        header_row = QHBoxLayout()
-        
-        self.btn_toggle_sidebar = QPushButton()
-        self.btn_toggle_sidebar.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_toggle_sidebar.setIcon(qta.icon("mdi.dock-left", color="#8E8D88"))
-            self.btn_toggle_sidebar.setIconSize(QSize(20, 20))
-        self.btn_toggle_sidebar.setFixedSize(36, 36)
-        self.btn_toggle_sidebar.setCursor(Qt.PointingHandCursor)
-        self.btn_toggle_sidebar.setToolTip("Toggle Sidebar (Ctrl+B)")
+        # Header: sidebar toggle, title with live count, Columns, Refresh and the one primary
+        self.page_header = PageHeader("All Clients")
+        self.btn_toggle_sidebar = IconButton("mdi.dock-left", "Toggle Sidebar (Ctrl+B)")
         self.btn_toggle_sidebar.clicked.connect(self.toggle_sidebar_requested.emit)
-        header_row.addWidget(self.btn_toggle_sidebar)
-        header_row.addSpacing(6)
+        self.page_header.add_leading(self.btn_toggle_sidebar)
 
-        title = QLabel("All Clients / Search")
-        title.setProperty("class", "PageTitle")
-        header_row.addWidget(title)
-        
-        # Cell Formatting & Undo/Redo Toolbar (Visible in both Normal and Admin modes)
-        header_row.addSpacing(16)
-        
-        self.btn_fill_color = QPushButton()
-        self.btn_fill_color.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_fill_color.setIcon(qta.icon("mdi.format-color-fill", color="#8E8D88"))
-            self.btn_fill_color.setIconSize(QSize(20, 20))
-        self.btn_fill_color.setFixedSize(36, 36)
-        self.btn_fill_color.setToolTip("Cell Fill Color (Background)")
-        self.btn_fill_color.clicked.connect(self._open_fill_menu_from_toolbar)
-        header_row.addWidget(self.btn_fill_color)
+        self.btn_columns = LabelledAction(
+            "Columns ▾", variant="secondary", icon="mdi.view-column-outline",
+            tooltip="Which columns show here (same switches as Settings → Main screen)")
+        self.btn_columns.clicked.connect(self._show_columns_menu)
+        self.page_header.add_action(self.btn_columns)
 
-        self.btn_text_color = QPushButton()
-        self.btn_text_color.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_text_color.setIcon(qta.icon("mdi.format-color-text", color="#8E8D88"))
-            self.btn_text_color.setIconSize(QSize(20, 20))
-        self.btn_text_color.setFixedSize(36, 36)
-        self.btn_text_color.setToolTip("Cell Text Color (Foreground)")
-        self.btn_text_color.clicked.connect(self._open_text_menu_from_toolbar)
-        header_row.addWidget(self.btn_text_color)
-
-        self.btn_clear_fmt = QPushButton()
-        self.btn_clear_fmt.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_clear_fmt.setIcon(qta.icon("mdi.eraser", color="#8E8D88"))
-            self.btn_clear_fmt.setIconSize(QSize(20, 20))
-        self.btn_clear_fmt.setFixedSize(36, 36)
-        self.btn_clear_fmt.setToolTip("Clear Selected Cell Formatting")
-        self.btn_clear_fmt.clicked.connect(self._clear_selected_formatting_from_toolbar)
-        header_row.addWidget(self.btn_clear_fmt)
-
-        header_row.addSpacing(8)
-
-        self.btn_undo = QPushButton()
-        self.btn_undo.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_undo.setIcon(qta.icon("mdi.undo", color="#8E8D88"))
-            self.btn_undo.setIconSize(QSize(20, 20))
-        self.btn_undo.setFixedSize(36, 36)
-        self.btn_undo.setToolTip("Undo Cell Formatting (Ctrl+Z)")
-        self.btn_undo.clicked.connect(self._undo_last_action)
-        self.btn_undo.setEnabled(False)
-        header_row.addWidget(self.btn_undo)
-
-        self.btn_redo = QPushButton()
-        self.btn_redo.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_redo.setIcon(qta.icon("mdi.redo", color="#8E8D88"))
-            self.btn_redo.setIconSize(QSize(20, 20))
-        self.btn_redo.setFixedSize(36, 36)
-        self.btn_redo.setToolTip("Redo Cell Formatting (Ctrl+Y)")
-        self.btn_redo.clicked.connect(self._redo_last_action)
-        self.btn_redo.setEnabled(False)
-        header_row.addWidget(self.btn_redo)
-
-        header_row.addStretch()
-
-        # Add Client button
-        self.btn_add_client = QPushButton("+ Add Client")
-        self.btn_add_client.setProperty("class", "primary")
-        self.btn_add_client.setMinimumHeight(36)
-        self.btn_add_client.setCursor(Qt.PointingHandCursor)
-        self.btn_add_client.clicked.connect(self.add_client_requested.emit)
-        header_row.addWidget(self.btn_add_client)
-        header_row.addSpacing(8)
-
-        # Sync Trigger (Refresh) button
-        self.btn_sync = QPushButton()
-        self.btn_sync.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_sync.setIcon(qta.icon("mdi.refresh", color="#8E8D88"))
-            self.btn_sync.setIconSize(QSize(20, 20))
-        self.btn_sync.setFixedSize(36, 36)
-        self.btn_sync.setCursor(Qt.PointingHandCursor)
-        self.btn_sync.setToolTip("Refresh table data (pull latest from synced database)")
+        self.btn_sync = IconButton(
+            "mdi.refresh", "Refresh table data (pull latest from synced database)", variant="bordered")
         self.btn_sync.clicked.connect(self._on_manual_refresh)
-        header_row.addWidget(self.btn_sync)
+        self.page_header.add_action(self.btn_sync)
 
-        layout.addLayout(header_row)
+        self.btn_add_client = LabelledAction(
+            "Add client", variant="primary", icon="mdi.plus", tooltip="Add a new client")
+        self.btn_add_client.clicked.connect(self.add_client_requested.emit)
+        self.page_header.add_action(self.btn_add_client)
+        layout.addWidget(self.page_header)
 
-        # Search Bar + Services Row
+        # Search box + filter chips (chips drop to their own row in COMPACT)
         search_row = QHBoxLayout()
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search clients across all columns...")
+        search_row.setSpacing(T["s_3"])
+        self.search_box = Input(placeholder="Search clients across all columns...", icon="mdi.magnify")
         self.search_box.setClearButtonEnabled(True)
-        if qta:
-            self.search_box.addAction(qta.icon("mdi.magnify", color="#8E8D88"), QLineEdit.LeadingPosition)
-        self.search_box.setMinimumHeight(36)
+        self.search_box.setMinimumWidth(220)
+        self.search_box.setMaximumWidth(560)
         self.search_box.textChanged.connect(self._on_search_input_changed)
         self.search_box.returnPressed.connect(self._activate_current_result)
         self.search_box.installEventFilter(self)
-        search_row.addWidget(self.search_box, stretch=3)
+        search_row.addWidget(self.search_box, 3)
 
-        lbl_services = QLabel("Filter:")
-        lbl_services.setProperty("class", "SectionLabel")
-        lbl_services.setStyleSheet("color: #8E8D88;")
-        search_row.addWidget(lbl_services)
-        
-        self.service_filter = QComboBox()
-        self.service_filter.setMinimumHeight(36)
-        self.service_filter.setMinimumWidth(180)
+        # The old preset combo stays as the hidden source of truth; the chips drive it.
+        self.service_filter = QComboBox(self)
+        self.service_filter.hide()
         self.service_filter.currentIndexChanged.connect(self._on_search_input_changed)
-        search_row.addWidget(self.service_filter)
-        
+        self.service_filter.currentIndexChanged.connect(self._sync_chips_from_combo)
+
+        self._syncing_chips = False
+        self._more_labels = {}
+        self.chip_bar = ChipBar(single_select=True)
+        for chip_id, label, _data in _QUICK_FILTERS:
+            self.chip_bar.add_chip(label, id=chip_id, checked=(chip_id == "all"))
+        self._more_menu = QMenu(self)
+        self.chip_bar.add_overflow_chip(self._more_menu, text="More", title="More filters")
+        self.chip_bar.currentChanged.connect(self._on_chip_changed)
+        search_row.addWidget(self.chip_bar)
         search_row.addStretch(1)
-
-        self.btn_edit_client = QPushButton()
-        self.btn_edit_client.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_edit_client.setIcon(qta.icon("mdi.pencil-outline", color="#8E8D88"))
-            self.btn_edit_client.setIconSize(QSize(20, 20))
-        self.btn_edit_client.setFixedSize(36, 36)
-        self.btn_edit_client.setToolTip("Edit selected client profile")
-        self.btn_edit_client.clicked.connect(self._request_edit_client)
-        search_row.addWidget(self.btn_edit_client)
-
-        self.btn_delete_client = QPushButton()
-        self.btn_delete_client.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_delete_client.setIcon(qta.icon("mdi.delete-outline", color="#C62828"))
-            self.btn_delete_client.setIconSize(QSize(20, 20))
-        self.btn_delete_client.setFixedSize(36, 36)
-        self.btn_delete_client.setToolTip("Permanently delete selected client record")
-        self.btn_delete_client.clicked.connect(self._request_delete_client)
-        search_row.addWidget(self.btn_delete_client)
-
-        self.btn_manage_services = QPushButton()
-        self.btn_manage_services.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_manage_services.setIcon(qta.icon("mdi.cog-outline", color="#8E8D88"))
-            self.btn_manage_services.setIconSize(QSize(20, 20))
-        self.btn_manage_services.setFixedSize(36, 36)
-        self.btn_manage_services.setToolTip("Attach / Detach Services for selected client")
-        self.btn_manage_services.clicked.connect(self._request_manage_services)
-        search_row.addWidget(self.btn_manage_services)
-
-        self.btn_archive_client = QPushButton()
-        self.btn_archive_client.setProperty("class", "GhostIconButton")
-        if qta:
-            self.btn_archive_client.setIcon(qta.icon("mdi.archive-outline", color="#8E8D88"))
-            self.btn_archive_client.setIconSize(QSize(20, 20))
-        self.btn_archive_client.setFixedSize(36, 36)
-        self.btn_archive_client.setToolTip("Archive selected client")
-        self.btn_archive_client.clicked.connect(self._request_archive_client)
-        search_row.addWidget(self.btn_archive_client)
-
         layout.addLayout(search_row)
 
-        self.results_table = QTableWidget()
-        self.results_table.setFrameShape(QFrame.NoFrame)
-        self.results_table.setLineWidth(0)
-        self.results_table.setMidLineWidth(0)
+        self.chip_row = QWidget(self)
+        chip_row_lay = QHBoxLayout(self.chip_row)
+        chip_row_lay.setContentsMargins(0, 0, 0, 0)
+        chip_row_lay.addStretch(1)
+        layout.addWidget(self.chip_row)
+        self.setup_responsive_chips(
+            self.chip_bar, wide_layout=search_row, compact_layout=chip_row_lay, compact_row=self.chip_row)
+
+        # Client and cell actions
+        self.action_row = QWidget(self)
+        action_lay = QHBoxLayout(self.action_row)
+        action_lay.setContentsMargins(0, 0, 0, 0)
+        action_lay.setSpacing(T["s_2"])
+
+        self.btn_edit_client = LabelledAction(
+            "Edit", variant="secondary", icon="mdi.pencil-outline", sm=True,
+            tooltip="Edit selected client profile")
+        self.btn_edit_client.clicked.connect(self._request_edit_client)
+        self.btn_manage_services = LabelledAction(
+            "Services", variant="secondary", icon="mdi.cog-outline", sm=True,
+            tooltip="Attach / Detach Services for selected client")
+        self.btn_manage_services.clicked.connect(self._request_manage_services)
+        self.btn_archive_client = LabelledAction(
+            "Archive", variant="secondary", icon="mdi.archive-outline", sm=True,
+            tooltip="Archive selected client")
+        self.btn_archive_client.clicked.connect(self._request_archive_client)
+        self.btn_fill_color = LabelledAction(
+            "Fill", variant="secondary", icon="mdi.format-color-fill", sm=True,
+            tooltip="Cell Fill Color (Background)")
+        self.btn_fill_color.clicked.connect(self._open_fill_menu_from_toolbar)
+        self.btn_text_color = LabelledAction(
+            "Text", variant="secondary", icon="mdi.format-color-text", sm=True,
+            tooltip="Cell Text Color (Foreground)")
+        self.btn_text_color.clicked.connect(self._open_text_menu_from_toolbar)
+        self.btn_clear_fmt = LabelledAction(
+            "Clear", variant="secondary", icon="mdi.eraser", sm=True,
+            tooltip="Clear Selected Cell Formatting")
+        self.btn_clear_fmt.clicked.connect(self._clear_selected_formatting_from_toolbar)
+        self.btn_undo = IconButton("mdi.undo", "Undo Cell Formatting (Ctrl+Z)", variant="bordered", sm=True)
+        self.btn_undo.clicked.connect(self._undo_last_action)
+        self.btn_undo.setEnabled(False)
+        self.btn_redo = IconButton("mdi.redo", "Redo Cell Formatting (Ctrl+Y)", variant="bordered", sm=True)
+        self.btn_redo.clicked.connect(self._redo_last_action)
+        self.btn_redo.setEnabled(False)
+        self.btn_delete_client = LabelledAction(
+            "Delete…", variant="danger", icon="mdi.delete-outline", sm=True,
+            tooltip="Permanently delete selected client record")
+        self.btn_delete_client.clicked.connect(self._request_delete_client)
+
+        for w in (self.btn_edit_client, self.btn_manage_services, self.btn_archive_client,
+                  self.btn_fill_color, self.btn_text_color, self.btn_clear_fmt,
+                  self.btn_undo, self.btn_redo):
+            action_lay.addWidget(w)
+        action_lay.addStretch(1)
+        action_lay.addWidget(self.btn_delete_client)
+        layout.addWidget(self.action_row)
+
+        self.results_table = DataGrid()
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.results_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.results_table.verticalHeader().setVisible(False)
-        self.results_table.setShowGrid(True)
-        self.results_table.setAlternatingRowColors(False)
         self.results_table.viewport().setCursor(Qt.PointingHandCursor)
         self.results_table.setSortingEnabled(True)
         self.results_table.horizontalHeader().setSortIndicatorShown(True)
         self.results_table.horizontalHeader().setSectionsClickable(True)
         self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self._show_cell_formatting_menu)
-        self.results_table.setItemDelegate(ActivityCellDelegate(self.results_table))
         self.results_table.itemActivated.connect(self._on_item_activated)
         self.results_table.installEventFilter(self)
         self.results_table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.results_table.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
-        self.results_table.setStyleSheet("""
-            QTableWidget {
-                background-color: #FFFFFF;
-                alternate-background-color: #FFFFFF;
-                color: #241F1B;
-                gridline-color: #D8CDB4;
-                border: none;
-                outline: none;
-                selection-background-color: #0078D7;
-                selection-color: #FFFFFF;
-            }
-            QHeaderView {
-                background-color: #0A0A0A;
-                border: none;
-            }
-            QHeaderView::section {
-                background-color: #0A0A0A;
-                color: #FFFFFF;
-                font-weight: 600;
-                border: none;
-                border-bottom: 1px solid #262626;
-                border-right: 1px solid #262626;
-                padding: 6px;
-            }
-            QTableCornerButton::section {
-                background-color: #0A0A0A;
-                border: none;
-            }
-        """)
-        
+
         from PySide6.QtGui import QKeySequence, QShortcut
         self.copy_shortcut = QShortcut(QKeySequence.Copy, self.results_table)
         self.copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
@@ -403,17 +264,15 @@ class SearchWindow(QWidget):
 
         self.redo_shortcut = QShortcut(QKeySequence.Redo, self)
         self.redo_shortcut.activated.connect(self._redo_last_action)
-        
-        layout.addWidget(self.results_table)
+
+        self.grid_footer = GridFooter()
+        self.grid_footer.add_hint("Enter", "opens the selected result")
+        self.grid_footer.add_hint(["↑", "↓"], "move", compact_hide=True)
+        self.grid_footer.add_hint("Ctrl+C", "copies the selected cells", compact_hide=True)
+        self.grid_frame = GridFrame(self.results_table, self.grid_footer)
+        layout.addWidget(self.grid_frame, 1)
 
         self.set_admin_mode(False)
-
-        hint = QLabel(
-            "Type to search, press Enter to open the top result "
-            "(\u2193/\u2191 to pick a different one first)."
-        )
-        hint.setProperty("class", "HintText")
-        layout.addWidget(hint)
 
         self.search_box.setFocus()
 
@@ -460,8 +319,7 @@ class SearchWindow(QWidget):
             if len(rows_data) == 1 and "\t" not in text:
                 mime.setData("application/x-sera-uid", b"1")
             QApplication.clipboard().setMimeData(mime)
-            self._flash_copied_items()
-            
+
             if len(rows_data) == 1 and "\t" not in text:
                 msg = f"Copied '{text}' to clipboard"
             elif len(rows_data) == 1:
@@ -470,21 +328,6 @@ class SearchWindow(QWidget):
                 msg = f"Copied {len(rows_data)} rows to clipboard"
                 
             self.toast_requested.emit(msg, "success")
-
-    def _flash_copied_items(self):
-        from PySide6.QtCore import QTimer
-        
-        self.results_table.setProperty("is_flashing", True)
-        self.results_table.viewport().update()
-
-        def restore_style():
-            try:
-                self.results_table.setProperty("is_flashing", False)
-                self.results_table.viewport().update()
-            except Exception:
-                pass
-
-        QTimer.singleShot(500, restore_style)
 
     def _on_search_input_changed(self, *_):
         self._search_timer.start(150)
@@ -512,9 +355,10 @@ class SearchWindow(QWidget):
             self._cached_mcl_cols = [c for c in all_cols if c.get("show_in_search", True)]
 
         self._cached_services = self.db.get_services()
+        keep = self.service_filter.currentData()
         self.service_filter.blockSignals(True)
         self.service_filter.clear()
-        
+
         # Smart Filter Presets
         self.service_filter.addItem("All Clients", None)
         self.service_filter.addItem("🔥 Most Viewed / Active", "most_viewed")
@@ -529,8 +373,71 @@ class SearchWindow(QWidget):
         # Specific Portal Services
         for s in self._cached_services:
             self.service_filter.addItem(f"Service: {s['name']}", s["id"])
-            
+
+        idx = self.service_filter.findData(keep)
+        if idx >= 0:
+            self.service_filter.setCurrentIndex(idx)
         self.service_filter.blockSignals(False)
+        self._rebuild_more_menu()
+        self._sync_chips_from_combo()
+
+    def _rebuild_more_menu(self):
+        """The chips' More menu: the presets without a chip of their own, then one entry per service."""
+        menu = self._more_menu
+        menu.clear()
+        self._more_actions = {}
+        for data, label in _MORE_FILTERS:
+            act = menu.addAction(label)
+            act.triggered.connect(lambda _=False, d=data, t=label: self._pick_more_filter(d, t))
+            self._more_actions[data] = (act, label)
+        if self._cached_services:
+            menu.addSeparator()
+            for s in self._cached_services:
+                act = menu.addAction(f"Service: {s['name']}")
+                act.triggered.connect(lambda _=False, d=s["id"], t=s["name"]: self._pick_more_filter(d, t))
+                self._more_actions[s["id"]] = (act, s["name"])
+
+    def _pick_more_filter(self, data, label):
+        idx = self.service_filter.findData(data)
+        if idx >= 0:
+            self.service_filter.setCurrentIndex(idx)
+
+    def _on_chip_changed(self, chip_id):
+        if self._syncing_chips:
+            return
+        data = {cid: d for cid, _l, d in _QUICK_FILTERS}.get(chip_id, "__keep__")
+        if data == "__keep__":
+            return
+        idx = self.service_filter.findData(data)
+        if idx >= 0 and idx != self.service_filter.currentIndex():
+            self.service_filter.setCurrentIndex(idx)
+
+    def _sync_chips_from_combo(self, *_):
+        """Show the combo's current preset on the chips: a quick chip lights up, or More carries its name."""
+        if getattr(self, "_syncing_chips", True) or not hasattr(self, "chip_bar"):
+            return
+        data = self.service_filter.currentData()
+        self._syncing_chips = True
+        try:
+            for chip_id, _label, d in _QUICK_FILTERS:
+                if d == data:
+                    self.chip_bar.set_selected(chip_id)
+                    self.chip_bar.chip("__overflow__").set_value_when_on(None)
+                    return
+            more = self.chip_bar.chip("__overflow__")
+            entry = getattr(self, "_more_actions", {}).get(data)
+            if more is not None and entry is not None:
+                for chip in self.chip_bar.chips():
+                    if chip is not more and chip.isChecked():
+                        chip.blockSignals(True)
+                        chip.setChecked(False)
+                        chip.blockSignals(False)
+                        chip.update()
+                more.blockSignals(True)
+                more.set_value(entry[1])
+                more.blockSignals(False)
+        finally:
+            self._syncing_chips = False
 
     def _on_scroll_changed(self, *_):
         if not getattr(self, "_restoring_scroll", False):
@@ -607,7 +514,9 @@ class SearchWindow(QWidget):
         try:
             self.results_table.setColumnCount(len(headers))
             self.results_table.setHorizontalHeaderLabels(headers)
-            self.results_table.horizontalHeader().setStretchLastSection(True)
+            for c_idx, col in enumerate(mcl_cols):
+                self.results_table.set_column(c_idx, **_column_spec(col))
+            self.results_table.set_column(len(mcl_cols), kind="text", stretch=2, minimum=140)
 
             if isinstance(svc_val, int):
                 clients = self.db.search_clients(text, service_id=svc_val)
@@ -618,7 +527,7 @@ class SearchWindow(QWidget):
             self.results_table.setRowCount(len(clients))
 
             services_map = {s["id"]: s["name"] for s in services}
-            col_max_lens = [len(h) for h in headers]
+            service_dots = {s["id"]: _SERVICE_DOTS[i % len(_SERVICE_DOTS)] for i, s in enumerate(services)}
 
             client_ids = [c["id"] for c in clients]
             fmt_map = self.db.get_cell_formatting_for_clients(client_ids)
@@ -668,9 +577,6 @@ class SearchWindow(QWidget):
                     else:
                         act_tag = ""
                         
-                    calc_len = len(val) + (len(act_tag) + 4 if act_tag else 0)
-                    if calc_len > col_max_lens[c_idx]:
-                        col_max_lens[c_idx] = calc_len
                     item = SmartTableWidgetItem(val)
                     item.setData(Qt.UserRole, client_id)
                     item.setData(Qt.UserRole + 1, col_key)
@@ -700,11 +606,11 @@ class SearchWindow(QWidget):
                 client_svc_ids = client.get("service_ids", [])
                 svc_names = [services_map[s_id] for s_id in client_svc_ids if s_id in services_map]
                 svc_val_str = ", ".join(svc_names)
-                if len(svc_val_str) > col_max_lens[-1]:
-                    col_max_lens[-1] = len(svc_val_str)
                 svc_item = SmartTableWidgetItem(svc_val_str)
                 svc_item.setData(Qt.UserRole, client_id)
                 svc_item.setData(Qt.UserRole + 1, "services")
+                svc_item.setData(ROLE_SERVICES, [
+                    (services_map[s_id], service_dots[s_id]) for s_id in client_svc_ids if s_id in services_map])
 
                 svc_fmt = fmt_map.get((client_id, "services"))
                 if svc_fmt:
@@ -737,10 +643,9 @@ class SearchWindow(QWidget):
             # What the grid now shows, for refresh() to reuse (unfiltered only)
             self._drawn_grid = (state_at_start, time.monotonic()) if not text else None
 
-            # Store current column definitions and max string lengths for dynamic responsiveness
             self._current_mcl_cols = mcl_cols
-            self._current_col_max_lens = col_max_lens
-            self._adjust_column_widths()
+            self.results_table.fit_columns()
+            self._update_counts(len(clients), text, svc_val)
 
             # Retain scroll positions precisely
             if v_val > 0:
@@ -753,116 +658,78 @@ class SearchWindow(QWidget):
             self.results_table.horizontalHeader().setSectionsClickable(True)
             self.results_table.setUpdatesEnabled(True)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "_column_resize_timer"):
-            self._column_resize_timer.start()
+    def _update_counts(self, shown, text, svc_val):
+        word = "client" if shown == 1 else "clients"
+        self.page_header.set_count(f"{shown} {word}")
+        filtered = bool(text) or svc_val is not None
+        self.grid_footer.set_count(f"{shown} {word} shown" if filtered else f"{shown} {word}")
 
-    def _adjust_column_widths(self):
-        if not hasattr(self, "_current_mcl_cols") or not self._current_mcl_cols:
-            return
-        if self.results_table.columnCount() == 0:
-            return
+    # ---- Columns menu: a second editor for the per-column "show on this screen" flag
+    def _flag_field(self):
+        return "admin_show_in_search" if getattr(self, "is_admin_mode", False) else "show_in_search"
 
-        mcl_cols = self._current_mcl_cols
-        col_max_lens = getattr(self, "_current_col_max_lens", [])
-        total_cols = self.results_table.columnCount()
-        fm = self.results_table.fontMetrics()
-        char_w = max(fm.horizontalAdvance("M"), 7)
-
-        # 1. Calculate minimum widths and assign flex weights
-        min_widths = []
-        weights = []
-
-        for c_idx, col in enumerate(mcl_cols):
-            lbl = col.get("label", "").strip().lower()
-            field_name = col.get("field_name", "").lower()
-            field_type = col.get("field_type", "").lower()
-            is_compact = (
-                field_type == "id"
-                or lbl in {"id", "client id", "token", "no", "no.", "sl no", "sl. no.", "s.no.", "sno", "numer", "number"}
-            )
-
-            hdr_w = fm.horizontalAdvance(col.get("label", "")) + 30
-            if is_compact:
-                w = max(hdr_w, 55)
-                min_widths.append(w)
-                weights.append(0.0)
-            else:
-                max_chars = col_max_lens[c_idx] if c_idx < len(col_max_lens) else 15
-                sample_chars = min(max_chars, 35)
-                content_w = max(sample_chars * char_w + 20, hdr_w, 80)
-
-                # Assign flex weights based on semantic data type
-                if any(k in lbl or k in field_name for k in ("name", "client")):
-                    weight = 3.2
-                    min_w = max(content_w, 130)
-                elif any(k in lbl or k in field_name for k in ("company", "trade", "firm", "business")):
-                    weight = 2.6
-                    min_w = max(content_w, 120)
-                elif "email" in lbl or "email" in field_name:
-                    weight = 2.0
-                    min_w = max(content_w, 120)
-                elif any(k in lbl or k in field_name for k in ("pan", "gst", "gstin", "tan")):
-                    weight = 1.4
-                    min_w = max(content_w, 105)
-                elif any(k in lbl or k in field_name for k in ("phone", "mobile", "contact")):
-                    weight = 1.3
-                    min_w = max(content_w, 95)
-                elif "status" in lbl:
-                    weight = 1.0
-                    min_w = max(content_w, 80)
-                else:
-                    weight = 1.5
-                    min_w = max(content_w, 90)
-
-                min_widths.append(min_w)
-                weights.append(weight)
-
-        # Services column (if present at the end)
-        if total_cols > len(mcl_cols):
-            svc_hdr_w = fm.horizontalAdvance("Services") + 30
-            svc_chars = col_max_lens[-1] if col_max_lens else 20
-            svc_w = max(min(svc_chars, 45) * char_w + 20, svc_hdr_w, 120)
-            min_widths.append(svc_w)
-            weights.append(2.8)
-
-        # 2. Check available viewport width
-        avail_w = self.results_table.viewport().width()
-        if avail_w <= 0:
-            avail_w = self.results_table.width() - 25
-
-        sum_min_w = sum(min_widths)
-        total_weight = sum(weights)
-
-        # 3. Proportional expansion to fill 100% viewport width without scrollbars
-        if avail_w > sum_min_w and total_weight > 0:
-            extra_w = avail_w - sum_min_w
-            allocated_w = []
-            for min_w, weight in zip(min_widths, weights):
-                if weight > 0:
-                    add = int((weight / total_weight) * extra_w)
-                    allocated_w.append(min_w + add)
-                else:
-                    allocated_w.append(min_w)
-
-            # Rounding difference adjustment on highest weighted column
-            diff = avail_w - sum(allocated_w)
-            if diff > 0:
-                best_idx = weights.index(max(weights))
-                allocated_w[best_idx] += diff
-
-            for c_idx, w in enumerate(allocated_w):
-                if c_idx < total_cols:
-                    self.results_table.setColumnWidth(c_idx, w)
+    def _write_column_flags(self, state):
+        ids = [cid for cid, on in state.items() if on]
+        if getattr(self, "is_admin_mode", False):
+            self.db.bulk_update_mcl_admin_visibility(ids)
         else:
-            # Underflow / small resolution: apply comfortable min widths
-            for c_idx, min_w in enumerate(min_widths):
-                if c_idx < total_cols:
-                    self.results_table.setColumnWidth(c_idx, min_w)
+            self.db.bulk_update_mcl_visibility(ids)
 
+    def _show_columns_menu(self):
+        field = self._flag_field()
+        cols = self.db.get_mcl_columns()
+        state = {c["id"]: bool(c.get(field, 1)) for c in cols}
+        switches = {}
 
+        def lock_last():
+            on_ids = [cid for cid, on in state.items() if on]
+            for cid, sw in switches.items():
+                sw.set_disabled_reason(_LAST_COLUMN_REASON if on_ids == [cid] else None)
 
+        def toggled(cid, on):
+            if state.get(cid) == on:
+                return
+            state[cid] = on
+            self._write_column_flags(state)
+            lock_last()
+            self._on_search_changed()
+            self.columns_changed.emit()
+
+        card = Card("Columns on this screen")
+        rows = QWidget(card)
+        rows_lay = QVBoxLayout(rows)
+        rows_lay.setContentsMargins(0, 0, 0, 0)
+        rows_lay.setSpacing(0)
+        for i, col in enumerate(cols):
+            sw = Switch(checked=state[col["id"]], tooltip=f"Show {col['label']} on this screen")
+            sw.toggled.connect(lambda on, cid=col["id"]: toggled(cid, on))
+            switches[col["id"]] = sw
+            row = SettingRow(col["label"], control=sw, width="auto")
+            row.set_first(i == 0)
+            rows_lay.addWidget(row)
+        lock_last()
+        scroll = QScrollArea(card)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(rows)
+        scroll.setAutoFillBackground(False)
+        scroll.viewport().setAutoFillBackground(False)
+        rows.setAutoFillBackground(False)
+        scroll.setMinimumWidth(260)
+        scroll.setFixedHeight(min(rows.sizeHint().height() + 2, max(160, int(self.height() * 0.6))))
+        card.add_widget(scroll)
+        note = QLabel("Admin mode: writes the admin-view flag of each column." if self.is_admin_mode
+                      else "Writes the same per-column flag as Settings → Main screen.", card)
+        note.setWordWrap(True)
+        note.setProperty("class", "HintText")
+        card.add_widget(note)
+
+        menu = QMenu(self)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(card)
+        menu.addAction(action)
+        self._columns_menu = menu
+        menu.exec(self.btn_columns.mapToGlobal(QPoint(0, self.btn_columns.height() + T["s_1"])))
 
     def _on_item_activated(self, item: QTableWidgetItem):
         client_id = item.data(Qt.UserRole)
