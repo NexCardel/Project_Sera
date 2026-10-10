@@ -24,7 +24,7 @@ ARGS = _ap.parse_args()
 os.environ["QT_SCALE_FACTOR"] = f"{ARGS.scale:.2f}"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget  # noqa: E402
 
 from ui.components import kit  # noqa: E402
 from ui.utils.tokens import TOKENS  # noqa: E402
@@ -162,13 +162,83 @@ def primitives_page():
     return page
 
 
+def containers_page():
+    page = QWidget()
+    page.setObjectName("gallery")
+    page.setStyleSheet(f"QWidget#gallery {{ background: {TOKENS['bg']}; }}")
+    root = QVBoxLayout(page)
+    root.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
+    root.setSpacing(TOKENS["s_3"])
+    page.setFixedWidth(760)
+
+    root.addWidget(kit.SectionLabel("Section label"))
+
+    general = kit.Card("Display")
+    general.add_action(kit.Pill("Saved", "emerald", dot=True))
+    sel = kit.Select(items=["Dark"])
+    general.add_row(kit.SettingRow("Theme", "Dark is the only theme for now", sel))
+    general.add_row(kit.SettingRow("Mask passwords", "Follows Password Masking Mode",
+                                   kit.Switch(checked=True, tooltip="Mask passwords")))
+    general.add_row(kit.SettingRow("Idle lock", "Lock after this long without input",
+                                   kit.Stepper(value=5, minimum=1, maximum=60, unit=" min")))
+    general.add_row(kit.SettingRow("Backup folder", "A long sub-label that wraps onto a second line "
+                                   "because the text column is narrower than the sentence.",
+                                   kit.LabelledAction("Browse", icon="mdi.folder-outline", sm=True), width="auto"))
+    general.add_row(kit.SettingRow("Notes template", "Wide control column",
+                                   kit.Input(placeholder="Template"), width="wide"))
+    root.addWidget(general)
+
+    em = kit.Card("Active engine", edge="em")
+    em.add_widget(QLabel("Body text sits in the padded body."))
+    root.addWidget(em)
+
+    danger = kit.Card("Danger zone", edge="danger")
+    danger.add_row(kit.SettingRow("Purge archived clients", "Removes them for good",
+                                  kit.LabelledAction("Purge", variant="danger", icon="mdi.delete-outline"),
+                                  width="auto", danger=True))
+    root.addWidget(danger)
+
+    compact = kit.Card("Compact row")
+    row = kit.SettingRow("Autofill delay", "Stacked under the text in COMPACT width",
+                         kit.Stepper(value=30, minimum=5, maximum=60, unit=" s"))
+    row.set_compact(True)
+    compact.add_row(row)
+    root.addWidget(compact)
+
+    empty = kit.Card("Empty")
+    empty.add_row(kit.EmptyState("No clients yet", "Add a client or import a list to begin.",
+                                 icon="mdi.account-group-outline"))
+    es = kit.EmptyState("Nothing here")
+    es.add_action(kit.LabelledAction("Refresh", variant="soft", icon="mdi.refresh", sm=True))
+    empty.add_row(es)
+    root.addWidget(empty)
+
+    for tone, text in (("w", "Warning: the portal list is older than 7 days."),
+                       ("r", "Error: the backup folder cannot be written."),
+                       ("g", "Done: 12 clients imported."),
+                       ("i", "Info banner with a very long sentence that wraps onto a second line "
+                             "when the page is narrow enough to need it, as COMPACT width will.")):
+        b = kit.Banner(text, tone)
+        if tone == "w":
+            b.add_action(kit.LabelledAction("Fix", variant="secondary", sm=True))
+        root.addWidget(b)
+
+    for level, text in (("success", "Copied to clipboard"), ("error", "Could not write the backup file")):
+        stage = QWidget()
+        stage.setFixedHeight(76)
+        kit.Toast(stage).show_alert(text, level, 0)
+        root.addWidget(stage)
+    return page
+
+
 def main():
     from ui.utils.theme import get_theme_stylesheet
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyleSheet(get_theme_stylesheet())     # the kit must hold up under the app's own sheet
     out = Path(ARGS.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    for name, build in (("primitives", primitives_page), ("inputs", inputs_page)):
+    for name, build in (("primitives", primitives_page), ("inputs", inputs_page),
+                        ("containers", containers_page)):
         page = build()
         page.resize(page.sizeHint())
         page.show()

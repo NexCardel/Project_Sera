@@ -49,17 +49,41 @@ Switch(parent=None, *, checked=False, tooltip="")
 Input, Select, Stepper, Checkbox and Switch all accept set_disabled_reason (Input and TextArea
 only setEnabled). Focus is the mint edge, disabled is 40 %.
 
+Containers (K-3):
+Card(title="", parent=None, *, edge=None)
+    Panel surface with an upper-case title and a right-hand slot. edge: None, "danger" (red edge and
+    title; destructive group only) or "em" (mint). add_widget(w) puts w in the padded body;
+    add_row(w) puts a SettingRow / EmptyState flush (full width, hairline between rows).
+    add_action(w) adds to the title row's right slot. set_title(), title(), set_edge(). A Card never
+    holds a Card: add_widget / add_row raise ValueError (group with a SectionLabel instead).
+SettingRow(title, sub="", control=None, parent=None, *, width="fixed", danger=False)
+    Title + muted sub-label left, control column right. width: "fixed" (230 px), "wide" (360),
+    "auto" (as wide as the control). control is a widget or a list; add_control(w) adds more; Input,
+    Select, TextArea and Stepper fill the column, everything else sits at its right edge.
+    set_title(), set_sub(), set_compact(on) stacks the control under the text (COMPACT width).
+SectionLabel(text, parent=None)
+    The theme's existing SectionLabel (QSS class "SectionLabel"), upper-cased.
+Banner(text, tone="i", parent=None, *, icon=None)
+    Inline notice; tone w (warning), r (error), g (success), i (info). Wraps. add_action(w) on the
+    right. set_text(), set_tone().
+Toast(parent)
+    The shell's alert, promoted: same API as SeraAlert (show_alert(message, level, duration_ms),
+    show_message, hide_alert, hide_toast; level success / info / warning / error), centred at the
+    bottom of its parent, no fade. duration_ms <= 0 stays until hide_alert.
+EmptyState(title, text="", parent=None, *, icon="mdi.inbox-outline")
+    Ring icon, one sentence, optional action: add_action(w). set_title(), set_text().
+
 Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widget still shows
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
 
 from functools import lru_cache
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractButton, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSizePolicy, QToolButton, QWidget,
+    QAbstractButton, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ui.utils.tokens import KIT, TOKENS
@@ -942,3 +966,403 @@ class Switch(_ReasonMixin, QAbstractButton):
         p.setBrush(_qcolor(K["white"] if on else K["sw_thumb"], alpha))
         p.drawEllipse(QRectF(x, 3, thumb, thumb))
         p.end()
+
+
+# ---------------------------------------------------------------- containers
+
+class SectionLabel(QLabel):
+    """The theme's SectionLabel (QSS class "SectionLabel"), upper-cased here because Qt ignores
+    text-transform. Unboxed; for grouping a page into sections, not for a Card title."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setProperty("class", "SectionLabel")
+        font = QFont(self.font())
+        font.setCapitalization(QFont.AllUppercase)
+        self.setFont(font)
+
+
+# edge: (background, border, title colour)
+_CARD_EDGES = {
+    None: (T["card"], T["line"], T["muted"]),
+    "danger": (K["card_danger_bg"], K["card_danger_line"], T["dangertx"]),
+    "em": (T["card"], T["emline"], T["mint"]),
+}
+
+
+@lru_cache(maxsize=None)
+def _card_qss(edge):
+    bg, bd, title = _CARD_EDGES[edge]
+    return (
+        f"QFrame#KitCard {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_l']}px; }}"
+        f"QWidget#KitCardHead, QWidget#KitCardBody {{ background: transparent; }}"
+        f"QLabel#KitCardTitle {{ color: {title}; background: transparent; border: none;"
+        f" font-size: {T['f_xs']}px; font-weight: 600; }}"
+    )
+
+
+class Card(QFrame):
+    EDGES = tuple(_CARD_EDGES)
+
+    def __init__(self, title="", parent=None, *, edge=None):
+        super().__init__(parent)
+        self.setObjectName("KitCard")
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(0, 0, 0, 0)
+        self._outer.setSpacing(0)
+        self._header = None
+        self._body = None
+        self.title_label = None
+        self.edge = None
+        self.set_edge(edge)
+        if title:
+            self.set_title(title)
+
+    def _ensure_header(self):
+        if self._header is None:
+            self._header = QWidget(self)
+            self._header.setObjectName("KitCardHead")
+            lay = QHBoxLayout(self._header)
+            lay.setContentsMargins(T["s_4"], T["s_3"], T["s_4"], 0)
+            lay.setSpacing(T["s_3"])
+            self.title_label = _ElideLabel("", self._header)
+            self.title_label.setObjectName("KitCardTitle")
+            font = QFont(self.title_label.font())
+            font.setCapitalization(QFont.AllUppercase)
+            font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+            self.title_label.setFont(font)
+            self.title_label.setMinimumHeight(K["h_card_head"])
+            lay.addWidget(self.title_label)
+            lay.addStretch(1)
+            self._outer.insertWidget(0, self._header)
+        return self._header
+
+    def set_title(self, title):
+        self._ensure_header()
+        self.title_label.setText(title)
+
+    def title(self):
+        return self.title_label.text() if self.title_label else ""
+
+    def set_edge(self, edge):
+        if edge not in _CARD_EDGES:
+            raise ValueError(f"unknown Card edge: {edge}")
+        self.edge = edge
+        self.setStyleSheet(_card_qss(edge))
+
+    def add_action(self, widget):
+        """Right-hand slot of the title row (a LabelledAction, Pill, Switch ...)."""
+        self._ensure_header().layout().addWidget(widget)
+
+    @staticmethod
+    def _refuse_card(widget):
+        if isinstance(widget, Card) or widget.findChildren(Card):
+            raise ValueError("a Card never holds a Card")
+
+    def add_widget(self, widget, stretch=0):
+        self._refuse_card(widget)
+        if self._body is None:
+            body = QWidget(self)
+            body.setObjectName("KitCardBody")
+            self._body = QVBoxLayout(body)
+            self._body.setContentsMargins(T["s_4"], T["s_3"], T["s_4"], K["pad_card_b"])
+            self._body.setSpacing(T["s_3"])
+            self._outer.addWidget(body)
+        self._body.addWidget(widget, stretch)
+
+    def add_row(self, widget):
+        """Full-width row (SettingRow, EmptyState); the first one under the title has no rule above."""
+        self._refuse_card(widget)
+        if isinstance(widget, SettingRow):
+            widget.set_first(self._outer.count() == (1 if self._header else 0))
+        self._body = None
+        self._outer.addWidget(widget)
+
+
+@lru_cache(maxsize=None)
+def _row_qss(first):
+    top = "none" if first else f"1px solid {K['row_line']}"
+    return (f"QFrame#KitSettingRow {{ background: transparent; border: none; border-top: {top}; }}"
+            f"QWidget#KitSettingCtl {{ background: transparent; border: none; }}")
+
+
+class SettingRow(QFrame):
+    WIDTHS = ("fixed", "auto", "wide")
+
+    def __init__(self, title, sub="", control=None, parent=None, *, width="fixed", danger=False):
+        super().__init__(parent)
+        if width not in self.WIDTHS:
+            raise ValueError(f"unknown SettingRow width: {width}")
+        self.setObjectName("KitSettingRow")
+        self.width_mode = width
+        self.danger = danger
+        self.compact = False
+        self.set_first(False)
+        self._root = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self._root.setContentsMargins(T["s_4"], K["pad_row_v"], T["s_4"], K["pad_row_v"])
+        self._root.setSpacing(T["s_4"])
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(1)
+        self.title_label = QLabel(title, self)
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(
+            f"QLabel {{ color: {T['dangertx'] if danger else T['text']}; background: transparent;"
+            f" font-size: {K['f_row_title']}px; font-weight: 600; }}")
+        self.sub_label = QLabel(sub, self)
+        self.sub_label.setWordWrap(True)
+        self.sub_label.setStyleSheet(
+            f"QLabel {{ color: {T['muted']}; background: transparent; font-size: {T['f_s']}px; }}")
+        self.sub_label.setVisible(bool(sub))
+        text.addWidget(self.title_label)
+        text.addWidget(self.sub_label)
+        self._root.addLayout(text, 1)
+        self.column = QWidget(self)
+        self.column.setObjectName("KitSettingCtl")
+        self._ctl = QHBoxLayout(self.column)
+        self._ctl.setContentsMargins(0, 0, 0, 0)
+        self._ctl.setSpacing(T["s_2"])
+        self._spacer = False
+        self._has_fill = False
+        self._root.addWidget(self.column, 0, Qt.AlignVCenter)
+        self._size_column()
+        if control is not None:
+            for w in (control if isinstance(control, (list, tuple)) else [control]):
+                self.add_control(w)
+
+    def _size_column(self):
+        if self.compact or self.width_mode == "auto":
+            self.column.setMinimumWidth(0)
+            self.column.setMaximumWidth(16777215)
+        else:
+            self.column.setFixedWidth(K["w_ctl_wide"] if self.width_mode == "wide" else T["w_ctl"])
+
+    def set_first(self, first):
+        self.first = bool(first)
+        self.setStyleSheet(_row_qss(self.first))
+
+    def set_title(self, title):
+        self.title_label.setText(title)
+
+    def set_sub(self, sub):
+        self.sub_label.setText(sub)
+        self.sub_label.setVisible(bool(sub))
+
+    def add_control(self, widget):
+        fill = isinstance(widget, (Input, Select, TextArea, Stepper))
+        if fill:
+            self._has_fill = True
+            if self._spacer:
+                self._ctl.takeAt(0)
+                self._spacer = False
+            self._ctl.addWidget(widget, 1)
+        else:
+            if not self._spacer and not self._has_fill:
+                self._ctl.insertStretch(0, 1)
+                self._spacer = True
+            self._ctl.addWidget(widget)
+
+    def set_compact(self, on):
+        self.compact = bool(on)
+        self._root.setDirection(QBoxLayout.TopToBottom if on else QBoxLayout.LeftToRight)
+        self._size_column()
+
+
+# tone: (background, border, text, icon)
+_BANNER_TONES = {
+    "w": (T["warndim"], T["warnline"], K["banner_w_tx"], "mdi.alert-outline"),
+    "r": (K["banner_r_bg"], K["banner_r_line"], K["banner_r_tx"], "mdi.alert-circle-outline"),
+    "g": (K["banner_g_bg"], K["banner_g_line"], K["banner_g_tx"], "mdi.check-circle-outline"),
+    "i": (T["infodim"], T["infoline"], K["banner_i_tx"], "mdi.information-outline"),
+}
+
+
+@lru_cache(maxsize=None)
+def _banner_qss(tone):
+    bg, bd, tx, _ = _BANNER_TONES[tone]
+    return (
+        f"QFrame#KitBanner {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_l'] - 2}px; }}"
+        f"QFrame#KitBanner QLabel {{ background: transparent; border: none; color: {tx};"
+        f" font-size: {K['f_banner']}px; }}"
+    )
+
+
+class Banner(QFrame):
+    TONES = tuple(_BANNER_TONES)
+
+    def __init__(self, text, tone="i", parent=None, *, icon=None):
+        super().__init__(parent)
+        self.setObjectName("KitBanner")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(K["pad_banner_h"], K["pad_banner_v"], K["pad_banner_h"], K["pad_banner_v"])
+        lay.setSpacing(T["s_3"])
+        self._icon_name = icon
+        self.icon_label = QLabel(self)
+        self.icon_label.setFixedSize(K["d_banner_icon"], K["d_banner_icon"])
+        lay.addWidget(self.icon_label, 0, Qt.AlignVCenter)
+        self.label = QLabel(text, self)
+        self.label.setWordWrap(True)
+        lay.addWidget(self.label, 1)
+        self.tone = None
+        self.set_tone(tone)
+
+    def text(self):
+        return self.label.text()
+
+    def set_text(self, text):
+        self.label.setText(text)
+
+    def set_tone(self, tone):
+        if tone not in _BANNER_TONES:
+            raise ValueError(f"unknown Banner tone: {tone}")
+        self.tone = tone
+        self.setStyleSheet(_banner_qss(tone))
+        ic = _icon(self._icon_name or _BANNER_TONES[tone][3], _BANNER_TONES[tone][2])
+        side = K["d_banner_icon"]
+        self.icon_label.setPixmap(ic.pixmap(side, side) if ic is not None else QPixmap())
+
+    def add_action(self, widget):
+        self.layout().addWidget(widget, 0, Qt.AlignVCenter)
+
+
+# level: (background, border, icon colour, icon)
+_TOAST_LEVELS = {
+    "success": (K["toast_bg"], K["banner_g_line"], T["mint"], "mdi.check-circle-outline"),
+    "info": (T["infodim"], T["infoline"], T["info"], "mdi.information-outline"),
+    "warning": (T["warndim"], T["warnline"], T["warn"], "mdi.alert-outline"),
+    "error": (K["banner_r_bg"], K["banner_r_line"], T["dangertx"], "mdi.alert-circle-outline"),
+}
+
+
+@lru_cache(maxsize=None)
+def _toast_qss(level):
+    bg, bd, _, _ = _TOAST_LEVELS[level]
+    return (
+        f"QFrame#KitToast {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_l'] - 2}px; }}"
+        f"QFrame#KitToast QLabel {{ background: transparent; border: none; color: {T['text']};"
+        f" font-size: {K['f_banner']}px; }}"
+    )
+
+
+class Toast(QFrame):
+    LEVELS = tuple(_TOAST_LEVELS)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("KitToast")
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.level = None
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(T["s_4"], K["pad_toast_v"], T["s_4"], K["pad_toast_v"])
+        lay.setSpacing(T["s_3"])
+        self.icon_label = QLabel(self)
+        self.icon_label.setFixedSize(K["d_banner_icon"], K["d_banner_icon"])
+        lay.addWidget(self.icon_label, 0, Qt.AlignVCenter)
+        self.label = QLabel("", self)
+        self.label.setWordWrap(True)
+        lay.addWidget(self.label, 1)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide_alert)
+        if parent is not None:
+            parent.installEventFilter(self)
+        self.hide()
+
+    def show_alert(self, message, level="success", duration_ms=3000):
+        if level not in _TOAST_LEVELS:
+            level = "success"
+        if level != self.level:
+            self.level = level
+            self.setStyleSheet(_toast_qss(level))
+            ic = _icon(_TOAST_LEVELS[level][3], _TOAST_LEVELS[level][2])
+            side = K["d_banner_icon"]
+            self.icon_label.setPixmap(ic.pixmap(side, side) if ic is not None else QPixmap())
+        self.label.setText(message)
+        self.setAccessibleName(message)
+        self._place()
+        self.show()
+        self.raise_()
+        self.timer.stop()
+        if duration_ms > 0:
+            self.timer.start(duration_ms)
+
+    def show_message(self, message, duration_ms=3000, level="info"):
+        self.show_alert(message, level=level, duration_ms=duration_ms)
+
+    def hide_alert(self):
+        self.timer.stop()
+        self.hide()
+
+    def hide_toast(self):
+        self.hide_alert()
+
+    def _place(self):
+        parent = self.parentWidget()
+        lay = self.layout()
+        margins = lay.contentsMargins()
+        natural = (margins.left() + margins.right() + 2 + K["d_banner_icon"] + lay.spacing()
+                   + QFontMetrics(self.label.font()).horizontalAdvance(self.label.text()) + 2)
+        limit = K["w_toast_max"]
+        if parent is not None:
+            limit = min(limit, max(parent.width() - 2 * T["s_4"], 0))
+        width = max(min(natural, limit), 1)
+        self.setFixedWidth(width)
+        height = lay.totalHeightForWidth(width)
+        self.setFixedHeight(height if height > 0 else self.sizeHint().height())
+        if parent is not None:
+            self.move((parent.width() - width) // 2, parent.height() - self.height() - K["gap_toast"])
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Resize and obj is self.parentWidget() and not self.isHidden():
+            self._place()
+        return False
+
+
+class EmptyState(QFrame):
+    def __init__(self, title, text="", parent=None, *, icon="mdi.inbox-outline"):
+        super().__init__(parent)
+        self.setObjectName("KitEmpty")
+        self.setStyleSheet("QFrame#KitEmpty { background: transparent; border: none; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(T["s_5"], K["pad_empty_v"], T["s_5"], K["pad_empty_v"])
+        lay.setSpacing(T["s_2"])
+        lay.setAlignment(Qt.AlignHCenter)
+        ring = QLabel(self)
+        ring.setFixedSize(K["d_ring"], K["d_ring"])
+        ring.setAlignment(Qt.AlignCenter)
+        ring.setStyleSheet(
+            f"QLabel {{ background: {K['ring_bg']}; border: 1px solid {K['ring_line']};"
+            f" border-radius: {K['d_ring'] // 2}px; }}")
+        ic = _icon(icon, K["ring_tx"])
+        if ic is not None:
+            ring.setPixmap(ic.pixmap(K["d_ring_icon"], K["d_ring_icon"]))
+        lay.addWidget(ring, 0, Qt.AlignHCenter)
+        self.title_label = QLabel(title, self)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(
+            f"QLabel {{ color: {T['text']}; background: transparent; font-size: {T['f_l']}px;"
+            f" font-weight: 600; }}")
+        lay.addWidget(self.title_label)
+        self.text_label = QLabel(text, self)
+        self.text_label.setAlignment(Qt.AlignCenter)
+        self.text_label.setWordWrap(True)
+        self.text_label.setStyleSheet(
+            f"QLabel {{ color: {T['muted']}; background: transparent; font-size: {T['f_m']}px; }}")
+        self.text_label.setVisible(bool(text))
+        lay.addWidget(self.text_label)
+        self._actions = QHBoxLayout()
+        self._actions.setContentsMargins(0, T["s_1"], 0, 0)
+        self._actions.setSpacing(T["s_2"])
+        self._actions.setAlignment(Qt.AlignHCenter)
+        lay.addLayout(self._actions)
+
+    def set_title(self, title):
+        self.title_label.setText(title)
+
+    def set_text(self, text):
+        self.text_label.setText(text)
+        self.text_label.setVisible(bool(text))
+
+    def add_action(self, widget):
+        self._actions.addWidget(widget)

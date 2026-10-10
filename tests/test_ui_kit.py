@@ -428,3 +428,167 @@ def test_switch_disabled_reason_blocks_toggle(app):
     sw.set_disabled_reason(None)
     assert sw.isEnabled()
     sw.close()
+
+
+# ---------------------------------------------------------------- containers (K-3)
+
+def test_card_title_is_caps_with_right_slot_and_edges(app):
+    from PySide6.QtWidgets import QLabel
+    c = kit.Card("Display")
+    pill = kit.Pill("Saved", "emerald")
+    c.add_action(pill)
+    c.add_widget(QLabel("body"))
+    assert c.title() == "Display"
+    assert c.title_label.font().capitalization().name == "AllUppercase"
+    assert pill.parentWidget() is c._header
+    assert TOKENS["line"] in c.styleSheet()
+    c.set_edge("danger")
+    assert KIT["card_danger_line"] in c.styleSheet() and c.edge == "danger"
+    c.set_edge("em")
+    assert TOKENS["emline"] in c.styleSheet()
+    with pytest.raises(ValueError):
+        c.set_edge("loud")
+    with pytest.raises(ValueError):
+        kit.Card("x", edge="loud")
+
+
+def test_card_never_holds_a_card(app):
+    from PySide6.QtWidgets import QWidget, QVBoxLayout
+    outer = kit.Card("Outer")
+    with pytest.raises(ValueError):
+        outer.add_widget(kit.Card("Inner"))
+    with pytest.raises(ValueError):
+        outer.add_row(kit.Card("Inner"))
+    wrapper = QWidget()
+    QVBoxLayout(wrapper).addWidget(kit.Card("Deep"))
+    with pytest.raises(ValueError):
+        outer.add_widget(wrapper)
+
+
+def test_card_rows_only_first_has_no_rule(app):
+    c = kit.Card("Rows")
+    a, b = kit.SettingRow("A"), kit.SettingRow("B")
+    c.add_row(a)
+    c.add_row(b)
+    assert a.first and not b.first
+    assert "border-top: none" in a.styleSheet()
+    assert KIT["row_line"] in b.styleSheet()
+    untitled = kit.Card()
+    x = kit.SettingRow("X")
+    untitled.add_row(x)
+    assert x.first and untitled.title() == ""
+
+
+def test_setting_row_column_widths_and_compact(app):
+    sel = kit.Select(items=["Dark"])
+    fixed = kit.SettingRow("Theme", "sub", sel)
+    wide = kit.SettingRow("Notes", "", kit.Input(), width="wide")
+    auto = kit.SettingRow("Backup", "", kit.LabelledAction("Browse"), width="auto")
+    assert fixed.column.minimumWidth() == fixed.column.maximumWidth() == TOKENS["w_ctl"] == 230
+    assert wide.column.maximumWidth() == KIT["w_ctl_wide"]
+    assert auto.column.minimumWidth() == 0 and auto.column.maximumWidth() > 10000
+    assert not fixed.sub_label.isHidden() and wide.sub_label.isHidden()
+    fixed.set_compact(True)
+    assert fixed.column.maximumWidth() > 10000
+    assert fixed._root.direction() == kit.QBoxLayout.TopToBottom
+    fixed.set_compact(False)
+    assert fixed.column.maximumWidth() == 230
+    with pytest.raises(ValueError):
+        kit.SettingRow("x", width="huge")
+
+
+def test_setting_row_fills_input_and_pushes_buttons_right(app):
+    row = kit.SettingRow("T", "", [kit.Input()])
+    row.resize(600, row.sizeHint().height())
+    row.show()
+    inp = row.column.findChild(kit.Input)
+    assert inp.width() == row.column.width()
+    sw = kit.Switch()
+    row2 = kit.SettingRow("S", "", sw)
+    row2.resize(600, row2.sizeHint().height())
+    row2.show()
+    assert sw.x() + sw.width() == row2.column.width()
+    row.close()
+    row2.close()
+
+
+def test_setting_row_danger_title_is_red(app):
+    assert TOKENS["dangertx"] in kit.SettingRow("Purge", danger=True).title_label.styleSheet()
+    assert TOKENS["text"] in kit.SettingRow("Keep").title_label.styleSheet()
+
+
+@pytest.mark.parametrize("tone", ["w", "r", "g", "i"])
+def test_banner_tones_icon_and_action(app, tone):
+    b = kit.Banner("Heads up", tone)
+    assert b.tone == tone and b.text() == "Heads up"
+    assert not b.icon_label.pixmap().isNull()
+    b.add_action(kit.LabelledAction("Fix", sm=True))
+    b.set_text("Changed")
+    assert b.label.text() == "Changed"
+    b.set_tone("r")
+    assert b.tone == "r"
+
+
+def test_banner_rejects_unknown_tone_and_wraps(app):
+    with pytest.raises(ValueError):
+        kit.Banner("x", "loud")
+    b = kit.Banner("word " * 60, "i")
+    assert b.label.wordWrap()
+    assert b.heightForWidth(300) > b.heightForWidth(900) or b.layout().totalHeightForWidth(300) > b.layout().totalHeightForWidth(900)
+
+
+def test_toast_keeps_alert_api_and_sits_bottom_centre(app):
+    from PySide6.QtWidgets import QWidget
+    host = QWidget()
+    host.resize(800, 400)
+    host.show()
+    t = kit.Toast(host)
+    assert t.isHidden()
+    for level in ("success", "info", "warning", "error"):
+        t.show_alert("Saved", level, 0)
+        assert t.level == level and t.isVisible() and not t.timer.isActive()
+    t.show_alert("Copied", "bogus", 0)
+    assert t.level == "success"
+    assert t.accessibleName() == "Copied"
+    assert abs((t.x() + t.width() / 2) - 400) <= 1
+    assert t.y() + t.height() == 400 - KIT["gap_toast"]
+    host.resize(300, 400)
+    assert t.width() <= 300 - 2 * TOKENS["s_4"]
+    t.show_message("Hello", 5000)
+    assert t.level == "info" and t.timer.isActive()
+    t.hide_toast()
+    assert t.isHidden() and not t.timer.isActive()
+    t.show_alert("Again", "error", 0)
+    t.hide_alert()
+    assert t.isHidden()
+    host.close()
+
+
+def test_toast_long_message_wraps_within_max_width(app):
+    from PySide6.QtWidgets import QWidget
+    host = QWidget()
+    host.resize(1200, 400)
+    host.show()
+    t = kit.Toast(host)
+    t.show_alert("word " * 80, "warning", 0)
+    assert t.width() <= KIT["w_toast_max"]
+    assert t.height() > KIT["pad_toast_v"] * 2 + 20
+    host.close()
+
+
+def test_empty_state_texts_and_action(app):
+    e = kit.EmptyState("No clients", "Add one.", icon="mdi.account-group-outline")
+    assert e.title_label.text() == "No clients" and not e.text_label.isHidden()
+    e.set_text("")
+    assert e.text_label.isHidden()
+    e.set_title("Nothing")
+    assert e.title_label.text() == "Nothing"
+    btn = kit.LabelledAction("Refresh", variant="soft", sm=True)
+    e.add_action(btn)
+    assert btn.parentWidget() is e
+
+
+def test_section_label_is_theme_class_and_upper(app):
+    s = kit.SectionLabel("General")
+    assert s.property("class") == "SectionLabel"
+    assert s.font().capitalization().name == "AllUppercase"
