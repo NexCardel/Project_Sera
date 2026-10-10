@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 17:20)
+# UI overhaul — report (2026-10-10 17:31)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 25 |
+| Not started | 24 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 11 |
+| Done | 12 |
 | Blocked | 0 |
 
-Runs: 20   output tokens: 514019   API-equivalent cost: $23.78
+Runs: 21   output tokens: 580227   API-equivalent cost: $28.09
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -25,7 +25,7 @@ Runs: 20   output tokens: 514019   API-equivalent cost: $23.78
 | K-3 | Done | sonnet | 4169c66 | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... | Kit containers: Card, SettingRow, SectionLabel, Banner, Toast, EmptyState; 58 kit tests pass, gallery containers page |
 | K-4 | Done | sonnet | da633a8 | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | kit bars (Chip, ChipBar, StatusStrip, SelectionBar, UnsavedBar), gallery, tests |
 | K-5 | Done | opus | 5c8093b | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | DataGrid (QTableWidget subclass, delegate-drawn white/dark/list tones, pills, service dots, drawn actions, fit_columns), DarkListTable, GridFooter, GridFrame; 9 |
-| K-6 | Not started | sonnet |  | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... |  |
+| K-6 | Done | sonnet | 782bc31 | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... | DialogFrame, Scrim, PageHeader, Tile, LogView, SlidePanel restyle (540 / full width COMPACT); 52 new tests pass; frames gallery page |
 | K-7 | Not started | sonnet |  | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... |  |
 | K-R | Not started | opus |  | Review phase K (kit) |  |
 | R-1 | Not started | mechanical |  | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... |  |
@@ -71,3 +71,4 @@ Runs: 20   output tokens: 514019   API-equivalent cost: $23.78
 - #2 (W0-2) R6.3 on a real PC: open Search, Manage Clients, Tracker Dump, Audit, Settings and Sera Sync at 100 %, 125 % and 150 % Windows scaling and at 1366x768; nothing clipped, no horizontal scroll, text readable — Not run
 - #3 (W0-2) Real keyboard on a real desktop: press Ctrl+= / Ctrl+- / Ctrl+0 (alert appears, restart applies the scale), Alt+n and Alt+Ctrl+n on a search result, Ctrl+B, F5 in Tracker Dump, and Tab order through the Manage Clients form; offscreen tests call the handlers/shortcuts directly — Not run
 - #4 (K-5) On a real desktop: hover a DataGrid row and its drawn action buttons (hover fill, tooltip per button, click runs the action); drag a column edge and confirm the width survives a window resize — Not run
+- #5 (K-6) On a real 125% display, open a SlidePanel in a window narrower than 1080 px: it should fill the width with no left edge, and a DialogFrame (normal and full) should show no clipped title or footer. — Not run

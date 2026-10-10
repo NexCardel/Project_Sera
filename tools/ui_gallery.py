@@ -5,8 +5,11 @@ tools/ui_gallery.py — render the UI kit (ui/components/kit.py) to PNGs
 
 Writes one PNG per kit section to out_dir (default Mockups/built/kit/), named
 <section>@<scale>.png. --scale sets QT_SCALE_FACTOR before the app starts, so run one process
-per scale. Offscreen; nothing opens on screen. K-1 adds the primitives page; K-7 adds every
-other component and state.
+per scale. Offscreen; nothing opens on screen. Sections: primitives, inputs, containers, bars,
+grid, frames, and states (normal / hover / focus / disabled of every interactive component).
+Disabled, checked, long text, empty and COMPACT states sit on each section's own page. The images
+are the contract: a screen package may not change them (BUILD-PLAN rule 14). Both scales:
+    python tools/ui_gallery.py && python tools/ui_gallery.py --scale 1.25
 """
 
 import argparse
@@ -68,6 +71,7 @@ def inputs_page():
     r += 1
     long_in = fixed(kit.Input())
     long_in.setText("A very long client name that runs past the right edge of the field")
+    long_in.setCursorPosition(0)
     off = fixed(kit.Input(placeholder="Disabled", icon="mdi.lock-outline"))
     off.setEnabled(False)
     _row(grid, r, "Input plain, placeholder, icon, long, disabled", [
@@ -345,6 +349,7 @@ _PEOPLE = [   # fictional clients, as in Mockups/fleet/index.html
 
 
 def _white_grid(compact=False):
+    from PySide6.QtCore import QPoint
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QTableWidgetItem
     heads = ["No.", "Name of company", "Name of proprietor", "GSTIN", "PAN", "Ph. no.", "Services"]
@@ -369,6 +374,7 @@ def _white_grid(compact=False):
     grid.item(3, 2).setBackground(QColor("#fff3cd"))       # a cell-format highlight from the engine
     grid.item(3, 2).setForeground(QColor("#6b4e00"))
     grid.selectRow(1)
+    grid._set_hover(4, QPoint(5, 5))                       # the hover row, drawn as under the mouse
     footer = kit.GridFooter()
     footer.set_count(f"{len(_PEOPLE)} clients")
     footer.add_hint("Enter", "opens the top result")
@@ -582,6 +588,100 @@ def frames_page():
     return page
 
 
+STATES = ("normal", "hover", "focus", "disabled")
+
+
+def _shot(host, make, state, width=None):
+    """Grab one widget in one interaction state: the mouse really moves over it, focus is real."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    stage = QWidget(host)
+    stage.setObjectName("stage")
+    stage.setStyleSheet(f"QWidget#stage {{ background: {TOKENS['bg']}; }}")
+    lay = QVBoxLayout(stage)
+    lay.setContentsMargins(TOKENS["s_2"], TOKENS["s_2"], TOKENS["s_2"], TOKENS["s_2"])
+    w = make()
+    if width:
+        w.setFixedWidth(width)
+    lay.addWidget(w)
+    stage.move(0, 0)
+    stage.show()
+    stage.adjustSize()
+    QApplication.processEvents()
+    if state == "disabled":
+        w.setEnabled(False)
+    elif state == "hover":
+        QTest.mouseMove(w, w.rect().center())
+    elif state == "focus":
+        w.setFocus(Qt.TabFocusReason)
+    QApplication.processEvents()
+    pm = stage.grab()
+    QTest.mouseMove(host, QPoint(host.width() - 2, host.height() - 2))
+    stage.hide()
+    stage.deleteLater()
+    return pm
+
+
+def _state_row(grid, r, host, caption, make, *, states=STATES, width=None):
+    cells = []
+    for state in states:
+        col = QWidget()
+        lay = QVBoxLayout(col)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        pic = QLabel()
+        pic.setPixmap(_shot(host, make, state, width))
+        tag = QLabel(state)
+        tag.setStyleSheet(f"color: {TOKENS['faint']}; font-size: {TOKENS['f_xs']}px;")
+        lay.addWidget(pic)
+        lay.addWidget(tag)
+        cells.append(col)
+    _row(grid, r, caption, cells)
+
+
+def states_page():
+    """Normal / hover / focus / disabled for every interactive component (checked variants get rows)."""
+    page, grid = _blank_page()
+    host = QWidget()
+    host.resize(520, 200)
+    host.show()
+    host.activateWindow()
+    QApplication.processEvents()
+    page._host = host
+    r = 0
+
+    def add(caption, make, **kw):
+        nonlocal r
+        _state_row(grid, r, host, caption, make, **kw)
+        r += 1
+
+    for variant in kit.LabelledAction.VARIANTS:
+        add(f"LabelledAction {variant}", lambda v=variant: kit.LabelledAction(v.title(), variant=v, icon="mdi.check"))
+    for variant in kit.IconButton.VARIANTS:
+        add(f"IconButton {variant}", lambda v=variant: kit.IconButton("mdi.refresh", "Refresh", variant=v))
+    add("Segmented", lambda: kit.Segmented(["All", "Pending", "Done"], current=1))
+    add("Input", lambda: kit.Input(placeholder="Search clients", icon="mdi.magnify"), width=230)
+    add("Select", lambda: kit.Select(items=["Dark", "Light"]), width=230)
+    add("TextArea", lambda: kit.TextArea(rows=2, placeholder="Add notes…"), width=230)
+    add("Stepper", lambda: kit.Stepper(value=30, minimum=5, maximum=60, unit=" s"), width=160)
+    add("Checkbox off", lambda: kit.Checkbox("Select row"))
+    add("Checkbox on", lambda: kit.Checkbox("Selected", checked=True))
+    add("Switch off", lambda: kit.Switch(tooltip="Off"))
+    add("Switch on", lambda: kit.Switch(checked=True, tooltip="On"))
+    add("Chip", lambda: kit.Chip("Active today"))
+    add("Chip checked, count", lambda: kit.Chip("All", count=16, checked=True))
+    add("Chip menu", lambda: kit.Chip("Client", has_menu=True))
+    add("Tile", lambda: kit.Tile("12", "Worked"), width=130)
+    add("Tile checked", lambda: kit.Tile("38", "Verified", tone="emerald", checked=True), width=130)
+    return page
+
+
+def _close_host(page):
+    host = getattr(page, "_host", None)
+    if host is not None:
+        host.close()
+
+
 def main():
     from ui.utils.theme import get_theme_stylesheet
     app = QApplication.instance() or QApplication(sys.argv)
@@ -590,7 +690,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     for name, build in (("primitives", primitives_page), ("inputs", inputs_page),
                         ("containers", containers_page), ("bars", bars_page), ("grid", grid_page),
-                        ("frames", frames_page)):
+                        ("frames", frames_page), ("states", states_page)):
         page = build()
         page.resize(page.sizeHint())
         page.show()
@@ -599,6 +699,7 @@ def main():
         page.grab().save(str(path))
         print(path)
         page.close()
+        _close_host(page)
 
 
 if __name__ == "__main__":

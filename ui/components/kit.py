@@ -1,9 +1,29 @@
 """
 ui/components/kit.py — the shared UI kit of the fleet redesign
 ================================================================
-Plain Qt widgets drawn from ui/utils/tokens.py only (no colour, radius or size literal here).
-Screens import these and compose them; they never restyle or subclass them to change the look.
-K-7 turns this docstring into the full reference. Leaves (K-1):
+The one document a screen package reads. Plain Qt widgets drawn from ui/utils/tokens.py only (no
+colour, radius or size literal here). A screen imports from here and from tokens, composes, and
+never restyles (no setStyleSheet with a literal), subclasses a kit widget to change its look, or
+adds a widget class of its own: if the kit lacks something, add it here first with a gallery state
+and a test. The API is frozen after K-R except for additive changes (a new variant or an optional
+argument). Look at tools/ui_gallery.py output (Mockups/built/kit/*.png, 100 % and 125 %) before
+guessing how a component looks; tests/test_ui_kit*.py show how each one is driven.
+
+Conventions every component follows:
+  - Tone / variant names are fixed strings; an unknown one raises ValueError.
+  - set_disabled_reason(reason): disabled at 40 % with the reason as tooltip, None restores both.
+    Use it instead of a bare setEnabled(False) so the user sees why.
+  - Icon-only controls need a tooltip (required argument); long text elides and the full text is
+    the tooltip; COMPACT is set with set_compact(on) or apply_width_mode(mode) ("wide" / "compact").
+  - Keyboard: Tab / Shift+Tab visit each control once, in layout order; disabled ones are skipped.
+    Space activates buttons, chips, tiles, switches and checkboxes; Enter also activates Chip, Tile
+    and Switch (a Chip with a menu opens it); Segmented and Stepper take Left / Right / Up / Down
+    (Stepper also Home / End) on one focus stop; Esc closes DialogFrame and Scrim. Focus is the mint
+    edge. Hover and pressed states are drawn by the widget, never by a timer.
+  - Checkable widgets report through toggled(bool) and clicked(); value widgets through
+    currentChanged(int) / valueChanged(int), emitted only on a real change.
+
+Leaves (K-1):
 
 LabelledAction(text, parent=None, *, variant="secondary", icon=None, sm=False, tooltip="")
     Icon + text button. variant: primary (one per screen), soft, secondary, ghost, danger
@@ -1578,6 +1598,10 @@ class Chip(_ReasonMixin, QAbstractButton):
             if self._menu is not None and self.isEnabled():
                 pos = self.mapToGlobal(QPoint(0, self.height() + 2))
                 self._menu.exec(pos)
+                event.accept()
+                return
+            if event.key() != Qt.Key_Space and self.isEnabled() and not event.isAutoRepeat():
+                self.click()
                 event.accept()
                 return
         super().keyPressEvent(event)
