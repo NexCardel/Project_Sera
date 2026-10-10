@@ -1,7 +1,7 @@
 WP,Phase,What,Status,Model,Attempts,Commit,Notes,Updated
 W0-1,0,"Baseline: full test suite, start-up and memory numbers, current snapshots",Done,claude-haiku-4-5-20251001,0,40bc942,"Baseline: startup/memory tests pass, 31 UI screenshots rendered, cloud environment viable for offscreen testing",2026-10-06 01:51
 W0-2,0,"Behaviour lock: tests for every 'must still work' item, green on the unchanged code",Done,claude-sonnet-5-5,2,537924a,"Behaviour lock: 8 offscreen test files tests/test_ui_lock_*.py (R1-R9 gaps) + goldens, no app code changed; Tracker CSV export bug (no import csv) locked as-is; 3 human checks added",2026-10-10 15:26
-W0-3,0,Screen inventory,Not started,gemini-3.8-flash-high -> claude-haiku-5-5,0,,,
+W0-3,0,Screen inventory,In progress,gemini-3.8-flash-high,1,,,2026-10-10 15:26
 W0-D,0,"Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML mockup",Done,claude-fable-5-1,0,e0d32a5,Fleet mockup by Fable 5.1 (cloud); owner decisions and BUILD-PLAN.md in 9d66d4e,2026-10-10 14:05
 W0-R,0,Review the safety net,Not started,claude-opus-5-5,0,,,
 T-1,1,"Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ...",Not started,claude-haiku-5-5 -> gemini-3.8-flash-high,0,,,

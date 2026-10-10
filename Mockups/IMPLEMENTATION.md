@@ -609,3 +609,10 @@ files, tests, decisions taken, what the next WP must know.`
   Human checks added (check-add): real-desktop client actions (R1.6), 100/125/150 % scaling + 1366x768 (R6.3), real keyboard shortcuts (Ctrl+=/-/0, Alt+n, Alt+Ctrl+n, Ctrl+B, F5, Tab order).
   Run with --basetemp=.pytest_tmp_lock (not committed) and -o faulthandler_timeout=60. Known: creating a SearchWindow before test_tracker_dump_columns.py's
   TestWidthModes (1000x700 resize) makes 2 of those fail (order leak, they pass alone; alphabetical suite order is unaffected). test_startup_speed::TestSearchGridReuse fails in setUp (PAN pk) - pre-existing.
+- **W0-3** (2026-10-10, gemini-3.8-flash-high): Screen and control inventory written to Mockups/INVENTORY.md.
+  Cataloged all 31 PNGs in Mockups/current/ (4 daily windows/panels, 12 settings pages, 14 dialogs, 1 loading modal)
+  plus DisplayScaleDialog (no PNG) and the Sidebar Display entry. Listed SgtLabDialog and SDIS dialogs as out of overhaul
+  with no control tables per plan. Every interactive widget is documented with its attribute name, Qt type, triggers/signals,
+  and tested status. Cross-referenced against tests/: every attribute reached by any test in tests/ is tagged with a target
+  marker (🎯) and its covering test files. No application code changed. All behaviour-lock tests pass offscreen.
+  Next WP (W0-D / Phase T/K) has the authoritative reference for control preservation and 'where every control went' checks.

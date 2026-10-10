@@ -1,1 +1,2 @@
 Run,WP,Model,Attempt,Started,Minutes,Outcome,Input tokens,Output tokens,Cache read,Cache write,Cost USD,Turns,Summary
+20261010-152650,W0-2,claude-sonnet-5-5,2,2026-10-10 14:54,32.1,Done,336,92509,15741107,377477,8.455600399999998,240,"W0-2 is finished and committed on `ui-overhaul`, with the tracker entry marked done; I changed no app code. The 8 new test files (`tests/test_ui_lock_*.py`) plus the shared helper `tests/ui_lock_support.py` cover the R1–R9 gaps. The two golden files are `tests/data/ui_lock_audit_export_golden.csv` a"
