@@ -235,3 +235,196 @@ def test_tag_draws_its_background(app):
     img = t.grab().toImage()
     corner_in = img.pixelColor(img.width() // 2, 2)
     assert corner_in.name().upper() in (TOKENS["emdeep"], TOKENS["emline"])
+
+
+# ---------------------------------------------------------------- inputs (K-2)
+
+def _press(w, key):
+    QTest.keyClick(w, key)
+
+
+def test_field_label_uppercase_required_and_buddy(app):
+    f = kit.Input()
+    lab = kit.FieldLabel("Name of company", required=True, for_widget=f)
+    assert lab.label_text == "Name of company"
+    assert lab.font().capitalization().name == "AllUppercase"
+    assert "*" in lab.text() and TOKENS["dangertx"] in lab.text()
+    assert lab.buddy() is f
+    assert kit.FieldLabel("PAN").text() == "PAN"
+
+
+def test_input_height_icon_and_placeholder(app):
+    i = kit.Input(placeholder="Search", icon="mdi.magnify")
+    assert i.height() == TOKENS["h_inp"]
+    assert i.has_icon() and i.textMargins().left() == KIT["pad_inp_icon"] - KIT["pad_inp"]
+    assert i.placeholderText() == "Search"
+    assert not kit.Input().has_icon()
+    assert kit.Input().textMargins().left() == 0
+    i.setText("abc")
+    assert i.text() == "abc"
+
+
+def test_input_trailing_slot_clears_text_and_clicks(app):
+    i = kit.Input()
+    i.setEchoMode(kit.Input.EchoMode.Password)
+    eye = i.add_trailing(kit.IconButton("mdi.eye", "Show / hide", sm=True))
+    copy = i.add_trailing(kit.IconButton("mdi.content-copy", "Copy", sm=True))
+    i.resize(240, TOKENS["h_inp"])
+    i.show()
+    app.processEvents()
+    assert i.textMargins().right() >= eye.width() + copy.width() + 2 + 6 - KIT["pad_inp"]
+    assert eye.parentWidget().geometry().right() <= i.width() - 6
+    hits = []
+    eye.clicked.connect(lambda: hits.append(1))
+    QTest.mouseClick(eye, Qt.LeftButton)
+    assert hits == [1]
+    i.close()
+
+
+def test_input_disabled_dims_icon(app):
+    i = kit.Input(icon="mdi.magnify")
+    on = i._icon_label.pixmap().toImage()
+    i.setEnabled(False)
+    assert i._icon_label.pixmap().toImage() != on
+
+
+def test_select_items_signal_and_wheel(app):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    s = kit.Select(items=["Light", "Dark", "Auto"])
+    assert s.height() == TOKENS["h_inp"] and s.count() == 3
+    seen = []
+    s.currentIndexChanged.connect(seen.append)
+    s.setCurrentIndex(2)
+    assert seen == [2]
+    s.show()
+    s.setCurrentIndex(0)
+    seen.clear()
+    ev = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120), Qt.NoButton,
+                     Qt.NoModifier, Qt.NoScrollPhase, False)
+    s.clearFocus()
+    QApplication.sendEvent(s, ev)
+    assert seen == []
+    s.close()
+
+
+def test_select_disabled_reason(app):
+    s = kit.Select(items=["A"])
+    s.setToolTip("Theme")
+    s.set_disabled_reason("Admin only")
+    assert not s.isEnabled() and s.toolTip() == "Admin only"
+    s.set_disabled_reason(None)
+    assert s.isEnabled() and s.toolTip() == "Theme"
+
+
+def test_text_area_rows_and_tab_leaves(app):
+    a = kit.TextArea(rows=3, placeholder="Notes")
+    b = kit.TextArea(rows=6)
+    assert b.minimumHeight() > a.minimumHeight() > 40
+    assert a.placeholderText() == "Notes" and a.tabChangesFocus()
+    a.setPlainText("x")
+    assert a.toPlainText() == "x"
+
+
+def test_stepper_buttons_keys_limits_and_signal(app):
+    s = kit.Stepper(value=30, minimum=10, maximum=33, step=2, unit=" s")
+    assert s.text() == "30 s" and s.height() == TOKENS["h_inp"]
+    seen = []
+    s.valueChanged.connect(seen.append)
+    s.show()
+    QTest.mouseClick(s.plus, Qt.LeftButton)
+    assert s.value() == 32 and seen == [32]
+    _press(s, Qt.Key_Up)
+    assert s.value() == 33 and not s.plus.isEnabled()
+    _press(s, Qt.Key_Right)
+    assert s.value() == 33 and seen == [32, 33]
+    _press(s, Qt.Key_Home)
+    assert s.value() == 10 and not s.minus.isEnabled()
+    _press(s, Qt.Key_Down)
+    assert s.value() == 10
+    _press(s, Qt.Key_End)
+    assert s.value() == 33
+    s.setValue(500)
+    assert s.value() == 33 and s._label.text() == "33 s"
+    assert s.minus.focusPolicy() == Qt.NoFocus and s.focusPolicy() == Qt.StrongFocus
+    s.close()
+
+
+def test_stepper_disabled_reason_disables_buttons(app):
+    s = kit.Stepper(value=5)
+    s.set_disabled_reason("Locked by admin")
+    assert not s.plus.isEnabled() and not s.minus.isEnabled() and s.toolTip() == "Locked by admin"
+    s.set_disabled_reason(None)
+    assert s.plus.isEnabled()
+
+
+def test_checkbox_toggle_space_and_signal(app):
+    c = kit.Checkbox("Select row")
+    seen = []
+    c.toggled.connect(seen.append)
+    c.show()
+    c.setFocus()
+    _press(c, Qt.Key_Space)
+    assert c.isChecked() and seen == [True]
+    QTest.mouseClick(c, Qt.LeftButton)
+    assert not c.isChecked() and seen == [True, False]
+    c.close()
+
+
+def test_checkbox_draws_box_and_tick(app):
+    c = kit.Checkbox("x", checked=True)
+    c.resize(c.sizeHint())
+    y = c.height() // 2 + 4
+    assert c.grab().toImage().pixelColor(KIT["d_cb"] // 2, y).name().upper() == TOKENS["em"]
+    c.setChecked(False)
+    assert c.grab().toImage().pixelColor(KIT["d_cb"] // 2, y).name().upper() == KIT["btn_bg"]
+
+
+def test_checkbox_elides_with_tooltip_and_reason(app):
+    c = kit.Checkbox("A long list entry that does not fit")
+    c.show()
+    c.setFixedWidth(60)
+    app.processEvents()
+    assert c.is_elided() and c.toolTip() == "A long list entry that does not fit"
+    c.setFixedWidth(400)
+    app.processEvents()
+    assert not c.is_elided() and c.toolTip() == ""
+    c.set_disabled_reason("Archived")
+    assert not c.isEnabled() and c.toolTip() == "Archived"
+    c.set_disabled_reason(None)
+    assert c.isEnabled() and c.toolTip() == ""
+    c.close()
+
+
+def test_switch_size_keys_signal_and_paint(app):
+    sw = kit.Switch(tooltip="Admin mode")
+    assert (sw.width(), sw.height()) == (KIT["w_sw"], KIT["h_sw"])
+    assert sw.accessibleName() == "Admin mode" and sw.toolTip() == "Admin mode"
+    seen = []
+    sw.toggled.connect(seen.append)
+    sw.show()
+    sw.setFocus()
+    _press(sw, Qt.Key_Space)
+    assert sw.isChecked() and seen == [True]
+    _press(sw, Qt.Key_Return)
+    assert not sw.isChecked() and seen == [True, False]
+    QTest.mouseClick(sw, Qt.LeftButton)
+    assert sw.isChecked()
+    img = sw.grab().toImage()
+    assert img.pixelColor(img.width() // 2, 4).name().upper() == TOKENS["em"]
+    sw.setChecked(False)
+    img = sw.grab().toImage()
+    assert img.pixelColor(img.width() // 2, 4).name().upper() == KIT["sw_off"]
+    sw.close()
+
+
+def test_switch_disabled_reason_blocks_toggle(app):
+    sw = kit.Switch()
+    sw.set_disabled_reason("Needs admin")
+    sw.show()
+    QTest.mouseClick(sw, Qt.LeftButton)
+    _press(sw, Qt.Key_Space)
+    assert not sw.isChecked() and sw.toolTip() == "Needs admin"
+    sw.set_disabled_reason(None)
+    assert sw.isEnabled()
+    sw.close()

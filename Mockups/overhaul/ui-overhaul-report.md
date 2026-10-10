@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 15:58)
+# UI overhaul — report (2026-10-10 16:03)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 30 |
+| Not started | 29 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 6 |
+| Done | 7 |
 | Blocked | 0 |
 
-Runs: 4   output tokens: 249387   API-equivalent cost: $12.29
+Runs: 5   output tokens: 285921   API-equivalent cost: $14.18
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -20,7 +20,7 @@ Runs: 4   output tokens: 249387   API-equivalent cost: $12.29
 | W0-D | Done | fable | e0d32a5 | Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML mockup | Fleet mockup by Fable 5.1 (cloud); owner decisions and BUILD-PLAN.md in 9d66d4e |
 | W0-R | Done | opus | 946bebe | Review the safety net | 5/5 mutations caught (detail, search, settings, audit, sync); added audit search-by-id case; INVENTORY covers all 31 PNGs; 147 lock tests pass |
 | T-1 | Done | haiku | 5595c31 | Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ... | tokens.py from the fleet :root block; theme.py reads it byte-identical; 3 token tests green |
-| K-1 | Not started | opus |  | Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ... |  |
+| K-1 | Done | opus | 1e69df0 | Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ... | kit.py primitives + KIT tokens + minimal ui_gallery; 32 tests pass; danger outlined per mockup |
 | K-2 | Not started | sonnet |  | Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ... |  |
 | K-3 | Not started | sonnet |  | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... |  |
 | K-4 | Not started | sonnet |  | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... |  |
@@ -60,6 +60,8 @@ Runs: 4   output tokens: 249387   API-equivalent cost: $12.29
 - **T-1** Legacy danger colour: #A82424 fill vs mockup --danger #FF4D4D → Keep #A82424 as the legacy danger button fill; #FF4D4D only on the danger hover edge (Byte-identical until screens opt in; K-1 LabelledAction danger must settle the fill and text colour (W1-1 conflict record))
 - **T-1** Radii and spacing in the legacy QSS → Radius and spacing tokens are defined in tokens.py but not wired into theme.py (Legacy radii are 5, 7, 9 and 10 px, not the mockup 6, 8, 12 scale; wiring them would change the look before any screen opts in)
 - **T-1** Token value format in tokens.py → Keys are CSS names with dashes as underscores; colours upper-case hex; px sizes as int; outer viewer tokens (page, ink, ink2, ink3, rule) included but unused by the app (Matches theme.py hex style and lets string.Template write ${f_m}px; the test compares with the mockup :root case-insensitively)
+- **K-1** LabelledAction danger: filled #A82424 (today's theme) or the mockup's outlined red? → Outlined: transparent, --dangerline edge, --dangertx text, --dangerdim on hover (The fleet mockup's .btn.dng is outlined and the mockup's tokens win (decision 2026-10-05); the old filled class stays in theme.py for unconverted screens)
+- **K-1** Where do the mockup's component-level literals (outside :root) and half-px font sizes go? → New KIT dict in ui/utils/tokens.py; 12.5px and 10.5px rounded up to 13 and 11 (TOKENS must equal the :root block (test_ui_tokens); kit.py stays hex-free; Qt px font sizes are ints)
 
 ## Checks waiting for you
 

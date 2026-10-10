@@ -6,7 +6,7 @@ W0-D,0,"Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML m
 W0-R,0,Review the safety net,Done,claude-opus-5-5,1,946bebe,"5/5 mutations caught (detail, search, settings, audit, sync); added audit search-by-id case; INVENTORY covers all 31 PNGs; 147 lock tests pass",2026-10-10 15:54
 T-1,1,"Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ...",Done,claude-haiku-5-5,1,5595c31,tokens.py from the fleet :root block; theme.py reads it byte-identical; 3 token tests green,2026-10-10 15:58
 K-1,2,"Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ...",Done,claude-opus-5-5,1,1e69df0,kit.py primitives + KIT tokens + minimal ui_gallery; 32 tests pass; danger outlined per mockup,2026-10-10 16:03
-K-2,2,"Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
+K-2,2,"Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ...",In progress,claude-sonnet-5-5,1,,,2026-10-10 16:03
 K-3,2,"Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
 K-4,2,"Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, ""More ▾"" overflow, ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
 K-5,2,"Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ...",Not started,claude-opus-5-5,0,,,

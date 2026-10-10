@@ -44,7 +44,7 @@ def _row(grid, r, caption, widgets):
     grid.addWidget(holder, r, 1)
 
 
-def primitives_page():
+def _blank_page():
     page = QWidget()
     page.setObjectName("gallery")
     page.setStyleSheet(f"QWidget#gallery {{ background: {TOKENS['bg']}; }}")
@@ -52,6 +52,69 @@ def primitives_page():
     grid.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
     grid.setHorizontalSpacing(TOKENS["s_4"])
     grid.setVerticalSpacing(TOKENS["s_3"])
+    return page, grid
+
+
+def inputs_page():
+    page, grid = _blank_page()
+
+    def fixed(w, width=230):
+        w.setFixedWidth(width)
+        return w
+
+    r = 0
+    _row(grid, r, "FieldLabel", [kit.FieldLabel("Name of company"), kit.FieldLabel("PAN", required=True)])
+    r += 1
+    long_in = fixed(kit.Input())
+    long_in.setText("A very long client name that runs past the right edge of the field")
+    off = fixed(kit.Input(placeholder="Disabled", icon="mdi.lock-outline"))
+    off.setEnabled(False)
+    _row(grid, r, "Input plain, placeholder, icon, long, disabled", [
+        fixed(kit.Input()), fixed(kit.Input(placeholder="Search clients")),
+        fixed(kit.Input(placeholder="Search clients", icon="mdi.magnify")), long_in, off])
+    r += 1
+    pw = fixed(kit.Input())
+    pw.setText("fictional-secret")
+    pw.setEchoMode(kit.Input.EchoMode.Password)
+    pw.add_trailing(kit.IconButton("mdi.eye-outline", "Show / hide", sm=True))
+    pw.add_trailing(kit.IconButton("mdi.content-copy", "Copy", sm=True))
+    focus = fixed(kit.Input())
+    focus.setText("focused (mint edge)")
+    _row(grid, r, "Input with trailing actions, focus", [pw, focus])
+    focus.setFocus()
+    r += 1
+    sel_off = fixed(kit.Select(items=["Disabled"]))
+    sel_off.set_disabled_reason("Admin only")
+    _row(grid, r, "Select", [fixed(kit.Select(items=["Dark", "Light", "Auto"])), sel_off])
+    r += 1
+    notes = kit.TextArea(rows=3, placeholder="Add notes for this client…")
+    notes.setFixedWidth(300)
+    filled = kit.TextArea(rows=3)
+    filled.setPlainText("Demo client\nSecond line")
+    filled.setFixedWidth(300)
+    _row(grid, r, "TextArea empty, filled", [notes, filled])
+    r += 1
+    step_off = fixed(kit.Stepper(value=5, unit=" min"), 160)
+    step_off.set_disabled_reason("Locked")
+    _row(grid, r, "Stepper normal, at max, disabled", [
+        fixed(kit.Stepper(value=30, minimum=5, maximum=60, unit=" s"), 160),
+        fixed(kit.Stepper(value=60, minimum=5, maximum=60, unit=" s"), 160), step_off])
+    r += 1
+    cb_off = kit.Checkbox("Disabled", checked=True)
+    cb_off.set_disabled_reason("Archived")
+    cb_long = kit.Checkbox("A long list entry that is squeezed")
+    cb_long.setFixedWidth(120)
+    _row(grid, r, "Checkbox off, on, disabled, elided",
+         [kit.Checkbox("Select row"), kit.Checkbox("Selected", checked=True), cb_off, cb_long])
+    r += 1
+    sw_off = kit.Switch(checked=True, tooltip="Disabled")
+    sw_off.set_disabled_reason("Needs admin")
+    _row(grid, r, "Switch off, on, disabled", [kit.Switch(tooltip="Off"), kit.Switch(checked=True, tooltip="On"), sw_off])
+    return page
+
+
+def primitives_page():
+    page, grid = _blank_page()
     r = 0
     for variant in kit.LabelledAction.VARIANTS:
         icon = {"primary": "mdi.check", "danger": "mdi.delete-outline"}.get(variant, "mdi.content-copy")
@@ -105,13 +168,15 @@ def main():
     app.setStyleSheet(get_theme_stylesheet())     # the kit must hold up under the app's own sheet
     out = Path(ARGS.out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    page = primitives_page()
-    page.resize(page.sizeHint())
-    page.show()
-    app.processEvents()
-    path = out / f"primitives@{int(round(ARGS.scale * 100))}.png"
-    page.grab().save(str(path))
-    print(path)
+    for name, build in (("primitives", primitives_page), ("inputs", inputs_page)):
+        page = build()
+        page.resize(page.sizeHint())
+        page.show()
+        app.processEvents()
+        path = out / f"{name}@{int(round(ARGS.scale * 100))}.png"
+        page.grab().save(str(path))
+        print(path)
+        page.close()
 
 
 if __name__ == "__main__":
