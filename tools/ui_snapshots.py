@@ -31,6 +31,9 @@ if ARGS.size:
     # A visible window is clamped to the real screen (a 1536-logical-px screen cannot show 1920 px),
     # and a hidden one never re-lays out. The offscreen platform takes the requested size as it is.
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # Offscreen Qt does not see the Windows fonts; without this the PNGs fall back to a wide all-caps face.
+    if sys.platform == "win32":
+        os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer

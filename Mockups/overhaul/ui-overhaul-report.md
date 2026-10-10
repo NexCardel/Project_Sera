@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 18:13)
+# UI overhaul — report (2026-10-10 18:25)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 20 |
+| Not started | 19 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 16 |
+| Done | 17 |
 | Blocked | 0 |
 
-Runs: 25   output tokens: 770778   API-equivalent cost: $39.16
+Runs: 26   output tokens: 807149   API-equivalent cost: $42.19
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -30,7 +30,7 @@ Runs: 25   output tokens: 770778   API-equivalent cost: $39.16
 | K-R | Done | opus | e9a31bc | Review phase K (kit) | Kit reviewed and frozen; 5 kit fixes, gallery uses real Windows fonts, ToggleSwitch/FilterChip users migrated; only pre-existing PAN + order-leak failures |
 | R-1 | Done | mechanical | 7773fd8 | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... | add WidthAware mixin to ui/utils/responsive.py for kit propagation, column toggling and chip moves |
 | R-2 | Done | sonnet | 5c5ae20 | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... | Sidebar on the kit: real logo, CLIENTS/TOOLS/ADMIN groups, one All Clients, Display for all, Staff Users removed, soft Auto-sync pill; 17 new tests |
-| R-3 | Not started | haiku |  | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... |  |
+| R-3 | Done | haiku | 58c6edd | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... | Display scale on the kit: SettingRow + Apply/Restart LabelledActions, DialogFrame dialog; same QSettings and restart path; tests pass; one real-screen check add |
 | R-R | Not started | sonnet |  | Review phase R (responsive and shell) |  |
 | S-1 | Not started | sonnet |  | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page |  |
 | S-2 | Not started | haiku |  | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge |  |
@@ -66,6 +66,10 @@ Runs: 25   output tokens: 770778   API-equivalent cost: $39.16
 - **K-5** DataGrid base class: QTableView with a new model, or QTableWidget (which is a QTableView)? → DataGrid subclasses QTableWidget; all drawing is in GridDelegate, which also works on any QTableView (Every grid in the app (search, tracker, audit, sync) is a QTableWidget whose items carry the cell-format highlights (BackgroundRole/ForegroundRole); a drop-in subclass keeps the highlight engine and the attribute/item API tests reach untouched)
 - **K-R** Migrate ToggleSwitch / FilterChip users now or leave them to R-2 / S-* packages? → Migrated now: sidebar toggle_admin -> kit.Switch (old ToggleSwitch class deleted); Manage Clients chips + More -> kit.Chip; Tracker Dump filter chips -> kit.Chip (literal ▾ left the label, the chip draws it; lock test text updated, behaviour unchanged) (BUILD-PLAN K-R row requires users migrated and green; attribute names and handlers kept, so it is drop-in)
 - **K-R** Kit Toast keeps a single-shot QTimer; does that break 'no timers'? → Kept (It is the auto-hide of the alert it replaces (same show_alert duration API), started only on show; no polling or animation timers anywhere in the kit)
+- **R-3** Screen scale row width → SettingRow width auto; combo, Apply and Restart now as its controls (Combo plus two actions need more than the 230 px fixed column; wide 360 px is tighter at 1.25 scale)
+- **R-3** Button variants and primary → Apply = soft, Restart now = secondary, dialog Close = secondary; no primary in the dialog (Settings General keeps Save changes as the only primary on that screen (rule 4))
+- **R-3** Where the scale row sits on Settings General → DisplayScaleControl added straight to the page layout inside a 12 px side wrapper; the old _setting_row wrapper dropped (The control is now a full SettingRow, so _setting_row would show the title twice; 12 px (s_3) plus the row's 16 px makes the 28 px page rhythm)
+- **R-3** Running-at line and hint → Running-at line is the row sub-label (set_sub after Apply); the hint moves to the dialog purpose line, shortened to fit one elided line (SettingRow has one sub-label and DialogFrame purpose is a single elided line; the design puts the running-at line in the row)
 
 ## Checks waiting for you
 
@@ -75,3 +79,4 @@ Runs: 25   output tokens: 770778   API-equivalent cost: $39.16
 - #4 (K-5) On a real desktop: hover a DataGrid row and its drawn action buttons (hover fill, tooltip per button, click runs the action); drag a column edge and confirm the width survives a window resize — Not run
 - #5 (K-6) On a real 125% display, open a SlidePanel in a window narrower than 1080 px: it should fill the width with no left edge, and a DialogFrame (normal and full) should show no clipped title or footer. — Not run
 - #6 (K-R) On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker) — Not run
+- #7 (R-3) On a real 125 % screen at 1366x768 and 1024x700: open Sidebar Display and Settings General Screen scale, check Apply and Restart now fit, then Restart now really restarts Sera and the new scale applies. — Not run

@@ -165,6 +165,56 @@ def test_shell_uses_the_token_width_and_still_folds_by_width():
     assert shell.sidebar_target_width == TOKENS["w_side"]
 
 
+def _settled(shell):
+    shell.sidebar_anim.stop()
+    APP.processEvents()
+
+
+@pytest.mark.parametrize("logical_width, folded", [(1366, False), (1093, False), (1024, False), (1001, False), (980, True)])
+def test_shell_folds_only_below_1000_logical_px(logical_width, folded):
+    shell = AppShell()
+    shell.resize(logical_width, 700)
+    shell._auto_sidebar_for_width()
+    _settled(shell)
+    assert shell.sidebar_collapsed is folded
+
+
+def test_shell_reopens_only_above_1060_and_a_manual_toggle_wins():
+    shell = AppShell()
+    shell.resize(980, 700)
+    shell._auto_sidebar_for_width()
+    shell.resize(1040, 700)
+    shell._auto_sidebar_for_width()
+    assert shell.sidebar_collapsed
+    shell.resize(1100, 700)
+    shell._auto_sidebar_for_width()
+    assert not shell.sidebar_collapsed
+    shell.toggle_sidebar()
+    assert shell.sidebar_collapsed and shell._sidebar_user_toggled
+    shell.resize(1400, 700)
+    shell._auto_sidebar_for_width()
+    assert shell.sidebar_collapsed
+    shell.toggle_sidebar()
+    assert not shell.sidebar_collapsed
+    shell.resize(900, 700)
+    shell._auto_sidebar_for_width()
+    assert not shell.sidebar_collapsed
+
+
+def test_toggle_button_folds_the_shell_sidebar():
+    shell = AppShell()
+    shell.sidebar.btn_toggle_sidebar.click()
+    assert shell.sidebar_collapsed and shell._sidebar_user_toggled
+
+
+def test_the_four_shell_shortcuts_stay_wired_in_main():
+    src = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
+    for line in ('QShortcut(QKeySequence("Ctrl+B"), self.shell)', "self.sc_ctrl_b.activated.connect(self.shell.toggle_sidebar)",
+                 'QShortcut(QKeySequence("Ctrl+="), self.shell)', 'QShortcut(QKeySequence("Ctrl+-"), self.shell)',
+                 'QShortcut(QKeySequence("Ctrl+0"), self.shell)'):
+        assert line in src, line
+
+
 def test_no_style_literals_in_the_shell_sidebar():
     src = (SHELL_DIR / "sidebar.py").read_text(encoding="utf-8")
     assert not re.search(r"setStyleSheet\(\s*[\"'f]", src)
