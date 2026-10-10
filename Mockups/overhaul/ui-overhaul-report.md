@@ -1,4 +1,4 @@
-# UI overhaul — report (2026-10-10 16:46)
+# UI overhaul — report (2026-10-10 16:52)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-12T23:00:00+05:30
 | :--- | ---: |
 | Not started | 25 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 8 |
-| Blocked | 2 |
+| Retry | 2 |
+| Done | 9 |
+| Blocked | 0 |
 
-Runs: 16   output tokens: 346219   API-equivalent cost: $17.59
+Runs: 18   output tokens: 359088   API-equivalent cost: $19.17
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -22,8 +22,8 @@ Runs: 16   output tokens: 346219   API-equivalent cost: $17.59
 | T-1 | Done | haiku | 5595c31 | Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ... | tokens.py from the fleet :root block; theme.py reads it byte-identical; 3 token tests green |
 | K-1 | Done | opus | 1e69df0 | Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ... | kit.py primitives + KIT tokens + minimal ui_gallery; 32 tests pass; danger outlined per mockup |
 | K-2 | Done | sonnet | 61833da | Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ... | Kit inputs: FieldLabel, Input, Select, TextArea, Stepper, Checkbox, Switch; 43 kit tests pass; sidebar ToggleSwitch left for the shell WP |
-| K-3 | Blocked | sonnet |  | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... | error after 3 attempts; see logs/ui-overhaul/20261010-161604-K-3.json |
-| K-4 | Blocked | sonnet |  | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | error after 3 attempts; see logs/ui-overhaul/20261010-161606-K-4.json |
+| K-3 | Done | sonnet | 4169c66 | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... | Kit containers: Card, SettingRow, SectionLabel, Banner, Toast, EmptyState; 58 kit tests pass, gallery containers page |
+| K-4 | Retry | sonnet |  | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | stopped by usage limit, resumes after 17:00 |
 | K-5 | Retry | opus |  | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | stopped by network/API error, resumes after 16:51 |
 | K-6 | Not started | sonnet |  | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... |  |
 | K-7 | Not started | sonnet |  | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... |  |

@@ -592,3 +592,280 @@ def test_section_label_is_theme_class_and_upper(app):
     s = kit.SectionLabel("General")
     assert s.property("class") == "SectionLabel"
     assert s.font().capitalization().name == "AllUppercase"
+
+
+# ---------------------------------------------------------------- Chip and ChipBar
+
+def test_chip_basic_and_filter_chip_alias(app):
+    c = kit.Chip("All", count=16)
+    assert c.text() == "All"
+    assert c.base_text() == "All"
+    assert c.count() == 16
+    assert c.height() == TOKENS["h_chip"]
+    assert c.property("class") == "FilterChip"
+    assert issubclass(kit.FilterChip, kit.Chip) or kit.FilterChip is kit.Chip
+
+
+def test_chip_value_when_on(app):
+    c = kit.Chip("Client", value_when_on="Client: Unregistered")
+    assert c.text() == "Client"
+    assert not c.isChecked()
+    c.setChecked(True)
+    assert c.text() == "Client: Unregistered"
+    c.setChecked(False)
+    assert c.text() == "Client"
+    c.set_value("Client: Active")
+    assert c.isChecked()
+    assert c.text() == "Client: Active"
+
+
+def test_chip_count_badge_and_size_hint(app):
+    c1 = kit.Chip("All")
+    c2 = kit.Chip("All", count=16)
+    assert c2.sizeHint().width() > c1.sizeHint().width()
+    c2.set_count(None)
+    assert c2.sizeHint().width() == c1.sizeHint().width()
+
+
+def test_chip_disabled_reason(app):
+    c = kit.Chip("Archived", tooltip="Show archived")
+    c.set_disabled_reason("Admin only")
+    assert not c.isEnabled()
+    assert c.toolTip() == "Admin only"
+    c.set_disabled_reason(None)
+    assert c.isEnabled()
+    assert c.toolTip() == "Show archived"
+
+
+def test_chip_menu_indicator_and_exec(app):
+    from PySide6.QtWidgets import QMenu
+    menu = QMenu()
+    menu.addAction("Option 1")
+    c = kit.Chip("More", menu=menu)
+    assert c.has_menu()
+    assert c.menu() is menu
+
+
+def test_chip_paint_offscreen(app):
+    c = kit.Chip("Active", count=5, checked=True)
+    c.resize(c.sizeHint())
+    pm = c.grab()
+    assert not pm.isNull()
+
+
+def test_chip_bar_single_select(app):
+    bar = kit.ChipBar(single_select=True)
+    c1 = bar.add_chip("All", id="all", checked=True)
+    c2 = bar.add_chip("Active", id="active")
+    c3 = bar.add_chip("Archived", id="archived")
+    assert bar.selected_chip() is c1
+    assert bar.selected_id() == "all"
+    assert c1.isChecked() and not c2.isChecked()
+
+    events = []
+    bar.currentChanged.connect(lambda cid: events.append(cid))
+    c2.setChecked(True)
+    assert not c1.isChecked()
+    assert c2.isChecked()
+    assert bar.selected_id() == "active"
+    assert events == ["active"]
+
+    # In single select mode, unchecking the active chip keeps it checked
+    c2.setChecked(False)
+    assert c2.isChecked()
+
+
+def test_chip_bar_overflow_menu(app):
+    from PySide6.QtWidgets import QMenu
+    bar = kit.ChipBar(single_select=True)
+    c1 = bar.add_chip("All", checked=True)
+    menu = QMenu()
+    menu.addAction("Preset A")
+    more = bar.add_overflow_chip(menu=menu, text="More")
+    assert bar.chip("__overflow__") is more
+    assert more.has_menu()
+
+    # Selecting overflow value activates overflow chip and unchecks c1
+    bar.select_overflow_value("Client: Unregistered", id="unregistered")
+    assert more.isChecked()
+    assert not c1.isChecked()
+    assert more.text() == "Client: Unregistered"
+    assert bar.selected_id() == "unregistered"
+
+    # Switching back to c1 unchecks overflow chip and resets its text to base text
+    c1.setChecked(True)
+    assert c1.isChecked()
+    assert not more.isChecked()
+    assert more.text() == "More"
+
+
+def test_chip_bar_compact_second_row_mode(app):
+    bar = kit.ChipBar()
+    c1 = bar.add_chip("Main")
+    c2 = bar.add_chip("Secondary", compact_hide=True)
+    bar.show()
+    assert not bar.is_compact()
+    assert c1.isVisible() and c2.isVisible()
+
+    compact_events = []
+    bar.compactChanged.connect(lambda on: compact_events.append(on))
+    bar.set_compact(True)
+    assert bar.is_compact()
+    assert c1.isVisible()
+    assert not c2.isVisible()
+    assert compact_events == [True]
+
+    bar.apply_width_mode("wide")
+    assert not bar.is_compact()
+    assert c2.isVisible()
+    bar.close()
+
+
+# ---------------------------------------------------------------- StatusStrip
+
+def test_status_strip_items(app):
+    strip = kit.StatusStrip()
+    assert strip.minimumHeight() == KIT["h_strip"]
+    p = strip.add_pill("Sync on", tone="emerald", dot=True)
+    assert isinstance(p, kit.Pill)
+    fact = strip.add_fact("1", "other PC online")
+    assert "1" in fact.text() and "other PC online" in fact.text()
+    sep = strip.add_separator()
+    assert sep.width() == 1 and sep.height() == KIT["h_strip_sep"]
+    txt = strip.add_text("This PC:", muted=True)
+    assert txt.text() == "This PC:"
+    strip.add_stretch()
+    btn = kit.LabelledAction("Scan again", sm=True)
+    strip.add_widget(btn)
+    assert btn.parentWidget() is strip
+
+
+def test_status_strip_clear(app):
+    strip = kit.StatusStrip()
+    strip.add_fact("1")
+    strip.add_separator()
+    assert strip.layout().count() == 2
+    strip.clear()
+    assert strip.layout().count() == 0
+
+
+# ---------------------------------------------------------------- SelectionBar
+
+def test_selection_bar_fixed_height_and_empty_hint(app):
+    bar = kit.SelectionBar()
+    assert bar.height() == KIT["h_selbar"]
+    assert not bar.has_selection()
+    assert not bar.hint_label.isHidden()
+    assert bar.active_container.isHidden()
+    assert "Select a client row" in bar.hint()
+
+
+def test_selection_bar_active_selection_and_who(app):
+    bar = kit.SelectionBar()
+    bar.set_who("Acme Corp")
+    assert bar.has_selection()
+    assert bar.who() == "Acme Corp"
+    assert bar.hint_label.isHidden()
+    assert not bar.active_container.isHidden()
+    assert KIT["selbar_has_bg"] in bar.styleSheet()
+
+    bar.set_empty()
+    assert not bar.has_selection()
+    assert not bar.hint_label.isHidden()
+    assert bar.active_container.isHidden()
+    assert TOKENS["card"] in bar.styleSheet()
+
+
+def test_selection_bar_buttons_have_no_focus(app):
+    bar = kit.SelectionBar()
+    b1 = bar.add_action("Open", variant="soft", icon="mdi.arrow-right")
+    b2 = bar.add_action("Edit", icon="mdi.pencil")
+    dng = bar.add_danger_action("Delete…")
+    assert b1.focusPolicy() == Qt.NoFocus
+    assert b2.focusPolicy() == Qt.NoFocus
+    assert dng.focusPolicy() == Qt.NoFocus
+    assert dng.variant == "danger"
+
+
+def test_selection_bar_compact_icon_only_except_open(app):
+    bar = kit.SelectionBar()
+    open_btn = bar.add_action("Open", icon="mdi.arrow-right")
+    edit_btn = bar.add_action("Edit", icon="mdi.pencil")
+    archive_btn = bar.add_action("Archive", icon="mdi.archive")
+
+    assert not open_btn.is_icon_only()
+    assert not edit_btn.is_icon_only()
+
+    bar.set_compact(True)
+    assert not open_btn.is_icon_only()  # Open keeps its label!
+    assert edit_btn.is_icon_only()
+    assert archive_btn.is_icon_only()
+
+    bar.set_compact(False)
+    assert not open_btn.is_icon_only()
+    assert not edit_btn.is_icon_only()
+    assert not archive_btn.is_icon_only()
+
+
+def test_selection_bar_groups_and_dividers(app):
+    bar = kit.SelectionBar()
+    vr = bar.add_divider()
+    assert vr.width() == 1 and vr.height() == KIT["h_selbar_vr"]
+    grp = bar.add_group_label("Cell")
+    assert grp.text() == "CELL"
+
+
+# ---------------------------------------------------------------- UnsavedBar
+
+def test_unsaved_bar_hidden_when_clean(app):
+    bar = kit.UnsavedBar()
+    assert bar.height() == KIT["h_unsaved"]
+    assert bar.count() == 0
+    assert not bar.is_dirty()
+    assert bar.isHidden()
+
+
+def test_unsaved_bar_count_and_dirty_state(app):
+    bar = kit.UnsavedBar()
+    bar.set_count(1)
+    assert bar.count() == 1
+    assert bar.is_dirty()
+    assert not bar.isHidden()
+    assert "1 unsaved change" in bar.label.text()
+    assert "changes" not in bar.label.text()
+
+    bar.set_count(3)
+    assert bar.count() == 3
+    assert "3 unsaved changes" in bar.label.text()
+
+    bar.set_count(0)
+    assert not bar.is_dirty()
+    assert bar.isHidden()
+
+
+def test_unsaved_bar_signals(app):
+    bar = kit.UnsavedBar()
+    bar.set_count(2)
+    discards = []
+    saves = []
+    bar.discard_clicked.connect(lambda: discards.append(1))
+    bar.save_clicked.connect(lambda: saves.append(1))
+
+    bar.discard_btn.click()
+    assert discards == [1]
+
+    bar.save_btn.click()
+    assert saves == [1]
+
+
+def test_unsaved_bar_reserved_space_mode(app):
+    bar = kit.UnsavedBar(reserved_space=True)
+    bar.show()
+    assert bar.isVisible()
+    assert bar.label.isHidden()  # contents hidden when clean
+    assert bar.height() == KIT["h_unsaved"]
+
+    bar.set_count(1)
+    assert bar.isVisible()
+    assert not bar.label.isHidden()
+    assert bar.is_dirty()

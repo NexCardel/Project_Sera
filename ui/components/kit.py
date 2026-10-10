@@ -73,14 +73,40 @@ Toast(parent)
 EmptyState(title, text="", parent=None, *, icon="mdi.inbox-outline")
     Ring icon, one sentence, optional action: add_action(w). set_title(), set_text().
 
+Bars (K-4):
+Chip(text, parent=None, *, count=None, checked=False, menu=None, value_when_on=None, tooltip="", has_menu=False)
+    Checkable button / filter pill (28 px high, promotes FilterChip). count: integer badge.
+    value_when_on: text shown when checked ("Client: Unregistered"). menu: QMenu opened on click.
+    set_count(), set_value_when_on(), set_value(), set_menu(), set_disabled_reason().
+FilterChip = Chip
+    Alias promoting Manage Clients' FilterChip.
+ChipBar(parent=None, *, single_select=False, chips=())
+    Horizontal row of chips; single_select enforces one checked chip (currentChanged, selectionChanged).
+    add_chip(), chips(), chip(id), selected_chip(), selected_id(), set_selected().
+    add_overflow_chip(menu) adds "More ▾" menu chip; set_compact(on) / apply_width_mode(mode).
+StatusStrip(parent=None)
+    One-line status panel (min 44 px). add_pill(), add_fact(bold, sub), add_text(), add_separator(),
+    add_widget(), add_stretch().
+SelectionBar(parent=None, *, hint=...)
+    Fixed 44 px action bar above data grids. hint_label shown when empty; active container with
+    who_label, client group, vertical dividers (add_divider), group labels (add_group_label),
+    and NoFocus action buttons (add_action, add_danger_action). set_compact(on) makes buttons icon-only
+    (Open keeps its label). set_who(), set_has_selection(), set_empty().
+UnsavedBar(parent=None, *, reserved_space=False)
+    Fixed 44 px amber warning bar: "N unsaved changes", Discard, Save changes.
+    set_count(n): hides when 0 (or collapses/transparents in reserved_space mode).
+    signals discard_clicked, save_clicked. count(), is_dirty().
+
 Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widget still shows
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
 
 from functools import lru_cache
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF,
+)
 from PySide6.QtWidgets import (
     QAbstractButton, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
@@ -1366,3 +1392,655 @@ class EmptyState(QFrame):
 
     def add_action(self, widget):
         self._actions.addWidget(widget)
+
+
+# ---------------------------------------------------------------- Chip and ChipBar
+
+class Chip(_ReasonMixin, QAbstractButton):
+    def __init__(self, text="", parent=None, *, count=None, checked=False, menu=None,
+                 value_when_on=None, tooltip="", has_menu=False):
+        super().__init__(parent)
+        self.setObjectName("KitChip")
+        self.setProperty("class", "FilterChip")
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFixedHeight(T["h_chip"])
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._base_text = text
+        self._count = count
+        self._menu = menu
+        self._has_menu = has_menu or (menu is not None)
+        self._value_when_on = value_when_on
+        self._compact_hide = False
+        self._hover = False
+        if tooltip:
+            self.setToolTip(tooltip)
+
+    def text(self):
+        if self.isChecked() and self._value_when_on:
+            return self._value_when_on
+        return self._base_text
+
+    def base_text(self):
+        return self._base_text
+
+    def setText(self, text):
+        self._base_text = text
+        self.updateGeometry()
+        self.update()
+
+    def set_text(self, text):
+        self.setText(text)
+
+    def count(self):
+        return self._count
+
+    def set_count(self, count):
+        self._count = count
+        self.updateGeometry()
+        self.update()
+
+    def value_when_on(self):
+        return self._value_when_on
+
+    def set_value_when_on(self, val):
+        self._value_when_on = val
+        self.updateGeometry()
+        self.update()
+
+    def set_value(self, val):
+        self.set_value_when_on(val)
+        self.setChecked(bool(val))
+
+    def menu(self):
+        return self._menu
+
+    def set_menu(self, menu):
+        self._menu = menu
+        self._has_menu = menu is not None
+        self.updateGeometry()
+        self.update()
+
+    def setMenu(self, menu):
+        self.set_menu(menu)
+
+    def set_has_menu(self, on):
+        self._has_menu = bool(on)
+        self.updateGeometry()
+        self.update()
+
+    def has_menu(self):
+        return self._has_menu
+
+    def compact_hide(self):
+        return self._compact_hide
+
+    def set_compact_hide(self, on):
+        self._compact_hide = bool(on)
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._menu is not None and self.isEnabled():
+            pos = self.mapToGlobal(QPoint(0, self.height() + 2))
+            self._menu.exec(pos)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            if self._menu is not None and self.isEnabled():
+                pos = self.mapToGlobal(QPoint(0, self.height() + 2))
+                self._menu.exec(pos)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def sizeHint(self):
+        font = QFont(T["ff"], K["f_chip"])
+        font.setWeight(QFont.Medium)
+        fm = QFontMetrics(font)
+        display_text = self.text()
+        w = K["pad_chip_h"] + fm.horizontalAdvance(display_text)
+        if self._count is not None:
+            b_font = QFont(T["ff"], K["f_badge"])
+            b_font.setWeight(QFont.DemiBold)
+            bfm = QFontMetrics(b_font)
+            bw = bfm.horizontalAdvance(str(self._count)) + 2 * K["pad_badge_h"]
+            w += K["gap_chip"] + bw
+        if self._has_menu:
+            w += K["gap_chip"] + 8
+        w += K["pad_chip_h"]
+        return QSize(max(w, 28), T["h_chip"])
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+
+        enabled = self.isEnabled()
+        checked = self.isChecked()
+        focused = self.hasFocus()
+        alpha = 1.0 if enabled else _DISABLED_ALPHA
+
+        if checked:
+            bg_col = _qcolor(T["emdeep"], alpha)
+            line_col = _qcolor(T["em"], alpha)
+            text_col = _qcolor(T["mint"], alpha)
+            badge_bg = _qcolor(T["emline"], alpha)
+            badge_tx = _qcolor(T["mint"], alpha)
+            chevron_col = _qcolor(T["mint"], alpha)
+        else:
+            bg_col = _qcolor(K["chip_bg"], alpha)
+            line_col = _qcolor(K["chip_hover_line"] if (self._hover and enabled) else K["chip_line"], alpha)
+            text_col = _qcolor(T["text"] if (self._hover and enabled) else T["text2"], alpha)
+            badge_bg = _qcolor(K["badge_bg"], alpha)
+            badge_tx = _qcolor(K["badge_tx"], alpha)
+            chevron_col = text_col
+
+        # Background pill
+        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        radius = K["r_chip"]
+        p.setPen(QPen(line_col, 1.0))
+        p.setBrush(QBrush(bg_col))
+        p.drawRoundedRect(r, radius, radius)
+
+        # Focus ring
+        if focused and enabled:
+            p.setPen(QPen(QColor(T["mint"]), 1.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
+
+        # Draw text
+        font = QFont(T["ff"], K["f_chip"])
+        font.setWeight(QFont.Medium)
+        p.setFont(font)
+        p.setPen(text_col)
+        fm = QFontMetrics(font)
+        display_text = self.text()
+        text_w = fm.horizontalAdvance(display_text)
+        cur_x = float(K["pad_chip_h"])
+        text_r = QRectF(cur_x, 0, text_w, self.height())
+        p.drawText(text_r, Qt.AlignVCenter | Qt.AlignLeft, display_text)
+        cur_x += text_w
+
+        # Draw badge
+        if self._count is not None:
+            cur_x += float(K["gap_chip"])
+            b_font = QFont(T["ff"], K["f_badge"])
+            b_font.setWeight(QFont.DemiBold)
+            bfm = QFontMetrics(b_font)
+            badge_str = str(self._count)
+            bw = float(bfm.horizontalAdvance(badge_str) + 2 * K["pad_badge_h"])
+            bh = float(K["h_badge"])
+            by = (self.height() - bh) / 2.0
+            badge_r = QRectF(cur_x, by, bw, bh)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(badge_bg))
+            p.drawRoundedRect(badge_r, K["r_badge"], K["r_badge"])
+            p.setFont(b_font)
+            p.setPen(badge_tx)
+            p.drawText(badge_r, Qt.AlignCenter, badge_str)
+            cur_x += bw
+
+        # Draw chevron
+        if self._has_menu:
+            cur_x += float(K["gap_chip"])
+            ch_w = 8.0
+            ch_h = 5.0
+            ch_y = (self.height() - ch_h) / 2.0
+            poly = QPolygonF([
+                QPointF(cur_x, ch_y),
+                QPointF(cur_x + ch_w, ch_y),
+                QPointF(cur_x + ch_w / 2.0, ch_y + ch_h),
+            ])
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(chevron_col))
+            p.drawPolygon(poly)
+
+        p.end()
+
+
+FilterChip = Chip
+
+
+class ChipBar(QFrame):
+    currentChanged = Signal(object)
+    selectionChanged = Signal(object)
+    compactChanged = Signal(bool)
+
+    def __init__(self, parent=None, *, single_select=False, chips=()):
+        super().__init__(parent)
+        self.setObjectName("KitChipBar")
+        self.setStyleSheet("QFrame#KitChipBar { background: transparent; border: none; }")
+        self.setFixedHeight(T["h_chip"])
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._single_select = single_select
+        self._compact = False
+        self._chips = []
+        self._chips_by_id = {}
+        self._overflow_chip = None
+        self._overflow_menu = None
+        self._selected_id = None
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(K["gap_chip"])
+        lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        for item in chips:
+            self.add_chip(item)
+
+    def add_chip(self, text_or_chip, *, id=None, count=None, checked=False, menu=None,
+                 value_when_on=None, tooltip="", compact_hide=False):
+        if isinstance(text_or_chip, Chip):
+            chip = text_or_chip
+            if chip.parentWidget() is not self:
+                chip.setParent(self)
+        else:
+            chip = Chip(str(text_or_chip), self, count=count, checked=checked, menu=menu,
+                        value_when_on=value_when_on, tooltip=tooltip)
+        if id is None:
+            id = text_or_chip if isinstance(text_or_chip, str) else chip.base_text()
+        chip._chip_id = id
+        chip.set_compact_hide(compact_hide)
+        self._chips.append(chip)
+        self._chips_by_id[id] = chip
+        chip.toggled.connect(lambda on, c=chip: self._on_chip_toggled(c, on))
+        self.layout().addWidget(chip)
+        if checked:
+            self.set_selected(id)
+        return chip
+
+    def _on_chip_toggled(self, chip, on):
+        if self._single_select:
+            if on:
+                for other in self._chips:
+                    if other is not chip and other.isChecked():
+                        other.blockSignals(True)
+                        other.setChecked(False)
+                        if other is self._overflow_chip:
+                            other.set_value_when_on(None)
+                        other.blockSignals(False)
+                        other.update()
+                self._selected_id = getattr(chip, "_chip_id", None)
+                self.currentChanged.emit(self._selected_id)
+                self.selectionChanged.emit(chip)
+            else:
+                if not any(c.isChecked() for c in self._chips):
+                    chip.blockSignals(True)
+                    chip.setChecked(True)
+                    chip.blockSignals(False)
+                    chip.update()
+        else:
+            self.selectionChanged.emit(chip)
+
+    def add_overflow_chip(self, menu=None, text="More", title="More filters"):
+        chip = Chip(text, self, menu=menu, tooltip=title, has_menu=True)
+        chip._chip_id = "__overflow__"
+        self._overflow_chip = chip
+        self._overflow_menu = menu
+        self._chips.append(chip)
+        self._chips_by_id["__overflow__"] = chip
+        chip.toggled.connect(lambda on, c=chip: self._on_chip_toggled(c, on))
+        self.layout().addWidget(chip)
+        return chip
+
+    def set_overflow_menu(self, menu, text="More"):
+        if self._overflow_chip is None:
+            return self.add_overflow_chip(menu, text=text)
+        self._overflow_chip.set_menu(menu)
+        self._overflow_menu = menu
+        return self._overflow_chip
+
+    def select_overflow_value(self, value_text, id=None):
+        if self._overflow_chip is not None:
+            self._overflow_chip.set_value(value_text)
+            self._selected_id = id or value_text
+            self.currentChanged.emit(self._selected_id)
+            self.selectionChanged.emit(self._overflow_chip)
+
+    def chips(self):
+        return list(self._chips)
+
+    def chip(self, id):
+        return self._chips_by_id.get(id)
+
+    def selected_chip(self):
+        for c in self._chips:
+            if c.isChecked():
+                return c
+        return None
+
+    def selected_id(self):
+        return self._selected_id
+
+    def set_selected(self, id_or_chip):
+        target = self.chip(id_or_chip) if not isinstance(id_or_chip, Chip) else id_or_chip
+        if target is not None:
+            if not target.isChecked():
+                target.setChecked(True)
+            else:
+                self._on_chip_toggled(target, True)
+
+    def is_compact(self):
+        return self._compact
+
+    def set_compact(self, on):
+        self._compact = bool(on)
+        for c in self._chips:
+            if c.compact_hide():
+                c.setVisible(not self._compact)
+        self.compactChanged.emit(self._compact)
+
+    def apply_width_mode(self, mode):
+        val = getattr(mode, "value", mode)
+        self.set_compact(str(val).lower() == "compact")
+
+
+# ---------------------------------------------------------------- StatusStrip
+
+class StatusStrip(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("KitStatusStrip")
+        self.setStyleSheet(
+            f"QFrame#KitStatusStrip {{ background: {T['card']}; border: 1px solid {T['line']};"
+            f" border-radius: {T['r_l']}px; min-height: {K['h_strip']}px; }}"
+        )
+        self.setMinimumHeight(K["h_strip"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(K["pad_strip_h"], K["pad_strip_v"], K["pad_strip_h"], K["pad_strip_v"])
+        self._lay.setSpacing(K["gap_strip"])
+        self._lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+    def add_pill(self, text_or_pill, tone="neutral", *, dot=False):
+        if isinstance(text_or_pill, Pill):
+            p = text_or_pill
+            if p.parentWidget() is not self:
+                p.setParent(self)
+        else:
+            p = Pill(str(text_or_pill), tone=tone, parent=self, dot=dot)
+        self._lay.addWidget(p)
+        return p
+
+    def add_fact(self, bold_text, sub_text=""):
+        lbl = QLabel(self)
+        lbl.setStyleSheet(f"QLabel {{ background: transparent; color: {T['text']}; font-size: {T['f_m']}px; }}")
+        if sub_text:
+            lbl.setText(f"<b>{bold_text}</b> {sub_text}")
+        else:
+            lbl.setText(f"<b>{bold_text}</b>")
+        self._lay.addWidget(lbl)
+        return lbl
+
+    def add_text(self, text, *, bold=False, muted=False):
+        lbl = QLabel(text, self)
+        col = T["muted"] if muted else T["text"]
+        weight = "font-weight: 600;" if bold else ""
+        lbl.setStyleSheet(f"QLabel {{ background: transparent; color: {col}; font-size: {T['f_m']}px; {weight} }}")
+        self._lay.addWidget(lbl)
+        return lbl
+
+    def add_separator(self):
+        sep = QFrame(self)
+        sep.setFixedSize(1, K["h_strip_sep"])
+        sep.setStyleSheet(f"QFrame {{ background: {T['line2']}; border: none; }}")
+        self._lay.addWidget(sep)
+        return sep
+
+    def add_widget(self, widget):
+        self._lay.addWidget(widget)
+        return widget
+
+    def add_stretch(self, factor=1):
+        self._lay.addStretch(factor)
+
+    def clear(self):
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+
+# ---------------------------------------------------------------- SelectionBar
+
+class SelectionBar(QFrame):
+    def __init__(self, parent=None, *, hint="Select a client row to open, edit or archive it. Select cells to colour them."):
+        super().__init__(parent)
+        self.setObjectName("KitSelectionBar")
+        self.setFixedHeight(K["h_selbar"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._empty_hint = hint
+        self._compact = False
+        self._has_selection = False
+        self._who_text = ""
+        self._actions = []
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(K["pad_selbar_l"], 0, K["pad_selbar_r"], 0)
+        lay.setSpacing(6)
+        lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        # Empty hint
+        self.hint_label = QLabel(self._empty_hint, self)
+        self.hint_label.setObjectName("KitSelectionHint")
+        self.hint_label.setStyleSheet(
+            f"QLabel#KitSelectionHint {{ background: transparent; color: {T['muted']};"
+            f" font-size: {T['f_s']}px; }}"
+        )
+        lay.addWidget(self.hint_label)
+
+        # Active container
+        self.active_container = QWidget(self)
+        self.active_container.setObjectName("KitSelectionActive")
+        self.active_container.setStyleSheet("QWidget#KitSelectionActive { background: transparent; }")
+        self._act_lay = QHBoxLayout(self.active_container)
+        self._act_lay.setContentsMargins(0, 0, 0, 0)
+        self._act_lay.setSpacing(6)
+        self._act_lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        lay.addWidget(self.active_container)
+
+        self.who_label = QLabel("", self.active_container)
+        self.who_label.setObjectName("KitSelectionWho")
+        self.who_label.setStyleSheet(
+            f"QLabel#KitSelectionWho {{ background: transparent; color: {T['text']};"
+            f" font-weight: 600; font-size: {T['f_m']}px; max-width: 220px; }}"
+        )
+        self._act_lay.addWidget(self.who_label)
+
+        self.set_has_selection(False)
+        self._restyle()
+
+    def _restyle(self):
+        if self._has_selection:
+            self.setStyleSheet(
+                f"QFrame#KitSelectionBar {{ background: {K['selbar_has_bg']};"
+                f" border: 1px solid {K['selbar_has_line']}; border-radius: {K['r_selbar']}px; }}"
+            )
+        else:
+            self.setStyleSheet(
+                f"QFrame#KitSelectionBar {{ background: {T['card']};"
+                f" border: 1px solid {T['line']}; border-radius: {K['r_selbar']}px; }}"
+            )
+
+    def set_has_selection(self, has: bool):
+        self._has_selection = bool(has)
+        self.hint_label.setVisible(not self._has_selection)
+        self.active_container.setVisible(self._has_selection)
+        self._restyle()
+
+    def has_selection(self):
+        return self._has_selection
+
+    def set_empty(self, empty: bool = True):
+        self.set_has_selection(not empty)
+
+    def set_who(self, who: str):
+        self._who_text = who or ""
+        self.who_label.setText(self._who_text)
+        self.set_has_selection(bool(who))
+
+    def who(self):
+        return self._who_text
+
+    def set_hint(self, hint: str):
+        self._empty_hint = hint
+        self.hint_label.setText(hint)
+
+    def hint(self):
+        return self._empty_hint
+
+    def add_action(self, action_or_text, *, variant="secondary", icon=None, sm=True,
+                   tooltip="", keep_label=False):
+        if isinstance(action_or_text, (LabelledAction, IconButton, QAbstractButton)):
+            btn = action_or_text
+            if btn.parentWidget() is not self.active_container:
+                btn.setParent(self.active_container)
+        else:
+            btn = LabelledAction(str(action_or_text), self.active_container, variant=variant,
+                                 icon=icon, sm=sm, tooltip=tooltip)
+        btn.setFocusPolicy(Qt.NoFocus)
+        btn_text = btn.text() if hasattr(btn, "text") else ""
+        btn._keep_label = keep_label or (btn_text == "Open")
+        self._actions.append(btn)
+        self._act_lay.addWidget(btn)
+        return btn
+
+    def add_divider(self):
+        vr = QFrame(self.active_container)
+        vr.setFixedSize(1, K["h_selbar_vr"])
+        vr.setStyleSheet(f"QFrame {{ background: {K['selbar_vr']}; margin: 0 6px; border: none; }}")
+        self._act_lay.addWidget(vr)
+        return vr
+
+    def add_group_label(self, text: str):
+        lbl = QLabel(text.upper(), self.active_container)
+        lbl.setStyleSheet(
+            f"QLabel {{ background: transparent; color: {K['selbar_grp_tx']};"
+            f" font-size: {K['f_selbar_grp']}px; font-weight: 600; margin-right: 2px; }}"
+        )
+        self._act_lay.addWidget(lbl)
+        return lbl
+
+    def add_spacer(self, factor=1):
+        self._act_lay.addStretch(factor)
+
+    def add_danger_action(self, text="Delete…", *, icon="mdi.delete-outline", sm=True, tooltip=""):
+        return self.add_action(text, variant="danger", icon=icon, sm=sm, tooltip=tooltip)
+
+    def is_compact(self):
+        return self._compact
+
+    def set_compact(self, on):
+        self._compact = bool(on)
+        for btn in self._actions:
+            if isinstance(btn, LabelledAction):
+                if getattr(btn, "_keep_label", False):
+                    continue
+                btn.set_icon_only(self._compact)
+
+    def apply_width_mode(self, mode):
+        val = getattr(mode, "value", mode)
+        self.set_compact(str(val).lower() == "compact")
+
+
+# ---------------------------------------------------------------- UnsavedBar
+
+class UnsavedBar(QFrame):
+    discard_clicked = Signal()
+    save_clicked = Signal()
+
+    def __init__(self, parent=None, *, reserved_space=False):
+        super().__init__(parent)
+        self.setObjectName("KitUnsavedBar")
+        self.setFixedHeight(K["h_unsaved"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._count = 0
+        self._reserved_space = reserved_space
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(K["pad_unsaved_l"], K["pad_unsaved_v"], K["pad_unsaved_r"], K["pad_unsaved_v"])
+        lay.setSpacing(T["s_3"])
+        lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+        self.icon_label = QLabel(self)
+        self.icon_label.setFixedSize(18, 18)
+        self.icon_label.setStyleSheet("QLabel { background: transparent; }")
+        ic = _icon("mdi.alert-outline", K["unsaved_tx"])
+        if ic is not None:
+            self.icon_label.setPixmap(ic.pixmap(18, 18))
+        lay.addWidget(self.icon_label)
+
+        self.label = QLabel("0 unsaved changes", self)
+        self.label.setStyleSheet(
+            f"QLabel {{ background: transparent; color: {K['unsaved_tx']};"
+            f" font-weight: 600; font-size: {T['f_m']}px; }}"
+        )
+        lay.addWidget(self.label)
+
+        lay.addStretch(1)
+
+        self.discard_btn = LabelledAction("Discard", self, variant="secondary", sm=True)
+        self.discard_btn.clicked.connect(self.discard_clicked)
+        lay.addWidget(self.discard_btn)
+
+        self.save_btn = LabelledAction("Save changes", self, variant="primary", icon="mdi.check", sm=True)
+        self.save_btn.clicked.connect(self.save_clicked)
+        lay.addWidget(self.save_btn)
+
+        self.set_count(0)
+
+    def count(self):
+        return self._count
+
+    def is_dirty(self):
+        return self._count > 0
+
+    def set_count(self, count: int):
+        self._count = max(0, int(count))
+        text = f"{self._count} unsaved change" if self._count == 1 else f"{self._count} unsaved changes"
+        self.label.setText(text)
+        is_dirty = self._count > 0
+        if self._reserved_space:
+            self.setVisible(True)
+            self.icon_label.setVisible(is_dirty)
+            self.label.setVisible(is_dirty)
+            self.discard_btn.setVisible(is_dirty)
+            self.save_btn.setVisible(is_dirty)
+            if is_dirty:
+                self.setStyleSheet(
+                    f"QFrame#KitUnsavedBar {{ background: {K['unsaved_bg']}; border: 1px solid {T['warnline']};"
+                    f" border-radius: {K['r_unsaved']}px; }}"
+                )
+            else:
+                self.setStyleSheet("QFrame#KitUnsavedBar { background: transparent; border: none; }")
+        else:
+            self.setStyleSheet(
+                f"QFrame#KitUnsavedBar {{ background: {K['unsaved_bg']}; border: 1px solid {T['warnline']};"
+                f" border-radius: {K['r_unsaved']}px; }}"
+            )
+            self.setVisible(is_dirty)
+
+    def set_reserved_space(self, on: bool):
+        self._reserved_space = bool(on)
+        self.set_count(self._count)
+
+    def reserved_space(self):
+        return self._reserved_space

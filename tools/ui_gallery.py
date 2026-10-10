@@ -231,6 +231,106 @@ def containers_page():
     return page
 
 
+def bars_page():
+    page = QWidget()
+    page.setObjectName("gallery")
+    page.setStyleSheet(f"QWidget#gallery {{ background: {TOKENS['bg']}; }}")
+    root = QVBoxLayout(page)
+    root.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
+    root.setSpacing(TOKENS["s_3"])
+    page.setFixedWidth(820)
+
+    # 1. Chips and ChipBar
+    root.addWidget(kit.SectionLabel("Chips and ChipBar"))
+    bar = kit.ChipBar(single_select=True)
+    bar.add_chip("All", count=16, checked=True)
+    bar.add_chip("Active today")
+    bar.add_chip("Has services")
+    bar.add_chip("No services")
+    bar.add_chip("Highlighted")
+    bar.add_chip("Archived")
+    from PySide6.QtWidgets import QMenu
+    menu = QMenu(bar)
+    menu.addAction("Most viewed / active")
+    menu.addAction("Has login credentials")
+    bar.add_overflow_chip(menu=menu, text="More")
+    root.addWidget(bar)
+
+    # Individual chips: value-when-on, disabled with reason
+    val_chip = kit.Chip("Client", value_when_on="Client: Unregistered", checked=True, has_menu=True)
+    dis_chip = kit.Chip("Disabled", tooltip="Admin only")
+    dis_chip.set_disabled_reason("Requires admin PIN")
+    row_chips = kit.ChipBar()
+    row_chips.add_chip(val_chip)
+    row_chips.add_chip(dis_chip)
+    root.addWidget(row_chips)
+
+    # 2. StatusStrip
+    root.addWidget(kit.SectionLabel("StatusStrip"))
+    strip = kit.StatusStrip()
+    strip.add_pill("Sync on", tone="emerald", dot=True)
+    strip.add_fact("1", "other PC online")
+    strip.add_separator()
+    strip.add_text("This PC:", muted=True)
+    strip.add_text("OFFICE-PC1", bold=True)
+    strip.add_text("· v2.12.0 · rev 1492", muted=True)
+    strip.add_separator()
+    strip.add_pill("Mode: live")
+    root.addWidget(strip)
+
+    # 3. SelectionBar
+    root.addWidget(kit.SectionLabel("SelectionBar (empty)"))
+    sel_empty = kit.SelectionBar()
+    root.addWidget(sel_empty)
+
+    root.addWidget(kit.SectionLabel("SelectionBar (active)"))
+    sel_active = kit.SelectionBar()
+    sel_active.set_who("Sharma Traders Pvt Ltd")
+    sel_active.add_action("Open", variant="soft", icon="mdi.arrow-right", keep_label=True)
+    sel_active.add_action("Edit", icon="mdi.pencil")
+    sel_active.add_action("Services", icon="mdi.server")
+    sel_active.add_action("Archive", icon="mdi.archive")
+    sel_active.add_divider()
+    sel_active.add_group_label("Cell")
+    fill = sel_active.add_action("Fill", icon="mdi.format-color-fill")
+    fill.set_swatch(TOKENS["warn"])
+    text_act = sel_active.add_action("Text", icon="mdi.format-color-text")
+    text_act.set_swatch(TOKENS["em"])
+    sel_active.add_action("Clear", icon="mdi.eraser")
+    sel_active.add_action(kit.IconButton("mdi.undo", "Undo (Ctrl+Z)", sm=True))
+    sel_active.add_action(kit.IconButton("mdi.redo", "Redo (Ctrl+Y)", sm=True))
+    sel_active.add_spacer()
+    sel_active.add_danger_action("Delete…", icon="mdi.delete-outline")
+    root.addWidget(sel_active)
+
+    root.addWidget(kit.SectionLabel("SelectionBar (compact: icon-only, Open keeps label)"))
+    sel_compact = kit.SelectionBar()
+    sel_compact.set_who("Sharma Traders Pvt Ltd")
+    sel_compact.add_action("Open", variant="soft", icon="mdi.arrow-right", keep_label=True)
+    sel_compact.add_action("Edit", icon="mdi.pencil")
+    sel_compact.add_action("Services", icon="mdi.server")
+    sel_compact.add_action("Archive", icon="mdi.archive")
+    sel_compact.add_divider()
+    sel_compact.add_group_label("Cell")
+    fill_c = sel_compact.add_action("Fill", icon="mdi.format-color-fill")
+    fill_c.set_swatch(TOKENS["warn"])
+    text_c = sel_compact.add_action("Text", icon="mdi.format-color-text")
+    text_c.set_swatch(TOKENS["em"])
+    sel_compact.add_action("Clear", icon="mdi.eraser")
+    sel_compact.add_spacer()
+    sel_compact.add_danger_action("Delete…", icon="mdi.delete-outline")
+    sel_compact.set_compact(True)
+    root.addWidget(sel_compact)
+
+    # 4. UnsavedBar
+    root.addWidget(kit.SectionLabel("UnsavedBar"))
+    unsaved = kit.UnsavedBar()
+    unsaved.set_count(2)
+    root.addWidget(unsaved)
+
+    return page
+
+
 def main():
     from ui.utils.theme import get_theme_stylesheet
     app = QApplication.instance() or QApplication(sys.argv)
@@ -238,7 +338,7 @@ def main():
     out = Path(ARGS.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for name, build in (("primitives", primitives_page), ("inputs", inputs_page),
-                        ("containers", containers_page)):
+                        ("containers", containers_page), ("bars", bars_page)):
         page = build()
         page.resize(page.sizeHint())
         page.show()
