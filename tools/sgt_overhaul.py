@@ -508,6 +508,8 @@ _LIMIT = re.compile(r"(usage|rate|session|weekly|5-hour|hour)\s+limit|limit\s+(r
 
 _AUTH = re.compile(r"authentication required|please (visit|log ?in|sign ?in)|not (logged|signed) in|invalid api key|oauth", re.I)
 _TRANSIENT = re.compile(r"can.t reach the api|ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network|"
+                        r"no such host|dial tcp|i/o timeout|"    # agy (Go) wording for the same failures
+
                         r"overloaded|API Error: 5\d\d\b|internal server error|service unavailable|connection (reset|refused|error)", re.I)
 
 
