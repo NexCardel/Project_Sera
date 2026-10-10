@@ -118,6 +118,19 @@ def test_a_user_shown_column_is_not_auto_hidden():
     assert hidden == {UPDATED, FILING}
 
 
+@pytest.mark.parametrize("available", [1000, 900, 822, 700])
+def test_forced_visible_columns_never_overflow_the_table(available):
+    widths, _ = fit(available, user_shown={FILING, UPDATED, DEVICE})
+    assert sum(widths.values()) <= available
+
+
+def test_a_forced_column_is_kept_when_it_fits_and_returns_when_there_is_room():
+    _, hidden = fit(822, user_shown={DEVICE})
+    assert DEVICE not in hidden
+    _, hidden = fit(1100, user_shown={DEVICE})
+    assert DEVICE not in hidden
+
+
 def test_user_widths_replace_the_preferred_width_when_there_is_room():
     widths, _ = fit(1600, user_widths={PERIOD: 300})
     assert widths[PERIOD] == 300
@@ -185,7 +198,7 @@ class TestWidthModes(_WindowCase):
         assert self.win._lbl_subtitle.isHidden()
         assert self.win._chip_row.isVisible()
         assert all(self.win._chip_layout.indexOf(chip) >= 0 for chip, *_ in self.win._filter_chips)
-        assert self.win.table.verticalHeader().defaultSectionSize() == 40
+        assert self.win.table.verticalHeader().defaultSectionSize() == 44
         assert self.win._lbl_per_page.isHidden()
 
         self.win.resize(1600, 900)

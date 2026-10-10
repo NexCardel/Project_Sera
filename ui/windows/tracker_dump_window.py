@@ -487,6 +487,13 @@ def fit_columns(available: int, is_grouped: bool, user_widths: dict, user_hidden
                 left -= 1
         widths = {c: prefs[c] - cuts[c] for c in cols}
 
+    if user_shown and sum(widths.values()) > available - CLIENT_FLOOR_PX:
+        # A column the user forced on must never push the table past its edge: drop the last
+        # forced column (Device first) and fit again. The saved choice stays, so it returns when there is room.
+        drop = next((c for c in (C.COL_DEVICE, C.COL_UPDATED, C.COL_FILING) if c in user_shown), None)
+        if drop is not None:
+            return fit_columns(available, is_grouped, user_widths, user_hidden, set(user_shown) - {drop})
+
     widths[C.COL_CLIENT] = max(CLIENT_FLOOR_PX, available - sum(widths.values()))
     return widths, hidden
 
@@ -2307,7 +2314,7 @@ class TrackerDumpWindow(QWidget):
             val.setStyleSheet(f"color: {color}; font-size: 16px;" if compact else f"color: {color};")
         self._refresh_tile_captions()
 
-        self.table.verticalHeader().setDefaultSectionSize(40 if compact else 48)
+        self.table.verticalHeader().setDefaultSectionSize(44 if compact else 48)
         self._lbl_per_page.setVisible(not compact)
         self._col_resize_timer.start()
 
