@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 17:35)
+# UI overhaul — report (2026-10-10 17:49)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 23 |
+| Not started | 22 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 13 |
+| Done | 14 |
 | Blocked | 0 |
 
-Runs: 22   output tokens: 604764   API-equivalent cost: $30.15
+Runs: 23   output tokens: 650380   API-equivalent cost: $35.50
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -27,7 +27,7 @@ Runs: 22   output tokens: 604764   API-equivalent cost: $30.15
 | K-5 | Done | opus | 5c8093b | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | DataGrid (QTableWidget subclass, delegate-drawn white/dark/list tones, pills, service dots, drawn actions, fit_columns), DarkListTable, GridFooter, GridFrame; 9 |
 | K-6 | Done | sonnet | 782bc31 | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... | DialogFrame, Scrim, PageHeader, Tile, LogView, SlidePanel restyle (540 / full width COMPACT); 52 new tests pass; frames gallery page |
 | K-7 | Done | sonnet | fd10027 | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... | Gallery states page (hover/focus/disabled), 14 PNGs at 100/125, kit reference docstring, 38 new keyboard/tooltip/elision/gallery tests, Chip Enter |
-| K-R | Not started | opus |  | Review phase K (kit) |  |
+| K-R | Done | opus | e9a31bc | Review phase K (kit) | Kit reviewed and frozen; 5 kit fixes, gallery uses real Windows fonts, ToggleSwitch/FilterChip users migrated; only pre-existing PAN + order-leak failures |
 | R-1 | Not started | mechanical |  | Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ... |  |
 | R-2 | Not started | sonnet |  | Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ... |  |
 | R-3 | Not started | haiku |  | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... |  |
@@ -64,6 +64,8 @@ Runs: 22   output tokens: 604764   API-equivalent cost: $30.15
 - **K-1** Where do the mockup's component-level literals (outside :root) and half-px font sizes go? → New KIT dict in ui/utils/tokens.py; 12.5px and 10.5px rounded up to 13 and 11 (TOKENS must equal the :root block (test_ui_tokens); kit.py stays hex-free; Qt px font sizes are ints)
 - **K-4** Bar behaviors and COMPACT modes → SelectionBar enforces NoFocus and Open keeps label; ChipBar supports single_select, overflow and second-row; UnsavedBar default hidden when clean (Matches IMPLEMENTATION.md 4.1/4.4 and fleet index.html specs)
 - **K-5** DataGrid base class: QTableView with a new model, or QTableWidget (which is a QTableView)? → DataGrid subclasses QTableWidget; all drawing is in GridDelegate, which also works on any QTableView (Every grid in the app (search, tracker, audit, sync) is a QTableWidget whose items carry the cell-format highlights (BackgroundRole/ForegroundRole); a drop-in subclass keeps the highlight engine and the attribute/item API tests reach untouched)
+- **K-R** Migrate ToggleSwitch / FilterChip users now or leave them to R-2 / S-* packages? → Migrated now: sidebar toggle_admin -> kit.Switch (old ToggleSwitch class deleted); Manage Clients chips + More -> kit.Chip; Tracker Dump filter chips -> kit.Chip (literal ▾ left the label, the chip draws it; lock test text updated, behaviour unchanged) (BUILD-PLAN K-R row requires users migrated and green; attribute names and handlers kept, so it is drop-in)
+- **K-R** Kit Toast keeps a single-shot QTimer; does that break 'no timers'? → Kept (It is the auto-hide of the alert it replaces (same show_alert duration API), started only on show; no polling or animation timers anywhere in the kit)
 
 ## Checks waiting for you
 
@@ -72,3 +74,4 @@ Runs: 22   output tokens: 604764   API-equivalent cost: $30.15
 - #3 (W0-2) Real keyboard on a real desktop: press Ctrl+= / Ctrl+- / Ctrl+0 (alert appears, restart applies the scale), Alt+n and Alt+Ctrl+n on a search result, Ctrl+B, F5 in Tracker Dump, and Tab order through the Manage Clients form; offscreen tests call the handlers/shortcuts directly — Not run
 - #4 (K-5) On a real desktop: hover a DataGrid row and its drawn action buttons (hover fill, tooltip per button, click runs the action); drag a column edge and confirm the width survives a window resize — Not run
 - #5 (K-6) On a real 125% display, open a SlidePanel in a window narrower than 1080 px: it should fill the width with no left edge, and a DialogFrame (normal and full) should show no clipped title or footer. — Not run
+- #6 (K-R) On a real Windows screen at 100 % and 125 %, compare Mockups/built/kit/*.png lettering and sizes with Mockups/fleet/index.html Foundation page (headless browser render was not allowed in the worker) — Not run
