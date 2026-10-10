@@ -117,10 +117,11 @@ vsdc_scope.json
 ltt_feed.csv
 ltt_tracker.xlsx
 ltt_rules.json
-.ui-overhaul.lock
-logs/ui-overhaul/
-!docs/ui_overhaul/ui-overhaul-status.csv
-!docs/ui_overhaul/ui-overhaul-runs.csv
-!docs/ui_overhaul/ui-overhaul-decisions.csv
-!docs/ui_overhaul/ui-overhaul-checks.csv
-!docs/ui_overhaul/ui-overhaul-questions.csv
+# UI overhaul tracker (same machinery, task status only, no client data)
+Mockups/overhaul/.ui-overhaul.lock
+Mockups/overhaul/logs/
+!Mockups/overhaul/ui-overhaul-status.csv
+!Mockups/overhaul/ui-overhaul-runs.csv
+!Mockups/overhaul/ui-overhaul-decisions.csv
+!Mockups/overhaul/ui-overhaul-checks.csv
+!Mockups/overhaul/ui-overhaul-questions.csv

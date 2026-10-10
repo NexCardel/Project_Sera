@@ -330,7 +330,18 @@ class Tracker:
             plan.append([w["wp"], w["phase"], w["what"], self.planned_models(w["wp"]), w["kind"], w["size"],
                          ", ".join(w["deps"]), w["focus"]])
         plan.freeze_panes = "A2"
-        links = [("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
+        models = wb.create_sheet("Models")      # which tier runs on which model and agent CLI
+        models.append(["Tier", "Tries in order", "Runners", "WPs"])
+        for tier, keys in self.plan["tiers"].items():
+            if tier.startswith("_"):
+                continue
+            runners = [self.plan["models"][k]["runner"] for k in keys]
+            models.append([tier, " -> ".join(self.plan["models"][k]["id"] for k in keys),
+                           " -> ".join(r + ("" if self.plan["runners"][r].get("enabled") else " (off)") for r in runners),
+                           sum(1 for w in self.plan["wps"] if w["model"] == tier)])
+        models.append([])
+        models.append([self.plan["tiers"].get("_note", "")])
+        links =[("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
                  ("Checks", self.p_checks), ("Runs", self.p_runs)]
         for name, _ in links:
             wb.create_sheet(name)

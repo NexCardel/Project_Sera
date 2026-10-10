@@ -1,0 +1,577 @@
+{
+  "about": "UI overhaul work packages. Order and packages: Mockups/fleet/BUILD-PLAN.md (kit first, 2026-10-10); rules, checks and specs: Mockups/IMPLEMENTATION.md. Fixed data: edit by hand only to re-plan. Live status is in ui-overhaul-status.csv, written only by Mockups/overhaul/ui_overhaul.py.",
+  "deadline": "2026-10-12T23:00:00+05:30",
+  "models": {
+    "opus": {
+      "runner": "claude",
+      "id": "claude-opus-5-5"
+    },
+    "sonnet": {
+      "runner": "claude",
+      "id": "claude-sonnet-5-5"
+    },
+    "haiku": {
+      "runner": "claude",
+      "id": "claude-haiku-5-5"
+    },
+    "fable": {
+      "runner": "claude",
+      "id": "claude-fable-5-1"
+    },
+    "gemini-flash": {
+      "runner": "antigravity",
+      "id": "gemini-3.8-flash-high"
+    },
+    "gemini-pro": {
+      "runner": "antigravity",
+      "id": "gemini-3.1-pro-high"
+    }
+  },
+  "tiers": {
+    "_note": "Owner decision 2026-10-10: one preferred model per WP; the second entry is used only when the first one's runner is at its usage limit, signed out or missing (Claude <-> Gemini). Mechanical WPs prefer Gemini 3.8 Flash; everything else prefers its Claude model. Opus WPs never fall back to Gemini; they wait for Claude (owner 2026-10-10).",
+    "mechanical": [
+      "gemini-flash",
+      "haiku"
+    ],
+    "haiku": [
+      "haiku",
+      "gemini-flash"
+    ],
+    "sonnet": [
+      "sonnet",
+      "gemini-flash"
+    ],
+    "opus": [
+      "opus"
+    ],
+    "fable": [
+      "fable"
+    ]
+  },
+  "runners": {
+    "claude": {
+      "enabled": true,
+      "exe": "claude",
+      "prompt": "stdin",
+      "args": [
+        "-p",
+        "--model",
+        "{model}",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "{permission_mode}",
+        "--allowedTools",
+        "{allowed_tools}",
+        "--disallowedTools",
+        "{disallowed_tools}"
+      ],
+      "coauthor": "Claude <noreply@anthropic.com>"
+    },
+    "antigravity": {
+      "enabled": true,
+      "exe": "agy",
+      "prompt": "arg",
+      "args": [
+        "--model",
+        "{model}",
+        "--output-format",
+        "json",
+        "--dangerously-skip-permissions",
+        "-p"
+      ],
+      "coauthor": "Gemini (Antigravity) <noreply@google.com>",
+      "_note": "agy 1.2.16; the prompt is the value of -p, so it goes last. Unrestricted (--dangerously-skip-permissions) as in the SDIS plan (owner decision 2026-10-04: restricted print mode refuses every command, so a worker cannot run tests). Gemini follows GEMINI.md's allow/block lists and the runner prompt; the repository's pre-push hook refuses any push (SGT_OVERHAUL_WORKER)."
+    }
+  },
+  "cli": {
+    "permission_mode": "acceptEdits",
+    "allowed_tools": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "TodoWrite",
+      "Bash(../APP/venv/Scripts/python.exe:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git stash:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(sed -n:*)",
+      "Bash(find:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(echo:*)",
+      "Bash(date:*)",
+      "Bash(node:*)"
+    ],
+    "disallowed_tools": [
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout main:*)",
+      "Bash(git switch main:*)",
+      "Bash(git branch -D:*)",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "run_timeout_min": 150,
+    "max_attempts": 3,
+    "non_claude_attempts": 99
+  },
+  "wps": [
+    {
+      "wp": "W0-1",
+      "phase": 0,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "S",
+      "deps": [],
+      "what": "Baseline: full test suite, start-up and memory numbers, current snapshots",
+      "focus": "Change no code. Run the full test suite and record pass/fail counts and the NAMES of failures in your hand-off note (locally: the live T/F/S plugin from CLAUDE.md; in a cloud Linux session: QT_QPA_PLATFORM=offscreen python -m pytest -q tests with a per-test timeout, and say which test modules could not even be collected and why - Windows-only imports are expected). Run tests/test_startup_speed.py and tests/test_memory_tuning.py and record their numbers or why they could not run. Run tools/ui_snapshots.py Mockups/baseline (renders every screen offscreen on fake data; never touches master.db; use the Python your prompt names) and note how many PNGs it wrote and any screen it failed on. Confirm you are on branch ui-overhaul. In your hand-off note state clearly whether this environment can run the offscreen UI tests, so the owner knows if cloud sessions are viable for later packages."
+    },
+    {
+      "wp": "W0-2",
+      "phase": 0,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "W0-1"
+      ],
+      "what": "Behaviour lock: tests for every 'must still work' item, green on the unchanged code",
+      "focus": "Read Mockups/IMPLEMENTATION.md sections 1 (rules), 2 and 5 (all of R1-R9); and the mockup spec(s) named below. For each R item with no test today, write an offscreen Qt test (QT_QPA_PLATFORM=offscreen, throwaway DB as in tools/ui_snapshots.py, fictional clients) in tests/test_ui_lock_*.py: search keys and Enter, Alt+n and Alt+Ctrl+n per service, masking First N / Last N, clipboard wipe rule, settings save keys (golden dict of every setting written for a fixed sequence of inputs), visibility save, audit filters and CSV export (store a golden export file in tests/data/), sync dialog columns and attributes, Manage Clients (R7), Tracker Dump (R8: reuse tests/test_tracker_dump_*.py and test_responsive.py, add only what they miss) and display scale (R9: reuse tests/test_ui_scale.py). They MUST pass on the unchanged code; if the old code shows a bug, record it as a decision and test the current behaviour. Do not change app code. Record R items that cannot be tested without a real desktop as checks (check-add)."
+    },
+    {
+      "wp": "W0-3",
+      "phase": 0,
+      "model": "mechanical",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "W0-1"
+      ],
+      "what": "Screen inventory",
+      "focus": "Write Mockups/INVENTORY.md: for every PNG in Mockups/current/ give the file and class, how it is opened, the tests that cover it, and a table of its controls (attribute name, type, what it triggers). Add the display scale dialog and the sidebar Display entry (ui/dialogs/display_scale_dialog.py; no PNG). List dlg_sgt_lab.png and the SDIS dialogs as 'out of the overhaul' with no control table. Mark every attribute name that a test under tests/ reaches (grep tests for it). This is the basis for the screen packages and for the 'where every control goes' checks. Change no code."
+    },
+    {
+      "wp": "W0-D",
+      "phase": 0,
+      "model": "fable",
+      "kind": "cloud",
+      "size": "S",
+      "deps": [],
+      "prompt": "fleet-redesign-cloud.md",
+      "what": "Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML mockup",
+      "focus": "Cloud only: the owner starts it with Fable 5.1 using `prompt W0-D`; the local dispatcher never runs it. Redesign every screen in Mockups/current/ (except dlg_sgt_lab.png: the SGT lab and the SDIS panels are out of the overhaul) as one new clickable HTML mockup in Mockups/fleet/ (index.html + README.md). Design only: no app code, nothing outside Mockups/fleet/ except the tracker files. Full instructions are in Mockups/overhaul/fleet-redesign-cloud.md. Done 2026-10-10: the result is Mockups/fleet/ (index.html, README.md, BUILD-PLAN.md)."
+    },
+    {
+      "wp": "W0-R",
+      "phase": 0,
+      "model": "opus",
+      "kind": "review",
+      "size": "S",
+      "deps": [
+        "W0-2",
+        "W0-3"
+      ],
+      "what": "Review the safety net",
+      "focus": "For each area of W0-2 (search, detail, settings, audit, sync) mutate ONE behaviour in the app code (e.g. change the Alt key map, drop a setting key from the save, remove Enter handling), confirm a lock test goes red, then undo with git checkout of that file only. List areas whose tests did not catch the mutation and fix the tests. Confirm INVENTORY.md covers every PNG in Mockups/current/."
+    },
+    {
+      "wp": "T-1",
+      "phase": 1,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "S",
+      "deps": [
+        "W0-R"
+      ],
+      "what": "Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: `ui/utils/tokens.py` from the `:root` block of `Mockups/fleet/index.html` (every colour, radius, spacing, font size, control size, widths). Point `ui/utils/theme.py` at it; existing QSS output byte-identical until a screen opts in. A test asserts every token name in the README table exists."
+    },
+    {
+      "wp": "K-1",
+      "phase": 2,
+      "model": "opus",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "T-1"
+      ],
+      "what": "Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Primitives**: `LabelledAction` (primary / soft / secondary / ghost / danger, `sm`, disabled with reason tooltip, icon + text), `IconButton` (bordered, primary, `sm`, tooltip mandatory), `Segmented`, `Key` (keyboard hint), `Pill` (7 tones), `Tag` (4 tones), `StatusDot`. Promote nothing yet; these are the leaves everything else uses."
+    },
+    {
+      "wp": "K-2",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-1"
+      ],
+      "what": "Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Inputs**: `Input` (leading icon, trailing action slot), `Select`, `TextArea`, `Stepper`, `Checkbox` (list use only), `Switch` (promotes `ToggleSwitch` from the sidebar; keyboard operable, disabled with reason). `FieldLabel` (label above field)."
+    },
+    {
+      "wp": "K-3",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-1"
+      ],
+      "what": "Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Containers**: `Card` (caps title, right-hand slot, `danger` and `em` edges, no nesting), `SettingRow` (title + sub-label, fixed 230 px control column, `auto` / `wide`), `SectionLabel` (reuse the existing one), `Banner` (w / r / g / i), `Toast` (promote the shell's alert), `EmptyState`."
+    },
+    {
+      "wp": "K-4",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-1",
+        "K-2"
+      ],
+      "what": "Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, \"More ▾\" overflow, ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Bars**: `Chip` + `ChipBar` (single-select group, count badge, ▾ menu chip, \"More ▾\" overflow, COMPACT second-row mode) promoting `FilterChip` from Manage Clients; `StatusStrip`; `SelectionBar` (fixed height, groups with dividers, `NoFocus` buttons, hint when empty, icon-only mode for COMPACT); `UnsavedBar`."
+    },
+    {
+      "wp": "K-5",
+      "phase": 2,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "K-1"
+      ],
+      "what": "Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Data grid**: `DataGrid` (QTableView + delegate) with the white tone and the dark tone, sticky header, zebra, mint selection with emerald edge, `GridFooter` with hints, cell pills (service dots, status pills), cell action buttons drawn by the delegate (never widgets per row), priority column classes with `fit_columns()` for COMPACT, `DarkListTable` for dialogs. Keeps the search grid's highlight engine untouched."
+    },
+    {
+      "wp": "K-6",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-1",
+        "K-3"
+      ],
+      "what": "Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Frames**: `DialogFrame` (icon, title, one-line purpose, body, footer with one primary, `full` variant, scrim), `PageHeader` (title, count, lead, actions), `SlidePanel` restyle (540 px, full width in COMPACT), `Tile` (summary tile), `LogView` (monospace activity log with tag colours)."
+    },
+    {
+      "wp": "K-7",
+      "phase": 2,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-1",
+        "K-2",
+        "K-3",
+        "K-4",
+        "K-5",
+        "K-6"
+      ],
+      "what": "Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: `tools/ui_gallery.py`: every component, every state (normal, hover, focus, disabled, checked, long text, empty, COMPACT) at 100 % and 125 % to `Mockups/built/kit/`. Tests per component: state, signals, Tab / Space / Enter, tooltip presence, elision. Kit docstring written as the one document screen packages read."
+    },
+    {
+      "wp": "K-R",
+      "phase": 2,
+      "model": "opus",
+      "kind": "review",
+      "size": "M",
+      "deps": [
+        "K-7"
+      ],
+      "what": "Review phase K (kit)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Gallery PNGs against `index.html`'s Foundation page side by side; tokens only (grep); no timers, no per-row widgets; import time and memory unchanged (`test_startup_speed`, `test_memory_tuning`); `ToggleSwitch` and `FilterChip` users migrated and green. **Kit API frozen.**"
+    },
+    {
+      "wp": "R-1",
+      "phase": 3,
+      "model": "mechanical",
+      "kind": "auto",
+      "size": "S",
+      "deps": [
+        "K-R"
+      ],
+      "what": "Responsive and shell: ui/utils/responsive.py is already there (WIDE / COMPACT with hysteresis); add a ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: `ui/utils/responsive.py` is already there (WIDE / COMPACT with hysteresis); add a `WidthAware` mixin that calls `apply_width_mode(mode)` on kit bars and grids so screens only list which columns and chips move."
+    },
+    {
+      "wp": "R-2",
+      "phase": 3,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-R"
+      ],
+      "what": "Responsive and shell: Sidebar on the kit: real logo (sera_mark.svg), brand not truncated, groups Clients / ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Sidebar** on the kit: real logo (`sera_mark.svg`), brand not truncated, groups Clients / Tools / Admin, one All Clients entry, Display entry for everyone, Manage Staff Users removed, Auto-sync pill as `LabelledAction soft`, auto-collapse below 1000 with manual override."
+    },
+    {
+      "wp": "R-3",
+      "phase": 3,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "S",
+      "deps": [
+        "K-R"
+      ],
+      "what": "Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: **Display scale**: `DisplayScaleControl` rebuilt as a `SettingRow` + two `LabelledAction`s; `DisplayScaleDialog` on `DialogFrame`. Same QSettings keys, same restart path."
+    },
+    {
+      "wp": "R-R",
+      "phase": 3,
+      "model": "sonnet",
+      "kind": "review",
+      "size": "S",
+      "deps": [
+        "R-3"
+      ],
+      "what": "Review phase R (responsive and shell)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Sidebar screenshots at 1366 / 1024 / 1366 @ 125 %; shortcuts Ctrl+B, Ctrl+= / − / 0 unchanged."
+    },
+    {
+      "wp": "S-1",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "R-R"
+      ],
+      "what": "Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page Kit used: DialogFrame full, nav, Card, SettingRow, Switch, Select, Stepper, UnsavedBar. This package handles settings writes or secrets: masking, focus and save keys unchanged."
+    },
+    {
+      "wp": "S-2",
+      "phase": 4,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-1"
+      ],
+      "what": "Screens: Settings: Action buttons, Tracker, Export, Backup, Purge",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Settings: Action buttons, Tracker, Export, Backup, Purge Kit used: same + Banner, danger Card."
+    },
+    {
+      "wp": "S-3",
+      "phase": 4,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-1"
+      ],
+      "what": "Screens: Settings: SCC vault presets",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Settings: SCC vault presets Kit used: Card, Tile, formula Tags, Input."
+    },
+    {
+      "wp": "S-4",
+      "phase": 4,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "S-1",
+        "K-5"
+      ],
+      "what": "Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three visibility pages Kit used: DarkListTable, Tag, Pill, Checkbox, Switch."
+    },
+    {
+      "wp": "S-5",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-4"
+      ],
+      "what": "Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs Kit used: DialogFrame, DarkListTable, FieldLabel, Select."
+    },
+    {
+      "wp": "S-6",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "R-R",
+        "K-5"
+      ],
+      "what": "Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu (IMPLEMENTATION 4.2) Kit used: PageHeader, ChipBar, DataGrid, GridFooter."
+    },
+    {
+      "wp": "S-7",
+      "phase": 4,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "S-6"
+      ],
+      "what": "Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour Kit used: SelectionBar, fit_columns."
+    },
+    {
+      "wp": "S-8",
+      "phase": 4,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-6"
+      ],
+      "what": "Screens: Client detail panel",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Client detail panel Kit used: SlidePanel, Card, LabelledAction, Key, Pill, EmptyState line."
+    },
+    {
+      "wp": "S-9",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-7"
+      ],
+      "what": "Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) Kit used: ChipBar, DataGrid (list mode), Card, SelectionBar."
+    },
+    {
+      "wp": "S-10",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-7"
+      ],
+      "what": "Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE pixel-identical to today's COMPACT behaviour) Kit used: Tile, ChipBar, Segmented, DataGrid dark."
+    },
+    {
+      "wp": "S-11",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "S-6"
+      ],
+      "what": "Screens: Audit log (IMPLEMENTATION 4.5)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Audit log (IMPLEMENTATION 4.5) Kit used: DialogFrame full, ChipBar, DataGrid, Card details."
+    },
+    {
+      "wp": "S-12",
+      "phase": 4,
+      "model": "opus",
+      "kind": "auto",
+      "size": "L",
+      "deps": [
+        "S-6"
+      ],
+      "what": "Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, activity Kit used: StatusStrip, Tabs, Card, LogView, Banner."
+    },
+    {
+      "wp": "S-13",
+      "phase": 4,
+      "model": "sonnet",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "K-R"
+      ],
+      "what": "Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin office (+ import), First run (3 pages + join request), Force update, Loading, Add client, Admin PIN, Shadow start Kit used: DialogFrame, FieldLabel, Banner, Progress. This package handles settings writes or secrets: masking, focus and save keys unchanged."
+    },
+    {
+      "wp": "S-14",
+      "phase": 4,
+      "model": "haiku",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-13"
+      ],
+      "what": "Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Arrangement only (rule 15): read the kit docstring in ui/components/kit.py, the screen's table in Mockups/fleet/README.md, the screen's current file and its tests; nothing else unless a test fails. Rebuild the layout around the existing attribute names; no setStyleSheet literals, no hex, no new widget classes (if the kit lacks something: stop, block with the reason 'needs kit change'). Run the screen's W0-2 lock tests; add golden screenshots at 1366, 1024 and 1366 @ 125 % to Mockups/built/. Your row: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, Map datapoints, Add workstation code, Add / Remove PC by IP, SCA diagnostics, LTT rules, ordinary update dialog, every QMessageBox through one helper Kit used: DialogFrame."
+    },
+    {
+      "wp": "S-R",
+      "phase": 4,
+      "model": "opus",
+      "kind": "review",
+      "size": "L",
+      "deps": [
+        "S-14"
+      ],
+      "what": "Review phase S (screens)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Every \"where every control went\" row ticked; every golden screenshot compared with `index.html`; grep: no literal stylesheet, no hex outside tokens; full suite; start-up time and memory vs baseline."
+    },
+    {
+      "wp": "F-1",
+      "phase": 5,
+      "model": "mechanical",
+      "kind": "auto",
+      "size": "M",
+      "deps": [
+        "S-R"
+      ],
+      "what": "Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ...",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Rewrite `docs/Sera_UI.md` from the kit docstring and tokens; update `Mockups/README.md` and this file's status to \"built\". Remove `settings_dialog.py` if nothing opens it (owner: not live)."
+    },
+    {
+      "wp": "F-2",
+      "phase": 5,
+      "model": "mechanical",
+      "kind": "desktop",
+      "size": "S",
+      "deps": [
+        "F-1"
+      ],
+      "what": "Finish: Real screenshots of every screen into Mockups/built/ (fictional data).",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Real screenshots of every screen into `Mockups/built/` (fictional data)."
+    },
+    {
+      "wp": "F-R",
+      "phase": 5,
+      "model": "opus",
+      "kind": "review",
+      "size": "L",
+      "deps": [
+        "F-2"
+      ],
+      "what": "Review phase F (finish)",
+      "focus": "Read Mockups/fleet/BUILD-PLAN.md (section 2 rules 11-15 and your row), Mockups/IMPLEMENTATION.md sections 1 (rules) and 5 (what must still work), and the IMPLEMENTATION 4.x spec your row names. The design is Mockups/fleet/index.html; the per-screen 'where every control went' lists are in Mockups/fleet/README.md. Your row: Merge-readiness report as in IMPLEMENTATION W8-R. Merge is the owner's call."
+    }
+  ]
+}

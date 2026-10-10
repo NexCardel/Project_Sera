@@ -15,18 +15,24 @@ does not redo them.
 ## 0. The whole plan on one page
 
 - **What:** restyle and re-arrange six screens (All Clients, Client detail, Audit log, Sera Sync,
-  Settings General, Settings Columns) as in the mockups, then bring every other screen onto the same
-  look so the app does not end up as a few new screens among old ones.
+  Settings General, Settings Columns) as in the mockups, plus Manage Clients, Tracker Dump and the
+  display scale picker (phase 4), then bring every other screen onto the same look so the app does
+  not end up as a few new screens among old ones. Every changed screen works at every display scale
+  and in both width modes (4.7). The SGT lab and the SDIS panels are **out of the overhaul**.
 - **How:** build the shared pieces once (phase 1), then use them screen by screen, busiest screens
   first. Each phase ends with a review that checks the "kept as it is" promises against the old code.
 - **Rule of the plan:** same data, same shortcuts, same settings, same database writes. Only the
   presentation and the arrangement change. Where a mockup needs new behaviour (selection bar,
   "Shows on" write-through, unsaved bar, audit service names, Sync cards) the behaviour is specified
   in section 4 *before* any code is written.
-- **Order:** 0 safety net → 1 shared pieces → 2 Client detail → 3 All Clients → 4 Settings →
-  5 Audit log → 6 Sera Sync → 7 every other screen → 8 docs and final review.
+- **Order:** 0 safety net (+ the fleet mockup, W0-D) → 1 shared pieces → 2 Client detail →
+  3 All Clients → 4 Manage Clients, Tracker Dump, Display scale → 5 Settings → 6 Audit log →
+  7 Sera Sync → 8 every other screen → 9 docs and final review.
+- **Re-planned (2026-10-10):** phase 4 added; SGT lab and SDIS removed; W0-D (a cloud session
+  with Fable 5.1 redesigns every screen as a new HTML mockup in `Mockups/fleet/`) added; the
+  work-package files moved to `Mockups/overhaul/`.
 - **Decided (2026-10-05):** Theme shows "Dark" as the only option. EMAIL and TAN keep type
-  `password` [Secret] for now. All screens not mocked up get the same treatment (phase 7).
+  `password` [Secret] for now. All screens not mocked up get the same treatment (phase 8).
 
 ---
 
@@ -51,10 +57,13 @@ does not redo them.
 7. **Fictional data.** Test fixtures, gallery data and screenshots use made-up clients, PANs and
    workstation names. Nothing is copied from `master.db`, `~/AmanAssociates_Sera/` or backups.
 8. **Small laptop first.** Every screen must work at 1366×768, at 100 / 125 / 150 % Windows scaling,
-   with no sideways scroll except inside the white data grid.
+   at Sera's own display scale 0.80–1.25 and in both width modes (WIDE / COMPACT, see 4.7), with no
+   sideways scroll except inside the white data grid.
 9. **Do not touch** version numbers, installers or the release files (`version.json`, release
    process). This is a UI change only. Never bulk-delete files in user data folders.
 10. **Match the surrounding code**: style, comment density, naming. Change only what the WP needs.
+11. **Out of the overhaul:** the SGT lab (`ui/dialogs/sgt_lab_dialog.py`) and the SDIS panels
+    (`ui/dialogs/sdis_dialog.py`, `sdis_containers_dialog.py`) keep their current look. No WP edits them.
 
 ---
 
@@ -63,6 +72,9 @@ does not redo them.
 | Thing | Location |
 | :--- | :--- |
 | Mockup specs, images, clickable page | `Mockups/` (this folder), `Mockups/redesign/index.html` |
+| Fleet redesign mockup (W0-D) | `Mockups/fleet/index.html`, `Mockups/fleet/README.md` |
+| Work-package tracker and dispatcher | `Mockups/overhaul/` (`ui_overhaul.py`, plan JSON, status CSVs, runner prompts, `run_ui_overhaul.bat`, `watch_ui_worker.bat`) |
+| Display scale and width modes | `ui/utils/ui_scale.py`, `ui/utils/responsive.py`, `ui/dialogs/display_scale_dialog.py`, `docs/ui-scale-adaptive-layout-plan.md` |
 | Screenshots of today's screens (31 files) | `Mockups/current/` |
 | Existing tokens and 5 primitives | `ui/utils/theme.py`, `docs/Sera_UI.md` |
 | Existing chip, switch | `FilterChip` (Manage Clients, `ui/windows/admin_window.py`), `ToggleSwitch` (`ui/shell/sidebar.py`) |
@@ -75,13 +87,28 @@ does not redo them.
 (`$env:PYTHONPATH="tools"; python -m pytest -p live_tf -p no:terminal -p no:cacheprovider tests`);
 single files with plain `python -m pytest <file>`. UI tests run with `QT_QPA_PLATFORM=offscreen`.
 
+**Running the dispatcher:** `Mockups/overhaul/run_ui_overhaul.bat` (from the `../APP-ui` worktree);
+`../APP/venv/Scripts/python.exe Mockups/overhaul/ui_overhaul.py show | next | prompt <WP>`. WPs of kind
+`cloud` (W0-D) are never started by the dispatcher: print the prompt with `prompt W0-D` and start
+a cloud session with it, then `git pull` the branch when it has pushed.
+
 ---
 
 ## 3. Work packages
 
+> **Superseded 2026-10-10.** The order and the packages below are replaced by
+> [`fleet/BUILD-PLAN.md`](fleet/BUILD-PLAN.md) (kit first: T, K, R, S, F), written with the fleet
+> mockup (W0-D). Phase 0 (W0-1 to W0-R) stays. Sections 1, 4, 5 and 9 still apply; the WP ids in
+> the 4.x headings map to BUILD-PLAN rows by topic (4.1 → S-7, 4.2 → S-6, 4.3 → S-4, 4.4 → S-1,
+> 4.5 → S-11, 4.6 → S-12, 4.7 → R-1 / R-3, 4.8 → S-9 / S-10). Models: the tracker
+> (`overhaul/ui-overhaul-plan.json`) gives each package one preferred model (Gemini 3.8 Flash for
+> mechanical packages, else Haiku / Sonnet / Opus 5.5); Claude and Gemini stand in for each other
+> only when one is at its usage limit.
+
 Columns follow the SGT plan: **model** is the tier (`opus` for design-heavy or risky work,
 `sonnet` for normal builds, `haiku` for mechanical checks), **kind** is `auto` (can run unattended),
-`desktop` (needs a real screen) or `review` (reads the phase against the rules), **size** is S/M/L.
+`desktop` (needs a real screen), `review` (reads the phase against the rules) or `cloud` (started by
+the owner in a cloud session, never by the dispatcher), **size** is S/M/L.
 Each phase's `-R` package is a gate: the next phase does not start until it passes.
 
 ### Phase 0 — Safety net *(nothing visual changes)*
@@ -90,7 +117,8 @@ Each phase's `-R` package is a gate: the next phase does not start until it pass
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | haiku | auto | S | — | Baseline: run the full suite with the live plugin; record pass/fail counts and the names of pre-existing failures in the hand-off note. Create worktree `../APP-ui`, branch `ui-overhaul`. |
 | W0-2 | sonnet | auto | L | W0-1 | **Behaviour lock.** Write offscreen Qt tests for every item in section 5 that has no test today (search keys, Enter, Alt+n, masking, clipboard wipe, settings save keys, audit filters, sync columns). They must pass on the *unchanged* code; they are the contract the redesign is held to. |
-| W0-3 | sonnet | auto | M | W0-1 | **Screen inventory.** For every screen in `Mockups/current/` list: file, class, entry point, tests that cover it, controls (name, type, signal target). Output: `Mockups/INVENTORY.md`. Basis for phase 7 and for every "where every control goes" table. |
+| W0-3 | sonnet | auto | M | W0-1 | **Screen inventory.** For every screen in `Mockups/current/` list: file, class, entry point, tests that cover it, controls (name, type, signal target). Output: `Mockups/INVENTORY.md`. Basis for phase 8 and for every "where every control goes" table. |
+| W0-D | fable | cloud | S | — | **Fleet redesign mockup** (Claude Fable 5.1, cloud session, prompt `Mockups/overhaul/fleet-redesign-cloud.md`). Redesign every screen in `Mockups/current/` except the SGT lab, plus the display scale picker and COMPACT mode, as one self-contained clickable `Mockups/fleet/index.html` with a `README.md` (tokens, components, where every control went, departures from `redesign/index.html`). Design only. Can run any time; W4-1 waits for it. |
 | W0-R | opus | review | S | W0-2, W0-3 | Check the lock tests really fail when a behaviour is broken (mutate one thing per area, see red, undo). |
 
 ### Phase 1 — Shared pieces
@@ -119,33 +147,43 @@ Each phase's `-R` package is a gate: the next phase does not start until it pass
 | W3-3 | opus | auto | L | W3-1, W1-2 | **Columns ▾ menu** and column widths (spec 4.2). |
 | W3-R | opus | review | M | W3-2, W3-3 | Section 5 checks R1.*; keyboard-only run through the whole screen; no layout jump when the bar appears. |
 
-### Phase 4 — Settings
+### Phase 4 — Manage Clients, Tracker Dump, Display scale *(daily screens; no mockup yet)*
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W4-1 | opus | auto | L | W3-R | **Unsaved bar and dirty tracking** for the whole hub (spec 4.4), including lazily built pages. No visual page changes yet. |
-| W4-2 | sonnet | auto | M | W4-1 | General page: real switches, equal-width controls via `SettingRow`, four cards (Display, Passwords & clipboard, Start-up, Capture engines), plainer wording, live masking preview. Theme shows "Dark" only. |
-| W4-3 | opus | auto | L | W4-1 | **Columns page** as a table with Type / Role tags and **Shows on M·Q·A write-through** (spec 4.3); labelled actions (+ Add column, Edit per row, Move / Delete for the selected row, Delete set apart). |
-| W4-R | opus | review | M | W4-2, W4-3 | Section 5 checks R3.*; every setting key written exactly as before (diff of the saved settings between old and new build on the same inputs). |
+| W4-1 | opus | auto | M | W3-R, W0-D | **Specs first.** Write `Mockups/07-manage-clients.md`, `08-tracker-dump.md`, `09-display-scale.md` in the 01–06 format (layout, where every control goes, kept as it is), taking the look from the fleet mockup where it fits section 1, and add a tab for each to `redesign/index.html` (Tracker Dump in WIDE and COMPACT). No app code. |
+| W4-2 | sonnet | auto | L | W4-1 | Manage Clients (`admin_window.py`) rebuilt on the kit per 07: list and chips, editor form in Cards, labelled actions, archived mode, bulk actions, toolbar, Ctrl+S / Ctrl+N, PIN and new-client dialogs. |
+| W4-3 | opus | auto | L | W4-1 | Tracker Dump (`tracker_dump_window.py`) rebuilt on the kit per 08, keeping all the adaptive-layout behaviour (4.7) and the per-row Actions cell. |
+| W4-4 | sonnet | auto | M | W4-2, W4-3 | Display scale picker on the kit per 09 (Settings → General row and sidebar Display dialog), then `tests/test_ui_scale_matrix.py`: every rebuilt screen at 1366×768 and 1024×700 × scale 0.80 / 1.00 / 1.25. |
+| W4-R | opus | review | M | W4-4 | R7–R9 checks; built screens vs their new mockup tabs; scale matrix PNGs; tokens only. |
 
-### Phase 5 — Audit log
-
-| WP | Model | Kind | Size | Deps | What |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| W5-1 | sonnet | auto | M | W4-R | Data helpers with tests, no layout yet (spec 4.5): service id → name map, time labels, elided actor / detail, per-workstation counts. |
-| W5-2 | sonnet | auto | L | W5-1 | Layout: one filter row (search + Action / Staff / Date chips), status pill for the aggregator, workstation column with counts, table, details panel on the right with both buttons ("Copy details", "Show only this client"). |
-| W5-R | opus | review | S | W5-2 | R4.* checks; export CSV byte-compared with the old one for the same data (apart from the one added column, see 4.5). |
-
-### Phase 6 — Sera Sync
+### Phase 5 — Settings
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W6-1 | opus | auto | M | W5-R | **Feature map.** The dialog is 1,700 lines and does much more than the mockup shows (office members, shadow mode start / reset / go-live, conflicts, workstation add / remove, hand-over of admin, recovery kit, manual peers by IP, network warning, context menu). List every control and give each a place; add an addendum to `04-sera-sync.md`. Nothing is dropped. |
-| W6-2 | sonnet | auto | M | W6-1 | Status strip, "Don't accept incoming syncs" switch (spec 4.6), one primary button. |
-| W6-3 | opus | auto | L | W6-2 | Device cards with all eight facts, ahead/behind label, empty state; activity card; the W6-1 placements for the remaining features. |
-| W6-R | opus | review | M | W6-3 | R5.* checks; all `test_sync_*_ui.py` pass unchanged; admin-only controls still hidden for non-admins. |
+| W5-1 | opus | auto | L | W3-R | **Unsaved bar and dirty tracking** for the whole hub (spec 4.4), including lazily built pages. No visual page changes yet. |
+| W5-2 | sonnet | auto | M | W5-1 | General page: real switches, equal-width controls via `SettingRow`, four cards (Display, Passwords & clipboard, Start-up, Capture engines), plainer wording, live masking preview. Theme shows "Dark" only. |
+| W5-3 | opus | auto | L | W5-1 | **Columns page** as a table with Type / Role tags and **Shows on M·Q·A write-through** (spec 4.3); labelled actions (+ Add column, Edit per row, Move / Delete for the selected row, Delete set apart). |
+| W5-R | opus | review | M | W5-2, W5-3 | Section 5 checks R3.*; every setting key written exactly as before (diff of the saved settings between old and new build on the same inputs). |
 
-### Phase 7 — Every other screen *(not mocked up; style pass with fixed recipes)*
+### Phase 6 — Audit log
+
+| WP | Model | Kind | Size | Deps | What |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| W6-1 | sonnet | auto | M | W5-R | Data helpers with tests, no layout yet (spec 4.5): service id → name map, time labels, elided actor / detail, per-workstation counts. |
+| W6-2 | sonnet | auto | L | W6-1 | Layout: one filter row (search + Action / Staff / Date chips), status pill for the aggregator, workstation column with counts, table, details panel on the right with both buttons ("Copy details", "Show only this client"). |
+| W6-R | opus | review | S | W6-2 | R4.* checks; export CSV byte-compared with the old one for the same data (apart from the one added column, see 4.5). |
+
+### Phase 7 — Sera Sync
+
+| WP | Model | Kind | Size | Deps | What |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| W7-1 | opus | auto | M | W6-R | **Feature map.** The dialog is 1,700 lines and does much more than the mockup shows (office members, shadow mode start / reset / go-live, conflicts, workstation add / remove, hand-over of admin, recovery kit, manual peers by IP, network warning, context menu). List every control and give each a place; add an addendum to `04-sera-sync.md`. Nothing is dropped. |
+| W7-2 | sonnet | auto | M | W7-1 | Status strip, "Don't accept incoming syncs" switch (spec 4.6), one primary button. |
+| W7-3 | opus | auto | L | W7-2 | Device cards with all eight facts, ahead/behind label, empty state; activity card; the W7-1 placements for the remaining features. |
+| W7-R | opus | review | M | W7-3 | R5.* checks; all `test_sync_*_ui.py` pass unchanged; admin-only controls still hidden for non-admins. |
+
+### Phase 8 — Every other screen *(not mocked up; style pass with fixed recipes)*
 
 These screens get the same look without a new mockup, using the recipes in section 7. If W0-3 shows a
 screen whose layout would change materially, the WP first adds a small mockup to `redesign/index.html`
@@ -153,23 +191,24 @@ and waits for approval (kind `desktop`).
 
 | WP | Model | Kind | Size | Deps | Screens |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W7-1 | sonnet | auto | M | W6-R | Security dialogs: change master password, office recovery, rejoin office, first run, force update, startup loading, shadow start. Extra care: they handle passwords and keys; masking and focus behaviour unchanged. |
-| W7-2 | sonnet | auto | L | W7-1 | Data dialogs: MCL manager, MCL column edit, service manager, service edit, CSV import. |
-| W7-3 | sonnet | auto | L | W4-R | Remaining Settings pages: actions, SCC, services, tracker, export, backup, purge, QC, and the three visibility pages (kept, as the spec promises). The legacy `settings_dialog.py` is checked for use; if unused, only noted. |
-| W7-4 | sonnet | auto | M | W7-2 | SGT lab, SDIS dialogs, LTT rules, SCA diagnostics, update dialog. |
-| W7-5 | sonnet | auto | M | W7-4 | Consistency pass on already redesigned or untouched shells: sidebar active item / icons from tokens, Manage Clients and Tracker Dump moved onto kit components where they duplicate them, toast colours from tokens. |
-| W7-R | opus | review | M | W7-5 | Sweep: grep for hard-coded colours outside `tokens.py`, every screen screenshot vs recipe, all dialogs reach at 125 % scaling. |
+| W8-1 | sonnet | auto | M | W7-R | Security dialogs: change master password, office recovery, rejoin office, first run, force update, startup loading, shadow start. Extra care: they handle passwords and keys; masking and focus behaviour unchanged. |
+| W8-2 | sonnet | auto | L | W8-1 | Data dialogs: MCL manager, MCL column edit, service manager, service edit, CSV import. |
+| W8-3 | sonnet | auto | L | W5-R | Remaining Settings pages: actions, SCC, services, tracker, export, backup, purge, QC, and the three visibility pages (kept, as the spec promises). The legacy `settings_dialog.py` is checked for use; if unused, only noted. |
+| W8-4 | sonnet | auto | M | W8-2 | LTT rules, SCA diagnostics, update dialog. (SGT lab and SDIS are out of the overhaul.) |
+| W8-5 | sonnet | auto | M | W8-4 | Consistency pass on already redesigned or untouched shells: sidebar active item / icons from tokens, display entry kept, toast colours from tokens. (Manage Clients and Tracker Dump were rebuilt in phase 4.) |
+| W8-R | opus | review | M | W8-5 | Sweep: grep for hard-coded colours outside `tokens.py`, every screen screenshot vs recipe, all dialogs reach at 125 % scaling. |
 
-### Phase 8 — Finish
+### Phase 9 — Finish
 
 | WP | Model | Kind | Size | Deps | What |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| W8-1 | sonnet | auto | M | W7-R | Rewrite `docs/Sera_UI.md` to describe the new system as current (tokens, kit, QSS snippets, screen layouts); update `Mockups/README.md` status to "built". |
-| W8-2 | haiku | desktop | S | W8-1 | Take real screenshots of each built screen into `Mockups/built/` for the human comparison (fictional data only). |
-| W8-R | opus | review | L | W8-2 | Final review and merge-readiness report: full suite, startup time and memory compared to W0-1, every row of every "where every control goes" table ticked, open checks listed. Merge is the owner's decision. |
+| W9-1 | sonnet | auto | M | W8-R | Rewrite `docs/Sera_UI.md` to describe the new system as current (tokens, kit, QSS snippets, screen layouts); update `Mockups/README.md` status to "built". |
+| W9-2 | haiku | desktop | S | W9-1 | Take real screenshots of each built screen into `Mockups/built/` for the human comparison (fictional data only). |
+| W9-R | opus | review | L | W9-2 | Final review and merge-readiness report: full suite, startup time and memory compared to W0-1, every row of every "where every control goes" table ticked, open checks listed. Merge is the owner's decision. |
 
-**Count:** 8 phases, 35 packages (9 reviews). Longest chain: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8. W7-3 can
-start once phase 4 is reviewed; W5 and W6 do not depend on each other and may swap order.
+**Count:** 10 phases (0–9), 41 packages (10 reviews, 1 cloud). Longest chain: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9.
+W0-D has no dependencies and should run early (W4-1 waits for it). W8-3 can start once phase 5 is
+reviewed; W6 and W7 do not depend on each other and may swap order.
 
 ---
 
@@ -226,7 +265,7 @@ decision.
   horizontal scrollbar at 1366 px with the default column set; widths stable across refresh; manual
   resize preserved if it exists today.
 
-### 4.3 Settings — Columns table and "Shows on" write-through *(W4-3, uses W4-1)*
+### 4.3 Settings — Columns table and "Shows on" write-through *(W5-3, uses W5-1)*
 
 - **The three flags** per column: Main (`show_in_search`), Quick-copy (`allow_quick_copy`), Admin
   (`admin_show_in_search`). Today three pages each own a dict of checkboxes and write on Save via
@@ -251,7 +290,7 @@ decision.
   toggling a flag twice leaves the dialog clean; reorder and delete behave as before; table sort/scan
   has the same row order as the old list.
 
-### 4.4 Settings — unsaved changes bar *(W4-1)*
+### 4.4 Settings — unsaved changes bar *(W5-1)*
 
 - **Dirty means different from loaded**, not "something fired". The dialog keeps a snapshot of every
   setting value at load (and after each Save). Dirty = snapshot ≠ current values. Turning a switch on
@@ -273,7 +312,7 @@ decision.
   save; the diff of the saved settings between old and new build for the same sequence of inputs is
   empty.
 
-### 4.5 Audit log — readable values *(W5-1, W5-2)*
+### 4.5 Audit log — readable values *(W6-1, W6-2)*
 
 - **Service names:** build `{service_id: name}` once per refresh from the services table. Unknown or
   removed service → "Service #n (removed)". Several services in one entry → names joined and elided
@@ -299,9 +338,9 @@ decision.
   elision; each filter chip vs the old filter on the same fixture; export compared with the old
   export; counts.
 
-### 4.6 Sera Sync — cards and the "Inv-Frames" switch *(W6-1 to W6-3)*
+### 4.6 Sera Sync — cards and the "Inv-Frames" switch *(W7-1 to W7-3)*
 
-- **Feature map first (W6-1):** every control of the current dialog gets a documented place before
+- **Feature map first (W7-1):** every control of the current dialog gets a documented place before
   layout work. Admin-only and shadow-mode controls stay admin-only and keep their PIN confirmation
   (`_confirm_admin_pin`). The "Kept as it is" list in `04-sera-sync.md` is extended with everything
   found.
@@ -324,6 +363,48 @@ decision.
 - **Tests:** existing `test_sync_*_ui.py` unchanged and green; card count equals member count;
   selection → N in the button; ahead / behind / in step / unknown; empty state; switch persistence;
   non-admin sees no admin controls.
+
+### 4.7 Display scale and width modes *(every phase; W4-3, W4-4)*
+
+What exists today (commit `702feda`, plan `docs/ui-scale-adaptive-layout-plan.md`):
+
+- **Display scale** per PC: Automatic (from the primary monitor's work-area width, clamped 0.80–1.00)
+  or a manual 0.80 / 0.90 / 1.00 / 1.10 / 1.25. Stored in QSettings on this PC, **never** in
+  `app_settings` (that table is synced). Applied through `QT_SCALE_FACTOR` before `QApplication`
+  starts, so a change takes effect at the next start ("Restart now"). Ctrl+= / Ctrl+- / Ctrl+0 step it.
+  Reached from Settings → General (admin) and the sidebar Display entry (all staff).
+- **Width modes** (`ui/utils/responsive.py`): a page narrower than 1080 logical px goes COMPACT. In
+  Tracker Dump COMPACT moves the filter chips to a second row, shortens labels and elides status
+  pills; columns shrink toward their minimums, the Client column keeps 240 px, and Device, Updated
+  and Filing hide in that order (the header menu shows or hides optional columns per PC; hidden
+  values go into the Client tooltip). The sidebar folds below 1000 px and reopens above 1060 px
+  unless the user toggled it this session.
+
+Rules for the overhaul:
+
+- Nothing in this list changes behaviour. The redesign restyles the picker and the COMPACT layouts;
+  the thresholds, the storage and the hide order stay.
+- Every screen a WP changes is rendered at 1366×768 and 1024×700 with scale 0.80, 1.00 and 1.25
+  (`tools/ui_snapshots.py --size … --scale …`, one process per scale) and checked for clipping and
+  sideways scroll. From W4-4 on, `tests/test_ui_scale_matrix.py` does this for every rebuilt screen;
+  later phases add their screens to it.
+- New kit components size from tokens, never fixed pixel widths on text, so they follow the scale.
+
+### 4.8 Manage Clients and Tracker Dump *(W4-1 to W4-3)*
+
+These two were redesigned once before the mockups and are busy daily screens, so they get a spec
+first (W4-1) rather than the phase-8 recipes.
+
+- **Spec source:** the fleet mockup (W0-D) for the look, `INVENTORY.md` for the full control list,
+  the 01–06 specs for the format. If the owner rejected the fleet mockup's version of a screen (see
+  the decisions file), follow `redesign/index.html` instead.
+- **Manage Clients:** the dynamic form still builds from the master column list; secret fields mask as
+  everywhere; New / Save / Archive / Restore / Purge and their bulk forms keep their confirmations,
+  admin PIN and audit entries; the chips stay a view of the hidden filter combo.
+- **Tracker Dump:** everything in 4.7; the per-row Actions cell (`act_autofill`, `act_view`, more)
+  keeps its service colours and tooltips; summary tiles, chips, view switch, page size, F5, export,
+  the payload inspector, MCL mapping and add-client-from-capture all stay. Its existing tests
+  (`test_tracker_dump_*.py`, `test_responsive.py`) pass unchanged.
 
 ---
 
@@ -374,9 +455,34 @@ redesign) and is re-run in every `-R` review. Items marked ◆ also need a human
   `test_memory_tuning`, `memory.log`).
 - R6.2 Tab order and focus rings sensible on every changed screen; every icon-only button has a
   tooltip; every disabled control explains why.
-- R6.3 ◆ 100 / 125 / 150 % scaling, 1366×768, no clipped text, no sideways scroll outside the grid.
+- R6.3 ◆ 100 / 125 / 150 % scaling, 1366×768, display scale 0.80–1.25, WIDE and COMPACT, no clipped
+  text, no sideways scroll outside the grid.
 - R6.4 `test_validate_icons` passes (every `mdi.*` icon name used exists).
 - R6.5 Screen reader names are not required, but every control has a text or tooltip name.
+
+**R7 — Manage Clients**
+- R7.1 Search, the filter presets / chips and the archived toggle list the same clients as before.
+- R7.2 Ctrl+S saves, Ctrl+N starts a new client; the new-client dialog; save writes the same database
+  call and audit entry; the form builds from the master column list with the same masking.
+- R7.3 Archive, restore, purge and their bulk forms, and bulk service, act on the selected clients
+  with the same confirmations and admin PIN.
+- R7.4 Every toolbar action stays reachable: backup, restore backup, audit log, export CSV, template,
+  column manager, services, import CSV, settings, purge duplicates, Sera Sync, inspect conflicts.
+
+**R8 — Tracker Dump**
+- R8.1 Search, filter chips, view switch, summary tiles, Reset and page size give the same rows.
+- R8.2 Row actions (autofill with the service colour, view, more menu, create client from capture)
+  and double-click do what they do today.
+- R8.3 Column fitting, hide order, header menu and COMPACT behaviour as in 4.7
+  (`test_tracker_dump_columns.py`, `test_responsive.py`).
+- R8.4 F5 refresh, CSV export, the context menu, the payload inspector and MCL mapping.
+
+**R9 — Display scale**
+- R9.1 Same options; stored in QSettings only, never in `app_settings`; applies at the next start;
+  Restart now works (`test_ui_scale.py`).
+- R9.2 Automatic scale and its clamp; manual range; Ctrl+= / Ctrl+- / Ctrl+0.
+- R9.3 The sidebar Display entry is open to all staff; the Settings row stays where it is visible today.
+- R9.4 The sidebar folds and reopens at the same widths, and respects a manual toggle.
 
 ---
 
@@ -403,9 +509,10 @@ with a tooltip; no animation longer than 150 ms; no timers; tested offscreen.
 
 ---
 
-## 7. Recipes for screens without a mockup *(phase 7)*
+## 7. Recipes for screens without a mockup *(phase 8)*
 
-Apply in this order and stop when the screen reads clean; do not invent new layouts.
+Apply in this order and stop when the screen reads clean; do not invent new layouts. Where the
+fleet mockup (W0-D) shows the screen and the owner accepted it, follow it instead of inventing.
 
 1. Page background and dialog surface from tokens; one panel tone; no nested bordered boxes.
 2. Group fields in `Card`s with a `SectionLabel`; use `SettingRow` for label + control rows so the
@@ -430,9 +537,18 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 | Theme setting | Shows "Dark" as the only option |
 | EMAIL and TAN type | Unchanged (`password` [Secret]) |
 | Screens without a mockup | Restyled with the recipes in section 7 |
-| Palette | The mockup's tokens win over `Sera_UI.md` where they differ; `Sera_UI.md` is rewritten in W8-1 |
+| Palette | The mockup's tokens win over `Sera_UI.md` where they differ; `Sera_UI.md` is rewritten in W9-1 |
 | Older blueprint | Superseded; its primitives are reused |
 | Settings "Shows on" edits | Staged until Save (4.3) |
+
+**Taken (2026-10-10):**
+
+| Decision | Choice |
+| :--- | :--- |
+| Manage Clients, Tracker Dump, Display scale | In the overhaul as phase 4, spec first |
+| SGT lab, SDIS panels | Out of the overhaul; look unchanged |
+| Fleet mockup | W0-D: a cloud session with Fable 5.1 redesigns every screen into `Mockups/fleet/`; a proposal the owner reviews |
+| Work-package files | Live in `Mockups/overhaul/` |
 
 **Defaults chosen by this plan (change by saying so):**
 
@@ -448,14 +564,16 @@ Apply in this order and stop when the screen reads clean; do not invent new layo
 
 | # | WP | Check | Result |
 | :--- | :--- | :--- | :--- |
+| 0 | W0-D | Open `Mockups/fleet/index.html`; decide per screen whether it replaces `redesign/index.html`; record it (`decide W0-D ...`) before W1-1 if the tokens should change | Not run |
 | 1 | W1-3 | Look at the gallery PNGs next to `redesign/index.html`: same feel, same colours | Not run |
 | 2 | W2-R | Open a real client with several services; press each Alt+number; confirm the right service starts and the label shown is that key | Not run |
 | 3 | W3-R | Use All Clients with the real client list for a day: selection bar, Columns menu, filters, no sideways scroll | Not run |
-| 4 | W4-R | Change a setting, close without saving, confirm the prompt; tick "Shows on" and confirm the main screen after Save | Not run |
-| 5 | W5-R | Open the audit log on a PC with real history; service names and times read correctly | Not run |
-| 6 | W6-R | With two real PCs: scan, select, Sync selected; toggle "Don't accept incoming syncs" and confirm the other PC cannot push | Not run |
-| 7 | W7-R | Open every dialog once at 125 % and 150 % scaling; look for clipping | Not run |
-| 8 | W8-R | Compare `Mockups/built/` with the mockup images screen by screen | Not run |
+| 4 | W5-R | Change a setting, close without saving, confirm the prompt; tick "Shows on" and confirm the main screen after Save | Not run |
+| 4a | W4-R | On the small office PC (about 1280 px at 125 %) open Tracker Dump and Manage Clients; change the display scale and restart | Not run |
+| 5 | W6-R | Open the audit log on a PC with real history; service names and times read correctly | Not run |
+| 6 | W7-R | With two real PCs: scan, select, Sync selected; toggle "Don't accept incoming syncs" and confirm the other PC cannot push | Not run |
+| 7 | W8-R | Open every dialog once at 125 % and 150 % scaling; look for clipping | Not run |
+| 8 | W9-R | Compare `Mockups/built/` with the mockup images screen by screen | Not run |
 
 ---
 
