@@ -4,30 +4,24 @@ service_manager_dialog.py
 Admin Mode -> "Manage Services". Maps login endpoints to MCL columns.
 """
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
+    QAbstractItemView,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
-    QPushButton,
+    QTableWidgetItem,
     QVBoxLayout,
-    QFrame,
-    QLabel,
     QWidget,
 )
 
 import automation
-
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
+from ui.components.kit import (
+    ROLE_ACTIONS, ROLE_TAG, Card, CellAction, DarkListTable, DialogFrame, FieldLabel, Input, LabelledAction,
+    Select,
+)
+from ui.utils.tokens import TOKENS
 
 # (label, stored automation_mode) - the autofill type a service's Client Detail button runs.
 MODE_CHOICES = (
@@ -78,16 +72,46 @@ def service_mode_tag(service: dict) -> str:
     return t1
 
 
-def _safe_icon(name, color=None):
-    if qta:
-        try:
-            if color:
-                return qta.icon(name, color=color)
-            return qta.icon(name)
-        except Exception:
-            pass
-    from PySide6.QtGui import QIcon
-    return QIcon()
+def service_mode_labels(service: dict) -> tuple:
+    """(Automation mode text, Mode 2 text or "") as the service tables show them."""
+    m1 = automation.service_action_mode(service)
+    m2 = automation.service_secondary_action_mode(service)
+    t2 = MODE_TAGS[m2] if m2 and m2 in MODE_TAGS and m2 != m1 else ""
+    return MODE_TAGS.get(m1, "Fast Autofill"), t2
+
+
+def fill_service_table(table, services, *, url_col=None, edit_col=None):
+    """Service · Automation mode · Mode 2 (+ Login URL, + a drawn Edit button) rows of a DarkListTable."""
+    table.setRowCount(0)
+    table.setRowCount(len(services))
+    for r, s in enumerate(services):
+        name = QTableWidgetItem(s["name"])
+        name.setData(Qt.UserRole, s["id"])
+        table.setItem(r, 0, name)
+        mode_1, mode_2 = service_mode_labels(s)
+        first = QTableWidgetItem(mode_1)
+        first.setData(ROLE_TAG, (mode_1, "emerald"))
+        table.setItem(r, 1, first)
+        second = QTableWidgetItem(mode_2 or "—")
+        if mode_2:
+            second.setData(ROLE_TAG, (mode_2, "neutral"))
+        table.setItem(r, 2, second)
+        if url_col is not None:
+            table.setItem(r, url_col, QTableWidgetItem(s.get("login_page_link") or ""))
+        if edit_col is not None:
+            edit = QTableWidgetItem("")
+            edit.setData(ROLE_ACTIONS, [CellAction("edit", "mdi.pencil-outline", f"Edit {s['name']}")])
+            table.setItem(r, edit_col, edit)
+
+
+def _field(label: FieldLabel, widget: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(TOKENS["s_1"])
+    lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
 
 
 class ServiceEditDialog(QDialog):
@@ -97,68 +121,36 @@ class ServiceEditDialog(QDialog):
         self.db = db
         self.setWindowTitle("Service Configuration — Compliance Automation")
         self.setModal(True)
-        self.setMinimumWidth(500)
-        self.resize(540, 580)
+        self.setMinimumWidth(520)
+        self.resize(620, 560)
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(14)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Edit compliance service" if service_data else "New compliance service",
+                            "Map portal login credentials and choose how this portal is autofilled.",
+                            self, icon="mdi.server-network", scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        # Header Frame
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_icon("mdi.server-network", color="#2E9B5F").pixmap(24, 24))
-        header.addWidget(icon_lbl)
+        self.name_input = Input(placeholder="e.g. GST Returns, Income Tax, TRACES (TDS)")
+        self.name_input.setText(service_data["name"] if service_data else "")
+        self.name_input.setAccessibleName("Service name")
+        frame.add_widget(_field(FieldLabel("Service name", required=True, for_widget=self.name_input),
+                                self.name_input))
 
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Edit Compliance Service" if service_data else "New Compliance Service")
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Map portal login credentials and choose how this portal is autofilled.")
-        sub_lbl.setStyleSheet("font-size: 11.5px; color: #8E8D88;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        main_layout.addLayout(header)
-
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 2px 0;")
-        main_layout.addWidget(divider)
-
-        # Form Container
-        # Styled by object name: a bare "QFrame" rule also matches every QLabel in the form.
-        form_frame = QFrame()
-        form_frame.setObjectName("ServiceForm")
-        form_frame.setStyleSheet("""
-            QFrame#ServiceForm {
-                background-color: #141414;
-                border: 1px solid #262626;
-                border-radius: 8px;
-                padding: 10px;
-            }
-        """)
-        form = QFormLayout(form_frame)
-        form.setSpacing(10)
-        form.setContentsMargins(8, 8, 8, 8)
-
-        self.name_input = QLineEdit(service_data["name"] if service_data else "")
-        self.name_input.setPlaceholderText("e.g. GST Returns, Income Tax, TRACES (TDS)")
-        form.addRow("Service Name:", self.name_input)
-
-        self.url_input = QLineEdit(service_data["login_page_link"] if service_data else "")
-        self.url_input.setPlaceholderText("e.g. https://services.gst.gov.in/services/login")
-        form.addRow("Login URL:", self.url_input)
+        self.url_input = Input(placeholder="e.g. https://services.gst.gov.in/services/login")
+        self.url_input.setText(service_data["login_page_link"] if service_data else "")
+        self.url_input.setAccessibleName("Login URL")
+        frame.add_widget(_field(FieldLabel("Login URL", for_widget=self.url_input), self.url_input))
 
         mcl = self.db.get_mcl_columns()
-        self.uid_combo = QComboBox()
-        self.pwd_combo = QComboBox()
-        self.uid_combo.addItem("-- Select User ID Column --", None)
-        self.pwd_combo.addItem("-- Select Password Column --", None)
-        
+        self.uid_combo = Select()
+        self.pwd_combo = Select()
+        self.uid_combo.setAccessibleName("User ID column")
+        self.pwd_combo.setAccessibleName("Password column")
+        self.uid_combo.addItem("Select…", None)
+        self.pwd_combo.addItem("Select…", None)
+
         for c in mcl:
             self.uid_combo.addItem(c["label"], c["id"])
             self.pwd_combo.addItem(c["label"], c["id"])
@@ -169,14 +161,12 @@ class ServiceEditDialog(QDialog):
             self.uid_combo.setCurrentIndex(max(idx_uid, 0))
             self.pwd_combo.setCurrentIndex(max(idx_pwd, 0))
 
-        form.addRow("User ID Column:", self.uid_combo)
-        form.addRow("Password Column:", self.pwd_combo)
-
         # Selectors are no longer edited here: known portals get them from the database presets
         # and the extension falls back to its own field detection. Existing values are kept.
         self._service_data = service_data or {}
 
-        self.mode_combo = QComboBox()
+        self.mode_combo = Select()
+        self.mode_combo.setAccessibleName("Automation mode")
         for label, mode in MODE_CHOICES:
             self.mode_combo.addItem(label, mode)
         self.mode_combo.setToolTip(MODE_HELP)
@@ -184,9 +174,8 @@ class ServiceEditDialog(QDialog):
             idx_mode = self.mode_combo.findData(automation.service_action_mode(service_data))
             self.mode_combo.setCurrentIndex(max(idx_mode, 0))
 
-        form.addRow("Automation Mode:", self.mode_combo)
-
-        self.mode_2_combo = QComboBox()
+        self.mode_2_combo = Select()
+        self.mode_2_combo.setAccessibleName("Automation mode 2")
         for label, mode in MODE_CHOICES_2:
             self.mode_2_combo.addItem(label, mode)
         self.mode_2_combo.setToolTip(MODE_HELP_2)
@@ -195,19 +184,17 @@ class ServiceEditDialog(QDialog):
             idx_mode_2 = self.mode_2_combo.findData(sec_mode)
             self.mode_2_combo.setCurrentIndex(max(idx_mode_2, 0))
 
-        form.addRow("Automation Mode 2:", self.mode_2_combo)
+        self.ext_flow_combo = Select()
+        self.ext_flow_combo.setAccessibleName("Extension login flow")
+        self.ext_flow_combo.addItem("Two-step (username first, then password)", "double")
+        self.ext_flow_combo.addItem("Single page (username and password together)", "single")
 
-        self.ext_flow_combo = QComboBox()
-        self.ext_flow_combo.addItem("Two-Step (Username first, then Password)", "double")
-        self.ext_flow_combo.addItem("Single Page (Username & Password together)", "single")
-        
         if service_data:
             idx_ext_flow = self.ext_flow_combo.findData(service_data.get("extension_flow", "double"))
             self.ext_flow_combo.setCurrentIndex(max(idx_ext_flow, 0))
-        
-        form.addRow("Extension Login Flow:", self.ext_flow_combo)
 
-        self.browser_combo = QComboBox()
+        self.browser_combo = Select()
+        self.browser_combo.setAccessibleName("Browser")
         for label, key in BROWSER_CHOICES:
             self.browser_combo.addItem(label, key)
         self.browser_combo.setToolTip(BROWSER_HELP)
@@ -215,8 +202,21 @@ class ServiceEditDialog(QDialog):
             idx_browser = self.browser_combo.findData((service_data.get("browser") or "").lower())
             self.browser_combo.setCurrentIndex(max(idx_browser, 0))
 
-        form.addRow("Browser:", self.browser_combo)
-        main_layout.addWidget(form_frame)
+        pairs = QWidget()
+        grid = QGridLayout(pairs)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(TOKENS["s_3"])
+        grid.setVerticalSpacing(TOKENS["s_3"])
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        cells = (
+            ("User ID column", self.uid_combo), ("Password column", self.pwd_combo),
+            ("Automation mode", self.mode_combo), ("Automation mode 2", self.mode_2_combo),
+            ("Extension login flow", self.ext_flow_combo), ("Browser", self.browser_combo),
+        )
+        for i, (text, combo) in enumerate(cells):
+            grid.addWidget(_field(FieldLabel(text, for_widget=combo), combo), i // 2, i % 2)
+        frame.add_widget(pairs)
 
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self.mode_2_combo.currentIndexChanged.connect(self._on_mode_changed)
@@ -229,22 +229,11 @@ class ServiceEditDialog(QDialog):
         if not service_data:
             self._auto_detect_portal_presets()
 
-        # Action Buttons
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
+        cancel_btn = frame.add_action("Cancel")
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-
-        save_btn = QPushButton("Save Service")
-        save_btn.setProperty("class", "primary")
-        save_btn.setIcon(_safe_icon("mdi.check", color="#FFFFFF"))
+        save_btn = frame.add_action("Save service", variant="primary", icon="mdi.check")
         save_btn.clicked.connect(self._on_accept)
-        btn_row.addWidget(save_btn)
-
-        main_layout.addLayout(btn_row)
+        save_btn.setDefault(True)
 
     def _auto_detect_portal_presets(self):
         name = self.name_input.text().strip().lower()
@@ -366,8 +355,8 @@ class ServiceManagerDialog(QDialog):
         self.db = db
         self.setWindowTitle("Manage Services — Compliance Catalog")
         self.setModal(True)
-        self.resize(540, 520)
-        self.setMinimumSize(480, 440)
+        self.resize(600, 480)
+        self.setMinimumSize(500, 400)
         self._build_ui()
         try:
             self.db.auto_populate_service_selectors()
@@ -376,101 +365,62 @@ class ServiceManagerDialog(QDialog):
         self._reload_services()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Compliance services catalog",
+                            "Portal login links, automation modes and credential columns",
+                            self, icon="mdi.server-network")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.accept)
 
-        # Header Frame
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_icon("mdi.server-network", color="#2E9B5F").pixmap(26, 26))
-        header.addWidget(icon_lbl)
+        add_btn = LabelledAction("Add service", variant="primary", icon="mdi.plus",
+                                 tooltip="Add a compliance service")
+        self.edit_btn = LabelledAction("Edit", icon="mdi.pencil-outline", tooltip="Edit the selected service")
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(TOKENS["s_2"])
+        row.addWidget(add_btn)
+        row.addWidget(self.edit_btn)
+        row.addStretch(1)
+        frame.add_widget(bar)
 
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Compliance Services Catalog")
-        title_lbl.setStyleSheet("font-size: 17px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Configure portal login links, automation modes, and credentials integration.")
-        sub_lbl.setStyleSheet("font-size: 12px; color: #8E8D88;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        layout.addLayout(header)
+        self.list_widget = DarkListTable(0, 3)
+        self.list_widget.setHorizontalHeaderLabels(["Service", "Automation mode", "Mode 2"])
+        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.list_widget.set_column(0, kind="strong", minimum=140)
+        self.list_widget.set_column(1, minimum=130)
+        self.list_widget.set_column(2, minimum=110, priority=1)
+        table_card = Card()
+        table_card.add_widget(self.list_widget, 1)
+        frame.add_widget(table_card, 1)
 
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 4px 0;")
-        layout.addWidget(divider)
-
-        self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: #141414;
-                border: 1px solid #262626;
-                border-radius: 8px;
-                padding: 6px;
-                color: #F8FAFC;
-                font-size: 13px;
-            }
-            QListWidget::item {
-                padding: 9px 12px;
-                border-radius: 6px;
-                margin-bottom: 2px;
-            }
-            QListWidget::item:hover {
-                background-color: #1F2933;
-            }
-            QListWidget::item:selected {
-                background-color: #1E3A2F;
-                color: #4CF9B7;
-                border: 1px solid #2E9B5F;
-            }
-        """)
-        layout.addWidget(self.list_widget, stretch=1)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        add_btn = QPushButton("Add Service")
-        add_btn.setProperty("class", "primary")
-        add_btn.setIcon(_safe_icon("mdi.plus", color="#FFFFFF"))
-
-        edit_btn = QPushButton("Edit")
-        edit_btn.setIcon(_safe_icon("mdi.pencil-outline", color="#F8FAFC"))
-
-        del_btn = QPushButton("Delete")
-        del_btn.setProperty("class", "danger")
-        del_btn.setIcon(_safe_icon("mdi.delete-outline", color="#FF5252"))
-        
-        add_btn.clicked.connect(self._on_add)
-        edit_btn.clicked.connect(self._on_edit)
-        del_btn.clicked.connect(self._on_delete)
-        
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(edit_btn)
-        btn_row.addWidget(del_btn)
-        btn_row.addStretch()
-
-        close_btn = QPushButton("Close")
-        close_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
+        self.del_btn = frame.add_action("Delete…", variant="danger", icon="mdi.delete-outline",
+                                        tooltip="Asks first: the service is detached from all client profiles")
+        frame.add_footer_spacer()
+        close_btn = frame.add_action("Close", icon="mdi.close")
         close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
 
-        layout.addLayout(btn_row)
+        add_btn.clicked.connect(self._on_add)
+        self.edit_btn.clicked.connect(self._on_edit)
+        self.del_btn.clicked.connect(self._on_delete)
+        self.list_widget.currentCellChanged.connect(lambda row, *_: self._on_sel_changed(row))
+        self.list_widget.doubleClicked.connect(lambda *_: self._on_edit())
 
     def _reload_services(self):
-        self.list_widget.clear()
-        for s in self.db.get_services():
-            item = QListWidgetItem(f"{s['name']}  [{service_mode_tag(s)}]")
-            item.setData(Qt.UserRole, s["id"])
-            self.list_widget.addItem(item)
+        fill_service_table(self.list_widget, self.db.get_services())
+        self._on_sel_changed(self.list_widget.currentRow())
+
+    def _on_sel_changed(self, row: int):
+        pick = None if (row >= 0 and self.list_widget.item(row, 0) is not None) else "Select a service first"
+        self.edit_btn.set_disabled_reason(pick)
+        self.del_btn.set_disabled_reason(pick)
 
     def _selected_id(self):
-        items = self.list_widget.selectedItems()
-        return items[0].data(Qt.UserRole) if items else None
+        row = self.list_widget.currentRow()
+        item = self.list_widget.item(row, 0) if row >= 0 else None
+        return item.data(Qt.UserRole) if item else None
 
     def _sync_extension_services(self):
         try:

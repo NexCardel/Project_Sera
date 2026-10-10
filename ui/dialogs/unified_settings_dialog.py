@@ -41,6 +41,7 @@ from ui.components.kit import (
     FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
     Switch, Tag, Tile, UnsavedBar, sidebar_qss,
 )
+from ui.dialogs.mcl_manager_dialog import mcl_role as _mcl_role
 from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS
 
@@ -65,50 +66,6 @@ _TEXT_NAV     = "#a0a0a0"
 _BORDER       = "#2a2a2a"
 _INPUT_BG     = "#171717"
 _INPUT_BORDER = "#333333"
-
-
-_ICON_CACHE = {}
-
-def _icon(name: str, color: str = _TEXT_PRI) -> QIcon:
-    key = (name, color)
-    if key in _ICON_CACHE:
-        return _ICON_CACHE[key]
-    try:
-        if qta:
-            ic = qta.icon(name, color=color)
-            _ICON_CACHE[key] = ic
-            return ic
-    except Exception:
-        pass
-    ic = QIcon()
-    _ICON_CACHE[key] = ic
-    return ic
-
-
-def _divider() -> QFrame:
-    f = QFrame()
-    f.setFrameShape(QFrame.HLine)
-    f.setFixedHeight(1)
-    f.setStyleSheet(f"background: {_BORDER}; border: none;")
-    return f
-
-
-def _page_header(title: str, subtitle: str = "") -> QWidget:
-    w = QWidget()
-    w.setStyleSheet("background: transparent;")
-    v = QVBoxLayout(w)
-    v.setContentsMargins(28, 22, 28, 4)
-    v.setSpacing(2)
-    lbl = QLabel(title)
-    lbl.setStyleSheet(f"font-size: 16px; font-weight: 700; color: {_TEXT_PRI};")
-    v.addWidget(lbl)
-    if subtitle:
-        sub = QLabel(subtitle)
-        sub.setStyleSheet(f"font-size: 12px; color: {_TEXT_SEC};")
-        sub.setWordWrap(True)
-        v.addWidget(sub)
-    v.addWidget(_divider())
-    return w
 
 
 
@@ -175,22 +132,13 @@ _MCL_FLAG_COLS = {3: ("show_in_search", "Shows on the Main screen"),
                   5: ("admin_show_in_search", "Shows on the Admin screen")}
 _MCL_COL_EDIT = 6
 
+# Services table: Service · Automation mode · Mode 2 · Login URL · Edit
+_SVC_HEADS = ["Service", "Automation mode", "Mode 2", "Login URL", ""]
+_SVC_COL_EDIT = 4
+
 
 def _flag(col: dict, field: str) -> bool:
     return bool(col.get(field, _FLAG_DEFAULTS[field]))
-
-
-def _mcl_role(col: dict):
-    """(text, pill tone) of the Role cell, or None: the same tags the old list showed after the type."""
-    roles = []
-    if col.get("field_type") == "id":       roles.append("ID/Serial")
-    if col.get("is_internal_pk"):           roles.append("Internal PK")
-    if col.get("is_identity"):              roles.append("Identity")
-    if col.get("field_type") == "password": roles.append("Secret")
-    if not roles:
-        return None
-    tone = "red" if "Secret" in roles else "amber" if "Internal PK" in roles else "emerald"
-    return " · ".join(roles), tone
 
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
@@ -893,49 +841,53 @@ class UnifiedSettingsDialog(QDialog):
         return page
 
     def _build_page_services(self) -> QWidget:
-        container = QWidget()
-        container.setStyleSheet(f"background: {_BG_CONTENT};")
-        lay = QVBoxLayout(container)
-        lay.setContentsMargins(28, 20, 28, 20)
-        lay.setSpacing(10)
+        header = PageHeader("Services",
+            lead="Define compliance portals and automation services. Changes apply at once.")
+        self._svc_btn_add = LabelledAction("Add service", variant="primary", icon="mdi.plus",
+                                           tooltip="Add a compliance service")
+        header.add_action(self._svc_btn_add)
 
-        lay.addWidget(_page_header("Services",
-            "Define compliance portals and automation services. Changes apply immediately."))
+        self._svc_btn_edit = LabelledAction("Edit", icon="mdi.pencil-outline",
+                                            tooltip="Edit the selected service")
+        self._svc_btn_del = LabelledAction("Delete service…", variant="danger", icon="mdi.delete-outline",
+                                           tooltip="Asks first: the service is detached from all client profiles")
+        bar = QWidget()
+        tb = QHBoxLayout(bar)
+        tb.setContentsMargins(0, 0, 0, 0)
+        tb.setSpacing(TOKENS["s_2"])
+        tb.addWidget(self._svc_btn_edit)
+        tb.addStretch(1)
+        tb.addWidget(self._svc_btn_del)
 
-        tb = QHBoxLayout()
-        tb.setSpacing(6)
+        self._svc_list = DarkListTable(0, len(_SVC_HEADS))
+        self._svc_list.setHorizontalHeaderLabels(_SVC_HEADS)
+        self._svc_list.horizontalHeaderItem(_SVC_COL_EDIT).setToolTip("Edit")
+        self._svc_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._svc_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._svc_list.set_column(0, kind="strong", minimum=120)
+        self._svc_list.set_column(1, minimum=130)
+        self._svc_list.set_column(2, minimum=110, priority=2)
+        self._svc_list.set_column(3, kind="mono", minimum=160, priority=1)
+        self._svc_list.set_column(_SVC_COL_EDIT, width=52)
+        table_card = Card()
+        table_card.add_widget(self._svc_list, 1)
 
-        def _ib(icon_name, color, tip):
-            btn = QPushButton()
-            btn.setProperty("class", "icon-sm")
-            btn.setIcon(_icon(icon_name, color=color))
-            btn.setIconSize(QSize(16, 16))
-            btn.setFixedSize(30, 30)
-            btn.setToolTip(tip)
-            return btn
-
-        self._svc_btn_add  = _ib("mdi.plus",          _ACCENT_LIGHT, "Add Service")
-        self._svc_btn_edit = _ib("mdi.pencil-outline", _TEXT_NAV,     "Edit Selected")
-        self._svc_btn_del  = _ib("mdi.delete-outline", _DANGER,       "Delete Selected")
-
-        self._svc_btn_edit.setEnabled(False)
-        self._svc_btn_del.setEnabled(False)
-
-        for btn in (self._svc_btn_add, self._svc_btn_edit, self._svc_btn_del):
-            tb.addWidget(btn)
-        tb.addStretch()
-        lay.addLayout(tb)
-
-        self._svc_list = QListWidget()
-        lay.addWidget(self._svc_list, stretch=1)
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], TOKENS["s_5"])
+        lay.setSpacing(TOKENS["s_3"])
+        lay.addWidget(header)
+        lay.addWidget(bar)
+        lay.addWidget(table_card, 1)
 
         self._svc_btn_add.clicked.connect(self._svc_on_add)
         self._svc_btn_edit.clicked.connect(self._svc_on_edit)
         self._svc_btn_del.clicked.connect(self._svc_on_delete)
-        self._svc_list.currentRowChanged.connect(self._svc_on_sel_changed)
+        self._svc_list.currentCellChanged.connect(lambda row, *_: self._svc_on_sel_changed(row))
+        self._svc_list.actionTriggered.connect(self._svc_on_cell_action)
 
         self._svc_reload()
-        return container
+        return page
 
     def _build_page_visibility(self, title: str, subtitle: str,
                                 field: str, cbs: dict) -> QScrollArea:
@@ -1614,20 +1566,23 @@ class UnifiedSettingsDialog(QDialog):
 
     # ── Service actions ───────────────────────────────────────────────────────
     def _svc_reload(self):
-        from ui.dialogs.service_manager_dialog import service_mode_tag
-        self._svc_list.clear()
-        for svc in self.db.get_services():
-            item = QListWidgetItem(f"{svc['name']}  [{service_mode_tag(svc)}]")
-            item.setData(Qt.UserRole, svc["id"])
-            self._svc_list.addItem(item)
+        from ui.dialogs.service_manager_dialog import fill_service_table
+        fill_service_table(self._svc_list, self.db.get_services(), url_col=3, edit_col=_SVC_COL_EDIT)
+        self._svc_on_sel_changed(self._svc_list.currentRow())
+
+    def _svc_on_cell_action(self, row: int, col: int, key: str):
+        if key == "edit":
+            self._svc_list.setCurrentCell(row, 0)
+            self._svc_on_edit()
 
     def _svc_on_sel_changed(self, row: int):
-        has = row >= 0
-        self._svc_btn_edit.setEnabled(has)
-        self._svc_btn_del.setEnabled(has)
+        pick = None if (row >= 0 and self._svc_list.item(row, 0) is not None) else "Select a service first"
+        self._svc_btn_edit.set_disabled_reason(pick)
+        self._svc_btn_del.set_disabled_reason(pick)
 
     def _svc_sel_id(self):
-        item = self._svc_list.currentItem()
+        row = self._svc_list.currentRow()
+        item = self._svc_list.item(row, 0) if row >= 0 else None
         return item.data(Qt.UserRole) if item else None
 
     def _svc_on_add(self):

@@ -4,41 +4,22 @@ mcl_manager_dialog.py
 Admin Mode -> "Manage Master Column List (MCL)".
 """
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
+    QAbstractItemView,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
-    QPushButton,
+    QTableWidgetItem,
     QVBoxLayout,
-    QFrame,
     QWidget,
 )
 
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
-
-
-def _safe_icon(name, color=None):
-    if qta:
-        try:
-            if color:
-                return qta.icon(name, color=color)
-            return qta.icon(name)
-        except Exception:
-            pass
-    from PySide6.QtGui import QIcon
-    return QIcon()
+from ui.components.kit import (
+    ROLE_PILL, ROLE_TAG, Card, DarkListTable, DialogFrame, FieldLabel, IconButton, Input, LabelledAction,
+    Select, SettingRow, Switch,
+)
+from ui.utils.tokens import TOKENS
 
 
 FIELD_TYPE_CHOICES = [
@@ -46,10 +27,33 @@ FIELD_TYPE_CHOICES = [
     ("Number", "number"),
     ("Alphanumeric", "alphanumeric"),
     ("Password / Secret", "password"),
-    ("Dropdown", "dropdown"),
     ("Date", "date"),
-    ("ID (Primary Key / Auto-Serial)", "id"),
+    ("Dropdown", "dropdown"),
+    ("ID (Primary key / auto-serial)", "id"),
 ]
+
+
+def mcl_role(col: dict):
+    """(text, pill tone) of the Role cell, or None: the tags the old list showed after the type."""
+    roles = []
+    if col.get("field_type") == "id":       roles.append("ID/Serial")
+    if col.get("is_internal_pk"):           roles.append("Internal PK")
+    if col.get("is_identity"):              roles.append("Identity")
+    if col.get("field_type") == "password": roles.append("Secret")
+    if not roles:
+        return None
+    tone = "red" if "Secret" in roles else "amber" if "Internal PK" in roles else "emerald"
+    return " · ".join(roles), tone
+
+
+def _field(label: FieldLabel, widget: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(TOKENS["s_1"])
+    lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
 
 
 class ColumnEditDialog(QDialog):
@@ -59,100 +63,58 @@ class ColumnEditDialog(QDialog):
         self.setWindowTitle("Configure Column — Master Column Layout")
         self.setModal(True)
         self.setMinimumWidth(460)
-        self.resize(480, 390)
+        self.resize(520, 540)
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(14)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Edit column" if label else "Add new column",
+                            "Define the column's label, data type and identity flags.",
+                            self, icon="mdi.view-column-outline", scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        # Header Frame
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_icon("mdi.view-column-outline", color="#2E9B5F").pixmap(24, 24))
-        header.addWidget(icon_lbl)
+        self.label_input = Input(placeholder="e.g. GSTIN, PAN No., Client Name, Password")
+        self.label_input.setText(label)
+        self.label_input.setAccessibleName("Column label")
+        frame.add_widget(_field(FieldLabel("Column label", required=True, for_widget=self.label_input),
+                                self.label_input))
 
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Edit Column Schema" if label else "Add New Column")
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Define attribute properties, data types, and identity flags.")
-        sub_lbl.setStyleSheet("font-size: 11.5px; color: #8E8D88;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        main_layout.addLayout(header)
-
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 4px 0;")
-        main_layout.addWidget(divider)
-
-        # Form Container
-        form_frame = QFrame()
-        form_frame.setStyleSheet("""
-            QFrame {
-                background-color: #141414;
-                border: 1px solid #262626;
-                border-radius: 8px;
-                padding: 12px;
-            }
-        """)
-        form = QFormLayout(form_frame)
-        form.setSpacing(10)
-        form.setContentsMargins(8, 8, 8, 8)
-
-        self.label_input = QLineEdit(label)
-        self.label_input.setPlaceholderText("e.g. GSTIN, PAN No., Client Name, Password")
-        form.addRow("Column Label:", self.label_input)
-
-        self.type_combo = QComboBox()
+        self.type_combo = Select()
+        self.type_combo.setAccessibleName("Field type")
         for type_label, value in FIELD_TYPE_CHOICES:
             self.type_combo.addItem(type_label, value)
         idx = self.type_combo.findData(field_type)
         self.type_combo.setCurrentIndex(max(idx, 0))
-        form.addRow("Field Type:", self.type_combo)
+        frame.add_widget(_field(FieldLabel("Field type", for_widget=self.type_combo), self.type_combo))
 
-        self.options_label = QLabel("Dropdown Options:")
-        self.options_input = QLineEdit(", ".join(dropdown_options or []))
-        self.options_input.setPlaceholderText("e.g. Active, Inactive, Pending")
-        form.addRow(self.options_label, self.options_input)
+        self.options_input = Input(placeholder="e.g. Active, Inactive, Pending")
+        self.options_input.setText(", ".join(dropdown_options or []))
+        self.options_input.setAccessibleName("Dropdown options")
+        self.options_label = FieldLabel("Dropdown options", for_widget=self.options_input)
+        self.options_field = _field(self.options_label, self.options_input)
+        frame.add_widget(self.options_field)
 
-        self.identity_cb = QCheckBox("Display identity column (shows in search titles & header badges)")
-        self.identity_cb.setChecked(bool(is_identity))
-        form.addRow("", self.identity_cb)
+        self.identity_cb = Switch(checked=bool(is_identity), tooltip="Display identity column")
+        self.internal_pk_cb = Switch(checked=bool(is_internal_pk), tooltip="Internal primary key anchor")
+        flags = Card()
+        flags.add_row(SettingRow("Display identity column",
+                                 "Shows in search titles and header badges.", self.identity_cb, width="auto"))
+        flags.add_row(SettingRow("Internal primary key anchor",
+                                 "Mandatory and unique legal identity, e.g. PAN / TAN.",
+                                 self.internal_pk_cb, width="auto"))
+        frame.add_widget(flags)
 
-        self.internal_pk_cb = QCheckBox("Internal Primary Key Anchor (Mandatory & Unique legal identity, e.g. PAN/TAN)")
-        self.internal_pk_cb.setChecked(bool(is_internal_pk))
-        form.addRow("", self.internal_pk_cb)
-
-        main_layout.addWidget(form_frame)
         self.type_combo.currentIndexChanged.connect(self._update_options_visibility)
         self._update_options_visibility()
 
-        # Action Buttons
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
+        cancel_btn = frame.add_action("Cancel")
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
-
-        save_btn = QPushButton("Save Column")
-        save_btn.setProperty("class", "primary")
-        save_btn.setIcon(_safe_icon("mdi.check", color="#FFFFFF"))
+        save_btn = frame.add_action("Save column", variant="primary", icon="mdi.check")
         save_btn.clicked.connect(self._on_accept)
-        btn_row.addWidget(save_btn)
-
-        main_layout.addLayout(btn_row)
+        save_btn.setDefault(True)
 
     def _update_options_visibility(self):
-        is_dropdown = self.type_combo.currentData() == "dropdown"
-        self.options_label.setVisible(is_dropdown)
-        self.options_input.setVisible(is_dropdown)
+        self.options_field.setVisible(self.type_combo.currentData() == "dropdown")
 
     def _on_accept(self):
         if not self.label_input.text().strip():
@@ -183,136 +145,94 @@ class MCLManagerDialog(QDialog):
         self.db = db
         self.setWindowTitle("Manage Master Column List (MCL) — Schema Editor")
         self.setModal(True)
-        self.resize(540, 560)
-        self.setMinimumSize(480, 480)
+        self.resize(640, 560)
+        self.setMinimumSize(520, 440)
         self._build_ui()
         self._reload_columns()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Master Column List (MCL)",
+                            "Custom columns, field types and display order across the application",
+                            self, icon="mdi.view-column-outline")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.accept)
 
-        # Header Frame
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_icon("mdi.view-column-outline", color="#2E9B5F").pixmap(26, 26))
-        header.addWidget(icon_lbl)
+        add_btn = LabelledAction("Add column", variant="primary", icon="mdi.plus",
+                                 tooltip="Add a column to the Master Column List")
+        self.edit_btn = LabelledAction("Edit", icon="mdi.pencil-outline", tooltip="Edit the selected column")
+        self.up_btn = IconButton("mdi.arrow-up", "Move column up", variant="bordered")
+        self.down_btn = IconButton("mdi.arrow-down", "Move column down", variant="bordered")
+        bar = QWidget()
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(TOKENS["s_2"])
+        row.addWidget(add_btn)
+        row.addWidget(self.edit_btn)
+        row.addStretch(1)
+        row.addWidget(self.up_btn)
+        row.addWidget(self.down_btn)
+        frame.add_widget(bar)
 
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Master Column List (MCL)")
-        title_lbl.setStyleSheet("font-size: 17px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Configure custom columns, field types, and display order across the application.")
-        sub_lbl.setStyleSheet("font-size: 12px; color: #8E8D88;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        layout.addLayout(header)
+        self.col_list = DarkListTable(0, 3)
+        self.col_list.setHorizontalHeaderLabels(["Column", "Type", "Role"])
+        self.col_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.col_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.col_list.set_column(0, kind="strong", minimum=140)
+        self.col_list.set_column(1, width=130)
+        self.col_list.set_column(2, minimum=130, max_share=0.4, priority=1)
+        table_card = Card()
+        table_card.add_widget(self.col_list, 1)
+        frame.add_widget(table_card, 1)
 
-        # Divider
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setStyleSheet("border: none; border-top: 1px solid #262626; margin: 4px 0;")
-        layout.addWidget(divider)
-
-        # List Widget
-        self.col_list = QListWidget()
-        self.col_list.setStyleSheet("""
-            QListWidget {
-                background-color: #141414;
-                border: 1px solid #262626;
-                border-radius: 8px;
-                padding: 6px;
-                color: #F8FAFC;
-                font-size: 13px;
-            }
-            QListWidget::item {
-                padding: 9px 12px;
-                border-radius: 6px;
-                margin-bottom: 2px;
-            }
-            QListWidget::item:hover {
-                background-color: #1F2933;
-            }
-            QListWidget::item:selected {
-                background-color: #1E3A2F;
-                color: #4CF9B7;
-                border: 1px solid #2E9B5F;
-            }
-        """)
-        layout.addWidget(self.col_list, stretch=1)
-
-        # Action Buttons Row
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        add_btn = QPushButton("Add Column")
-        add_btn.setProperty("class", "primary")
-        add_btn.setIcon(_safe_icon("mdi.plus", color="#FFFFFF"))
-
-        edit_btn = QPushButton("Edit")
-        edit_btn.setIcon(_safe_icon("mdi.pencil-outline", color="#F8FAFC"))
-
-        del_btn = QPushButton("Delete")
-        del_btn.setProperty("class", "danger")
-        del_btn.setIcon(_safe_icon("mdi.delete-outline", color="#FF5252"))
-
-        up_btn = QPushButton()
-        up_btn.setIcon(_safe_icon("mdi.arrow-up", color="#F8FAFC"))
-        up_btn.setToolTip("Move Column Up")
-        up_btn.setFixedWidth(36)
-
-        down_btn = QPushButton()
-        down_btn.setIcon(_safe_icon("mdi.arrow-down", color="#F8FAFC"))
-        down_btn.setToolTip("Move Column Down")
-        down_btn.setFixedWidth(36)
+        self.del_btn = frame.add_action("Delete…", variant="danger", icon="mdi.delete-outline",
+                                        tooltip="Asks first: all client values in this column are permanently removed")
+        frame.add_footer_spacer()
+        close_btn = frame.add_action("Close", icon="mdi.close")
+        close_btn.clicked.connect(self.accept)
 
         add_btn.clicked.connect(self._on_add)
-        edit_btn.clicked.connect(self._on_edit)
-        del_btn.clicked.connect(self._on_delete)
-        up_btn.clicked.connect(lambda: self._on_move(-1))
-        down_btn.clicked.connect(lambda: self._on_move(1))
-
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(edit_btn)
-        btn_row.addWidget(del_btn)
-        btn_row.addWidget(up_btn)
-        btn_row.addWidget(down_btn)
-        btn_row.addStretch()
-
-        close_btn = QPushButton("Close")
-        close_btn.setIcon(_safe_icon("mdi.close", color="#8E8D88"))
-        close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
-
-        layout.addLayout(btn_row)
+        self.edit_btn.clicked.connect(self._on_edit)
+        self.del_btn.clicked.connect(self._on_delete)
+        self.up_btn.clicked.connect(lambda: self._on_move(-1))
+        self.down_btn.clicked.connect(lambda: self._on_move(1))
+        self.col_list.currentCellChanged.connect(lambda row, *_: self._on_sel_changed(row))
+        self.col_list.doubleClicked.connect(lambda *_: self._on_edit())
 
     def _reload_columns(self):
-        self.col_list.clear()
-        for c in self.db.get_mcl_columns():
-            tags = []
-            if c.get("field_type") == "id":
-                tags.append("ID / Auto-Serial")
-            if c.get("is_internal_pk"):
-                tags.append("Internal PK Anchor")
-            if c.get("is_identity"):
-                tags.append("Identity")
-            if c.get("field_type") == "password":
-                tags.append("Secret")
-            elif c.get("field_type") == "dropdown":
-                tags.append("Dropdown")
+        table = self.col_list
+        table.setRowCount(0)
+        columns = self.db.get_mcl_columns()
+        table.setRowCount(len(columns))
+        for r, c in enumerate(columns):
+            ftype = c.get("field_type", "text")
+            name = QTableWidgetItem(c["label"])
+            name.setData(Qt.UserRole, c["id"])
+            table.setItem(r, 0, name)
+            tag = QTableWidgetItem(ftype)
+            tag.setData(ROLE_TAG, (ftype, "red" if ftype == "password" else "neutral"))
+            table.setItem(r, 1, tag)
+            role = mcl_role(c)
+            cell = QTableWidgetItem(role[0] if role else "—")
+            if role:
+                cell.setData(ROLE_PILL, role)
+            table.setItem(r, 2, cell)
+        self._on_sel_changed(table.currentRow())
 
-            tag_str = f"  [{', '.join(tags)}]" if tags else ""
-            item = QListWidgetItem(f"{c['label']} ({c.get('field_type', 'text')}){tag_str}")
-            item.setData(Qt.UserRole, c["id"])
-            self.col_list.addItem(item)
+    def _on_sel_changed(self, row: int):
+        table = self.col_list
+        pick = None if (row >= 0 and table.item(row, 0) is not None) else "Select a column first"
+        self.edit_btn.set_disabled_reason(pick)
+        self.del_btn.set_disabled_reason(pick)
+        self.up_btn.set_disabled_reason(pick or ("Already the first column" if row == 0 else None))
+        self.down_btn.set_disabled_reason(
+            pick or ("Already the last column" if row == table.rowCount() - 1 else None))
 
     def _selected_id(self):
-        items = self.col_list.selectedItems()
-        return items[0].data(Qt.UserRole) if items else None
+        row = self.col_list.currentRow()
+        item = self.col_list.item(row, 0) if row >= 0 else None
+        return item.data(Qt.UserRole) if item else None
 
     def _on_add(self):
         dlg = ColumnEditDialog(self)
@@ -351,4 +271,4 @@ class MCLManagerDialog(QDialog):
             ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
             self.db.reorder_mcl_columns(ids)
             self._reload_columns()
-            self.col_list.setCurrentRow(new_idx)
+            self.col_list.setCurrentCell(new_idx, 0)
