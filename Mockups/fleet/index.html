@@ -1,0 +1,1007 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sera Fleet Mockup</title>
+<style>
+/* =====================================================================
+   TOKENS. One block; the Qt build reads the same names from ui/utils/tokens.py.
+   ===================================================================== */
+:root{
+  color-scheme:dark;
+  /* surfaces */
+  --bg:#202020; --side:#171717; --panel:#141414; --card:#191919; --raise:#1f1f1f; --hover:#262626;
+  --line:#2a2a2a; --line2:#363636; --line3:#444444;
+  /* text */
+  --text:#f8fafc; --text2:#c9d1d9; --muted:#8e8d88; --faint:#6e6e6e;
+  /* emerald: the one primary */
+  --em:#2e9b5f; --em2:#34b76d; --emdim:#1a382b; --emdeep:#0e1f16; --emline:#1e4d34; --mint:#4cf9b7;
+  /* status */
+  --danger:#ff4d4d; --dangertx:#ff8d8d; --dangerdim:#3a1a1a; --dangerline:#7a2b2b;
+  --warn:#e3b341; --warndim:#33290f; --warnline:#5b4814;
+  --info:#5aa7ff; --infodim:#16263b; --infoline:#24466e;
+  --purple:#c4a8ff; --purpledim:#2a1f3d;
+  /* the white data grid */
+  --g-bg:#ffffff; --g-alt:#f7faf8; --g-line:#e7ece9; --g-head:#101713; --g-headtx:#cfe9dc; --g-text:#1b2420; --g-mute:#6b7a72; --g-hover:#edf6f1; --g-sel:#d9f2e4;
+  /* radii */
+  --r-s:6px; --r-m:8px; --r-l:12px;
+  /* spacing */
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px;
+  /* type */
+  --f-xs:11px; --f-s:12px; --f-m:13px; --f-l:14px; --f-xl:17px; --f-xxl:21px;
+  --ff:'Segoe UI',system-ui,sans-serif; --mono:Consolas,'Cascadia Mono',ui-monospace,monospace;
+  /* control sizes */
+  --h-ctl:32px; --h-inp:34px; --h-chip:28px; --h-row:40px; --w-ctl:230px; --w-side:212px; --w-setnav:224px;
+  /* outer page (not part of the app) */
+  --page:#0b0d0c; --ink:#e8ece9; --ink2:#a9b3ad; --ink3:#6f7a74; --rule:#242a27;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--page);color:var(--ink);font:13px/1.45 var(--ff);display:flex;flex-direction:column;min-height:100vh}
+h1,h2,h3,h4,p{margin:0}
+button{font-family:inherit}
+
+/* ---------- outer chrome (the viewer, not the app) ---------- */
+.top{display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--rule);background:#0e110f;flex-wrap:wrap}
+.top h1{font-size:15px;font-weight:700}
+.top .sub{color:var(--ink3);font-size:12px}
+.top .sp{flex:1}
+.seg{display:inline-flex;border:1px solid #2b332e;border-radius:8px;overflow:hidden}
+.seg button{all:unset;cursor:pointer;padding:5px 11px;font-size:12px;color:var(--ink2);border-right:1px solid #2b332e}
+.seg button:last-child{border-right:none}
+.seg button[aria-pressed=true]{background:#163626;color:var(--mint);font-weight:600}
+.seg button:focus-visible{outline:2px solid var(--mint);outline-offset:-2px}
+.tbtn{all:unset;cursor:pointer;padding:5px 12px;font-size:12px;color:var(--ink);border:1px solid #2b332e;border-radius:8px;background:#141a16}
+.tbtn:hover{border-color:#4a5a50}
+.tbtn:focus-visible{outline:2px solid var(--mint);outline-offset:1px}
+.lbl{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.08em;margin-right:4px}
+.wrap{display:flex;flex:1;min-height:0}
+.navlist{width:232px;flex:none;border-right:1px solid var(--rule);overflow:auto;padding:10px 8px 30px;background:#0e110f}
+.navlist h4{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);padding:12px 8px 5px;font-weight:600}
+.navlist button{all:unset;display:block;width:100%;cursor:pointer;padding:6px 10px;border-radius:7px;font-size:12.5px;color:var(--ink2)}
+.navlist button:hover{background:#151b17;color:var(--ink)}
+.navlist button[aria-current=page]{background:#163626;color:var(--mint);font-weight:600}
+.navlist button:focus-visible{outline:2px solid var(--mint);outline-offset:-2px}
+.navlist button small{display:block;font-size:10.5px;color:var(--ink3);font-weight:400}
+.stage{flex:1;overflow:auto;padding:18px 20px 40px;min-width:0}
+.frame{position:relative;background:var(--bg);border:1px solid #333;border-radius:10px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.5);margin:0 auto}
+.frame-cap{display:flex;gap:16px;color:var(--ink3);font-size:12px;margin:8px auto 0;max-width:1366px}
+.frame-cap b{color:var(--ink2);font-weight:600}
+.about{max-width:1366px;margin:16px auto 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px 28px}
+.about h4{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px;font-weight:600}
+.about ul{margin:0;padding-left:17px;color:var(--ink2);font-size:12.5px;display:grid;gap:4px}
+.about li::marker{color:var(--ink3)}
+.about b{color:var(--ink);font-weight:600}
+/* lightbox for the Before screenshot */
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.86);display:none;z-index:50;flex-direction:column;padding:16px}
+.lb.on{display:flex}
+.lb .bar{display:flex;align-items:center;gap:12px;color:var(--ink);padding:0 4px 10px}
+.lb .bar .sp{flex:1}
+.lb .pic{flex:1;overflow:auto;display:grid;place-items:start center}
+.lb img{max-width:100%;height:auto;border:1px solid #333;border-radius:6px}
+.lb .miss{color:var(--ink2);padding:40px;text-align:center}
+
+/* =====================================================================
+   THE APP. Everything inside .app is built from the components below.
+   ===================================================================== */
+.app{position:absolute;left:0;top:0;transform-origin:0 0;display:grid;grid-template-columns:var(--w-side) 1fr;background:var(--bg);color:var(--text);font-size:var(--f-m);line-height:1.4;overflow:hidden}
+.app.nosb,.app.sb-collapsed{grid-template-columns:1fr}
+.app.sb-collapsed .sb{display:none}
+.app *{scrollbar-width:thin;scrollbar-color:#3a3a3a transparent}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+svg.i.s{width:14px;height:14px}svg.i.l{width:20px;height:20px}
+.sp{flex:1}
+.mut{color:var(--muted)}.sm{font-size:var(--f-s)}.xs{font-size:var(--f-xs)}.mono{font-family:var(--mono)}
+.row-h{display:flex;align-items:center;gap:var(--s-2)}
+.wrapx{flex-wrap:wrap}
+
+/* ---------- sidebar ---------- */
+.sb{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px 10px;min-height:0}
+.brand{display:flex;align-items:center;gap:9px;padding:0 4px 10px}
+.brand .logo{width:30px;height:30px;flex:none}
+.brand b{font-size:13px;line-height:1.15;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brand b span{display:block;font-size:var(--f-xs);color:var(--muted);font-weight:500}
+.admin-row{display:flex;align-items:center;justify-content:space-between;padding:8px 6px 10px;color:#a0a0a0;font-size:var(--f-s);border-bottom:1px solid var(--line);margin-bottom:6px}
+.nav-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);padding:10px 8px 4px;font-weight:600}
+.nav{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:var(--r-m);color:#b9b9b4;cursor:pointer;position:relative;white-space:nowrap}
+.nav:hover{background:var(--raise);color:var(--text)}
+.nav.on{background:var(--emdim);color:var(--text);font-weight:600}
+.nav.on::before{content:"";position:absolute;left:-10px;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--em)}
+.nav .kb{margin-left:auto}
+.nav.sub{padding-left:34px;height:30px;font-size:12.5px}
+.sb-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px}
+.me{display:flex;align-items:center;gap:8px;padding:2px 4px;font-size:var(--f-s);font-weight:600;color:#e0e0e0;cursor:pointer;border-radius:var(--r-m)}
+.me:hover{background:var(--raise)}
+.avatar{width:26px;height:26px;border-radius:50%;background:var(--em);display:grid;place-items:center;color:#fff;flex:none}
+.ver{text-align:center;color:var(--faint);font-size:10px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--em2);box-shadow:0 0 0 3px rgba(52,183,109,.18);flex:none;display:inline-block}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px rgba(227,179,65,.18)}.dot.off{background:#666;box-shadow:none}.dot.bad{background:var(--danger);box-shadow:0 0 0 3px rgba(255,77,77,.16)}.dot.info{background:var(--info);box-shadow:0 0 0 3px rgba(90,167,255,.18)}
+
+/* ---------- main area ---------- */
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;padding:16px 20px 12px;gap:12px;position:relative}
+.hd{display:flex;align-items:center;gap:10px;min-height:36px}
+.hd h2{font-size:var(--f-xxl);font-weight:700;letter-spacing:.005em;white-space:nowrap}
+.hd .lead{color:var(--muted);font-size:var(--f-s)}
+.count{color:var(--muted);font-size:var(--f-s);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1px 10px;white-space:nowrap}
+.foot{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:var(--f-s);min-height:22px}
+
+/* ---------- COMPONENT: labelled action (.btn) and icon button (.ibtn) ---------- */
+.btn{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;height:var(--h-ctl);padding:0 13px;border-radius:var(--r-m);background:#1a1a1a;border:1px solid var(--line2);color:var(--text);font:600 12.5px var(--ff);cursor:pointer;white-space:nowrap}
+.btn:hover{background:#242424;border-color:var(--line3)}
+.btn:focus-visible,.ibtn:focus-visible,.chip:focus-visible,.sw:focus-visible,.inp:focus-visible,.nav:focus-visible,.tile:focus-visible{outline:2px solid var(--mint);outline-offset:1px}
+.btn.pri{background:var(--em);border-color:var(--em2);color:#fff}.btn.pri:hover{background:var(--em2)}
+.btn.soft{background:var(--emdeep);border-color:var(--emline);color:var(--mint)}.btn.soft:hover{background:#163626}
+.btn.dng{background:transparent;border-color:var(--dangerline);color:var(--dangertx)}.btn.dng:hover{background:var(--dangerdim)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--text2)}.btn.ghost:hover{background:#222}
+.btn.sm{height:28px;padding:0 10px;font-size:12px}.btn.lg{height:38px;padding:0 18px;font-size:13px}
+.btn[disabled],.btn.dis,.ibtn.dis{opacity:.4;pointer-events:none}
+.btn .cv{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.3);flex:none}
+.ibtn{all:unset;box-sizing:border-box;width:var(--h-ctl);height:var(--h-ctl);display:inline-grid;place-items:center;border-radius:var(--r-m);color:var(--text2);cursor:pointer;flex:none}
+.ibtn:hover{background:var(--hover);color:var(--text)}.ibtn.bd{border:1px solid var(--line2);background:#1a1a1a}
+.ibtn.sm{width:24px;height:24px}.ibtn.pri{background:var(--em);color:#fff;border-color:var(--em2)}
+.segbtn{display:inline-flex;border:1px solid var(--line2);border-radius:var(--r-m);overflow:hidden;height:var(--h-ctl)}
+.segbtn button{all:unset;cursor:pointer;padding:0 14px;display:flex;align-items:center;font:600 12.5px var(--ff);color:var(--text2);border-right:1px solid var(--line2)}
+.segbtn button:last-child{border-right:none}
+.segbtn button.on{background:var(--em);color:#fff}
+/* ---------- COMPONENT: inputs ---------- */
+.inp{box-sizing:border-box;height:var(--h-inp);background:var(--panel);border:1px solid #303030;border-radius:var(--r-m);color:var(--text);font:13px var(--ff);padding:0 12px;min-width:0;width:100%}
+.inp::placeholder{color:#74746f}.inp:focus{outline:none;border-color:var(--mint);box-shadow:0 0 0 3px rgba(76,249,183,.12)}
+textarea.inp{height:auto;padding:10px 12px;resize:vertical;line-height:1.5}
+select.inp{appearance:none;background-image:linear-gradient(45deg,transparent 50%,#9a9a9a 50%),linear-gradient(135deg,#9a9a9a 50%,transparent 50%);background-position:calc(100% - 17px) 14px,calc(100% - 12px) 14px;background-size:5px 5px;background-repeat:no-repeat;padding-right:30px}
+.field{position:relative;display:flex;align-items:center;min-width:0}
+.field>svg.i{position:absolute;left:11px;color:#7a7a75;pointer-events:none}.field .inp{padding-left:34px}
+.field .tail{position:absolute;right:6px;display:flex;gap:2px}
+.stepper{display:flex;align-items:center;border:1px solid #303030;border-radius:var(--r-m);background:var(--panel);height:var(--h-inp);width:100%}
+.stepper button{all:unset;width:34px;text-align:center;cursor:pointer;color:var(--text2);font-size:16px}
+.stepper button:hover{color:var(--mint)}.stepper span{flex:1;text-align:center;font-variant-numeric:tabular-nums}
+.lab{display:block;font-size:var(--f-xs);color:var(--muted);margin-bottom:4px}
+.form{display:grid;gap:12px}
+.form .f2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cb{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px}
+.cb i{width:16px;height:16px;border-radius:4px;border:1px solid var(--line3);background:#1a1a1a;display:inline-grid;place-items:center;color:#fff;flex:none}
+.cb.on i{background:var(--em);border-color:var(--em2)}
+.cb i svg{display:none}.cb.on i svg{display:block}
+/* ---------- COMPONENT: switch ---------- */
+.sw{all:unset;box-sizing:border-box;width:38px;height:22px;border-radius:11px;background:#2c2c2c;border:1px solid #3c3c3c;position:relative;cursor:pointer;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#bdbdb8;transition:transform .15s,background .15s}
+.sw[aria-checked=true]{background:var(--em);border-color:var(--em2)}.sw[aria-checked=true]::after{transform:translateX(16px);background:#fff}
+.sw[disabled]{opacity:.4;pointer-events:none}
+@media (prefers-reduced-motion:reduce){.sw,.sw::after{transition:none}}
+/* ---------- COMPONENT: chip ---------- */
+.chips{display:flex;gap:6px;align-items:center;flex-wrap:nowrap;min-width:0}
+.chip{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:var(--h-chip);padding:0 12px;border-radius:14px;border:1px solid #333;background:#181818;color:var(--text2);font:500 12.5px var(--ff);cursor:pointer;white-space:nowrap}
+.chip:hover{border-color:#4a4a4a;color:var(--text)}
+.chip.on{background:var(--emdeep);border-color:var(--em);color:var(--mint)}
+.chip .n{font-size:10.5px;background:#2a2a2a;color:#ccc;border-radius:9px;padding:0 6px;line-height:16px}
+.chip.on .n{background:var(--emline);color:var(--mint)}
+/* ---------- COMPONENT: pill (status) and tag (type/role) ---------- */
+.pill{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:11px;font-size:var(--f-xs);font-weight:600;background:#262626;color:#c4c4be;white-space:nowrap;border:1px solid transparent}
+.pill.g{background:var(--emdeep);color:var(--mint);border-color:var(--emline)}.pill.w{background:var(--warndim);color:var(--warn)}.pill.r{background:var(--dangerdim);color:#ff9a9a}.pill.b{background:var(--infodim);color:#8bbcff}.pill.p{background:var(--purpledim);color:var(--purple)}.pill.o{background:#3a2412;color:#ffb380}
+.tag{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:5px;font:600 11px var(--mono);color:#c4c4be;background:#242424;border:1px solid #333;white-space:nowrap}
+.tag.g{color:var(--mint);border-color:var(--emline);background:var(--emdeep)}.tag.w{color:var(--warn);border-color:var(--warnline);background:var(--warndim)}.tag.r{color:#ff9a9a;border-color:#5b2323;background:var(--dangerdim)}.tag.b{color:#8bbcff;border-color:var(--infoline);background:var(--infodim)}
+.kb{display:inline-block;font:600 10.5px var(--mono);color:#9a9a95;background:#222;border:1px solid #333;border-bottom-width:2px;border-radius:5px;padding:0 5px;line-height:17px;white-space:nowrap}
+/* ---------- COMPONENT: card ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-l);min-width:0}
+.card>header{display:flex;align-items:center;gap:10px;padding:12px 16px 0;min-height:30px}
+.card>header h3{font-size:var(--f-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600;white-space:nowrap}
+.card>header .sp{flex:1}
+.card .body{padding:12px 16px 14px}
+.card.danger{border-color:#5b2323;background:#1b1414}.card.danger>header h3{color:var(--dangertx)}
+.card.em{border-color:var(--emline)}.card.em>header h3{color:var(--mint)}
+/* ---------- COMPONENT: setting row ---------- */
+.srow{display:flex;align-items:center;gap:16px;padding:11px 16px;border-top:1px solid #222}
+.card>.srow:first-of-type,.card>header+.srow{border-top:none}
+.srow .t{flex:1;min-width:0}.srow .t b{display:block;font-weight:600;font-size:13.5px}.srow .t span{display:block;color:var(--muted);font-size:var(--f-s);margin-top:1px}
+.srow .t span.pre{white-space:pre-line}
+.srow .ctl{width:var(--w-ctl);flex:none;display:flex;justify-content:flex-end;align-items:center;gap:8px}
+.srow .ctl.auto{width:auto}.srow .ctl.wide{width:360px}
+.srow.danger .t b{color:var(--dangertx)}
+.sub-h{font-size:var(--f-xs);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:14px 16px 4px;border-top:1px solid #222}
+/* ---------- COMPONENT: status strip ---------- */
+.strip{display:flex;align-items:center;gap:14px;padding:8px 14px;border-radius:var(--r-l);background:var(--card);border:1px solid var(--line);min-height:44px;flex-wrap:wrap}
+.strip .sep{width:1px;height:18px;background:var(--line2)}
+.strip b{font-weight:600}
+/* ---------- COMPONENT: selection bar ---------- */
+.selbar{display:flex;align-items:center;gap:6px;height:44px;padding:0 10px 0 14px;border-radius:10px;background:var(--card);border:1px solid var(--line);overflow:hidden}
+.selbar.has{background:#1b2a22;border-color:#24503a}
+.selbar .who{font-weight:600;margin-right:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.selbar .hint{color:var(--muted);font-size:var(--f-s)}
+.vr{width:1px;height:22px;background:#2e4a3b;margin:0 6px;flex:none}
+.grp{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#6fa88a;margin-right:2px;white-space:nowrap}
+/* ---------- COMPONENT: unsaved bar ---------- */
+.unsaved{display:flex;align-items:center;gap:12px;padding:8px 10px 8px 14px;border-radius:10px;background:#2a2410;border:1px solid var(--warnline);color:#f1d27c;font-weight:600;min-height:44px}
+.unsaved[hidden]{display:none}
+.unsaved .sp{flex:1}
+/* ---------- COMPONENT: empty state ---------- */
+.empty{display:grid;place-items:center;gap:6px;padding:30px 20px;text-align:center;color:var(--muted)}
+.empty b{color:var(--text);font-size:var(--f-l)}
+.empty .ring{width:44px;height:44px;border-radius:50%;background:#1d1d1d;border:1px solid #2e2e2e;display:grid;place-items:center;color:#777;margin-bottom:4px}
+.empty .act{margin-top:6px;display:flex;gap:8px}
+/* ---------- COMPONENT: banner, toast ---------- */
+.banner{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:10px;font-size:12.5px;border:1px solid}
+.banner.w{background:var(--warndim);border-color:var(--warnline);color:#f1d27c}.banner.r{background:#2a1515;border-color:#5b2323;color:#ffabab}.banner.g{background:#10261b;border-color:#24503a;color:#a9f0cf}.banner.i{background:var(--infodim);border-color:var(--infoline);color:#bcd8ff}
+.banner .sp{flex:1}
+.toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:10px;background:#12281d;border:1px solid #24503a;color:var(--text);box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:12.5px;max-width:520px;z-index:4}
+.toast svg{color:var(--mint)}
+/* ---------- COMPONENT: white data grid ---------- */
+.gridwrap{background:var(--g-bg);border-radius:var(--r-l);border:1px solid #333;overflow:hidden;flex:1;min-height:0;display:flex;flex-direction:column;box-shadow:0 1px 0 rgba(255,255,255,.04),0 8px 24px rgba(0,0,0,.35)}
+.gridscroll{overflow:auto;flex:1;min-height:0}
+table.grid{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:13px;color:var(--g-text)}
+.grid th{position:sticky;top:0;z-index:1;background:var(--g-head);color:var(--g-headtx);font-size:var(--f-xs);font-weight:600;letter-spacing:.07em;text-transform:uppercase;text-align:left;padding:0 12px;height:36px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid th+th{border-left:1px solid #1d2822}
+.grid td{padding:0 12px;height:var(--h-row);border-bottom:1px solid var(--g-line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid tbody tr:nth-child(even) td{background:var(--g-alt)}
+.grid tbody tr:hover td{background:var(--g-hover)}
+.grid tbody tr.sel td{background:var(--g-sel);color:#0b2a1a;font-weight:500}
+.grid tbody tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--em)}
+.grid td.num{color:var(--g-mute);font-variant-numeric:tabular-nums}
+.grid td.mono{font-family:var(--mono);font-size:12px;color:#33433a}
+.grid td.hl{background:#fff3cd!important;color:#6b4e00}
+.grid tr{cursor:pointer}
+.grid td.tall{height:52px;white-space:normal;line-height:1.3}
+.gfoot{height:30px;border-top:1px solid var(--g-line);background:#fbfcfb;color:var(--g-mute);font-size:11.5px;display:flex;align-items:center;padding:0 12px;gap:14px;flex:none}
+.gfoot .kb{background:#f0f3f1;border-color:#d9dfdc;color:#55645c}
+.gp{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;margin-right:9px;color:#3a4a41}
+.gp i{width:7px;height:7px;border-radius:50%;display:inline-block}
+.gpill{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
+.cellbtns{display:inline-flex;gap:4px;vertical-align:middle}
+.cellbtns .ibtn{width:26px;height:26px;color:#3a4a41;border:1px solid #d9dfdc;background:#fff;border-radius:6px}
+.cellbtns .ibtn.pri{background:var(--em);color:#fff;border-color:var(--em2)}
+.cellbtns .ibtn:hover{background:#edf6f1}
+.cellbtns .ibtn.pri:hover{background:var(--em2)}
+/* dark list table (dialogs, settings) */
+table.dt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.dt th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:9px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.dt td{padding:8px 14px;border-bottom:1px solid #222;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table.dt tr:last-child td{border-bottom:none}
+table.dt tbody tr{cursor:pointer}table.dt tbody tr:hover td{background:#1e1e1e}
+table.dt tr.sel td{background:#162a20}
+table.dt tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--em)}
+/* ---------- panel (client detail) ---------- */
+.panel{position:absolute;top:0;right:0;bottom:0;width:540px;background:var(--panel);border-left:1px solid var(--line2);box-shadow:-16px 0 40px rgba(0,0,0,.45);display:flex;flex-direction:column;z-index:3}
+.p-hd{padding:14px 18px 12px;border-bottom:1px solid var(--line);display:grid;gap:8px}
+.p-top{display:flex;align-items:center;gap:10px}
+.p-top h2{font-size:var(--f-xl);font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.idchip{font:600 11.5px var(--mono);color:var(--mint);background:var(--emdeep);border:1px solid var(--emline);border-radius:var(--r-m);padding:3px 9px;cursor:pointer;white-space:nowrap}
+.p-meta{color:var(--muted);font-size:12.5px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.p-meta .sep{color:#444}
+.p-body{overflow:auto;padding:14px 18px 20px;display:grid;gap:12px;align-content:start;flex:1}
+.svc{display:flex;align-items:center;gap:10px;padding:9px 16px;border-top:1px solid var(--line)}
+.svc:first-of-type{border-top:none}
+.svc .ic{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;background:#222;flex:none}
+.svc .nm{flex:1;font-weight:600;font-size:13px;min-width:0}.svc .nm small{display:block;font-weight:400;color:var(--muted);font-size:11.5px}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:0 20px;padding:4px 16px 12px}
+.kv .f{padding:8px 0;border-bottom:1px solid #222;min-width:0}
+.kv .f:nth-last-child(-n+2){border-bottom:none}
+.kv label{display:block;font-size:var(--f-xs);color:var(--muted);margin-bottom:1px}
+.kv .v{display:flex;align-items:center;gap:4px;font-size:13px;min-width:0}
+.kv .v span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv .v .ibtn{width:24px;height:24px;color:#777}.kv .v .ibtn:hover{color:var(--mint)}
+.kv .v.mono span{font-family:var(--mono);font-size:12.5px}
+.notset{padding:0 16px 12px;color:#7c7c77;font-size:var(--f-s)}
+.notset b{color:#a0a09a;font-weight:500}
+/* ---------- dialogs ---------- */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:10;display:grid;place-items:center;padding:20px}
+.scrim.desk{background:#0f1412}
+.dlg{background:var(--bg);border:1px solid #3a3a3a;border-radius:var(--r-l);overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;position:relative;color:var(--text);font-size:13px;line-height:1.4;max-width:100%;max-height:100%}
+.dlg>.d-hd{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dlg>.d-hd h2{font-size:var(--f-xl);font-weight:700}.dlg>.d-hd p{color:var(--muted);font-size:12.5px;margin-top:1px}
+.d-ic{width:34px;height:34px;border-radius:9px;background:var(--emdeep);border:1px solid var(--emline);display:grid;place-items:center;color:var(--mint);flex:none}
+.d-ic.w{background:var(--warndim);border-color:var(--warnline);color:var(--warn)}.d-ic.b{background:var(--infodim);border-color:var(--infoline);color:#8bbcff}
+.d-bd{padding:16px 18px;display:grid;gap:12px;align-content:start;flex:1;min-height:0;overflow:auto}
+.d-ft{display:flex;justify-content:flex-end;gap:10px;padding:12px 18px;border-top:1px solid var(--line);background:#1b1b1b;align-items:center}
+.d-ft .sp{flex:1}
+.d-full{position:absolute;inset:0;border:none;border-radius:0;box-shadow:none;z-index:10}
+[hidden]{display:none!important}
+.choice{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--r-l);background:#181818;border:1px solid var(--line2);cursor:pointer}
+.choice:hover{border-color:var(--em)}.choice b{display:block;font-size:var(--f-l)}.choice span{color:var(--muted);font-size:12.5px}
+.choice .d-ic{width:40px;height:40px}
+.progress{height:6px;border-radius:3px;background:#262626;overflow:hidden}.progress i{display:block;height:100%;width:62%;background:var(--em)}
+.log{font:12px/1.65 var(--mono);color:var(--text2);background:#0f1412;border:1px solid #1d2622;border-radius:10px;padding:10px 12px;overflow:auto}
+.log .ts{color:#6a7a72}.log .tg{display:inline-block;min-width:54px;font-weight:700}
+.log .tg.guard{color:var(--warn)}.log .tg.sync{color:var(--mint)}.log .tg.err{color:#ff8d8d}.log .tg.peer{color:#8bbcff}.log .tg.net{color:var(--purple)}
+.tabs2{display:flex;gap:4px;border-bottom:1px solid var(--line)}
+.tabs2 button{all:unset;cursor:pointer;padding:9px 12px;color:var(--muted);font-weight:600;font-size:12.5px;border-bottom:2px solid transparent;display:flex;gap:8px;align-items:center;margin-bottom:-1px}
+.tabs2 button:hover{color:var(--text)}.tabs2 button[aria-selected=true]{color:var(--mint);border-bottom-color:var(--mint)}
+.tabs2 .n{background:#2a2a2a;color:#ccc;border-radius:9px;font-size:10.5px;padding:0 6px;line-height:17px}
+.tabs2 .n.a{background:var(--warndim);color:var(--warn)}
+.stat{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:12px 16px 14px}
+.stat div{background:var(--panel);border:1px solid #262626;border-radius:10px;padding:8px 10px}
+.stat b{display:block;font-size:18px;font-variant-numeric:tabular-nums}.stat span{font-size:var(--f-xs);color:var(--muted)}
+.formula{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 16px 0}
+.formula .p{font:600 11.5px var(--mono);color:var(--mint);background:var(--emdeep);border:1px solid var(--emline);border-radius:7px;padding:3px 8px}
+.formula .p.f{color:var(--warn);background:var(--warndim);border-color:var(--warnline)}
+.formula i{color:var(--muted);font-style:normal}
+/* tiles (tracker) */
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-height:50px;cursor:pointer;min-width:0}
+.tile.on{border-color:var(--em)}
+.tile b{display:block;font-size:20px;line-height:1.1;font-variant-numeric:tabular-nums}
+.tile span{font-size:var(--f-s);color:var(--muted);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* settings hub */
+.set{display:grid;grid-template-columns:var(--w-setnav) 1fr;flex:1;min-height:0}
+.set-nav{background:var(--side);border-right:1px solid var(--line);padding:12px 10px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.set-main{position:relative;overflow:auto;padding:18px 24px 24px;min-width:0;display:flex;flex-direction:column;gap:12px}
+.set-main h2{font-size:19px;font-weight:700}
+.set-main .lead{color:var(--muted);font-size:12.5px;margin-top:2px;max-width:720px}
+.stack{display:grid;gap:12px;max-width:820px}
+/* manage clients */
+.mc{display:grid;grid-template-columns:360px 1fr;gap:14px;flex:1;min-height:0}
+.mc .list{background:var(--g-bg);border:1px solid #333;border-radius:var(--r-l);overflow:auto;display:flex;flex-direction:column}
+.mc .li{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--g-line);color:var(--g-text);cursor:pointer;font-size:12.5px}
+.mc .li:nth-child(even){background:var(--g-alt)}.mc .li:hover{background:var(--g-hover)}
+.mc .li.sel{background:var(--g-sel);box-shadow:inset 3px 0 0 var(--em)}
+.mc .li .t{flex:1;min-width:0}.mc .li .t b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mc .li .t small{color:var(--g-mute);font-family:var(--mono);font-size:11px}
+.mc .li .svcs{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;max-width:150px}
+.mc .editor{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow:auto}
+.mc .ed-hd{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--card);border:1px solid var(--line);border-radius:var(--r-l)}
+.mc .ed-hd .av{width:38px;height:38px;border-radius:10px;background:var(--emdim);color:var(--mint);display:grid;place-items:center;font-weight:700;font-size:15px;flex:none}
+.mc .ed-hd h3{font-size:16px;font-weight:700}.mc .ed-hd p{color:var(--muted);font-size:12px}
+.mc .cards2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.svcchip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--line2);background:#1a1a1a;font-weight:600;font-size:12.5px;cursor:pointer}
+.svcchip.on{background:var(--emdeep);border-color:var(--em);color:var(--mint)}
+/* audit */
+.audit{display:grid;grid-template-columns:200px 1fr 300px;gap:12px;flex:1;min-height:0}
+.ws{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ws .nav{justify-content:space-between}
+.ws .nav span.c{color:var(--muted);font-size:var(--f-xs);font-family:var(--mono)}
+/* sync */
+.sync{display:grid;grid-template-columns:1fr 330px;gap:12px;flex:1;min-height:0}
+.devcard{display:grid;gap:6px;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--panel)}
+.devcard.sel{border-color:var(--em);background:#10261b}
+.devcard .l1{display:flex;align-items:center;gap:10px}
+.devcard .facts{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:var(--f-s)}
+.devcard .facts b{color:var(--text2);font-weight:600}
+/* foundation page */
+.fx{padding:18px 22px;display:grid;gap:18px;overflow:auto;align-content:start}
+.fx h3{font-size:var(--f-xs);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);padding-bottom:6px}
+.sw-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.sw-c{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.sw-c i{display:block;height:34px}.sw-c div{padding:5px 8px;font-size:11px;color:var(--text2)}.sw-c b{display:block;color:var(--text);font:600 11px var(--mono)}
+.demo{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+
+/* =====================================================================
+   COMPACT width mode (page narrower than 1080 logical px)
+   ===================================================================== */
+.app.compact .hd .lead{display:none}
+.app.compact .hd h2{font-size:var(--f-xl)}
+.app.compact .chips-row{flex-direction:column;align-items:stretch}
+.app.compact .chips-row .chips{flex-wrap:wrap}
+.app.compact .col-lo{display:none}
+.withpanel .col-lo2{display:none}
+.app.compact .chips-row .field{max-width:none!important}
+.w-hist{width:250px}.w-period{width:170px}.w-status{width:210px}
+.app.compact .w-hist{width:160px}.app.compact .w-period{width:140px}.app.compact .w-status{width:170px}
+.set-main>h2+.lead{margin-top:-10px}
+.app.compact .srow .ctl.wide{width:300px;flex-wrap:wrap;justify-content:flex-start}.app.compact .srow .ctl.wide select{min-width:170px}
+.app.compact .sync{display:flex;flex-direction:column}.app.compact .sync>div:first-child{overflow:visible;flex:none}
+.app.compact .selbar .btn span.txt{display:none}
+.app.compact .selbar .btn{padding:0 8px}
+.app.compact .tiles{gap:6px}
+.app.compact .tile{min-height:40px;padding:6px 10px}.app.compact .tile b{font-size:16px}
+.app.compact .grid td{height:40px}
+.app.compact .hide-c{display:none}
+.app.compact .show-c{display:inline-flex}
+.show-c{display:none}
+.app.compact .wide-only{display:none!important}
+.compact-only{display:none!important}
+.app.compact .compact-only{display:flex!important}
+.app.compact .col-c1,.app.compact .col-c2{display:none}
+.app.narrow .col-c3{display:none}
+.app.compact .panel{width:100%;border-left:none}
+.app.compact .mc{grid-template-columns:300px 1fr}
+.app.compact .mc .cards2{grid-template-columns:1fr}
+.app.compact .mc .li .svcs{display:none}
+.app.compact .audit{grid-template-columns:1fr 280px}
+.app.compact .audit .ws{display:none}
+.app.compact .sync{grid-template-columns:1fr}
+.app.compact .sync .activity{max-height:170px}
+.app.compact .set{grid-template-columns:200px 1fr}
+.app.compact .srow .ctl{width:200px}
+.app.compact .srow .ctl.wide{width:260px}
+.app.compact .main{padding:12px 14px 10px}
+.app.compact .srow{padding:9px 14px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div><h1>Sera · Fleet redesign mockup</h1><div class="sub">Every screen and dialog, built from one token block and one component kit. Dark only; grids stay white. Fictional data.</div></div>
+  <span class="sp"></span>
+  <span class="lbl">Width</span>
+  <div class="seg" id="modeSeg"><button aria-pressed="true" data-mode="wide">WIDE 1366</button><button aria-pressed="false" data-mode="compact">COMPACT 1024</button></div>
+  <span class="lbl">Scale</span>
+  <div class="seg" id="scaleSeg"><button aria-pressed="false" data-scale="0.8">80 %</button><button aria-pressed="true" data-scale="1">100 %</button><button aria-pressed="false" data-scale="1.25">125 %</button></div>
+  <span class="lbl">Admin</span>
+  <div class="seg" id="adminSeg"><button aria-pressed="true" data-admin="1">On</button><button aria-pressed="false" data-admin="0">Off</button></div>
+  <button class="tbtn" id="beforeBtn" title="Show today's screenshot of this screen">Before</button>
+</header>
+<div class="wrap">
+  <nav class="navlist" id="navlist" aria-label="Screens"></nav>
+  <main class="stage">
+    <div class="frame" id="frame"><div class="app" id="app"></div></div>
+    <div class="frame-cap" id="cap"></div>
+    <div class="about" id="about"></div>
+  </main>
+</div>
+<div class="lb" id="lb" role="dialog" aria-label="Today's screenshot">
+  <div class="bar"><b id="lbTitle">Before</b><span class="sub" id="lbPath"></span><span class="sp"></span><button class="tbtn" id="lbClose">Close</button></div>
+  <div class="pic" id="lbPic"></div>
+</div>
+
+<script>
+/* =====================================================================
+   Helpers: icons (Material Design names the app uses), logo, small builders
+   ===================================================================== */
+const P={search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/>',plus:'<path d="M12 5v14M5 12h14"/>',refresh:'<path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 4v7h-7"/>',copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/>',eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',edit:'<path d="M4 20h4L19 9l-4-4L4 16v4z"/>',trash:'<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>',archive:'<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/>',bolt:'<path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z"/>',assist:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1"/><circle cx="12" cy="11" r="2"/><path d="M8.5 17c.5-2 2-3 3.5-3s3 1 3.5 3"/>',down:'<path d="M6 9l6 6 6-6"/>',right:'<path d="M9 6l6 6-6 6"/>',left:'<path d="M15 6l-6 6 6 6"/>',up:'<path d="M12 19V5M6 11l6-6 6 6"/>',dn:'<path d="M12 5v14M6 13l6 6 6-6"/>',back:'<path d="M19 12H5M11 6l-6 6 6 6"/>',close:'<path d="M6 6l12 12M18 6L6 18"/>',check:'<path d="M5 12l5 5 9-10"/>',cog:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',users:'<circle cx="9" cy="9" r="3"/><path d="M3 20c.6-3.5 3-5 6-5s5.4 1.5 6 5"/><circle cx="17" cy="8" r="2.4"/><path d="M17 13.5c2.3.2 3.7 1.6 4 4.5"/>',brief:'<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V4h6v3M3 13h18"/>',db:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',dl:'<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',ul:'<path d="M12 16V5M7 9l5-5 5 5M5 20h14"/>',shield:'<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/>',lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',pulse:'<path d="M3 12h4l2-6 4 12 2-6h6"/>',monitor:'<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',cols:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/>',server:'<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/>',fill:'<path d="M5 12l7-7 7 7-7 7-7-7z"/><path d="M19 15c1 1.5 1.5 2.5 1.5 3.5a1.5 1.5 0 01-3 0c0-1 .5-2 1.5-3.5z"/>',tcol:'<path d="M6 19L12 5l6 14M8.5 14h7"/>',erase:'<path d="M4 15l8-9 8 8-5 5H8l-4-4z"/>',undo:'<path d="M9 8L4 13l5 5M4 13h9a6 6 0 010 7"/>',redo:'<path d="M15 8l5 5-5 5M20 13h-9a6 6 0 000 7"/>',dock:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',warn:'<path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/>',sync:'<path d="M4 12a8 8 0 0113.5-5.8M20 12a8 8 0 01-13.5 5.8"/><path d="M18 3v4h-4M6 21v-4h4"/>',play:'<circle cx="12" cy="12" r="9"/><path d="M10 8.5l5 3.5-5 3.5z"/>',csv:'<path d="M6 3h8l4 4v14H6V3z"/><path d="M14 3v4h4"/>',info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',filter:'<path d="M4 5h16l-6 8v6l-4-2v-4L4 5z"/>',dots:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',vdots:'<circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/>',bldg:'<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2"/>',laptop:'<rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M3 19h18"/>',key:'<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',pct:'<path d="M5 19L19 5"/><circle cx="7" cy="7" r="2"/><circle cx="17" cy="17" r="2"/>',doc:'<path d="M6 3h8l4 4v14H6V3z"/><path d="M9 12h6M9 16h6"/>',mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',pause:'<path d="M9 5v14M15 5v14"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c.8-4 4-6 8-6s7.2 2 8 6"/>',flask:'<path d="M9 3h6M10 3v6l-5 9a2 2 0 002 3h10a2 2 0 002-3l-5-9V3"/>',radar:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l6-6"/>',tap:'<path d="M9 11V5a2 2 0 014 0v6"/><path d="M13 10a2 2 0 014 0v1a2 2 0 014 0v4a6 6 0 01-6 6h-2a6 6 0 01-5-3l-3-5a2 2 0 013-2l1 1V11"/>',zoom:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5M8 11h6M11 8v6"/>',rocket:'<path d="M5 15l4 4M14 4c3 0 5 2 6 6l-7 7-5-5 6-8z"/><circle cx="14" cy="10" r="1.5"/>',grid:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/>',link:'<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',restore:'<path d="M4 12a8 8 0 102.3-5.7"/><path d="M4 4v6h6"/><path d="M12 8v4l3 2"/>',broom:'<path d="M14 3l7 7-6 6-7-7z"/><path d="M8 9l-5 5c-1 1-1 3 0 4l3 3c1 1 3 1 4 0l5-5"/>',image:'<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-8 8"/>',excel:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 8l8 8M16 8l-8 8"/>'};
+const M={search:'magnify',plus:'plus',refresh:'refresh',copy:'content-copy',eye:'eye-outline',edit:'pencil',trash:'delete-outline',archive:'archive-outline',bolt:'flash',assist:'clipboard-account-outline',down:'chevron-down',right:'chevron-right',left:'chevron-left',up:'arrow-up',dn:'arrow-down',back:'arrow-left',close:'close',check:'check',cog:'cog-outline',users:'account-multiple-outline',brief:'briefcase-outline',db:'database-outline',dl:'download',ul:'upload',shield:'shield-outline',lock:'lock-outline',pulse:'pulse',monitor:'monitor',cols:'view-column-outline',server:'server-network',fill:'format-color-fill',tcol:'format-color-text',erase:'eraser',undo:'undo',redo:'redo',dock:'dock-left',warn:'alert-outline',sync:'sync',play:'play-circle-outline',csv:'file-delimited-outline',info:'information-outline',filter:'filter-variant',dots:'dots-horizontal',vdots:'dots-vertical',bldg:'domain',laptop:'laptop',key:'key-outline',clock:'clock-outline',pct:'percent',doc:'file-document-outline',mail:'email-outline',pause:'pause',user:'account',flask:'flask-outline',radar:'radar',tap:'gesture-tap-button',zoom:'magnify-plus-outline',rocket:'rocket-launch-outline',grid:'table',link:'link-variant',restore:'backup-restore',broom:'broom',image:'image-outline',excel:'microsoft-excel'};
+const I=(n,c='')=>`<svg class="i ${c}" viewBox="0 0 24 24" aria-hidden="true"><title>mdi.${M[n]}</title>${P[n]}</svg>`;
+/* assets/logo/sera_mark.svg, embedded as is */
+const LOGO=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" class="logo"><title>Sera</title><mask id="notches" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><circle cx="32" cy="25.5" r="3" fill="#000"/><circle cx="32" cy="44.5" r="3.4" fill="#000"/><circle cx="32" cy="58.5" r="4.2" fill="#000"/></mask><g mask="url(#notches)" stroke-width="2.4" stroke-linejoin="round"><path d="M32 7.5 41 20 23 20Z" fill="#2E9B5F" stroke="#2E9B5F"/><path d="M26.5 25.5 37.5 25.5 47.5 39 16.5 39Z" fill="#2E9B5F" stroke="#2E9B5F"/><path d="M23.5 44.5 40.5 44.5 51 57.5 13 57.5Z" fill="#2E9B5F" stroke="#2E9B5F"/></g></svg>`;
+const sw=(on,extra='')=>`<button class="sw" role="switch" aria-checked="${!!on}" ${extra}></button>`;
+const dot=(c='')=>`<span class="dot ${c}"></span>`;
+const cb=(on,label,extra='')=>`<span class="cb ${on?'on':''}" role="checkbox" aria-checked="${!!on}" tabindex="0" ${extra}><i>${I('check','s')}</i>${label}</span>`;
+const sel=(opts,v,extra='')=>`<select class="inp" ${extra}>${opts.map(o=>`<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+const step=(v,u='')=>`<div class="stepper"><button aria-label="less">−</button><span>${v}${u}</span><button aria-label="more">+</button></div>`;
+const chip=(t,on=false,extra='')=>`<button class="chip ${on?'on':''}" ${extra}>${t}</button>`;
+const pill=(t,tone='',extra='')=>`<span class="pill ${tone}" ${extra}>${t}</span>`;
+const tag=(t,tone='')=>`<span class="tag ${tone}">${t}</span>`;
+const kb=t=>`<span class="kb">${t}</span>`;
+const btn=(t,cls='',ic='',extra='')=>`<button class="btn ${cls}" ${extra}>${ic?I(ic,'s'):''}<span class="txt">${t}</span></button>`;
+const ibtn=(ic,title,cls='',extra='')=>`<button class="ibtn ${cls}" title="${title}" aria-label="${title}" ${extra}>${I(ic)}</button>`;
+const srow=(t,d,c,cls='',rowcls='')=>`<div class="srow ${rowcls}"><div class="t"><b>${t}</b>${d?`<span>${d}</span>`:''}</div><div class="ctl ${cls}">${c}</div></div>`;
+const swrow=(t,d,on,extra='')=>srow(t,d,sw(on,extra),'auto');
+const card=(title,body,right='',cls='')=>`<div class="card ${cls}">${title!==null?`<header><h3>${title}</h3><span class="sp"></span>${right}</header>`:''}${body}</div>`;
+const empty=(ic,t,d,act='')=>`<div class="empty"><div class="ring">${I(ic,'l')}</div><b>${t}</b><span>${d}</span>${act?`<div class="act">${act}</div>`:''}</div>`;
+const dlgHd=(ic,t,d,right='',tone='')=>`<div class="d-hd"><div class="d-ic ${tone}">${I(ic,'l')}</div><div style="flex:1;min-width:0"><h2>${t}</h2>${d?`<p>${d}</p>`:''}</div>${right}</div>`;
+
+/* ---------- fictional data ---------- */
+const SVC={GST:'#ff6a3d',IT:'#4d8dff',Email:'#a77bff',TRACES:'#e3b341',EPFO:'#35c4a0'};
+const svcName={GST:'GST',IT:'Income Tax',Email:'Email',TRACES:'TRACES',EPFO:'EPFO'};
+const gp=k=>`<span class="gp"><i style="background:${SVC[k]}"></i>${svcName[k]}</span>`;
+const people=[
+ ['Sharma Traders Pvt Ltd','Rohan Sharma','ABCDE1000F','19ABCDE1000F1Z5','98000 00001',['GST','IT']],
+ ['Gupta & Sons','Meera Gupta','ABCDE1001F','19ABCDE1001F1Z3','98000 00002',['GST','IT','Email']],
+ ['Mehta Textiles LLP','Kiran Mehta','ABCDE1002F','19ABCDE1002F1Z1','98000 00003',['GST']],
+ ['Rao Consultants','Anita Rao','ABCDE1003F','','98000 00004',['IT']],
+ ['Iyer Foods','Suresh Iyer','ABCDE1004F','19ABCDE1004F1Z8','98000 00005',['GST','IT','TRACES']],
+ ['Khan Logistics','Farhan Khan','ABCDE1005F','19ABCDE1005F1Z6','98000 00006',['GST','IT']],
+ ['Patel Jewellers','Nisha Patel','ABCDE1006F','19ABCDE1006F1Z4','',['GST','IT','Email']],
+ ['Nair Clinic','Deepa Nair','ABCDE1007F','','98000 00008',['IT']],
+ ['Singh Motors','Harpreet Singh','ABCDE1008F','19ABCDE1008F1Z0','98000 00009',['GST','IT','EPFO']],
+ ['Bose Publications','Arjun Bose','ABCDE1009F','19ABCDE1009F1Z9','98000 00010',['GST']],
+ ['Das Hardware','Priya Das','ABCDE1010F','19ABCDE1010F1Z7','98000 00011',['GST','IT']],
+ ['Reddy Infra','Vikram Reddy','ABCDE1011F','19ABCDE1011F1Z5','98000 00012',['GST','IT','TRACES','EPFO']],
+ ['Joshi Dairy Co-op','Sunita Joshi','ABCDE1012F','19ABCDE1012F1Z3','98000 00013',['GST']],
+ ['Verma Electricals','Amit Verma','ABCDE1013F','','98000 00014',['IT','Email']],
+ ['Chowdhury Rice Mills','Rina Chowdhury','ABCDE1014F','19ABCDE1014F1Z1','98000 00015',['GST','IT']],
+ ['Lotus Dresses','Partnership','ABCDE1015F','19ABCDE1015F1Z9','98000 00016',['GST','IT']]];
+const PCS={me:'OFFICE-PC1',other:'FRONT-DESK',admin:'ADMIN-PC'};
+const COLS=[['No.','id','pk',1,1,1],['NAME OF COMPANY','text','identity',1,1,1],['NAME OF PROPRIETOR','text','identity',1,1,1],['GSTIN','alphanumeric','',0,1,1],['PAN','alphanumeric','anchor',0,1,1],['PH. NO.','number','',0,1,1],['DOB','date','',0,1,1],['USER ID','password','secret',0,0,1],['EMAIL','password','secret',0,0,1],['TAN','password','secret',0,0,1],['GST_Password','password','secret',0,0,1],['IT_Password','password','secret',0,0,1],['Email_Password','password','secret',0,0,1],['TDS_Password','password','secret',0,0,1]];
+
+/* ---------- shared: sidebar ---------- */
+function sidebar(active,st){
+ const admin=st.admin;
+ const n=(id,ic,t,extra='',cls='')=>`<div class="nav ${cls} ${active===id?'on':''}" tabindex="0" data-nav="${id}">${ic?I(ic):''}<span>${t}</span>${extra}</div>`;
+ return `<aside class="sb">
+  <div class="brand">${LOGO}<b>Aman Associates<span>Project Sera</span></b>${ibtn('dock','Toggle / hide sidebar (Ctrl+B)','','data-act="sbtoggle"')}</div>
+  <div class="admin-row"><span>Admin mode</span>${sw(admin,'data-act="admin"')}</div>
+  <div class="nav-label">Clients</div>
+  ${n('clients','users','All Clients',kb('Ctrl K'))}
+  ${admin?n('manage','edit','Manage Clients'):''}
+  ${n('tracker','radar','Tracker Dump')}
+  ${admin?n('audit','shield','Audit Log'):''}
+  <div class="nav-label">Tools</div>
+  ${n('import','db','Import CSV')}
+  ${n('display','monitor','Display')}
+  ${admin?`<div class="nav-label">Admin</div>${n('options','cog','Options')}${n('staff','brief','Manage Staff Users')}`:''}
+  <div class="sb-foot">
+    <div class="me" title="${admin?'Open Sera Sync (admin only)':''}" data-nav="sync"><span class="avatar">${I('user','s')}</span>${admin?'Admin':'Staff'}</div>
+    <button class="btn soft sm" style="justify-content:center" title="Sera LAN mesh · live link active. Click to broadcast a sync to LAN peers.">${dot()}Auto-sync active</button>
+    <div class="ver">v2.12.0</div>
+  </div></aside>`;
+}
+function desk(inner){return `<div class="scrim desk">${inner}</div>`;}
+
+/* =====================================================================
+   Screens. Each returns the HTML of the whole app frame for the current state.
+   ===================================================================== */
+const S=[];
+const st={admin:true,compact:false,scale:1,sel:2,mcSel:[0],dirty:0,setPage:'general',syncTab:'devices',auditSel:3,trkView:'grouped',dlg:null,sbUser:null,panelMenu:false,colsMenu:false,unlockShown:false};
+
+/* ---------- All Clients / Search ---------- */
+function searchGrid(sel,withPanel){
+ const rows=people.map((p,i)=>`<tr class="${i===sel?'sel':''}" data-row="${i}"><td class="num">${i+1}</td><td title="${p[0]}">${p[0]}</td><td title="${p[1]}" class="${i===3?'hl':''}">${p[1]}</td><td class="mono col-lo">${p[3]||'<span style="color:#9aa">—</span>'}</td><td class="mono col-lo2">${p[2]}</td><td class="num col-lo">${p[4]||'—'}</td><td class="col-lo2">${p[5].map(gp).join('')}</td></tr>`).join('');
+ return `<div class="gridwrap ${withPanel?'withpanel':''}"><div class="gridscroll"><table class="grid"><colgroup><col style="width:56px"><col><col style="width:24%"><col class="col-lo" style="width:150px"><col class="col-lo2" style="width:112px"><col class="col-lo" style="width:110px"><col class="col-lo2" style="width:${withPanel?150:210}px"></colgroup>
+ <thead><tr><th>No.</th><th>Name of company</th><th>Name of proprietor</th><th class="col-lo">GSTIN</th><th class="col-lo2">PAN</th><th class="col-lo">Ph. no.</th><th class="col-lo2">Services</th></tr></thead><tbody>${rows}</tbody></table></div>
+ <div class="gfoot"><span>${people.length} clients</span><span class="sp"></span><span>${kb('Enter')} opens the top result</span><span class="hide-c">${kb('↑')}${kb('↓')} move · ${kb('Ctrl C')} copies the selected cells</span><span>${kb('Esc')} closes the panel</span></div></div>`;
+}
+function selbar(st,who){
+ const a=st.admin;
+ if(who===null)return `<div class="selbar"><span class="hint">Select a client row to open, edit or archive it. Select cells to colour them.</span></div>`;
+ return `<div class="selbar has"><span class="who">${who}</span>
+ <button class="btn sm soft keep" data-act="openpanel">${I('right','s')}<span class="txt">Open</span></button>${a?`${btn('Edit','sm','edit','title="Edit selected client profile"')}${btn('Services','sm','server','title="Attach / detach services for the selected client"')}`:''}${btn('Archive','sm','archive','title="Archive selected client"')}
+ <span class="vr"></span><span class="grp">Cell</span><button class="btn sm" title="Cell fill colour (background) ▾">${I('fill','s')}<span class="cv" style="background:#fff3cd"></span><span class="txt">Fill</span></button><button class="btn sm" title="Cell text colour (foreground) ▾">${I('tcol','s')}<span class="cv" style="background:#006100"></span><span class="txt">Text</span></button>${btn('Clear','sm','erase','title="Clear selected cell formatting"')}${ibtn('undo','Undo cell formatting (Ctrl+Z)')}${ibtn('redo','Redo cell formatting (Ctrl+Y)')}
+ <span class="sp"></span>${a?btn('Delete…','sm dng','trash','title="Permanently delete selected client record (asks first)"'):''}</div>`;
+}
+function filterRow(){
+ return `<div class="row-h chips-row" style="gap:10px">
+ <div class="field" style="flex:1;min-width:220px;max-width:560px">${I('search')}<input class="inp" placeholder="Search clients across all columns…" aria-label="Search clients (Ctrl+K)"></div>
+ <div class="chips" data-chips="single">${chip('All <span class="n">16</span>',true)}${chip('Active today')}${chip('Has services')}${chip('No services')}${chip('Highlighted')}${chip('Archived')}${chip('More '+I('down','s'),false,'title="Most viewed / active · Has login credentials · Missing passwords · Service: GST · Income Tax · Email · TRACES · EPFO"')}</div></div>`;
+}
+function searchHd(st,c){
+ return `<div class="hd">${ibtn('dock','Toggle / hide sidebar (Ctrl+B)','','data-act="sbtoggle"')}<h2>All Clients</h2><span class="count">16 clients</span><span class="sp"></span>
+ ${c?'':`<button class="btn" data-act="colsmenu" title="Which columns show here (same switches as Settings → Main screen)">${I('cols')}Columns ${I('down','s')}</button>`}${ibtn('refresh','Refresh table data (pull latest from the synced database)','bd')}${c?ibtn('plus','Add client','bd pri'):btn('Add client','pri','plus')}</div>`;
+}
+function colsMenu(){
+ return `<div class="card" style="position:absolute;right:140px;top:50px;z-index:6;width:240px;box-shadow:0 14px 30px rgba(0,0,0,.5)"><header><h3>Columns on this screen</h3></header><div class="body" style="display:grid;gap:8px;padding-top:8px">
+ ${COLS.slice(0,7).map(c=>`<div class="row-h" style="justify-content:space-between"><span class="sm">${c[0]}</span>${sw(c[3]||['GSTIN','PAN','PH. NO.'].includes(c[0]),c[0]==='NAME OF COMPANY'?'disabled title="The client name always shows"':'')}</div>`).join('')}
+ <div class="mut xs" style="margin-top:4px">Writes the same per-column flag as Settings → Main screen.</div></div></div>`;
+}
+function toast(t){return `<div class="toast">${I('check')}${t}</div>`;}
+
+S.push({id:'search',group:'Shell and daily screens',title:'All Clients / Search',before:'01_all_clients_search.png',
+ render:s=>`${sidebar('clients',s)}<div class="main">${searchHd(s)}${filterRow()}<div id="selslot">${selbar(s,s.sel===null?null:people[s.sel][0])}</div>${searchGrid(s.sel,false)}${s.colsMenu?colsMenu():''}</div>`,
+ about:{c:['<b>Selection bar</b> above the grid holds everything that needs a selected client or cell: Open, Edit, Services, Archive (client group), Fill, Text, Clear, Undo, Redo (cell group) and Delete alone at the far end. With nothing selected it shows a one-line hint and keeps its height, so the grid never jumps.','<b>Header</b>: title with a live count, Columns ▾, Refresh and one primary (+ Add client). The five cell-formatting icons leave the title row.','<b>Filter chips</b> replace the 9-preset combo: All, Active today, Has services, No services, Highlighted, Archived; the rest (Most viewed, Has logins, Missing passwords, per-service) live under More ▾. The combo stays as the hidden source of truth, as Manage Clients does today.','<b>Grid</b> shows No., company, proprietor, GSTIN, PAN, Ph. no. and Services at fixed sensible widths so nothing is cut off at 1366 px. Cell highlights (yellow cell) are kept.','<b>COMPACT</b>: chips drop under the search box, the bar keeps icons with tooltips (Open keeps its label), GSTIN and Ph. no. hide first (they scroll inside the grid if the user widens columns).'],k:['Enter opens the top result; ↑ ↓ move; Ctrl+C copies cells; Ctrl+Z / Ctrl+Y undo and redo formatting; Ctrl+B toggles the sidebar; Esc behaviour unchanged.','Admin mode still decides whether Edit, Services and Delete appear.'],t:['Click any row: the bar fills in. Click the selected row again to clear it. Columns ▾ opens the per-column switches. Open shows the client panel.']}});
+
+/* ---------- Client detail panel ---------- */
+function detailPanel(s){
+ const p=people[s.sel??0];
+ const svc=(k,sub,btns,n)=>`<div class="svc"><div class="ic" style="color:${SVC[k]}">${I(k==='Email'?'mail':k==='GST'?'pct':'doc')}</div><div class="nm">${svcName[k]}<small>${sub}</small></div>${btns}<span class="kb" title="Alt+${n} runs mode 1 · Alt+Ctrl+${n} runs mode 2">Alt ${n}</span></div>`;
+ const A=`<button class="btn sm pri" title="Fast Autofill (mode 1): the extension fills and submits the login form">${I('bolt','s')}Autofill</button>`;
+ const As=`<button class="btn sm" title="SMTI Manual Assist (mode 2, Alt+Ctrl+n): on-page widget to inject User ID / Password yourself">${I('assist','s')}Assist</button>`;
+ const C=`<button class="btn sm" title="MECP Manual Copy: a floating card to copy credentials">${I('copy','s')}Copy login</button>`;
+ const f=(l,v,mono)=>`<div class="f"><label>${l}</label><div class="v ${mono?'mono':''}"><span title="Click to copy ${l}">${v}</span>${ibtn('copy','Copy '+l,'sm')}</div></div>`;
+ const pw=(l,v)=>`<div class="f"><label>${l}</label><div class="v mono"><span>${v}</span>${ibtn('eye','Show / hide password (Settings → Action buttons)','sm')}${ibtn('copy','Copy password · clipboard clears after 30 s','sm')}</div></div>`;
+ return `<aside class="panel">
+  <div class="p-hd"><div class="p-top">${ibtn('back','Back (Esc)','bd','data-act="closepanel"')}<h2>${p[0]}</h2><span class="idchip" title="Client ID: CLI-${String(s.sel+1).padStart(5,'0')} · click to copy">CLI-${String(s.sel+1).padStart(5,'0')}</span>${s.admin?`${ibtn('dots','More: Services, Archive, Delete','bd','data-act="panelmenu"')}${btn('Edit','sm','edit')}`:ibtn('dots','More: Archive','bd','data-act="panelmenu"')}</div>
+   <div class="p-meta"><span>#${s.sel+1}</span><span class="sep">·</span><span class="mono">PAN ${p[2]}</span><span class="sep">·</span><span>${p[1]}</span><span class="sep">·</span>${pill(I('clock','s')+' Autofilled today 11:42','g')}</div>
+   ${s.panelMenu?`<div class="card" style="position:absolute;right:76px;top:46px;z-index:7;width:200px;padding:6px;box-shadow:0 14px 30px rgba(0,0,0,.5)"><div class="nav">${I('server')}<span>Services…</span></div><div class="nav">${I('archive')}<span>Archive</span></div>${s.admin?`<div class="nav" style="color:var(--dangertx)">${I('trash')}<span>Delete…</span></div>`:''}</div>`:''}</div>
+  <div class="p-body">
+   ${card('Services',`<div style="height:6px"></div>${svc('GST','Fast Autofill',A,1)}${svc('IT','Autofill · Assist',A+As,2)}${svc('Email','Copy login',C+`<button class="btn sm dis" title="Off: Assist needs a saved password for this service">${I('assist','s')}Assist</button>`,3)}`,`<span class="mut xs" title="Alt+1…9 runs mode 1. Alt+Ctrl+1…9 runs mode 2 when a service has one.">${I('info','s')} Alt+1…9 · Alt+Ctrl+1…9 for mode 2</span>`)}
+   ${card('Identity',`<div class="kv">${f('No.',s.sel+1)}${f('Name of company',p[0])}${f('Name of proprietor',p[1])}${f('GSTIN',p[3]||'Not set',1)}${f('PAN',p[2],1)}${f('Ph. no.',p[4]||'Not set')}</div><div class="notset"><b>Not set:</b> DOB</div>`)}
+   ${card('Logins',`<div class="kv">${f('User ID','shar_****',1)}${f('Email','rohan*********',1)}${pw('GST_Password','Digit*****')}${pw('IT_Password','Cjlp@*****')}${pw('Email_Password','Class*****')}</div><div class="notset"><b>Not set:</b> TAN, TDS_Password</div>`,`<span class="mut xs">Masked: first 5 characters shown · clipboard clears after 30 s</span>`)}
+   ${card('Notes',`<div class="body" style="padding-top:8px"><textarea class="inp" rows="3" placeholder="Add notes for this client…" aria-label="Notes">Demo client</textarea></div>`,`<span class="mut xs">${I('check','s')} Saved</span>`)}
+   ${card('Portal values',`<div class="body mut sm" style="padding-top:6px">Read-only values SGT captured on each portal (Sera Distill profile builder). Shown only when the client has some. <span class="mono" style="color:var(--text2)">Income Tax · Filing status: Verified · AY 2026-27</span></div>`,`${btn('Show','sm ghost','down')}`)}
+  </div></aside>`;
+}
+S.push({id:'panel',group:'Shell and daily screens',title:'Client detail panel',before:'04_client_detail_panel.png',
+ render:s=>`${sidebar('clients',s)}<div class="main"><div class="hd">${ibtn('dock','Toggle / hide sidebar (Ctrl+B)','','data-act="sbtoggle"')}<h2>All Clients</h2><span class="count">16 clients</span></div>${filterRow()}${searchGrid(s.sel,true)}${toast('Copied PAN · clears in 30 s')}</div>${detailPanel(s)}`,
+ about:{c:['<b>Header</b>: Back, name, the ID chip (click copies), ⋯ (Services, Archive, Delete while the panel is open) and Edit. One meta line: #, PAN, proprietor and the last activity.','<b>Services first</b>, since that is why staff open it: labelled buttons (Autofill, Assist, Copy login) and a per-row Alt key that matches the real shortcut. "Off" is a dimmed button with a reason tooltip; no red outlines.','<b>Identity</b> and <b>Logins</b> cards: copy icon right after each value; empty fields collapse into one "Not set" line; masking follows Settings → Password masking; eye buttons follow Settings → Action buttons.','<b>Notes</b> gets a real box and still saves itself. <b>Portal values</b> (read-only SGT captures, present in code) become a collapsed card at the end.','<b>WIDE</b>: the panel is 540 px and the grid keeps No., company, proprietor beside it. <b>COMPACT</b>: the panel fills the content area; Back / Esc returns to the grid.'],k:['Esc goes back; Alt+1…9 and Alt+Ctrl+1…9 run the same actions; show / copy and the 30 s clipboard wipe; Notes auto-save.'],t:['Click ⋯ for the client menu. Click Back to return to All Clients.']}});
+
+/* ---------- Manage Clients (admin) ---------- */
+function manageClients(s){
+ const sels=s.mcSel;
+ const li=people.map((p,i)=>`<div class="li ${sels.includes(i)?'sel':''}" data-mc="${i}"><div class="t"><b>${p[0]}</b><small>#${i+1} · ${p[2]}</small></div><div class="svcs">${p[5].map(k=>`<span class="gpill" style="background:${SVC[k]}22;color:${SVC[k]}">${svcName[k]}</span>`).join('')}</div></div>`).join('');
+ const multi=sels.length>1;const p=people[sels[0]??0];
+ const fld=(l,v,req)=>`<div><label class="lab">${l}${req?' <span style="color:var(--dangertx)">*</span>':''}</label><input class="inp" value="${v||''}" aria-label="${l}"></div>`;
+ const login=(l,v)=>`<div><label class="lab">${l}</label><div class="field"><input class="inp" value="${v||''}" type="password" aria-label="${l}" style="padding-left:12px;padding-right:62px"><div class="tail">${ibtn('eye','Show / hide','sm')}${ibtn('copy','Copy (clipboard clears after 30 s)','sm')}</div></div></div>`;
+ return `${sidebar('manage',s)}<div class="main">
+ <div class="hd">${ibtn('back','Back to Search (Esc)','bd')}<h2>Manage Clients</h2><span class="count">16 clients</span><span class="sp"></span>${btn('New client','pri','plus','title="Start a blank client form (Ctrl+N)"')}</div>
+ <div class="mc">
+  <div style="display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0">
+   <div class="field">${I('search')}<input class="inp" placeholder="Search clients (ID, name, PAN, GSTIN…)" aria-label="Search clients"></div>
+   <div class="chips" data-chips="single" style="flex-wrap:wrap">${chip('All',true)}${chip('Has services')}${chip('No services')}${chip('Archived','',`title="Archived clients (Restore or Delete permanently)"`)}${chip('More '+I('down','s'),false,'title="Most viewed / active · Active today · Has login credentials · Missing passwords · Service: …"')}</div>
+   <div class="row-h"><span class="mut sm" style="white-space:nowrap">Sort</span>${sel(['ID (ascending: 1, 2, 3…)','ID (descending)','Client identity (A → Z)','Client identity (Z → A)','Most viewed / activity','Recently added (newest first)','Recently updated'],'ID (ascending: 1, 2, 3…)','aria-label="Sort"')}</div>
+   <div class="list" title="Ctrl- or Shift-click to select several clients">${li}</div>
+   ${multi?`<div class="selbar has" style="height:40px"><span class="who">${sels.length} selected</span>${btn('Attach / detach service…','sm','server')}${btn('Archive','sm','archive')}${btn('Restore','sm','restore')}<span class="sp"></span>${btn('Delete permanently','sm dng','trash')}${ibtn('close','Clear selection','','data-act="mcclear"')}</div>`:`<div class="mut xs">Ctrl- or Shift-click to select several clients.</div>`}
+  </div>
+  <div class="editor">
+   <div class="ed-hd"><div class="av">${multi?sels.length:(sels.length?p[0].split(' ').map(w=>w[0]).join('').slice(0,2):'+')}</div><div style="flex:1;min-width:0">${multi?`<h3>${sels.length} clients selected</h3><p>Use the bar under the list to change them together.</p>`:sels.length?`<h3>${p[0]}</h3><p>Client #${sels[0]+1} · Updated today 11:42 · <span style="color:var(--warn)">Unsaved changes</span></p>`:`<h3>New client</h3><p>Fill in the details and press Save. Fields marked * are required.</p>`}</div>${btn('More '+I('down','s'),'','dots','title="Archive client · Restore client · Delete permanently…"')}${btn('Save','pri','check','title="Save this client (Ctrl+S)"')}</div>
+   <div class="cards2">
+    ${card('Identity',`<div class="body form" style="padding-top:8px">${fld('Name of company',p[0])}${fld('Name of proprietor',p[1])}<div class="f2">${fld('GSTIN',p[3])}${fld('PAN',p[2],1)}</div><div><label class="lab">DOB</label>${sel(['Not set','Pick a date…'],'Not set')}</div></div>`)}
+    ${card('Portal logins',`<div class="body form" style="padding-top:8px"><div class="f2">${login('User ID','shar_1234')}${login('Email','rohan@example.in')}${login('TAN','')}${login('GST_Password','Digit1234')}${login('IT_Password','Cjlp@1234')}${login('Email_Password','Class1234')}${login('TDS_Password','')}</div></div>`,`<span class="mut xs">Hidden — use the eye to show</span>`)}
+    ${card('Contact',`<div class="body form" style="padding-top:8px">${fld('Ph. no.',p[4])}</div>`)}
+    ${card('Attached services',`<div class="body" style="padding-top:8px;display:flex;gap:8px;flex-wrap:wrap">${Object.keys(SVC).map(k=>`<button class="svcchip ${p[5].includes(k)?'on':''}" data-toggle="svc">${svcName[k]}</button>`).join('')}</div>`,`<span class="mut xs">Click to attach or detach</span>`)}
+   </div>
+   ${card('Notes',`<div class="body" style="padding-top:8px"><textarea class="inp" rows="3" placeholder="Write notes here…" aria-label="Notes"></textarea></div>`)}
+  </div></div></div>`;
+}
+S.push({id:'manage',group:'Shell and daily screens',title:'Manage Clients (admin)',before:'02_manage_clients_admin.png',
+ render:manageClients,
+ about:{c:['Manage Clients was redesigned earlier and is kept; this pass only moves it onto the kit: the list becomes the <b>white grid</b> style (owner preference, same as the other data lists), chips are the shared <b>chip</b>, the editor header and cards are the shared <b>card</b>, logins get eye + copy in the field.','<b>Bulk selection</b> reuses the <b>selection bar</b> under the list (Attach / detach service…, Archive, Restore, Delete permanently, Clear) instead of a custom strip.','<b>Other details</b> card appears only when a column falls outside Identity / Logins / Contact, as today. The conflict banner ("Inspect Conflicts…") keeps its place above the search box when Sera Sync reports one.','<b>COMPACT</b>: the list narrows to 300 px and hides the service pills (they stay in the editor); the editor cards stack in one column.'],k:['Ctrl+N new client, Ctrl+S save, Esc back; Show archived stays the hidden source of truth behind the Archived chip; sort combo unchanged.'],t:['Click rows in the list; Ctrl-click a second row to see the bulk bar.']}});
+
+/* ---------- Tracker Dump ---------- */
+function trackerDump(s){
+ const grouped=s.trkView==='grouped';
+ const rows=[
+  ['Sharma Traders Pvt Ltd','#1 · ABCDE1000F','ITR-3','AY 2026-27 · ARN 123456789012345 · 2 filings','Submitted & E-verified','g','Today 11:42','OFFICE-PC1'],
+  ['Unregistered (ABCDE9999F)','needs a client','GSTR-3B','Sep 2026 · ARN AA1909260123456','Submitted (e-verification pending)','w','Today 10:05','FRONT-DESK'],
+  ['Khan Logistics','#6 · ABCDE1005F','GSTR-1','Sep 2026 · 1 filing','Not submitted','r','Yesterday 18:20','OFFICE-PC1'],
+  ['Reddy Infra','#12 · ABCDE1011F','TDS 26Q','Q2 2026-27 · ARN 987654321098765','Submitted','g2','03 Oct 09:12','ADMIN-PC'],
+  ['Iyer Foods','#5 · ABCDE1004F','ITR-4','AY 2026-27 · 3 filings','Other EVC','b','02 Oct 16:40','OFFICE-PC1'],
+  ['Patel Jewellers','#7 · ABCDE1006F','GSTR-3B','Aug 2026 · ARN AA1908260987654','Option Expired (NA)','x','28 Sep 12:01','FRONT-DESK']];
+ const tone={g:['#e3f3ea','#1c6b43'],g2:['#edf7f0','#2b7d4f'],w:['#fff1d1','#8a6200'],r:['#ffe0e0','#a32121'],b:['#e1ecff','#2456a8'],x:['#eceeed','#4b5a52']};
+ const tr=rows.map((r,i)=>`<tr class="${i===0?'sel':''}"><td class="tall" title="Updated ${r[6]} · ${r[7]}"><b style="display:block;${r[0].startsWith('Unreg')?'color:#b35a00':''}">${r[0]}</b><span class="mono" style="color:var(--g-mute);font-size:11px">${r[1]}</span></td><td class="col-c3">${r[2]}</td><td title="${r[3]}">${r[3]}</td><td><span class="gpill" style="background:${tone[r[5]][0]};color:${tone[r[5]][1]}"><i class="dot" style="background:${tone[r[5]][1]};box-shadow:none;width:6px;height:6px"></i>${r[4]}</span></td><td><span class="cellbtns">${ibtn('eye',grouped?'Inspect client container (2 captures)':'View raw payload')}${ibtn('bolt','Fast Autofill: Income Tax','pri')}${ibtn('vdots','More: Inspect · + Create client · Delete container')}</span></td><td class="num col-c2">${r[6]}</td><td class="col-c1">${r[7]}</td></tr>`).join('');
+ const tiles=[['6','Client containers','Show everything (clears all filters)',true,''],['1','Need a client','Captures not matched to a registered client',false,'#ffa657'],['1','Awaiting e-verification','Submitted, e-verification still pending',false,'#e3b341'],['2','Not submitted','Not submitted or option expired',false,'#ff8a8a'],['2','Captured today','Updated since midnight',false,'#4cf9b7']];
+ const chipsHtml=`<div class="chips">${chip('Status '+I('down','s'),false,'title="All statuses · Submitted & E-verified · Submitted · Pending e-Verification · Other EVC · Not submitted"')}${chip('Portal '+I('down','s'),false,'title="All portals · Income Tax (ITR) · GST portal · TRACES / TDS"')}${chip('Client: Unregistered '+I('down','s'),true,'title="All clients · Registered clients · Unregistered / action required"')}${chip('Time '+I('down','s'),false,'title="All time · Today · Past 7 days · Past 30 days"')}${chip('Source '+I('down','s'),false,'title="All sources · Hide SGT · SGT only"')}${btn('Reset','sm ghost','close','title="Reset all search and filter options"')}</div>`;
+ return `${sidebar('tracker',s)}<div class="main">
+ <div class="hd"><div><h2>Tracker Dump</h2><div class="lead">Filings captured by the browser extension, VSDC and SGT, grouped per client</div></div><span class="sp"></span>${ibtn('refresh','Refresh (F5)','bd')}<button class="btn" title="Re-resolve identities (SRPF) · Map datapoints to MCL columns… · Open LTT sheet · Export captures (CSV) · Distill… · Clear all captures">${I('cog')}Tools ${I('down','s')}</button></div>
+ <div class="tiles">${tiles.map(t=>`<div class="tile ${t[3]?'on':''}" tabindex="0" title="${t[2]}"><b style="color:${t[4]||'var(--text)'}">${t[0]}</b><span>${t[1]}</span></div>`).join('')}</div>
+ <div class="row-h chips-row" style="gap:10px"><div class="segbtn"><button class="${grouped?'on':''}" data-act="trk-grouped" title="One row per client (SRPF container)"><span class="hide-c">Containers</span><span class="show-c">Containers</span></button><button class="${grouped?'':'on'}" data-act="trk-raw" title="One row per individual capture"><span class="hide-c">Raw captures</span><span class="show-c">Raw</span></button></div><div class="field" style="flex:1;min-width:180px;max-width:360px">${I('search')}<input class="inp" placeholder="Search client, PAN, GSTIN, ARN, period, portal…" aria-label="Search captures"></div><div class="wide-only" style="display:contents">${chipsHtml}</div></div>
+ <div class="compact-only">${chipsHtml}</div>
+ <div class="gridwrap"><div class="gridscroll"><table class="grid"><colgroup><col style="min-width:240px"><col class="col-c3" style="width:90px"><col class="${grouped?'w-hist':'w-period'}"><col class="w-status"><col style="width:110px"><col class="col-c2" style="width:120px"><col class="col-c1" style="width:110px"></colgroup>
+ <thead title="Right-click: tick Filing type, Updated, Captured by to show or hide · Automatic (fit to width)"><tr><th>Client</th><th class="col-c3">Filing type</th><th>${grouped?'Filings & history':'Period'}</th><th>Submission status</th><th>Actions</th><th class="col-c2">Updated</th><th class="col-c1">Captured by</th></tr></thead><tbody>${tr}</tbody></table></div></div>
+ <div class="foot"><span>Showing 1 to 6 of 6 entries</span><span class="sp"></span><span class="hide-c">Rows per page:</span>${sel(['25','50','100'],'25','style="width:72px" aria-label="Rows per page"')}${btn('Prev','sm ghost','left')}<b>Page 1 / 1</b>${btn('Next','sm ghost','right')}</div></div>`;
+}
+S.push({id:'tracker',group:'Shell and daily screens',title:'Tracker Dump',before:'03_tracker_dump.png',
+ render:trackerDump,
+ about:{c:['Tracker Dump keeps the layout it already has (it was redesigned earlier) and moves onto the kit: summary <b>tiles</b>, the shared <b>chip</b> with a value shown when switched on ("Client: Unregistered"), one primary per row (Fast Autofill), Inspect and a ⋮ menu for the rest.','<b>White grid</b> instead of today\'s dark table, so all data grids in the app read the same way. Status pills keep their colours on white; unregistered clients keep the orange name.','<b>Tools ▾</b> keeps all six items (Re-resolve identities, Map datapoints, Open LTT sheet, Export captures CSV, Distill…, Clear all captures). The header right-click menu (show / hide Filing type, Updated, Captured by; Automatic) stays.','<b>COMPACT</b> (as the app already does): subtitle hidden, chips move to a second row, segment labels shorten ("Raw"), tiles shrink, rows 40 px, "Rows per page" label hidden, and columns hide in the order Captured by → Updated → Filing type. Hidden values go into the Client cell tooltip.'],k:['F5 refresh, the five tiles as filters, search, status bar paging, both view modes (the hidden view-mode combo stays the source of truth), Reset.'],t:['Switch Containers / Raw captures. Toggle COMPACT to see the column and chip changes.']}});
+
+/* ---------- Display scale (per-PC) ---------- */
+function displayDlg(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:520px" onclick="event.stopPropagation()">
+ ${dlgHd('monitor','Display scale','Makes Sera\'s text and layout smaller or larger on this PC only.')}
+ <div class="d-bd">
+  ${card(null,`${srow('Scale','Applies after restarting Sera. Automatic fits the screen it starts on. Saved on this PC only, never synced.',sel(['Automatic (recommended)','80 %','90 %','100 %','110 %','125 %'],'Automatic (recommended)','aria-label="Display scale"'))}
+  <div class="srow" style="padding-top:0;border-top:none"><div class="t"><span>Running at 100 % · Automatic chose 100 % for a 1366 px screen.</span></div><div class="ctl auto">${btn('Apply','','check','title="Save the choice on this PC"')}${btn('Restart now','pri','refresh','title="Save and restart Sera now (asks first; anything unsaved in Sera is lost)"')}</div></div>`)}
+  <div class="mut sm">Shortcuts anywhere in Sera: ${kb('Ctrl =')} / ${kb('Ctrl −')} step by 5 %, ${kb('Ctrl 0')} back to Automatic. A small alert says "Display scale 85 % — restart Sera to apply".</div>
+ </div>
+ <div class="d-ft">${btn('Close','','','data-close')}</div></div></div>`;
+}
+S.push({id:'display',group:'Shell and daily screens',title:'Display scale (no screenshot)',before:null,
+ render:s=>`${sidebar('display',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${displayDlg()}`,
+ about:{c:['<b>Reached two ways</b>: the sidebar entry <b>Display</b> (open to every staff member, since a PC\'s own scale is not an admin setting) opens this dialog; Settings → General has the same control inline as a setting row.','One <b>setting row</b>: a combo with Automatic, 80, 90, 100, 110 and 125 %; a status line saying what is running now; <b>Apply</b> saves, <b>Restart now</b> saves and restarts (asks first). Nothing changes live because Qt reads the factor only at start.','The hint names the shortcuts the shell already has (Ctrl+= / Ctrl+− / Ctrl+0).'],k:['Stored per PC in the registry (QSettings), never in the synced app settings.'],t:['Use the Scale toggle above the frame to preview 80 / 100 / 125 %: the frame keeps its pixel size and the app scales inside it, exactly as QT_SCALE_FACTOR does.']}});
+
+/* =====================================================================
+   Settings hub (one dialog, twelve pages; each page is a navigation entry here)
+   ===================================================================== */
+const SETNAV=[['App settings',[['general','cog','General'],['actions','tap','Action buttons'],['scc','shield','SCC vault presets'],['tracker','radar','Tracker']]],['Column schema',[['mcl','cols','Columns (MCL)'],['services','server','Services']]],['Visibility',[['main','monitor','Main screen'],['qc','copy','Quick-copy fields'],['admin','shield','Admin screen']]],['Data tools',[['export','dl','Export CSV'],['backup','db','Backup & restore'],['purge','broom','Purge duplicates']]]];
+const SAVEPAGES=['general','actions','scc','tracker','main','qc','admin'];
+const colList=(idx,title)=>{
+ return card(null,`<div class="row-h" style="padding:10px 16px;border-bottom:1px solid #222"><div class="field" style="width:260px">${I('search')}<input class="inp" placeholder="Find a column" aria-label="Find a column"></div><span class="sp"></span><span class="mut sm">${COLS.filter(c=>c[idx]).length} of ${COLS.length} shown</span></div>`+
+ COLS.map(c=>`<div class="srow" style="padding:8px 16px"><div class="t"><b>${c[0]}</b><span>Field type: ${c[1]}</span></div><div class="ctl auto">${tag(c[1],c[1]==='password'?'r':'')}${sw(c[idx])}</div></div>`).join(''));};
+const maskPreview=`<span class="mono" style="color:var(--text2)">Abwf@•••••</span>`;
+const SETPAGE={
+general:()=>`<h2>General</h2><p class="lead">Display, passwords and clipboard, start-up, clipboard assist and schema info for this PC.</p><div class="stack">
+ ${card('Display',`${srow('Theme','Sera currently has one dark theme.',sel(['Dark'],'Dark','aria-label="Theme"'))}${srow('Window size on launch','How the app window opens.',sel(['Fullscreen / maximised','Square (1:1)','Rectangular (950 × 680)'],'Fullscreen / maximised','aria-label="Window display mode"'))}
+ <div class="srow"><div class="t"><b>Screen scale</b><span>Makes text and layout smaller or larger on this PC only. Applies after restarting Sera. Saved on this PC, never synced. Running at 100 %.</span></div><div class="ctl wide">${sel(['Automatic (recommended)','80 %','90 %','100 %','110 %','125 %'],'Automatic (recommended)','aria-label="Screen scale" data-nodirty')}${btn('Apply','sm','check','data-nodirty title="Saves on this PC straight away (not part of Save changes)"')}${btn('Restart now','sm','refresh','data-nodirty title="Save and restart Sera now (asks first)"')}</div></div>`)}
+ ${card('Passwords and clipboard',`${srow('Password masking','How passwords are hidden in the client panel. Preview: '+maskPreview,sel(['First N characters visible','Last N characters visible','Full dots'],'First N characters visible','aria-label="Password masking mode"'))}${srow('Characters shown','How many stay visible when masked (1–10).',step(5))}${srow('Clear clipboard after','Copied values are wiped after this long (5–300 s).',step(30,' sec'))}${swrow('Click-to-copy','Master toggle: staff can click a field\'s value to copy it.',1)}`)}
+ ${card('Start-up',`${swrow('Keep running when closed','Closing the window minimises Sera to the system tray instead of quitting.',1)}${swrow('Start with Windows','Sera starts in the background when Windows starts.',1)}`)}
+ ${card('Clipboard assist (SCA)',`${swrow('SCA — Sera Clipboard Assist','When a client User ID is copied from a spreadsheet, arms the matching portal credentials automatically.',1)}${srow('SCA action mode','Whether SCA silently injects credentials or shows a 1-click floating prompt.',sel(['Ambient autofill (fills password on paste)','SCA widget (floating 1-click prompt on paste)'],'Ambient autofill (fills password on paste)','aria-label="SCA action mode"'))}${srow('SCA uses per copied User ID','Maximum successful SCA fills after one User ID is copied (1–20).',step(1,' uses'))}`)}
+ ${card('Schema info',`${srow('ID / primary key column','Column used as the client\'s unique identifier and auto-serial source.',`<span class="pill g">${I('key','s')} No. — wired to client auto-serial numbers</span>`,'auto')}`)}</div>`,
+actions:()=>`<h2>Action buttons</h2><p class="lead">Each service gets one autofill button in the client panel. Its type (Fast Autofill, SMTI Assist or MECP Copy) is chosen per service in Services → Automation mode.</p><div class="stack">${card(null,swrow('Show / hide eye buttons','Shows a password-reveal toggle next to each credential field in the client panel.',0))}</div>`,
+scc:()=>`<h2>SCC vault presets</h2><p class="lead">Sera Credential Capture: two PAN-based password formulas and two plain fixed passwords.</p><div class="stack">
+ ${card(null,`${swrow('SCC one-time verification','When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.',1)}${srow('Detect login automatically','Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never changes what SGT captures. If it ever fails or runs slow it switches itself off until the app restarts. Needs SGT on.',sel(['Off','On'],'Off','aria-label="Detect login automatically"'))}`)}
+ ${card('Counts · this PC, this session and earlier',`<div class="stat">${[['Attempts',16,'attempts opened'],['Worked',6,'login succeeded'],['Failed',8,'wrong password'],['Locked',4,'locked out'],['No conclusion',4,'other outcome'],['Asked',3,'card asked which row'],['Saved',4,'password saved'],['Not understood',4,'portal wording not recognised']].map(a=>`<div title="${a[2]}"><b>${a[1]}</b><span>${a[0]}</span></div>`).join('')}</div>`)}
+ ${card('Option 1 · 4 letters + fixed string + 4 digits',`<div class="formula"><span class="p">pan_letters (4 lowercase)</span><i>+</i><span class="p f">fixed string</span><i>+</i><span class="p">pan_digits (4)</span></div><div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="lab">Option 1 label</label><input class="inp" value="Combo 1" aria-label="Option 1 label"></div><div><label class="lab">Fixed string (e.g. @ or #)</label><input class="inp" value="@" aria-label="Option 1 fixed string"></div></div>`)}
+ ${card('Option 2 · fixed string + 4 digits',`<div class="formula"><span class="p f">fixed string</span><i>+</i><span class="p">pan_digits (4)</span></div><div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="lab">Option 2 label</label><input class="inp" value="Combo 2" aria-label="Option 2 label"></div><div><label class="lab">Fixed string (e.g. Pass# or Tax@)</label><input class="inp" placeholder="Fixed string" aria-label="Option 2 fixed string"></div></div>`)}
+ ${card('Option 3 · plain fixed password',`<div class="formula"><span class="p f">fixed string</span><i>(no PAN substitution)</i></div><div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="lab">Option 3 label</label><input class="inp" placeholder="e.g. Combo 3" aria-label="Option 3 label"></div><div><label class="lab">Plain fixed password</label><input class="inp" type="password" placeholder="e.g. FirmMaster@2026" aria-label="Option 3 password"></div></div>`)}
+ ${card('Option 4 · plain fixed password',`<div class="formula"><span class="p f">fixed string</span><i>(no PAN substitution)</i></div><div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label class="lab">Option 4 label</label><input class="inp" placeholder="e.g. Combo 4" aria-label="Option 4 label"></div><div><label class="lab">Plain fixed password</label><input class="inp" type="password" placeholder="e.g. BackupPass#1" aria-label="Option 4 password"></div></div>`)}
+ ${card('Live combination preview',`<div class="body" style="padding-top:8px"><div class="row-h" style="gap:10px"><span class="mut sm">Test with PAN:</span><input class="inp mono" value="ABCDE1234F" style="width:160px;text-transform:uppercase" aria-label="Test PAN" data-nodirty></div><div class="mono sm" style="margin-top:10px;display:grid;gap:4px;color:var(--mint)"><span>• Combo 1: ${I('key','s')} abcd@1234</span><span>• Combo 2: ${I('key','s')} ••••1234</span><span class="mut">• Combo 3: (disabled / blank)</span><span class="mut">• Combo 4: (disabled / blank)</span></div><div class="mut xs" style="margin-top:8px">Shows how the 4 combination buttons will appear in the in-browser SMTI widget for the test PAN. Real resolved values are shown here as the preview; nothing is stored.</div></div>`)}</div>`,
+tracker:()=>`<h2>Tracker</h2><p class="lead">SGT (Sera Global Tracker) is the capture engine. VSDC, VSDC-X and VSDC 24/7 are the older engines; they stay off unless you need one beside SGT.</p><div class="stack">
+ ${card('SGT · Sera Global Tracker',`${srow('SGT mode','Reads every portal page and works out every datapoint from its field list, without crosshairs. Live saves its captures as the tracker\'s rows (tagged SGT, orange); a filing another engine already saved is updated in place and its status never moves down; an unidentified submission is saved unassigned and raises the phone alert. Shadow keeps SGT\'s rows separate from the other engines\', for comparison. Either way the HUD pill shows its captures and a detailed log stays on this PC (sgt_shadow folder).',sel(['Live (main capture engine)','Shadow (separate rows, for comparison)'],'Live (main capture engine)','aria-label="SGT mode"'))}
+  ${swrow('Record pages for SGT testing','While SGT is on, keeps the text of each portal page it reads on this PC (sgt_corpus folder, deleted after 30 days) so a change to SGT\'s field list can be replayed against real pages before it is used. The pages contain client details; they never leave this PC.',1)}
+  ${swrow('Record pages for Sera Distill (SDIS)','While SGT is on, also keeps the full structure of each changed portal page on this PC (sdis_capture folder, at most 500 MB, oldest first) so Sera Distill can find the datapoints of a page. Dropped if it takes over 1.5 s, so SGT captures exactly as before. The pages leave this PC only for the admin PC.',0)}
+  ${srow('SGT-I','SGT\'s Intelligence half: watches the pages SGT reads, on its own, and learns how each portal is built. It never changes what SGT captures. If it ever fails or runs slow it switches itself off until the app restarts. Off = SGT exactly as before.',sel(['Off','On'],'Off','aria-label="SGT-I"'))}
+  ${srow('SGT lab','New datapoints SGT-I found on portals, drawn only from counting and maths (no AI). Accept writes one to this PC\'s local override file; Reject only remembers your choice.',btn('Open SGT lab','','flask','data-nodirty'))}
+  ${swrow('Show HUD pill','The small bottom-left pop-up that appears when a page, client or submission is captured. Turning it off only hides the pill; capturing and saving carry on.',1)}`,pill(dot()+' Live','g'),'em')}
+ ${card('Older engines',`${swrow('VSDC · Visual Sera DOM Crosshair','Extracts structured data from client-facing compliance portals visually using DOM coordinates.',0)}${swrow('VSDC-X · UI automation','Advanced fallback capture method that navigates modal overlays and complex popups using UI Automation exact-text reading.',0)}${swrow('VSDC 24/7 · optical','Always-on background optical screen harvester. Periodically takes screenshots of designated web portals and runs OCR to detect compliance receipts.',0)}`,'<span class="mut xs">all off</span>')}</div>`,
+mcl:()=>`<div class="row-h"><div style="flex:1"><h2>Columns (MCL)</h2><p class="lead">The Master Column List: the schema for every client field. Changes apply immediately.</p></div>${btn('Add column','pri','plus','data-open="mcledit"')}</div><div class="stack" style="max-width:none">
+ <div class="row-h"><span class="mut sm">Drag ⋮⋮ to reorder (or Alt+↑ / Alt+↓). Selected: PAN. Shows-on ticks are staged until Save.</span><span class="sp"></span>${btn('Move up','sm','up')}${btn('Move down','sm','dn')}${btn('Delete column…','sm dng','trash','title="Asks first: all client values in this column are removed"')}</div>
+ ${card(null,`<table class="dt"><thead><tr><th style="width:28px"></th><th>Column</th><th>Type</th><th>Role</th><th title="Shows on: Main screen · Quick-copy · Admin screen (same flags as the three Visibility pages)">Shows on &nbsp;M · Q · A</th><th style="width:70px"></th></tr></thead><tbody>${COLS.map((c,i)=>`<tr class="${i===4?'sel':''}" data-mcl="${i}"><td class="mut" title="Drag to reorder (or Alt+↑ / Alt+↓)">⋮⋮</td><td style="font-weight:600">${c[0]}</td><td>${tag(c[1],c[1]==='password'?'r':'')}</td><td>${c[2]==='pk'?pill('Primary key · auto-serial','g'):c[2]==='identity'?pill('Identity','g'):c[2]==='anchor'?pill('Required anchor','w'):c[2]==='secret'?pill('Secret','r'):'<span class="mut">—</span>'}</td><td><span class="row-h" style="gap:4px">${[3,4,5].map(k=>cb(c[k],'','title="'+['Main screen','Quick-copy','Admin screen'][k-3]+'"')).join('')}</span></td><td>${btn('Edit','sm ghost','edit','data-open="mcledit"')}</td></tr>`).join('')}</tbody></table>`)}
+</div>`,
+services:()=>`<div class="row-h"><div style="flex:1"><h2>Services</h2><p class="lead">Compliance portals and their automation. Changes apply immediately.</p></div>${btn('Add service','pri','plus','data-open="svcedit"')}</div><div class="stack" style="max-width:none">
+ <div class="row-h"><span class="mut sm">Selected: Income Tax</span><span class="sp"></span>${btn('Delete service…','sm dng','trash','title="Asks first: the service is detached from all client profiles"')}</div>
+ ${card(null,`<table class="dt"><thead><tr><th>Service</th><th>Automation mode</th><th>Mode 2</th><th>Login URL</th><th style="width:70px"></th></tr></thead><tbody>${[['GST','Fast Autofill','—','services.gst.gov.in/services/login'],['IT','Fast Autofill','SMTI Assist','eportal.incometax.gov.in/iec/foservices/#/login'],['Email','MECP Copy','—','mail.example.in'],['TRACES','Fast Autofill','—','contents.tdscpc.gov.in/en/login.html'],['EPFO','Fast Autofill','—','unifiedportal-emp.epfindia.gov.in']].map((r,i)=>`<tr class="${i===1?'sel':''}"><td style="font-weight:600"><span class="row-h" style="gap:8px"><i class="dot" style="background:${SVC[r[0]]};box-shadow:none"></i>${svcName[r[0]]}</span></td><td>${tag(r[1],'g')}</td><td>${r[2]==='—'?'<span class="mut">—</span>':tag(r[2])}</td><td class="mono mut" style="max-width:300px">${r[3]}</td><td>${btn('Edit','sm ghost','edit','data-open="svcedit"')}</td></tr>`).join('')}</tbody></table>`)}
+</div>`,
+main:()=>`<h2>Main screen</h2><p class="lead">Choose which columns appear on the main client search grid. The Columns ▾ menu on All Clients edits the same flags.</p><div class="stack">${colList(3)}</div>`,
+qc:()=>`<h2>Quick-copy fields</h2><p class="lead">Choose which fields staff can click to copy the value.</p><div class="stack">${colList(4)}</div>`,
+admin:()=>`<h2>Admin screen</h2><p class="lead">Choose which columns appear on the client grid in Admin mode.</p><div class="stack">${colList(5)}</div>`,
+export:()=>`<h2>Export CSV</h2><p class="lead">Download client data or a blank import template.</p><div class="stack">${card(null,`${srow('Export all clients','Download every active client record as a CSV spreadsheet file.',btn('Export all clients','soft','dl','data-nodirty'),'auto')}${srow('Download import template','A blank CSV that matches your current Master Column List.',btn('Download template','','csv','data-nodirty'),'auto')}`)}</div>`,
+backup:()=>`<h2>Backup & restore</h2><p class="lead">Protect your data with regular backups or roll back to a previous snapshot.</p><div class="stack">
+ ${card(null,srow('Back up database','Copy the current encrypted database to a folder of your choice.',btn('Choose backup folder','soft','db','data-nodirty'),'auto'))}
+ ${card('Office recovery kit and security',`${srow('Export recovery kit (.serakit)','Export encrypted office credentials to a USB drive for disaster recovery.',btn('Export recovery kit','','key','data-nodirty'),'auto')}${srow('Change office master password','Update the master password used to recover office credentials without modifying client data.',btn('Change password','','lock','data-open="masterpw" data-nodirty'),'auto')}`,'<span class="mut xs">admin PC only</span>')}
+ ${card('Danger zone',srow('Restore database','Make a previous backup the data again (in an office: on every PC). The app restarts. Asks first.',btn('Restore from backup…','dng','restore','data-nodirty'),'auto','danger'),'','danger')}</div>`,
+purge:()=>`<h2>Purge duplicates</h2><p class="lead">Permanently remove duplicate client records that share identical identity values.</p><div class="stack">${card('Danger zone',srow('Purge duplicate clients','Scans all non-archived clients and deletes duplicates sharing the same identity values. The oldest record (lowest ID) is kept per group. This cannot be undone. Asks first.',btn('Run deduplication…','dng','broom','data-nodirty'),'auto','danger'),'','danger')}</div>`};
+function settingsShell(s,page,extra=''){
+ const save=SAVEPAGES.includes(page);
+ return `<div class="dlg d-full">${dlgHd('cog','Settings','Project Sera · this PC',ibtn('close','Close (Esc)','bd'))}
+ <div class="set"><nav class="set-nav"><div class="field" style="margin-bottom:6px">${I('search')}<input class="inp" placeholder="Search settings…" aria-label="Search settings"></div>
+ ${SETNAV.map(g=>`<div class="nav-label">${g[0]}</div>`+g[1].map(i=>`<div class="nav ${i[0]===page?'on':''}" tabindex="0" data-setpage="${i[0]}">${I(i[1])}<span>${i[2]}</span></div>`).join('')).join('')}</nav>
+ <div class="set-main" id="setmain"><div class="unsaved" id="unsaved" ${s.dirty?'':'hidden'}>${I('warn')}<span>${s.dirty} unsaved change${s.dirty===1?'':'s'}</span><span class="sp"></span>${btn('Discard','sm','','data-act="discard"')}${btn('Save changes','sm pri','check','data-act="save"')}</div>${SETPAGE[page]()}</div></div>
+ <div class="d-ft"><span class="mut sm">${save?'Save writes every pending change on every page at once.':'Changes on this page apply immediately.'}</span><span class="sp"></span>${btn('Close','','close','data-act="setclose"')}${save?btn('Save changes','pri','check',`data-act="save" ${s.dirty?'':'disabled'}`):''}</div></div>${extra}`;
+}
+const SETMETA={general:['General','settings_general.png'],actions:['Action buttons','settings_actions.png'],scc:['SCC vault presets','settings_scc.png'],tracker:['Tracker','settings_tracker.png'],mcl:['Columns (MCL)','settings_mcl.png'],services:['Services','settings_services.png'],main:['Main screen visibility','settings_main_vis.png'],qc:['Quick-copy fields','settings_qc.png'],admin:['Admin screen visibility','settings_admin_vis.png'],export:['Export CSV','settings_export.png'],backup:['Backup & restore','settings_backup.png'],purge:['Purge duplicates','settings_purge.png']};
+const SETABOUT={
+general:{c:['<b>Five cards</b> replace one long list: Display, Passwords and clipboard, Start-up, Clipboard assist (SCA), Schema info. Every control sits in a fixed-width right column so the edge lines up.','<b>Real switches</b> instead of green squares; steppers for numbers; the masking row shows a live preview.','<b>Screen scale</b> is a new row in Display (Automatic / 80–125 %, Apply, Restart now, running-at line). It saves on its own buttons because it is per PC, not a synced setting; it never marks the page dirty.','<b>Theme</b> shows Dark only (decided). Window size keeps its three options.','<b>Unsaved bar</b> appears at the top of the page as soon as something differs from the loaded values, with Discard and Save; the footer Save stays and enables with it.'],k:['Every setting key: theme, window_mode, masking mode, mask_reveal_count, clipboard_clear_seconds, quick_copy_enabled, run_in_background, autostart, sca_enabled, sca_action_mode, sca_max_uses; the ID column line.'],t:['Flip a switch: the unsaved bar appears and the footer Save enables. Discard clears it.']},
+actions:{c:['One switch in one card. The page keeps its explanatory lead because the per-service button type is chosen elsewhere (Services → Automation mode).'],k:['The show / hide eye setting and its effect in the client panel.'],t:['Flip the switch.']},
+scc:{c:['<b>Counts</b> become eight small stat tiles with the meaning of each in a tooltip, instead of a paragraph plus a one-line monospace string.','<b>Each formula</b> is a card: the formula as coloured pieces (PAN parts in emerald, the fixed string in amber), then the label and the string side by side with labels above them.','<b>Live preview</b> card keeps the test PAN and the four resolved lines; the real passwords stay on this PC, nothing is stored.'],k:['SCC enable, detect login mode, all 8 label / string fields, the test PAN, the four preview lines.'],t:['Type in any field: the unsaved bar appears.']},
+tracker:{c:['<b>SGT first</b> as the main engine in an emerald-edged card with its mode, the two record switches, SGT-I, the SGT lab button and the HUD pill switch. The three <b>older engines</b> are grouped below, with "all off" at a glance.','Long descriptions stay, slightly tightened; nothing removed. Section headers become cards.'],k:['SGT mode (Live / Shadow), Record pages for SGT testing, Record pages for Sera Distill, SGT-I, Open SGT lab, Show HUD pill, VSDC, VSDC-X, VSDC 24/7.'],t:['Flip a switch to see the unsaved bar.']},
+mcl:{c:['<b>A real table</b>: Column · Type · Role · Shows on M·Q·A · Edit. Type and role are tags, so "which fields are secret?" is answered at a glance.','<b>Shows on</b> ticks are a second editor for the three visibility pages (same flags); staged until Save, as everything else in this dialog.','<b>Labelled actions</b>: + Add column at the top, Edit per row, Move up / Move down and Delete column (set apart, asks first) for the selected row. The old +, pencil, bin and arrows toolbar goes.'],k:['Add, edit, delete, reorder; the standalone MCL manager dialog is kept for the Admin menu path (see Dialogs → MCL manager).'],t:['Click a row to select it. Add column / Edit open the column editor.']},
+services:{c:['<b>A table</b> with Service, Automation mode, Mode 2 and Login URL, instead of "GST [Fast Autofill]" text lines. Add service is the primary at the top; Edit per row; Delete service set apart at the bottom.'],k:['Add, edit, delete; the same service editor dialog.'],t:['Add service / Edit open the service editor.']},
+main:{c:['Same list as today but with real <b>switches</b>, a type tag, a "Find a column" box and an "N of 14 shown" count. The same flags appear in the Columns (MCL) table and in the All Clients Columns ▾ menu.'],k:['One switch per column, saved together on Save.'],t:['Flip a switch.']},
+qc:{c:['Same layout as Main screen; the switch means "staff can click to copy".'],k:['allow_quick_copy per column.'],t:['Flip a switch.']},
+admin:{c:['Same layout as Main screen; the switch means "shows on the admin grid".'],k:['admin_show_in_search per column.'],t:['Flip a switch.']},
+export:{c:['Two setting rows in one card with labelled actions; the arrow suffix on the buttons goes, the icon says what happens.'],k:['Export all clients, Download template.'],t:[]},
+backup:{c:['Back up stays a soft emerald action. <b>Restore</b> moves into a red-edged Danger zone card because it replaces the data on every PC and restarts the app.','The <b>Office recovery kit and security</b> rows (Export recovery kit, Change password) that the admin PC shows today get their own card here.'],k:['All four actions and their confirmations.'],t:['Change password opens its dialog over this page.']},
+purge:{c:['One Danger zone card; the destructive action is red and says it asks first.'],k:['Run deduplication and its confirmation.'],t:[]}};
+Object.keys(SETMETA).forEach(p=>S.push({id:'set-'+p,group:'Settings hub',title:SETMETA[p][0],before:SETMETA[p][1],setPage:p,render:s=>settingsShell(s,p),about:SETABOUT[p]}));
+
+/* =====================================================================
+   Dialogs
+   ===================================================================== */
+/* ---------- Audit log (SSAL) ---------- */
+const AUDIT=[[13,'Today 12:49','03 Oct 2026, 12:49:07 PM','Admin','View','x','Sharma Traders Pvt Ltd','—','Viewed client profile'],[12,'Today 12:49','03 Oct 2026, 12:49:05 PM','Priya','Create','g','Reddy Infra','—','Added new client'],[11,'Today 12:48','03 Oct 2026, 12:48:31 PM','Priya','Autofill','b','Bose Publications','GST','Extension autofill triggered for GST'],[10,'Today 12:48','03 Oct 2026, 12:48:02 PM','Rafiq','Manual assist','w','Singh Motors','Income Tax','Manual assist triggered for Income Tax'],[9,'Today 12:47','03 Oct 2026, 12:47:40 PM','Admin','Update','w','Nair Clinic','—','Updated PAN'],[8,'Today 11:02','03 Oct 2026, 11:02:11 AM','Rafiq','Manual copy','w','Khan Logistics','Email','MECP manual copy triggered for Email'],[7,'Yesterday 18:20','02 Oct 2026, 06:20:12 PM','Admin','Archive','x','Verma Electricals','—','Archived client'],[6,'Yesterday 17:55','02 Oct 2026, 05:55:48 PM','OFFICE-PC1','Sync received','b','—','—','Received 3 client changes from FRONT-DESK'],[5,'Yesterday 09:14','02 Oct 2026, 09:14:03 AM','Admin','CSV import','g','—','—','Imported 12 rows from clients.csv'],[4,'30 Sep 16:40','30 Sep 2026, 04:40:30 PM','Admin','Delete','r','Old Test Client','—','Deleted client'],[3,'30 Sep 16:38','30 Sep 2026, 04:38:00 PM','Admin','Audit log viewed','r','—','—','Opened SSAL audit log window'],[2,'29 Sep 10:05','29 Sep 2026, 10:05:55 AM','Priya','Filing submitted','g','Iyer Foods','Income Tax','ITR-4 AY 2026-27 submitted'],[1,'28 Sep 09:00','28 Sep 2026, 09:00:00 AM','Admin','Backup','x','—','—','Database backed up to D:\\SeraBackups']];
+const ATONE={x:['#eceeed','#4b5a52'],g:['#e3f3ea','#1c6b43'],b:['#e1ecff','#2456a8'],w:['#fff1d1','#8a6200'],r:['#ffe0e0','#a32121']};
+function auditDlg(s){
+ const r=AUDIT[s.auditSel];
+ return `<div class="dlg d-full">${dlgHd('shield','Audit log','Sera-Sync Audit Log (SSAL): every view, assist, copy and change, from this PC and the other Sera PCs',pill(dot()+' Host aggregator active','g','title="This PC collects the other workstations\' entries"')+ibtn('close','Close (Esc)','bd'))}
+ <div class="d-bd" style="padding:12px 16px 14px"><div class="audit">
+  <div class="ws"><div class="nav-label" style="padding-top:0">Workstations</div><div class="nav on">${I('laptop')}<span>All (this office)</span><span class="c">13</span></div><div class="nav">${I('laptop')}<span>OFFICE-PC1</span><span class="c">9</span></div><div class="nav">${I('laptop')}<span>FRONT-DESK</span><span class="c">3</span></div><div class="nav">${I('laptop')}<span>ADMIN-PC</span><span class="c">1</span></div></div>
+  <div style="display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0">
+   <div class="row-h chips-row" style="gap:8px"><div class="field" style="flex:1;min-width:200px">${I('search')}<input class="inp" placeholder="Search client, PAN, actor, action, service, details…" aria-label="Search audit log"></div><div class="chips">${chip('Action '+I('down','s'),false,'title="All actions · view · manual_assist · autofill · manual_copy · create · update · archive · unarchive · delete · csv_import · backup · restore · csv_export · filing_submitted · sync_pushed · sync_received · audit_log_viewed"')}${chip('Staff '+I('down','s'),false,'title="All staff, or type a name"')}${chip('Last 30 days '+I('down','s'),true,'title="All time · Today · Yesterday · Last 7 days · Last 30 days · Custom range (From / To)"')}${ibtn('refresh','Refresh','bd')}${btn('Export CSV…','soft','dl')}</div></div>
+   <div class="row-h"><span class="mut sm">13 log entries · 03 Sep – 03 Oct 2026</span><span class="sp"></span><span class="mut xs hide-c">From ${kb('2026-09-03')} to ${kb('2026-10-03')} when Custom range is chosen</span></div>
+   <div class="gridwrap"><div class="gridscroll"><table class="grid"><colgroup><col style="width:46px"><col style="width:120px"><col style="width:96px"><col style="width:132px"><col style="width:170px"><col class="col-lo" style="width:96px"><col class="col-lo"></colgroup><thead><tr><th>ID</th><th>When</th><th>Actor</th><th>Action</th><th>Client</th><th class="col-lo">Service</th><th class="col-lo">Detail</th></tr></thead><tbody>${AUDIT.map((a,i)=>`<tr class="${i===s.auditSel?'sel':''}" data-audit="${i}"><td class="num">${a[0]}</td><td class="num" title="${a[2]}">${a[1]}</td><td title="${a[3]}">${a[3]}</td><td><span class="gpill" style="background:${ATONE[a[5]][0]};color:${ATONE[a[5]][1]}">${a[4]}</span></td><td style="font-weight:600" title="${a[6]}">${a[6]}</td><td class="col-lo">${a[7]}</td><td class="col-lo" title="${a[8]}">${a[8]}</td></tr>`).join('')}</tbody></table></div></div>
+  </div>
+  ${card('Entry #'+r[0],`<div class="kv" style="grid-template-columns:1fr;padding-top:0"><div class="f"><label>When</label><div class="v">${r[2]}</div></div><div class="f"><label>Staff / workstation</label><div class="v">${r[3]} · OFFICE-PC1</div></div><div class="f"><label>Action</label><div class="v"><span class="gpill" style="background:${ATONE[r[5]][0]};color:${ATONE[r[5]][1]}">${r[4]}</span></div></div><div class="f"><label>Client</label><div class="v">${r[6]}</div></div><div class="f"><label>Service</label><div class="v">${r[7]}</div></div><div class="f" style="border:none"><label>Detail</label><div class="v" style="white-space:normal"><span style="white-space:normal">${r[8]}</span></div></div></div><div class="body" style="display:flex;gap:8px;padding-top:0;flex-wrap:wrap">${btn('Copy details','sm','copy')}${btn('Show only this client','sm','filter','title="Was: Filter Client"')}</div>`)}
+ </div></div></div>`;
+}
+S.push({id:'audit',group:'Dialogs',title:'Audit log (SSAL)',before:'dlg_audit_log.png',render:s=>`${sidebar('audit',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${auditDlg(s)}`,
+ about:{c:['<b>One filter row</b>: search, then Action, Staff and Date chips (the Date chip holds the five presets and Custom range with From / To), then Refresh and Export CSV. The count and the exact range sit under it.','<b>Details card on the right</b> fills in when a row is picked, instead of a half-empty drill-down box under the table. Both buttons stay: Copy details and Show only this client (was Filter Client).','<b>Readable values</b>: action pills by group (views grey, assists amber, audit red, sync blue, creates green), service names instead of numbers, "Today 12:49" with the full timestamp on hover.','<b>Workstations</b> list shows how many entries each PC has. The aggregator state is a pill, not a button. The window closes with ✕ (the top Close button of today).','<b>COMPACT</b>: the workstations column folds away (its filter lives behind the Staff chip), Service and Detail leave the grid since the details card shows them.'],k:['All 18 action types, staff filter, custom range, Export CSV (same columns, one added Service name column), Refresh, Copy details, Filter client.'],t:['Click any row: the details card updates.']}});
+
+/* ---------- Sera Sync ---------- */
+function syncDlg(s){
+ const t=s.syncTab;
+ const tabs=`<div class="tabs2">${[['devices','laptop','Devices'],['members','users','Office members'],['status','sync','Sync status']].map(x=>`<button data-synctab="${x[0]}" aria-selected="${t===x[0]}">${I(x[1],'s')}${x[2]}${x[0]==='status'?'<span class="n a">1</span>':''}</button>`).join('')}</div>`;
+ const devices=`<div class="row-h" style="justify-content:space-between"><span class="mut sm">Devices running Sera on your local network. Right-click a device to remove a manual address.</span>${btn('Scan again','sm','refresh','title="Was: Refresh"')}</div>
+  <div class="devcard sel"><div class="l1">${cb(1,'')}<b>FRONT-DESK</b><span class="mut sm">· staff: Rafiq</span><span class="sp"></span>${pill(dot()+' Normal','g','title="Mode / status"')}</div><div class="facts"><span>IP <b>192.168.1.14</b></span><span>Version <b>2.12.0</b></span><span>Database changed <b>Today 11:58</b></span><span>Clients / dumps <b>16 / 6</b></span></div></div>
+  <div class="devcard"><div class="l1">${cb(0,'')}<b>ADMIN-PC</b><span class="mut sm">· staff: Admin</span><span class="sp"></span>${pill('different office key — rejoin needed','w')}</div><div class="facts"><span>IP <b>192.168.1.10</b></span><span>Version <b>2.11.8</b></span><span>Database changed <b>02 Oct 18:30</b></span><span>Clients / dumps <b>15 / 4</b></span></div></div>
+  <div class="banner i">${I('info')}<span>Not seeing a PC? It must be on the same network, running Sera, with Sera Sync switched on.</span></div>
+  <div class="row-h" style="flex-wrap:wrap">${btn('Sync selected (1)','pri','sync')}${btn('Sync to all PCs','','sync')}<span class="sp"></span>${btn('Add PC by IP','','plus')}${btn('Remove PC by IP','','trash')}${btn('Rejoin office','','link','data-open="rejoin" title="Sera restarts and pairs with the admin PC"')}${btn('Export recovery kit','','key')}</div>`;
+ const members=`<div class="banner r">${I('warn')}<span>PC FRONT-DESK needs updating (schema 14 vs this PC's 15).</span></div>
+  ${card(null,`<table class="dt"><thead><tr><th>Name</th><th>Online</th><th>Role</th><th>Last successful sync (this PC)</th><th>This PC</th></tr></thead><tbody><tr class="sel"><td style="font-weight:600">OFFICE-PC1</td><td>${pill(dot()+' Online (this PC)','g')}</td><td>Admin</td><td class="mut">—</td><td>${pill('This PC')}</td></tr><tr><td style="font-weight:600">FRONT-DESK</td><td>${pill(dot()+' Online','g')}</td><td>Member</td><td>Today 11:58</td><td></td></tr><tr><td style="font-weight:600">ADMIN-PC</td><td>${pill(dot('off')+' Offline')}</td><td>Member</td><td>28 Sep 2026 19:51</td><td></td></tr></tbody></table>`)}
+  <div class="row-h">${btn('Add workstation','pri','laptop','title="Shows a 6-digit code for the new PC (5-minute window)"')}${btn('Remove','','users','title="Asks first"')}${btn('Hand over admin','','key','title="Asks first; the other PC then runs Become admin"')}${btn('Become admin','','shield','title="Asks for the office master password"')}</div>`;
+ const status=`${card(null,`<div class="stat" style="grid-template-columns:repeat(3,1fr)"><div><b>340</b><span>Pending outgoing changes · 1 member</span></div><div><b>0</b><span>Parked</span></div><div><b style="font-size:15px;line-height:28px">Live since 28 Sep</b><span>Sync mode</span></div></div><div class="banner w" style="margin:0 16px 12px">${I('warn')}<span>Parked changes exist older than 7 days (9 d).</span></div>`)}
+  ${card('Shadow mode · off',`<div class="body" style="padding-top:8px;display:flex;gap:8px;flex-wrap:wrap">${btn('Start shadow mode','','play','title="Start the 7-day shadow week on this PC (admin PC first, then every other PC). Asks for the admin PIN."')}${btn('Reset shadow mode','','undo','title="Set shadow mode off on this PC and set its shadow files aside"')}${btn('Go live','soft','bolt','title="Make this PC\'s shadow copy its live data and switch Sera Sync to live (after a restart)"')}<span class="sp"></span>${btn('Run now','','shield','title="Run the shadow-mode capture check now (also runs every 30 minutes)"')}</div><div class="log" style="margin:0 16px 14px;max-height:72px"><span class="ts">2026-09-28T19:08:58Z</span> peer_digest_check OK (peer ADMIN-PC): no local seal yet<br><span class="ts">2026-09-28T19:10:37Z</span> went live. Previous databases are in pre-golive-20260929_004037</div>`)}
+  ${card('Conflicts · field edits an older change lost to',`<table class="dt"><thead><tr><th>Table</th><th>Column</th><th>Kept</th><th>Discarded</th><th>When</th></tr></thead><tbody><tr class="sel"><td>clients</td><td>PH. NO.</td><td class="mono">98000 00009</td><td class="mono">98000 00019</td><td>Today 11:58</td></tr></tbody></table><div class="body" style="display:flex;gap:8px;padding-top:10px">${btn('Keep','sm','check','title="Acknowledge the row already holds the value that won"')}${btn('Use discarded value','sm','undo','title="Write the discarded value back, as a normal edit"')}</div>`)}`;
+ return `<div class="dlg d-full">${dlgHd('sync','Sera Sync','Keeps the client database the same on every Sera PC on this network',ibtn('close','Close (Esc)','bd'))}
+ <div class="d-bd" style="padding:12px 16px 14px;gap:10px">
+  <div class="banner w">${I('warn')}<span>This PC's network is Public, so other devices on it can reach Sera Sync. For security set it to Private: Windows Settings → Network → set this network to Private.</span></div>
+  <div class="strip">${pill(dot()+' Sync on','g')}<span><b>1</b> other PC online</span><span class="sep"></span><span class="mut">This PC:</span><b>OFFICE-PC1</b><span class="mut">· v2.12.0 · rev 1492</span><span class="sep"></span>${pill('Mode: live')}</div>
+  <div class="sync"><div style="display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow:auto">${tabs}${t==='devices'?devices:t==='members'?members:status}</div>
+  <div class="card activity" style="display:flex;flex-direction:column;min-height:0"><header><h3>${I('bolt','s')} Live activity</h3><span class="sp"></span>${btn('Clear','sm ghost','trash')}</header><div class="mut xs" style="padding:4px 16px 0">Real-time P2P sync events, revision scores and guard alerts</div><div class="log" style="margin:8px 12px 12px;flex:1"><span class="ts">[12:02:14]</span> <span class="tg peer">PEER</span> Found FRONT-DESK (rev 1488)<br><span class="ts">[12:02:15]</span> <span class="tg sync">SYNC</span> This PC is ahead by 4 revisions<br><span class="ts">[11:58:40]</span> <span class="tg sync">SYNC</span> Received 3 client changes from FRONT-DESK<br><span class="ts">[11:41:32]</span> <span class="tg guard">GUARD</span> Public network detected<br><span class="ts">[11:40:02]</span> <span class="tg net">NETWORK</span> Added manual PC: 192.168.1.10<br><span class="ts">[11:39:50]</span> <span class="tg err">ERROR</span> Could not reach ADMIN-PC: timeout 3 s</div></div></div>
+ </div><div class="d-ft">${btn('Close','','close')}</div></div>`;
+}
+S.push({id:'sync',group:'Dialogs',title:'Sera Sync',before:'dlg_sera_sync.png',render:s=>`${sidebar('clients',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${syncDlg(s)}`,
+ about:{c:['<b>Status strip</b> on one line: sync on, PCs online, this PC\'s name, version and revision, mode. It replaces the mint "N devices online" label in the title.','<b>Three tabs</b> on the left (Devices, Office members, Sync status) hold everything the 1,700-line dialog does, so nothing scrolls off at 1366 × 768; <b>Live activity</b> stays always visible on the right with Clear, as today.','<b>Devices</b> become cards with all seven facts (username, hostname, IP, version, DB modified, clients / dumps, mode / status); a tick selects, the context menu stays on the card. The empty box becomes a sentence that says what is needed. One primary: Sync selected (N).','<b>Network warning</b> becomes a slim amber banner rather than a red slab. Real errors stay red inside their tab.'],k:['Refresh (now Scan again), Add / Remove PC by IP, Rejoin office, Export recovery kit, Add workstation, Remove, Hand over admin, Become admin, pending / parked counts, Start / Reset shadow, Go live, Run now, conflicts Keep / Use discarded value, Clear, Close. Admin-only controls stay admin-only and keep their PIN confirmation.'],t:['Click the three tabs. Rejoin office opens its dialog.']}});
+
+/* ---------- MCL manager + column edit ---------- */
+function mclMgr(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:640px;height:560px" onclick="event.stopPropagation()">${dlgHd('cols','Master Column List (MCL)','Custom columns, field types and display order across the application')}
+ <div class="d-bd" style="gap:10px"><div class="row-h">${btn('Add column','pri','plus','data-open="mcledit"')}${btn('Edit','','edit','data-open="mcledit"')}<span class="sp"></span>${ibtn('up','Move column up','bd')}${ibtn('dn','Move column down','bd')}</div>
+ ${card(null,`<table class="dt"><thead><tr><th>Column</th><th>Type</th><th>Role</th></tr></thead><tbody>${COLS.slice(0,10).map((c,i)=>`<tr class="${i===0?'sel':''}"><td style="font-weight:600">${c[0]}</td><td>${tag(c[1],c[1]==='password'?'r':'')}</td><td>${c[2]==='pk'?pill('ID / auto-serial','g'):c[2]==='identity'?pill('Identity','g'):c[2]==='anchor'?pill('Internal PK anchor','w'):c[2]==='secret'?pill('Secret','r'):'<span class="mut">—</span>'}</td></tr>`).join('')}</tbody></table>`)}</div>
+ <div class="d-ft">${btn('Delete…','dng','trash','title="Asks first: all client values in this column are permanently removed"')}<span class="sp"></span>${btn('Close','','close','data-close')}</div></div></div>`;
+}
+function mclEdit(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:520px" onclick="event.stopPropagation()">${dlgHd('cols','Add new column','Define the column\'s label, data type and identity flags.')}
+ <div class="d-bd form"><div><label class="lab">Column label</label><input class="inp" placeholder="e.g. GSTIN, PAN No., Client Name, Password" aria-label="Column label"></div>
+ <div><label class="lab">Field type</label>${sel(['Text','Number','Alphanumeric','Password / Secret','Date','Dropdown','ID (Primary key / auto-serial)'],'Text','aria-label="Field type"')}</div>
+ <div><label class="lab">Dropdown options <span class="mut">(only for Dropdown)</span></label><input class="inp" placeholder="e.g. Active, Inactive, Pending" aria-label="Dropdown options" disabled style="opacity:.5"></div>
+ ${cb(0,'Display identity column (shows in search titles and header badges)')}${cb(0,'Internal primary key anchor (mandatory and unique legal identity, e.g. PAN / TAN)')}</div>
+ <div class="d-ft">${btn('Cancel','','','data-close')}${btn('Save column','pri','check','data-close')}</div></div></div>`;
+}
+S.push({id:'mclmgr',group:'Dialogs',title:'MCL manager',before:'dlg_mcl_manager.png',render:s=>settingsShell(s,'mcl',mclMgr()),
+ about:{c:['Kept as the standalone editor the Admin menu opens (the Settings → Columns page does the same job). Same frame as every other dialog: icon, title, one-line purpose, body, footer.','The text list "(text) [Identity]" becomes a <b>table</b> with type and role tags; the toolbar is labelled (Add column primary, Edit) with Move up / down as icon buttons with tooltips; <b>Delete</b> moves to the footer, set apart in red.'],k:['Add, Edit, Delete (with its confirmation), Move up, Move down, Close.'],t:['Add column or Edit opens the column editor on top.']}});
+S.push({id:'mcledit',group:'Dialogs',title:'MCL column edit',before:'dlg_mcl_column_edit.png',render:s=>settingsShell(s,'mcl',mclMgr()+mclEdit()),
+ about:{c:['Labels sit above their fields (the boxed "Column Label:" labels go). The two long checkboxes get their full text instead of being cut off at the dialog edge.','The <b>Dropdown options</b> field (present in code, shown only for the Dropdown type) is drawn disabled so its place is visible.'],k:['Column label, Field type (7 types), Dropdown options, Display identity column, Internal primary key anchor, Cancel, Save column.'],t:[]}});
+
+/* ---------- Service manager + edit ---------- */
+function svcMgr(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:600px;height:480px" onclick="event.stopPropagation()">${dlgHd('server','Compliance services catalog','Portal login links, automation modes and credential columns')}
+ <div class="d-bd" style="gap:10px"><div class="row-h">${btn('Add service','pri','plus','data-open="svcedit"')}${btn('Edit','','edit','data-open="svcedit"')}</div>
+ ${card(null,`<table class="dt"><thead><tr><th>Service</th><th>Automation mode</th><th>Mode 2</th></tr></thead><tbody>${[['GST','Fast Autofill','—'],['IT','Fast Autofill','SMTI Assist'],['Email','MECP Copy','—'],['TRACES','Fast Autofill','—'],['EPFO','Fast Autofill','—']].map((r,i)=>`<tr class="${i===0?'sel':''}"><td style="font-weight:600"><span class="row-h" style="gap:8px"><i class="dot" style="background:${SVC[r[0]]};box-shadow:none"></i>${svcName[r[0]]}</span></td><td>${tag(r[1],'g')}</td><td>${r[2]==='—'?'<span class="mut">—</span>':tag(r[2])}</td></tr>`).join('')}</tbody></table>`)}</div>
+ <div class="d-ft">${btn('Delete…','dng','trash','title="Asks first: the service is detached from all client profiles"')}<span class="sp"></span>${btn('Close','','close','data-close')}</div></div></div>`;
+}
+function svcEdit(){
+ const f=(l,c)=>`<div><label class="lab">${l}</label>${c}</div>`;
+ return `<div class="scrim" data-close><div class="dlg" style="width:560px" onclick="event.stopPropagation()">${dlgHd('server','New compliance service','Map portal login credentials and choose how this portal is autofilled.')}
+ <div class="d-bd form">${f('Service name','<input class="inp" placeholder="e.g. GST Returns, Income Tax, TRACES (TDS)" aria-label="Service name">')}${f('Login URL','<input class="inp" placeholder="e.g. https://services.gst.gov.in/services/login" aria-label="Login URL">')}
+ <div class="f2">${f('User ID column',sel(['Select…','USER ID','EMAIL','TAN'],'Select…','aria-label="User ID column"'))}${f('Password column',sel(['Select…','GST_Password','IT_Password','Email_Password','TDS_Password'],'Select…','aria-label="Password column"'))}</div>
+ <div class="f2">${f('Automation mode <span class="mut">· what the button and Alt+N do</span>',sel(['Fast Autofill','SMTI Manual Assist','MECP Manual Copy'],'Fast Autofill','aria-label="Automation mode" title="Fast Autofill: the extension fills and submits the login form. SMTI Manual Assist: an on-page widget to inject User ID / Password yourself. MECP Manual Copy: a floating card to copy credentials."'))}${f('Automation mode 2 <span class="mut">· optional second button</span>',sel(['None','Fast Autofill','SMTI Manual Assist','MECP Manual Copy'],'None','aria-label="Automation mode 2"'))}</div>
+ <div class="f2">${f('Extension login flow',sel(['Two-step (username first, then password)','Single page (username and password together)'],'Two-step (username first, then password)','aria-label="Extension login flow"'))}${f('Browser',sel(['Default (app setting)','Google Chrome','Microsoft Edge','Mozilla Firefox'],'Default (app setting)','aria-label="Browser" title="Browser that opens this portal when Sera has to launch one"'))}</div></div>
+ <div class="d-ft">${btn('Cancel','','','data-close')}${btn('Save service','pri','check','data-close')}</div></div></div>`;
+}
+S.push({id:'svcmgr',group:'Dialogs',title:'Service manager',before:'dlg_service_manager.png',render:s=>settingsShell(s,'services',svcMgr()),
+ about:{c:['Same treatment as the MCL manager: a table with Service, Automation mode and Mode 2 instead of "GST [Fast Autofill]" lines; labelled Add service (primary) and Edit; Delete set apart in the footer.'],k:['Add, Edit, Delete (with its confirmation), Close.'],t:['Add service / Edit opens the editor on top.']}});
+S.push({id:'svcedit',group:'Dialogs',title:'Service edit',before:'dlg_service_edit.png',render:s=>settingsShell(s,'services',svcMgr()+svcEdit()),
+ about:{c:['Labels above fields, two columns for the paired choices, so the dialog is 560 px wide and 440 px tall instead of a tall single column. The long help texts stay in tooltips on the two mode combos.','The <b>Browser</b> row (present in code under the login flow) is drawn; the screenshot cuts it off.'],k:['Service name, Login URL, User ID column, Password column, Automation mode, Automation mode 2, Extension login flow, Browser, Cancel, Save service; portal auto-detection on typing and the "Watch this portal?" question on save.'],t:[]}});
+
+/* ---------- CSV import ---------- */
+function csvImport(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:720px;height:560px" onclick="event.stopPropagation()">${dlgHd('csv','Import clients from CSV','Add new clients or update existing ones from a spreadsheet.')}
+ <div class="d-bd"><div class="banner i" style="align-items:flex-start">${I('info')}<span>A row that matches an existing client\'s identity column (GSTIN, PAN or name) <b>updates</b> that client. Other rows <b>create</b> a new client. Attach services with a "Services" column or "Service: [name]" columns holding Yes / No.</span></div>
+ <div style="border:1px dashed #3a3a3a;border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px;background:#171717"><span class="mut" style="flex:1">No CSV file selected. The file\'s encoding is detected and shown here.</span>${btn('Browse CSV…','','csv')}</div>
+ ${card('Column mapping preview',`<table class="dt"><thead><tr><th>CSV header</th><th>Maps to MCL column</th></tr></thead></table>${empty('grid','Choose a file to see how its columns match','Rows map to NAME OF COMPANY, PAN… · "Service: GST (Yes/No)" · system metadata ignored · unmatched columns skipped.')}`)}</div>
+ <div class="d-ft">${btn('Cancel','','','data-close')}${btn('Import data','pri dis','ul','title="Enabled once a file is chosen; a summary (new, updated, warnings) follows"')}</div></div></div>`;
+}
+S.push({id:'csv',group:'Dialogs',title:'CSV import',before:'dlg_csv_import.png',render:s=>`${sidebar('import',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${csvImport()}`,
+ about:{c:['The three rules become one info banner; the file row is a drop area with Browse CSV; the empty mapping table says what will appear. Import data is disabled until a file is chosen.','The follow-up <b>Import summary</b> dialog (new clients created, existing updated, warnings, Done) keeps its content in the same dialog frame; not drawn separately.'],k:['Browse CSV…, the mapping table (CSV header → MCL column), Cancel, Import data.'],t:[]}});
+
+/* ---------- Change master password ---------- */
+function masterPw(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:520px" onclick="event.stopPropagation()">${dlgHd('lock','Change master password','Update the password used to recover the office key and protect recovery kits.')}
+ <div class="d-bd form"><div><label class="lab">Current password</label><input class="inp" type="password" placeholder="Current master password" aria-label="Current password"></div><div><label class="lab">New password</label><input class="inp" type="password" placeholder="At least 8 characters" aria-label="New password"></div><div><label class="lab">Confirm new password</label><input class="inp" type="password" placeholder="Type it again" aria-label="Confirm new password"></div><div class="mut sm">The database is not modified. Only the key recovery file is re-encrypted.</div></div>
+ <div class="d-ft">${btn('Cancel','','','data-close')}${btn('Change password','pri','check','data-close')}</div></div></div>`;
+}
+S.push({id:'masterpw',group:'Dialogs',title:'Change master password',before:'dlg_change_master_password.png',render:s=>settingsShell(s,'backup',masterPw()),
+ about:{c:['Same dialog frame; labels above the fields; the note stays. Opened from Settings → Backup & restore → Change password.'],k:['Current, New (min 8), Confirm, the note, Cancel, Change password.'],t:[]}});
+
+/* ---------- Office recovery (unlock) ---------- */
+function recovery(){
+ return desk(`<div class="dlg" style="width:560px">${dlgHd('shield','Office key unlock required','This Windows account can\'t unlock Sera. Enter the office master password.')}
+ <div class="d-bd form"><div><label class="lab">Master password</label><div class="field"><input class="inp" type="password" placeholder="Enter office master password" aria-label="Master password" style="padding-left:12px;padding-right:40px"><div class="tail">${ibtn('eye','Show / hide password','sm')}</div></div></div>
+ <div class="banner r" hidden>${I('warn')}<span>Wrong password (4 attempts remaining).</span></div>
+ <div class="row-h" style="justify-content:space-between"><span class="mut sm">Lost the password? Use the office recovery kit from the USB drive.</span>${btn('Restore from recovery kit file…','','key')}</div></div>
+ <div class="d-ft">${btn('Exit','','')}${btn('Unlock','pri','lock')}</div></div>`);
+}
+S.push({id:'recovery',group:'Dialogs',title:'Office recovery (unlock)',before:'dlg_office_recovery.png',render:recovery,
+ about:{c:['Shown before the shell, so it sits on the plain dark desktop. Same frame; the recovery-kit button gets a sentence that says when to use it; the wrong-password message is a red banner (hidden until needed) instead of a bare label.'],k:['Master password with eye, Restore from recovery kit file…, Exit, Unlock, the attempts-remaining message.'],t:[]}});
+
+/* ---------- Rejoin office ---------- */
+function rejoin(){
+ return `<div class="scrim" data-close><div class="dlg" style="width:600px" onclick="event.stopPropagation()">${dlgHd('link','Rejoin office','This PC gets the office database from the admin PC.')}
+ <div class="d-bd form"><div class="banner i" style="align-items:flex-start">${I('info')}<span>Its current files are moved to a "legacy" folder first (nothing is deleted). Afterwards Sera shows what only this PC has (clients, audit entries, tracker filings) and imports it after you confirm. On the admin PC, open Sera Sync → Add workstation to get a 6-digit code.</span></div>
+ <div><label class="lab">This PC\'s current master password <span class="mut">· only asked if the saved one doesn\'t work</span></label><input class="inp" type="password" aria-label="Current master password" disabled style="opacity:.5"></div>
+ <div class="f2"><div><label class="lab">Admin PC address (IP)</label><input class="inp" placeholder="e.g. 192.168.1.10" aria-label="Admin PC address"></div><div><label class="lab">Pairing code</label><input class="inp mono" placeholder="123 456" aria-label="Pairing code"></div></div>
+ <div><label class="lab">This PC\'s name</label><input class="inp" value="OFFICE-PC1" aria-label="This PC\'s name"></div></div>
+ <div class="d-ft">${btn('Cancel','','','data-close')}${btn('Rejoin','pri','link','title="Sera restarts, pairs, downloads the office database"')}</div></div></div>`;
+}
+S.push({id:'rejoin',group:'Dialogs',title:'Rejoin office',before:'dlg_rejoin_office.png',render:s=>`${sidebar('clients',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${syncDlg(s)}${rejoin()}`,
+ about:{c:['Opened from Sera Sync → Rejoin office. The explanation becomes an info banner; the optional old-password field (asked only when the saved one fails) is drawn disabled so its place is visible; Rejoin is the one primary and sits last.','The follow-up <b>Import this PC\'s data</b> dialog (counts found only on this PC, per-column "take this PC\'s values" checkboxes, Import / Not now / Don\'t import) keeps its content in the same frame; not drawn.'],k:['Old master password, Admin PC address, Pairing code, This PC\'s name, Rejoin, Cancel, the error line.'],t:[]}});
+
+/* ---------- First run ---------- */
+function firstRun(s){
+ const stepTabs=`<div class="tabs2" style="margin:-4px 0 4px">${[['welcome','1 · Welcome'],['create','2a · Create a new office'],['join','2b · Join an existing office']].map(x=>`<button data-frstep="${x[0]}" aria-selected="${(s.frStep||'welcome')===x[0]}">${x[1]}</button>`).join('')}</div>`;
+ const step=s.frStep||'welcome';
+ let body,foot;
+ if(step==='welcome'){body=`<div class="choice" data-frgo="create"><div class="d-ic">${I('bldg','l')}</div><div><b>Create a new office</b><span>Set up a new office on this PC. You will choose the office master password.</span></div>${I('right')}</div>
+  <div class="choice" data-frgo="join"><div class="d-ic b">${I('laptop','l')}</div><div><b>Join an existing office</b><span>Pair with the office admin PC using the 6-digit code shown in its "Add workstation" dialog, then download the office database.</span></div>${I('right')}</div>`;foot=`${btn('Exit','','')}`;}
+ else if(step==='create'){body=`<div class="mut sm">This PC becomes the office admin PC. Choose a name for the office and a master password (it recovers the office key and protects recovery kits).</div><div><label class="lab">Office name</label><input class="inp" placeholder="e.g. Aman Associates" aria-label="Office name"></div><div class="f2"><div><label class="lab">Master password (min 8 characters)</label><input class="inp" type="password" aria-label="Master password"></div><div><label class="lab">Confirm master password</label><input class="inp" type="password" aria-label="Confirm master password"></div></div><div class="banner r" hidden>${I('warn')}<span>Error text appears here.</span></div>`;foot=`${btn('Back','','back','data-frgo="welcome"')}<span class="sp"></span>${btn('Create office','pri','bldg')}`;}
+ else {body=`<div class="mut sm">On the admin PC, open Sera Sync → Add workstation. Enter the 6-digit code it shows, or pick the admin PC below.</div><div class="row-h" style="justify-content:space-between"><span class="sm">Admin PCs with an open pairing window</span>${btn('Scan LAN','sm','radar')}</div>${card(null,`<table class="dt"><thead><tr><th>Office</th><th>Admin PC</th><th>IP address</th></tr></thead><tbody><tr class="sel"><td>Aman Associates</td><td>ADMIN-PC</td><td class="mono">192.168.1.10</td></tr></tbody></table>`)}<div class="f2"><div><label class="lab">Or admin PC address (IP)</label><input class="inp" placeholder="e.g. 192.168.1.50" aria-label="Admin PC address"></div><div><label class="lab">Pairing code</label><input class="inp mono" placeholder="123 456" aria-label="Pairing code"></div></div><div class="mut sm">Found 1 open pairing window.</div>`;foot=`${btn('Back','','back','data-frgo="welcome"')}<span class="sp"></span>${btn('Pair & join','pri','link')}`;}
+ return desk(`<div class="dlg" style="width:640px;min-height:470px"><div class="d-hd" style="gap:14px">${LOGO.replace('class="logo"','class="logo" style="width:40px;height:40px"')}<div style="flex:1"><h2>Welcome to Project Sera</h2><p>No local database was detected. Choose how to set up this workstation.</p></div></div>
+ <div class="d-bd form">${stepTabs}${body}</div><div class="d-ft">${foot}</div></div>`);
+}
+S.push({id:'firstrun',group:'Dialogs',title:'First run',before:'dlg_first_run.png',render:firstRun,
+ about:{c:['Two <b>choice cards</b> instead of two full-width buttons with floating descriptions; the logo is the real mark. Exit stays in the footer.','The two follow-on pages the dialog has in code (Create new office; Join office with Scan LAN, peers table, manual IP and code) are drawn behind the step tabs so their controls are visible. The tabs are a mockup device only; the app moves between pages with the buttons.','The <b>Workstation join request</b> prompt that the admin PC shows (host wants to join, code, Allow / Reject, auto-reject timer) keeps its content in the same frame; not drawn.'],k:['Create a new office, Join an existing office, Exit; Office name, Master password, Confirm, Back, Create office; Scan LAN, peers table, manual IP, Pairing code, Back, Pair & join, status line.'],t:['Click the cards or the step tabs.']}});
+
+/* ---------- Force update ---------- */
+function forceUpdate(){
+ return desk(`<div class="dlg" style="width:560px">${dlgHd('warn','Mandatory update required','A new version of Project Sera is required to continue.','','w')}
+ <div class="d-bd"><div class="row-h" style="justify-content:center;gap:12px;padding:4px 0"><span class="mut sm">Current version</span>${pill('2.12.0')}${I('right')}<span class="mut sm">New version</span>${pill('v2.13.0','g')}</div>
+ ${card('Release notes',`<div class="body" style="padding-top:8px;color:var(--text2);max-height:120px;overflow:auto">Demo release notes.</div>`)}
+ <div class="progress"><i style="width:0"></i></div><div class="mut sm">Click Update now to install the mandatory update. Sera restarts when it finishes. This window cannot be closed.</div></div>
+ <div class="d-ft">${btn('Exit application','','','title="Asks: Project Sera cannot run without this update. Are you sure?"')}${btn('Update now','pri','rocket')}</div></div>`);
+}
+S.push({id:'update',group:'Dialogs',title:'Force update',before:'dlg_force_update.png',render:forceUpdate,
+ about:{c:['The red slab becomes a calm amber header (attention, not danger); versions become two pills; the release notes a card; one emerald primary (Update now) and a plain Exit application. The progress bar and status line stay for the download.'],k:['Current / new version, release notes, status line, progress, Exit application (asks first), Update now; cannot be closed with ✕ or Esc.'],t:[]}});
+
+/* ---------- Start-up loading ---------- */
+S.push({id:'loading',group:'Dialogs',title:'Start-up loading',before:'dlg_startup_loading.png',render:()=>desk(`<div class="dlg" style="width:440px;padding:26px 28px;gap:14px;align-items:center;text-align:center">${LOGO.replace('class="logo"','class="logo" style="width:56px;height:56px"')}<div><h2 style="font-size:var(--f-xl)">Project Sera</h2><div class="mut" style="margin-top:3px">Initializing security vault…</div></div><div class="progress" style="width:260px"><i style="width:38%"></i></div></div>`),
+ about:{c:['The green card becomes the same dark dialog frame: the real logo, the app name, the status line that the start-up updates, and an emerald progress bar.'],k:['Title, status text, progress.'],t:[]}});
+
+/* ---------- Legacy settings dialog ---------- */
+function legacy(s){
+ const t=s.legTab||'general';
+ const tabs=`<div class="tabs2">${[['general','General'],['buttons','Action buttons'],['main','Main screen'],['qc','Quick-copy'],['admin','Admin screen']].map(x=>`<button data-legtab="${x[0]}" aria-selected="${t===x[0]}">${x[1]}</button>`).join('')}</div>`;
+ let body;
+ if(t==='general')body=`${card(null,`${srow('Application theme','',sel(['Dark'],'Dark','aria-label="Theme"'))}${srow('Window display mode','',sel(['Fullscreen / maximised (default)','Square (1:1)','Rectangular (950 × 680)'],'Fullscreen / maximised (default)','aria-label="Window mode"'))}${srow('Password masking mode','',sel(['First N characters visible','Last N characters visible','Full dots'],'First N characters visible','aria-label="Masking"'))}${srow('Visible characters count','',step(5))}${srow('Auto clipboard clear','',step(30,' s'))}${swrow('Enable Quick-Copy (master toggle)','',1)}${swrow('Keep app running in background when closed','',1)}${swrow('Launch Project Sera automatically on Windows startup','',1)}${swrow('Enable Sera DOM (DOM detector — File Submission Tracker)','',0)}${swrow('Enable SCA (Sera Clipboard Assist)','',1)}${srow('SCA action mode','',sel(['Ambient autofill','SCA widget'],'Ambient autofill','aria-label="SCA mode"'))}${srow('SCA uses per copied UID','',step(1,' uses'))}${srow('ID / primary key column','',pill('No. — auto-serial','g'),'auto')}`)}`;
+ else if(t==='buttons')body=card(null,`<div class="srow"><div class="t"><span>Configure visibility of service action buttons in the client panel.</span></div></div>${swrow("Enable 'Ext' button (Extension Autofill)",'',1)}${swrow("Enable 'Assist' button (SMTI Manual Assist)",'',1)}${swrow("Enable 'Copy' button (MECP Manual Copy)",'',1)}${swrow("Enable 'Show / Hide' password eye buttons",'',0)}`);
+ else body=colList(t==='main'?3:t==='qc'?4:5);
+ return `<div class="scrim" data-close><div class="dlg" style="width:760px;height:640px" onclick="event.stopPropagation()">${dlgHd('cog','Application settings (legacy)','Display preferences, credential masking, automation daemons and column visibility.')}
+ <div class="d-bd" style="gap:10px">${tabs}${body}</div><div class="d-ft">${btn('Cancel','','','data-close')}${btn('Save settings','pri','check','data-close')}</div></div></div>`;
+}
+S.push({id:'legacy',group:'Dialogs',title:'Legacy settings dialog',before:'dlg_settings_legacy.png',render:s=>`${sidebar('options',s)}<div class="main">${searchHd(s)}${filterRow()}${selbar(s,null)}${searchGrid(null,false)}</div>${legacy(s)}`,
+ about:{c:['The old tabbed dialog is still in the code (settings_dialog.py). If it stays reachable, it gets the same frame, tabs, setting rows and switches as the hub; nothing else changes. Its "Light Mode (Default)" entry shows Dark like the hub.','Its Action buttons tab has three extra switches (Ext, Assist, Copy buttons) the hub no longer offers; they are drawn as they are.'],k:['All five tabs and their controls, Cancel, Save settings.'],t:['Click the five tabs.']}});
+
+/* ---------- Foundation: tokens and the kit ---------- */
+S.unshift({id:'kit',group:'Foundation',title:'Tokens and component kit',before:null,render:s=>`<div class="fx" style="grid-column:1/-1">
+<section><h3>Colour tokens</h3><div class="sw-row">${[['--bg','#202020'],['--side','#171717'],['--panel','#141414'],['--card','#191919'],['--line','#2a2a2a'],['--line2','#363636'],['--text','#f8fafc'],['--text2','#c9d1d9'],['--muted','#8e8d88'],['--em','#2e9b5f'],['--em2','#34b76d'],['--emdim','#1a382b'],['--emdeep','#0e1f16'],['--mint','#4cf9b7'],['--danger','#ff4d4d'],['--warn','#e3b341'],['--info','#5aa7ff'],['--g-bg','#ffffff'],['--g-head','#101713'],['--g-sel','#d9f2e4']].map(c=>`<div class="sw-c"><i style="background:${c[1]}"></i><div><b>${c[0]}</b>${c[1]}</div></div>`).join('')}</div><div class="mut sm">Emerald is the one primary per screen. Red is only for destructive actions. Amber means attention. Mint is for selected / active text on dark surfaces.</div></section>
+<section><h3>Sizes · radii 6 / 8 / 12 · spacing 4 8 12 16 20 24 · type 11 12 13 14 17 21 · controls 32 (buttons) 34 (inputs) 28 (chips) · rows 40 · sidebar 212 · setting control column 230</h3></section>
+<section><h3>Labelled action · icon button · segmented</h3><div class="demo">${btn('Primary','pri','plus')}${btn('Soft','soft','bolt')}${btn('Secondary','','copy')}${btn('Ghost','ghost','')}${btn('Danger','dng','trash')}${btn('Disabled','dis','')}${btn('Small','sm','edit')}${ibtn('refresh','Icon button','bd')}${ibtn('plus','Icon primary','bd pri')}<div class="segbtn"><button class="on">Containers</button><button>Raw captures</button></div></div></section>
+<section><h3>Chip · switch · pill · tag · key</h3><div class="demo"><div class="chips">${chip('All <span class="n">16</span>',true)}${chip('Has services')}${chip('Client: Unregistered '+I('down','s'),true)}${chip('More '+I('down','s'))}</div>${sw(1)}${sw(0)}${pill(dot()+' Sync on','g')}${pill('Attention','w')}${pill('Secret','r')}${pill('Sync received','b')}${pill('Neutral')}${tag('text')}${tag('password','r')}${tag('Fast Autofill','g')}${kb('Alt 1')}${kb('Ctrl K')}</div></section>
+<section><h3>Inputs · stepper · checkbox</h3><div class="demo"><div class="field" style="width:260px">${I('search')}<input class="inp" placeholder="Search…" aria-label="demo search"></div>${sel(['Select','Other'],'Select','style="width:180px" aria-label="demo select"')}<div style="width:150px">${step(30,' sec')}</div>${cb(1,'Checked')}${cb(0,'Unchecked')}</div></section>
+<section><h3>Card · setting row · status strip · selection bar · unsaved bar · empty state · banner</h3><div style="display:grid;gap:10px;max-width:900px">
+${card('Card title',`${srow('Setting row','Label and sub-label left, control in a fixed-width right column.',sel(['Option'],'Option','aria-label="demo"'))}${swrow('Switch row','On / off settings use a switch, never a checkbox.',1)}`,'<span class="mut xs">header extra</span>')}
+<div class="strip">${pill(dot()+' Sync on','g')}<span><b>1</b> other PC online</span><span class="sep"></span><span class="mut">This PC:</span><b>OFFICE-PC1</b></div>
+${selbar({admin:true},'Sharma Traders Pvt Ltd')}
+<div class="unsaved">${I('warn')}<span>2 unsaved changes</span><span class="sp"></span>${btn('Discard','sm')}${btn('Save changes','sm pri','check')}</div>
+${card(null,empty('laptop','No other PCs found yet','Open Sera on another PC on the same network, then press Scan again.',btn('Scan again','sm','refresh')))}
+<div class="banner w">${I('warn')}<span>Attention banner.</span></div><div class="banner r">${I('warn')}<span>Error banner.</span></div><div class="banner i">${I('info')}<span>Information banner.</span></div></div></section>
+<section><h3>The white data grid</h3><div class="gridwrap" style="height:200px;flex:none">${searchGrid(1,false).replace('<div class="gridwrap">','').slice(0,-6)}</div></section>
+<section><h3>Dialog frame</h3><div class="dlg" style="width:460px;height:200px;position:relative">${dlgHd('shield','Dialog title','One line saying what this does.',ibtn('close','Close','bd'))}<div class="d-bd mut">Body</div><div class="d-ft">${btn('Cancel')}${btn('Primary action','pri','check')}</div></div></section>
+</div>`,
+ about:{c:['Everything on every screen is one of these: labelled action, icon button, chip, switch, card, pill, tag, key, input / select / stepper / checkbox, setting row, status strip, selection bar, unsaved bar, empty state, banner, toast, white grid, dark list table, dialog frame.','Icons carry the Material Design name the app uses (hover one).'],k:[],t:[]}});
+
+/* =====================================================================
+   Boot and interaction
+   ===================================================================== */
+const navlist=document.getElementById('navlist'),frame=document.getElementById('frame'),app=document.getElementById('app'),cap=document.getElementById('cap'),about=document.getElementById('about');
+let cur=null;
+(function buildNav(){
+ let g='';S.forEach(sc=>{if(sc.group!==g){g=sc.group;const h=document.createElement('h4');h.textContent=g;navlist.appendChild(h);}
+  const b=document.createElement('button');b.dataset.id=sc.id;b.innerHTML=sc.title+(sc.before?`<small>../current/${sc.before}</small>`:'<small>no screenshot today</small>');navlist.appendChild(b);});
+})();
+function layout(){
+ const W=st.compact?1024:1366,H=768;frame.style.width=W+'px';frame.style.height=H+'px';
+ const lw=Math.round(W/st.scale),lh=Math.round(H/st.scale);
+ app.style.width=lw+'px';app.style.height=lh+'px';app.style.transform=`scale(${st.scale})`;
+ const collapsed=lw<1000&&st.sbUser!==true;
+ app.classList.toggle('sb-collapsed',collapsed||st.sbUser===false);
+ const pageW=lw-((collapsed||st.sbUser===false||app.classList.contains('nosb'))?0:212);
+ app.classList.toggle('compact',pageW<1080);
+ app.classList.toggle('narrow',pageW<800);
+ cap.innerHTML=`<span>Frame <b>${W} × ${H}</b> px</span><span>Scale <b>${Math.round(st.scale*100)} %</b> → logical <b>${lw} × ${lh}</b></span><span>Page width <b>${pageW}</b> → <b>${pageW<1080?'COMPACT':'WIDE'}</b> (switches below 1080)</span><span>Sidebar <b>${(collapsed||st.sbUser===false)?'collapsed':'shown'}</b>${collapsed?' (auto below 1000)':''}</span>`;
+}
+function show(id,keep){
+ const sc=S.find(x=>x.id===id)||S[0];cur=sc;
+ if(!keep){st.dlg=null;st.panelMenu=false;st.colsMenu=false;}
+ if(sc.setPage)st.setPage=sc.setPage;
+ navlist.querySelectorAll('button').forEach(b=>b.setAttribute('aria-current',b.dataset.id===sc.id?'page':'false'));
+ render();
+ try{history.replaceState(null,'','#'+sc.id)}catch(e){}
+ document.getElementById('beforeBtn').disabled=!sc.before;document.getElementById('beforeBtn').style.opacity=sc.before?1:.4;
+ const n=sc.about||{c:[],k:[],t:[]};
+ about.innerHTML=`<div><h4>What changes</h4><ul>${n.c.map(x=>`<li>${x}</li>`).join('')||'<li>—</li>'}</ul></div><div><h4>Kept as it is</h4><ul>${n.k.map(x=>`<li>${x}</li>`).join('')||'<li>—</li>'}</ul></div><div><h4>Try it</h4><ul>${n.t.map(x=>`<li>${x}</li>`).join('')||'<li>—</li>'}</ul></div>`;
+}
+function render(){
+ const sc=cur;const nosb=['kit','recovery','firstrun','update','loading','audit','sync','rejoin'].includes(sc.id)||sc.id.startsWith('set-')||['mclmgr','mcledit','svcmgr','svcedit','masterpw'].includes(sc.id);
+ app.classList.toggle('nosb',nosb);
+ app.innerHTML=sc.render(st);
+ layout();
+}
+/* viewer controls */
+document.getElementById('modeSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;st.compact=b.dataset.mode==='compact';[...e.currentTarget.children].forEach(x=>x.setAttribute('aria-pressed',x===b));layout();});
+document.getElementById('scaleSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;st.scale=+b.dataset.scale;[...e.currentTarget.children].forEach(x=>x.setAttribute('aria-pressed',x===b));layout();});
+document.getElementById('adminSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;st.admin=b.dataset.admin==='1';[...e.currentTarget.children].forEach(x=>x.setAttribute('aria-pressed',x===b));render();});
+navlist.addEventListener('click',e=>{const b=e.target.closest('button');if(b)show(b.dataset.id);});
+/* Before lightbox */
+const lb=document.getElementById('lb');
+document.getElementById('beforeBtn').addEventListener('click',()=>{if(!cur||!cur.before)return;document.getElementById('lbTitle').textContent='Before · '+cur.title;document.getElementById('lbPath').textContent='../current/'+cur.before;const pic=document.getElementById('lbPic');pic.innerHTML=`<img src="../current/${cur.before}" alt="Today's ${cur.title}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'miss',textContent:'Screenshot not found at ../current/${cur.before}. Open this file from Mockups/fleet/ so the relative path resolves.'}))">`;lb.classList.add('on');});
+document.getElementById('lbClose').addEventListener('click',()=>lb.classList.remove('on'));
+lb.addEventListener('click',e=>{if(e.target===lb)lb.classList.remove('on')});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(lb.classList.contains('on'))lb.classList.remove('on');else if(st.dlg){st.dlg=null;render();}else if(st.panelMenu||st.colsMenu){st.panelMenu=st.colsMenu=false;render();}}});
+/* in-app interaction (event delegation) */
+function markDirty(el){if(el.closest('[data-nodirty]')||el.hasAttribute('data-nodirty'))return;if(!el.closest('#setmain'))return;st.dirty++;const u=document.getElementById('unsaved');if(u){u.hidden=false;u.querySelector('span').textContent=`${st.dirty} unsaved change${st.dirty===1?'':'s'}`;}document.querySelectorAll('.d-ft [data-act="save"]').forEach(b=>b.removeAttribute('disabled'));}
+app.addEventListener('click',e=>{
+ const t=e.target;
+ const act=t.closest('[data-act]');
+ if(act){const a=act.dataset.act;
+  if(a==='sbtoggle'){st.sbUser=app.classList.contains('sb-collapsed');layout();return;}
+  if(a==='admin'){st.admin=!st.admin;document.querySelectorAll('#adminSeg button').forEach(x=>x.setAttribute('aria-pressed',(x.dataset.admin==='1')===st.admin));render();return;}
+  if(a==='openpanel'){show('panel');return;}
+  if(a==='closepanel'){show('search');return;}
+  if(a==='panelmenu'){st.panelMenu=!st.panelMenu;render();return;}
+  if(a==='colsmenu'){st.colsMenu=!st.colsMenu;render();return;}
+  if(a==='mcclear'){st.mcSel=[];render();return;}
+  if(a==='trk-grouped'){st.trkView='grouped';render();return;}
+  if(a==='trk-raw'){st.trkView='raw';render();return;}
+  if(a==='discard'||a==='save'){st.dirty=0;render();return;}
+  if(a==='setclose'){if(st.dirty){alert('Mockup: the app asks Save / Discard / Keep editing here.');}return;}
+ }
+ const op=t.closest('[data-open]');if(op){const id=op.dataset.open;const sc=S.find(x=>x.id===id);if(sc){show(id);}return;}
+ if(t.closest('[data-close]')&&!t.closest('.dlg')||t.closest('button[data-close]')){
+  const back={mcledit:'mclmgr',mclmgr:'set-mcl',svcedit:'svcmgr',svcmgr:'set-services',masterpw:'set-backup',csv:'search',legacy:'search',rejoin:'sync',display:'search'};
+  if(back[cur.id]){show(back[cur.id]);return;}}
+ const sw=t.closest('.sw');if(sw&&!sw.hasAttribute('disabled')){sw.setAttribute('aria-checked',sw.getAttribute('aria-checked')!=='true');if(sw.dataset.act!=='admin')markDirty(sw);return;}
+ const c=t.closest('.cb');if(c){c.classList.toggle('on');c.setAttribute('aria-checked',c.classList.contains('on'));markDirty(c);return;}
+ const ch=t.closest('.chip');if(ch){const grp=ch.closest('[data-chips="single"]');if(grp){grp.querySelectorAll('.chip.on').forEach(x=>{if(x!==ch)x.classList.remove('on')});ch.classList.add('on');}else ch.classList.toggle('on');return;}
+ const sc=t.closest('.svcchip');if(sc){sc.classList.toggle('on');return;}
+ const tile=t.closest('.tile');if(tile){tile.parentElement.querySelectorAll('.tile').forEach(x=>x.classList.toggle('on',x===tile));return;}
+ const row=t.closest('tr[data-row]');if(row){const i=+row.dataset.row;st.sel=(st.sel===i)?null:i;const tb=row.closest('tbody');tb.querySelectorAll('tr').forEach(x=>x.classList.toggle('sel',+x.dataset.row===st.sel));const slot=document.getElementById('selslot');if(slot)slot.innerHTML=selbar(st,st.sel===null?null:people[st.sel][0]);return;}
+ const mc=t.closest('[data-mc]');if(mc){const i=+mc.dataset.mc;if(e.ctrlKey||e.metaKey||e.shiftKey){st.mcSel=st.mcSel.includes(i)?st.mcSel.filter(x=>x!==i):[...st.mcSel,i];}else st.mcSel=[i];render();return;}
+ const au=t.closest('tr[data-audit]');if(au){st.auditSel=+au.dataset.audit;render();return;}
+ const mcl=t.closest('tr[data-mcl]');if(mcl&&!t.closest('.cb')&&!t.closest('button')){mcl.parentElement.querySelectorAll('tr').forEach(x=>x.classList.toggle('sel',x===mcl));return;}
+ const sp=t.closest('[data-setpage]');if(sp){show('set-'+sp.dataset.setpage,true);return;}
+ const stab=t.closest('[data-synctab]');if(stab){st.syncTab=stab.dataset.synctab;render();return;}
+ const fr=t.closest('[data-frgo],[data-frstep]');if(fr){st.frStep=fr.dataset.frgo||fr.dataset.frstep;render();return;}
+ const lt=t.closest('[data-legtab]');if(lt){st.legTab=lt.dataset.legtab;render();return;}
+ const nav=t.closest('[data-nav]');if(nav){const m={clients:'search',manage:'manage',tracker:'tracker',audit:'audit',import:'csv',display:'display',options:'set-general',sync:'sync',staff:null};const id=m[nav.dataset.nav];if(id)show(id);return;}
+ const stp=t.closest('.stepper button');if(stp){const s=stp.parentElement.querySelector('span');const m=s.textContent.match(/^(\d+)(.*)$/);if(m){s.textContent=(+m[1]+(stp.textContent==='+'?1:-1))+m[2];markDirty(stp);}return;}
+});
+app.addEventListener('change',e=>{markDirty(e.target);});
+app.addEventListener('input',e=>{if(e.target.matches('input[type=text],input:not([type]),textarea'))markDirty(e.target);});
+show((location.hash||'').slice(1)||'search');
+</script>
+</body>
+</html>
