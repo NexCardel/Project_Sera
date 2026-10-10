@@ -1,22 +1,22 @@
-# UI overhaul — report (2026-10-10 15:26)
+# UI overhaul — report (2026-10-10 15:48)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 33 |
+| Not started | 32 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 3 |
+| Done | 4 |
 | Blocked | 0 |
 
-Runs: 1   output tokens: 92509   API-equivalent cost: $8.46
+Runs: 2   output tokens: 184200   API-equivalent cost: $8.46
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | W0-1 | Done | haiku | 40bc942 | Baseline: full test suite, start-up and memory numbers, current snapshots | Baseline: startup/memory tests pass, 31 UI screenshots rendered, cloud environment viable for offscreen testing |
 | W0-2 | Done | sonnet | 537924a | Behaviour lock: tests for every 'must still work' item, green on the unchanged code | Behaviour lock: 8 offscreen test files tests/test_ui_lock_*.py (R1-R9 gaps) + goldens, no app code changed; Tracker CSV export bug (no import csv) locked as-is; |
-| W0-3 | Not started | mechanical |  | Screen inventory |  |
+| W0-3 | Done | mechanical | 5191b06 | Screen inventory | Screen inventory written to Mockups/INVENTORY.md |
 | W0-D | Done | fable | e0d32a5 | Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML mockup | Fleet mockup by Fable 5.1 (cloud); owner decisions and BUILD-PLAN.md in 9d66d4e |
 | W0-R | Not started | opus |  | Review the safety net |  |
 | T-1 | Not started | haiku |  | Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ... |  |

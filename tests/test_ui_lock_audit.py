@@ -193,6 +193,7 @@ def test_search_matches_client_token_actor_action_detail_and_id(world):
         ("bhanu", {2, 4, 6, 8, 10, 12, 14, 16, 21}),                    # actor
         ("sync_re", {16}),                                              # action
         ("after the range", {20}),
+        ("21", {21}),                                                   # row id
     ]:
         win.txt_search.setText(text)
         _wait_filter()

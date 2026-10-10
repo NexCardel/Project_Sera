@@ -106,6 +106,7 @@ logs/sdis/
 ~*
 scratch/
 .pytest_cache/
+.pytest_tmp*/
 data/
 tools/vsdc_uia_probe_output/
 

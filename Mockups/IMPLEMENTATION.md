@@ -616,3 +616,14 @@ files, tests, decisions taken, what the next WP must know.`
   and tested status. Cross-referenced against tests/: every attribute reached by any test in tests/ is tagged with a target
   marker (🎯) and its covering test files. No application code changed. All behaviour-lock tests pass offscreen.
   Next WP (W0-D / Phase T/K) has the authoritative reference for control preservation and 'where every control went' checks.
+- **W0-R** (2026-10-10, claude-opus-5-5): Mutation review of the W0-2 lock. One mutation per area, each went red, each undone (file back to HEAD):
+  detail - Alt+Ctrl+n wired to the Mode-1 action (test_alt_n_and_alt_ctrl_n_...); search - Enter in the search box disconnected
+  (test_enter_in_the_search_box_...); settings - scc_opt3_fixed_str dropped from the save (both golden-settings tests);
+  audit - "Last 7 Days" from -6 days (test_date_presets_...); sync - activity cap drops the newest row (test_activity_list_is_capped_...).
+  Gap found and fixed: audit search claims to match the row id but no case did; added ("21", {21}) to
+  tests/test_ui_lock_audit.py and confirmed it goes red when the id field is removed from match_fields. Audit search over
+  service_name is not lockable (get_audit_logs never returns that key; the Service column shows the id). Sync conflict panel,
+  Add Workstation and Hand Over Admin are locked by tests/test_sync_office_ui.py, not by test_ui_lock_sync.py.
+  INVENTORY.md: all 31 PNGs in Mockups/current/ have a section. The 5 lock files: 147 passed. No app code changed.
+  Note for workers: `git checkout -- <file>` is not on the shell allow-list; undo mutations with an exact reverse Edit + `git diff --stat`.
+  .gitignore now has `.pytest_tmp*/` (the --basetemp folder was being swept in by `git add -A`; unstaging is not on the allow-list).
