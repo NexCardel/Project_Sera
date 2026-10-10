@@ -36,7 +36,10 @@ def _office_db(tmp_path):
     from database import SeraDatabase
     sync_office.create_new_office(tmp_path, "Aman Associates", "OfficeMaster#2026", "Admin PC")
     hex_key = sera_keys.dek_hex(sera_keys.load_dek(tmp_path))
-    return SeraDatabase(str(tmp_path / "master.db"), hex_key, defer_startup_maintenance=True)
+    db = SeraDatabase(str(tmp_path / "master.db"), hex_key, defer_startup_maintenance=True)
+    # create_new_office starts a new office "live" (sync_office.py); these tests start from "off".
+    db.set_sync_mode("off")
+    return db
 
 
 def _dialog(tmp_path, monkeypatch, *, answer=True, pin=True):

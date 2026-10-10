@@ -27,6 +27,9 @@ from .sgt_toolbox import CHECKS, TRANSFORMS, period_sort_key
 # Icon-font glyphs (Unicode private use area) that UIA reports as text on the portals.
 _PRIVATE_USE = re.compile("[-]")
 _SPACES = re.compile(r"\s+")
+# What can trail a label without being its value: "(ARN) is:", "is", "are:" - a bracketed short form
+# and/or a linking word. "Name of the Bank" (a different label) is not filler.
+_LABEL_FILLER = re.compile(r"^(?:\([^)]{1,12}\)\s*)?(?:(?:is|are)\b\s*)?[:\-–]*$", re.IGNORECASE)
 
 
 # A wizard stepper names every step, including the ones still to come ("Return Successfully
@@ -189,6 +192,10 @@ def _hits(spec: FieldSpec, lines: Sequence[str], lo: int, hi: int, today: date) 
         if not m:
             continue
         rest = m.group("rest").strip()
+        if rest and _LABEL_FILLER.match(rest):
+            rest = ""                   # "...Number (ARN) is:" - the label's own tail; the value is on the next line
+        if spec.label_sep == "required" and not m.group("sep"):
+            continue                    # "GSTIN of Supplier ..." / a bare "GSTIN" header: not this field
         if rest and spec.label_rest != "ignore":
             if spec.label_rest == "value" or m.group("sep"):
                 got = extract_value(spec, rest, today)

@@ -130,6 +130,7 @@ class Sidebar(QFrame):
     
     # Action Signals
     action_import_csv = Signal()
+    action_display_scale = Signal()
     action_manage_clients = Signal()
     action_tracker_dump = Signal()
     action_audit_log = Signal()
@@ -277,6 +278,8 @@ class Sidebar(QFrame):
         self.btn_settings = self._create_admin_nav_button("Options", self.action_settings, "mdi.cog-outline")
         self.btn_manage_staff = self._create_admin_nav_button("Manage Staff Users", self.action_manage_staff, "mdi.briefcase-outline")
         self.btn_new_clients = self._create_nav_button("Import CSV", self.action_import_csv, "mdi.database-outline")
+        # Open to everyone (unlike Options): a PC's own screen scale is not an admin setting.
+        self.btn_display_scale = self._create_nav_button("Display", self.action_display_scale, "mdi.monitor")
 
         # Spacer keeps the navigation at the top while the account area stays pinned.
         self.layout.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Minimum, QSizePolicy.Expanding))

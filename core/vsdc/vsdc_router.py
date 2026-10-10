@@ -206,7 +206,8 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+# Two hours, the same idle limit as SGT's sessions (core/sgt/sgt_shadow.py IDLE_END_SEC).
+_SESSION_IDLE_TIMEOUT_SEC = 2 * 3600
 
 
 class VSDCRouter:
@@ -447,6 +448,13 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
 
+    def set_client_lookup(self, lookup) -> None:
+        """lookup(portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None.
+        SGT uses it where a page shows the user ID but not the client's GSTIN."""
+        self._client_lookup = lookup
+        if self._sgt is not None:
+            self._sgt.set_client_lookup(lookup)
+
     def set_scc_handlers(self, factory) -> None:
         """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
         self._scc_handlers = factory
@@ -485,7 +493,9 @@ class VSDCRouter:
                                   sdis=SdisRecorder(enabled=getattr(self, "_sdis_record", True)),
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
-                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
+                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
+                                  ask_demotion=self.notify_demotion,
+                                  resolve_client=getattr(self, "_client_lookup", None))
             self._apply_sgt_i()
             self._apply_scc()
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
@@ -549,6 +559,18 @@ class VSDCRouter:
             self._hud_buffer.append((event_type, title, subtitle, snapshot))
             return
         self._emit_activity(event_type, title, subtitle, snapshot)
+
+    on_demotion = None          # set by the app: shows the "lower this status?" dialog (called from SGT's thread)
+
+    def notify_demotion(self, info: Dict[str, Any]) -> None:
+        """SGT saw a lower status for a filing that has an ARN and asks the user before lowering it."""
+        cb = self.on_demotion
+        if callable(cb):
+            cb(info)
+
+    def answer_demotion(self, token: str, lower: bool) -> None:
+        if self._sgt is not None:
+            self._sgt.answer_demotion(token, lower)
 
     def notify_sgt(self, event_type: str, title: str, subtitle: str, context: Dict[str, Optional[str]]) -> None:
         """

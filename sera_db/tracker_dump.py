@@ -12,6 +12,9 @@ from core.dataset_key import NOT_CARRIER_SQL, compute_dataset_key as _compute_da
 from sera_db.common import SKELETON_NAME_REGEX
 
 
+RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
+
+
 class TrackerDumpMixin:
 
     # The canonical key lives in core/dataset_key.py so SGT (live) builds exactly the same one.
@@ -157,6 +160,8 @@ class TrackerDumpMixin:
         # Resolve incoming dataset key components
         page_url_norm = None
         incoming_form = filing_type or ""
+        incoming_pref = ""
+        status_correction = False
         cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
         taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
@@ -167,6 +172,8 @@ class TrackerDumpMixin:
                     raw_p = p_obj.get("raw_payload") if isinstance(p_obj.get("raw_payload"), dict) else {}
                     dataset_key = dataset_key or p_obj.get("dataset_key") or raw_p.get("dataset_key")
                     incoming_form = p_obj.get("filing_type") or raw_p.get("filing_type") or incoming_form
+                    incoming_pref = p_obj.get("filing_preference") or raw_p.get("filing_preference") or ""
+                    status_correction = bool(p_obj.get("status_correction"))
                     taxpayer_id = p_obj.get("gstin") or p_obj.get("pan") or raw_p.get("gstin") or raw_p.get("pan") or taxpayer_id
                     page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
                     if page_url and isinstance(page_url, str):
@@ -187,7 +194,8 @@ class TrackerDumpMixin:
                 portal=portal,
                 identifier=taxpayer_id,
                 form_type=incoming_form or filing_type,
-                period_label=period_label
+                period_label=period_label,
+                preference=incoming_pref
             )
 
         # 2. Write capture to rawPayload.db and update SRPF container
@@ -247,7 +255,7 @@ class TrackerDumpMixin:
                     ex_status, ex_arn = ex_row
                     try:
                         from core.vsdc.vsdc_assembler import get_status_rank
-                        if get_status_rank(ex_status) > get_status_rank(status):
+                        if get_status_rank(ex_status) > get_status_rank(status) and not status_correction:
                             status = ex_status
                             if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A":
                                 arn_number = ex_arn
@@ -366,6 +374,7 @@ class TrackerDumpMixin:
                     "capture_method": capture_method,
                     "status": status,
                     "raw_payload_json": raw_payload_json,
+                    "captured_by": captured_by,
                     "created_at": now
                 }
             )
@@ -791,6 +800,7 @@ class TrackerDumpMixin:
                         "capture_method": d["capture_method"],
                         "status": d.get("status"),
                         "raw_payload_json": d["raw_payload_json"],
+                        "captured_by": d.get("captured_by"),
                         "created_at": d["created_at"]
                     }
                 )
@@ -813,18 +823,43 @@ class TrackerDumpMixin:
 
         return updated_count
 
-    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None) -> list[dict]:
-        """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db."""
+    @staticmethod
+    def _payload_field_sql(*paths: str) -> str:
+        """SQL that reads the first non-empty of some JSON paths out of raw_payload_json (NULL when the
+        payload is not JSON at all, so one bad row cannot fail the whole list query)."""
+        parts = [f"NULLIF(json_extract(raw_payload_json, '{p}'), '')" for p in paths]
+        return f"CASE WHEN json_valid(raw_payload_json) THEN COALESCE({', '.join(parts)}) END"
+
+    def get_tracker_dumps(self, client_id: int = None, limit: int = 200, search_query: str = None,
+                          slim: bool = False, dump_id: int = None) -> list[dict]:
+        """Reads tracker_dump entries from rawPayload.db and enriches them with client names from master.db.
+
+        slim=True is for the list view: the payload itself is not transferred. The three things the
+        list shows from it (the submission status, the device name, the client name) are read out of
+        the payload inside SQLite, so the rows are the same as a full read would give them. Slim rows
+        have raw_payload_json == "" and "_slim": True; fetch one row with dump_id=... when its payload
+        is needed. limit=-1 means no limit."""
         with self._connect_raw() as r_conn:
-            sql = """SELECT id, client_id, unassigned_identity, service_id, portal,
-                            period_label, arn_number, capture_method, status,
-                            raw_payload_json, captured_by, created_at, dataset_key, notes
-                     FROM tracker_dump
-                     WHERE """ + NOT_CARRIER_SQL     # SDIS carrier rows are not datasets (S.4)
+            extra = ""
+            if slim:
+                extra = (", " + self._payload_field_sql("$.status", "$.raw_payload.status") + " AS payload_status"
+                         + ", " + self._payload_field_sql("$.device_name", "$.raw_payload.device_name") + " AS device_name"
+                         + ", " + self._payload_field_sql("$.client_name", "$.name", "$.taxpayer_name",
+                                                          "$.raw_payload.client_name", "$.raw_payload.client_temp_name")
+                         + " AS payload_name"
+                         + ", " + self._payload_field_sql("$.raw_payload.recovered_by.tool", "$.recovered_by.tool") + " AS recovered_tool")
+            payload_col = "''" if slim else "raw_payload_json"
+            sql = ("SELECT id, client_id, unassigned_identity, service_id, portal, "
+                   "period_label, arn_number, capture_method, status, "
+                   f"{payload_col}, captured_by, created_at, dataset_key, notes{extra} "
+                   "FROM tracker_dump WHERE " + NOT_CARRIER_SQL)     # SDIS carrier rows are not datasets (S.4)
             params = []
             if client_id:
                 sql += " AND client_id = ?"
                 params.append(client_id)
+            if dump_id is not None:
+                sql += " AND id = ?"
+                params.append(dump_id)
             if search_query:
                 sql += " AND (arn_number LIKE ? OR portal LIKE ? OR period_label LIKE ? OR unassigned_identity LIKE ? OR dataset_key LIKE ?)"
                 q = f"%{search_query}%"
@@ -876,6 +911,7 @@ class TrackerDumpMixin:
         for r in rows:
             cid = r[1]
             unassigned_id = r[2]
+            slim = len(r) > 14
             raw_json_str = r[9] or ""
             p_obj = None
             if raw_json_str and raw_json_str != "{}":
@@ -883,9 +919,21 @@ class TrackerDumpMixin:
                     p_obj = json.loads(raw_json_str) if isinstance(raw_json_str, str) else raw_json_str
                 except Exception:
                     pass
+            elif slim and r[16]:
+                # slim row: the payload's name fields, read in SQL, stand in for the payload below
+                p_obj = {"client_name": r[16]}
+
+            # A row mr_fixer corrected (core/sdis/arn_fixer.py) shows "/-" right after the client's name.
+            if slim:
+                recovered = bool(r[17]) if len(r) > 17 else False
+            else:
+                rp = p_obj.get("raw_payload") if isinstance(p_obj, dict) else None
+                recovered = isinstance(rp, dict) and isinstance(rp.get("recovered_by"), dict) and bool(rp["recovered_by"].get("tool"))
+            mark = RECOVERED_NAME_MARK if recovered else ""
 
             if cid and cid in client_map:
-                info = client_map[cid]
+                info = dict(client_map[cid])
+                info["name"] = f"{info['name']}{mark}"
             elif unassigned_id:
                 # 1. Try container map
                 c_name = unassigned_map.get(unassigned_id, "")
@@ -898,13 +946,13 @@ class TrackerDumpMixin:
                             (p_obj.get("raw_payload", {}).get("client_temp_name") if isinstance(p_obj.get("raw_payload"), dict) else "") or ""
                         )
                 if c_name and not SKELETON_NAME_REGEX.search(c_name):
-                    info = {"name": f"{c_name} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
+                    info = {"name": f"{c_name}{mark} ({unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
                 else:
                     info = {"name": f"Unregistered (PAN: {unassigned_id})", "pan": unassigned_id, "is_unassigned": True}
             else:
                 info = {"name": "Unregistered Client", "pan": "", "is_unassigned": True}
 
-            results.append({
+            row = {
                 "id": r[0], "client_id": cid, "unassigned_identity": unassigned_id,
                 "is_unassigned": info.get("is_unassigned", False),
                 "client_name": info["name"], "pan": info["pan"],
@@ -912,7 +960,10 @@ class TrackerDumpMixin:
                 "period_label": r[5] or "", "arn_number": r[6] or "N/A", "capture_method": r[7] or "DOM_Tracker",
                 "status": r[8] or "submitted", "raw_payload_json": r[9] or "{}", "captured_by": r[10] or "System",
                 "created_at": r[11], "dataset_key": r[12] if len(r) > 12 else "", "notes": r[13] if len(r) > 13 else ""
-            })
+            }
+            if slim:
+                row.update({"_slim": True, "payload_status": r[14], "device_name": r[15] or ""})
+            results.append(row)
 
         # Default chronological entry organisation: latest entry at top
         results.sort(key=lambda x: (str(x.get("created_at") or ""), x.get("id") or 0), reverse=True)

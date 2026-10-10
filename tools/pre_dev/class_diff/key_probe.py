@@ -53,7 +53,9 @@ CAPTURE (default): like SGT, the probe keeps reading the page - every --interval
 --seconds (30 s) - while you use it normally. A read is kept only when the page's keys or texts
 changed, and every kept read is merged by key into one map per page link (link_map.py), so the
 capture ends as ONE page holding every node that appeared: form, popup, success message. The
-console shows each change as it happens. One capture = one session (one client): compare.py
+console shows each change as it happens. Every kept read also goes to snapshot_diff.AnchorPage,
+which builds the link's COMP PAGE (the anchor page plus every node attached later; see
+snapshot_diff.py) and writes comp_<start>_<n>__<page>.json/.csv/.txt for compare.py --comp. One capture = one session (one client): compare.py
 compares the latest capture of a link with the previous one. Files: capture_<start>_<n>.txt/.json
 (n = the n-th page link the capture visited).
 
@@ -69,6 +71,7 @@ import sys
 import time
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -424,11 +427,14 @@ def _typed(docs: List[List[Dict[str, Any]]], in_control: Optional[set] = None) -
              for n in doc] for doc in docs]
 
 
-def capture(hwnd: int, seconds: float, interval: float) -> Dict[str, Dict[str, Any]]:
+def capture(hwnd: int, seconds: float, interval: float, session: str = "",
+            anchor: str = "settled") -> Dict[str, Dict[str, Any]]:
     """Poll the window for `seconds`, like SGT: every `interval` read the page (raw view); keep the
     read only when its keys or texts changed since the last kept read OF THAT PAGE LINK, and merge
-    every kept read into that link's map. Returns {page link: state}. Ctrl+C ends it early."""
+    every kept read into that link's map AND hand it to snapshot_diff.AnchorPage, which builds the
+    link's comp page (anchor page + attached nodes). Returns {page link: state}. Ctrl+C ends it early."""
     import link_map
+    from snapshot_diff import AnchorPage
 
     pages: Dict[str, Dict[str, Any]] = {}
     start = time.monotonic()
@@ -443,7 +449,8 @@ def capture(hwnd: int, seconds: float, interval: float) -> Dict[str, Dict[str, A
             raw = read_keys(hwnd, True)
             browser = browser_name_of_hwnd(hwnd)
             st = pages.setdefault(page, {"title": title, "polls": 0, "snapshots": [], "last": None,
-                                         "map": link_map.LinkMap("", page, browser=browser)})
+                                         "map": link_map.LinkMap("", page, browser=browser),
+                                         "anchor": AnchorPage(page, session, browser, anchor), "quiet": False})
             st["polls"] += 1
             if raw:
                 docs = _typed(raw)
@@ -455,13 +462,20 @@ def capture(hwnd: int, seconds: float, interval: float) -> Dict[str, Dict[str, A
                     first = not st["snapshots"]
                     st["snapshots"].append({"t": round(t, 1), "docs": docs})
                     st["last"] = sig
-                    res = st["map"].add({"docs": docs}, seen)
+                    st["map"].add({"docs": docs}, seen)
+                    row = st["anchor"].add({"docs": docs}, seen, quiet_before=st["quiet"])
+                    st["quiet"] = False
                     if first:
                         _say(f"  {seen:>7s}  page: {page[-60:]}")
                     else:
-                        news = [b for b in res["blocks"] if b["texts"]]
-                        what = " ; ".join(" | ".join(x[:25] for x in b["texts"][:3]) for b in news[:2])
-                        _say(f"  {seen:>7s}  changed" + (f" - NEW: {what}" if news else " (values)"))
+                        what = []
+                        for tag, k in (("+", "attached_texts"), ("-", "left_texts"), ("<", "returned_texts")):
+                            if row[k]:
+                                what.append(f"{tag}{len(row[k])}: " + " | ".join(x[:25] for x in row[k][:3]))
+                        _say(f"  {seen:>7s}  {row['phase']:6s} {row['nodes']:4d} nodes  "
+                             + ("  ".join(what) if what else f"(values: {row['text_changed']} changed)"))
+                else:
+                    st["quiet"] = True
             time.sleep(max(0.0, interval - (time.monotonic() - start - t)))
     except KeyboardInterrupt:
         _say("  stopped early (Ctrl+C)")
@@ -542,6 +556,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--seconds", type=float, default=30.0, help="how long to capture (default 30)")
     ap.add_argument("--interval", type=float, default=1.0, help="seconds between reads while capturing (default 1)")
     ap.add_argument("--once", action="store_true", help="one read only (the old behaviour), no capture")
+    ap.add_argument("--anchor", choices=("settled", "first"), default="settled",
+                    help="comp page: settled (default) = the anchor page is fixed once the loaded page sits still "
+                         "for a poll; first = the first snapshot alone")
     ap.add_argument("--timing", action="store_true", help="time SGT's reader in control vs raw view; writes nothing")
     ap.add_argument("--rounds", type=int, default=15, help="reads per view for --timing (default 15)")
     args = ap.parse_args(argv)
@@ -572,7 +589,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         started = datetime.now()
         session = f"{started:%Y%m%d_%H%M%S}"
         _say(f"Capturing for {args.seconds:g} s - use the page normally (type, open popups, submit). Ctrl+C stops early.")
-        pages = capture(hwnd, args.seconds, args.interval)
+        pages = capture(hwnd, args.seconds, args.interval, session, args.anchor)
         _say("Done.")
         for n, (page, st) in enumerate(pages.items(), 1):
             if not st["snapshots"]:
@@ -590,6 +607,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             _say(f"  {page[-50:]}: {st['polls']} polls, {len(st['snapshots'])} kept, "
                  f"{len(st['map'].to_flat())} nodes, {len(st['map'].events)} events")
             _say(f"  Report: {path}")
+            from snapshot_diff import write_comp
+            apg = st["anchor"]
+            comp = apg.comp_flat()
+            out = write_comp(apg, Path(path[:-4].replace(os.sep + "capture_", os.sep + "comp_")))
+            _say(f"  Comp page: {len(comp)} nodes (anchor {sum(1 for e in comp if e['origin'] == 'anchor')}, "
+                 f"attached {sum(1 for e in comp if e['origin'] == 'attached')}; anchor fixed at "
+                 f"{apg.settled_at or 'never'}) -> {out['json'].name}")
         return 0
 
     url = read_url(hwnd)

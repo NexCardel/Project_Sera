@@ -36,6 +36,7 @@ except Exception:
     qta = None
 # Only the Material Design icon font is used; loading qtawesome's other 11 costs ~15 MB.
 from ui.utils.icon_fonts import restrict_icon_fonts
+from ui.utils.ui_scale import choose_startup_scale, next_manual_value, read_settings, write_settings, MODE_MANUAL
 restrict_icon_fonts()
 from core.memlog import mark as memory_mark
 
@@ -57,6 +58,8 @@ class SyncSignalBridge(QObject):
     update_found_signal = Signal(dict)
     update_ready_signal = Signal(str, dict)
     maintenance_done_signal = Signal()
+    # The ARN-row fixer (core/sdis/arn_autofix.py) changed tracker rows on its thread: refresh the view.
+    arn_autofix_done_signal = Signal(int)
     join_approval_signal = Signal(str, str, str, object)
     # SyncEngine's "synced" event (P3-5/P3-8): sorted list of tables an applied batch touched.
     engine_synced_signal = Signal(list)
@@ -64,6 +67,8 @@ class SyncSignalBridge(QObject):
     engine_alert_signal = Signal(str, str)
     # An SCC save (core/scc/save.py) from SCC-U's thread: client id, client name, PAN, outcome.
     scc_saved_signal = Signal(int, str, str, str)
+    # SGT saw a LOWER status for a filing that has an ARN: ask before lowering it (info dict).
+    sgt_demotion_signal = Signal(dict)
 
 import security
 from database import SeraDatabase
@@ -181,6 +186,11 @@ class SeraApp:
             except Exception:
                 pass
 
+        # Per-PC UI scale for small screens (ui/utils/ui_scale.py). Must run before QApplication reads
+        # QT_SCALE_FACTOR; it never raises, and falls back to 100 %.
+        self.ui_scale, _scale_note = choose_startup_scale()
+        memory_mark(f"[UI] scale={self.ui_scale:.2f} ({_scale_note})")
+
         # Enable High-DPI and smooth fractional scaling (125%, 150%, etc.)
         if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
             QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -212,9 +222,11 @@ class SeraApp:
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
+        self.sync_bridge.arn_autofix_done_signal.connect(lambda _n: self._refresh_tracker_dump_ui())
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
         self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
+        self.sync_bridge.sgt_demotion_signal.connect(self._ask_sgt_demotion)
         self.sync_bridge.engine_alert_signal.connect(
             lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
@@ -484,9 +496,12 @@ class SeraApp:
                         target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
                         name="shadow-mirror-catch-up", daemon=True).start()
                 self.db.set_seal_timing_callback(_seal_timing_cb)
-                # SDIS Part P: finished capture files go to the admin PC after a sync round.
-                from core.sdis.transfer import Pusher
-                self._sdis_pusher = Pusher(self.sync_engine, on_event=self.sync_service.log_activity)
+                # SDIS excavator: on its own timer, sends unsent capture files to the admin PC (or parks
+                # them with a live line in the sync panel); on the admin PC it checks what arrived.
+                from core.sdis.excavator import Excavator
+                self._sdis_excavator = Excavator(self.sync_engine, on_event=self.sync_service.log_activity)
+                self._sdis_excavator.start()
+                self.app.aboutToQuit.connect(self._sdis_excavator.stop)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -607,6 +622,17 @@ class SeraApp:
         self.app.processEvents()                      # paint the window now
         memory_mark("start-up: window painted")
         QTimer.singleShot(0, self._start_capture_engines)
+        # Failed ARN-only GST rows are fixed from the corpus on the admin PC, unattended, a while after
+        # start-up (core/sdis/arn_autofix.py); the excavator fills the corpus in the meantime.
+        try:
+            from core.sdis import arn_autofix
+            _svc = getattr(self, "sync_service", None)
+            arn_autofix.start_background(
+                self.db, self.app_dir,
+                on_event=(_svc.log_activity if _svc is not None else None),
+                on_done=lambda n: self.sync_bridge.arn_autofix_done_signal.emit(n))
+        except Exception as exc:
+            print(f"[ARN fixer] not started: {exc}")
 
         # Memory over the working day (~/AmanAssociates_Sera/logs/memory.log): once a minute after
         # start-up, then every 10 minutes - steady growth here is a leak, a jump is a feature
@@ -661,6 +687,9 @@ class SeraApp:
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
             self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            from core.sgt.sgt_client_link import ClientLink
+            self.vsdc_worker.router.set_client_lookup(ClientLink(self.db))   # portal user ID -> saved client
+            self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
             from core.scc import manual as scc_manual
             scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
@@ -1084,8 +1113,8 @@ class SeraApp:
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
             try:
-                from core.ltt import feed as _ltt_feed
-                _ltt_feed.schedule_export(self.db)
+                from core.ltt import monthly as _ltt_monthly
+                _ltt_monthly.schedule_export(self.db)
             except Exception:
                 pass
 
@@ -1093,6 +1122,28 @@ class SeraApp:
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
+
+    def _ask_sgt_demotion(self, info: dict):
+        """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
+        the default is to keep the status that is recorded."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(getattr(self, "shell", None))
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Lower this filing's status?")
+        what = " ".join(x for x in (info.get("form"), info.get("period")) if x)
+        box.setText(f"{info.get('client') or 'This client'} - {what}\n\n"
+                    f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
+                    f"status than the one recorded.")
+        box.setInformativeText(f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
+                               f"\"{info.get('evidence') or ''}\"\n\n"
+                               f"Keep the recorded status unless you are sure the page is right.")
+        keep = box.addButton("Keep current status", QMessageBox.RejectRole)
+        lower = box.addButton("Lower the status", QMessageBox.AcceptRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        router = getattr(getattr(self, "vsdc_worker", None), "router", None)
+        if router is not None:
+            router.answer_demotion(info.get("token"), box.clickedButton() is lower)
 
     def _make_scc_handlers(self):
         """SCC-U's handlers (once, when its host is created)."""
@@ -1637,6 +1688,7 @@ class SeraApp:
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
+        sidebar.action_display_scale.connect(self._open_display_scale_dialog)
         sidebar.action_enter_admin.connect(self._request_admin_mode)
         sidebar.action_exit_admin.connect(self._exit_admin_mode)
         
@@ -1650,6 +1702,14 @@ class SeraApp:
         # Toggle Sidebar Hotkey (Ctrl+B)
         self.sc_ctrl_b = QShortcut(QKeySequence("Ctrl+B"), self.shell)
         self.sc_ctrl_b.activated.connect(self.shell.toggle_sidebar)
+
+        # Per-PC display scale: Ctrl+= / Ctrl+- step it by 5 %, Ctrl+0 returns to Automatic. Next start.
+        self.sc_scale_up = QShortcut(QKeySequence("Ctrl+="), self.shell)
+        self.sc_scale_up.activated.connect(lambda: self._step_display_scale(0.05))
+        self.sc_scale_down = QShortcut(QKeySequence("Ctrl+-"), self.shell)
+        self.sc_scale_down.activated.connect(lambda: self._step_display_scale(-0.05))
+        self.sc_scale_reset = QShortcut(QKeySequence("Ctrl+0"), self.shell)
+        self.sc_scale_reset.activated.connect(self._reset_display_scale)
 
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
@@ -1996,6 +2056,24 @@ class SeraApp:
                 return
         self.app.quit()
 
+    def _step_display_scale(self, delta: float):
+        """Ctrl+= / Ctrl+-: steps the saved manual value (or the scale in use, when still on Automatic)."""
+        mode, saved = read_settings()
+        base = saved if mode == MODE_MANUAL and saved is not None else self.ui_scale
+        value = next_manual_value(base, delta)
+        write_settings(MODE_MANUAL, value)
+        self.shell.show_alert(f"Display scale {round(value * 100)} % — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _reset_display_scale(self):
+        write_settings("auto")
+        self.shell.show_alert("Display scale set back to Automatic — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _open_display_scale_dialog(self):
+        from ui.dialogs.display_scale_dialog import DisplayScaleDialog
+        DisplayScaleDialog(parent=self.shell).exec()
+
     def _global_search_shortcut(self):
         self.shell.dismiss_detail_on_outside = False
         self.shell.set_current_page(0)
@@ -2218,8 +2296,8 @@ class SeraApp:
                 "This PC was away from the office for a long time. Sera Sync has downloaded a fresh "
                 "copy of the office data; restart Sera to finish (your own changes are kept).", "warning")
             return
-        if kind == "synced" and getattr(self, "_sdis_pusher", None) is not None:
-            self._sdis_pusher.on_synced()   # SDIS Part P: at most every 15 min, own thread
+        if kind == "synced" and getattr(self, "_sdis_excavator", None) is not None:
+            self._sdis_excavator.nudge()    # peers are reachable: let the excavator look now
         if kind == "synced":
             # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
             # for the UI to reload, and refreshing anyway would falsely tell the user a live
@@ -2232,6 +2310,17 @@ class SeraApp:
                 self._write_sdis_fields()   # SDIS Part Q: another PC registered/renamed/retired a field
             if "sdis_config" in (info.get("tables") or ()):
                 self._write_sdis_containers()   # SDIS Part S.3: another PC edited the containers
+            if "tracker_dump" in (info.get("tables") or ()):
+                # Another PC filed something or its status changed. The containers the LTT sheet
+                # and tracker list read are a local cache of tracker_dump that sync does not touch:
+                # rebuild them, rewrite the LTT sheet, then refresh the windows with the new data.
+                try:
+                    from core.ltt import monthly as _ltt_monthly
+                    _ltt_monthly.refresh_after_sync(
+                        db, on_done=lambda: self.sync_bridge.engine_synced_signal.emit(
+                            ["tracker_dump", "client_raw_containers"]))
+                except Exception as e:
+                    print(f"[ltt] could not schedule the refresh after sync: {e}")
         elif kind == "clock_ahead":
             name = info.get("name") or info.get("device_id") or "Peer"
             ahead_ms = info.get("ahead_ms", 0)

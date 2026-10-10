@@ -65,6 +65,12 @@ MULTIPLES = ("conflict", "latest_period")
 #   separated  - as "value", but only after a ":" or "-" ("Name: X" yes, "Name of the Bank" no)
 #   ignore     - disregarded; the value is looked for on the following lines
 LABEL_RESTS = ("value", "separated", "ignore")
+# Whether the label line itself must carry a ":" or "-" after the label:
+#   any        - no ("GSTIN" alone, as a table header, is a label like any other)
+#   required   - yes ("GSTIN -" is the page's own field; a bare "GSTIN" header over a column of
+#                other firms' numbers, "GSTIN of Supplier" and "GSTIN/UIN of Recipient" are not).
+#                Applies whether the value follows on the same line or on the next one.
+LABEL_SEPS = ("any", "required")
 # Where a record field looks: inside its own block (a card), or anywhere on the page - for a
 # fact the page states once about every card on it ("select the return you would like to
 # verify" makes every card on that page one awaiting verification).
@@ -196,6 +202,7 @@ class FieldSpec:
     labels: Tuple[str, ...] = ()
     label_re: Optional["re.Pattern[str]"] = None
     label_rest: str = "value"               # see LABEL_RESTS
+    label_sep: str = "any"                  # see LABEL_SEPS
     within: int = 3
     pick: str = "first"
     value_map: Tuple[Tuple["re.Pattern[str]", Optional[str]], ...] = ()
@@ -245,11 +252,16 @@ class CurrentRules:
                        the status given to a complete dataset nothing has submitted yet
                        ("Draft") - only when some piece came from the page LINK (the portals
                        only put the form / year in the link while you are inside that filing)
+      scoped_portals   portals where every return page is one self-contained return (GST): a
+                       dataset's pieces must come from the page of its own form, a changed form
+                       or period starts a new dataset, and a dataset already written is never
+                       moved to another period. Wizard portals (ITR) leave this out.
     """
     compose: Tuple[Tuple[str, str], ...] = ()
     complete_when: Tuple[str, ...] = ("form", "period")
     in_progress_status: Optional[str] = "Draft"
     in_progress_needs_link: bool = True
+    scoped_portals: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -379,7 +391,7 @@ def _int(raw: Any, default: int, lo: int, hi: int, what: str) -> int:
     return raw
 
 
-_FIELD_KEYS = {"name", "field", "slot", "take", "pattern", "case", "labels", "label_at", "label_rest",
+_FIELD_KEYS = {"name", "field", "slot", "take", "pattern", "case", "labels", "label_at", "label_rest", "label_sep",
                "within", "pick", "map", "transforms", "checks", "portals", "urls", "confidence", "merge",
                "source", "multiple", "scope",
                "examples", "counter_examples", "disabled", "note"}
@@ -411,6 +423,9 @@ def build_field(raw: Dict[str, Any], slot: str, owner: str = "") -> FieldSpec:
     label_rest = raw.get("label_rest", "value")
     if label_rest not in LABEL_RESTS:
         raise SpecError(f"'label_rest' must be one of {LABEL_RESTS}")
+    label_sep = raw.get("label_sep", "any")
+    if label_sep not in LABEL_SEPS:
+        raise SpecError(f"'label_sep' must be one of {LABEL_SEPS}")
     if take == "after_label" and not labels:
         raise SpecError("take 'after_label' needs at least one label")
 
@@ -461,7 +476,7 @@ def build_field(raw: Dict[str, Any], slot: str, owner: str = "") -> FieldSpec:
     return FieldSpec(
         name=str(name), field=fld, slot=slot, take=take, pattern=pattern,
         labels=labels, label_re=label_regex(labels, label_at) if labels else None,
-        label_rest=label_rest, within=_int(raw.get("within"), 3, 1, 12, "'within'"),
+        label_rest=label_rest, label_sep=label_sep, within=_int(raw.get("within"), 3, 1, 12, "'within'"),
         pick=pick, value_map=tuple(value_map), transforms=transforms, checks=checks,
         portals=_str_list(raw.get("portals"), "'portals'"),
         urls=tuple(safe_compile(u, re.IGNORECASE, "'urls' entry") for u in _str_list(raw.get("urls"), "'urls'")),
@@ -846,7 +861,8 @@ def build_profile_rules(raw: Any) -> ProfileRules:
 def build_current_rules(raw: Any) -> CurrentRules:
     if not isinstance(raw, dict):
         raise SpecError("'rules' must be a JSON object")
-    unknown = set(raw) - {"compose", "complete_when", "in_progress_status", "in_progress_needs_link", "note"}
+    unknown = set(raw) - {"compose", "complete_when", "in_progress_status", "in_progress_needs_link",
+                          "scoped_portals", "note"}
     if unknown:
         raise SpecError(f"unknown key(s) {sorted(unknown)} - check the spelling")
     status = raw.get("in_progress_status", "Draft")
@@ -857,6 +873,7 @@ def build_current_rules(raw: Any) -> CurrentRules:
         complete_when=_str_list(raw.get("complete_when", ["form", "period"]), "'complete_when'"),
         in_progress_status=status,
         in_progress_needs_link=bool(raw.get("in_progress_needs_link", True)),
+        scoped_portals=_str_list(raw.get("scoped_portals", []), "'scoped_portals'"),
     )
 
 

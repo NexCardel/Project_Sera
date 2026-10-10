@@ -210,19 +210,60 @@
       "name": "gst_gstin",
       "field": "gstin",
       "portals": ["GST Portal"],
-      "urls": ["fowelcome", "/auth/dashboard"],
       "take": "anywhere",
-      "pattern": "(?<![A-Z0-9])([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])(?![A-Z0-9])",
+      "pattern": "^\\s*(?!GSTIN)[^\\s0-9][^0-9]*?\\s([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\\s*$",
       "checks": ["gstin_checksum"],
       "confidence": 90,
-      "note": "The welcome page prints the logged-in GSTIN under the name. Two different GSTINs on one page are a conflict and neither is taken.",
+      "note": "The client's GSTIN comes from the portal's top header only, which prints 'NAME GSTIN' as one line on every logged-in page - no page link needed. A GSTIN alone on a line, or after a label, is a supplier / recipient / table cell and is never the client's. Two different header GSTINs on one page are a conflict and neither is taken.",
       "examples": [
-        "19ABCPD1234E1ZB",
-        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"], "expect": "19ABCPD1234E1ZB"}
+        {"lines": [" ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "19ABCPD1234E1ZB"},
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile", "ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "19ABCPD1234E1ZB"}
       ],
       "counter_examples": [
-        "19ABCPD1234E1ZC",
-        {"lines": ["19ABCPD1234E1ZB", "27AAACZ9876K1ZE"]}
+        "19ABCPD1234E1ZB",
+        "ASHOK KUMAR SEN 19ABCPD1234E1ZC",
+        "GSTIN 27AAACZ9876K1ZE",
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB", "View Profile"]},
+        {"lines": ["ASHOK KUMAR SEN 19ABCPD1234E1ZB", "RAVI MEHTA 27AAACZ9876K1ZE"]}
+      ]
+    },
+    {
+      "name": "gst_header_name",
+      "field": "name",
+      "merge": "promote_longer",
+      "portals": ["GST Portal"],
+      "take": "anywhere",
+      "pattern": "^\\s*(?!GSTIN)([^\\s0-9][^0-9]*?)\\s[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\\s*$",
+      "transforms": ["collapse_spaces"],
+      "checks": ["looks_like_name", "not_ui_chrome"],
+      "confidence": 88,
+      "note": "The client's name from the same top-header line as gst_gstin ('NAME GSTIN').",
+      "examples": [
+        {"lines": [" ASHOK KUMAR SEN 19ABCPD1234E1ZB"], "expect": "ASHOK KUMAR SEN"}
+      ],
+      "counter_examples": [
+        {"lines": ["ASHOK KUMAR SEN", "19ABCPD1234E1ZB"]},
+        "GSTIN 19ABCPD1234E1ZB"
+      ]
+    },
+    {
+      "name": "gst_login_username",
+      "field": "username",
+      "merge": "latest",
+      "portals": ["GST Portal"],
+      "urls": ["/services/login"],
+      "labels": ["Username"],
+      "label_at": "start",
+      "within": 3,
+      "pattern": "^(?!(?i:password|login|forgot|first|username|enter|skip|home)\\b)([A-Za-z0-9][A-Za-z0-9_.@$-]{2,29})$",
+      "confidence": 80,
+      "note": "The user name typed on the GST login page (the line after the 'Username' label; the password box is never read). It is followed as it is typed - the last value read before the page changes wins - and links the session to the saved client that holds this user ID (sgt_client_link) once the portal has moved on from the login page.",
+      "examples": [
+        {"lines": ["Login", "Username", "Username", "abcd_2345", "Password", "Password", "LOGIN"], "expect": "abcd_2345"}
+      ],
+      "counter_examples": [
+        {"lines": ["Login", "Username", "Username", "Password", "Password", "LOGIN"]},
+        {"lines": ["Forgot Username", "Forgot Password"]}
       ]
     },
     {
@@ -363,8 +404,7 @@
         },
         {
           "field": "arn",
-          "labels": ["Acknowledgement No", "Acknowledgement Number"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_real"],
@@ -406,16 +446,19 @@
           "field": "status",
           "take": "anywhere",
           "case": "insensitive",
-          "pattern": "^(pending for e-?verification|itr filed|e-?verified|successfully e-?verified|return verified|under processing|processed.*)$",
+          "pattern": "^(pending for e-?verification|itr filed|e-?verified|successfully e-?verified|return verified|under processing|processed.*|refund (?:credited|determined|is kept on hold).*)$",
           "pick": "map_order",
           "map": [
-            ["processed|under processing|verified", "Submitted & Verified"],
+            ["processed|under processing|verified|refund", "Submitted & Verified"],
             ["pending for e-?verification|itr filed", "Submitted (Not Verified)"]
           ],
           "confidence": 90,
-          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along level on the card wins. 'Processed ...' / 'Under Processing' come after verification, so they prove it.",
-          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund", "Successfully e-Verified"],
-          "counter_examples": ["done", "Filing Type"]
+          "note": "A card lists its status history newest first; the map order is the ladder, so the furthest-along level on the card wins. 'Processed ...' / 'Under Processing' come after verification, so they prove it, and so do the refund steps ('Refund Credited to your Bank A/c...', 'Refund determined has been adjusted...', 'Refund is kept on hold...'), which only follow a processed return.",
+          "examples": ["Pending for e-verification", "ITR Filed", "Processed with no demand/refund", "Successfully e-Verified",
+                       "Refund Credited to your Bank A/c. For details, Check “Know Your Refund Status”",
+                       "Refund determined has been adjusted fully/partially as per the communication issued. For details, Check “Know Your Refund Status”",
+                       "Refund is kept on hold as Taxpayer’s response and/or JAO’s response is awaited as per the communication issued."],
+          "counter_examples": ["done", "Filing Type", "Know Your Refund Status", "Refund Status"]
         },
         {
           "field": "status",
@@ -482,8 +525,7 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["Acknowledgement Number", "Acknowledgement No"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_today"],
@@ -544,8 +586,7 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["Acknowledgement Number", "Acknowledgement No"],
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([0-9OoIlSB]{15})(?![0-9A-Za-z])",
           "transforms": ["ocr_digits"],
           "checks": ["all_digits", "ddmmyy_tail_real"],
@@ -607,14 +648,12 @@
       "fields": [
         {
           "field": "arn",
-          "labels": ["ARN", "Acknowledgement Reference Number", "Acknowledgment Reference Number", "Application Reference Number"],
-          "label_at": "anywhere",
-          "within": 2,
+          "take": "anywhere",
           "pattern": "(?<![0-9A-Za-z])([A-Z]{2}[0-9]{12}[0-9A-Z])(?![0-9A-Za-z])",
           "confidence": 90,
-          "note": "No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
-          "examples": ["AA070826000001Z", "AB0708260000012"],
-          "counter_examples": ["AA07082600000", "12070826000001Z"]
+          "note": "Pure regex, no label: any two letters (AA and AB are both real) + 12 digits + a check character (15 in all) wherever it is on the page, whatever words sit around it ('ARN:', 'The Acknowledgment Reference Number (ARN) is:' ...). No OCR 'repair' here: the last character is a real check letter (the Z in ...0001Z).",
+          "examples": ["AA070826000001Z", "AA0708260000012", "AB190626708598H", "XB070826000001Z"],
+          "counter_examples": ["AA07082600000", "12070826000001Z", "XAA070826000001Z", "A1070826000001Z", "AB19062670859"]
         },
         {
           "field": "status",
@@ -637,6 +676,21 @@
           "expect": [{"arn": "AA070826000001Z", "status": "Submitted & Verified"}]
         },
         {
+          "lines": ["Filing Successful", "GSTR-1 of GSTIN 19ABCPD1234E1ZB has been successfully filed.",
+                    "The Acknowledgment Reference Number (ARN) is:", "AA290121001228S", "."],
+          "expect": [{"arn": "AA290121001228S", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["GSTR1", "of GSTIN -", "19ABCPD1234E1ZB", "for the Return Period - '", "September", "-", "2026-27",
+                    "has been successfully filed. The Acknowledgment Reference Number is", "AA190926191296I", ". The", "GSTR1",
+                    "can be viewed on your Dashboard Login=>Taxpayer Dashboard=>Returns. This message is sent to your registered Email ID and Mobile Number."],
+          "expect": [{"arn": "AA190926191296I", "status": "Submitted & Verified"}]
+        },
+        {
+          "lines": ["has been successfully filed. The Acknowledgment Reference Number is", ". The", "GSTR1", "can be viewed on your Dashboard"],
+          "expect": []
+        },
+        {
           "lines": ["Track Return Status", "ARN", "AA070826000001Z", "Status", "Filed"],
           "expect": []
         }
@@ -653,7 +707,7 @@
         {
           "field": "form",
           "take": "nearest_above",
-          "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
+          "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?|CMP-? ?08)\\b",
           "transforms": ["dash_form"],
           "confidence": 90,
           "examples": ["GSTR-1 / IFF", "GSTR-3B"],
@@ -714,7 +768,8 @@
       "compose": {"period": "{tax_period} (FY {fy})"},
       "complete_when": ["form", "period"],
       "in_progress_status": "Draft",
-      "in_progress_needs_link": false
+      "in_progress_needs_link": false,
+      "scoped_portals": ["GST Portal"]
     },
     "fields": [
       {
@@ -882,22 +937,49 @@
         "source": "link",
         "take": "anywhere",
         "case": "insensitive",
-        "pattern": "/returns/auth/(gstr(?!2[ab])[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
+        "pattern": "/returns/auth/(gstr(?!2(?![0-9]))[0-9]{1,2}[a-z]?)q?(?![a-z0-9])",
         "transforms": ["dash_form"],
         "confidence": 95,
         "examples": [{"link": "https://return.gst.gov.in/returns/auth/gstr3b", "expect": "GSTR-3B"}],
-        "counter_examples": [{"link": "https://services.gst.gov.in/services/auth/fowelcome"}]
+        "counter_examples": [{"link": "https://services.gst.gov.in/services/auth/fowelcome"},
+                             {"link": "https://return.gst.gov.in/returns/auth/gstr2/preview"},
+                             {"link": "https://return.gst.gov.in/returns/auth/gstr2b"}]
       },
       {
         "name": "cur_gst_form_page",
         "field": "form",
         "portals": ["GST Portal"],
         "take": "anywhere",
-        "pattern": "^(GSTR-? ?(?!2[AB])[0-9]{1,2}[A-Z]?)Q? - ",
+        "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?)Q? - ",
         "transforms": ["dash_form"],
         "confidence": 85,
         "examples": ["GSTR-3BQ - Quarterly Return", "GSTR-1 - Details of outward supplies of goods or services"],
-        "counter_examples": ["GSTR-1 / IFF"]
+        "counter_examples": ["GSTR-1 / IFF", "GSTR-2A - Auto Drafted details", "GSTR-2 - Inward supplies"]
+      },
+      {
+        "name": "cur_gst_form_return_type",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "labels": ["Return Type"],
+        "within": 1,
+        "pattern": "^(GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?|CMP-? ?08)$",
+        "transforms": ["dash_form"],
+        "confidence": 85,
+        "note": "The filing and success page (/returns/auth/file) has no form in its link and no 'GSTR-1 - ...' heading; it prints 'Return Type - GSTR1' (GSTR3B the same way).",
+        "examples": [{"lines": ["Return Type - GSTR1"], "expect": "GSTR-1"},
+                     {"lines": ["Return Type -", "GSTR3B"], "expect": "GSTR-3B"}],
+        "counter_examples": [{"lines": ["Return Type - Regular"]}, {"lines": ["Return Type - GSTR2A"]}]
+      },
+      {
+        "name": "cur_gst_form_filing_heading",
+        "field": "form",
+        "portals": ["GST Portal"],
+        "take": "anywhere",
+        "pattern": "^Returns Filing for GST (GSTR-? ?(?!2(?![0-9]))[0-9]{1,2}[A-Z]?)$",
+        "transforms": ["dash_form"],
+        "confidence": 80,
+        "examples": ["Returns Filing for GST GSTR1", "Returns Filing for GST GSTR-3B"],
+        "counter_examples": ["Returns Filing for GST", "Returns Filing for GST GSTR2A"]
       },
       {
         "name": "cur_gst_fy",
@@ -912,15 +994,50 @@
         "counter_examples": [{"lines": ["FY -", "Return Period -"]}]
       },
       {
+        "name": "cur_gst_fy_bare",
+        "field": "fy",
+        "portals": ["GST Portal"],
+        "take": "anywhere",
+        "pattern": "^(20[0-9]{2}-[0-9]{2})$",
+        "checks": ["years_consecutive"],
+        "confidence": 80,
+        "note": "The GSTR-1 page draws its financial year as a bare line above 'Tax Period -', with no FY label. Two different bare years on one page are a conflict and none is taken.",
+        "examples": [{"lines": ["Returns", "2026-27", "Tax Period -", "September(Q)"], "expect": "2026-27"}],
+        "counter_examples": [{"lines": ["(c) 2026-27 Goods and Services Tax Network"]}, {"lines": ["2026-27", "2025-26"]}]
+      },
+      {
         "name": "cur_gst_tax_period",
         "field": "tax_period",
         "portals": ["GST Portal"],
-        "labels": ["Tax Period", "Return Period", "Period"],
+        "labels": ["Tax Period", "Return Period", "Return / Tax Period", "Period"],
         "within": 1,
-        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December)$",
+        "pattern": "^(January|February|March|April|May|June|July|August|September|October|November|December|(?:Jan|Apr|Jul|Oct) ?[-–] ?(?:Mar|Jun|Sep|Dec))(?: ?\\(Q\\))?(?: ?[-–] ?20[0-9]{2})?$",
+        "map": [
+          ["^apr ?[-–] ?jun$", "June"],
+          ["^jul ?[-–] ?sep$", "September"],
+          ["^oct ?[-–] ?dec$", "December"],
+          ["^jan ?[-–] ?mar$", "March"],
+          ["^january$", "January"],
+          ["^february$", "February"],
+          ["^march$", "March"],
+          ["^april$", "April"],
+          ["^may$", "May"],
+          ["^june$", "June"],
+          ["^july$", "July"],
+          ["^august$", "August"],
+          ["^september$", "September"],
+          ["^october$", "October"],
+          ["^november$", "November"],
+          ["^december$", "December"]
+        ],
         "confidence": 90,
-        "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"}],
-        "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}]
+        "note": "A quarterly filer's period is a quarter: 'Apr-Jun' (GSTR-3B) or 'September(Q)' (GSTR-1). It is recorded as the quarter's END month (Apr-Jun = June), the evidence keeps what the page printed. Never read from the returns dashboard: its dropdown is only a selection, not a return being worked on.",
+        "examples": [{"lines": ["Tax Period -", "August"], "expect": "August"},
+                     {"lines": ["Tax Period -", "September(Q)"], "expect": "September"},
+                     {"lines": ["Return Period - Apr-Jun"], "expect": "June"},
+                     {"lines": ["Return Period -", "Jan-Mar"], "expect": "March"},
+                     {"lines": ["RETURN / TAX PERIOD", "January - 2021"], "expect": "January"}],
+        "counter_examples": [{"lines": ["Return Period -", "Due Date -"]}, {"lines": ["Tax Period -", "Feb-Apr"]}]
       },
       {
         "name": "cur_gst_status",
