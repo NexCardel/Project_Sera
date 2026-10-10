@@ -1,4 +1,4 @@
-# UI overhaul — report (2026-10-10 16:52)
+# UI overhaul — report (2026-10-10 17:08)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-12T23:00:00+05:30
 | :--- | ---: |
 | Not started | 25 |
 | In progress | 0 |
-| Retry | 2 |
-| Done | 9 |
+| Retry | 1 |
+| Done | 10 |
 | Blocked | 0 |
 
-Runs: 18   output tokens: 359088   API-equivalent cost: $19.17
+Runs: 19   output tokens: 438009   API-equivalent cost: $19.17
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,7 +23,7 @@ Runs: 18   output tokens: 359088   API-equivalent cost: $19.17
 | K-1 | Done | opus | 1e69df0 | Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ... | kit.py primitives + KIT tokens + minimal ui_gallery; 32 tests pass; danger outlined per mockup |
 | K-2 | Done | sonnet | 61833da | Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ... | Kit inputs: FieldLabel, Input, Select, TextArea, Stepper, Checkbox, Switch; 43 kit tests pass; sidebar ToggleSwitch left for the shell WP |
 | K-3 | Done | sonnet | 4169c66 | Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ... | Kit containers: Card, SettingRow, SectionLabel, Banner, Toast, EmptyState; 58 kit tests pass, gallery containers page |
-| K-4 | Retry | sonnet |  | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | stopped by usage limit, resumes after 17:00 |
+| K-4 | Done | sonnet | da633a8 | Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, "More ▾" overflow, ... | kit bars (Chip, ChipBar, StatusStrip, SelectionBar, UnsavedBar), gallery, tests |
 | K-5 | Retry | opus |  | Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ... | stopped by network/API error, resumes after 16:51 |
 | K-6 | Not started | sonnet |  | Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ... |  |
 | K-7 | Not started | sonnet |  | Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ... |  |
@@ -62,6 +62,7 @@ Runs: 18   output tokens: 359088   API-equivalent cost: $19.17
 - **T-1** Token value format in tokens.py → Keys are CSS names with dashes as underscores; colours upper-case hex; px sizes as int; outer viewer tokens (page, ink, ink2, ink3, rule) included but unused by the app (Matches theme.py hex style and lets string.Template write ${f_m}px; the test compares with the mockup :root case-insensitively)
 - **K-1** LabelledAction danger: filled #A82424 (today's theme) or the mockup's outlined red? → Outlined: transparent, --dangerline edge, --dangertx text, --dangerdim on hover (The fleet mockup's .btn.dng is outlined and the mockup's tokens win (decision 2026-10-05); the old filled class stays in theme.py for unconverted screens)
 - **K-1** Where do the mockup's component-level literals (outside :root) and half-px font sizes go? → New KIT dict in ui/utils/tokens.py; 12.5px and 10.5px rounded up to 13 and 11 (TOKENS must equal the :root block (test_ui_tokens); kit.py stays hex-free; Qt px font sizes are ints)
+- **K-4** Bar behaviors and COMPACT modes → SelectionBar enforces NoFocus and Open keeps label; ChipBar supports single_select, overflow and second-row; UnsavedBar default hidden when clean (Matches IMPLEMENTATION.md 4.1/4.4 and fleet index.html specs)
 
 ## Checks waiting for you
 

@@ -9,7 +9,7 @@ K-1,2,"Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / dan
 K-2,2,"Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ...",Done,claude-sonnet-5-5,1,61833da,"Kit inputs: FieldLabel, Input, Select, TextArea, Stepper, Checkbox, Switch; 43 kit tests pass; sidebar ToggleSwitch left for the shell WP",2026-10-10 16:08
 K-3,2,"Kit: Containers: Card (caps title, right-hand slot, danger and em edges, no nesting), ...",Done,claude-sonnet-5-5,1,4169c66,"Kit containers: Card, SettingRow, SectionLabel, Banner, Toast, EmptyState; 58 kit tests pass, gallery containers page",2026-10-10 16:51
 K-4,2,"Kit: Bars: Chip + ChipBar (single-select group, count badge, ▾ menu chip, ""More ▾"" overflow, ...",Done,gemini-3.8-flash-high,1,da633a8,"kit bars (Chip, ChipBar, StatusStrip, SelectionBar, UnsavedBar), gallery, tests",2026-10-10 17:07
-K-5,2,"Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ...",Retry,claude-opus-5-5,0,,"stopped by network/API error, resumes after 16:51",2026-10-10 16:46
+K-5,2,"Kit: Data grid: DataGrid (QTableView + delegate) with the white tone and the dark tone, sticky ...",In progress,claude-opus-5-5,1,,"stopped by network/API error, resumes after 16:51",2026-10-10 17:08
 K-6,2,"Kit: Frames: DialogFrame (icon, title, one-line purpose, body, footer with one primary, full ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
 K-7,2,"Kit: tools/ui_gallery.py: every component, every state (normal, hover, focus, disabled, ...",Not started,claude-sonnet-5-5 -> gemini-3.8-flash-high,0,,,
 K-R,2,Review phase K (kit),Not started,claude-opus-5-5,0,,,

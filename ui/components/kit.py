@@ -3,7 +3,7 @@ ui/components/kit.py — the shared UI kit of the fleet redesign
 ================================================================
 Plain Qt widgets drawn from ui/utils/tokens.py only (no colour, radius or size literal here).
 Screens import these and compose them; they never restyle or subclass them to change the look.
-K-7 turns this docstring into the full reference; the leaves so far (K-1):
+K-7 turns this docstring into the full reference. Leaves (K-1):
 
 LabelledAction(text, parent=None, *, variant="secondary", icon=None, sm=False, tooltip="")
     Icon + text button. variant: primary (one per screen), soft, secondary, ghost, danger
@@ -97,19 +97,63 @@ UnsavedBar(parent=None, *, reserved_space=False)
     set_count(n): hides when 0 (or collapses/transparents in reserved_space mode).
     signals discard_clicked, save_clicked. count(), is_dirty().
 
+Data grid (K-5):
+DataGrid(rows=0, columns=0, parent=None, *, tone="white", list_mode=False)
+    A QTableWidget (drop-in for today's grids: items, BackgroundRole / ForegroundRole cell formats and
+    the search grid's highlight engine work unchanged) drawn by GridDelegate, never by widgets per
+    row. tone: "white" (every data grid) or "dark" (Tracker Dump). Sticky caps header (sort arrow,
+    elided names get a tooltip), zebra, hover row, mint selection with the emerald edge on the first
+    selected cell of a run, mint cursor on the current cell in cell-selection grids. A cell's
+    BackgroundRole fill always wins (highlight). list_mode: no header, 52 px two-line rows, row
+    selection (Manage Clients list). set_tone(tone). Row height 40 (tokens); set_tall_rows(True)
+    gives 52 px rows for two-line cells.
+    Cell content by item role (set with item.setData(role, value)):
+      ROLE_SERVICES [(name, colour), ...]  service dots; "+N" when they do not fit, names in the tooltip
+      ROLE_PILL     (text, tone[, dot])    status pill; tones neutral emerald green amber red blue
+                                           (dark / list also purple orange)
+      ROLE_TAG      (text, tone)           mono tag (Tag tones)
+      ROLE_ACTIONS  [CellAction, ...]      buttons drawn in the cell; a click emits
+                                           actionTriggered(row, column, key); hover tooltip per button
+      ROLE_SUB      "second line"          two-line cell: bold first line, muted mono second line
+      Checkable items with a check state (item.setCheckState) draw a kit checkbox; a click on it or
+      Space toggles CheckStateRole.
+      Any other cell: DisplayRole text, elided, full text as tooltip when cut (ToolTipRole wins).
+    set_column(col, *, kind="text", width=None, minimum=None, stretch=1, max_share=None,
+               priority=0, compact_hidden=False)
+        kind: text, num (muted), mono (PAN, GSTIN), strong (bold). width: fixed preferred px, None
+        shares the rest by stretch (capped at max_share of the width). priority > 0: hides when even
+        the minimums do not fit, highest first. compact_hidden: hidden in COMPACT.
+    fit_columns(available=None) -> hidden columns  (runs on every viewport resize once a column has
+        a spec; columns hidden by the screen stay hidden; widths the user dragged win until
+        reset_manual_widths()). signal columnsFitted(list). hidden_by_fit(), manual_widths().
+    set_compact(on) / apply_width_mode(mode) refit. fit_column_widths(...) is the pure function.
+CellAction(key, icon, tooltip, *, primary=False, colour=None, enabled=True)
+    One drawn 26 px button; primary is emerald (or `colour`, e.g. the service colour). tooltip required.
+DarkListTable(rows=0, columns=0, parent=None)
+    DataGrid in the "list" tone for dialogs and settings: muted caps header, hairline rows, row
+    selection dark-mint with the emerald edge, tags / pills / checkboxes in cells.
+GridFooter(parent=None, *, tone="white")
+    30 px strip under a grid. set_count(text) (count_label), add_hint(keys, text="", *,
+    compact_hide=False) key caps + sentence, add_widget(w) (pager), set_compact / apply_width_mode.
+GridFrame(grid, footer=None, parent=None)
+    The rounded surface around a grid and its footer; set_tone(tone) recolours all three;
+    apply_width_mode passes on to both.
+
 Every clickable piece: hover, mint focus edge, disabled at 40 % (a disabled widget still shows
 its tooltip). No timers, no animation. qtawesome is imported only when an icon is drawn.
 """
 
 from functools import lru_cache
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap, QPolygonF,
+    QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap,
+    QPolygonF, QRegion,
 )
 from PySide6.QtWidgets import (
-    QAbstractButton, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QStyle,
+    QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from ui.utils.tokens import KIT, TOKENS
@@ -2044,3 +2088,904 @@ class UnsavedBar(QFrame):
 
     def reserved_space(self):
         return self._reserved_space
+
+
+# ---------------------------------------------------------------- DataGrid
+
+# Item roles the grid delegate draws; well above the UserRole + n the screens use themselves.
+ROLE_SERVICES = Qt.UserRole + 0x100   # [(name, colour), ...]: service dots, "+N" when they do not fit
+ROLE_PILL = Qt.UserRole + 0x101       # (text, tone) or (text, tone, dot): status pill
+ROLE_TAG = Qt.UserRole + 0x102        # (text, tone): mono tag (list tables)
+ROLE_ACTIONS = Qt.UserRole + 0x103    # [CellAction, ...]: buttons drawn in the cell
+ROLE_SUB = Qt.UserRole + 0x104        # muted mono second line: makes the cell a two-line "tall" cell
+
+GRID_KINDS = ("text", "num", "mono", "strong")
+
+# tone: surfaces and text of the three table looks (white grid, dark grid, dark list table)
+_GRID_TONES = {
+    "white": {
+        "bg": T["g_bg"], "alt": T["g_alt"], "hover": T["g_hover"], "sel": T["g_sel"],
+        "line": T["g_line"], "text": T["g_text"], "sel_text": K["grid_sel_tx"], "mute": T["g_mute"],
+        "mono": K["grid_mono_tx"], "head": T["g_head"], "head_text": T["g_headtx"],
+        "head_rule": K["grid_head_rule"], "head_line": None, "wrap": K["grid_wrap_line"],
+        "foot": K["grid_foot_bg"], "foot_line": T["g_line"], "btn_bg": K["white"],
+        "btn_line": K["grid_btn_line"], "btn_tx": K["grid_btn_tx"], "btn_hover": T["g_hover"],
+        "svc_tx": K["grid_btn_tx"], "cb_bg": K["white"], "cb_line": K["grid_btn_line"],
+    },
+    "dark": {
+        "bg": T["panel"], "alt": K["dgrid_alt"], "hover": K["dgrid_hover"], "sel": K["dgrid_sel"],
+        "line": K["dgrid_line"], "text": T["text2"], "sel_text": T["text"], "mute": T["muted"],
+        "mono": T["muted"], "head": K["dgrid_head"], "head_text": T["mint"],
+        "head_rule": K["grid_head_rule"], "head_line": None, "wrap": T["line2"],
+        "foot": T["panel"], "foot_line": T["line"], "btn_bg": K["btn_bg"], "btn_line": T["line2"],
+        "btn_tx": T["text2"], "btn_hover": T["hover"], "svc_tx": T["text2"], "cb_bg": K["btn_bg"],
+        "cb_line": T["line3"],
+    },
+    "list": {
+        "bg": "transparent", "alt": None, "hover": K["list_hover"], "sel": K["list_sel"],
+        "line": K["row_line"], "text": T["text"], "sel_text": T["text"], "mute": T["muted"],
+        "mono": T["muted"], "head": "transparent", "head_text": T["muted"], "head_rule": None,
+        "head_line": T["line"], "wrap": T["line"], "foot": T["card"], "foot_line": T["line"],
+        "btn_bg": K["btn_bg"], "btn_line": T["line2"], "btn_tx": T["text2"], "btn_hover": T["hover"],
+        "svc_tx": T["text2"], "cb_bg": K["btn_bg"], "cb_line": T["line3"],
+    },
+}
+
+# status pills drawn in cells: tone -> (background, text, border); "green" is the tracker's softer emerald
+_GRID_PILLS = {
+    "white": {
+        "neutral": (K["gpill_x_bg"], K["gpill_x_tx"], "transparent"),
+        "emerald": (K["gpill_g_bg"], K["gpill_g_tx"], "transparent"),
+        "green": (K["gpill_g_bg"], K["gpill_g_tx"], "transparent"),
+        "amber": (K["gpill_w_bg"], K["gpill_w_tx"], "transparent"),
+        "red": (K["gpill_r_bg"], K["gpill_r_tx"], "transparent"),
+        "blue": (K["gpill_b_bg"], K["gpill_b_tx"], "transparent"),
+    },
+    "dark": {
+        **_PILL_TONES,
+        "emerald": (K["dpill_g_bg"], T["mint"], "transparent"),
+        "green": (K["dpill_g2_bg"], K["dpill_g2_tx"], "transparent"),
+        "red": (T["dangerdim"], T["dangertx"], "transparent"),
+    },
+    "list": {**_PILL_TONES, "green": _PILL_TONES["emerald"]},
+}
+
+
+def _as_brush(value):
+    """A BackgroundRole / ForegroundRole value (QBrush, QColor or colour name) as a QBrush, or None."""
+    if value is None:
+        return None
+    brush = value if isinstance(value, QBrush) else QBrush(QColor(value))
+    return brush if brush.style() != Qt.NoBrush else None
+
+
+def _is_checked(value):
+    return getattr(value, "value", value) == Qt.Checked.value
+
+
+@lru_cache(maxsize=256)
+def _cell_icon(name, colour):
+    return _icon(name, colour)
+
+
+class CellAction:
+    """One button the grid delegate draws in a cell (ROLE_ACTIONS); never a widget per row."""
+
+    __slots__ = ("key", "icon", "tooltip", "primary", "colour", "enabled")
+
+    def __init__(self, key, icon, tooltip, *, primary=False, colour=None, enabled=True):
+        if not tooltip:
+            raise ValueError("CellAction needs a tooltip")
+        self.key = key
+        self.icon = icon
+        self.tooltip = tooltip
+        self.primary = primary
+        self.colour = colour
+        self.enabled = enabled
+
+
+class GridDelegate(QStyledItemDelegate):
+    """Draws every cell of a DataGrid / DarkListTable: zebra, hover, mint selection with the emerald
+    edge, the cell-format highlights (BackgroundRole / ForegroundRole win, as today), pills, tags,
+    service dots, two-line cells, checkboxes and action buttons. Works on any QTableView."""
+
+    def __init__(self, view, tone="white"):
+        super().__init__(view)
+        self._view = view
+        self.tone = tone
+
+    # ---- geometry shared by paint, clicks and tooltips
+    def _pal(self):
+        return _GRID_TONES[self.tone]
+
+    def _pad(self):
+        return K["pad_list_cell"] if self.tone == "list" else K["pad_cell"]
+
+    @staticmethod
+    def _has_check(index):
+        """Checkable with a state set (QTableWidgetItem is user-checkable by default, like Qt itself)."""
+        return bool(index.flags() & Qt.ItemIsUserCheckable) and index.data(Qt.CheckStateRole) is not None
+
+    def _content_rect(self, rect, index):
+        pad = self._pad()
+        r = rect.adjusted(pad, 0, -pad, -1)
+        if self._has_check(index):
+            r.setLeft(r.left() + K["d_cell_cb"] + T["s_2"])
+        return r
+
+    def _check_rect(self, rect):
+        d = K["d_cell_cb"]
+        return QRect(rect.left() + self._pad(), rect.top() + (rect.height() - d) // 2, d, d)
+
+    def action_rects(self, rect, actions):
+        side, gap = K["h_cell_btn"], K["gap_cell_btn"]
+        x, y = rect.left() + self._pad(), rect.top() + (rect.height() - side) // 2
+        return [QRect(x + i * (side + gap), y, side, side) for i in range(len(actions))]
+
+    def _action_at(self, rect, actions, pos):
+        for action, r in zip(actions, self.action_rects(rect, actions)):
+            if r.contains(pos):
+                return action
+        return None
+
+    def _kind(self, index):
+        get = getattr(self._view, "column_kind", None)
+        return get(index.column()) if get else "text"
+
+    def _text_font(self, option, index, selected=False):
+        font = index.data(Qt.FontRole)
+        if font is not None:
+            return QFont(font)
+        font = QFont(option.font)
+        kind = self._kind(index)
+        if kind == "mono":
+            font.setFamily(_MONO)
+            font.setPixelSize(T["f_s"])
+        elif kind == "strong":
+            font.setWeight(QFont.DemiBold)
+        elif selected and self.tone == "white":
+            font.setWeight(QFont.Medium)
+        return font
+
+    def _small_font(self, option, size, mono=False):
+        font = QFont(option.font)
+        if mono:
+            font.setFamily(_MONO)
+        font.setPixelSize(size)
+        font.setWeight(QFont.DemiBold)
+        return font
+
+    def _pill_colours(self, tone):
+        tones = _GRID_PILLS[self.tone]
+        return tones.get(tone) or tones["neutral"]
+
+    def _services_shown(self, fm, items, width):
+        """How many services fit in `width` before the "+N" counter takes over."""
+        x, dot, gap = 0, K["d_svc_dot"], K["gap_svc"]
+        for i, (name, _colour) in enumerate(items):
+            rest = len(items) - i - 1
+            need = dot + T["s_1"] + fm.horizontalAdvance(name)
+            if rest:
+                need += gap + fm.horizontalAdvance(f"+{rest}")
+            if i and x + need > width:
+                return i
+            x += dot + T["s_1"] + fm.horizontalAdvance(name) + gap
+        return len(items)
+
+    def _selection_starts(self, index):
+        """True when the cell to the left (on screen) is not selected: that cell carries the edge."""
+        view = self._view
+        header = view.horizontalHeader()
+        sm = view.selectionModel()
+        for v in range(header.visualIndex(index.column()) - 1, -1, -1):
+            col = header.logicalIndex(v)
+            if not view.isColumnHidden(col):
+                return not sm.isSelected(index.siblingAtColumn(col))
+        return True
+
+    # ---- painting
+    def paint(self, painter, option, index):
+        pal = self._pal()
+        view = self._view
+        rect = option.rect
+        row = index.row()
+        selected = bool(option.state & QStyle.State_Selected)
+        painter.save()
+
+        highlight = _as_brush(index.data(Qt.BackgroundRole))
+        if highlight is not None:           # the cell-format engine's fill wins (.grid td.hl)
+            painter.fillRect(rect, highlight)
+        else:
+            if selected:
+                fill = pal["sel"]
+            elif row == getattr(view, "_hover_row", -1):
+                fill = pal["hover"]
+            elif pal["alt"] and row % 2:
+                fill = pal["alt"]
+            else:
+                fill = pal["bg"]
+            if fill != "transparent":
+                painter.fillRect(rect, QColor(fill))
+        if not (self.tone == "list" and row == index.model().rowCount() - 1):
+            painter.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), QColor(pal["line"]))
+        if selected and self._selection_starts(index):
+            painter.fillRect(QRect(rect.left(), rect.top(), K["w_sel_edge"], rect.height()), QColor(T["em"]))
+        cell_cursor = (option.state & QStyle.State_HasFocus
+                       and view.selectionBehavior() == QAbstractItemView.SelectItems)
+        if (selected and highlight is not None) or cell_cursor:
+            painter.setPen(QPen(QColor(T["em"])))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect.adjusted(0, 0, -1, -2))
+
+        painter.setRenderHint(QPainter.Antialiasing)
+        if self._has_check(index):
+            self._paint_check(painter, self._check_rect(rect), _is_checked(index.data(Qt.CheckStateRole)),
+                              bool(index.flags() & Qt.ItemIsEnabled))
+        cr = self._content_rect(rect, index)
+
+        actions = index.data(ROLE_ACTIONS)
+        services = index.data(ROLE_SERVICES)
+        pill = index.data(ROLE_PILL)
+        tag = index.data(ROLE_TAG)
+        if actions:
+            self._paint_actions(painter, rect, actions)
+        elif services:
+            self._paint_services(painter, option, cr, services)
+        elif pill:
+            self._paint_pill(painter, option, cr, *pill)
+        elif tag:
+            self._paint_tag(painter, option, cr, *tag)
+        else:
+            self._paint_text(painter, option, index, cr, selected, highlight)
+        painter.restore()
+
+    def _text_colour(self, index, selected):
+        fg = _as_brush(index.data(Qt.ForegroundRole))
+        if fg is not None:
+            return fg.color()
+        pal = self._pal()
+        if selected:
+            return QColor(pal["sel_text"])
+        kind = self._kind(index)
+        return QColor(pal["mute"] if kind == "num" else pal["mono"] if kind == "mono" else pal["text"])
+
+    def _paint_text(self, painter, option, index, cr, selected, highlight):
+        text = str(index.data(Qt.DisplayRole) if index.data(Qt.DisplayRole) is not None else "")
+        text = text.replace("\n", " ")
+        font = self._text_font(option, index, selected)
+        colour = self._text_colour(index, selected)
+        if highlight is not None and _as_brush(index.data(Qt.ForegroundRole)) is None:
+            # A fill without a text colour: dark ink on a light fill, light ink on a dark one.
+            colour = QColor(T["g_text"] if highlight.color().lightness() > 140 else T["text"])
+        sub = index.data(ROLE_SUB)
+        align = index.data(Qt.TextAlignmentRole)
+        if align is None:
+            align = Qt.AlignLeft | Qt.AlignVCenter
+        elif not isinstance(align, Qt.AlignmentFlag):
+            align = Qt.AlignmentFlag(int(align))
+        if not align & Qt.AlignVertical_Mask:
+            align |= Qt.AlignVCenter
+        if not sub:
+            fm = QFontMetrics(font)
+            painter.setFont(font)
+            painter.setPen(colour)
+            painter.drawText(cr, align, fm.elidedText(text, Qt.ElideRight, max(cr.width(), 0)))
+            return
+        top_font = QFont(font)
+        top_font.setWeight(QFont.DemiBold)
+        sub_font = self._small_font(option, T["f_xs"], mono=True)
+        sub_font.setWeight(QFont.Normal)
+        fm1, fm2 = QFontMetrics(top_font), QFontMetrics(sub_font)
+        gap = 2
+        y = cr.top() + (cr.height() - fm1.height() - fm2.height() - gap) // 2
+        painter.setFont(top_font)
+        painter.setPen(colour)
+        painter.drawText(QRect(cr.left(), y, cr.width(), fm1.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                         fm1.elidedText(text, Qt.ElideRight, max(cr.width(), 0)))
+        painter.setFont(sub_font)
+        painter.setPen(QColor(self._pal()["mute"]))
+        painter.drawText(QRect(cr.left(), y + fm1.height() + gap, cr.width(), fm2.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter,
+                         fm2.elidedText(str(sub), Qt.ElideRight, max(cr.width(), 0)))
+
+    def _paint_check(self, painter, r, checked, enabled):
+        pal = self._pal()
+        painter.setOpacity(1.0 if enabled else _DISABLED_ALPHA)
+        rf = QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.setPen(QPen(QColor(T["em2"] if checked else pal["cb_line"]), 1))
+        painter.setBrush(QColor(T["em"] if checked else pal["cb_bg"]))
+        painter.drawRoundedRect(rf, K["r_cb"], K["r_cb"])
+        if checked:
+            painter.setPen(QPen(QColor(K["white"]), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            x, y, s = rf.left(), rf.top(), rf.width()
+            painter.drawPolyline(QPolygonF([QPointF(x + s * 0.24, y + s * 0.52),
+                                            QPointF(x + s * 0.43, y + s * 0.70),
+                                            QPointF(x + s * 0.76, y + s * 0.32)]))
+        painter.setOpacity(1.0)
+
+    def _paint_actions(self, painter, rect, actions):
+        pal = self._pal()
+        hover = getattr(self._view, "_hover_pos", None)
+        for action, r in zip(actions, self.action_rects(rect, actions)):
+            hot = action.enabled and hover is not None and r.contains(hover)
+            if action.primary:
+                base = QColor(action.colour or T["em"])
+                bg = base.lighter(115) if (hot and action.colour) else QColor(T["em2"]) if hot else base
+                line, ink = QColor(action.colour or T["em2"]), K["white"]
+            else:
+                bg = QColor(pal["btn_hover"] if hot else pal["btn_bg"])
+                line, ink = QColor(pal["btn_line"]), pal["btn_tx"]
+            painter.setOpacity(1.0 if action.enabled else _DISABLED_ALPHA)
+            painter.setPen(QPen(line, 1))
+            painter.setBrush(bg)
+            painter.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), T["r_s"], T["r_s"])
+            icon = action.icon if isinstance(action.icon, QIcon) else _cell_icon(action.icon, ink)
+            if icon is not None and not icon.isNull():
+                side = 14
+                icon.paint(painter, QRect(r.center().x() - side // 2 + 1, r.center().y() - side // 2 + 1,
+                                          side, side))
+        painter.setOpacity(1.0)
+
+    def _paint_services(self, painter, option, cr, items):
+        font = self._small_font(option, T["f_s"])
+        fm = QFontMetrics(font)
+        shown = self._services_shown(fm, items, cr.width())
+        dot, gap = K["d_svc_dot"], K["gap_svc"]
+        x, cy = cr.left(), cr.center().y()
+        painter.setFont(font)
+        for name, colour in items[:shown]:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(colour))
+            painter.drawEllipse(QRectF(x, cy - dot / 2 + 1, dot, dot))
+            x += dot + T["s_1"]
+            painter.setPen(QColor(self._pal()["svc_tx"]))
+            room = max(cr.right() - x, 0)
+            label = fm.elidedText(name, Qt.ElideRight, room)
+            painter.drawText(QRect(x, cr.top(), room, cr.height()), Qt.AlignLeft | Qt.AlignVCenter, label)
+            x += fm.horizontalAdvance(label) + gap
+        if shown < len(items):
+            painter.setPen(QColor(self._pal()["mute"]))
+            painter.drawText(QRect(x, cr.top(), max(cr.right() - x, 0), cr.height()),
+                             Qt.AlignLeft | Qt.AlignVCenter, f"+{len(items) - shown}")
+
+    def _pill_geometry(self, option, cr, text, dot):
+        font = self._small_font(option, T["f_xs"])
+        fm = QFontMetrics(font)
+        pad = K["pad_gpill"]
+        dot_w = K["d_pill_dot"] + T["s_1"] + 1 if dot else 0
+        shown = fm.elidedText(text, Qt.ElideRight, max(cr.width() - 2 * pad - dot_w, 0))
+        return font, shown, min(cr.width(), fm.horizontalAdvance(shown) + 2 * pad + dot_w)
+
+    def _paint_pill(self, painter, option, cr, text, tone="neutral", dot=False):
+        bg, tx, bd = self._pill_colours(tone)
+        h = K["h_pill"] if self.tone == "list" else K["h_gpill"]
+        font, shown, w = self._pill_geometry(option, cr, str(text), dot)
+        r = QRectF(cr.left(), cr.top() + (cr.height() - h) / 2, w, h)
+        painter.setPen(QPen(QColor(bd), 1) if bd != "transparent" else Qt.NoPen)
+        painter.setBrush(QColor(bg))
+        painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), h / 2, h / 2)
+        x = r.left() + K["pad_gpill"]
+        if dot:
+            d = K["d_pill_dot"]
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(tx))
+            painter.drawEllipse(QRectF(x, r.center().y() - d / 2, d, d))
+            x += d + T["s_1"] + 1
+        painter.setFont(font)
+        painter.setPen(QColor(tx))
+        painter.drawText(QRectF(x, r.top(), r.right() - x, h), Qt.AlignLeft | Qt.AlignVCenter, shown)
+
+    def _paint_tag(self, painter, option, cr, text, tone="neutral"):
+        bg, tx, bd = _TAG_TONES.get(tone) or _TAG_TONES["neutral"]
+        font = self._small_font(option, T["f_xs"], mono=True)
+        fm = QFontMetrics(font)
+        pad, h = 7, K["h_tag"]
+        shown = fm.elidedText(str(text), Qt.ElideRight, max(cr.width() - 2 * pad, 0))
+        r = QRectF(cr.left(), cr.top() + (cr.height() - h) / 2,
+                   min(cr.width(), fm.horizontalAdvance(shown) + 2 * pad), h)
+        painter.setPen(QPen(QColor(bd), 1))
+        painter.setBrush(QColor(bg))
+        painter.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), K["r_xs"], K["r_xs"])
+        painter.setFont(font)
+        painter.setPen(QColor(tx))
+        painter.drawText(r.adjusted(pad, 0, -pad, 0), Qt.AlignLeft | Qt.AlignVCenter, shown)
+
+    # ---- clicks, keys and tooltips
+    def editorEvent(self, event, model, option, index):
+        kind = event.type()
+        mouse = kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick)
+        actions = index.data(ROLE_ACTIONS)
+        if actions and mouse and event.button() == Qt.LeftButton:
+            hit = self._action_at(option.rect, actions, event.position().toPoint())
+            if hit is not None:
+                if kind == QEvent.MouseButtonRelease and hit.enabled:
+                    signal = getattr(self._view, "actionTriggered", None)
+                    if signal is not None:
+                        signal.emit(index.row(), index.column(), hit.key)
+                return kind != QEvent.MouseButtonPress      # a press still selects the row
+        flags = index.flags()
+        if self._has_check(index) and flags & Qt.ItemIsEnabled:
+            toggle = False
+            if mouse and event.button() == Qt.LeftButton:
+                inside = self._check_rect(option.rect).adjusted(-4, -4, 4, 4).contains(event.position().toPoint())
+                if not inside:
+                    return False
+                toggle = kind == QEvent.MouseButtonRelease
+            elif kind == QEvent.KeyPress and event.key() in (Qt.Key_Space, Qt.Key_Select):
+                toggle = True
+            else:
+                return False
+            if toggle:
+                state = Qt.Unchecked if _is_checked(index.data(Qt.CheckStateRole)) else Qt.Checked
+                model.setData(index, state, Qt.CheckStateRole)
+            return True
+        return super().editorEvent(event, model, option, index)
+
+    def cell_tooltip(self, option, index, pos=None):
+        """What the cell's tooltip says: the button under `pos`, else the full text when it is cut."""
+        actions = index.data(ROLE_ACTIONS)
+        if actions:
+            hit = self._action_at(option.rect, actions, pos) if pos is not None else None
+            return hit.tooltip if hit else ""
+        cr = self._content_rect(option.rect, index)
+        services = index.data(ROLE_SERVICES)
+        if services:
+            fm = QFontMetrics(self._small_font(option, T["f_s"]))
+            if self._services_shown(fm, services, cr.width()) < len(services):
+                return ", ".join(name for name, _c in services)
+            return ""
+        pill = index.data(ROLE_PILL)
+        if pill:
+            _font, shown, _w = self._pill_geometry(option, cr, str(pill[0]), len(pill) > 2 and pill[2])
+            return str(pill[0]) if shown != str(pill[0]) else ""
+        tag = index.data(ROLE_TAG)
+        text = str(tag[0]) if tag else str(index.data(Qt.DisplayRole) or "").replace("\n", " ")
+        font = self._small_font(option, T["f_xs"], mono=True) if tag else self._text_font(option, index)
+        room = cr.width() - (14 if tag else 0)
+        return text if QFontMetrics(font).horizontalAdvance(text) > room else ""
+
+    def helpEvent(self, event, view, option, index):
+        if event.type() != QEvent.ToolTip or not index.isValid():
+            return super().helpEvent(event, view, option, index)
+        tip = self.cell_tooltip(option, index, event.pos())
+        if not tip and not index.data(ROLE_ACTIONS) and index.data(Qt.ToolTipRole):
+            return super().helpEvent(event, view, option, index)
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+        else:
+            QToolTip.hideText()
+        return True
+
+
+class _GridHeader(QHeaderView):
+    """The sticky header: upper-case, letter-spaced, elided, with a small sort arrow."""
+
+    def __init__(self, tone, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setSectionsClickable(True)
+        self.setHighlightSections(False)
+        self.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.setMinimumSectionSize(K["w_col_min"] // 2)
+        self.tone = None
+        self.set_tone(tone)
+
+    def set_tone(self, tone):
+        self.tone = tone
+        self.setFixedHeight(K["h_list_head"] if tone == "list" else K["h_grid_head"])
+        self.setStyleSheet(f"QHeaderView {{ background: {_GRID_TONES[tone]['head']}; border: none; }}")
+        self.viewport().update()
+
+    def _font(self):
+        font = QFont(self.font())
+        font.setPixelSize(T["f_xs"])
+        font.setWeight(QFont.DemiBold)
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 0.8)
+        return font
+
+    def _text_rect(self, rect, logical):
+        pad = K["pad_list_cell"] if self.tone == "list" else K["pad_cell"]
+        r = rect.adjusted(pad, 0, -pad, 0)
+        if self.isSortIndicatorShown() and self.sortIndicatorSection() == logical:
+            r.setRight(r.right() - 12)
+        return r
+
+    def section_text(self, logical):
+        return str(self.model().headerData(logical, Qt.Horizontal, Qt.DisplayRole) or "").upper()
+
+    def paintSection(self, painter, rect, logical):
+        pal = _GRID_TONES[self.tone]
+        painter.save()
+        if pal["head"] != "transparent":
+            painter.fillRect(rect, QColor(pal["head"]))
+        if pal["head_rule"] and self.visualIndex(logical) > 0:
+            painter.fillRect(QRect(rect.left(), rect.top(), 1, rect.height()), QColor(pal["head_rule"]))
+        if pal["head_line"]:
+            painter.fillRect(QRect(rect.left(), rect.bottom(), rect.width(), 1), QColor(pal["head_line"]))
+        font = self._font()
+        r = self._text_rect(rect, logical)
+        painter.setFont(font)
+        painter.setPen(QColor(pal["head_text"]))
+        painter.drawText(r, Qt.AlignLeft | Qt.AlignVCenter,
+                         QFontMetrics(font).elidedText(self.section_text(logical), Qt.ElideRight, max(r.width(), 0)))
+        if self.isSortIndicatorShown() and self.sortIndicatorSection() == logical:
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(pal["head_text"]))
+            x, y = r.right() + 6, rect.center().y()
+            up = self.sortIndicatorOrder() == Qt.AscendingOrder
+            pts = ([QPointF(x - 4, y + 2), QPointF(x + 4, y + 2), QPointF(x, y - 3)] if up else
+                   [QPointF(x - 4, y - 2), QPointF(x + 4, y - 2), QPointF(x, y + 3)])
+            painter.drawPolygon(QPolygonF(pts))
+        painter.restore()
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.ToolTip:
+            logical = self.logicalIndexAt(event.pos())
+            if logical >= 0 and not self.model().headerData(logical, Qt.Horizontal, Qt.ToolTipRole):
+                rect = QRect(self.sectionViewportPosition(logical), 0, self.sectionSize(logical), self.height())
+                text = self.section_text(logical)
+                if QFontMetrics(self._font()).horizontalAdvance(text) > self._text_rect(rect, logical).width():
+                    QToolTip.showText(event.globalPos(), text, self)
+                else:
+                    QToolTip.hideText()
+                return True
+        return super().viewportEvent(event)
+
+
+def fit_column_widths(available, specs, manual=None, user_hidden=(), compact=False):
+    """Widths for the columns of a grid `available` px wide (the rule from IMPLEMENTATION 4.2 / 4.7).
+
+    specs: {col: spec} in on-screen order; a spec is a dict as DataGrid.set_column stores it. A column
+    with a `width` is fixed (shrinks toward its `minimum` only when space is short); a column without
+    one shares what is left by `stretch`, never under its minimum and never over `max_share` of the
+    whole width. In COMPACT, `compact_hidden` columns hide; then, while even the minimums do not fit,
+    the column with the highest `priority` hides (0 never does; rightmost first on a tie). `manual`
+    widths (the user dragged them) replace the preferred width. user_hidden columns stay hidden and
+    are not counted. Returns ({col: width} for the visible columns, set of columns fitting hid).
+    """
+    manual = manual or {}
+    order = [c for c in specs if c not in user_hidden]
+    pos = {c: i for i, c in enumerate(order)}
+    hidden = {c for c in order if compact and specs[c]["compact_hidden"]}
+
+    def pref(c):
+        return manual.get(c) or specs[c]["width"]
+
+    def minimum(c):
+        m = specs[c]["minimum"]
+        m = K["w_col_min"] if m is None else m
+        return min(m, pref(c)) if pref(c) else m
+
+    def visible():
+        return [c for c in order if c not in hidden]
+
+    while sum(minimum(c) for c in visible()) > available:
+        optional = [c for c in visible() if specs[c]["priority"] > 0]
+        if not optional:
+            break
+        hidden.add(max(optional, key=lambda c: (specs[c]["priority"], pos[c])))
+
+    cols = visible()
+    fixed = [c for c in cols if pref(c)]
+    flex = [c for c in cols if not pref(c)]
+    widths = {c: pref(c) for c in fixed}
+    deficit = sum(widths.values()) - (available - sum(minimum(c) for c in flex))
+    room = {c: widths[c] - minimum(c) for c in fixed}
+    total_room = sum(room.values())
+    if deficit > 0 and total_room > 0:
+        # Shrink in proportion to how much room each fixed column has above its minimum.
+        cut = min(deficit, total_room)
+        for c in fixed:
+            widths[c] -= int(cut * room[c] / total_room)
+
+    left = available - sum(widths.values())
+    free = list(flex)
+    while free:
+        weight = sum(specs[c]["stretch"] for c in free) or 1
+        clamped = []
+        for c in free:
+            share = left * specs[c]["stretch"] / weight
+            top = specs[c]["max_share"] * available if specs[c]["max_share"] else None
+            if share < minimum(c):
+                widths[c] = minimum(c)
+            elif top is not None and share > top:
+                widths[c] = int(top)
+            else:
+                continue
+            clamped.append(c)
+        if not clamped:
+            for c in free:
+                widths[c] = int(left * specs[c]["stretch"] / weight)
+            widths[free[-1]] += left - sum(widths[c] for c in free)
+            break
+        for c in clamped:
+            left -= widths[c]
+            free.remove(c)
+    if not flex and cols:
+        widths[cols[-1]] += max(0, available - sum(widths.values()))
+    return widths, hidden
+
+
+@lru_cache(maxsize=None)
+def _grid_qss(tone):
+    pal = _GRID_TONES[tone]
+    return (
+        f"QTableView {{ background: {pal['bg']}; border: none; outline: 0; color: {pal['text']};"
+        f" font-size: {T['f_m']}px; gridline-color: {pal['line']};"
+        f" selection-background-color: {pal['sel']}; selection-color: {pal['sel_text']}; }}"
+        f"QTableView QTableCornerButton::section {{ background: {pal['head']}; border: none; }}"
+    )
+
+
+class DataGrid(QTableWidget):
+    """A QTableWidget (so the items, and the search grid's cell-format engine on them, stay as they
+    are) drawn by GridDelegate. See the module docstring for the API."""
+
+    actionTriggered = Signal(int, int, str)     # row, column, CellAction.key
+    columnsFitted = Signal(list)                # the columns fit_columns() hid for lack of width
+    TONES = tuple(_GRID_TONES)
+
+    def __init__(self, rows=0, columns=0, parent=None, *, tone="white", list_mode=False):
+        super().__init__(rows, columns, parent)
+        self._hover_row = -1
+        self._hover_pos = None
+        self._specs = {}
+        self._fit_hidden = set()
+        self._manual = {}
+        self._fitting = False
+        self.compact = False
+        self.list_mode = list_mode
+        self.setHorizontalHeader(_GridHeader(tone, self))
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.sectionResized.connect(self._on_section_resized)
+        self.verticalHeader().hide()
+        self.setShowGrid(False)
+        self.setWordWrap(False)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.delegate = GridDelegate(self, tone)
+        self.setItemDelegate(self.delegate)
+        if list_mode:
+            header.hide()
+            self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tone = None
+        self.set_tone(tone)
+
+    def set_tone(self, tone):
+        if tone not in _GRID_TONES:
+            raise ValueError(f"unknown DataGrid tone: {tone}")
+        self.tone = tone
+        self.delegate.tone = tone
+        self.horizontalHeader().set_tone(tone)
+        self.setStyleSheet(_grid_qss(tone))
+        self._size_rows()
+        self.viewport().update()
+
+    def set_tall_rows(self, on):
+        """52 px rows for two-line (ROLE_SUB) cells, as Tracker Dump's Client column."""
+        self._tall = bool(on)
+        self._size_rows()
+
+    def _size_rows(self):
+        rows = self.verticalHeader()
+        tall = self.list_mode or getattr(self, "_tall", False)
+        height = K["h_row_tall"] if tall else K["h_list_row"] if self.tone == "list" else T["h_row"]
+        rows.setMinimumSectionSize(min(rows.minimumSectionSize(), height))
+        rows.setDefaultSectionSize(height)
+
+    # ---- columns
+    def set_column(self, col, *, kind="text", width=None, minimum=None, stretch=1, max_share=None,
+                   priority=0, compact_hidden=False):
+        if kind not in GRID_KINDS:
+            raise ValueError(f"unknown column kind: {kind}")
+        self._specs[col] = {"kind": kind, "width": width, "minimum": minimum, "stretch": stretch,
+                            "max_share": max_share, "priority": priority, "compact_hidden": compact_hidden}
+
+    def column_kind(self, col):
+        spec = self._specs.get(col)
+        return spec["kind"] if spec else "text"
+
+    def _spec(self, col):
+        return self._specs.get(col) or {"kind": "text", "width": None, "minimum": None, "stretch": 1,
+                                         "max_share": None, "priority": 0, "compact_hidden": False}
+
+    def fit_columns(self, available=None):
+        n = self.columnCount()
+        if not n:
+            return []
+        if available is None:
+            available = self.viewport().width()
+        header = self.horizontalHeader()
+        order = [header.logicalIndex(v) for v in range(n)]
+        user_hidden = {c for c in order if self.isColumnHidden(c) and c not in self._fit_hidden}
+        widths, hidden = fit_column_widths(available, {c: self._spec(c) for c in order}, self._manual,
+                                           user_hidden, self.compact)
+        self._fitting = True
+        try:
+            for c in order:
+                if c in user_hidden:
+                    continue
+                self.setColumnHidden(c, c in hidden)
+                if c in widths:
+                    self.setColumnWidth(c, max(widths[c], header.minimumSectionSize()))
+        finally:
+            self._fitting = False
+        changed = hidden != self._fit_hidden
+        self._fit_hidden = set(hidden)
+        if changed:
+            self.columnsFitted.emit(sorted(hidden))
+        return sorted(hidden)
+
+    def hidden_by_fit(self):
+        return sorted(self._fit_hidden)
+
+    def reset_manual_widths(self):
+        self._manual.clear()
+        self.fit_columns()
+
+    def manual_widths(self):
+        return dict(self._manual)
+
+    def _on_section_resized(self, col, old, new):
+        if not self._fitting and old > 0 and new > 0:
+            self._manual[col] = new
+
+    def set_compact(self, on):
+        self.compact = bool(on)
+        self.fit_columns()
+
+    def apply_width_mode(self, mode):
+        self.set_compact(str(getattr(mode, "value", mode)).lower() == "compact")
+
+    # ---- hover (the delegate paints the row under the mouse and the button under it)
+    def _set_hover(self, row, pos):
+        old = self._hover_row
+        self._hover_pos = pos
+        if row != old:
+            self._hover_row = row
+            self.viewport().update()
+        elif row >= 0:
+            self.viewport().update(QRect(0, self.rowViewportPosition(row), self.viewport().width(),
+                                         self.rowHeight(row)))
+
+    def viewportEvent(self, event):
+        kind = event.type()
+        if kind == QEvent.MouseMove:
+            pos = event.position().toPoint()
+            self._set_hover(self.rowAt(pos.y()), pos)
+        elif kind == QEvent.Leave:
+            self._set_hover(-1, None)
+        elif kind == QEvent.Resize and self._specs:
+            result = super().viewportEvent(event)
+            self.fit_columns()
+            return result
+        return super().viewportEvent(event)
+
+
+class DarkListTable(DataGrid):
+    """Dark list table for dialogs and settings (table.dt): muted caps header, hairline rows, the
+    selected row dark-mint with the emerald edge; tags, pills and checkboxes drawn in cells."""
+
+    def __init__(self, rows=0, columns=0, parent=None):
+        super().__init__(rows, columns, parent, tone="list")
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+
+
+# ---------------------------------------------------------------- GridFooter and GridFrame
+
+@lru_cache(maxsize=None)
+def _footer_qss(tone):
+    pal = _GRID_TONES[tone]
+    return (
+        f"QFrame#KitGridFooter {{ background: {pal['foot']}; border: none;"
+        f" border-top: 1px solid {pal['foot_line']}; }}"
+        f"QWidget#KitGridHint {{ background: transparent; }}"
+        f"QLabel#KitGridFootText {{ background: transparent; color: {pal['mute']};"
+        f" font-size: {K['f_grid_foot']}px; }}"
+    )
+
+
+class GridFooter(QFrame):
+    """The 30 px strip under a grid: a count on the left, keyboard hints on the right."""
+
+    def __init__(self, parent=None, *, tone="white"):
+        super().__init__(parent)
+        self.setObjectName("KitGridFooter")
+        self.setFixedHeight(K["h_grid_foot"])
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(K["pad_cell"], 0, K["pad_cell"], 0)
+        self._lay.setSpacing(K["gap_strip"])
+        self.count_label = QLabel("", self)
+        self.count_label.setObjectName("KitGridFootText")
+        self._lay.addWidget(self.count_label)
+        self._lay.addStretch(1)
+        self._hints = []
+        self._keys = []
+        self.compact = False
+        self.tone = None
+        self.set_tone(tone)
+
+    def set_tone(self, tone):
+        if tone not in _GRID_TONES:
+            raise ValueError(f"unknown GridFooter tone: {tone}")
+        self.tone = tone
+        self.setStyleSheet(_footer_qss(tone))
+        for key in self._keys:
+            key.setStyleSheet(_key_qss(tone == "white"))
+
+    def set_count(self, text):
+        self.count_label.setText(text)
+
+    def add_hint(self, keys, text="", *, compact_hide=False):
+        """Key caps then a muted sentence ("Enter opens the top result"); compact_hide drops it in COMPACT."""
+        holder = QWidget(self)
+        holder.setObjectName("KitGridHint")
+        lay = QHBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(T["s_1"])
+        for k in [keys] if isinstance(keys, str) else keys:
+            key = Key(k, holder, light=self.tone == "white")
+            self._keys.append(key)
+            lay.addWidget(key)
+        if text:
+            label = QLabel(text, holder)
+            label.setObjectName("KitGridFootText")
+            lay.addWidget(label)
+        self._lay.addWidget(holder)
+        self._hints.append((holder, compact_hide))
+        holder.setVisible(not (compact_hide and self.compact))
+        return holder
+
+    def add_widget(self, widget):
+        self._lay.addWidget(widget)
+        return widget
+
+    def set_compact(self, on):
+        self.compact = bool(on)
+        for holder, compact_hide in self._hints:
+            holder.setVisible(not (compact_hide and self.compact))
+
+    def apply_width_mode(self, mode):
+        self.set_compact(str(getattr(mode, "value", mode)).lower() == "compact")
+
+
+class GridFrame(QFrame):
+    """The rounded surface (.gridwrap) that holds a DataGrid and, under it, its GridFooter."""
+
+    def __init__(self, grid, footer=None, parent=None):
+        super().__init__(parent)
+        self.setObjectName("KitGridFrame")
+        self.grid = grid
+        self.footer = footer
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(1, 1, 1, 1)
+        lay.setSpacing(0)
+        lay.addWidget(grid, 1)
+        if footer is not None:
+            lay.addWidget(footer)
+        self.set_tone(grid.tone)
+
+    def set_tone(self, tone):
+        pal = _GRID_TONES[tone]
+        self.grid.set_tone(tone)
+        if self.footer is not None:
+            self.footer.set_tone(tone)
+        bg = pal["bg"] if pal["bg"] != "transparent" else T["card"]
+        self.setStyleSheet(f"QFrame#KitGridFrame {{ background: {bg}; border: 1px solid {pal['wrap']};"
+                           f" border-radius: {T['r_l']}px; }}")
+
+    def apply_width_mode(self, mode):
+        self.grid.apply_width_mode(mode)
+        if self.footer is not None:
+            self.footer.apply_width_mode(mode)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), T["r_l"], T["r_l"])
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))

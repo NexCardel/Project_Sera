@@ -24,10 +24,11 @@ ARGS = _ap.parse_args()
 os.environ["QT_SCALE_FACTOR"] = f"{ARGS.scale:.2f}"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget  # noqa: E402
 
 from ui.components import kit  # noqa: E402
-from ui.utils.tokens import TOKENS  # noqa: E402
+from ui.utils.tokens import KIT, TOKENS  # noqa: E402
 
 
 def _row(grid, r, caption, widgets):
@@ -331,6 +332,145 @@ def bars_page():
     return page
 
 
+_SVC = {"GST": "#ff6a3d", "Income Tax": "#4d8dff", "Email": "#a77bff", "TRACES": "#e3b341", "EPFO": "#35c4a0"}
+_PEOPLE = [   # fictional clients, as in Mockups/fleet/index.html
+    ("Sharma Traders Pvt Ltd", "Rohan Sharma", "19ABCDE1000F1Z5", "ABCDE1000F", "98000 00001", ["GST", "Income Tax"]),
+    ("Gupta & Sons", "Meera Gupta", "19ABCDE1001F1Z3", "ABCDE1001F", "98000 00002", ["GST", "Income Tax", "Email"]),
+    ("Mehta Textiles LLP", "Kiran Mehta", "", "ABCDE1002F", "", ["GST"]),
+    ("Bose Electricals", "Anirban Bose", "19ABCDE1003F1Z9", "ABCDE1003F", "98000 00004", ["Income Tax", "TRACES"]),
+    ("Roy Pharma Distributors Private Limited", "Sunita Roy", "19ABCDE1004F1Z7", "ABCDE1004F", "98000 00005",
+     ["GST", "Income Tax", "Email", "TRACES", "EPFO"]),
+    ("Das Hardware", "Pritam Das", "", "ABCDE1005F", "98000 00006", ["Income Tax"]),
+]
+
+
+def _white_grid(compact=False):
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QTableWidgetItem
+    heads = ["No.", "Name of company", "Name of proprietor", "GSTIN", "PAN", "Ph. no.", "Services"]
+    grid = kit.DataGrid(len(_PEOPLE), len(heads))
+    grid.setHorizontalHeaderLabels(heads)
+    grid.setSortingEnabled(False)
+    grid.horizontalHeader().setSortIndicatorShown(True)
+    grid.horizontalHeader().setSortIndicator(1, Qt.AscendingOrder)
+    grid.set_column(0, kind="num", width=56)
+    grid.set_column(1, minimum=160, stretch=2)
+    grid.set_column(2, minimum=120, max_share=0.24)
+    grid.set_column(3, kind="mono", width=150, minimum=130, priority=2, compact_hidden=True)
+    grid.set_column(4, kind="mono", width=112, minimum=100, priority=1)
+    grid.set_column(5, kind="num", width=110, minimum=96, priority=3, compact_hidden=True)
+    grid.set_column(6, width=210, minimum=120, priority=1)
+    for r, (name, owner, gstin, pan, phone, svcs) in enumerate(_PEOPLE):
+        for c, text in enumerate([str(r + 1), name, owner, gstin or "—", pan, phone or "—"]):
+            grid.setItem(r, c, QTableWidgetItem(text))
+        item = QTableWidgetItem(", ".join(svcs))
+        item.setData(kit.ROLE_SERVICES, [(s, _SVC[s]) for s in svcs])
+        grid.setItem(r, 6, item)
+    grid.item(3, 2).setBackground(QColor("#fff3cd"))       # a cell-format highlight from the engine
+    grid.item(3, 2).setForeground(QColor("#6b4e00"))
+    grid.selectRow(1)
+    footer = kit.GridFooter()
+    footer.set_count(f"{len(_PEOPLE)} clients")
+    footer.add_hint("Enter", "opens the top result")
+    footer.add_hint(["↑", "↓"], "move · Ctrl C copies the selected cells", compact_hide=True)
+    footer.add_hint("Esc", "closes the panel")
+    frame = kit.GridFrame(grid, footer)
+    frame.setFixedSize(760 if compact else 1060, 330)
+    if compact:
+        frame.apply_width_mode("compact")
+    return frame
+
+
+def _dark_grid():
+    from PySide6.QtWidgets import QTableWidgetItem
+    heads = ["Client", "Filing type", "Period", "Submission status", "Actions", "Updated", "Captured by"]
+    rows = [("Sharma Traders Pvt Ltd", "#1 · ABCDE1000F", "GSTR-3B", "Aug 2026", "Filed", "emerald", "Today 11:02", "OFFICE-PC1"),
+            ("Unregistered capture", "ABCDE1009F", "ITR-4", "AY 2026-27", "Awaiting e-verification", "amber", "Yesterday 17:40", "FRONT-DESK"),
+            ("Bose Electricals", "#4 · ABCDE1003F", "24Q", "Q2 FY 2026-27", "Not submitted", "red", "2 Oct 16:40", "OFFICE-PC1"),
+            ("Gupta & Sons", "#2 · ABCDE1001F", "GSTR-1", "Sep 2026", "Draft saved", "blue", "28 Sep 12:01", "FRONT-DESK")]
+    grid = kit.DataGrid(len(rows), len(heads), tone="dark")
+    grid.setHorizontalHeaderLabels(heads)
+    grid.set_tall_rows(True)
+    for c, spec in enumerate([dict(minimum=240), dict(width=90, priority=3), dict(width=170),
+                              dict(width=210), dict(width=110), dict(kind="num", width=120, priority=2),
+                              dict(width=110, priority=1)]):
+        grid.set_column(c, **spec)
+    for r, (name, sub, filing, period, status, tone, when, pc) in enumerate(rows):
+        item = QTableWidgetItem(name)
+        item.setData(kit.ROLE_SUB, sub)
+        grid.setItem(r, 0, item)
+        for c, text in ((1, filing), (2, period), (5, when), (6, pc)):
+            grid.setItem(r, c, QTableWidgetItem(text))
+        pill = QTableWidgetItem(status)
+        pill.setData(kit.ROLE_PILL, (status, tone, True))
+        grid.setItem(r, 3, pill)
+        acts = QTableWidgetItem("")
+        acts.setData(kit.ROLE_ACTIONS, [
+            kit.CellAction("view", "mdi.eye-outline", "View raw payload"),
+            kit.CellAction("autofill", "mdi.lightning-bolt", "Fast Autofill: Income Tax", primary=True,
+                           colour=_SVC["Income Tax"] if r == 2 else None),
+            kit.CellAction("more", "mdi.dots-vertical", "More: Inspect · + Create client · Delete container",
+                           enabled=r != 3)])
+        grid.setItem(r, 4, acts)
+    grid.selectRow(0)
+    footer = kit.GridFooter(tone="dark")
+    footer.set_count("Showing 1 to 4 of 4 entries")
+    footer.add_hint("F5", "refreshes")
+    frame = kit.GridFrame(grid, footer)
+    frame.setFixedSize(1060, 290)
+    return frame
+
+
+def _list_table():
+    from PySide6.QtWidgets import QTableWidgetItem
+    cols = [("NAME OF COMPANY", "text", "Identity", "emerald", True), ("PAN", "text", "Internal PK anchor", "amber", True),
+            ("ID", "number", "ID / auto-serial", "emerald", False), ("GST PASSWORD", "password", "Secret", "red", False),
+            ("EMAIL", "password", "", "", True)]
+    t = kit.DarkListTable(len(cols), 4)
+    t.setHorizontalHeaderLabels(["Column", "Type", "Role", "Main"])
+    t.set_column(0, kind="strong", minimum=160)
+    t.set_column(1, width=110)
+    t.set_column(2, width=190)
+    t.set_column(3, width=70)
+    for r, (name, typ, role, tone, main) in enumerate(cols):
+        t.setItem(r, 0, QTableWidgetItem(name))
+        tag = QTableWidgetItem(typ)
+        tag.setData(kit.ROLE_TAG, (typ, "red" if typ == "password" else "neutral"))
+        t.setItem(r, 1, tag)
+        pill = QTableWidgetItem(role or "—")
+        if role:
+            pill.setData(kit.ROLE_PILL, (role, tone))
+        t.setItem(r, 2, pill)
+        box = QTableWidgetItem("")
+        box.setFlags(box.flags() | Qt.ItemIsUserCheckable)
+        box.setCheckState(Qt.Checked if main else Qt.Unchecked)
+        t.setItem(r, 3, box)
+    t.selectRow(0)
+    card = kit.Card("Columns")
+    card.add_widget(t)
+    t.setFixedHeight(KIT["h_list_head"] + len(cols) * KIT["h_list_row"] + 2)
+    card.setFixedWidth(620)
+    return card
+
+
+def grid_page():
+    page = QWidget()
+    page.setObjectName("gallery")
+    page.setStyleSheet(f"QWidget#gallery {{ background: {TOKENS['bg']}; }}")
+    root = QVBoxLayout(page)
+    root.setContentsMargins(TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"], TOKENS["s_6"])
+    root.setSpacing(TOKENS["s_3"])
+    root.addWidget(kit.SectionLabel("DataGrid white: zebra, selected row, highlight cell, service dots, footer"))
+    root.addWidget(_white_grid())
+    root.addWidget(kit.SectionLabel("DataGrid white, COMPACT (GSTIN and Ph. no. hidden, hint dropped)"))
+    root.addWidget(_white_grid(compact=True))
+    root.addWidget(kit.SectionLabel("DataGrid dark: two-line cells, status pills, drawn row actions"))
+    root.addWidget(_dark_grid())
+    root.addWidget(kit.SectionLabel("DarkListTable in a Card: tags, pills, checkboxes"))
+    root.addWidget(_list_table())
+    return page
+
+
 def main():
     from ui.utils.theme import get_theme_stylesheet
     app = QApplication.instance() or QApplication(sys.argv)
@@ -338,7 +478,7 @@ def main():
     out = Path(ARGS.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     for name, build in (("primitives", primitives_page), ("inputs", inputs_page),
-                        ("containers", containers_page), ("bars", bars_page)):
+                        ("containers", containers_page), ("bars", bars_page), ("grid", grid_page)):
         page = build()
         page.resize(page.sizeHint())
         page.show()

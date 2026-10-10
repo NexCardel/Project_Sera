@@ -869,3 +869,265 @@ def test_unsaved_bar_reserved_space_mode(app):
     assert bar.isVisible()
     assert not bar.label.isHidden()
     assert bar.is_dirty()
+
+
+# ---------------------------------------------------------------- DataGrid (K-5)
+
+from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtGui import QColor  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QTableWidget, QTableWidgetItem  # noqa: E402
+
+
+def _spec(width=None, minimum=None, stretch=1, max_share=None, priority=0, compact_hidden=False):
+    return {"kind": "text", "width": width, "minimum": minimum, "stretch": stretch,
+            "max_share": max_share, "priority": priority, "compact_hidden": compact_hidden}
+
+
+def _grid(rows=4, cols=3, **kw):
+    g = kit.DataGrid(rows, cols, **kw)
+    g.setHorizontalHeaderLabels([f"Column {c}" for c in range(cols)])
+    for r in range(rows):
+        for c in range(cols):
+            g.setItem(r, c, QTableWidgetItem(f"r{r}c{c}"))
+    g.resize(600, 300)
+    g.show()
+    QApplication.processEvents()
+    return g
+
+
+def _pixel(grid, x, y):
+    return grid.viewport().grab().toImage().pixelColor(x, y).name().upper()
+
+
+def _cell_point(grid, row, col, dx=None):
+    rect = grid.visualRect(grid.model().index(row, col))
+    return QPoint(rect.left() + dx if dx is not None else rect.center().x(), rect.center().y())
+
+
+def test_data_grid_is_a_table_widget_with_tones(app):
+    g = kit.DataGrid(2, 2)
+    assert isinstance(g, QTableWidget)
+    assert g.tone == "white" and isinstance(g.itemDelegate(), kit.GridDelegate)
+    assert g.horizontalHeader().height() == KIT["h_grid_head"]
+    assert g.verticalHeader().defaultSectionSize() == TOKENS["h_row"]
+    assert g.verticalHeader().isHidden()
+    g.set_tone("dark")
+    assert g.tone == "dark" and g.itemDelegate().tone == "dark"
+    with pytest.raises(ValueError):
+        g.set_tone("blue")
+    g.set_tall_rows(True)
+    assert g.verticalHeader().defaultSectionSize() == KIT["h_row_tall"]
+
+
+def test_list_mode_and_dark_list_table(app):
+    lst = kit.DataGrid(3, 1, list_mode=True)
+    assert lst.horizontalHeader().isHidden()
+    assert lst.selectionBehavior() == lst.SelectionBehavior.SelectRows
+    assert lst.verticalHeader().defaultSectionSize() == KIT["h_row_tall"]
+    t = kit.DarkListTable(3, 2)
+    assert isinstance(t, kit.DataGrid) and t.tone == "list"
+    assert t.selectionBehavior() == t.SelectionBehavior.SelectRows
+    assert t.horizontalHeader().height() == KIT["h_list_head"]
+    assert t.verticalHeader().defaultSectionSize() == KIT["h_list_row"]
+
+
+def test_grid_paints_zebra_selection_edge_and_highlight(app):
+    g = _grid()
+    g.setFocusPolicy(Qt.NoFocus)                         # no cell cursor in the pixel checks
+    g.item(2, 1).setBackground(QColor("#123456"))         # the cell-format engine's fill
+    g.selectRow(1)
+    g.item(2, 1).setSelected(True)
+    QApplication.processEvents()
+    x0 = g.visualRect(g.model().index(0, 1)).center().x()
+    assert _pixel(g, x0, g.rowViewportPosition(0) + 5) == TOKENS["g_bg"]
+    assert _pixel(g, x0, g.rowViewportPosition(3) + 5) == TOKENS["g_alt"]      # zebra
+    assert _pixel(g, x0, g.rowViewportPosition(1) + 5) == TOKENS["g_sel"]      # mint selection
+    assert _pixel(g, 1, g.rowViewportPosition(1) + 5) == TOKENS["em"]          # emerald edge
+    assert _pixel(g, x0, g.rowViewportPosition(2) + 5) == "#123456"            # highlight wins over selection
+    assert _pixel(g, x0, g.rowViewportPosition(2)) == TOKENS["em"]             # ...with an emerald outline
+
+
+def test_grid_hover_row(app):
+    g = _grid()
+    g.setFocusPolicy(Qt.NoFocus)
+    g._set_hover(0, QPoint(5, 5))
+    QApplication.processEvents()
+    assert _pixel(g, 200, g.rowViewportPosition(0) + 5) == TOKENS["g_hover"]
+    g._set_hover(-1, None)
+    QApplication.processEvents()
+    assert _pixel(g, 200, g.rowViewportPosition(0) + 5) == TOKENS["g_bg"]
+
+
+def test_grid_header_upper_case_painted_items_untouched(app):
+    g = _grid()
+    assert g.horizontalHeaderItem(0).text() == "Column 0"
+    assert g.horizontalHeader().section_text(0) == "COLUMN 0"
+
+
+def test_fit_column_widths_fills_the_width(app):
+    specs = {0: _spec(width=56), 1: _spec(minimum=160, stretch=2), 2: _spec(minimum=120), 3: _spec(width=110)}
+    widths, hidden = kit.fit_column_widths(1000, specs)
+    assert hidden == set()
+    assert widths[0] == 56 and widths[3] == 110
+    assert sum(widths.values()) == 1000
+    assert widths[1] == pytest.approx(2 * widths[2], abs=2)
+
+
+def test_fit_column_widths_max_share_and_minimum(app):
+    specs = {0: _spec(minimum=100), 1: _spec(minimum=100, max_share=0.2)}
+    widths, _ = kit.fit_column_widths(1000, specs)
+    assert widths[1] == 200 and widths[0] == 800
+    widths, _ = kit.fit_column_widths(150, specs)
+    assert widths == {0: 100, 1: 100}                        # never under the minimum (grid scrolls)
+
+
+def test_fit_column_widths_hides_by_priority_then_shrinks(app):
+    specs = {0: _spec(minimum=240), 1: _spec(width=120, minimum=110, priority=3),
+             2: _spec(width=170, minimum=140), 3: _spec(width=150, minimum=130, priority=2),
+             4: _spec(width=130, minimum=100, priority=1)}
+    widths, hidden = kit.fit_column_widths(900, specs)
+    assert hidden == set() and sum(widths.values()) == 900
+    widths, hidden = kit.fit_column_widths(700, specs)       # mins 720 > 700: drop priority 3 first
+    assert hidden == {1}
+    assert widths[0] >= 240 and all(widths[c] >= specs[c]["minimum"] for c in (2, 3, 4))
+    _, hidden = kit.fit_column_widths(500, specs)
+    assert hidden == {1, 3}
+
+
+def test_fit_column_widths_compact_manual_and_user_hidden(app):
+    specs = {0: _spec(), 1: _spec(width=150, compact_hidden=True), 2: _spec(width=100)}
+    _, hidden = kit.fit_column_widths(800, specs, compact=True)
+    assert hidden == {1}
+    widths, hidden = kit.fit_column_widths(800, specs, manual={2: 222}, user_hidden={1})
+    assert hidden == set() and 1 not in widths
+    assert widths[2] == 222 and widths[0] == 800 - 222
+
+
+def test_grid_fit_columns_compact_signal_and_user_hidden(app):
+    g = _grid(cols=4)
+    g.set_column(0, minimum=100)
+    g.set_column(1, width=150, compact_hidden=True)
+    g.set_column(2, width=100)
+    g.set_column(3, width=100)
+    g.setColumnHidden(3, True)                               # the screen hid it (header menu)
+    fitted = []
+    g.columnsFitted.connect(fitted.append)
+    g.apply_width_mode("compact")
+    assert g.isColumnHidden(1) and g.hidden_by_fit() == [1] and fitted == [[1]]
+    assert g.isColumnHidden(3)
+    g.apply_width_mode(type("Mode", (), {"value": "wide"})())
+    assert not g.isColumnHidden(1) and fitted[-1] == []
+    assert g.isColumnHidden(3)                               # user-hidden stays hidden
+    width = g.viewport().width()
+    assert g.columnWidth(0) + g.columnWidth(1) + g.columnWidth(2) == width
+
+
+def test_grid_manual_width_wins_until_reset(app):
+    g = _grid()
+    for c in range(3):
+        g.set_column(c, minimum=80)
+    g.fit_columns()
+    g.horizontalHeader().resizeSection(2, 250)               # as a user drag does
+    assert g.manual_widths() == {2: 250}
+    g.fit_columns()
+    assert g.columnWidth(2) == 250
+    g.reset_manual_widths()
+    assert g.manual_widths() == {} and g.columnWidth(2) != 250
+
+
+def test_cell_actions_are_drawn_not_widgets_and_click_emits(app):
+    g = _grid(cols=2)
+    for r in range(g.rowCount()):
+        g.item(r, 1).setData(kit.ROLE_ACTIONS, [
+            kit.CellAction("view", "mdi.eye-outline", "View raw payload"),
+            kit.CellAction("autofill", "mdi.lightning-bolt", "Fast Autofill", primary=True, colour="#4d8dff"),
+            kit.CellAction("more", "mdi.dots-vertical", "More", enabled=False)])
+    QApplication.processEvents()
+    assert not [b for b in g.findChildren(QAbstractButton) if b.isVisible()]
+    assert all(g.indexWidget(g.model().index(r, 1)) is None for r in range(g.rowCount()))
+    hits = []
+    g.actionTriggered.connect(lambda *a: hits.append(a))
+    index = g.model().index(2, 1)
+    rects = g.itemDelegate().action_rects(g.visualRect(index), index.data(kit.ROLE_ACTIONS))
+    QTest.mouseClick(g.viewport(), Qt.LeftButton, pos=rects[1].center())
+    assert hits == [(2, 1, "autofill")]
+    QTest.mouseClick(g.viewport(), Qt.LeftButton, pos=rects[2].center())   # disabled: nothing
+    assert hits == [(2, 1, "autofill")]
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    option = QStyleOptionViewItem()
+    option.rect = g.visualRect(index)
+    option.font = g.font()
+    assert g.itemDelegate().cell_tooltip(option, index, rects[0].center()) == "View raw payload"
+    with pytest.raises(ValueError):
+        kit.CellAction("x", "mdi.eye", "")
+
+
+def test_cell_checkbox_toggles_on_box_and_space_only(app):
+    g = _grid(cols=2)
+    for r in range(g.rowCount()):
+        g.item(r, 1).setCheckState(Qt.Unchecked)
+    rect = g.visualRect(g.model().index(1, 1))
+    box = g.itemDelegate()._check_rect(rect)
+    QTest.mouseClick(g.viewport(), Qt.LeftButton, pos=box.center())
+    assert g.item(1, 1).checkState() == Qt.Checked
+    QTest.mouseClick(g.viewport(), Qt.LeftButton, pos=QPoint(rect.right() - 5, rect.center().y()))
+    assert g.item(1, 1).checkState() == Qt.Checked
+    g.setFocus()
+    g.setCurrentCell(1, 1)
+    QTest.keyClick(g, Qt.Key_Space)
+    assert g.item(1, 1).checkState() == Qt.Unchecked
+    assert g.item(0, 0).data(Qt.CheckStateRole) is None      # plain items draw no box
+
+
+def test_cell_tooltips_for_elided_text_services_and_pills(app):
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    g = _grid(cols=3)
+    g.setColumnWidth(0, 80)
+    g.setColumnWidth(1, 90)
+    g.setColumnWidth(2, 400)
+    g.item(0, 0).setText("Roy Pharma Distributors Private Limited")
+    g.item(0, 1).setData(kit.ROLE_SERVICES, [("GST", "#ff6a3d"), ("Income Tax", "#4d8dff"), ("EPFO", "#35c4a0")])
+    g.item(0, 2).setData(kit.ROLE_PILL, ("Filed", "emerald", True))
+    g.item(1, 2).setData(kit.ROLE_PILL, ("Awaiting e-verification " * 6, "amber"))
+    delegate = g.itemDelegate()
+
+    def tip(row, col):
+        option = QStyleOptionViewItem()
+        index = g.model().index(row, col)
+        option.rect = g.visualRect(index)
+        option.font = g.font()
+        return delegate.cell_tooltip(option, index)
+
+    assert tip(0, 0) == "Roy Pharma Distributors Private Limited"
+    assert tip(1, 0) == ""
+    assert tip(0, 1) == "GST, Income Tax, EPFO"
+    assert tip(0, 2) == ""
+    assert tip(1, 2).startswith("Awaiting")
+
+
+def test_grid_footer_hints_and_compact(app):
+    f = kit.GridFooter()
+    assert f.height() == KIT["h_grid_foot"]
+    f.set_count("6 clients")
+    assert f.count_label.text() == "6 clients"
+    keep = f.add_hint("Enter", "opens the top result")
+    drop = f.add_hint(["↑", "↓"], "move", compact_hide=True)
+    f.apply_width_mode("compact")
+    assert not keep.isHidden() and drop.isHidden()
+    f.set_compact(False)
+    assert not drop.isHidden()
+    keys = keep.findChildren(kit.Key)
+    assert keys and KIT["key_light_bg"].lower() in keys[0].styleSheet().lower()
+    f.set_tone("dark")
+    assert KIT["key_bg"].lower() in keys[0].styleSheet().lower()
+
+
+def test_grid_frame_holds_grid_and_footer(app):
+    g = kit.DataGrid(1, 1)
+    f = kit.GridFooter()
+    frame = kit.GridFrame(g, f)
+    assert frame.grid is g and frame.footer is f
+    frame.set_tone("dark")
+    assert g.tone == "dark" and f.tone == "dark"
+    frame.apply_width_mode("compact")
+    assert g.compact and f.compact
