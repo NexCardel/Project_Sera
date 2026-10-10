@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 00:50)
+# UI overhaul — report (2026-10-11 01:00)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 14 |
+| Not started | 13 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 22 |
+| Done | 23 |
 | Blocked | 0 |
 
-Runs: 30   output tokens: 1018721   API-equivalent cost: $59.87
+Runs: 31   output tokens: 1061506   API-equivalent cost: $63.97
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -36,7 +36,7 @@ Runs: 30   output tokens: 1018721   API-equivalent cost: $59.87
 | S-2 | Done | haiku | 3f70e0e | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge | Five Settings pages (Action buttons, Tracker, Export, Backup, Purge) on the kit; 15 goldens; lock tests green except pre-existing TestSearchGridReuse |
 | S-3 | Done | haiku | 5718c61 | Screens: Settings: SCC vault presets | SCC vault presets on the kit: Cards, eight display-only Tiles, formula Tags, Inputs; 3 goldens in Mockups/built/settings; 56 lock tests pass |
 | S-4 | Done | opus | eaf3752 | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... | MCL DarkListTable with staged M/Q/A ticks on one column model; visibility pages with Switch, Find, count; 16 new tests; goldens x12; sm buttons avoided (theme m |
-| S-5 | Not started | sonnet |  | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs |  |
+| S-5 | Done | sonnet | e14dde1 | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs | Services page + MCL manager, column edit, service manager, service edit rebuilt on the kit; 13 new tests, goldens at 1366/1024/125% |
 | S-6 | Not started | sonnet |  | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... |  |
 | S-7 | Not started | opus |  | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour |  |
 | S-8 | Not started | haiku |  | Screens: Client detail panel |  |
@@ -101,3 +101,4 @@ Runs: 30   output tokens: 1018721   API-equivalent cost: $59.87
 - #12 (S-2) Tracker PageHeader lead elides at 1024 px ('...beside S...'); confirm the wording is acceptable or shorten the lead. — Not run
 - #13 (S-2) On a real 1366x768 screen, open Settings > Backup and confirm the Danger zone is readable and Restore is clearly red. — Not run
 - #14 (S-4) Settings > Master Column List on a real screen: click the M/Q/A ticks with the mouse, Alt+Up/Alt+Down on a selected row, Add/Edit/Delete column with a real column editor dialog, and check that the visibility pages agree before Save. — Not run
+- #15 (S-5) On a real 125% screen, open Settings > Services and the Service edit and Column edit dialogs: check nothing clips and the dropdown lists open fully. — Not run
