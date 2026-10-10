@@ -1,0 +1,20 @@
+ID,Local Time (IST),Timestamp (UTC),Workstation,Actor,Action,Client Token,Client Name,Service,Detail
+19,<local>,2026-03-05T23:59:59,local,Asha,view,CLI-00002,Bravo Textiles LLP,,
+18,<local>,2026-03-03T09:00:00,local,System,update_settings,,—,,Saved via Unified Settings Hub
+17,<local>,2026-03-02T10:17:00,local,Asha,audit_log_viewed,CLI-00001,Alpha Traders Pvt Ltd,,detail for audit_log_viewed
+16,<local>,2026-03-02T10:16:00,local,Bhanu,sync_received,CLI-00003,Charlie Foods,,detail for sync_received
+15,<local>,2026-03-02T10:15:00,local,Asha,sync_pushed,CLI-00001,Alpha Traders Pvt Ltd,,detail for sync_pushed
+14,<local>,2026-03-02T10:14:00,local,Bhanu,filing_submitted,CLI-00003,Charlie Foods,,detail for filing_submitted
+13,<local>,2026-03-02T10:13:00,local,Asha,csv_export,CLI-00001,Alpha Traders Pvt Ltd,,detail for csv_export
+12,<local>,2026-03-02T10:12:00,local,Bhanu,restore,CLI-00003,Charlie Foods,,detail for restore
+11,<local>,2026-03-02T10:11:00,local,Asha,backup,CLI-00001,Alpha Traders Pvt Ltd,,detail for backup
+10,<local>,2026-03-02T10:10:00,local,Bhanu,csv_import,CLI-00003,Charlie Foods,,detail for csv_import
+9,<local>,2026-03-02T10:09:00,local,Asha,delete,CLI-00001,Alpha Traders Pvt Ltd,,detail for delete
+8,<local>,2026-03-02T10:08:00,local,Bhanu,unarchive,CLI-00003,Charlie Foods,,detail for unarchive
+7,<local>,2026-03-02T10:07:00,local,Asha,archive,CLI-00001,Alpha Traders Pvt Ltd,,detail for archive
+6,<local>,2026-03-02T10:06:00,local,Bhanu,update,CLI-00003,Charlie Foods,,detail for update
+5,<local>,2026-03-02T10:05:00,local,Asha,create,CLI-00001,Alpha Traders Pvt Ltd,,detail for create
+4,<local>,2026-03-02T10:04:00,local,Bhanu,manual_copy,CLI-00003,Charlie Foods,,detail for manual_copy
+3,<local>,2026-03-02T10:03:00,local,Asha,autofill,CLI-00001,Alpha Traders Pvt Ltd,1,detail for autofill
+2,<local>,2026-03-02T10:02:00,local,Bhanu,manual_assist,CLI-00003,Charlie Foods,1,detail for manual_assist
+1,<local>,2026-03-02T10:01:00,local,Asha,view,CLI-00001,Alpha Traders Pvt Ltd,,detail for view
