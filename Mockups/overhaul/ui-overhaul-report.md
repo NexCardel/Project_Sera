@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 15:48)
+# UI overhaul — report (2026-10-10 15:54)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 32 |
+| Not started | 31 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 4 |
+| Done | 5 |
 | Blocked | 0 |
 
-Runs: 2   output tokens: 184200   API-equivalent cost: $8.46
+Runs: 3   output tokens: 200248   API-equivalent cost: $9.99
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -18,7 +18,7 @@ Runs: 2   output tokens: 184200   API-equivalent cost: $8.46
 | W0-2 | Done | sonnet | 537924a | Behaviour lock: tests for every 'must still work' item, green on the unchanged code | Behaviour lock: 8 offscreen test files tests/test_ui_lock_*.py (R1-R9 gaps) + goldens, no app code changed; Tracker CSV export bug (no import csv) locked as-is; |
 | W0-3 | Done | mechanical | 5191b06 | Screen inventory | Screen inventory written to Mockups/INVENTORY.md |
 | W0-D | Done | fable | e0d32a5 | Fleet redesign mockup (cloud, Fable 5.1): every screen in one new HTML mockup | Fleet mockup by Fable 5.1 (cloud); owner decisions and BUILD-PLAN.md in 9d66d4e |
-| W0-R | Not started | opus |  | Review the safety net |  |
+| W0-R | Done | opus | 946bebe | Review the safety net | 5/5 mutations caught (detail, search, settings, audit, sync); added audit search-by-id case; INVENTORY covers all 31 PNGs; 147 lock tests pass |
 | T-1 | Not started | haiku |  | Tokens: ui/utils/tokens.py from the :root block of Mockups/fleet/index.html (every colour, ... |  |
 | K-1 | Not started | opus |  | Kit: Primitives: LabelledAction (primary / soft / secondary / ghost / danger, sm, disabled ... |  |
 | K-2 | Not started | sonnet |  | Kit: Inputs: Input (leading icon, trailing action slot), Select, TextArea, Stepper, Checkbox ... |  |
