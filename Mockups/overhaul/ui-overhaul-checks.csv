@@ -12,3 +12,4 @@ Check,WP,Text,Result,Date,Notes
 11,S-2,"Real-desktop 125% check: open Settings > Tracker, Backup and Purge on a real 125% laptop and confirm nothing clips.",Not run,2026-10-10 18:57,
 12,S-2,Tracker PageHeader lead elides at 1024 px ('...beside S...'); confirm the wording is acceptable or shorten the lead.,Not run,2026-10-10 18:57,
 13,S-2,"On a real 1366x768 screen, open Settings > Backup and confirm the Danger zone is readable and Restore is clearly red.",Not run,2026-10-10 18:57,
+14,S-4,"Settings > Master Column List on a real screen: click the M/Q/A ticks with the mouse, Alt+Up/Alt+Down on a selected row, Add/Edit/Delete column with a real column editor dialog, and check that the visibility pages agree before Save.",Not run,2026-10-11 00:49,

@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-10 18:51)
+# UI overhaul — report (2026-10-11 00:31)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 17 |
+| Not started | 15 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 19 |
+| Done | 21 |
 | Blocked | 0 |
 
-Runs: 28   output tokens: 898468   API-equivalent cost: $50.67
+Runs: 29   output tokens: 967483   API-equivalent cost: $54.72
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -33,8 +33,8 @@ Runs: 28   output tokens: 898468   API-equivalent cost: $50.67
 | R-3 | Done | haiku | 58c6edd | Responsive and shell: Display scale: DisplayScaleControl rebuilt as a SettingRow + two LabelledActions; ... | Display scale on the kit: SettingRow + Apply/Restart LabelledActions, DialogFrame dialog; same QSettings and restart path; tests pass; one real-screen check add |
 | R-R | Done | sonnet | 8d136ee | Review phase R (responsive and shell) | Phase R reviewed: sidebar clean at 1366/1024/1366@125%; fold thresholds and Ctrl+B / scale shortcuts locked by tests; no app code changed |
 | S-1 | Done | sonnet | 8c2e4dc | Screens: Settings hub shell + unsaved bar + dirty tracking (IMPLEMENTATION 4.4) + General page | Settings hub + unsaved bar + dirty/discard/close prompt + General page on kit; lock + 13 new tests green, goldens in Mockups/built/settings |
-| S-2 | Not started | haiku |  | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge |  |
-| S-3 | Not started | haiku |  | Screens: Settings: SCC vault presets |  |
+| S-2 | Done | haiku | 3f70e0e | Screens: Settings: Action buttons, Tracker, Export, Backup, Purge | Five Settings pages (Action buttons, Tracker, Export, Backup, Purge) on the kit; 15 goldens; lock tests green except pre-existing TestSearchGridReuse |
+| S-3 | Done | haiku | 5718c61 | Screens: Settings: SCC vault presets | SCC vault presets on the kit: Cards, eight display-only Tiles, formula Tags, Inputs; 3 goldens in Mockups/built/settings; 56 lock tests pass |
 | S-4 | Not started | opus |  | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... |  |
 | S-5 | Not started | sonnet |  | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs |  |
 | S-6 | Not started | sonnet |  | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... |  |
@@ -75,6 +75,12 @@ Runs: 28   output tokens: 898468   API-equivalent cost: $50.67
 - **S-1** Dialog legacy QSS and compact trigger → Keep _apply_global_style for the 9 unconverted pages and child dialogs; compact is driven by dialog width minus nav (below 700 on, above 740 off) (Arrangement-only package; other pages still need the legacy sheet. Dialog width is deterministic where the stacked pane width is stale before layout.)
 - **S-1** Unsaved bar and two primary Save buttons → Bar shows on every page when dirty (reserved space); footer Save and bar Save both primary, as in the mockup (Dirty tracking spans all pages, so the bar belongs to the shell. The mockup draws two Save buttons while dirty; both call the same save.)
 - **S-1** Close with unsaved changes → Three-way prompt in reject(): Save changes / Discard changes / Keep editing (reject() also serves Esc and the title-bar X, so one override guards all exits; Save closes only if the save left nothing dirty.)
+- **S-2** Add a Banner on the S-2 pages? → No Banner (The fleet mockup puts no Banner on these pages; kept the layout to the mockup)
+- **S-2** Office recovery Card title: mockup casing or existing test text? → Keep 'Office Recovery Kit & Security' (test_office_recovery asserts the exact title; changing it would break the lock test)
+- **S-3** Are the SCC counts tiles interactive? → Non-interactive stat tiles (not checkable, no focus, arrow cursor), tooltip gives meaning (Counts are read-only figures; a clickable tile implies an action that does not exist)
+- **S-3** How is a counts-load failure shown? → Eight dashes in the tiles plus a hidden-until-needed Banner reading Counts not available (Keeps the tile grid stable and states the failure in words instead of a bare error label)
+- **S-3** Are the password fields shown as plain text? → Kept plain text, as before (Arrangement only; masking the fields is a behaviour change outside this package)
+- **S-3** Does the live preview show full resolved values? → Kept full values, as the current behaviour does (Preview content is unchanged; only the layout moved to kit Cards and Tags)
 
 ## Checks waiting for you
 
@@ -88,3 +94,6 @@ Runs: 28   output tokens: 898468   API-equivalent cost: $50.67
 - #8 (R-R) Sidebar on a real 1366x768 laptop at Windows 125 % and Sera display scale 1.00 / 1.25: brand, All Clients + Ctrl K hint, Auto-sync pill not clipped; Ctrl+B, Ctrl+=, Ctrl+-, Ctrl+0 pressed on a real keyboard (offscreen only tests the wiring). — Not run
 - #9 (S-1) On a real 125 % screen, open Settings > General and check nothing clips: nav, five cards, unsaved bar, footer Save. — Not run
 - #10 (S-1) Edit one General setting then press Close or Esc: confirm the wording of the 'Unsaved changes' prompt (Save changes / Discard changes / Keep editing) is what you want. — Not run
+- #11 (S-2) Real-desktop 125% check: open Settings > Tracker, Backup and Purge on a real 125% laptop and confirm nothing clips. — Not run
+- #12 (S-2) Tracker PageHeader lead elides at 1024 px ('...beside S...'); confirm the wording is acceptable or shorten the lead. — Not run
+- #13 (S-2) On a real 1366x768 screen, open Settings > Backup and confirm the Danger zone is readable and Restore is clearly red. — Not run

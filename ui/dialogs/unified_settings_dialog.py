@@ -13,10 +13,9 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -32,13 +31,15 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QStackedWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from ui.components.kit import (
-    Banner, Card, DialogFrame, FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill,
-    Select, SettingRow, Stepper, Switch, Tag, Tile, UnsavedBar, sidebar_qss,
+    ROLE_ACTIONS, ROLE_PILL, ROLE_TAG, Banner, Card, CellAction, DarkListTable, DialogFrame, EmptyState,
+    FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
+    Switch, Tag, Tile, UnsavedBar, sidebar_qss,
 )
 from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS
@@ -92,47 +93,6 @@ def _divider() -> QFrame:
     return f
 
 
-# ── Setting row ───────────────────────────────────────────────────────────────
-def _setting_row(title: str, subtitle: str,
-                 control: "QWidget | None" = None, *, danger: bool = False) -> QWidget:
-    row = QWidget()
-    row.setObjectName("SettingRow")
-    row.setStyleSheet("QWidget#SettingRow { background: transparent; }")
-
-    outer = QVBoxLayout(row)
-    outer.setContentsMargins(0, 0, 0, 0)
-    outer.setSpacing(0)
-
-    inner = QWidget()
-    inner.setStyleSheet("background: transparent;")
-    h = QHBoxLayout(inner)
-    h.setContentsMargins(28, 13, 28, 13)
-    h.setSpacing(16)
-
-    t_col = QVBoxLayout()
-    t_col.setSpacing(3)
-
-    t = QLabel(title)
-    t.setStyleSheet(
-        f"font-size: 13px; font-weight: 600; "
-        f"color: {_DANGER if danger else _TEXT_PRI}; background: transparent;")
-    t_col.addWidget(t)
-
-    if subtitle:
-        s = QLabel(subtitle)
-        s.setStyleSheet(f"font-size: 11.5px; color: {_TEXT_SEC}; background: transparent;")
-        s.setWordWrap(True)
-        t_col.addWidget(s)
-
-    h.addLayout(t_col, stretch=1)
-    if control is not None:
-        h.addWidget(control, alignment=Qt.AlignVCenter)
-
-    outer.addWidget(inner)
-    outer.addWidget(_divider())
-    return row
-
-
 def _page_header(title: str, subtitle: str = "") -> QWidget:
     w = QWidget()
     w.setStyleSheet("background: transparent;")
@@ -150,20 +110,6 @@ def _page_header(title: str, subtitle: str = "") -> QWidget:
     v.addWidget(_divider())
     return w
 
-
-def _wrap_scroll(content: QWidget) -> QScrollArea:
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.NoFrame)
-    scroll.setStyleSheet(
-        f"QScrollArea {{ background: {_BG_CONTENT}; border: none; }}"
-        f"QScrollBar:vertical {{ background: {_BG_NAV}; width: 6px; border-radius: 3px; }}"
-        f"QScrollBar::handle:vertical {{ background: #383838; border-radius: 3px; min-height: 20px; }}"
-        f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}"
-    )
-    content.setStyleSheet(f"background: {_BG_CONTENT};")
-    scroll.setWidget(content)
-    return scroll
 
 
 # ── Page indices ──────────────────────────────────────────────────────────────
@@ -217,6 +163,35 @@ _STATE_CHECKS = {"quick_copy": "quick_copy_check", "run_in_bg": "run_in_bg_check
                  "sgt_record_pages": "sgt_record_check", "sdis_record": "sdis_record_check"}
 _STATE_EDITS = {f"scc_opt{n}_{part}": f"scc_opt{n}_{part}_edit" for n in (1, 2, 3, 4) for part in ("label", "str")}
 
+# The three per-column visibility flags: state key, mcl_columns field, default when the row lacks it.
+_FLAGS = (("vis", "show_in_search", True), ("qc", "allow_quick_copy", False),
+          ("admin_vis", "admin_show_in_search", True))
+_FLAG_DEFAULTS = {field: default for _key, field, default in _FLAGS}
+
+# Master Column List table: Column · Type · Role · Shows on M · Q · A · Edit
+_MCL_HEADS = ["Column", "Type", "Role", "M", "Q", "A", ""]
+_MCL_FLAG_COLS = {3: ("show_in_search", "Shows on the Main screen"),
+                  4: ("allow_quick_copy", "Quick-copy field"),
+                  5: ("admin_show_in_search", "Shows on the Admin screen")}
+_MCL_COL_EDIT = 6
+
+
+def _flag(col: dict, field: str) -> bool:
+    return bool(col.get(field, _FLAG_DEFAULTS[field]))
+
+
+def _mcl_role(col: dict):
+    """(text, pill tone) of the Role cell, or None: the same tags the old list showed after the type."""
+    roles = []
+    if col.get("field_type") == "id":       roles.append("ID/Serial")
+    if col.get("is_internal_pk"):           roles.append("Internal PK")
+    if col.get("is_identity"):              roles.append("Identity")
+    if col.get("field_type") == "password": roles.append("Secret")
+    if not roles:
+        return None
+    tone = "red" if "Secret" in roles else "amber" if "Internal PK" in roles else "emerald"
+    return " · ".join(roles), tone
+
 
 # ── Main Dialog ───────────────────────────────────────────────────────────────
 class UnifiedSettingsDialog(QDialog):
@@ -248,7 +223,11 @@ class UnifiedSettingsDialog(QDialog):
         self.vis_cbs       = {}
         self.qc_cbs        = {}
         self.admin_vis_cbs = {}
+        self._vis_headers  = {}
+        self._painting     = False
 
+        # One model of the columns and their three visibility flags; the Columns table and the three
+        # visibility pages are views of it, and Save writes it (4.3).
         self.mcl_columns = self.db.get_mcl_columns()
 
         self._page_builders = {
@@ -846,57 +825,72 @@ class UnifiedSettingsDialog(QDialog):
         return self._kit_page(header, verify, counts, opt1_card, opt2_card, opt3_card, opt4_card, preview)
 
     def _build_page_mcl(self) -> QWidget:
-        container = QWidget()
-        container.setStyleSheet(f"background: {_BG_CONTENT};")
-        lay = QVBoxLayout(container)
-        lay.setContentsMargins(28, 20, 28, 20)
-        lay.setSpacing(10)
+        header = PageHeader("Master Column List",
+            lead="The schema for every client field; changes apply at once. "
+                 "Shows on ticks (M · Q · A) wait for Save.")
+        self._mcl_btn_add = LabelledAction("Add column", variant="primary", icon="mdi.plus",
+                                           tooltip="Add a column to the Master Column List")
+        header.add_action(self._mcl_btn_add)
 
-        lay.addWidget(_page_header("Master Column List",
-            "Define the schema for all client data fields. Changes apply immediately."))
-
-        tb = QHBoxLayout()
-        tb.setSpacing(6)
-
-        def _ib(icon_name, color, tip):
-            btn = QPushButton()
-            btn.setProperty("class", "icon-sm")
-            btn.setIcon(_icon(icon_name, color=color))
-            btn.setIconSize(QSize(16, 16))
-            btn.setFixedSize(30, 30)
-            btn.setToolTip(tip)
-            return btn
-
-        self._mcl_btn_add  = _ib("mdi.plus",          _ACCENT_LIGHT, "Add Column")
-        self._mcl_btn_edit = _ib("mdi.pencil-outline", _TEXT_NAV,     "Edit Selected")
-        self._mcl_btn_del  = _ib("mdi.delete-outline", _DANGER,       "Delete Selected")
-        self._mcl_btn_up   = _ib("mdi.arrow-up",       _TEXT_NAV,     "Move Up")
-        self._mcl_btn_dn   = _ib("mdi.arrow-down",     _TEXT_NAV,     "Move Down")
-
-        for btn in (self._mcl_btn_edit, self._mcl_btn_del, self._mcl_btn_up, self._mcl_btn_dn):
-            btn.setEnabled(False)
-
-        for btn in (self._mcl_btn_add, self._mcl_btn_edit, self._mcl_btn_del):
+        self._mcl_sel_tag = Tag("Selected: —")
+        self._mcl_btn_edit = LabelledAction("Edit", icon="mdi.pencil-outline",
+                                            tooltip="Edit the selected column")
+        self._mcl_btn_up = LabelledAction("Move up", icon="mdi.arrow-up",
+                                          tooltip="Move the selected column up (Alt+↑)")
+        self._mcl_btn_dn = LabelledAction("Move down", icon="mdi.arrow-down",
+                                          tooltip="Move the selected column down (Alt+↓)")
+        self._mcl_btn_del = LabelledAction("Delete column…", variant="danger", icon="mdi.delete-outline",
+                                           tooltip="Asks first: all client values in this column are removed")
+        bar = QWidget()
+        tb = QHBoxLayout(bar)
+        tb.setContentsMargins(0, 0, 0, 0)
+        tb.setSpacing(TOKENS["s_2"])
+        tb.addWidget(self._mcl_sel_tag)
+        tb.addStretch(1)
+        for btn in (self._mcl_btn_edit, self._mcl_btn_up, self._mcl_btn_dn):
             tb.addWidget(btn)
-        tb.addSpacing(6)
-        for btn in (self._mcl_btn_up, self._mcl_btn_dn):
-            tb.addWidget(btn)
-        tb.addStretch()
-        lay.addLayout(tb)
+        tb.addSpacing(TOKENS["s_5"])                       # Delete is set apart from the safe actions
+        tb.addWidget(self._mcl_btn_del)
 
-        self._mcl_list = QListWidget()
+        self._mcl_list = DarkListTable(0, len(_MCL_HEADS))
+        self._mcl_list.setHorizontalHeaderLabels(_MCL_HEADS)
+        for col, (_field, tip) in _MCL_FLAG_COLS.items():
+            self._mcl_list.horizontalHeaderItem(col).setToolTip(tip)
+        self._mcl_list.horizontalHeaderItem(_MCL_COL_EDIT).setToolTip("Edit")
         self._mcl_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        lay.addWidget(self._mcl_list, stretch=1)
+        self._mcl_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._mcl_list.set_column(0, kind="strong", minimum=140)
+        self._mcl_list.set_column(1, width=110)
+        self._mcl_list.set_column(2, minimum=120, max_share=0.4, priority=1)
+        for col in _MCL_FLAG_COLS:
+            self._mcl_list.set_column(col, width=44)
+        self._mcl_list.set_column(_MCL_COL_EDIT, width=52)
+        table_card = Card()
+        table_card.add_widget(self._mcl_list, 1)
+
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(TOKENS["s_5"], TOKENS["s_3"], TOKENS["s_5"], TOKENS["s_5"])
+        lay.setSpacing(TOKENS["s_3"])
+        lay.addWidget(header)
+        lay.addWidget(bar)
+        lay.addWidget(table_card, 1)
 
         self._mcl_btn_add.clicked.connect(self._mcl_on_add)
         self._mcl_btn_edit.clicked.connect(self._mcl_on_edit)
         self._mcl_btn_del.clicked.connect(self._mcl_on_delete)
         self._mcl_btn_up.clicked.connect(lambda: self._mcl_on_move(-1))
         self._mcl_btn_dn.clicked.connect(lambda: self._mcl_on_move(1))
-        self._mcl_list.currentRowChanged.connect(self._mcl_on_sel_changed)
+        self._mcl_list.currentCellChanged.connect(lambda row, *_: self._mcl_on_sel_changed(row))
+        self._mcl_list.itemChanged.connect(self._mcl_on_item_changed)
+        self._mcl_list.actionTriggered.connect(self._mcl_on_cell_action)
+        for key, step in ((Qt.Key_Up, -1), (Qt.Key_Down, 1)):
+            sc = QShortcut(QKeySequence(Qt.ALT | key), self._mcl_list)
+            sc.setContext(Qt.WidgetWithChildrenShortcut)
+            sc.activated.connect(lambda step=step: self._mcl_on_move(step))
 
         self._mcl_reload()
-        return container
+        return page
 
     def _build_page_services(self) -> QWidget:
         container = QWidget()
@@ -945,28 +939,39 @@ class UnifiedSettingsDialog(QDialog):
 
     def _build_page_visibility(self, title: str, subtitle: str,
                                 field: str, cbs: dict) -> QScrollArea:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 28)
-        lay.setSpacing(0)
-
-        lay.addWidget(_page_header(title, subtitle))
-
+        # A view of the shared column model (self.mcl_columns): built from it, so a page opened after
+        # a Shows-on tick on the Columns page shows the ticked value, and every switch writes to it.
+        header = PageHeader(title, lead=subtitle)
+        find = Input(placeholder="Find a column", icon="mdi.magnify")
+        find.setAccessibleName("Find a column")
+        find.setMinimumWidth(220)
+        header.add_action(find)
+        rows = {}
+        card = Card()
         for col in self.mcl_columns:
-            cb = QCheckBox()
-            if field == "show_in_search":
-                cb.setChecked(bool(col.get("show_in_search", True)))
-            elif field == "allow_quick_copy":
-                cb.setChecked(bool(col.get("allow_quick_copy", False)))
-            elif field == "admin_show_in_search":
-                cb.setChecked(bool(col.get("admin_show_in_search", True)))
-            cb.toggled.connect(self._on_control_changed)
-            cbs[col["id"]] = cb
-            lay.addWidget(_setting_row(
-                col["label"], f"Field type: {col.get('field_type', 'text')}", cb))
+            ftype = col.get("field_type", "text")
+            sw = Switch(tooltip=f"{title}: {col['label']}")
+            sw.setChecked(_flag(col, field))
+            sw.toggled.connect(lambda on, cid=col["id"]: self._set_flag(cid, field, on))
+            cbs[col["id"]] = sw
+            row = SettingRow(col["label"], f"Field type: {ftype}",
+                             [Tag(ftype, "red" if ftype == "password" else "neutral"), sw], width="auto")
+            rows[col["id"]] = row
+            card.add_row(row)
+        if not rows:
+            card.add_row(EmptyState("No columns yet", "Add columns on the Master Column List page."))
+        find.textChanged.connect(lambda text: [
+            row.setVisible(not text.strip() or text.strip().lower() in row.title_label.text().lower())
+            for row in rows.values()])
+        self._vis_headers[field] = header
+        self._paint_vis_count(field)
+        return self._kit_page(header, card)
 
-        lay.addStretch()
-        return _wrap_scroll(w)
+    def _paint_vis_count(self, field: str):
+        header = self._vis_headers.get(field)
+        if header is not None:
+            on = sum(1 for col in self.mcl_columns if _flag(col, field))
+            header.set_count(f"{on} of {len(self.mcl_columns)} shown")
 
 
     def _build_page_tracker(self) -> QScrollArea:
@@ -1156,10 +1161,44 @@ class UnifiedSettingsDialog(QDialog):
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
             state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
-        state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
-        state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
-        state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
+        for key, field, _default in _FLAGS:
+            state[key] = {col["id"]: _flag(col, field) for col in self.mcl_columns}
         return state
+
+    def _flags_dirty(self, key: str) -> bool:
+        base = (self._initial_state or {}).get(key, {})
+        return any(base.get(cid) != on for cid, on in self._capture_state()[key].items())
+
+    def _set_flag(self, cid, field: str, on: bool):
+        """A tick in any view (Columns table or a visibility page): stage it in the model, repaint."""
+        if self._painting:
+            return
+        col = next((c for c in self.mcl_columns if c["id"] == cid), None)
+        if col is None:
+            return
+        col[field] = 1 if on else 0
+        self._paint_flags()
+        self._on_control_changed()
+
+    def _paint_flags(self):
+        """Every view of the column model shows the model's flags (switches, table ticks, counts)."""
+        self._painting = True
+        try:
+            model = {col["id"]: col for col in self.mcl_columns}
+            for (_key, field, _default), boxes in zip(_FLAGS, (self.vis_cbs, self.qc_cbs, self.admin_vis_cbs)):
+                for cid, box in boxes.items():
+                    if cid in model:
+                        box.setChecked(_flag(model[cid], field))
+                self._paint_vis_count(field)
+            table = getattr(self, "_mcl_list", None)
+            if table is not None:
+                for row in range(table.rowCount()):
+                    col = model.get(table.item(row, 0).data(Qt.UserRole))
+                    for c, (field, _tip) in _MCL_FLAG_COLS.items():
+                        if col is not None:
+                            table.item(row, c).setCheckState(Qt.Checked if _flag(col, field) else Qt.Unchecked)
+        finally:
+            self._painting = False
 
     def _on_control_changed(self, *args):
         if self._restoring:
@@ -1209,10 +1248,12 @@ class UnifiedSettingsDialog(QDialog):
                 edit = getattr(self, name, None)
                 if edit is not None and key in state:
                     edit.setText(state[key])
-            for key, boxes in (("vis", self.vis_cbs), ("qc", self.qc_cbs), ("admin_vis", self.admin_vis_cbs)):
-                for cid, checked in state.get(key, {}).items():
-                    if cid in boxes:
-                        boxes[cid].setChecked(checked)
+            for key, field, _default in _FLAGS:
+                saved = state.get(key, {})
+                for col in self.mcl_columns:
+                    if col["id"] in saved:
+                        col[field] = 1 if saved[col["id"]] else 0
+            self._paint_flags()
         finally:
             self._restoring = False
 
@@ -1410,15 +1451,13 @@ class UnifiedSettingsDialog(QDialog):
                 for k, v in bulk_settings.items():
                     self.db.set_setting(k, v)
 
-            if self.vis_cbs:
-                self.db.bulk_update_mcl_visibility(
-                    [cid for cid, cb in self.vis_cbs.items() if cb.isChecked()])
-            if self.qc_cbs:
-                self.db.bulk_update_mcl_quick_copy(
-                    [cid for cid, cb in self.qc_cbs.items() if cb.isChecked()])
-            if self.admin_vis_cbs:
-                self.db.bulk_update_mcl_admin_visibility(
-                    [cid for cid, cb in self.admin_vis_cbs.items() if cb.isChecked()])
+            # A flag set is written when its page was opened (as before) or a Shows-on tick changed it.
+            for (key, field, _default), boxes, write in zip(
+                    _FLAGS, (self.vis_cbs, self.qc_cbs, self.admin_vis_cbs),
+                    (self.db.bulk_update_mcl_visibility, self.db.bulk_update_mcl_quick_copy,
+                     self.db.bulk_update_mcl_admin_visibility)):
+                if boxes or self._flags_dirty(key):
+                    write([col["id"] for col in self.mcl_columns if _flag(col, field)])
 
             self.db.log_action(self.actor, "update_settings",
                                detail="Saved via Unified Settings Hub")
@@ -1431,29 +1470,97 @@ class UnifiedSettingsDialog(QDialog):
             QMessageBox.critical(self, "Error Saving Settings", str(e))
 
     # ── MCL actions ───────────────────────────────────────────────────────────
+    def _mcl_refresh_model(self):
+        """Take the columns from the database (add / edit / delete / move apply at once) and keep the
+        Shows-on flags staged so far. A built visibility page that no longer matches is dropped and
+        rebuilt from the model on its next visit."""
+        staged = {c["id"]: c for c in self.mcl_columns}
+        fresh = self.db.get_mcl_columns()
+        for col in fresh:
+            old = staged.get(col["id"])
+            for key, field, _default in _FLAGS:
+                if old is not None and field in old:
+                    col[field] = old[field]
+                elif self._initial_state is not None:     # a new column: its loaded flags are the baseline
+                    self._initial_state.setdefault(key, {})[col["id"]] = _flag(col, field)
+        if self._initial_state is not None:
+            ids = {col["id"] for col in fresh}
+            for key, _field, _default in _FLAGS:
+                base = self._initial_state.get(key, {})
+                for cid in [cid for cid in base if cid not in ids]:
+                    del base[cid]
+        shape = lambda cols: [(c["id"], c["label"], c.get("field_type")) for c in cols]
+        changed = shape(fresh) != shape(self.mcl_columns)
+        self.mcl_columns = fresh
+        if changed:
+            for page_idx, boxes in ((_P_MAIN_VIS, self.vis_cbs), (_P_QC, self.qc_cbs),
+                                    (_P_ADMIN_VIS, self.admin_vis_cbs)):
+                page = self._page_widgets.pop(page_idx, None)
+                if page is not None:
+                    self._stack.removeWidget(page)
+                    page.deleteLater()
+                boxes.clear()
+
     def _mcl_reload(self):
-        self._mcl_list.clear()
-        for c in self.db.get_mcl_columns():
-            tags = []
-            if c.get("field_type") == "id":        tags.append("ID/Serial")
-            if c.get("is_internal_pk"):            tags.append("Internal PK")
-            if c.get("is_identity"):               tags.append("Identity")
-            if c.get("field_type") == "password":  tags.append("Secret")
-            if c.get("field_type") == "dropdown":  tags.append("Dropdown")
-            tag_str = f"  [{' \u00b7 '.join(tags)}]" if tags else ""
-            item = QListWidgetItem(f"{c['label']}  ({c.get('field_type','text')}){tag_str}")
-            item.setData(Qt.UserRole, c["id"])
-            self._mcl_list.addItem(item)
+        self._mcl_refresh_model()
+        table = self._mcl_list
+        self._painting = True
+        try:
+            table.setRowCount(0)
+            table.setRowCount(len(self.mcl_columns))
+            for r, c in enumerate(self.mcl_columns):
+                ftype = c.get("field_type", "text")
+                name = QTableWidgetItem(c["label"])
+                name.setData(Qt.UserRole, c["id"])
+                table.setItem(r, 0, name)
+                tag = QTableWidgetItem(ftype)
+                tag.setData(ROLE_TAG, (ftype, "red" if ftype == "password" else "neutral"))
+                table.setItem(r, 1, tag)
+                role = _mcl_role(c)
+                cell = QTableWidgetItem(role[0] if role else "\u2014")
+                if role:
+                    cell.setData(ROLE_PILL, role)
+                table.setItem(r, 2, cell)
+                for col, (field, tip) in _MCL_FLAG_COLS.items():
+                    box = QTableWidgetItem("")
+                    box.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+                    box.setCheckState(Qt.Checked if _flag(c, field) else Qt.Unchecked)
+                    box.setToolTip(f"{tip}: {c['label']} (staged until Save)")
+                    table.setItem(r, col, box)
+                edit = QTableWidgetItem("")
+                edit.setData(ROLE_ACTIONS, [CellAction("edit", "mdi.pencil-outline", f"Edit {c['label']}")])
+                table.setItem(r, _MCL_COL_EDIT, edit)
+        finally:
+            self._painting = False
+        self._mcl_on_sel_changed(table.currentRow())
+
+    def _mcl_on_item_changed(self, item):
+        if self._painting or item.column() not in _MCL_FLAG_COLS:
+            return
+        name = self._mcl_list.item(item.row(), 0)
+        if name is not None:
+            field = _MCL_FLAG_COLS[item.column()][0]
+            self._set_flag(name.data(Qt.UserRole), field, item.checkState() == Qt.Checked)
+
+    def _mcl_on_cell_action(self, row: int, col: int, key: str):
+        if key == "edit":
+            self._mcl_list.setCurrentCell(row, 0)
+            self._mcl_on_edit()
 
     def _mcl_on_sel_changed(self, row: int):
-        has = row >= 0
-        self._mcl_btn_edit.setEnabled(has)
-        self._mcl_btn_del.setEnabled(has)
-        self._mcl_btn_up.setEnabled(row > 0)
-        self._mcl_btn_dn.setEnabled(has and row < self._mcl_list.count() - 1)
+        table = self._mcl_list
+        name = table.item(row, 0) if row >= 0 else None
+        pick = None if name is not None else "Select a column first"
+        self._mcl_btn_edit.set_disabled_reason(pick)
+        self._mcl_btn_del.set_disabled_reason(pick)
+        self._mcl_btn_up.set_disabled_reason(pick or ("Already the first column" if row == 0 else None))
+        self._mcl_btn_dn.set_disabled_reason(
+            pick or ("Already the last column" if row == table.rowCount() - 1 else None))
+        self._mcl_sel_tag.setText(f"Selected: {name.text()}" if name is not None else "Selected: \u2014")
 
     def _mcl_sel_id(self):
-        item = self._mcl_list.currentItem()
+        row = self._mcl_list.currentRow()
+        item = self._mcl_list.item(row, 0) if row >= 0 else None
         return item.data(Qt.UserRole) if item else None
 
     def _mcl_on_add(self):
@@ -1503,7 +1610,7 @@ class UnifiedSettingsDialog(QDialog):
             ids[idx], ids[new_idx] = ids[new_idx], ids[idx]
             self.db.reorder_mcl_columns(ids)
             self._mcl_reload()
-            self._mcl_list.setCurrentRow(new_idx)
+            self._mcl_list.setCurrentCell(new_idx, 0)
 
     # ── Service actions ───────────────────────────────────────────────────────
     def _svc_reload(self):

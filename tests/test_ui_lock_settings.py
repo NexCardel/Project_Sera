@@ -5,8 +5,7 @@ import pathlib
 import ui_lock_support as S
 
 import pytest
-from PySide6.QtWidgets import QCheckBox
-
+from ui.components.kit import Switch
 from ui.dialogs import unified_settings_dialog as usd
 
 GOLDEN = json.loads((pathlib.Path(__file__).parent / "data" / "ui_lock_settings_golden.json").read_text("utf-8"))
@@ -176,7 +175,7 @@ def test_visibility_pages_open_on_the_saved_state(env):
         assert [i for i, cb in again.vis_cbs.items() if cb.isChecked()] == [cols["PAN"]]
         assert [i for i, cb in again.qc_cbs.items() if cb.isChecked()] == [cols["GSTIN"]]
         assert [i for i, cb in again.admin_vis_cbs.items() if cb.isChecked()] == [cols["EMAIL"]]
-        assert all(isinstance(cb, QCheckBox) for cb in again.vis_cbs.values())
+        assert all(isinstance(cb, Switch) for cb in again.vis_cbs.values())    # S-4: switches (were QCheckBox)
     finally:
         S.dispose(again)
 
