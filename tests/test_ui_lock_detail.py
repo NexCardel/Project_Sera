@@ -188,7 +188,7 @@ def test_header_shows_the_identity_columns(world):
 def test_missing_client_goes_back_instead_of_showing_a_blank_profile(world, monkeypatch):
     db, ids, make = world
     win = make()
-    monkeypatch.setattr(cdw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(cdw.MessageBox, "warning", lambda *a, **k: None)
     got = []
     win.back_requested.connect(lambda: got.append(1))
     win.load_client(9999)

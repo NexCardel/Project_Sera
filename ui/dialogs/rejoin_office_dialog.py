@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 import sync_rejoin
-from ui.components.kit import Banner, Card, Checkbox, DialogFrame, FieldLabel, Input, SectionLabel
+from ui.components.kit import MessageBox, Banner, Card, Checkbox, DialogFrame, FieldLabel, Input, SectionLabel
 from ui.utils.tokens import TOKENS
 
 TITLE = "Aman Associates — Rejoin Office"
@@ -222,7 +222,7 @@ class SalvageDialog(QDialog):
         self.accept()
 
     def _on_skip(self) -> None:
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Don't import",
             "Don't import anything from this PC's old data?\n\nThe old files stay in the legacy folder, "
             "but Sera won't offer the import again.",
@@ -283,15 +283,15 @@ def _undo(app: Path) -> str | None:
     try:
         sync_rejoin.undo_rejoin(app)
     except Exception as e:
-        QMessageBox.critical(None, TITLE, f"The rejoin could not be undone: {e}\n\n"
+        MessageBox.critical(None, TITLE, f"The rejoin could not be undone: {e}\n\n"
                              "Sera will close so nothing is damaged. Contact the office administrator.")
         return "exit"
-    QMessageBox.information(None, TITLE, "The rejoin was undone. This PC uses its own files again.")
+    MessageBox.information(None, TITLE, "The rejoin was undone. This PC uses its own files again.")
     return None
 
 
 def _download_failed(app: Path, error) -> str | None:
-    reply = QMessageBox.question(
+    reply = MessageBox.question(
         None, TITLE,
         f"This PC joined the office, but the office database could not be downloaded:\n\n{error}\n\n"
         "Yes: undo the rejoin and keep using this PC's own files for now.\n"
@@ -324,12 +324,12 @@ def _run_salvage(app: Path, password: str | None) -> None:
                 return                          # asked again at the next start
         except sync_rejoin.SalvageError as e:
             _busy(False)
-            QMessageBox.critical(None, TITLE, f"{e}\n\nThis PC's old data is in:\n{state.get('legacy_dir', '')}\n\n"
+            MessageBox.critical(None, TITLE, f"{e}\n\nThis PC's old data is in:\n{state.get('legacy_dir', '')}\n\n"
                                  "Please report this to the owner. Sera will offer the import again next time.")
             return
         except Exception as e:
             _busy(False)
-            QMessageBox.warning(None, TITLE, f"Could not read this PC's old data: {e}\n\n"
+            MessageBox.warning(None, TITLE, f"Could not read this PC's old data: {e}\n\n"
                                 "Sera will offer the import again next time.")
             return
         finally:
@@ -341,7 +341,7 @@ def _run_salvage(app: Path, password: str | None) -> None:
     dlg.exec()
     if dlg.choice == "skip":
         path = sync_rejoin.skip_salvage(app)
-        QMessageBox.information(None, TITLE, f"Nothing was imported. The old files stay in:\n{report.legacy_dir}"
+        MessageBox.information(None, TITLE, f"Nothing was imported. The old files stay in:\n{report.legacy_dir}"
                                 + (f"\n\nReport: {path}" if path else ""))
         return
     if dlg.choice != "import":
@@ -351,12 +351,12 @@ def _run_salvage(app: Path, password: str | None) -> None:
         done = sync_rejoin.salvage_after_rejoin(app, dry_run=False, password=password, take_legacy=dlg.take_legacy)
     except Exception as e:
         _busy(False)
-        QMessageBox.warning(None, TITLE, f"The import failed and was undone: {e}\n\n"
+        MessageBox.warning(None, TITLE, f"The import failed and was undone: {e}\n\n"
                             "Sera will offer it again next time.")
         return
     finally:
         _busy(False)
-    QMessageBox.information(
+    MessageBox.information(
         None, TITLE,
         f"Imported {len(done.to_insert)} client(s), {done.audit_new} audit entries, {done.tracker_new} tracker "
         f"filing(s) and {done.timelines_new} session timeline(s).\n\nReport: {done.report_path}\n"
@@ -365,20 +365,13 @@ def _run_salvage(app: Path, password: str | None) -> None:
 
 def _ask_pending_join() -> str:
     """"finish", "undo" or "quit"."""
-    box = QMessageBox(QMessageBox.Question, TITLE,
-                      "This PC joined the office but the office database hasn't been downloaded yet.\n\n"
-                      "Connect to the admin PC now and finish? If the admin PC can't provide it, you can "
-                      "undo the rejoin and keep using this PC's own files.")
-    btn_finish = box.addButton("Finish now", QMessageBox.AcceptRole)
-    btn_undo = box.addButton("Undo rejoin", QMessageBox.DestructiveRole)
-    box.addButton("Close Sera", QMessageBox.RejectRole)
-    box.setDefaultButton(btn_finish)
-    box.exec()
-    if box.clickedButton() is btn_finish:
-        return "finish"
-    if box.clickedButton() is btn_undo:
-        return "undo"
-    return "quit"
+    clicked = MessageBox.choose(
+        None, TITLE,
+        "This PC joined the office but the office database hasn't been downloaded yet.\n\n"
+        "Connect to the admin PC now and finish? If the admin PC can't provide it, you can "
+        "undo the rejoin and keep using this PC's own files.",
+        [("Undo rejoin", "secondary"), ("Close Sera", "secondary"), ("Finish now", "primary")])
+    return {2: "finish", 0: "undo"}.get(clicked, "quit")
 
 
 def run_pending_rejoin(app_dir, requested: bool) -> str | None:
@@ -389,19 +382,19 @@ def run_pending_rejoin(app_dir, requested: bool) -> str | None:
     try:
         outcome = sync_rejoin.resume_interrupted_rejoin(app)
     except Exception as e:
-        QMessageBox.critical(None, TITLE, f"An earlier rejoin can't be finished automatically:\n\n{e}\n\n"
+        MessageBox.critical(None, TITLE, f"An earlier rejoin can't be finished automatically:\n\n{e}\n\n"
                              "Sera will close so nothing is damaged. Contact the office administrator.")
         return "exit"
     if outcome == "rolled_back":
-        QMessageBox.warning(None, TITLE, "An interrupted rejoin was undone. This PC still uses its own files.")
+        MessageBox.warning(None, TITLE, "An interrupted rejoin was undone. This PC still uses its own files.")
 
     password = None
     if requested and outcome is None:
         if sera_keys.load_office(app) is not None:
-            QMessageBox.information(None, TITLE, "This PC already uses the office key.")
+            MessageBox.information(None, TITLE, "This PC already uses the office key.")
             return None
         if not (app / sync_rejoin.MASTER_DB).exists():
-            QMessageBox.information(None, TITLE, "This PC has no database to rejoin with. Use \"Join office\" instead.")
+            MessageBox.information(None, TITLE, "This PC has no database to rejoin with. Use \"Join office\" instead.")
             return None
         outcome, password = _run_wizard(app)
         if outcome == "exit":

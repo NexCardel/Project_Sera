@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QStackedWidget,
     QTableWidgetItem,
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
+    MessageBox,
     Banner, Card, DarkListTable, DialogFrame, FieldLabel, Input, LabelledAction, SectionLabel,
 )
 from ui.utils.tokens import TOKENS
@@ -397,7 +397,7 @@ class FirstRunDialog(QDialog):
         self.office_join_progress.setVisible(False)
         if not ok:
             self.office_join_status_label.setText(f"Join failed: {reason}")
-            QMessageBox.warning(
+            MessageBox.warning(
                 self, "Join Failed",
                 f"Could not join the office:\n\n{reason}\n\n"
                 "If pairing itself succeeded and only the download failed, restart Sera: "

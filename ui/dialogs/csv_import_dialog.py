@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QTableWidgetItem,
     QVBoxLayout,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from database import SeraDatabase
 from ui.components.kit import (
+    MessageBox,
     ROLE_PILL, Banner, Card, DarkListTable, DialogFrame, EmptyState, LabelledAction, SectionLabel, Tile,
 )
 from ui.utils.tokens import TOKENS
@@ -162,7 +162,7 @@ class CSVImportDialog(QDialog):
         try:
             self.csv_data, used_encoding = self._read_csv_rows(path)
         except Exception as e:
-            QMessageBox.critical(self, "Error Reading CSV", str(e))
+            MessageBox.critical(self, "Error Reading CSV", str(e))
             return
 
         if used_encoding not in ("utf-8-sig", "utf-8"):
@@ -171,7 +171,7 @@ class CSVImportDialog(QDialog):
             self.file_label.setText(path)
 
         if not self.csv_data:
-            QMessageBox.warning(self, "Empty File", "The CSV file appears to be empty.")
+            MessageBox.warning(self, "Empty File", "The CSV file appears to be empty.")
             return
 
         headers = list(self.csv_data[0].keys())

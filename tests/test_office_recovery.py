@@ -355,7 +355,7 @@ def test_office_recovery_dialog_wrong_password_counts_attempts(tmp_path, qapp, m
         assert f"{5 - attempt} attempts remaining" in dlg.lbl_error.text()
 
     # 5th wrong attempt triggers critical error and rejects
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args: None)
     dlg.pw_edit.setText("wrong-5")
     dlg._on_unlock()
     assert dlg.result() == 0  # Rejected
@@ -373,7 +373,7 @@ def test_office_recovery_dialog_restore_kit(tmp_path, qapp, monkeypatch):
 
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args, **kwargs: (str(kit_file), ""))
     monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", lambda *args, **kwargs: (INITIAL_PW, True))
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
 
     dlg._on_restore_kit()
     assert dlg.result() == 1  # Accepted
@@ -395,7 +395,7 @@ def test_change_master_password_dialog(tmp_path, qapp, monkeypatch):
     assert "do not match" in dlg.lbl_error.text()
 
     # Successful change
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
     dlg.confirm_pw.setText(NEW_PW)
     dlg._on_save()
     assert dlg.result() == 1  # Accepted
@@ -412,7 +412,7 @@ def test_export_recovery_kit_flow(tmp_path, qapp, monkeypatch):
 
     monkeypatch.setattr("PySide6.QtWidgets.QInputDialog.getText", lambda *args, **kwargs: (INITIAL_PW, True))
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getSaveFileName", lambda *args, **kwargs: (str(dest_file), ""))
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
 
     ok = export_recovery_kit_flow(None, tmp_path)
     assert ok is True
@@ -432,8 +432,8 @@ def test_main_startup_missing_office_db_prompt(tmp_path, qapp, monkeypatch):
 
     app = StubApp()
     # When user clicks No on restore prompt, startup aborts (sys.exit)
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args, **kwargs: 65536)  # QMessageBox.No
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args, **kwargs: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args, **kwargs: 65536)  # QMessageBox.No
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args, **kwargs: None)
 
     with pytest.raises(SystemExit):
         app._handle_missing_office_db(tmp_path, db_path, hex_key)
@@ -469,9 +469,9 @@ def test_main_startup_missing_office_db_restore(tmp_path, qapp, monkeypatch):
 
     app = StubApp()
     # User clicks Yes to restore, selects backup_file
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args, **kwargs: 16384)  # QMessageBox.Yes
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args, **kwargs: 16384)  # QMessageBox.Yes
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args, **kwargs: (str(backup_file), ""))
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
 
     app._handle_missing_office_db(tmp_path, db_path, hex_key)
 
@@ -513,9 +513,9 @@ def test_main_startup_missing_office_db_wrong_key(tmp_path, qapp, monkeypatch):
 
     app = StubApp()
     critical_errors = []
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda parent, title, text, *args, **kwargs: critical_errors.append(text) or 16384)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda parent, title, text, *args, **kwargs: critical_errors.append(text) or 16384)
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args, **kwargs: (str(backup_file), ""))
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
 
     with pytest.raises(SystemExit):
         app._handle_missing_office_db(tmp_path, db_path, hex_key)
@@ -544,9 +544,9 @@ def test_main_startup_missing_office_db_unencrypted(tmp_path, qapp, monkeypatch)
 
     app = StubApp()
     critical_errors = []
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda parent, title, text, *args, **kwargs: critical_errors.append(text) or 16384)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda parent, title, text, *args, **kwargs: critical_errors.append(text) or 16384)
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args, **kwargs: (str(backup_file), ""))
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda *args: None)
 
     with pytest.raises(SystemExit):
         app._handle_missing_office_db(tmp_path, db_path, hex_key)
@@ -567,9 +567,9 @@ def test_main_startup_missing_office_db_file_dialog_cancel(tmp_path, qapp, monke
 
     app = StubApp()
     info_messages = []
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args, **kwargs: 16384)  # Yes
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args, **kwargs: 16384)  # Yes
     monkeypatch.setattr("PySide6.QtWidgets.QFileDialog.getOpenFileName", lambda *args, **kwargs: ("", ""))  # Cancelled
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information", lambda parent, title, text: info_messages.append((title, text)))
+    monkeypatch.setattr("ui.components.kit.MessageBox.information", lambda parent, title, text: info_messages.append((title, text)))
 
     with pytest.raises(SystemExit):
         app._handle_missing_office_db(tmp_path, db_path, hex_key)

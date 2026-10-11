@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QInputDialog, QLineEdit, Q
 import security
 from ui.windows import admin_window as aw
 from ui.windows.admin_window import AdminPinDialog, AdminWindow, NewClientDialog
+from ui.components.kit import MessageBox
 
 YES, NO = QMessageBox.Yes, QMessageBox.No
 
@@ -40,9 +41,9 @@ def ask(monkeypatch):
     def warn(parent, title, text, *a, **k):
         box["warned"].append((title, text))
         return QMessageBox.Ok
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake))
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(warn))
-    monkeypatch.setattr(QMessageBox, "critical", staticmethod(warn))
+    monkeypatch.setattr(MessageBox, "question", staticmethod(fake))
+    monkeypatch.setattr(MessageBox, "warning", staticmethod(warn))
+    monkeypatch.setattr(MessageBox, "critical", staticmethod(warn))
     return box
 
 
@@ -484,12 +485,12 @@ def test_bulk_purge_button_deletes_every_selected_row(world, ask):
 def test_the_delete_from_search_entry_confirms_with_the_identity(world, monkeypatch):
     db, ids, win = world
     seen = []
-    monkeypatch.setattr(QMessageBox, "question",
+    monkeypatch.setattr(MessageBox, "question",
                         staticmethod(lambda p, t, text, *a, **k: (seen.append((t, text)), NO)[1]))
     win.delete_client(ids["B"])
     assert seen == [("Delete client", 'Permanently delete "Bravo Textiles LLP — Bhanu Rao"? This cannot be undone.')]
     assert db.get_client(ids["B"])
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: YES))
+    monkeypatch.setattr(MessageBox, "question", staticmethod(lambda *a, **k: YES))
     win.delete_client(ids["B"])
     assert db.get_client(ids["B"]) is None
 
@@ -504,7 +505,7 @@ def test_open_client_editor_selects_that_client_and_new_client_form_is_blank(wor
 
 def _service_answers(monkeypatch, name, attach_answer):
     monkeypatch.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: (name, True)))
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: attach_answer))
+    monkeypatch.setattr(MessageBox, "question", staticmethod(lambda *a, **k: attach_answer))
 
 
 def test_bulk_service_attaches_then_detaches_for_every_selected_client(world, monkeypatch):
@@ -548,8 +549,8 @@ def test_manage_client_services_selects_the_client_then_opens_the_service_flow(w
 def test_admin_pin_first_run_sets_it_and_later_runs_check_it(tmp_path, monkeypatch):
     db = S.make_db(tmp_path)
     warned = []
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
-    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
+    monkeypatch.setattr(MessageBox, "warning", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
+    monkeypatch.setattr(MessageBox, "critical", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
     first = AdminPinDialog(db)
     assert first._is_first_run and first.pin_input.echoMode() == QLineEdit.Password
     first.pin_input.setText("123")
@@ -600,7 +601,7 @@ def test_import_csv_audit_conflicts_and_sync_handlers_exist_and_sync_needs_the_s
     for name in ("_on_import_csv", "_on_view_audit_log", "_on_inspect_conflicts", "_on_open_sera_sync"):
         assert callable(getattr(win, name))
     warned = []
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
+    monkeypatch.setattr(MessageBox, "warning", staticmethod(lambda p, t, m, *a, **k: warned.append(t)))
     win._on_open_sera_sync()
     assert warned == ["Sera Sync"]
 

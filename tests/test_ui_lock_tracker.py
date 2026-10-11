@@ -20,6 +20,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QToolButton
 
 import ui.windows.tracker_dump_window as tdw
+from ui.components.kit import MessageBox
 
 APP = QApplication.instance() or QApplication([])
 W = tdw.TrackerDumpWindow
@@ -109,7 +110,7 @@ def no_real_dialogs(monkeypatch):
             raise AssertionError(f"unexpected {kind}: {title}: {text}")
         return staticmethod(_raise)
     for kind in ("critical", "warning", "question", "information"):
-        monkeypatch.setattr(QMessageBox, kind, _boom(kind))
+        monkeypatch.setattr(MessageBox, kind, _boom(kind))
 
 
 @pytest.fixture
@@ -445,7 +446,7 @@ def test_delete_container_asks_first_and_removes_only_that_container(make_window
     win, db = make_window()
     asked = []
     answer = {"v": NO}
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda p, t, text, *a, **k: (asked.append((t, text)), answer["v"])[1]))
+    monkeypatch.setattr(MessageBox, "question", staticmethod(lambda p, t, text, *a, **k: (asked.append((t, text)), answer["v"])[1]))
     _fake_menu(monkeypatch, pick="Delete Container")
     _right_click(win, 2)
     assert asked == [("Confirm Delete Container", "Are you sure you want to delete this client container "
@@ -461,7 +462,7 @@ def test_delete_record_asks_first_and_removes_only_that_capture(make_window, mon
     win, db = make_window(raw=True)
     asked = []
     answer = {"v": NO}
-    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda p, t, text, *a, **k: (asked.append((t, text)), answer["v"])[1]))
+    monkeypatch.setattr(MessageBox, "question", staticmethod(lambda p, t, text, *a, **k: (asked.append((t, text)), answer["v"])[1]))
     _fake_menu(monkeypatch, pick="Delete Record")
     _right_click(win, 1)
     assert asked == [("Confirm Delete", "Are you sure you want to delete Tracker Dump record #4?")]
@@ -493,7 +494,7 @@ def test_tools_menu_entries_in_order(make_window, monkeypatch):
 def test_re_resolve_reports_how_many_captures_changed(make_window, monkeypatch):
     win, db = make_window()
     told = []
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda p, t, text, *a, **k: told.append((t, text))))
+    monkeypatch.setattr(MessageBox, "information", staticmethod(lambda p, t, text, *a, **k: told.append((t, text))))
     _fake_menu(monkeypatch, pick="Re-Resolve Identities (SRPF)")
     win.btn_preferences.click()
     assert told == [("SRPF Containers Rebuilt", "Successfully re-resolved captures and rebuilt unified SRPF client "
@@ -503,7 +504,7 @@ def test_re_resolve_reports_how_many_captures_changed(make_window, monkeypatch):
 def test_clear_all_asks_with_a_warning_and_no_clears_nothing(make_window, monkeypatch):
     win, db = make_window()
     asked = []
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda p, t, text, *a, **k: (asked.append(t), NO)[1]))
+    monkeypatch.setattr(MessageBox, "warning", staticmethod(lambda p, t, text, *a, **k: (asked.append(t), NO)[1]))
     _fake_menu(monkeypatch, pick="Clear All Captures")
     win.btn_preferences.click()
     assert asked == ["Clear All Dump Logs"] and db.deleted == [] and len(_names(win)) == 6
@@ -516,7 +517,7 @@ def test_export_csv_currently_fails_because_tracker_dump_window_never_imports_cs
     out = tmp_path / "export.csv"
     failed = []
     monkeypatch.setattr(tdw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: (str(out), "")))
-    monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda p, t, text, *a, **k: failed.append((t, text))))
+    monkeypatch.setattr(MessageBox, "critical", staticmethod(lambda p, t, text, *a, **k: failed.append((t, text))))
     win.cmb_status.setCurrentText("Other EVC")
     win._export_csv()
     assert len(failed) == 1 and failed[0][0] == "Export Failed" and failed[0][1].startswith("Could not write CSV: ")
@@ -526,7 +527,7 @@ def test_export_csv_currently_fails_because_tracker_dump_window_never_imports_cs
 def test_export_csv_with_nothing_loaded_only_says_so(make_window, monkeypatch):
     win, _ = make_window(FakeDB(containers=[], raw=[]))
     told = []
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda p, t, text, *a, **k: told.append((t, text))))
+    monkeypatch.setattr(MessageBox, "information", staticmethod(lambda p, t, text, *a, **k: told.append((t, text))))
     monkeypatch.setattr(tdw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: pytest.fail("asked for a path")))
     win._export_csv()
     assert told == [("Export CSV", "No records to export.")]
@@ -536,6 +537,6 @@ def test_export_csv_with_nothing_loaded_only_says_so(make_window, monkeypatch):
 def test_a_cancelled_save_dialog_writes_nothing(make_window, monkeypatch, tmp_path):
     win, _ = make_window()
     monkeypatch.setattr(tdw.QFileDialog, "getSaveFileName", staticmethod(lambda *a, **k: ("", "")))
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: pytest.fail("reported an export")))
+    monkeypatch.setattr(MessageBox, "information", staticmethod(lambda *a, **k: pytest.fail("reported an export")))
     win._export_csv()
     assert list(tmp_path.iterdir()) == []

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 import automation
 from ui.components.kit import (
+    MessageBox,
     ROLE_ACTIONS, ROLE_TAG, Card, CellAction, DarkListTable, DialogFrame, FieldLabel, Input, LabelledAction,
     Select,
 )
@@ -290,7 +291,7 @@ class ServiceEditDialog(QDialog):
 
     def _on_accept(self):
         if not self.name_input.text().strip():
-            QMessageBox.warning(self, "Missing Name", "Service name is required.")
+            MessageBox.warning(self, "Missing Name", "Service name is required.")
             return
         if not self._confirm_watched_domain():
             return
@@ -320,10 +321,10 @@ class ServiceEditDialog(QDialog):
             if builtin or other:
                 why = f"{dom} is already watched for {builtin or other}"
         if why:
-            QMessageBox.information(self, "Portal not registered",
+            MessageBox.information(self, "Portal not registered",
                                     f"The service will be saved, but no portal is registered: {why}.")
             return True
-        return QMessageBox.question(
+        return MessageBox.question(
             self, "Watch this portal?",
             f"Sera will watch {dom} (and its subdomains) as the portal '{name}':\n"
             f"SGT capture and the SDIS recorder will read pages there.\n\n"
@@ -447,7 +448,7 @@ class ServiceManagerDialog(QDialog):
                 self._reload_services()
                 self._sync_extension_services()
             except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+                MessageBox.critical(self, "Error", str(e))
 
     def _on_edit(self):
         sid = self._selected_id()
@@ -467,7 +468,7 @@ class ServiceManagerDialog(QDialog):
         sid = self._selected_id()
         if not sid:
             return
-        if QMessageBox.question(self, "Confirm Deletion", "Delete this service? It will be detached from all client profiles.") == QMessageBox.Yes:
+        if MessageBox.question(self, "Confirm Deletion", "Delete this service? It will be detached from all client profiles.", danger=True) == QMessageBox.Yes:
             self.db.delete_service(sid)
             self._reload_services()
             self._sync_extension_services()

@@ -12,13 +12,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QLineEdit,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
 import sera_keys
-from ui.components.kit import Banner, DialogFrame, FieldLabel, Input
+from ui.components.kit import MessageBox, Banner, DialogFrame, FieldLabel, Input
 from ui.utils.tokens import TOKENS
 
 
@@ -114,7 +113,7 @@ class ChangeMasterPasswordDialog(QDialog):
 
         try:
             sera_keys.change_master_password(self.app_dir, curr, new)
-            QMessageBox.information(
+            MessageBox.information(
                 self,
                 "Password Changed",
                 "The office master password has been successfully updated.\n\n"
@@ -138,11 +137,11 @@ def export_recovery_kit_flow(parent, app_dir: str | Path, password: str | None =
     try:
         office = sera_keys.load_office(app_path)
     except Exception as e:
-        QMessageBox.critical(parent, "Export Error", f"Cannot load office configuration:\n\n{e}")
+        MessageBox.critical(parent, "Export Error", f"Cannot load office configuration:\n\n{e}")
         return False
 
     if office is None:
-        QMessageBox.warning(parent, "Export Not Available", "This PC is not in office mode. No office key exists to export.")
+        MessageBox.warning(parent, "Export Not Available", "This PC is not in office mode. No office key exists to export.")
         return False
 
     name = office_name or office.office_name or "office"
@@ -175,7 +174,7 @@ def export_recovery_kit_flow(parent, app_dir: str | Path, password: str | None =
 
     try:
         exported = sera_keys.export_recovery_kit(app_path, pwd, save_path)
-        QMessageBox.information(
+        MessageBox.information(
             parent,
             "Recovery Kit Exported",
             f"Sera recovery kit successfully exported to:\n\n{exported}\n\n"
@@ -183,8 +182,8 @@ def export_recovery_kit_flow(parent, app_dir: str | Path, password: str | None =
         )
         return True
     except sera_keys.WrongPassword:
-        QMessageBox.critical(parent, "Export Failed", "Incorrect master password. Recovery kit was not exported.")
+        MessageBox.critical(parent, "Export Failed", "Incorrect master password. Recovery kit was not exported.")
         return False
     except Exception as e:
-        QMessageBox.critical(parent, "Export Failed", f"Failed to export recovery kit:\n\n{e}")
+        MessageBox.critical(parent, "Export Failed", f"Failed to export recovery kit:\n\n{e}")
         return False

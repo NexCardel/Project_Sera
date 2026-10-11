@@ -980,11 +980,11 @@ class SearchWindow(WidthAware, QWidget):
         menu.addSeparator()
         custom_fill_act = menu.addAction("Custom Fill Color...")
         if qta:
-            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color=T["text2"]))
         custom_fill_act.setData(("fill", "custom"))
         clear_fill_act = menu.addAction("Clear Fill Color")
         if qta:
-            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color="#999999"))
+            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color=T["muted"]))
         clear_fill_act.setData(("fill", "clear"))
         return menu
 
@@ -1008,11 +1008,11 @@ class SearchWindow(WidthAware, QWidget):
         menu.addSeparator()
         custom_text_act = menu.addAction("Custom Text Color...")
         if qta:
-            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color=T["text2"]))
         custom_text_act.setData(("text", "custom"))
         clear_text_act = menu.addAction("Clear Text Color")
         if qta:
-            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color="#999999"))
+            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color=T["muted"]))
         clear_text_act.setData(("text", "clear"))
         return menu
 
@@ -1037,7 +1037,7 @@ class SearchWindow(WidthAware, QWidget):
         # Fill Color Submenu
         fill_menu = menu.addMenu("Cell Fill Color (Background)")
         if qta:
-            fill_menu.setIcon(qta.icon("mdi.format-color-fill", color="#241F1B"))
+            fill_menu.setIcon(qta.icon("mdi.format-color-fill", color=T["text2"]))
             
         fill_presets = [
             ("Vivid Yellow", "#FFF200"),
@@ -1062,18 +1062,18 @@ class SearchWindow(WidthAware, QWidget):
         fill_menu.addSeparator()
         custom_fill_act = fill_menu.addAction("Custom Fill Color...")
         if qta:
-            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+            custom_fill_act.setIcon(qta.icon("mdi.palette-outline", color=T["text2"]))
         custom_fill_act.setData(("fill", "custom"))
         
         clear_fill_act = fill_menu.addAction("Clear Fill Color")
         if qta:
-            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color="#999999"))
+            clear_fill_act.setIcon(qta.icon("mdi.format-color-fill", color=T["muted"]))
         clear_fill_act.setData(("fill", "clear"))
         
         # Text Color Submenu
         text_menu = menu.addMenu("Cell Text Color (Foreground)")
         if qta:
-            text_menu.setIcon(qta.icon("mdi.format-color-text", color="#241F1B"))
+            text_menu.setIcon(qta.icon("mdi.format-color-text", color=T["text2"]))
             
         text_presets = [
             ("Dark Red", "#9C0006"),
@@ -1093,18 +1093,18 @@ class SearchWindow(WidthAware, QWidget):
         text_menu.addSeparator()
         custom_text_act = text_menu.addAction("Custom Text Color...")
         if qta:
-            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color="#241F1B"))
+            custom_text_act.setIcon(qta.icon("mdi.palette-outline", color=T["text2"]))
         custom_text_act.setData(("text", "custom"))
         
         clear_text_act = text_menu.addAction("Clear Text Color")
         if qta:
-            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color="#999999"))
+            clear_text_act.setIcon(qta.icon("mdi.format-color-text", color=T["muted"]))
         clear_text_act.setData(("text", "clear"))
         
         menu.addSeparator()
         clear_all_act = menu.addAction("Clear All Cell Formatting")
         if qta:
-            clear_all_act.setIcon(qta.icon("mdi.eraser", color="#D9383A"))
+            clear_all_act.setIcon(qta.icon("mdi.eraser", color=T["dangertx"]))
         clear_all_act.setData(("all", "clear"))
         
         chosen_action = menu.exec_(self.results_table.viewport().mapToGlobal(pos))

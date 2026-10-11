@@ -26,6 +26,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts=false")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QSizePolicy, QSystemTrayIcon, QMenu
+from ui.components.kit import MessageBox
 from ui.shell.app_shell import AppShell
 from PySide6.QtGui import QFont, QShortcut, QKeySequence, QIcon, QAction
 from PySide6.QtCore import Qt, QObject, Signal, QTimer
@@ -288,7 +289,7 @@ class SeraApp:
             import sync_snapshot
             if sync_snapshot.has_pending_join(self.app_dir):
                 from PySide6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
+                reply = MessageBox.question(
                     None,
                     "Aman Associates — Resume Office Join",
                     "An office join was in progress but interrupted before the database snapshot could be downloaded.\n\n"
@@ -300,7 +301,7 @@ class SeraApp:
                     try:
                         sync_snapshot.resume_join_snapshot(self.app_dir)
                     except Exception as exc:
-                        QMessageBox.critical(
+                        MessageBox.critical(
                             None,
                             "Office Join Failed",
                             f"Could not complete office join: {exc}\n\n"
@@ -376,7 +377,7 @@ class SeraApp:
             memory_mark("start-up: vault unlocked")
         except Exception as e:
             loading_dlg.close()
-            QMessageBox.critical(None, "Database Error", str(e))
+            MessageBox.critical(None, "Database Error", str(e))
             sys.exit(1)
 
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
@@ -1126,24 +1127,19 @@ class SeraApp:
     def _ask_sgt_demotion(self, info: dict):
         """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
         the default is to keep the status that is recorded."""
-        from PySide6.QtWidgets import QMessageBox
-        box = QMessageBox(getattr(self, "shell", None))
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Lower this filing's status?")
         what = " ".join(x for x in (info.get("form"), info.get("period")) if x)
-        box.setText(f"{info.get('client') or 'This client'} - {what}\n\n"
-                    f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
-                    f"status than the one recorded.")
-        box.setInformativeText(f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
-                               f"\"{info.get('evidence') or ''}\"\n\n"
-                               f"Keep the recorded status unless you are sure the page is right.")
-        keep = box.addButton("Keep current status", QMessageBox.RejectRole)
-        lower = box.addButton("Lower the status", QMessageBox.AcceptRole)
-        box.setDefaultButton(keep)
-        box.exec()
+        text = (f"{info.get('client') or 'This client'} - {what}\n\n"
+                f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
+                f"status than the one recorded.\n\n"
+                f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
+                f"\"{info.get('evidence') or ''}\"\n\n"
+                f"Keep the recorded status unless you are sure the page is right.")
+        clicked = MessageBox.choose(getattr(self, "shell", None), "Lower this filing's status?", text,
+                                    [("Lower the status", "secondary"), ("Keep current status", "primary")],
+                                    level="warning", escape=1)
         router = getattr(getattr(self, "vsdc_worker", None), "router", None)
         if router is not None:
-            router.answer_demotion(info.get("token"), box.clickedButton() is lower)
+            router.answer_demotion(info.get("token"), clicked == 0)
 
     def _make_scc_handlers(self):
         """SCC-U's handlers (once, when its host is created)."""
@@ -1380,7 +1376,7 @@ class SeraApp:
         import shutil
         import sqlcipher3.dbapi2 as sqlite3
 
-        reply = QMessageBox.critical(
+        reply = MessageBox.critical(
             None,
             "Aman Associates — Office Database Missing",
             f"The office database was not found at:\n{db_path}\n\n"
@@ -1429,23 +1425,23 @@ class SeraApp:
                             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
                             dst_sidecar.rename(dst_sidecar.with_name(f"{dst_sidecar.name}.bak-{ts}"))
 
-                    QMessageBox.information(
+                    MessageBox.information(
                         None, "Database Restored",
                         f"Database successfully restored from:\n{backup_file}\n\nStarting Sera...",
                     )
                     return
                 except Exception as e:
-                    QMessageBox.critical(
+                    MessageBox.critical(
                         None, "Restore Failed",
                         f"The selected backup could not be opened with this office key:\n\n{e}",
                     )
             else:
-                QMessageBox.information(
+                MessageBox.information(
                     None, "Restore Cancelled",
                     "No database backup was selected. Sera cannot start without the office database.",
                 )
         else:
-            QMessageBox.information(
+            MessageBox.information(
                 None, "Startup Cancelled",
                 "Database restore was cancelled. Sera cannot start without the office database.",
             )
@@ -1516,7 +1512,7 @@ class SeraApp:
             office_info = sera_keys.load_office(app_dir)
         except sera_keys.KeyFileInvalid as e:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Configuration Error",
                 f"The office configuration file is invalid or corrupted:\n\n{e}\n\n"
                 "Please restore keys/office.json or contact your office administrator."
@@ -1525,7 +1521,7 @@ class SeraApp:
 
         if office_info is None:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Configuration Error",
                 "The office configuration file could not be loaded.\n\n"
                 "Please contact your office administrator."
@@ -1543,7 +1539,7 @@ class SeraApp:
         computed_key_id = sera_keys.key_id(dek)
         if not hmac.compare_digest(computed_key_id, office_info.key_id):
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
+            MessageBox.critical(
                 None, "Aman Associates — Office Key Mismatch",
                 "The loaded office data key does not match the office configuration in office.json.\n\n"
                 "Startup aborted to prevent database damage."
@@ -2136,7 +2132,7 @@ class SeraApp:
         if not client:
             return
         identity = self.admin_win._get_identity_label(client)
-        confirm = QMessageBox.question(
+        confirm = MessageBox.question(
             self.shell, "Archive client",
             f"Archive {identity}? It will be hidden from Search until restored.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No

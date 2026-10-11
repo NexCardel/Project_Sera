@@ -15,6 +15,7 @@ from ui.utils.tokens import TOKENS as T
 import ui.windows.tracker_dump_window as tdw
 from ui.windows.tracker_dump_window import TrackerDumpWindow, _service_matches_portal
 from ui.windows.client_detail_window import ClientDetailWindow
+from ui.components.kit import MessageBox
 
 APP = QApplication.instance() or QApplication([])
 
@@ -106,7 +107,7 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         fast = win._autofill_action({"client_id": 1, "portal": "Income Tax"})
         self.assertIn("Fast Autofill", fast.tooltip)
         self.assertTrue(fast.primary)
-        self.assertEqual(fast.colour, T["danger"])
+        self.assertIsNone(fast.colour)          # the kit's emerald primary; red is for danger only
 
         smti = win._autofill_action({"client_id": 1, "portal": "GST"})
         self.assertIn("SMTI Manual Assist", smti.tooltip)
@@ -148,7 +149,7 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         # Unmatched service scenario -> shows QMessageBox and emits nothing
         win._client_services_cache = {}
         mock_db.get_client_services.return_value = []
-        with patch.object(QMessageBox, "information") as mock_info:
+        with patch.object(MessageBox, "information") as mock_info:
             win._on_grid_action(0, TrackerDumpWindow.COL_ACTIONS, "autofill")
             APP.processEvents()
             self.assertEqual(len(emitted), 1)  # No new emission

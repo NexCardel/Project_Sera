@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
+    MessageBox,
     ROLE_PILL,
     Banner,
     Card,
@@ -483,7 +484,7 @@ class SeraSyncDialog(QDialog):
     def _on_rejoin_office(self):
         if not self.sync_service:
             return
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Rejoin Office",
             "Rejoin the office on this PC?\n\n"
             "Sera will restart, pair with the admin PC (ask there for a code under \"Add workstation\") "
@@ -499,7 +500,7 @@ class SeraSyncDialog(QDialog):
         try:
             sync_rejoin.write_rejoin_request(Path(self.sync_service.db_path).parent, requested_by=self.actor)
         except OSError as e:
-            QMessageBox.warning(self, "Rejoin Office", f"Could not schedule the rejoin: {e}")
+            MessageBox.warning(self, "Rejoin Office", f"Could not schedule the rejoin: {e}")
             return
         try:
             self.sync_service.stop()
@@ -889,7 +890,7 @@ class SeraSyncDialog(QDialog):
                     "already be on there) and uses it from the next restart. This PC's current database is "
                     "kept in the shadow folder. What only this PC has is counted next, and after the restart "
                     "Sera offers to import it.\n\nDownload the admin PC's data now?")
-        if QMessageBox.question(self, "Start Shadow Mode", text, QMessageBox.Yes | QMessageBox.No,
+        if MessageBox.question(self, "Start Shadow Mode", text, QMessageBox.Yes | QMessageBox.No,
                                 QMessageBox.No) != QMessageBox.Yes:
             return
         if not self._confirm_admin_pin():
@@ -898,16 +899,16 @@ class SeraSyncDialog(QDialog):
             try:
                 sync_shadow.start_shadow_mode(self.db, self._app_dir())
             except Exception as exc:
-                QMessageBox.warning(self, "Start Shadow Mode", f"Shadow mode was not started: {exc}")
+                MessageBox.warning(self, "Start Shadow Mode", f"Shadow mode was not started: {exc}")
                 return
             self.shell_alert_or_status("Shadow mode started on the admin PC (day 1 of 7).")
-            QMessageBox.information(self, "Start Shadow Mode",
+            MessageBox.information(self, "Start Shadow Mode",
                                     "Shadow mode is on. Now use \"Start shadow mode\" on every other PC.")
             self._refresh_sync_status()
             return
 
         if self.sync_engine is None:
-            QMessageBox.warning(self, "Start Shadow Mode", "Sera Sync isn't running on this PC. Restart Sera and try again.")
+            MessageBox.warning(self, "Start Shadow Mode", "Sera Sync isn't running on this PC. Restart Sera and try again.")
             return
         self._shadow_start_busy = True
         self.btn_start_shadow.setEnabled(False)
@@ -969,10 +970,10 @@ class SeraSyncDialog(QDialog):
         self._shadow_start_busy = False
         if plan is None:
             self.shell_alert_or_status(f"Shadow mode download failed: {error}")
-            QMessageBox.warning(self, "Start Shadow Mode", f"Could not get the admin PC's data: {error}")
+            MessageBox.warning(self, "Start Shadow Mode", f"Could not get the admin PC's data: {error}")
             self._refresh_sync_status()
             return
-        reply = QMessageBox.question(self, "Start Shadow Mode", self._shadow_start_count_text(plan.report),
+        reply = MessageBox.question(self, "Start Shadow Mode", self._shadow_start_count_text(plan.report),
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             sync_shadow.cancel_shadow_start(self._app_dir())
@@ -983,7 +984,7 @@ class SeraSyncDialog(QDialog):
             sync_shadow.stage_shadow_start(self._app_dir(), plan)
         except Exception as exc:
             sync_shadow.cancel_shadow_start(self._app_dir())
-            QMessageBox.warning(self, "Start Shadow Mode", f"Could not prepare the start: {exc}")
+            MessageBox.warning(self, "Start Shadow Mode", f"Could not prepare the start: {exc}")
             self._refresh_sync_status()
             return
         try:
@@ -997,7 +998,7 @@ class SeraSyncDialog(QDialog):
     def _on_reset_shadow_mode(self):
         if self.db is None:
             return
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Reset Shadow Mode",
             "Reset shadow mode on this PC?\n\n"
             "Shadow mode goes off here and this PC's shadow copies are set aside (renamed, not "
@@ -1014,7 +1015,7 @@ class SeraSyncDialog(QDialog):
         try:
             renamed = sync_shadow.reset_shadow_mode(self.db, self._app_dir())
         except Exception as exc:
-            QMessageBox.warning(self, "Reset Shadow Mode", f"Shadow mode was not reset: {exc}")
+            MessageBox.warning(self, "Reset Shadow Mode", f"Shadow mode was not reset: {exc}")
             return
         self.shell_alert_or_status(f"Shadow mode reset ({len(renamed)} file(s) set aside).")
         self._refresh_sync_status()
@@ -1050,7 +1051,7 @@ class SeraSyncDialog(QDialog):
             "Don't save anything until Sera has restarted: a change made in those seconds stays "
             "only in the kept old database and doesn't reach the other PCs.\n\n"
             "Go live on every PC, one after the other.")
-        if QMessageBox.question(self, "Go Live", text, QMessageBox.Yes | QMessageBox.No,
+        if MessageBox.question(self, "Go Live", text, QMessageBox.Yes | QMessageBox.No,
                                 QMessageBox.No) != QMessageBox.Yes:
             return
         if not self._confirm_admin_pin():
@@ -1083,7 +1084,7 @@ class SeraSyncDialog(QDialog):
                     self.sync_engine.start()
             except Exception as restart_exc:
                 exc = f"{exc} (and Sera Sync could not be restarted: {restart_exc}; restart Sera)"
-            QMessageBox.warning(self, "Go Live", f"This PC did not go live: {exc}")
+            MessageBox.warning(self, "Go Live", f"This PC did not go live: {exc}")
             self._refresh_sync_status()
             return
         try:
@@ -1261,17 +1262,17 @@ class SeraSyncDialog(QDialog):
     def _on_remove_member(self):
         member = self._selected_member()
         if member is None:
-            QMessageBox.information(self, "Remove", "Select a workstation to remove first.")
+            MessageBox.information(self, "Remove", "Select a workstation to remove first.")
             return
         own_device_id, _ = self._own_identity()
         if member.get("device_id") == own_device_id:
-            QMessageBox.warning(self, "Remove", "The admin PC can't remove itself; hand over admin first.")
+            MessageBox.warning(self, "Remove", "The admin PC can't remove itself; hand over admin first.")
             return
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Remove Workstation",
             f"Remove \"{member.get('name')}\" from the office?\n\n"
             "It will no longer be able to sync. This can't be undone from here.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         )
         if reply != QMessageBox.Yes:
             return
@@ -1280,20 +1281,20 @@ class SeraSyncDialog(QDialog):
             with self.db._connect() as conn:
                 sync_admin.revoke_member(self._app_dir(), conn, own_device_id, member.get("device_id"))
         except Exception as exc:
-            QMessageBox.warning(self, "Remove", f"Could not remove the workstation: {exc}")
+            MessageBox.warning(self, "Remove", f"Could not remove the workstation: {exc}")
             return
         self._refresh_members()
 
     def _on_hand_over_admin(self):
         member = self._selected_member()
         if member is None:
-            QMessageBox.information(self, "Hand Over Admin", "Select the workstation to make admin.")
+            MessageBox.information(self, "Hand Over Admin", "Select the workstation to make admin.")
             return
         own_device_id, _ = self._own_identity()
         if member.get("device_id") == own_device_id:
-            QMessageBox.information(self, "Hand Over Admin", "This PC is already the office admin.")
+            MessageBox.information(self, "Hand Over Admin", "This PC is already the office admin.")
             return
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Hand Over Admin",
             f"Make \"{member.get('name')}\" the office admin PC?\n\n"
             "This PC stops being able to add or remove workstations immediately. Until "
@@ -1311,7 +1312,7 @@ class SeraSyncDialog(QDialog):
                 sync_admin.hand_over_admin(self._app_dir(), conn, own_device_id, member.get("device_id"))
                 sync_admin.reconcile_admin_key(self._app_dir(), conn, own_device_id)
         except Exception as exc:
-            QMessageBox.warning(self, "Hand Over Admin", f"Could not hand over admin: {exc}")
+            MessageBox.warning(self, "Hand Over Admin", f"Could not hand over admin: {exc}")
             return
         self._refresh_members()
 
@@ -1322,14 +1323,14 @@ class SeraSyncDialog(QDialog):
             return
         own_device_id, _ = self._own_identity()
         if own_device_id is None:
-            QMessageBox.warning(self, "Become Admin", "This PC's device identity could not be read.")
+            MessageBox.warning(self, "Become Admin", "This PC's device identity could not be read.")
             return
         try:
             import sync_admin
             with self.db._connect() as conn:
                 sync_admin.claim_admin(self._app_dir(), conn, pwd, own_device_id)
         except Exception as exc:
-            QMessageBox.warning(self, "Become Admin", f"Could not become admin: {exc}")
+            MessageBox.warning(self, "Become Admin", f"Could not become admin: {exc}")
             return
         self._refresh_members()
 

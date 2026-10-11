@@ -12,6 +12,7 @@ from ui.components.kit import DarkListTable, DialogFrame, Select
 from ui.dialogs import mcl_manager_dialog as mcl
 from ui.dialogs import service_manager_dialog as svc
 from ui.dialogs import unified_settings_dialog as usd
+from ui.components.kit import MessageBox
 
 
 @pytest.fixture
@@ -67,12 +68,12 @@ def test_delete_asks_first_and_removes_only_on_yes(db, page, monkeypatch):
     sid = _service(db, "Alpha Portal")
     page._svc_reload()
     page._svc_list.setCurrentCell(_names(page._svc_list).index("Alpha Portal"), 0)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.No)
     page._svc_on_delete()
     assert db.get_service(sid) is not None
     emitted = []
     page.services_changed.connect(lambda: emitted.append(1))
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     page._svc_on_delete()
     assert db.get_service(sid) is None and emitted
     assert "Alpha Portal" not in _names(page._svc_list)
@@ -105,7 +106,7 @@ def test_service_edit_dialog_is_a_kit_frame_with_every_control(db):
 def test_service_edit_dialog_requires_a_name(db, monkeypatch):
     dlg = svc.ServiceEditDialog(db)
     warned = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1]))
+    monkeypatch.setattr(MessageBox, "warning", lambda *a, **k: warned.append(a[1]))
     dlg._on_accept()
     assert warned == ["Missing Name"] and dlg.result() != QDialog.Accepted
     dlg.close()
@@ -120,7 +121,7 @@ def test_service_manager_lists_services_and_guards_buttons(db, monkeypatch):
     assert not dlg.edit_btn.isEnabled() and not dlg.del_btn.isEnabled()
     t.setCurrentCell(0, 0)
     assert dlg.edit_btn.isEnabled() and dlg.del_btn.isEnabled()
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     n = t.rowCount()
     dlg._on_delete()
     assert t.rowCount() == n - 1
@@ -142,7 +143,7 @@ def test_column_edit_validates_and_returns_the_same_dict(monkeypatch):
     assert dlg.result_data() == {"label": "Entity", "field_type": "dropdown", "dropdown_options": ["A", "B"],
                                  "is_identity": 1, "is_internal_pk": 0}
     warned = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: warned.append(a[1]))
+    monkeypatch.setattr(MessageBox, "warning", lambda *a, **k: warned.append(a[1]))
     dlg.options_input.setText("")
     dlg._on_accept()
     assert warned == ["Missing Options"]
@@ -162,10 +163,10 @@ def test_mcl_manager_reorders_and_deletes_with_a_prompt(db, monkeypatch):
     dlg._on_move(1)
     assert _names(t)[:2] == [labels[1], labels[0]] and t.currentRow() == 1
     n = t.rowCount()
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.No)
     dlg._on_delete()
     assert t.rowCount() == n
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(MessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     dlg._on_delete()
     assert t.rowCount() == n - 1
     dlg.close()

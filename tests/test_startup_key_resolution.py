@@ -325,7 +325,7 @@ def test_startup_office_mode_key_id_mismatch_aborts(tmp_path, monkeypatch):
     monkeypatch.setattr("sera_keys.load_dek", lambda app_dir: dek)
 
     # Mock QMessageBox.critical so it does not pop up a UI dialog
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args: None)
 
     app = StubSeraApp(tmp_path)
     with pytest.raises(SystemExit):
@@ -342,7 +342,7 @@ def test_startup_office_mode_corrupt_office_json_aborts(tmp_path, monkeypatch):
     keys_dir.mkdir(parents=True, exist_ok=True)
     (keys_dir / "office.json").write_text("{this is not valid json", encoding="utf-8")
 
-    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.critical", lambda *args: None)
+    monkeypatch.setattr("ui.components.kit.MessageBox.critical", lambda *args: None)
 
     app = StubSeraApp(tmp_path)
     with pytest.raises(SystemExit):

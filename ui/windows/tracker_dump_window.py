@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 from ui.utils.responsive import WidthMode, mode_for
 from ui.components.kit import (
+    MessageBox,
     Banner, CellAction, Card, Chip, ChipBar, Checkbox, DarkListTable, DataGrid, DialogFrame, GridFooter,
     GridFrame, Pill, TextArea,
     IconButton, Input, LabelledAction, PageHeader, Segmented, Select, SettingRow, Tile, ROLE_ACTIONS,
@@ -289,12 +290,14 @@ def _portal_short(text: str) -> tuple[str, str]:
     """Short portal label + colour for the table; the full text goes in the tooltip."""
     low = str(text or "").lower()
     if "income tax" in low or "itr" in low:
-        return "Income Tax", "#58A6FF"
-    if "gst" in low or "cmp" in low:
-        return "GST", "#4CF9B7"
-    if any(k in low for k in ("traces", "tds", "26q", "24q", "27q")):
-        return "TDS", "#D2A8FF"
-    return str(text or "—"), "#8B949E"
+        label = "Income Tax"
+    elif "gst" in low or "cmp" in low:
+        label = "GST"
+    elif any(k in low for k in ("traces", "tds", "26q", "24q", "27q")):
+        label = "TDS"
+    else:
+        label = str(text or "—")
+    return label, _portal_ink(label)
 
 
 def _filing_type(portal: str, fallback: str) -> str:
@@ -506,7 +509,7 @@ def _save_column_choices(hidden: set, shown: set) -> None:
         pass
 
 
-def _safe_qta_icon(icon_name, color="#FFFFFF"):
+def _safe_qta_icon(icon_name, color=K["white"]):
     if qta is not None:
         try:
             return qta.icon(icon_name, color=color)
@@ -2049,7 +2052,7 @@ class TrackerDumpWindow(QWidget):
             self._apply_filters()
             self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
         except Exception as e:
-            QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
+            MessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
 
     REUSE_DATA_FOR_S = 60.0
 
@@ -2231,7 +2234,7 @@ class TrackerDumpWindow(QWidget):
         service = self._service_for_row(item)
         if not service:
             portal_name = item.get("service_name") or item.get("portal") or "Portal"
-            return CellAction("autofill", "mdi.flash", f"Fast Autofill: {portal_name}", primary=True, colour=T["danger"])
+            return CellAction("autofill", "mdi.flash", f"Fast Autofill: {portal_name}", primary=True)
         specs = {
             automation.ACTION_AUTOFILL: ("Fast Autofill", "mdi.flash"),
             automation.ACTION_SMTI: ("SMTI Manual Assist", "mdi.clipboard-account-outline"),
@@ -2241,8 +2244,8 @@ class TrackerDumpWindow(QWidget):
         label, icon = specs.get(mode, specs[automation.ACTION_AUTOFILL])
         tip = f"{label}: {service.get('name', 'Service')}"
         if mode in specs and mode != automation.ACTION_AUTOFILL:
-            return CellAction("autofill", _safe_qta_icon(icon, T["danger"]), tip)
-        return CellAction("autofill", icon, tip, primary=True, colour=T["danger"])
+            return CellAction("autofill", _safe_qta_icon(icon, T["mint"]), tip)
+        return CellAction("autofill", icon, tip, primary=True)
 
     def _service_for_row(self, item: dict):
         cid = item.get("client_id")
@@ -2302,7 +2305,7 @@ class TrackerDumpWindow(QWidget):
                 or item.get("pan")
                 or f"Client #{cid}"
             )
-            QMessageBox.information(
+            MessageBox.information(
                 self,
                 "No matching service",
                 f"No service matching portal '{portal_name}' was found for {client_name}."
@@ -2517,28 +2520,28 @@ class TrackerDumpWindow(QWidget):
             self.load_data()
 
     def _delete_srpf_container(self, identity_key: str):
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Confirm Delete Container",
             f"Are you sure you want to delete this client container ({identity_key}) and all its captured filings?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.delete_srpf_container(identity_key)
             self.load_data()
 
     def _delete_dump(self, dump_id: int):
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Confirm Delete",
             f"Are you sure you want to delete Tracker Dump record #{dump_id}?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.delete_tracker_dump(dump_id)
             self.load_data()
 
     def _clear_all_dumps(self):
-        if QMessageBox.warning(
+        if MessageBox.warning(
             self, "Clear All Dump Logs",
             "Are you sure you want to clear ALL tracker dump logs and containers?\nThis operation cannot be undone.",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.clear_tracker_dumps()
             with self.db._connect_raw() as conn:
@@ -2547,7 +2550,7 @@ class TrackerDumpWindow(QWidget):
 
     def _export_csv(self):
         if not self._dumps_cache:
-            QMessageBox.information(self, "Export CSV", "No records to export.")
+            MessageBox.information(self, "Export CSV", "No records to export.")
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
@@ -2576,9 +2579,9 @@ class TrackerDumpWindow(QWidget):
                         r.get("total_captures", 1),
                         r.get("last_updated") or r.get("created_at")
                     ])
-            QMessageBox.information(self, "Export Complete", f"Exported {len(self._dumps_cache)} records to:\n{file_path}")
+            MessageBox.information(self, "Export Complete", f"Exported {len(self._dumps_cache)} records to:\n{file_path}")
         except Exception as e:
-            QMessageBox.critical(self, "Export Failed", f"Could not write CSV: {e}")
+            MessageBox.critical(self, "Export Failed", f"Could not write CSV: {e}")
 
     def _open_daily_dump_txt(self):
         pass
@@ -2594,18 +2597,18 @@ class TrackerDumpWindow(QWidget):
         try:
             count = self.db.re_resolve_all_tracker_dumps()
             self.load_data()
-            QMessageBox.information(
+            MessageBox.information(
                 self, "SRPF Containers Rebuilt",
                 f"Successfully re-resolved captures and rebuilt unified SRPF client containers ({count} captures updated)."
             )
         except Exception as e:
-            QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
+            MessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
 
     def _open_mcl_mapping_dialog(self):
         try:
             McLMappingDialog(self.db, self).exec()
         except Exception as e:
-            QMessageBox.critical(self, "Mapping Error", f"Could not open the mapping dialog: {e}")
+            MessageBox.critical(self, "Mapping Error", f"Could not open the mapping dialog: {e}")
 
     def _open_ltt_rules(self):
         """Plain-language setup of the return forms the LTT sheet tracks (core/ltt)."""
@@ -2625,14 +2628,14 @@ class TrackerDumpWindow(QWidget):
             path = ltt_monthly.export_month(self.db, create=True)
             os.startfile(str(path))
         except Exception as e:
-            QMessageBox.warning(self, "LTT sheet", f"Could not open the LTT sheet: {e}")
+            MessageBox.warning(self, "LTT sheet", f"Could not open the LTT sheet: {e}")
         finally:
             QApplication.restoreOverrideCursor()
 
     def _open_distill(self):
         """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
         if not self.db.is_admin_pc():
-            QMessageBox.information(self, "Sera Distill", "Sera Distill runs on the admin PC only.")
+            MessageBox.information(self, "Sera Distill", "Sera Distill runs on the admin PC only.")
             return
         dlg = getattr(self, "_distill_dialog", None)
         if dlg is None:

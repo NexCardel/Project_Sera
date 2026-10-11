@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QMessageBox,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -35,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
+    MessageBox,
     Card,
     ChipBar,
     DarkListTable,
@@ -639,4 +639,4 @@ class AuditLogDialog(WidthAware, QDialog):
 
                 self.toast_requested.emit(f"SSAL Audit log ({self.selected_host}) exported successfully to:\n{path}", 3000)
             except Exception as e:
-                QMessageBox.critical(self, "Export Error", f"Could not export audit log CSV:\n{e!s}")
+                MessageBox.critical(self, "Export Error", f"Could not export audit log CSV:\n{e!s}")

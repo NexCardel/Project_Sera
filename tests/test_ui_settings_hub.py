@@ -25,9 +25,10 @@ def dlg(tmp_path, monkeypatch):
 
 def _answer(monkeypatch, choice):
     seen = []
-    monkeypatch.setattr(usd.QMessageBox, "exec", lambda self: seen.append(self.text()) or 0)
-    monkeypatch.setattr(usd.QMessageBox, "clickedButton",
-                        lambda self: next(b for b in self.buttons() if b.text() == choice))
+    def choose(parent, title, text, choices, **kwargs):
+        seen.append(text)
+        return [c[0] for c in choices].index(choice) if choice in [c[0] for c in choices] else None
+    monkeypatch.setattr(usd.MessageBox, "choose", choose)
     return seen
 
 
@@ -107,7 +108,7 @@ def test_close_prompt_save_writes_then_closes(dlg, monkeypatch):
     _answer(monkeypatch, "Save changes")
     closed = []
     monkeypatch.setattr(usd.QDialog, "reject", lambda self: closed.append(True))
-    monkeypatch.setattr(usd.QMessageBox, "information", staticmethod(lambda *a, **k: 0))
+    monkeypatch.setattr(usd.MessageBox, "information", staticmethod(lambda *a, **k: 0))
     dlg.reject()
     assert closed == [True] and dlg.db.get_setting("clipboard_clear_seconds") == "250"
 

@@ -23,7 +23,8 @@ SECTIONS = ("primitives", "inputs", "containers", "bars", "grid", "frames", "sta
 
 # Not shown on their own: GridDelegate paints DataGrid cells, IconTile is the icon square inside DialogFrame,
 # FilterChip is another name for Chip.
-NOT_STANDALONE = {"GridDelegate", "IconTile", "FilterChip"}
+# MessageBox only opens modal prompts; their look is the DialogFrame on the frames page.
+NOT_STANDALONE = {"GridDelegate", "IconTile", "FilterChip", "MessageBox"}
 
 
 @pytest.fixture(scope="module")

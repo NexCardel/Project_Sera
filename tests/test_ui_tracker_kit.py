@@ -78,12 +78,12 @@ def test_unregistered_client_is_amber_and_has_no_autofill(win):
     assert keys == ["view", "create", "more"]
 
 
-def test_every_row_action_has_a_tooltip_and_autofill_is_the_red_primary(win):
+def test_every_row_action_has_a_tooltip_and_autofill_is_the_emerald_primary(win):
     for r in range(win.table.rowCount()):
         actions = win.table.item(r, W.COL_ACTIONS).data(ROLE_ACTIONS)
         assert actions and all(a.tooltip for a in actions)
     first = win.table.item(0, W.COL_ACTIONS).data(ROLE_ACTIONS)[0]
-    assert first.key == "autofill" and first.primary and first.colour == T["danger"]
+    assert first.key == "autofill" and first.primary and first.colour is None   # red means danger only
 
 
 def test_rows_are_the_kit_tall_rows_in_both_modes(win):

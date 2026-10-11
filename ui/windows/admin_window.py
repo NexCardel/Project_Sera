@@ -40,6 +40,7 @@ from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
 from ui.dialogs.settings_dialog import SettingsDialog
 from ui.components.kit import (
+    MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,
     FieldLabel, GridFooter, GridFrame, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
     Select, TextArea,
@@ -169,7 +170,7 @@ class NewClientDialog(QDialog):
     def _on_create(self):
         mcl_cols = self.db.get_mcl_columns()
         if not mcl_cols:
-            QMessageBox.warning(self, "No Schema", "Define at least one MCL column before adding clients.")
+            MessageBox.warning(self, "No Schema", "Define at least one MCL column before adding clients.")
             return
 
         values = {
@@ -181,7 +182,7 @@ class NewClientDialog(QDialog):
 
         duplicates = self.db.find_duplicate_clients(values)
         if duplicates:
-            proceed = QMessageBox.question(
+            proceed = MessageBox.question(
                 self, "Possible duplicate",
                 "A client already exists with this identity value:\n\n"
                 + "\n".join(f"• {duplicate}" for duplicate in duplicates)
@@ -196,9 +197,9 @@ class NewClientDialog(QDialog):
             self.client_created.emit()
             self.accept()
         except ValueError as val_err:
-            QMessageBox.warning(self, "Validation Error", str(val_err))
+            MessageBox.warning(self, "Validation Error", str(val_err))
         except Exception as e:
-            QMessageBox.critical(self, "Creation Failed", f"Could not create client: {e}")
+            MessageBox.critical(self, "Creation Failed", f"Could not create client: {e}")
 
 
 class AdminPinDialog(QDialog):
@@ -237,7 +238,7 @@ class AdminPinDialog(QDialog):
     def _on_accept(self):
         pin = self.pin_input.text()
         if not pin or len(pin) < 4:
-            QMessageBox.warning(self, "Too Short", "PIN must be at least 4 characters.")
+            MessageBox.warning(self, "Too Short", "PIN must be at least 4 characters.")
             return
 
         if self._is_first_run:
@@ -249,7 +250,7 @@ class AdminPinDialog(QDialog):
         if security.verify_admin_pin(pin, stored_hash):
             self.accept()
         else:
-            QMessageBox.critical(self, "Incorrect PIN", "That PIN is incorrect.")
+            MessageBox.critical(self, "Incorrect PIN", "That PIN is incorrect.")
             self.pin_input.clear()
 
 
@@ -1076,7 +1077,7 @@ class AdminWindow(WidthAware, QWidget):
         msg += "\n\nConflict files happen when two team members edit database files simultaneously.\n"
         msg += "Would you like to open the database folder to resolve them?"
 
-        reply = QMessageBox.question(
+        reply = MessageBox.question(
             self, "Syncthing Conflict Files", msg,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         )
@@ -1152,10 +1153,10 @@ class AdminWindow(WidthAware, QWidget):
         if not client:
             return
         identity = self._get_identity_label(client)
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Delete client",
             f'Permanently delete "{identity}"? This cannot be undone.',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.bulk_delete_clients([client_id])
             self.refresh()
@@ -1171,7 +1172,7 @@ class AdminWindow(WidthAware, QWidget):
 
         mcl_cols = self.db.get_mcl_columns()
         if not mcl_cols:
-            QMessageBox.warning(self, "No Schema", "Define at least one MCL column before saving clients.")
+            MessageBox.warning(self, "No Schema", "Define at least one MCL column before saving clients.")
             return
 
         values = {col_id: read_input_widget(col_def, widget) for col_id, (col_def, widget) in self._input_widgets.items()}
@@ -1182,7 +1183,7 @@ class AdminWindow(WidthAware, QWidget):
 
         dupes = self.db.find_duplicate_clients(values, exclude_client_id=self.selected_client_id)
         if dupes:
-            proceed = QMessageBox.question(
+            proceed = MessageBox.question(
                 self, "Possible duplicate",
                 "A client already exists with this identity value:\n\n"
                 + "\n".join(f"• {d}" for d in dupes)
@@ -1205,10 +1206,10 @@ class AdminWindow(WidthAware, QWidget):
                 c_name = self._get_identity_label(saved_client) if saved_client else ""
                 self.action_alert_requested.emit("update", c_name)
         except ValueError as val_err:
-            QMessageBox.warning(self, "Validation Error", str(val_err))
+            MessageBox.warning(self, "Validation Error", str(val_err))
             return
         except Exception as e:
-            QMessageBox.critical(self, "Save Error", f"Failed to save client: {e}")
+            MessageBox.critical(self, "Save Error", f"Failed to save client: {e}")
             return
 
         self._set_dirty(False)
@@ -1226,7 +1227,7 @@ class AdminWindow(WidthAware, QWidget):
         ids = self._get_selected_client_ids()
         if not ids: return
         who = "this client" if len(ids) == 1 else f"these {len(ids)} clients"
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Archive client" if len(ids) == 1 else "Archive clients",
             f"Archive {who}? They'll be hidden from Search and this list "
             "until restored from \"Show Archived\" -- nothing is deleted."
@@ -1246,11 +1247,11 @@ class AdminWindow(WidthAware, QWidget):
         ids = self._get_selected_client_ids()
         if not ids: return
         who = "this client" if len(ids) == 1 else f"these {len(ids)} clients"
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Delete permanently",
             f"Permanently delete {who}? This cannot be undone from within "
             "the app -- only a Syncthing file-version restore could bring it back.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.bulk_delete_clients(ids)
             self.refresh()
@@ -1272,7 +1273,7 @@ class AdminWindow(WidthAware, QWidget):
             return
         service = next(s for s in services if s["name"] == name)
 
-        action = QMessageBox.question(
+        action = MessageBox.question(
             self, "Attach or detach",
             f"Attach \"{name}\" to the {len(ids)} selected client(s)?\n\n"
             "Choose No to instead detach it from them.",
@@ -1339,7 +1340,7 @@ class AdminWindow(WidthAware, QWidget):
     def _on_open_sera_sync(self):
         """Open the Sera Sync dialog for LAN database synchronization."""
         if not hasattr(self, '_sync_service') or self._sync_service is None:
-            QMessageBox.warning(self, "Sera Sync", "Sync service is not running. Please restart the app.")
+            MessageBox.warning(self, "Sera Sync", "Sync service is not running. Please restart the app.")
             return
         from ui.dialogs.sera_sync_dialog import SeraSyncDialog
         dlg = SeraSyncDialog(self._sync_service, db=self.db, actor=self.actor, parent=self,

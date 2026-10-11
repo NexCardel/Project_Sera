@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QMessageBox, QTableWidgetSelectionRange
 from ui.components.kit import LabelledAction
 from ui.windows.admin_window import AdminWindow
 from ui.windows.search_window import SearchWindow
+from ui.components.kit import MessageBox
 
 COMPANY = "NAME OF COMPANY"
 NO = QMessageBox.StandardButton.No
@@ -174,7 +175,7 @@ def test_delete_opens_the_same_confirmation_and_cancel_changes_nothing(world, mo
     admin = AdminWindow(db, actor="Admin")
     win.delete_client_requested.connect(admin.delete_client)             # as main.py wires it
     asked = []
-    monkeypatch.setattr(QMessageBox, "question",
+    monkeypatch.setattr(MessageBox, "question",
                         staticmethod(lambda p, t, text, *a, **k: (asked.append(t), NO)[1]))
     audit_before = len(db.get_audit_logs())
     r = _row_of(win, ids["B"])

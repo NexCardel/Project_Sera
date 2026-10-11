@@ -17,13 +17,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QLineEdit,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
 import sera_keys
-from ui.components.kit import Banner, DialogFrame, FieldLabel, IconButton, Input, LabelledAction
+from ui.components.kit import MessageBox, Banner, DialogFrame, FieldLabel, IconButton, Input, LabelledAction
 from ui.utils.tokens import TOKENS
 
 
@@ -114,7 +113,7 @@ class OfficeRecoveryDialog(QDialog):
             try:
                 sera_keys.load_dek(self.app_dir)
             except sera_keys.KeyUnavailable:
-                QMessageBox.warning(
+                MessageBox.warning(
                     self,
                     "Automatic Unlock Unavailable",
                     "Note: Windows could not save the key for automatic unlocking on this account.\n\n"
@@ -131,7 +130,7 @@ class OfficeRecoveryDialog(QDialog):
                 )
                 self.pw_edit.clear()
             else:
-                QMessageBox.critical(
+                MessageBox.critical(
                     self, "Aman Associates — Key Recovery Failed",
                     "Could not recover office key.\nThe maximum number of attempts (5) was exceeded."
                 )
@@ -156,7 +155,7 @@ class OfficeRecoveryDialog(QDialog):
         try:
             meta = sera_keys.inspect_recovery_kit(kit_file)
         except Exception as e:
-            QMessageBox.critical(self, "Invalid Recovery Kit", f"Could not read recovery kit file:\n\n{e}")
+            MessageBox.critical(self, "Invalid Recovery Kit", f"Could not read recovery kit file:\n\n{e}")
             return
 
         # Prompt for password to unlock this kit file
@@ -190,7 +189,7 @@ class OfficeRecoveryDialog(QDialog):
                     "\n\nNote: Windows could not save the key for automatic unlocking on this account.\n"
                     "You will need to enter the master password again on the next start."
                 )
-            QMessageBox.information(
+            MessageBox.information(
                 self,
                 "Office Key Restored",
                 msg,
@@ -202,12 +201,12 @@ class OfficeRecoveryDialog(QDialog):
             if rem > 0:
                 self._show_error(f"Wrong password for recovery kit file. ({rem} attempts remaining)")
             else:
-                QMessageBox.critical(
+                MessageBox.critical(
                     self, "Aman Associates — Key Recovery Failed",
                     "Could not recover office key.\nThe maximum number of attempts (5) was exceeded."
                 )
                 self.reject()
         except sera_keys.KeyFileInvalid as e:
-            QMessageBox.critical(self, "Invalid Recovery Kit", f"Recovery kit validation failed:\n\n{e}")
+            MessageBox.critical(self, "Invalid Recovery Kit", f"Recovery kit validation failed:\n\n{e}")
         except Exception as e:
-            QMessageBox.critical(self, "Restore Failed", f"Failed to restore recovery kit:\n\n{e}")
+            MessageBox.critical(self, "Restore Failed", f"Failed to restore recovery kit:\n\n{e}")

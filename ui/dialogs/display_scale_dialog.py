@@ -8,7 +8,7 @@ ordinary staff can open. The choice is saved in QSettings on this PC only and ap
 """
 from PySide6.QtWidgets import QDialog, QMessageBox, QVBoxLayout
 
-from ui.components.kit import DialogFrame, LabelledAction, Select, SettingRow
+from ui.components.kit import MessageBox, DialogFrame, LabelledAction, Select, SettingRow
 from ui.utils import ui_scale
 
 _OPTIONS = (
@@ -65,7 +65,7 @@ class DisplayScaleControl(SettingRow):
         self.set_sub(f"Saved on this PC. Restart Sera to apply (running at {round(ui_scale.running_scale() * 100)} %).")
 
     def _restart_now(self) -> None:
-        answer = QMessageBox.question(
+        answer = MessageBox.question(
             self, "Restart Sera",
             "Save this scale and restart Sera now? Anything unsaved in Sera will be lost.")
         if answer != QMessageBox.Yes:

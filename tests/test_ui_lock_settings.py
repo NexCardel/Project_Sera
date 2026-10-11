@@ -232,9 +232,8 @@ def test_opening_on_a_named_page(tmp_path, name, idx):
 def test_unsaved_dialog_closes_without_writing(env, monkeypatch):
     db, ids, dlg, written, outside = env
     dlg.clipboard_spin.setValue(99)
-    monkeypatch.setattr(usd.QMessageBox, "exec", lambda self: 0)
-    monkeypatch.setattr(usd.QMessageBox, "clickedButton",
-                        lambda self: next(b for b in self.buttons() if b.text() == "Discard changes"))
+    monkeypatch.setattr(usd.MessageBox, "choose",
+                        lambda p, t, text, choices, **k: [c[0] for c in choices].index("Discard changes"))
     dlg.reject()
     assert written == [] and db.get_setting("clipboard_clear_seconds") is None
 
@@ -249,8 +248,8 @@ def test_purge_asks_first_and_deletes_only_the_newer_duplicate(env, monkeypatch)
                          c["PAN"]: "ABCDE1009F"}, "", [])
     asked, info = [], []
     answer = {"v": usd.QMessageBox.No}
-    monkeypatch.setattr(usd.QMessageBox, "question", lambda *a, **k: (asked.append(a[1]), answer["v"])[1])
-    monkeypatch.setattr(usd.QMessageBox, "information", lambda *a, **k: info.append(a[2]))
+    monkeypatch.setattr(usd.MessageBox, "question", lambda *a, **k: (asked.append(a[1]), answer["v"])[1])
+    monkeypatch.setattr(usd.MessageBox, "information", lambda *a, **k: info.append(a[2]))
     dlg._on_purge_duplicates()
     assert asked == ["Purge Duplicate Clients"] and db.get_client(dup) is not None   # "No" changes nothing
     answer["v"] = usd.QMessageBox.Yes
@@ -265,7 +264,7 @@ def test_purge_with_nothing_to_purge_only_toasts(env, monkeypatch):
     db, ids, dlg, written, outside = env
     toasts = []
     dlg.toast_requested.connect(lambda m, ms: toasts.append(m))
-    monkeypatch.setattr(usd.QMessageBox, "question", lambda *a, **k: usd.QMessageBox.Yes)
+    monkeypatch.setattr(usd.MessageBox, "question", lambda *a, **k: usd.QMessageBox.Yes)
     dlg._on_purge_duplicates()
     assert toasts == ["No duplicate clients were found."]
     assert [l for l in db.get_audit_logs() if l["action"] == "purge_duplicates"] == []
@@ -291,8 +290,7 @@ def test_restore_is_never_run_when_the_source_question_is_cancelled(env, monkeyp
     db, ids, dlg, written, outside = env
     called = []
     db.restore_from = lambda p: called.append(p)
-    monkeypatch.setattr(usd.QMessageBox, "exec", lambda self: 0)
-    monkeypatch.setattr(usd.QMessageBox, "clickedButton", lambda self: None)
+    monkeypatch.setattr(usd.MessageBox, "choose", lambda *a, **k: None)          # Esc
     dlg._on_restore_backup()
     assert called == []
 
@@ -301,10 +299,10 @@ def test_restore_needs_the_overwrite_confirmation(env, monkeypatch):
     db, ids, dlg, written, outside = env
     called, warned = [], []
     db.restore_from = lambda p: called.append(p) or "restored"
-    monkeypatch.setattr(usd.QMessageBox, "exec", lambda self: 0)
-    monkeypatch.setattr(usd.QMessageBox, "clickedButton", lambda self: self.buttons()[1])
+    monkeypatch.setattr(usd.MessageBox, "choose",
+                        lambda p, t, text, choices, **k: [c[0] for c in choices].index("Select Specific File (.db)"))
     monkeypatch.setattr(usd.QFileDialog, "getOpenFileName", lambda *a, **k: ("C:/fake/backup.db", ""))
-    monkeypatch.setattr(usd.QMessageBox, "warning", lambda *a, **k: (warned.append(a[1]), usd.QMessageBox.No)[1])
+    monkeypatch.setattr(usd.MessageBox, "warning", lambda *a, **k: (warned.append(a[1]), usd.QMessageBox.No)[1])
     dlg._on_restore_backup()
     assert warned == ["Confirm Restore"] and called == []
 

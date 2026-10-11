@@ -780,7 +780,7 @@ def test_run_pending_rejoin_undoes_an_interrupted_move(pcs, monkeypatch):
     app = pcs["legacy"]
     hashes = {p.name: _sha(p) for p in app.iterdir()}
     sync_rejoin.move_legacy_files(app)
-    with patch("PySide6.QtWidgets.QMessageBox.warning") as warn:
+    with patch("ui.components.kit.MessageBox.warning") as warn:
         assert run_pending_rejoin(app, requested=False) is None
     warn.assert_called_once()
     assert {p.name: _sha(p) for p in app.iterdir() if p.is_file()} == hashes
@@ -810,7 +810,7 @@ def test_run_pending_rejoin_imports_after_confirmation(pcs, monkeypatch):
         return 1
 
     with patch.object(rd.SalvageDialog, "exec", _exec), \
-         patch("PySide6.QtWidgets.QMessageBox.information") as info:
+         patch("ui.components.kit.MessageBox.information") as info:
         assert rd.run_pending_rejoin(app, requested=False) is None
     assert shown and shown[0].dry_run is True
     info.assert_called_once()
@@ -862,12 +862,12 @@ def test_rejoin_button_writes_request_and_restarts(tmp_path):
     from unittest.mock import patch
     from PySide6.QtWidgets import QMessageBox
     dlg, svc = _sync_dialog(None, tmp_path / "master.db")
-    with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.No), \
+    with patch("ui.components.kit.MessageBox.question", return_value=QMessageBox.No), \
          patch("version.restart_app") as restart:
         dlg._on_rejoin_office()
     assert sync_rejoin.read_rejoin_request(tmp_path) is None
     restart.assert_not_called()
-    with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
+    with patch("ui.components.kit.MessageBox.question", return_value=QMessageBox.Yes), \
          patch("version.restart_app") as restart:
         dlg._on_rejoin_office()
     assert sync_rejoin.read_rejoin_request(tmp_path)["requested_by"] == "User 1"
@@ -983,7 +983,7 @@ def test_pending_join_dialog_offers_undo(pcs, monkeypatch):
     monkeypatch.setattr(sera_keys, "load_office",
                         lambda d: object() if (sera_keys.keys_dir(d) / sera_keys.OFFICE_FILE).exists() else None)
     monkeypatch.setattr(rd, "_ask_pending_join", lambda: "undo")
-    with patch("PySide6.QtWidgets.QMessageBox.information") as info:
+    with patch("ui.components.kit.MessageBox.information") as info:
         assert rd.run_pending_rejoin(app, requested=False) is None
     info.assert_called_once()
     assert {n: _sha(app / n) for n in hashes} == hashes
@@ -1005,11 +1005,11 @@ def test_failed_download_at_start_can_be_undone(pcs, monkeypatch):
         raise RuntimeError("admin PC unreachable")
 
     monkeypatch.setattr(sync_rejoin, "resume_download", _fail)
-    with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.No):
+    with patch("ui.components.kit.MessageBox.question", return_value=QMessageBox.No):
         assert rd.run_pending_rejoin(app, requested=False) == "exit"
     assert sync_rejoin.read_state(app) is not None                     # still paired, retried next start
-    with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.Yes), \
-         patch("PySide6.QtWidgets.QMessageBox.information"):
+    with patch("ui.components.kit.MessageBox.question", return_value=QMessageBox.Yes), \
+         patch("ui.components.kit.MessageBox.information"):
         assert rd.run_pending_rejoin(app, requested=False) is None
     assert sync_rejoin.read_state(app) is None
     assert (app / "master.db").exists()

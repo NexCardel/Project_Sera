@@ -86,9 +86,9 @@ def boxes(monkeypatch):
         shown.append(("question", title, text))
         return answer["question"]
 
-    monkeypatch.setattr(m.QMessageBox, "information", staticmethod(_rec("information")))
-    monkeypatch.setattr(m.QMessageBox, "warning", staticmethod(_rec("warning")))
-    monkeypatch.setattr(m.QMessageBox, "question", staticmethod(q))
+    monkeypatch.setattr(m.MessageBox, "information", staticmethod(_rec("information")))
+    monkeypatch.setattr(m.MessageBox, "warning", staticmethod(_rec("warning")))
+    monkeypatch.setattr(m.MessageBox, "question", staticmethod(q))
 
     def msg(parent, title, text, level="info"):
         shown.append(({"info": "information"}.get(level, level), title, text))

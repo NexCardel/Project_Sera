@@ -189,6 +189,17 @@ LogView(parent=None, *, max_lines=500)
 SlidePanel (ui/shell/slide_panel.py) is restyled from the same tokens: 540 px, the whole width in
 COMPACT (apply_width_mode / set_compact; derived from the parent's width until one is set).
 
+Messages (S-14, S-R): every prompt is a DialogFrame in a modal QDialog; screens never use QMessageBox.
+MessageBox.information / warning / critical / question(parent, title, text, buttons=..., defaultButton=...,
+    *, danger=False)
+    Same arguments and QMessageBox.StandardButton result as the QMessageBox statics they replace
+    (compare with QMessageBox.Yes etc.). The default button is the one primary (danger=True paints it
+    red for delete / purge / restore); Esc gives Cancel, else No, else the only button.
+MessageBox.choose(parent, title, text, choices, *, level="question", escape=None) -> index or None
+    Custom buttons: choices = [(label, variant), ...] left to right; Esc returns `escape`.
+show_message(parent, title, text, level="info") / ask_confirm(parent, title, text, *, yes, no, level,
+    danger) -> bool: the short forms.
+
 Shell sidebar (R-2):
 NavItem(text, parent=None, *, icon=None, hint=None, tooltip="")
     Sidebar entry drawn by the widget: 16 px icon, text, optional Key hint at the right. set_active(on)
@@ -213,7 +224,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout,
     QWidget,
 )
@@ -3287,6 +3298,12 @@ _MESSAGE_LOOK = {
 
 
 def _run_message(parent, title, text, level, actions):
+    index = _choose(parent, title, text, level, [(label, variant) for label, variant, _ in actions], None)
+    return index is not None and actions[index][2]
+
+
+def _choose(parent, title, text, level, actions, escape):
+    """actions: [(label, variant), ...] left to right. Returns the clicked index, `escape` on Esc."""
     icon, tone = _MESSAGE_LOOK[level]
     dlg = QDialog(parent)
     dlg.setModal(True)
@@ -3302,10 +3319,69 @@ def _run_message(parent, title, text, level, actions):
     body.setWordWrap(True)
     body.setTextInteractionFlags(Qt.TextSelectableByMouse)
     frame.add_widget(body)
-    for label, variant, accepts in actions:
+    picked = [escape]
+    for index, (label, variant) in enumerate(actions):
         button = frame.add_action(label, variant=variant)
-        button.clicked.connect(dlg.accept if accepts else dlg.reject)
-    return dlg.exec() == QDialog.Accepted
+        button.setAutoDefault(False)
+        if variant in ("primary", "danger"):
+            button.setDefault(True)
+            button.setFocus()
+        button.clicked.connect(lambda _=False, i=index: (picked.__setitem__(0, i), dlg.accept()))
+    dlg.exec()
+    return picked[0]
+
+
+_SB = QMessageBox.StandardButton
+# Footer order (left to right) and label of each standard button; the accepting ones sit on the right.
+_STANDARD = [
+    (_SB.Help, "Help"), (_SB.Reset, "Reset"), (_SB.Discard, "Discard"), (_SB.Abort, "Abort"),
+    (_SB.Ignore, "Ignore"), (_SB.Cancel, "Cancel"), (_SB.Close, "Close"), (_SB.NoToAll, "No to all"),
+    (_SB.No, "No"), (_SB.Retry, "Retry"), (_SB.Apply, "Apply"), (_SB.Open, "Open"),
+    (_SB.YesToAll, "Yes to all"), (_SB.Save, "Save"), (_SB.SaveAll, "Save all"), (_SB.Ok, "OK"),
+    (_SB.Yes, "Yes"),
+]
+_ESCAPE_ORDER = (_SB.Cancel, _SB.No, _SB.Close, _SB.Abort, _SB.Ignore)
+
+
+def _standard_box(parent, title, text, level, buttons, default, danger):
+    try:
+        flags = int(buttons.value) if hasattr(buttons, "value") else int(buttons)
+    except (TypeError, ValueError):
+        flags = int(_SB.Ok.value)
+    shown = [(b, label) for b, label in _STANDARD if flags & int(b.value)] or [(_SB.Ok, "OK")]
+    kinds = [b for b, _ in shown]
+    if default is None or default == _SB.NoButton or default not in kinds:
+        default = kinds[-1]
+    escape = next((b for b in _ESCAPE_ORDER if b in kinds), kinds[0] if len(kinds) == 1 else _SB.NoButton)
+    actions = [(label, ("danger" if danger else "primary") if b == default else "secondary")
+               for b, label in shown]
+    index = _choose(parent, title, text, level, actions, None)
+    return escape if index is None else kinds[index]
+
+
+class MessageBox:
+    """Drop-in for the QMessageBox statics, drawn as a kit dialog (see the module docstring)."""
+
+    @staticmethod
+    def information(parent, title, text, buttons=_SB.Ok, defaultButton=_SB.NoButton, *, danger=False):
+        return _standard_box(parent, title, text, "info", buttons, defaultButton, danger)
+
+    @staticmethod
+    def warning(parent, title, text, buttons=_SB.Ok, defaultButton=_SB.NoButton, *, danger=False):
+        return _standard_box(parent, title, text, "warning", buttons, defaultButton, danger)
+
+    @staticmethod
+    def critical(parent, title, text, buttons=_SB.Ok, defaultButton=_SB.NoButton, *, danger=False):
+        return _standard_box(parent, title, text, "critical", buttons, defaultButton, danger)
+
+    @staticmethod
+    def question(parent, title, text, buttons=_SB.Yes | _SB.No, defaultButton=_SB.NoButton, *,
+                 danger=False):
+        return _standard_box(parent, title, text, "question", buttons, defaultButton, danger)
+
+    @staticmethod
+    def choose(parent, title, text, choices, *, level="question", escape=None):
+        return _choose(parent, title, text, level, list(choices), escape)
 
 
 def show_message(parent, title, text, level="info"):

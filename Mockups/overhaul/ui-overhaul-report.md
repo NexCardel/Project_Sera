@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 17:47)
+# UI overhaul — report (2026-10-11 18:51)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 5 |
+| Not started | 4 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 31 |
+| Done | 32 |
 | Blocked | 0 |
 
-Runs: 40   output tokens: 1706951   API-equivalent cost: $122.74
+Runs: 41   output tokens: 1934719   API-equivalent cost: $138.14
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -45,7 +45,7 @@ Runs: 40   output tokens: 1706951   API-equivalent cost: $122.74
 | S-11 | Done | sonnet | c067ce0 | Screens: Audit log (IMPLEMENTATION 4.5) | Audit log on the kit: chips drive hidden state widgets, DarkListTable workstations, pill actions, Entry card; 3 goldens; lock tests pass |
 | S-12 | Done | opus | 7799b9d | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... | Sera Sync on the kit: strip, Segmented tabs, DarkListTable devices + EmptyState, LogView activity; feature map in 04-sera-sync.md; lock test adapted, sync UI te |
 | S-13 | Done | sonnet | cd3e59d | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... | Ten small dialogs on the kit; global QProgressBar theme rule; 16 new tests; known pre-existing failures only; human checks 28-29 |
-| S-14 | Not started | haiku |  | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... |  |
+| S-14 | Done | haiku | fb1490a | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... | S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note |
 | S-R | Not started | opus |  | Review phase S (screens) |  |
 | F-1 | Not started | mechanical |  | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... |  |
 | F-2 | Not started | mechanical |  | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). |  |
@@ -113,6 +113,12 @@ Runs: 40   output tokens: 1706951   API-equivalent cost: $122.74
 - **S-13** Error and status lines (master password, recovery, first run, rejoin, force update) → Kit Banner with set_text/set_tone; same attribute names, .text() still works (red banner for errors, info/green/amber for status; no literal colours)
 - **S-13** Rejoin office: legacy password field when the saved key is used → Field is disabled with a tooltip instead of hidden; still editable when the saved key fails (Mockup shows it; same legacy_pw attribute and verify behaviour)
 - **S-13** Fixed dialog sizes (first run 620x520, join request 480x280, force update 520x420) → Minimum sizes with a sensible resize; first-run button 'Pair & Join' renamed 'Pair and join' (Content must fit at 0.80-1.25 scale; '&' in a button label turned the space into a mnemonic)
+- **S-14** Is there an ordinary update dialog class to convert? → No class exists; ForceUpdateDialog (S-13) is the update dialog and covers it (Only ForceUpdateDialog exists; its exit and error prompts moved to the kit helpers in S-14)
+- **S-14** How far does the QMessageBox sweep go in S-14? → Convert McL, LTT, SCA, update, by-IP prompts, add-workstation window and ForceUpdate; hand off the rest (Keeps this WP to the dialogs in scope; rejoin_office_dialog.py, the other sera_sync_dialog handlers (rejoin, shadow, go live, remove member, hand over and become admin), tracker_dump_window.py window-level calls, main.py and other dialogs stay for a later WP)
+- **S-14** What colour do mapped rows use in the McL mapping dialog? → T['text'] instead of the old cyan (The token set has no cyan; the change is cosmetic and keeps the palette to tokens)
+- **S-14** Should the converted dialogs become a new widget class or use the kit directly? → Kit DialogFrame inside a plain QDialog; show_message and ask_confirm helpers in kit.py (No new widget classes are allowed; the kit already has the frame, banner and action pieces)
+- **S-14** Are STATUS_THEMES and the tracker portal-colour hex changed in S-14? → Left in place (They are data and helpers outside the S-14 dialogs; changing them touches the tracker window, which is S-10 territory)
+- **S-14** How does the LTT rules dialog handle its lists and height at 1024x700? → Body scrolls (scroll=True); lists themed through the KitList rule with minimum heights (Without scroll the editor is squeezed at 1024x700, and the lists rendered as default white boxes)
 
 ## Checks waiting for you
 
@@ -145,3 +151,5 @@ Runs: 40   output tokens: 1706951   API-equivalent cost: $122.74
 - #27 (S-12) Sera Sync on a real 1366x768 laptop at 125 %: Devices tab scrolls a little to reach Add/Remove PC by IP when the Public-network banner shows; check two real PCs list, right-click a manual peer, Add workstation code window and the activity stream follow-to-bottom — Not run
 - #28 (S-13) On a real 125 % screen: open First run (all 3 pages), Force update and the startup loading dialog; confirm nothing clips and the progress bar is visible — Not run
 - #29 (S-13) On a throwaway office: change the master password and unlock via Office recovery; confirm the password fields stay masked and the eye toggle works — Not run
+- #30 (S-14) Review the S-14 dialogs at 125 percent on a real screen (SCA diagnostics, LTT rules, McL mapping, payload inspector, add client from capture, add workstation pairing window, add/remove PC by IP prompts, message and confirm boxes); check the goldens in Mockups/built/dialogs/ match — Not run
+- #31 (S-14) Payload inspector table headers elide at 1024x700 (Period and Submission status are cut); decide whether the columns need priority or a wider minimum — Not run

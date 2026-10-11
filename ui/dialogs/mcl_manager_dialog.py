@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
+    MessageBox,
     ROLE_PILL, ROLE_TAG, Card, DarkListTable, DialogFrame, FieldLabel, IconButton, Input, LabelledAction,
     Select, SettingRow, Switch,
 )
@@ -118,10 +119,10 @@ class ColumnEditDialog(QDialog):
 
     def _on_accept(self):
         if not self.label_input.text().strip():
-            QMessageBox.warning(self, "Missing Label", "Column label is required.")
+            MessageBox.warning(self, "Missing Label", "Column label is required.")
             return
         if self.type_combo.currentData() == "dropdown" and not self.options_input.text().strip():
-            QMessageBox.warning(self, "Missing Options", "Enter at least one option, comma-separated.")
+            MessageBox.warning(self, "Missing Options", "Enter at least one option, comma-separated.")
             return
         self.accept()
 
@@ -256,7 +257,7 @@ class MCLManagerDialog(QDialog):
         col_id = self._selected_id()
         if not col_id:
             return
-        if QMessageBox.question(self, "Confirm Deletion", "Delete this column? All client values associated with this column will be permanently removed.") == QMessageBox.Yes:
+        if MessageBox.question(self, "Confirm Deletion", "Delete this column? All client values associated with this column will be permanently removed.", danger=True) == QMessageBox.Yes:
             self.db.delete_mcl_column(col_id)
             self._reload_columns()
 

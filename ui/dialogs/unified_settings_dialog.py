@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.components.kit import (
+    MessageBox,
     ROLE_ACTIONS, ROLE_PILL, ROLE_TAG, Banner, Card, CellAction, DarkListTable, DialogFrame, EmptyState,
     FieldLabel, Input, LabelledAction, NavItem, NavLabel, PageHeader, Pill, Select, SettingRow, Stepper,
     Switch, Tag, Tile, UnsavedBar, sidebar_qss,
@@ -49,24 +50,6 @@ try:
     import qtawesome as qta
 except Exception:
     qta = None
-
-
-# ── Palette ───────────────────────────────────────────────────────────────────
-_BG_DIALOG    = "#1a1a1a"
-_BG_NAV       = "#1e1e1e"
-_BG_CONTENT   = "#202020"
-_NAV_HOVER    = "#252525"
-_NAV_ACTIVE   = "#282828"
-_ACCENT       = "#2E9B5F"
-_ACCENT_LIGHT = "#4CF9B7"
-_DANGER       = "#FF5252"
-_TEXT_PRI     = "#e8e8e8"
-_TEXT_SEC     = "#808080"
-_TEXT_NAV     = "#a0a0a0"
-_BORDER       = "#2a2a2a"
-_INPUT_BG     = "#171717"
-_INPUT_BORDER = "#333333"
-
 
 
 # ── Page indices ──────────────────────────────────────────────────────────────
@@ -205,7 +188,6 @@ class UnifiedSettingsDialog(QDialog):
 
         self._initial_state = None
         self._loaded_groups = set()
-        self._apply_global_style()
         self._build_ui()
 
         # Only the requested page is built now (building all eight settings pages cost ~0.75-1.5 s
@@ -239,95 +221,6 @@ class UnifiedSettingsDialog(QDialog):
             else:
                 self._initial_state.setdefault(key, value)
         self._update_save_btn_state()
-
-    # ── Global style ──────────────────────────────────────────────────────────
-    def _apply_global_style(self):
-        self.setStyleSheet(f"""
-            QDialog#UnifiedSettings {{ background: {_BG_DIALOG}; }}
-            QLabel {{ background: transparent; color: {_TEXT_PRI}; }}
-            QLineEdit, QComboBox, QSpinBox {{
-                background: {_INPUT_BG};
-                color: {_TEXT_PRI};
-                border: 1px solid {_INPUT_BORDER};
-                border-radius: 5px;
-                padding: 5px 9px;
-                font-size: 12px;
-                min-width: 160px;
-            }}
-            QComboBox::drop-down {{ border: none; padding-right: 6px; }}
-            QComboBox QAbstractItemView {{
-                background: #252525; color: {_TEXT_PRI};
-                selection-background-color: {_NAV_ACTIVE};
-                border: 1px solid {_INPUT_BORDER};
-            }}
-            QSpinBox::up-button, QSpinBox::down-button {{ width: 18px; }}
-            QCheckBox {{ color: {_TEXT_PRI}; font-size: 13px; spacing: 8px; background: transparent; }}
-            QCheckBox::indicator {{
-                width: 16px; height: 16px;
-                border: 1px solid {_INPUT_BORDER};
-                border-radius: 3px;
-                background: {_INPUT_BG};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {_ACCENT}; border-color: {_ACCENT};
-            }}
-
-            QPushButton#UnifiedSaveBtn {{
-                background-color: {_ACCENT};
-                color: #FFFFFF;
-                border: 1px solid #34B76D;
-                border-radius: 6px;
-                padding: 6px 18px;
-                font-size: 13px;
-                font-weight: 600;
-            }}
-            QPushButton#UnifiedSaveBtn:hover {{
-                background-color: #34B76D;
-                border-color: #4CF9B7;
-            }}
-            QPushButton#UnifiedSaveBtn:pressed {{
-                background-color: #247A49;
-                border-color: {_ACCENT};
-            }}
-            QPushButton#UnifiedSaveBtn:disabled {{
-                background-color: #1a2920;
-                color: #4f6e5c;
-                border: 1px solid #233b2c;
-            }}
-            QPushButton#UnifiedCloseBtn {{
-                background-color: #262626;
-                color: #E0E0E0;
-                border: 1px solid #383838;
-                border-radius: 6px;
-                padding: 6px 18px;
-                font-size: 13px;
-                font-weight: 500;
-            }}
-            QPushButton#UnifiedCloseBtn:hover {{
-                background-color: #333333;
-                color: #FFFFFF;
-                border-color: #4D4D4D;
-            }}
-            QPushButton#UnifiedCloseBtn:pressed {{
-                background-color: #1A1A1A;
-            }}
-            QPushButton[class="icon-sm"] {{
-                background: #2a2a2a; border: 1px solid #383838;
-                border-radius: 5px; padding: 4px; min-width: 0;
-            }}
-            QPushButton[class="icon-sm"]:hover {{ background: #353535; }}
-            QListWidget {{
-                background: #1a1a1a; color: {_TEXT_PRI};
-                border: 1px solid {_BORDER}; border-radius: 6px;
-                outline: none; font-size: 13px;
-            }}
-            QListWidget::item {{ padding: 9px 14px; border-radius: 4px; }}
-            QListWidget::item:selected {{ background: {_NAV_ACTIVE}; color: {_ACCENT_LIGHT}; }}
-            QListWidget::item:hover:!selected {{ background: {_NAV_HOVER}; }}
-            QScrollBar:vertical {{ background: {_BG_NAV}; width: 6px; border-radius: 3px; }}
-            QScrollBar::handle:vertical {{ background: #383838; border-radius: 3px; min-height: 20px; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        """)
 
     # ── Build ─────────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -1218,20 +1111,15 @@ class UnifiedSettingsDialog(QDialog):
         if self._dirty_count() == 0:
             super().reject()
             return
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Unsaved changes")
-        box.setText(f"You have {self._dirty_count()} unsaved change(s) in Settings.")
-        save_btn = box.addButton("Save changes", QMessageBox.AcceptRole)
-        discard_btn = box.addButton("Discard changes", QMessageBox.DestructiveRole)
-        box.addButton("Keep editing", QMessageBox.RejectRole)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is save_btn:
+        clicked = MessageBox.choose(
+            self, "Unsaved changes", f"You have {self._dirty_count()} unsaved change(s) in Settings.",
+            [("Discard changes", "secondary"), ("Keep editing", "secondary"), ("Save changes", "primary")],
+            level="warning")
+        if clicked == 2:
             self._on_save_settings()
             if self._dirty_count() == 0:
                 super().reject()
-        elif clicked is discard_btn:
+        elif clicked == 0:
             super().reject()
 
     def _update_scc_counts_display(self):
@@ -1419,7 +1307,7 @@ class UnifiedSettingsDialog(QDialog):
             self._update_save_btn_state()
 
         except Exception as e:
-            QMessageBox.critical(self, "Error Saving Settings", str(e))
+            MessageBox.critical(self, "Error Saving Settings", str(e))
 
     # ── MCL actions ───────────────────────────────────────────────────────────
     def _mcl_refresh_model(self):
@@ -1542,10 +1430,10 @@ class UnifiedSettingsDialog(QDialog):
         col_id = self._mcl_sel_id()
         if col_id is None:
             return
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Delete Column",
             "Delete this column? All client values for this column will be permanently removed.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.delete_mcl_column(col_id)
             self._mcl_reload()
@@ -1595,7 +1483,7 @@ class UnifiedSettingsDialog(QDialog):
                 self._svc_reload()
                 self.services_changed.emit()
             except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+                MessageBox.critical(self, "Error", str(e))
 
     def _svc_on_edit(self):
         svc_id = self._svc_sel_id()
@@ -1616,10 +1504,10 @@ class UnifiedSettingsDialog(QDialog):
         svc_id = self._svc_sel_id()
         if svc_id is None:
             return
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Delete Service",
             "Delete this service? It will be detached from all client profiles.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             self.db.delete_service(svc_id)
             self._svc_reload()
@@ -1639,7 +1527,7 @@ class UnifiedSettingsDialog(QDialog):
                 self.db.log_action(self.actor, "csv_export", detail=f"Exported to {path}")
                 self.toast_requested.emit(f"Exported successfully to:\n{path}", 3000)
             except Exception as e:
-                QMessageBox.critical(self, "Export Error", str(e))
+                MessageBox.critical(self, "Export Error", str(e))
 
     def _on_download_template(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1649,7 +1537,7 @@ class UnifiedSettingsDialog(QDialog):
                 self.db.export_mcl_schema_csv(path)
                 self.toast_requested.emit(f"Template saved to:\n{path}", 3000)
             except Exception as e:
-                QMessageBox.critical(self, "Download Error", str(e))
+                MessageBox.critical(self, "Download Error", str(e))
 
     def _on_backup(self):
         dest = QFileDialog.getExistingDirectory(self, "Choose Backup Destination")
@@ -1660,47 +1548,43 @@ class UnifiedSettingsDialog(QDialog):
             self.db.log_action(self.actor, "backup", detail=f"Backed up to {path}")
             self.toast_requested.emit(f"Backup saved:\n{path}", 3000)
         except Exception as e:
-            QMessageBox.critical(self, "Backup Failed", str(e))
+            MessageBox.critical(self, "Backup Failed", str(e))
 
     def _on_restore_backup(self):
         if getattr(self.db, "key_mode", None) == "office":
             self._on_restore_office_backup()
             return
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Restore Source")
-        msg.setText("How would you like to locate the backup?")
-        btn_folder = msg.addButton("Select Backup Folder", QMessageBox.AcceptRole)
-        btn_file   = msg.addButton("Select Specific File (.db)", QMessageBox.AcceptRole)
-        msg.addButton(QMessageBox.Cancel)
-        msg.exec()
-        clicked = msg.clickedButton()
-        if clicked == btn_file:
+        clicked = MessageBox.choose(
+            self, "Restore Source", "How would you like to locate the backup?",
+            [("Cancel", "secondary"), ("Select Backup Folder", "secondary"),
+             ("Select Specific File (.db)", "secondary")])
+        if clicked == 2:
             path, _ = QFileDialog.getOpenFileName(
                 self, "Choose Database File", "",
                 "Database Files (*.db *.sqlite *sync-conflict*);;All Files (*)")
-        elif clicked == btn_folder:
+        elif clicked == 1:
             path = QFileDialog.getExistingDirectory(self, "Choose Backup Folder")
         else:
             return
         if not path:
             return
-        if QMessageBox.warning(
+        if MessageBox.warning(
             self, "Confirm Restore",
             "WARNING: This will overwrite your live database.\n\n"
             "If Syncthing is active, the restored database will also sync to all team members' PCs.\n\n"
             "The application will restart. Continue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) == QMessageBox.Yes:
             try:
                 summary = self.db.restore_from(path)
                 self.db.log_action(self.actor, "restore", detail=summary)
-                QMessageBox.information(
+                MessageBox.information(
                     self, "Restore Successful",
                     f"{summary}\n\nThe application will now restart.")
                 import version
                 version.restart_app()
             except Exception as e:
-                QMessageBox.critical(self, "Restore Error", str(e))
+                MessageBox.critical(self, "Restore Error", str(e))
 
     def _on_restore_office_backup(self):
         """Sera Sync v3 (P4-3b, D9): the restored backup becomes the data on every PC. Admin PC
@@ -1715,19 +1599,19 @@ class UnifiedSettingsDialog(QDialog):
         try:
             plan = sync_restore.plan_restore(self.db, path)
         except sync_restore.RestoreRefused as e:
-            QMessageBox.warning(self, "Restore Not Possible", str(e))
+            MessageBox.warning(self, "Restore Not Possible", str(e))
             return
         except Exception as e:
-            QMessageBox.critical(self, "Restore Error", str(e))
+            MessageBox.critical(self, "Restore Error", str(e))
             return
         if not self._confirm_office_restore(plan):
             return
         try:
             sync_restore.stage_restore(self.db, path, actor=self.actor)
         except (sync_restore.RestoreRefused, sync_restore.RestoreError) as e:
-            QMessageBox.critical(self, "Restore Error", str(e))
+            MessageBox.critical(self, "Restore Error", str(e))
             return
-        QMessageBox.information(
+        MessageBox.information(
             self, "Restore Ready",
             "The backup is ready to be restored. Sera will now restart to do it.")
         import version
@@ -1735,42 +1619,43 @@ class UnifiedSettingsDialog(QDialog):
 
     def _confirm_office_restore(self, plan) -> bool:
         import sync_restore
+        title = "Restore Backup for the Whole Office"
         dlg = QDialog(self)
-        dlg.setWindowTitle("Restore Backup for the Whole Office")
+        dlg.setWindowTitle(title)
+        dlg.setMinimumWidth(480)
         lay = QVBoxLayout(dlg)
-        text = QLabel(plan.confirmation_text())
-        text.setWordWrap(True)
-        lay.addWidget(text)
-        lay.addWidget(QLabel(f"Type {sync_restore.CONFIRM_WORD} to continue:"))
-        edit = QLineEdit()
-        lay.addWidget(edit)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        cancel = QPushButton("Cancel")
-        ok = QPushButton("Restore")
-        ok.setProperty("class", "danger")
-        ok.setEnabled(False)
-        row.addWidget(cancel)
-        row.addWidget(ok)
-        lay.addLayout(row)
-        edit.textChanged.connect(lambda t: ok.setEnabled(t.strip() == sync_restore.CONFIRM_WORD))
+        lay.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame(title, "Every Sera PC in the office gets this backup", dlg,
+                            icon="mdi.backup-restore", tone="amber")
+        frame.closeRequested.connect(dlg.reject)
+        lay.addWidget(frame)
+        frame.add_widget(Banner(plan.confirmation_text(), "w"))
+        edit = Input()
+        frame.add_widget(FieldLabel(f"Type {sync_restore.CONFIRM_WORD} to continue", for_widget=edit))
+        frame.add_widget(edit)
+        frame.add_footer_spacer()
+        cancel = frame.add_action("Cancel")
+        ok = frame.add_action("Restore", variant="danger", icon="mdi.backup-restore")
+        reason = f"Type {sync_restore.CONFIRM_WORD} first"
+        ok.set_disabled_reason(reason)
+        edit.textChanged.connect(
+            lambda t: ok.set_disabled_reason(None if t.strip() == sync_restore.CONFIRM_WORD else reason))
         cancel.clicked.connect(dlg.reject)
         ok.clicked.connect(dlg.accept)
-        dlg.setMinimumWidth(480)
         return dlg.exec() == QDialog.Accepted and edit.text().strip() == sync_restore.CONFIRM_WORD
 
     def _on_purge_duplicates(self):
-        if QMessageBox.question(
+        if MessageBox.question(
             self, "Purge Duplicate Clients",
             "This will permanently delete duplicate clients (keeping the oldest record per group).\n\n"
             "This cannot be undone. Continue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No, danger=True
         ) != QMessageBox.Yes:
             return
         try:
             results = self.db.purge_duplicate_clients()
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            MessageBox.critical(self, "Error", str(e))
             return
         if results["deleted"] == 0:
             self.toast_requested.emit("No duplicate clients were found.", 3000)
@@ -1778,7 +1663,7 @@ class UnifiedSettingsDialog(QDialog):
             self.db.log_action(
                 self.actor, "purge_duplicates",
                 detail=f"Purged {results['deleted']} duplicate(s) across {results['groups']} group(s)")
-            QMessageBox.information(
+            MessageBox.information(
                 self, "Purge Complete",
                 f"\u2705  Deleted {results['deleted']} duplicate client(s) "
                 f"across {results['groups']} group(s).")

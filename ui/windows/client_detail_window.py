@@ -24,7 +24,7 @@ try:
 except Exception:
     qta = None
 from automation import _AutofillBridge
-from ui.components.kit import Card, EmptyState, Key, LabelledAction, Pill, SettingRow, TextArea
+from ui.components.kit import MessageBox, Card, EmptyState, Key, LabelledAction, Pill, SettingRow, TextArea
 from ui.utils.masking import mask_password
 from ui.utils.tokens import TOKENS as T
 
@@ -201,7 +201,7 @@ class ClientDetailWindow(QWidget):
 
         self.client = self.db.get_client(client_id)
         if not self.client:
-            QMessageBox.warning(self, "Not found", "That client record no longer exists.")
+            MessageBox.warning(self, "Not found", "That client record no longer exists.")
             self.back_requested.emit()
             return False
 
@@ -485,7 +485,7 @@ class ClientDetailWindow(QWidget):
     def _launch_extension_autofill(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:
-            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
+            MessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         try:
@@ -520,7 +520,7 @@ class ClientDetailWindow(QWidget):
                 self._launch_manual_copy(service)
                 return
 
-            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
+            MessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         try:
@@ -563,7 +563,7 @@ class ClientDetailWindow(QWidget):
         scc_mode = bool(is_itr and uid and scc_enabled and not is_scc_verified)
 
         if not uid or (not pwd and not scc_mode):
-            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
+            MessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         service["_client_name"] = self._get_identity_label(self.client)
@@ -574,7 +574,7 @@ class ClientDetailWindow(QWidget):
             from core.scc import manual as scc_manual
             scc_mode = scc_manual.open_card(uid, client_id, on_error)
             if not scc_mode and not pwd:
-                QMessageBox.warning(self, "Missing credentials", f"Could not open the SCC card for {service['name']}: "
+                MessageBox.warning(self, "Missing credentials", f"Could not open the SCC card for {service['name']}: "
                                     "no password combinations to show and no saved password.")
                 return
 
@@ -598,7 +598,7 @@ class ClientDetailWindow(QWidget):
     def _launch_manual_assist(self, service: dict):
         uid, pwd = self._get_credentials(service)
         if not uid or not pwd:
-            QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
+            MessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
 
         try:
@@ -619,7 +619,7 @@ class ClientDetailWindow(QWidget):
         self.window().showMinimized()
 
     def _on_autofill_failed(self, portal: str, msg: str):
-        QMessageBox.critical(
+        MessageBox.critical(
             self, "Autofill failed",
             f"Could not complete {portal} autofill:\n{msg}\n\n"
             f"Verify the CSS selectors in Admin Mode -> Manage Services."

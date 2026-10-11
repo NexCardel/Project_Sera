@@ -177,11 +177,11 @@ def test_delete_asks_first_and_drops_the_column_everywhere(env, monkeypatch):
     dlg._switch_page(usd._P_MCL)
     dlg._mcl_list.setCurrentCell(_row(dlg, col), 0)
     asked = []
-    monkeypatch.setattr(usd.QMessageBox, "question",
+    monkeypatch.setattr(usd.MessageBox, "question",
                         staticmethod(lambda *a, **k: asked.append(a[1]) or usd.QMessageBox.No))
     dlg._mcl_btn_del.click()
     assert asked == ["Delete Column"] and col in [c["id"] for c in db.get_mcl_columns()]
-    monkeypatch.setattr(usd.QMessageBox, "question", staticmethod(lambda *a, **k: usd.QMessageBox.Yes))
+    monkeypatch.setattr(usd.MessageBox, "question", staticmethod(lambda *a, **k: usd.QMessageBox.Yes))
     dlg._mcl_btn_del.click()
     assert col not in [c["id"] for c in db.get_mcl_columns()]
     assert col not in [dlg._mcl_list.item(r, 0).data(Qt.UserRole) for r in range(dlg._mcl_list.rowCount())]
