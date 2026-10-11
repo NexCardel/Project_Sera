@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 01:14)
+# UI overhaul — report (2026-10-11 07:56)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 12 |
+| Not started | 11 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 24 |
+| Done | 25 |
 | Blocked | 0 |
 
-Runs: 32   output tokens: 1135634   API-equivalent cost: $70.12
+Runs: 33   output tokens: 1150771   API-equivalent cost: $71.76
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -38,7 +38,7 @@ Runs: 32   output tokens: 1135634   API-equivalent cost: $70.12
 | S-4 | Done | opus | eaf3752 | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... | MCL DarkListTable with staged M/Q/A ticks on one column model; visibility pages with Switch, Find, count; 16 new tests; goldens x12; sm buttons avoided (theme m |
 | S-5 | Done | sonnet | e14dde1 | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs | Services page + MCL manager, column edit, service manager, service edit rebuilt on the kit; 13 new tests, goldens at 1366/1024/125% |
 | S-6 | Done | sonnet | dcdd34a | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... | All Clients on the kit: PageHeader, ChipBar over the hidden combo, white DataGrid, Columns menu; 22 lock tests + 3 new pass; goldens in Mockups/built/search |
-| S-7 | Not started | opus |  | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour |  |
+| S-7 | Done | opus | a3e2407 | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour | SelectionBar replaces action_row: none/one/many-row states, Open, menu path, live swatches, COMPACT icon-only; 13 new tests; goldens in Mockups/built/search |
 | S-8 | Not started | haiku |  | Screens: Client detail panel |  |
 | S-9 | Not started | sonnet |  | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) |  |
 | S-10 | Not started | sonnet |  | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... |  |
@@ -87,6 +87,8 @@ Runs: 32   output tokens: 1135634   API-equivalent cost: $70.12
 - **S-6** Where do the client and cell action buttons go on All Clients? → Interim action_row above the grid until S-7 adds the SelectionBar (The kit has no place for them yet; arrangement-only WP keeps every button and handler)
 - **S-6** Keep the ActivityCellDelegate breadcrumb and copy flash? → Dropped; activity detail stays in the ID cell tooltip and the UserRole+2 tag is kept (DataGrid has no hook for them; folding them into the kit is a kit change)
 - **S-6** Which flag does the Columns menu write, and may the last column be hidden? → Staff show_in_search, or admin_show_in_search in admin mode; at least one column must stay visible (Same flags as Settings Main screen; the old code forced no column, so an empty grid is prevented by a disabled switch with a reason)
+- **S-7** Which client actions stay enabled with several rows selected? → None: Open/Edit/Services/Archive/Delete disable with 'Works on one client; N rows are selected'; the cell group stays on (Every old handler acts on one client id; spec 4.1 forbids anything that silently acts on the first row)
+- **S-7** How do bar actions get a keyboard path (spec 4.1)? → The grid right-click / menu-key menu lists the visible, enabled client actions above the existing cell-formatting submenus; each just clicks the bar button (Cheapest path that reuses the same handlers; no new shortcuts to collide with)
 
 ## Checks waiting for you
 
@@ -107,3 +109,4 @@ Runs: 32   output tokens: 1135634   API-equivalent cost: $70.12
 - #15 (S-5) On a real 125% screen, open Settings > Services and the Service edit and Column edit dialogs: check nothing clips and the dropdown lists open fully. — Not run
 - #16 (S-6) On a real 125 % display, open All Clients: no horizontal scrollbar, chips and header not clipped, Columns menu fits. — Not run
 - #17 (S-6) SearchWindow.columns_changed is not connected in main.py: toggle a column in Columns on All Clients while Settings is open and confirm whether Settings needs to refresh. — Not run
+- #18 (S-7) All Clients selection bar on a real screen at 125 %: select one row, several rows, then cells; bar never jumps, Fill/Text swatches match the cell, Delete asks and Cancel keeps the client. Also delete the two stray test-temp folders 'UsersNexAppDataLocalTemp...scratchpadpt1' and '...pt2' in the APP-ui root (left by an earlier run; not committed) — Not run

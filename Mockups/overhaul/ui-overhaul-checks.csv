@@ -17,3 +17,7 @@ Check,WP,Text,Result,Date,Notes
 16,S-6,"On a real 125 % display, open All Clients: no horizontal scrollbar, chips and header not clipped, Columns menu fits.",Not run,2026-10-11 01:14,
 17,S-6,SearchWindow.columns_changed is not connected in main.py: toggle a column in Columns on All Clients while Settings is open and confirm whether Settings needs to refresh.,Not run,2026-10-11 01:14,
 18,S-7,"All Clients selection bar on a real screen at 125 %: select one row, several rows, then cells; bar never jumps, Fill/Text swatches match the cell, Delete asks and Cancel keeps the client. Also delete the two stray test-temp folders 'UsersNexAppDataLocalTemp...scratchpadpt1' and '...pt2' in the APP-ui root (left by an earlier run; not committed)",Not run,2026-10-11 07:55,
+19,S-8,"Real 125 % screen: open a client in the detail panel and check the Services, Identity and Logins rows fit; the Notes and collapsed Portal values sections are not in the goldens.",Not run,2026-10-11 08:09,
+20,S-8,"Real clipboard: copy a password, then confirm the clipboard is cleared after 30 s.",Not run,2026-10-11 08:09,
+21,S-8,"Two-PC checks: Alt+1..9 autofill and Alt+Ctrl+1..9 on a real browser, with the detail panel open.",Not run,2026-10-11 08:09,
+22,S-8,"Visual check of the collapsed Portal values card: header row, Show toggle and expanded rows on a real screen.",Not run,2026-10-11 08:09,
