@@ -66,12 +66,48 @@ def _light_history(hist: list) -> list:
     return [{k: v for k, v in h.items() if k != "raw_payload_json"} for h in hist]
 
 
-def _latest_payload_status(hist: list) -> Optional[str]:
+_MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
+
+
+def _period_date(label) -> Optional[datetime.date]:
+    """When a period label starts, to order periods: "September (FY 2026-27)", "AY 2026-27", "Jun - 2026".
+    None when the label is not a readable period."""
+    from core.sgt.sgt_toolbox import period_start
+    d = period_start(label)
+    if d:
+        return d
+    text = str(label or "")
+    m = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", text, re.I)
+    y = re.search(r"\b(20\d{2})\b", text)
+    return datetime.date(int(y.group(1)), _MONTHS[m.group(1).lower()], 1) if m and y else None
+
+
+def headline_entry(hist: list) -> Optional[dict]:
+    """The filing a container's list row stands for. The latest period captured (by the period itself, the
+    capture order when a label cannot be read); in it, the form that has been submitted - the last captured
+    of them if several - otherwise the form captured last. Its status is the period's status."""
+    from core.vsdc.vsdc_assembler import get_status_rank
+    entries = [h for h in hist if isinstance(h, dict)]
+    if not entries:
+        return None
+    dated = [(_period_date(h.get("period_label")), i, h) for i, h in enumerate(entries)]
+    known = [t for t in dated if t[0] is not None]
+    if known:
+        top = max(t[0] for t in known)
+        group = [t[2] for t in known if t[0] == top]
+    else:
+        group = [entries[-1]]
+    group.sort(key=lambda h: str(h.get("created_at") or ""))
+    submitted = [h for h in group if get_status_rank(h.get("status")) >= 2]
+    return (submitted or group)[-1]
+
+
+def _latest_payload_status(hist: list, entry: Optional[dict] = None) -> Optional[str]:
     """The status the latest filing's payload states itself (what the tracker's status
-    resolver looks for), or None."""
+    resolver looks for), or None. entry: that filing, when it is not the last of the history."""
     if not hist:
         return None
-    raw = hist[-1].get("raw_payload_json")
+    raw = (entry if entry is not None else hist[-1]).get("raw_payload_json")
     try:
         obj = json.loads(raw) if isinstance(raw, str) and raw else raw
     except Exception:
@@ -623,6 +659,18 @@ class SrpfMixin:
             latest_payload = filing_hist[-1].get("raw_payload_json", "") if filing_hist else ""
             payload_status = r[17] if len(r) > 17 else None
 
+            # The row shows the latest period captured, with the submitted form's status (see headline_entry).
+            head = headline_entry(filing_hist)
+            if head is not None and head is not filing_hist[-1]:
+                latest_portal = head.get("portal", "Portal")
+                latest_arn = head.get("arn", "N/A")
+                latest_status = head.get("status", "")
+                latest_payload = head.get("raw_payload_json", "")
+                payload_status = None if slim else _latest_payload_status(filing_hist, head)
+            if head is not None:
+                latest_period = head.get("period_label", "") or latest_period
+                latest_portal = head.get("portal", "Portal") or latest_portal
+
             containers.append({
                 "identity_key": identity_key,
                 "client_id": cid,
@@ -641,7 +689,7 @@ class SrpfMixin:
                 "user_id": user_id_val,
                 "portal": latest_portal,
                 "period_summary": period_summary,
-                "latest_period": latest_period,
+                "latest_period": latest_period,         # what the Filings & History column shows
                 "latest_arn": latest_arn,
                 "status": latest_status,
                 "latest_status": latest_status,

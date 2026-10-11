@@ -3130,8 +3130,9 @@ class TrackerDumpWindow(QWidget):
 
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
             hist_item = _get_item(self.COL_PERIOD, color="#58A6FF")
-            hist_item.setText(_filings_short(period_sum))
-            hist_item.setToolTip(period_sum)
+            latest = str(r.get("latest_period") or "").strip()
+            hist_item.setText(re.sub(r"\bAssessment Year\b", "AY", latest) if latest and latest != "N/A" else _filings_short(period_sum))
+            hist_item.setToolTip(f"Latest period captured: {latest}\n{period_sum}" if latest else period_sum)
 
             # Submission Status
             status_text, status_theme = _resolve_ltt_submission_status(r)
