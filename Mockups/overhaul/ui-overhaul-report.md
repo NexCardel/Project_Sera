@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 18:51)
+# UI overhaul — report (2026-10-12 01:27)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 4 |
+| Not started | 3 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 32 |
+| Done | 33 |
 | Blocked | 0 |
 
-Runs: 41   output tokens: 1934719   API-equivalent cost: $138.14
+Runs: 42   output tokens: 1939647   API-equivalent cost: $150.58
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -46,7 +46,7 @@ Runs: 41   output tokens: 1934719   API-equivalent cost: $138.14
 | S-12 | Done | opus | 7799b9d | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... | Sera Sync on the kit: strip, Segmented tabs, DarkListTable devices + EmptyState, LogView activity; feature map in 04-sera-sync.md; lock test adapted, sync UI te |
 | S-13 | Done | sonnet | cd3e59d | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... | Ten small dialogs on the kit; global QProgressBar theme rule; 16 new tests; known pre-existing failures only; human checks 28-29 |
 | S-14 | Done | haiku | fb1490a | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... | S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note |
-| S-R | Not started | opus |  | Review phase S (screens) |  |
+| S-R | Done | opus | fbcb288 | Review phase S (screens) | Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite |
 | F-1 | Not started | mechanical |  | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... |  |
 | F-2 | Not started | mechanical |  | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). |  |
 | F-R | Not started | opus |  | Review phase F (finish) |  |
@@ -119,6 +119,9 @@ Runs: 41   output tokens: 1934719   API-equivalent cost: $138.14
 - **S-14** Should the converted dialogs become a new widget class or use the kit directly? → Kit DialogFrame inside a plain QDialog; show_message and ask_confirm helpers in kit.py (No new widget classes are allowed; the kit already has the frame, banner and action pieces)
 - **S-14** Are STATUS_THEMES and the tracker portal-colour hex changed in S-14? → Left in place (They are data and helpers outside the S-14 dialogs; changing them touches the tracker window, which is S-10 territory)
 - **S-14** How does the LTT rules dialog handle its lists and height at 1024x700? → Body scrolls (scroll=True); lists themed through the KitList rule with minimum heights (Without scroll the editor is squeezed at 1024x700, and the lists rendered as default white boxes)
+- **S-R** Phase S review: about 130 QMessageBox prompts (Manage Clients, Settings, Sera Sync, Rejoin, Tracker, main.py...) are still plain Qt message boxes, themed dark by the app stylesheet but not on the kit's dialog frame. S-14 built the kit helper (show_message / ask_confirm) but converted only a few. Converting all of them touches many tests that patch QMessageBox. What should happen? → Convert them all now in S-R (large, risky near the deadline) (asked as Q3)
+- **S-R** Tracker Dump row autofill button: keep main's solid red or follow the mockup? → Emerald kit primary (no colour override); SMTI/MECP icon mint (index.html draws it as ibtn pri (emerald); rule 4 says red means danger only; main's red was a fixed colour, not a per-service one)
+- **S-R** Settings dialog still set a literal hex stylesheet (_apply_global_style) - keep or drop? → Dropped it and its palette constants (Rule 11; offscreen before/after renders of all 12 pages differ only in scrollbar width (app theme now) and the scale combo's 160 px min-width)
 
 ## Checks waiting for you
 

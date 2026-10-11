@@ -38,7 +38,6 @@ import security
 from ui.dialogs.csv_import_dialog import CSVImportDialog
 from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
-from ui.dialogs.settings_dialog import SettingsDialog
 from ui.components.kit import (
     MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,

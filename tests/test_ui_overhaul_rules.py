@@ -1,8 +1,8 @@
 """S-R: the overhaul's rules over every converted screen file, and the kit MessageBox that replaced QMessageBox.
 
 Rule 11: screens import, they do not style - no setStyleSheet( with a literal. Rule 3: tokens, not hex.
-Every prompt is a kit dialog. Out of the overhaul (their look stays): the SGT lab, the SDIS panels and
-the legacy settings dialog (not live; F-1 removes it).
+Every prompt is a kit dialog. Out of the overhaul (their look stays): the SGT lab and the SDIS panels
+(legacy settings_dialog.py removed in F-1).
 """
 import os
 import re
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from ui.components.kit import LabelledAction, MessageBox
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT_OF_OVERHAUL = {"sgt_lab_dialog.py", "sdis_dialog.py", "sdis_containers_dialog.py", "settings_dialog.py"}
+OUT_OF_OVERHAUL = {"sgt_lab_dialog.py", "sdis_dialog.py", "sdis_containers_dialog.py"}
 SCREEN_FILES = sorted(p for d in ("ui/windows", "ui/dialogs", "ui/shell") for p in (ROOT / d).glob("*.py")
                       if p.name not in OUT_OF_OVERHAUL and p.name != "__init__.py")
 HEX = re.compile(r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b|rgba?\(")
