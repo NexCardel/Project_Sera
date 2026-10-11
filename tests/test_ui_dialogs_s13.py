@@ -161,11 +161,9 @@ def test_force_update_dialog(made, monkeypatch):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
     from PySide6.QtCore import QEvent
-    from PySide6.QtWidgets import QMessageBox
     from ui.dialogs import update_dialog
     asked = []
-    monkeypatch.setattr(QMessageBox, "warning", staticmethod(
-        lambda *a, **k: asked.append(a[1]) or QMessageBox.No))
+    monkeypatch.setattr(update_dialog, "ask_confirm", lambda *a, **k: asked.append(a[1]) or False)
     info = {"current_version": "2.12.0", "latest_version": "2.13.0", "release_notes": "Notes",
             "download_url": ""}
     dlg = _keep(made, update_dialog.ForceUpdateDialog(info, auto_start=False))

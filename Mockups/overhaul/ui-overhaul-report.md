@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 17:18)
+# UI overhaul — report (2026-10-11 17:47)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 6 |
+| Not started | 5 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 30 |
+| Done | 31 |
 | Blocked | 0 |
 
-Runs: 39   output tokens: 1633568   API-equivalent cost: $115.98
+Runs: 40   output tokens: 1706951   API-equivalent cost: $122.74
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -44,7 +44,7 @@ Runs: 39   output tokens: 1633568   API-equivalent cost: $115.98
 | S-10 | Done | sonnet | b574da2 | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... | Tracker Dump on the kit: tiles, chips, segmented switch, dark DataGrid with pills and delegate row actions; WIDE columns unchanged; lock tests adapted, 11 new k |
 | S-11 | Done | sonnet | c067ce0 | Screens: Audit log (IMPLEMENTATION 4.5) | Audit log on the kit: chips drive hidden state widgets, DarkListTable workstations, pill actions, Entry card; 3 goldens; lock tests pass |
 | S-12 | Done | opus | 7799b9d | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... | Sera Sync on the kit: strip, Segmented tabs, DarkListTable devices + EmptyState, LogView activity; feature map in 04-sera-sync.md; lock test adapted, sync UI te |
-| S-13 | Not started | sonnet |  | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... |  |
+| S-13 | Done | sonnet | cd3e59d | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... | Ten small dialogs on the kit; global QProgressBar theme rule; 16 new tests; known pre-existing failures only; human checks 28-29 |
 | S-14 | Not started | haiku |  | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... |  |
 | S-R | Not started | opus |  | Review phase S (screens) |  |
 | F-1 | Not started | mechanical |  | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... |  |
@@ -106,6 +106,13 @@ Runs: 39   output tokens: 1633568   API-equivalent cost: $115.98
 - **S-12** Sera Sync: the kit has no Tabs or device-card widget, and the lock tests drive the device list as a table (rows, right-click by position). A = build now: kit Segmented switches the three tabs, devices stay one row each in the kit dark list table (all 7 facts as columns, status as a pill, every fact in the row tooltip, empty sentence + Add PC by IP under it). B = stop S-12 and first add kit Tabs + DeviceCard in a small kit package. → A (asked as Q1)
 - **S-12** Sync selected/all, Inv-Frames switch, device tick and ahead/behind from spec 4.6 → Not built (None exists in today's dialog: Sync selected/all removed in P4-1 (test keeps them absent), no Inv-Frames control or setting, peers carry no revision score; adding them is new behaviour or a protocol change)
 - **S-12** Which tab opens first, and how do hidden tabs still refresh → Office mode opens on Sync status; refresh gate is visible-or-visible-to-its-page (_panel_on) (Old dialog showed office panels first and test_sync_status_panel_ui expects Sync status visible after show; members cache feeds the pending counts so it must refresh while its tab is hidden)
+- **S-13** The kit has no Progress bar (Force update and Loading need an emerald one; mockup: 6 px, track #262626, fill emerald). Options: A = add one QProgressBar rule to the global theme (ui/utils/theme.py, tokens only; no new class, no kit change; dialogs use plain QProgressBar), B = add an additive kit.Progress widget with gallery state + test, C = block the whole WP as needs kit change. → A (asked as Q2)
+- **S-13** Progress bar for Force update, First-run join and Loading → One global QProgressBar rule in ui/utils/theme.py from tokens; plain QProgressBar in the dialogs (Q2 answered A by the user; no new kit widget)
+- **S-13** Shadow start, Add client and Admin PIN dialogs → Left unchanged (Shadow start has no layout of its own; Add client and Admin PIN were already on DialogFrame/FieldLabel/Input from an earlier WP)
+- **S-13** Force update: Exit application button → Now asks the same confirmation as closing the window before exiting (Mockup says Exit asks first; the old button exited without asking. Esc is still swallowed, closeRequested stays unconnected)
+- **S-13** Error and status lines (master password, recovery, first run, rejoin, force update) → Kit Banner with set_text/set_tone; same attribute names, .text() still works (red banner for errors, info/green/amber for status; no literal colours)
+- **S-13** Rejoin office: legacy password field when the saved key is used → Field is disabled with a tooltip instead of hidden; still editable when the saved key fails (Mockup shows it; same legacy_pw attribute and verify behaviour)
+- **S-13** Fixed dialog sizes (first run 620x520, join request 480x280, force update 520x420) → Minimum sizes with a sensible resize; first-run button 'Pair & Join' renamed 'Pair and join' (Content must fit at 0.80-1.25 scale; '&' in a button label turned the space into a mnemonic)
 
 ## Checks waiting for you
 
@@ -136,3 +143,5 @@ Runs: 39   output tokens: 1633568   API-equivalent cost: $115.98
 - #25 (S-10) Open Tracker Dump on a real 125 percent screen with a real client list (1024 px wide): Client column is narrow there because fit_columns is unchanged; confirm names are still readable enough — Not run
 - #26 (S-11) Open the Audit log at 125 % display scale on a real PC: the Action/Staff/Date chips and the icon-only Export must not clip; Service and Detail columns hide below ~1080 px. — Not run
 - #27 (S-12) Sera Sync on a real 1366x768 laptop at 125 %: Devices tab scrolls a little to reach Add/Remove PC by IP when the Public-network banner shows; check two real PCs list, right-click a manual peer, Add workstation code window and the activity stream follow-to-bottom — Not run
+- #28 (S-13) On a real 125 % screen: open First run (all 3 pages), Force update and the startup loading dialog; confirm nothing clips and the progress bar is visible — Not run
+- #29 (S-13) On a throwaway office: change the master password and unlock via Office recovery; confirm the password fields stay masked and the eye toggle works — Not run

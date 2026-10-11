@@ -11,23 +11,24 @@ import re
 import os
 import shutil
 import time
-from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
-from PySide6.QtGui import QColor, QCursor, QFont,QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, Signal, QTimer, QThread, QSettings
+from PySide6.QtGui import QColor, QCursor, QFont,QFontMetrics, QGuiApplication, QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QComboBox, QMessageBox, QDialog, QTextEdit, QTextBrowser, QFrame,
-    QFileDialog, QScrollArea, QFormLayout, QCheckBox, QTabWidget,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox, QMessageBox, QDialog, QFrame,
+    QFileDialog, QScrollArea, QStackedWidget,
     QApplication, QSizePolicy, QMenu, QGridLayout, QStyledItemDelegate
 )
 
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 from ui.utils.responsive import WidthMode, mode_for
 from ui.components.kit import (
-    CellAction, Chip, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
-    PageHeader, Segmented, Select, Tile, ROLE_ACTIONS, ROLE_PILL, ROLE_SUB,
+    Banner, CellAction, Card, Chip, ChipBar, Checkbox, DarkListTable, DataGrid, DialogFrame, GridFooter,
+    GridFrame, Pill, TextArea,
+    IconButton, Input, LabelledAction, PageHeader, Segmented, Select, SettingRow, Tile, ROLE_ACTIONS,
+    ROLE_PILL, ROLE_SUB, show_message,
 )
 from ui.utils.tokens import KIT as K, TOKENS as T
 import automation
@@ -219,12 +220,6 @@ def _get_status_theme(status_text: str) -> dict:
     })
 
 
-def _status_pill_style(status_text: str) -> str:
-    theme = _get_status_theme(status_text)
-    return (f"QLabel {{ color: {theme['fg']}; background-color: {theme['bg']}; "
-            f"border: 1px solid {theme['border']}; border-radius: 11px; padding: 3px 11px; }}")
-
-
 _STATUS_PILL_TONES = {
     "Submitted & E-verified": "emerald",
     "Submitted": "green",
@@ -244,31 +239,6 @@ def _status_pill(status_text: str) -> tuple[str, str]:
 def _portal_ink(label: str) -> str:
     """Token colour for the short portal label that _portal_short returns."""
     return {"Income Tax": K["blue_tx"], "GST": T["mint"], "TDS": T["purple"]}.get(label, T["muted"])
-
-
-def _create_colored_cell_widget(status_text: str, bg_color: str = "", fg_color: str = "", tooltip: str = "") -> QWidget:
-    """A transparent cell holding a rounded status pill (dot + text)."""
-    container = QWidget()
-    container.setStyleSheet("QWidget { background: transparent; }")
-
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(8, 0, 8, 0)
-    layout.setSpacing(0)
-    layout.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-
-    lbl = QLabel(status_text)
-    lbl.setObjectName("status_label")
-    lbl.setProperty("full_text", status_text)      # the text before the column elides it
-    lbl.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
-    lbl.setStyleSheet(_status_pill_style(status_text))
-    lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
-    layout.addWidget(lbl)
-
-    if tooltip:
-        container.setToolTip(tooltip)
-        lbl.setToolTip(tooltip)
-
-    return container
 
 
 def _capture_method_color(method: str) -> str:
@@ -568,94 +538,26 @@ class AddClientFromCaptureDialog(QDialog):
         self._setup_ui()
 
     def _setup_ui(self):
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1A1A1A;
-                color: #F8F5F2;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QLabel {
-                color: #E6EDF3;
-                font-size: 12px;
-            }
-            QLineEdit {
-                background-color: #0D1117;
-                border: 1px solid #30363D;
-                border-radius: 5px;
-                color: #F0F6FC;
-                padding: 6px 10px;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #2E9B5F;
-            }
-            QPushButton.PrimaryBtn {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-                font-weight: 700;
-                border: none;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton.PrimaryBtn:hover {
-                background-color: #247C4C;
-            }
-            QPushButton.CancelBtn {
-                background-color: #262626;
-                color: #A0A0A0;
-                border: 1px solid #444444;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton.CancelBtn:hover {
-                background-color: #333333;
-                color: #FFFFFF;
-            }
-            QCheckBox {
-                color: #F0F6FC;
-                font-size: 12px;
-            }
-        """)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame(
+            "Create client from capture",
+            f"Portal: {self.item_data.get('portal', 'Government Portal')} | ARN: {self.item_data.get('arn_number', 'N/A')}",
+            self, icon="mdi.account-plus-outline", full=True, scroll=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
-
-        # Header Info Banner
-        header = QFrame()
-        header.setStyleSheet("background-color: #0A0A0A; border: 1px solid #2E9B5F; border-radius: 6px; padding: 10px;")
-        h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(8, 8, 8, 8)
-        h_layout.setSpacing(4)
-
-        title_lbl = QLabel("<b>⚡ Quick Onboard from Government Network Capture</b>")
-        title_lbl.setStyleSheet("color: #4CF9B7; font-size: 13.5px;")
-        desc_lbl = QLabel(f"Portal: <b>{self.item_data.get('portal', 'Government Portal')}</b> | ARN: <b>{self.item_data.get('arn_number', 'N/A')}</b>")
-        desc_lbl.setStyleSheet("color: #A0A0A0; font-size: 11.5px;")
-        h_layout.addWidget(title_lbl)
-        h_layout.addWidget(desc_lbl)
-        layout.addWidget(header)
-
-        # Form Scroll Area for MCL Fields
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: 1px solid #30363D; border-radius: 6px; background-color: #121212; }")
-        
-        scroll_content = QWidget()
-        scroll_content.setStyleSheet("background-color: #121212;")
-        form = QFormLayout(scroll_content)
-        form.setContentsMargins(12, 12, 12, 12)
-        form.setSpacing(10)
+        frame.add_widget(Banner("Quick onboard from a government network capture. "
+                                "Check the prefilled fields, then save to link the captures.", "g"))
 
         # Extract profile from SRPF container or current capture payload
         extracted_info = self._extract_info_from_payload()
         mcl_cols = self.db.get_mcl_columns()
         mapped_values = map_profile_to_mcl_columns(extracted_info, mcl_cols)
 
+        fields = Card("Client fields")
         self.field_inputs = {}
-        
+
         for col in mcl_cols:
             col_id = col["id"]
             lbl_text = col["label"]
@@ -669,69 +571,40 @@ class AddClientFromCaptureDialog(QDialog):
             else:
                 prefill_val = mapped_values.get(col_id, "")
 
-            # Form Label with mandatory badge if Internal PK
-            field_label_widget = QLabel()
-            if is_pk:
-                field_label_widget.setText(f"<span style='color:#FF6B6B;'>*</span> <b>{lbl_text}</b> <span style='color:#4CF9B7; font-size:10px;'>[Internal PK]</span>")
-            else:
-                field_label_widget.setText(lbl_text)
-            field_label_widget.setTextFormat(Qt.RichText)
-
-            inp = QLineEdit(prefill_val)
+            inp = Input()
+            inp.setText(prefill_val)
             self.field_inputs[col_id] = (inp, is_pk, lbl_text)
-            form.addRow(field_label_widget, inp)
-
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll, stretch=1)
+            fields.add_row(SettingRow(lbl_text, "Internal primary key, required" if is_pk else "", inp, width="wide"))
+        frame.add_widget(fields)
 
         # Service Attachments
-        svc_frame = QFrame()
-        svc_frame.setStyleSheet("background-color: #121212; border: 1px solid #30363D; border-radius: 6px; padding: 8px;")
-        svc_layout = QVBoxLayout(svc_frame)
-        svc_layout.setContentsMargins(6, 6, 6, 6)
-        svc_layout.setSpacing(6)
-        svc_lbl = QLabel("<b>Auto-Attach Compliance Services:</b>")
-        svc_lbl.setStyleSheet("color: #E6EDF3; font-size: 11.5px;")
-        svc_layout.addWidget(svc_lbl)
-
-        svc_checks_box = QHBoxLayout()
+        svc_card = Card("Auto-attach compliance services")
+        svc_row = QWidget()
+        svc_checks_box = QHBoxLayout(svc_row)
+        svc_checks_box.setContentsMargins(0, 0, 0, 0)
         self.svc_checkboxes = {}
         all_services = self.db.get_services()
         portal_name = (self.item_data.get("portal", "") or "").lower()
 
         for s in all_services:
-            cb = QCheckBox(s["name"])
             # Auto-check matching portal service
-            if _service_matches_portal(s["name"], portal_name):
-                cb.setChecked(True)
+            cb = Checkbox(s["name"], checked=_service_matches_portal(s["name"], portal_name))
             self.svc_checkboxes[s["id"]] = cb
             svc_checks_box.addWidget(cb)
         svc_checks_box.addStretch()
-        svc_layout.addLayout(svc_checks_box)
-        layout.addWidget(svc_frame)
+        svc_card.add_widget(svc_row)
+        frame.add_widget(svc_card)
 
-        # Button Box
-        btn_box = QHBoxLayout()
-        btn_box.addStretch()
-
-        btn_cancel = QPushButton("Cancel")
-        btn_cancel.setProperty("class", "CancelBtn")
+        btn_cancel = frame.add_action("Cancel", variant="secondary")
         btn_cancel.clicked.connect(self.reject)
-
-        btn_save = QPushButton("Save & Link Captures")
-        btn_save.setProperty("class", "PrimaryBtn")
-        btn_save.setIcon(_safe_qta_icon("mdi.check-circle", "#FFFFFF"))
+        btn_save = frame.add_action("Save & Link Captures", variant="primary", icon="mdi.check-circle")
         btn_save.clicked.connect(self._on_save)
-
-        btn_box.addWidget(btn_cancel)
-        btn_box.addWidget(btn_save)
-        layout.addLayout(btn_box)
 
     def _extract_info_from_payload(self) -> dict:
         from ui.utils.profile_parser import extract_profile_from_payload
         unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
 
-        # Priority 1: Extract profile from current payload 
+        # Priority 1: Extract profile from current payload
         raw_str = self.item_data.get("raw_payload_json") or "{}"
         parsed = extract_profile_from_payload(raw_str)
 
@@ -760,7 +633,8 @@ class AddClientFromCaptureDialog(QDialog):
             val = inp.text().strip()
             if is_pk:
                 if not val:
-                    QMessageBox.warning(self, "Mandatory Field Required", f"The Internal Primary Key '{label}' is mandatory and cannot be empty.")
+                    show_message(self, "Mandatory Field Required",
+                                 f"The Internal Primary Key '{label}' is mandatory and cannot be empty.", "warning")
                     inp.setFocus()
                     return
                 pan_val = val
@@ -771,16 +645,15 @@ class AddClientFromCaptureDialog(QDialog):
         try:
             new_cid = self.db.add_client(values=values, notes=f"Auto-created from Tracker Dump capture (ARN: {self.item_data.get('arn_number', 'N/A')})", service_ids=service_ids, actor="Staff")
             self.created_client_id = new_cid
-            
+
             # Retroactively link all unassigned tracker dumps matching this identity
             linked_count = self.db.link_unassigned_tracker_dumps(new_cid, pan_val or self.item_data.get("unassigned_identity") or "")
-            QMessageBox.information(
-                self, "Client Created Successfully",
-                f"Client #{new_cid} was created and successfully linked to {max(linked_count, 1)} capture(s) in Tracker Dump."
-            )
+            show_message(self, "Client Created Successfully",
+                         f"Client #{new_cid} was created and successfully linked to {max(linked_count, 1)} capture(s) in Tracker Dump.",
+                         "info")
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Client Creation Failed", f"Could not create client: {e}")
+            show_message(self, "Client Creation Failed", f"Could not create client: {e}", "critical")
 
 
 class PayloadInspectorDialog(QDialog):
@@ -790,61 +663,13 @@ class PayloadInspectorDialog(QDialog):
         self.db = db
         self.item_data = item_data
         self.is_container = is_container or bool(item_data.get("filing_history"))
+        self.current_screenshot_path = ""
         title_tag = item_data.get('identity_key') or item_data.get('arn_number') or 'Capture'
         self.setWindowTitle(f"SRPF Container Inspector — {title_tag}")
         self.resize(1000, 700)
         self.setMinimumSize(760, 560)
-        # Every rule is scoped by objectName so frame styles never cascade onto the labels
-        # inside them (that cascade is what drew a box around every single label before).
-        self.setStyleSheet("""
-            QDialog { background-color: #1B1B1B; color: #F0F6FC; font-family: 'Segoe UI', sans-serif; }
-            QLabel { color: #F0F6FC; font-size: 12px; background: transparent; border: none; }
-            QFrame#InspCard { background-color: #141414; border: 1px solid #262626; border-radius: 8px; }
-            QLabel#InspName { font-size: 18px; font-weight: 700; }
-            QLabel#InspMeta { color: #8B949E; font-size: 12px; }
-            QLabel#CardTitle { color: #8E8D88; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
-            QLabel#FieldKey { color: #8E8D88; font-size: 11px; }
-            QLabel#FieldVal { color: #F0F6FC; font-size: 13px; font-weight: 600; }
-            QLabel#UnregBadge {
-                color: #FFA657; background-color: #2E1D0E; border: 1px solid #6B4214;
-                border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600;
-            }
-            QLabel#EmptyNote { color: #6F6E6A; font-size: 12px; }
-            QTabWidget::pane { border: none; border-top: 1px solid #262626; background: transparent; }
-            QTabBar { background: transparent; qproperty-drawBase: 0; }
-            QTabBar::tab {
-                background: transparent; color: #8B949E; padding: 8px 14px; border: none;
-                border-bottom: 2px solid transparent; font-weight: 600; font-size: 12px;
-            }
-            QTabBar::tab:hover { color: #F0F6FC; }
-            QTabBar::tab:selected { color: #F0F6FC; border-bottom: 2px solid #2E9B5F; }
-            QTextEdit, QTextBrowser {
-                background-color: #111111; color: #D1D5DA; font-size: 12px;
-                border: 1px solid #262626; border-radius: 8px; padding: 10px;
-            }
-            QTextEdit#JsonView { font-family: 'Consolas', 'Courier New', monospace; color: #9BE9A8; }
-            QTableWidget {
-                background-color: #141414; alternate-background-color: #171717;
-                border: none; color: #F0F6FC; gridline-color: #262626;
-                selection-background-color: #1A382B; selection-color: #FFFFFF;
-            }
-            QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #222222; }
-            QHeaderView::section {
-                background-color: #141414; color: #8E8D88; font-weight: 700; font-size: 11px;
-                padding: 6px 8px; border: none; border-bottom: 1px solid #2E9B5F;
-            }
-            QPushButton {
-                background-color: #2E9B5F; color: #FFFFFF; font-weight: 600;
-                border: 1px solid #2E9B5F; border-radius: 6px; padding: 7px 16px;
-            }
-            QPushButton:hover { background-color: #34B76D; }
-            QPushButton.SecondaryBtn { background-color: #202020; color: #E6EDF3; border: 1px solid #3A3A3A; }
-            QPushButton.SecondaryBtn:hover { background-color: #2A2A2A; border-color: #555555; }
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(14)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         # Extract profile from payload
         raw_json = item_data.get("raw_payload_json") or "{}"
@@ -880,94 +705,67 @@ class PayloadInspectorDialog(QDialog):
         identity_key = pan_val or item_data.get('identity_key') or 'N/A'
 
         # ---- Header: name, badges, one line of facts, latest status ----
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        head_text = QVBoxLayout()
-        head_text.setSpacing(4)
-        name_row = QHBoxLayout()
-        name_row.setSpacing(8)
-        name_lbl = QLabel(_strip_pan_suffix(client_name, pan_val))
-        name_lbl.setObjectName("InspName")
-        name_lbl.setStyleSheet(f"color: {'#FFA657' if is_unreg else '#F0F6FC'};")
-        name_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        name_row.addWidget(name_lbl)
-        if is_unreg:
-            b = QLabel("No matching client")
-            b.setObjectName("UnregBadge")
-            name_row.addWidget(b)
-        name_row.addStretch()
-        head_text.addLayout(name_row)
-
         client_ref = str(item_data.get("client_id_token") or item_data.get("client_id") or "")
         captures = item_data.get('total_captures', 1)
-        meta_parts = [p for p in (
+        meta_text = "  ·  ".join(p for p in (
             f"Client #{client_ref}" if client_ref and not is_unreg else "",
             f"PAN {identity_key}" if identity_key != "N/A" else "",
             str(item_data.get('portal') or "Government Portal"),
             f"{captures} capture{'s' if captures != 1 else ''}",
             f"Updated {_format_to_local_time(item_data.get('last_updated') or item_data.get('created_at'))}",
-        ) if p]
-        meta_lbl = QLabel("  ·  ".join(meta_parts))
-        meta_lbl.setObjectName("InspMeta")
-        meta_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        meta_lbl.setToolTip(f"Identity key: {item_data.get('identity_key') or identity_key}")
-        head_text.addWidget(meta_lbl)
-        header.addLayout(head_text, stretch=1)
+        ) if p)
 
+        frame = DialogFrame(_strip_pan_suffix(client_name, pan_val), meta_text, self,
+                            icon="mdi.card-account-details-outline", full=True)
+        frame.purpose_label.setToolTip(f"Identity key: {item_data.get('identity_key') or identity_key}")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
+
+        if is_unreg:
+            frame.add_header_widget(Pill("No matching client", "amber"))
         head_status, _ = _resolve_ltt_submission_status(item_data)
-        status_pill = QLabel(head_status)
-        status_pill.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
-        status_pill.setStyleSheet(_status_pill_style(head_status))
+        _, head_tone = _status_pill(head_status)
+        status_pill = Pill(head_status, "emerald" if head_tone == "green" else head_tone)
         status_pill.setToolTip("Latest submission status")
-        header.addWidget(status_pill, alignment=Qt.AlignTop)
-        layout.addLayout(header)
+        frame.add_header_widget(status_pill)
 
-        # Tab Widget
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
+        tabs = Segmented(["Overview", "Raw JSON", "Notes && Media"])
+        pages = QStackedWidget()
+        tabs.currentChanged.connect(pages.setCurrentIndex)
+        frame.add_widget(tabs)
+        frame.add_widget(pages, 1)
 
         # Tab 1: Overview -- details cards over the filing history
         tab_summary = QWidget()
         sum_layout = QVBoxLayout(tab_summary)
-        sum_layout.setContentsMargins(0, 14, 0, 0)
-        sum_layout.setSpacing(12)
-
-        def _card(title: str):
-            frame = QFrame()
-            frame.setObjectName("InspCard")
-            v = QVBoxLayout(frame)
-            v.setContentsMargins(14, 12, 14, 14)
-            v.setSpacing(10)
-            t = QLabel(title.upper())
-            t.setObjectName("CardTitle")
-            v.addWidget(t)
-            return frame, v
+        sum_layout.setContentsMargins(0, 0, 0, 0)
+        sum_layout.setSpacing(T["s_3"])
 
         def _field_grid(pairs, cols):
-            grid = QGridLayout()
-            grid.setHorizontalSpacing(24)
-            grid.setVerticalSpacing(10)
+            host = QWidget()
+            grid = QGridLayout(host)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(T["s_4"])
+            grid.setVerticalSpacing(T["s_2"])
             shown = [(k, v) for k, v in pairs if v and str(v).strip()]
             for i, (key, val) in enumerate(shown):
-                cell = QVBoxLayout()
-                cell.setSpacing(1)
+                row, col = (i // cols) * 2, i % cols
                 k = QLabel(key)
-                k.setObjectName("FieldKey")
+                k.setObjectName("KitFieldKey")
                 v = QLabel(str(val))
-                v.setObjectName("FieldVal")
+                v.setObjectName("KitFieldVal")
                 v.setWordWrap(True)
                 v.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                cell.addWidget(k)
-                cell.addWidget(v)
-                grid.addLayout(cell, i // cols, i % cols, Qt.AlignTop)
+                grid.addWidget(k, row, col, Qt.AlignTop)
+                grid.addWidget(v, row + 1, col, Qt.AlignTop)
             for c in range(cols):
                 grid.setColumnStretch(c, 1)
-            return grid, len(shown)
+            return host, len(shown)
 
         cards_row = QHBoxLayout()
-        cards_row.setSpacing(12)
+        cards_row.setSpacing(T["s_3"])
 
-        client_card, client_v = _card("Client details")
+        client_card = Card("Client details")
         grid, n_client = _field_grid([
             ("Firm / trade name", comp_name),
             ("Proprietor name", prop_name),
@@ -979,35 +777,32 @@ class PayloadInspectorDialog(QDialog):
             ("DOB / incorporation", item_data.get("dob") or profile_data.get("dob")),
             ("Portal user ID", item_data.get("user_id") or profile_data.get("user_id")),
         ], cols=2)
-        client_v.addLayout(grid)
+        client_card.add_widget(grid)
         if not n_client:
             empty = QLabel("No client details in this capture.")
-            empty.setObjectName("EmptyNote")
-            client_v.addWidget(empty)
-        client_v.addStretch()
+            empty.setObjectName("KitEmpty")
+            client_card.add_widget(empty)
         cards_row.addWidget(client_card, stretch=3)
 
         if sgt_i_info:
-            sgti_card, sgti_v = _card("SGT-I — advisory, read-only")
+            sgti_card = Card("SGT-I — advisory, read-only")
             sgti_card.setToolTip("SGT Intelligence's own facts about this row (route, explanation, second "
                                   "opinion). They sit beside the Core's captured values and never replace "
                                   "them (blueprint 14.2 rule 4).")
             sgti_text = QLabel(json.dumps(sgt_i_info, indent=2, sort_keys=True, ensure_ascii=False))
-            sgti_text.setObjectName("FieldVal")
-            sgti_text.setStyleSheet("font-family: 'Consolas', 'Courier New', monospace; font-size: 11px; font-weight: 400;")
+            sgti_text.setFont(QFont("Consolas", 10))
             sgti_text.setWordWrap(True)
             sgti_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            sgti_v.addWidget(sgti_text)
-            sgti_v.addStretch()
+            sgti_card.add_widget(sgti_text)
             cards_row.addWidget(sgti_card, stretch=2)
 
         sum_layout.addLayout(cards_row)
 
         # SDIS Others and Profile builder values, per portal (blueprint S.4), sdis_mcl labels
         for portal, pairs in self._sdis_values(item_data, raw_json):
-            sdis_card, sdis_v = _card(f"{portal} — portal values (SDIS)")
+            sdis_card = Card(f"{portal} — portal values (SDIS)")
             grid, _ = _field_grid(pairs, cols=3)
-            sdis_v.addLayout(grid)
+            sdis_card.add_widget(grid)
             sum_layout.addWidget(sdis_card)
 
         # Filing History Table
@@ -1023,79 +818,70 @@ class PayloadInspectorDialog(QDialog):
                 "created_at": item_data.get("created_at")
             }]
 
-        hist_card, hist_v = _card(f"Captured filings & obligations ({len(filing_history)})")
-        hist_table = QTableWidget()
-        hist_table.setColumnCount(6)
+        hist_card = Card(f"Captured filings & obligations ({len(filing_history)})")
+        hist_table = DarkListTable(0, 6)
         hist_table.setHorizontalHeaderLabels(["Period / AY", "ARN / Ack number", "Submission status", "Portal", "Captured by", "Captured at"])
-        hist_table.verticalHeader().setVisible(False)
-        hist_table.verticalHeader().setDefaultSectionSize(40)
-        hist_table.setShowGrid(False)
-        hist_table.setAlternatingRowColors(True)
-        hist_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        hist_table.setSelectionBehavior(QTableWidget.SelectRows)
-        hh = hist_table.horizontalHeader()
-        hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        for c in range(6):
-            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.Fixed)       # holds a pill widget: contents don't size it
-        hist_table.setColumnWidth(2, 270)
-        hh.setSectionResizeMode(3, QHeaderView.Stretch)
-        hist_table.setWordWrap(False)
+        hist_table.set_column(0, kind="strong", width=120)
+        hist_table.set_column(1, kind="mono", width=170)
+        hist_table.set_column(2, kind="text", width=170, stretch=0)
+        hist_table.set_column(3, kind="text")
+        hist_table.set_column(4, kind="text", width=150)
+        hist_table.set_column(5, kind="mono", width=140)
         hist_table.setRowCount(len(filing_history))
 
         for idx, fh in enumerate(reversed(filing_history)):
             p_item = QTableWidgetItem(fh.get("period_label") or "N/A")
-            p_item.setForeground(QColor("#E3B341"))
+            p_item.setForeground(QColor(T["warn"]))
             hist_table.setItem(idx, 0, p_item)
 
             arn_val = fh.get("arn") or "N/A"
             arn_item = QTableWidgetItem(arn_val)
-            arn_item.setFont(QFont("Consolas", 10))
-            arn_item.setForeground(QColor("#F0F6FC" if arn_val != "N/A" else "#6F6E6A"))
+            arn_item.setForeground(QColor(T["text"] if arn_val != "N/A" else T["faint"]))
             hist_table.setItem(idx, 1, arn_item)
 
             s_text, _ = _resolve_ltt_submission_status(fh)
-            hist_table.setItem(idx, 2, QTableWidgetItem(""))  # Empty text to prevent bleed
-            hist_table.setCellWidget(idx, 2, _create_colored_cell_widget(s_text, tooltip=f"Submission Status: {s_text}"))
+            status_item = QTableWidgetItem()
+            status_item.setData(ROLE_PILL, _status_pill(s_text))
+            status_item.setToolTip(f"Submission Status: {s_text}")
+            hist_table.setItem(idx, 2, status_item)
 
             portal_full = fh.get("portal") or "Income Tax"
-            short, color = _portal_short(portal_full)
+            short, _ = _portal_short(portal_full)
             port_item = QTableWidgetItem(short)
-            port_item.setForeground(QColor(color))
+            port_item.setForeground(QColor(_portal_ink(short)))
             port_item.setToolTip(portal_full)
             hist_table.setItem(idx, 3, port_item)
 
             method = _extract_device_name(fh)
             m_item = QTableWidgetItem(method)
-            m_item.setForeground(QColor("#FFA657"))
+            m_item.setForeground(QColor(T["warn"]))
             m_item.setToolTip(f"Device: {method}")
             hist_table.setItem(idx, 4, m_item)
 
             ts_raw = fh.get("created_at") or ""
             ts_item = QTableWidgetItem(_short_local_time(ts_raw))
-            ts_item.setForeground(QColor("#8B949E"))
+            ts_item.setForeground(QColor(T["muted"]))
             ts_item.setToolTip(_format_to_local_time(ts_raw))
             hist_table.setItem(idx, 5, ts_item)
 
-        hist_table.setMinimumHeight(40 + 40 * min(max(len(filing_history), 1), 3))
-        hist_v.addWidget(hist_table, stretch=1)
+        hist_card.add_widget(hist_table, 1)
         sum_layout.addWidget(hist_card, stretch=1)
 
         overview_scroll = QScrollArea()
+        overview_scroll.setObjectName("KitDlgScroll")
         overview_scroll.setWidgetResizable(True)
         overview_scroll.setFrameShape(QFrame.NoFrame)
-        overview_scroll.setStyleSheet("QScrollArea { background: transparent; } QScrollArea > QWidget > QWidget { background: transparent; }")
         overview_scroll.setWidget(tab_summary)
-        tabs.addTab(overview_scroll, "Overview")
+        pages.addWidget(overview_scroll)
 
         # Tab 2: Raw Technical JSON
         tab_json = QWidget()
         json_layout = QVBoxLayout(tab_json)
-        json_layout.setContentsMargins(0, 14, 0, 0)
+        json_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.txt_json = QTextEdit()
-        self.txt_json.setObjectName("JsonView")
+        self.txt_json = TextArea()
         self.txt_json.setReadOnly(True)
+        self.txt_json.setFont(QFont("Consolas", 10))
 
         raw_str = item_data.get('raw_payload_json')
         if not raw_str:
@@ -1106,107 +892,75 @@ class PayloadInspectorDialog(QDialog):
         except Exception:
             formatted = str(raw_str)
 
-        self.txt_json.setText(formatted)
-        json_layout.addWidget(self.txt_json)
-        tabs.addTab(tab_json, "Raw JSON")
+        self.txt_json.setPlainText(formatted)
+        json_layout.addWidget(self.txt_json, 1)
+        pages.addWidget(tab_json)
 
         # Tab 3: Notes & Media
         tab_notes = QWidget()
         notes_layout = QVBoxLayout(tab_notes)
-        notes_layout.setContentsMargins(0, 14, 0, 0)
-        notes_layout.setSpacing(10)
+        notes_layout.setContentsMargins(0, 0, 0, 0)
+        notes_layout.setSpacing(T["s_3"])
 
-        self.txt_notes = QTextEdit()
-        self.txt_notes.setPlaceholderText("Write notes here...")
+        self.txt_notes = TextArea(placeholder="Write notes here...")
 
         media_toolbar = QHBoxLayout()
-        
-        self.btn_attach_img = QPushButton()
-        self.btn_attach_img.setToolTip("Attach Image")
-        self.btn_attach_img.setIcon(_safe_qta_icon("mdi.paperclip", "#FFFFFF"))
-        self.btn_attach_img.setFixedSize(36, 36)
-        self.btn_attach_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_paste_img = QPushButton()
-        self.btn_paste_img.setToolTip("Paste Image")
-        self.btn_paste_img.setIcon(_safe_qta_icon("mdi.content-paste", "#4CF9B7"))
-        self.btn_paste_img.setFixedSize(36, 36)
-        self.btn_paste_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_ocr_img = QPushButton()
-        self.btn_ocr_img.setToolTip("Scan Text (OCR)")
-        self.btn_ocr_img.setIcon(_safe_qta_icon("mdi.text-recognition", "#58A6FF"))
-        self.btn_ocr_img.setFixedSize(36, 36)
-        self.btn_ocr_img.setProperty("class", "SecondaryBtn")
-        
-        self.btn_clear_img = QPushButton()
-        self.btn_clear_img.setToolTip("Clear Image")
-        self.btn_clear_img.setIcon(_safe_qta_icon("mdi.close-circle-outline", "#FF6B6B"))
-        self.btn_clear_img.setStyleSheet("QPushButton { background-color: #201414; border: 1px solid #5A2626; border-radius: 6px; }"
-                                         "QPushButton:hover { border-color: #FF6B6B; }")
-        self.btn_clear_img.setFixedSize(36, 36)
-        
+        media_toolbar.setSpacing(T["s_2"])
+
+        self.btn_attach_img = IconButton("mdi.paperclip", "Attach Image", tab_notes, variant="bordered")
+        self.btn_paste_img = IconButton("mdi.content-paste", "Paste Image", tab_notes, variant="bordered")
+        self.btn_ocr_img = IconButton("mdi.text-recognition", "Scan Text (OCR)", tab_notes, variant="bordered")
+        self.btn_clear_img = IconButton("mdi.close-circle-outline", "Clear Image", tab_notes, variant="bordered")
+
         media_toolbar.addWidget(self.btn_attach_img)
         media_toolbar.addWidget(self.btn_paste_img)
         media_toolbar.addWidget(self.btn_ocr_img)
         media_toolbar.addWidget(self.btn_clear_img)
         media_toolbar.addStretch()
 
-        self.lbl_save_status = QLabel("")
-        self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
+        self.lbl_save_status = Pill("", "neutral")
+        self.lbl_save_status.setVisible(False)
         media_toolbar.addWidget(self.lbl_save_status)
-        
-        self.btn_expand_img = QPushButton()
-        self.btn_expand_img.setToolTip("View Full Image")
-        self.btn_expand_img.setIcon(_safe_qta_icon("mdi.fullscreen", "#FFFFFF"))
-        self.btn_expand_img.setProperty("class", "SecondaryBtn")
-        self.btn_expand_img.setFixedSize(36, 36)
+
+        self.btn_expand_img = IconButton("mdi.fullscreen", "View Full Image", tab_notes, variant="bordered")
         media_toolbar.addWidget(self.btn_expand_img)
 
         self.lbl_image_preview = QLabel("No image attached")
+        self.lbl_image_preview.setObjectName("KitPreview")
         self.lbl_image_preview.setAlignment(Qt.AlignCenter)
-        self.lbl_image_preview.setStyleSheet("border: 1px dashed #3A3A3A; border-radius: 8px; color: #6F6E6A;")
         self.lbl_image_preview.setMinimumHeight(200)
 
         notes_layout.addWidget(self.txt_notes, stretch=1)
         notes_layout.addLayout(media_toolbar)
         notes_layout.addWidget(self.lbl_image_preview)
 
-        tabs.addTab(tab_notes, "Notes && Media")  # && = a literal & in tab text
+        pages.addWidget(tab_notes)
 
         # Connect signals
-        self.current_screenshot_path = ""
         self.btn_attach_img.clicked.connect(self._attach_image)
         self.btn_paste_img.clicked.connect(self._paste_image)
         self.btn_ocr_img.clicked.connect(self._trigger_ocr_manually)
         self.btn_clear_img.clicked.connect(self._clear_image)
         self.btn_expand_img.clicked.connect(self._expand_image)
-        
+
         # Auto-save setup
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.setInterval(1000)
         self._save_timer.timeout.connect(self._save_notes)
         self.txt_notes.textChanged.connect(self._on_notes_changed)
-        
+
         # Load existing data
         QTimer.singleShot(0, self._load_notes_and_media)
 
-        layout.addWidget(tabs, stretch=1)
-
-        # Actions Box
-        btn_box = QHBoxLayout()
-
+        # Actions
         if is_unreg and self.db:
-            btn_create = QPushButton("Create client from this container")
-            btn_create.setIcon(_safe_qta_icon("mdi.account-plus", "#FFFFFF"))
+            btn_create = frame.add_action("Create client from this container", variant="primary",
+                                          icon="mdi.account-plus")
             btn_create.clicked.connect(self._create_client)
-            btn_box.addWidget(btn_create)
+        frame.add_footer_spacer()
 
-        btn_box.addStretch()
-
-        btn_copy = QPushButton("Copy Container Summary")
-        btn_copy.setProperty("class", "SecondaryBtn")
+        btn_copy = frame.add_action("Copy Container Summary", variant="secondary")
 
         def _on_tab_changed(idx):
             btn_copy.setVisible(idx != 2)
@@ -1246,13 +1000,13 @@ class PayloadInspectorDialog(QDialog):
 
         btn_copy.clicked.connect(_handle_bottom_copy)
 
-        btn_close = QPushButton("Close")
-        btn_close.setProperty("class", "SecondaryBtn")
+        btn_close = frame.add_action("Close", variant="secondary")
         btn_close.clicked.connect(self.accept)
 
-        btn_box.addWidget(btn_copy)
-        btn_box.addWidget(btn_close)
-        layout.addLayout(btn_box)
+    def _set_save_status(self, text, tone="neutral"):
+        self.lbl_save_status.set_text(text)
+        self.lbl_save_status.set_tone(tone)
+        self.lbl_save_status.setVisible(bool(text))
 
     def _load_notes_and_media(self):
         if not self.db: return
@@ -1271,7 +1025,7 @@ class PayloadInspectorDialog(QDialog):
                     media_data = self.db.get_tracker_dump_media(uid)
                     notes = media_data.get("notes", "")
                     spath = media_data.get("screenshot_path", "")
-            
+
             if notes:
                 self.txt_notes.setPlainText(notes)
             if spath and os.path.exists(spath):
@@ -1308,8 +1062,7 @@ class PayloadInspectorDialog(QDialog):
             self.lbl_image_preview.setText("Failed to load image")
 
     def _on_notes_changed(self):
-        self.lbl_save_status.setText("Saving...")
-        self.lbl_save_status.setStyleSheet("color: #F1E05A; font-size: 12px; font-weight: bold;")
+        self._set_save_status("Saving...", "amber")
         self._save_timer.start()
 
     def _clear_image(self):
@@ -1323,7 +1076,7 @@ class PayloadInspectorDialog(QDialog):
             try:
                 os.startfile(self.current_screenshot_path)
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not open image: {e}")
+                show_message(self, "Error", f"Could not open image: {e}", "warning")
 
     def _attach_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
@@ -1346,18 +1099,17 @@ class PayloadInspectorDialog(QDialog):
                 self._save_notes()
                 self._run_ocr(temp_path)
         else:
-            QMessageBox.information(self, "No Image", "No image found in clipboard.")
+            show_message(self, "No Image", "No image found in clipboard.")
 
     def _trigger_ocr_manually(self):
         if hasattr(self, 'current_screenshot_path') and self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
             self._run_ocr(self.current_screenshot_path)
         else:
-            QMessageBox.information(self, "No Image", "Please attach or paste an image first to scan text.")
+            show_message(self, "No Image", "Please attach or paste an image first to scan text.")
 
     def _run_ocr(self, img_path):
         from ui.utils.ocr_worker import OCRWorker
-        self.lbl_save_status.setText("Scanning OCR...")
-        self.lbl_save_status.setStyleSheet("color: #58A6FF; font-size: 12px; font-weight: bold;")
+        self._set_save_status("Scanning OCR...", "blue")
         self.ocr_thread = OCRWorker(img_path)
         self.ocr_thread.finished.connect(self._on_ocr_finished)
         self.ocr_thread.start()
@@ -1370,20 +1122,19 @@ class PayloadInspectorDialog(QDialog):
                 self.txt_notes.setPlainText(new_text)
                 self._save_notes()
         else:
-            self.lbl_save_status.setText("OCR Failed")
-            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
-            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
+            self._set_save_status("OCR Failed", "red")
+            QTimer.singleShot(2500, lambda: self._set_save_status(""))
 
     def _save_notes(self):
         if not self.db: return
         notes = self.txt_notes.toPlainText()
         final_path = ""
-        
+
         if self.current_screenshot_path and os.path.exists(self.current_screenshot_path):
             try:
                 media_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data", "media"))
                 os.makedirs(media_dir, exist_ok=True)
-                
+
                 # Copy file if it's not already in the media directory
                 if not self.current_screenshot_path.startswith(media_dir):
                     ext = os.path.splitext(self.current_screenshot_path)[1]
@@ -1395,10 +1146,9 @@ class PayloadInspectorDialog(QDialog):
                 else:
                     final_path = self.current_screenshot_path
             except Exception as e:
-                self.lbl_save_status.setText("Failed to save image")
-                self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+                self._set_save_status("Failed to save image", "red")
                 return
-        
+
         try:
             if self.is_container:
                 ikey = self.item_data.get('identity_key')
@@ -1408,13 +1158,11 @@ class PayloadInspectorDialog(QDialog):
                 uid = self.item_data.get('id')
                 if uid and hasattr(self.db, 'save_tracker_dump_media'):
                     self.db.save_tracker_dump_media(uid, notes, final_path)
-                    
-            self.lbl_save_status.setText("✓ Saved!")
-            self.lbl_save_status.setStyleSheet("color: #4CF9B7; font-size: 12px; font-weight: bold;")
-            QTimer.singleShot(2500, lambda: self.lbl_save_status.setText(""))
+
+            self._set_save_status("✓ Saved!", "emerald")
+            QTimer.singleShot(2500, lambda: self._set_save_status(""))
         except Exception as e:
-            self.lbl_save_status.setText("Failed to save to database")
-            self.lbl_save_status.setStyleSheet("color: #FF6B6B; font-size: 12px; font-weight: bold;")
+            self._set_save_status("Failed to save to database", "red")
 
     def _create_client(self):
         if not self.db:
@@ -1513,58 +1261,24 @@ class McLMappingDialog(QDialog):
 
     # ---------------- UI ----------------
     def _setup_ui(self):
-        self.setStyleSheet("""
-            QDialog { background-color: #141414; color: #F8F5F2; font-family: 'Segoe UI', sans-serif; }
-            QLabel { color: #C9D1D9; font-size: 12px; }
-            QLabel#title { color: #F8F5F2; font-size: 17px; font-weight: 700; }
-            QLabel#hint { color: #8B949E; font-size: 12px; }
-            QLabel#stat { color: #8B949E; font-size: 11.5px; }
-            QLineEdit { background-color: #0D1117; border: 1px solid #30363D; border-radius: 8px;
-                        color: #F0F6FC; padding: 8px 12px; font-size: 13px; }
-            QLineEdit:focus { border: 1px solid #2E9B5F; }
-            QComboBox { background-color: #0D1117; border: 1px solid #2E9B5F; border-radius: 6px;
-                        color: #F0F6FC; padding: 3px 8px; font-size: 12.5px; }
-            QComboBox QAbstractItemView { background-color: #0D1117; color: #F0F6FC;
-                                          selection-background-color: #2E9B5F; border: 1px solid #30363D; }
-            QCheckBox { color: #C9D1D9; font-size: 12px; spacing: 6px; }
-            QTableWidget { background-color: #0F0F0F; alternate-background-color: #141414;
-                           border: 1px solid #262626; border-radius: 8px; color: #E6EDF3;
-                           font-size: 12.5px; outline: 0; }
-            QTableWidget::item { padding: 0 10px; border: none; }
-            QTableWidget::item:hover { background-color: #1B2A22; }
-            QTableWidget::item:selected { background-color: #1B2A22; color: #E6EDF3; }
-            QHeaderView::section { background-color: #0F0F0F; color: #8B949E; border: none;
-                                   border-bottom: 1px solid #2E9B5F; padding: 8px 10px;
-                                   font-size: 11px; font-weight: 700; text-align: left; }
-            QScrollBar:vertical { background: #0F0F0F; width: 10px; margin: 0; }
-            QScrollBar::handle:vertical { background: #333333; border-radius: 5px; min-height: 30px; }
-            QScrollBar::handle:vertical:hover { background: #2E9B5F; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-            QPushButton { background-color: #1F1F1F; color: #E6EDF3; border: 1px solid #3A3A3A;
-                          border-radius: 8px; padding: 9px 18px; font-size: 13px; }
-            QPushButton:hover { background-color: #2A2A2A; border-color: #4A4A4A; }
-            QPushButton:disabled { color: #5A5A5A; border-color: #262626; }
-            QPushButton#primary { background-color: #2E9B5F; color: #FFFFFF; font-weight: 700; border: none; }
-            QPushButton#primary:hover { background-color: #36B06D; }
-            QPushButton#primary:disabled { background-color: #1F3A2B; color: #5E7F6C; }
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Map captured datapoints to MCL columns", "", self,
+                            icon="mdi.table-arrow-right", full=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
+        frame.add_close_button()
 
-        title = QLabel("Map captured datapoints to MCL columns")
-        title.setObjectName("title")
         hint = QLabel("Pick the MCL column a datapoint belongs to where auto-mapping misses it. "
                       "When a capture arrives for a registered client, mapped values fill that client's "
                       "blank columns; existing values are never overwritten.")
-        hint.setObjectName("hint")
+        hint.setObjectName("KitDlgMessage")
         hint.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(hint)
+        frame.add_widget(hint)
 
         bar = QHBoxLayout()
-        bar.setSpacing(14)
-        self.txt_filter = QLineEdit()
+        bar.setSpacing(T["s_4"])
+        self.txt_filter = Input()
         self.txt_filter.setPlaceholderText("Search datapoints or sample values…")
         self.txt_filter.setClearButtonEnabled(True)
         self._filter_timer = QTimer(self)
@@ -1572,64 +1286,42 @@ class McLMappingDialog(QDialog):
         self._filter_timer.setInterval(120)
         self._filter_timer.timeout.connect(self._apply_filter)
         self.txt_filter.textChanged.connect(lambda _: self._filter_timer.start())
-        self.chk_unmapped = QCheckBox("Only unmapped")
+        self.chk_unmapped = Checkbox("Only unmapped")
         self.chk_unmapped.toggled.connect(self._apply_filter)
         bar.addWidget(self.txt_filter, stretch=1)
         bar.addWidget(self.chk_unmapped)
-        layout.addLayout(bar)
+        frame.body_layout.addLayout(bar)
 
-        self.table = QTableWidget(0, 5)
+        self.table = DarkListTable(0, 5)
         self.table.setHorizontalHeaderLabels(["DATAPOINT", "SEEN", "SAMPLE VALUE", "AUTO-MAPPED TO", "MAP TO MCL COLUMN"])
-        hdr = self.table.horizontalHeader()
-        hdr.setStretchLastSection(False)
-        hdr.setHighlightSections(False)
-        hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        hdr.setSectionResizeMode(self._KEY, QHeaderView.Interactive)
-        hdr.setSectionResizeMode(self._SEEN, QHeaderView.Fixed)
-        hdr.setSectionResizeMode(self._SAMPLE, QHeaderView.Stretch)
-        hdr.setSectionResizeMode(self._AUTO, QHeaderView.Fixed)
-        hdr.setSectionResizeMode(self._MAP, QHeaderView.Fixed)
-        self.table.setColumnWidth(self._KEY, 210)
-        self.table.setColumnWidth(self._SEEN, 64)
-        self.table.setColumnWidth(self._AUTO, 170)
-        self.table.setColumnWidth(self._MAP, 210)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        self.table.setAlternatingRowColors(True)
-        self.table.setShowGrid(False)
-        self.table.setWordWrap(False)
-        self.table.setTextElideMode(Qt.ElideRight)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.set_column(self._KEY, kind="mono", width=210, stretch=0)
+        self.table.set_column(self._SEEN, kind="num", width=64, stretch=0)
+        self.table.set_column(self._SAMPLE, kind="text", stretch=1)
+        self.table.set_column(self._AUTO, kind="text", width=170, stretch=0)
+        self.table.set_column(self._MAP, kind="text", width=210, stretch=0)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setItemDelegateForColumn(
             self._MAP, _McLColumnDelegate([(c["label"], c["id"]) for c in self._mcl_cols], self.table))
         self.table.cellClicked.connect(self._on_cell_clicked)
-        layout.addWidget(self.table, stretch=1)
+        frame.add_widget(self.table, 1)
 
-        foot = QHBoxLayout()
-        self.lbl_status = QLabel("Reading recent captures…")
-        self.lbl_status.setObjectName("stat")
-        foot.addWidget(self.lbl_status, stretch=1)
-        layout.addLayout(foot)
+        footer = GridFooter(tone="list")
+        self.lbl_status = footer.count_label
+        self.lbl_status.setText("Reading recent captures…")
+        frame.add_widget(footer)
 
-        btns = QHBoxLayout()
-        btns.setSpacing(10)
-        self.btn_apply = QPushButton("Save && apply to registered clients")
-        self.btn_apply.setToolTip("Saves the mappings, then fills blank MCL columns of registered clients from their existing captures.")
-        self.btn_apply.clicked.connect(lambda: self._save(apply_now=True))
-        self.btn_save = QPushButton("Save")
-        self.btn_save.setObjectName("primary")
-        self.btn_save.clicked.connect(lambda: self._save(apply_now=False))
-        btn_close = QPushButton("Close")
+        self.btn_apply = frame.add_action(
+            "Save && apply to registered clients",
+            tooltip="Saves the mappings, then fills blank MCL columns of registered clients from their existing captures.")
+        frame.add_footer_spacer()
+        btn_close = frame.add_action("Close")
         btn_close.clicked.connect(self.reject)
+        self.btn_save = frame.add_action("Save", variant="primary")
+        self.btn_apply.clicked.connect(lambda: self._save(apply_now=True))
+        self.btn_save.clicked.connect(lambda: self._save(apply_now=False))
         self.btn_save.setEnabled(False)
         self.btn_apply.setEnabled(False)
-        btns.addWidget(self.btn_apply)
-        btns.addStretch(1)
-        btns.addWidget(btn_close)
-        btns.addWidget(self.btn_save)
-        layout.addLayout(btns)
 
     # ---------------- loading (off the UI thread) ----------------
     def _start_scan(self):
@@ -1656,25 +1348,25 @@ class McLMappingDialog(QDialog):
             if key not in known:
                 points.append({"key": key, "count": 0, "sample": "", "auto_column_id": None})
 
-        green, cyan, dim = QColor("#4CF9B7"), QColor("#58C4FF"), QColor("#6E7681")
+        green, dim = QColor(T["mint"]), QColor(T["faint"])
+        muted, text = QColor(T["muted"]), QColor(T["text"])
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(points))
         for r, p in enumerate(points):
             key_item = QTableWidgetItem(p["key"])
             key_item.setToolTip(p["key"])
-            key_item.setFont(QFont("Consolas", 10))
             seen_item = QTableWidgetItem(str(p["count"]))
             seen_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             seen_item.setForeground(dim)
             sample_item = QTableWidgetItem(p["sample"])
             sample_item.setToolTip(p["sample"])
-            sample_item.setForeground(QColor("#9DA7B3"))
+            sample_item.setForeground(muted)
             auto_item = QTableWidgetItem(self._col_label.get(p["auto_column_id"], ""))
             auto_item.setForeground(green)
             col_id = saved.get(p["key"])
             map_item = QTableWidgetItem(self._col_label.get(col_id, "—"))
             map_item.setData(Qt.UserRole, col_id)
-            map_item.setForeground(cyan if col_id is not None else dim)
+            map_item.setForeground(text if col_id is not None else dim)
             for item in (key_item, seen_item, sample_item, auto_item):
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             map_item.setFlags(map_item.flags() | Qt.ItemIsEditable)
@@ -1723,14 +1415,14 @@ class McLMappingDialog(QDialog):
                     changed = self.db.enrich_registered_clients_from_containers()
                 finally:
                     QApplication.restoreOverrideCursor()
-                QMessageBox.information(self, "Mappings saved",
-                                        f"{len(mappings)} mapping(s) saved. {changed} registered client record(s) updated.")
+                show_message(self, "Mappings saved",
+                             f"{len(mappings)} mapping(s) saved. {changed} registered client record(s) updated.")
             else:
-                QMessageBox.information(self, "Mappings saved",
-                                        f"{len(mappings)} mapping(s) saved. They apply to future captures of registered clients.")
+                show_message(self, "Mappings saved",
+                             f"{len(mappings)} mapping(s) saved. They apply to future captures of registered clients.")
             self.accept()
         except Exception as e:
-            QMessageBox.critical(self, "Save failed", f"Could not save the mappings: {e}")
+            show_message(self, "Save failed", f"Could not save the mappings: {e}", "critical")
 
 
 class TrackerDumpWindow(QWidget):

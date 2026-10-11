@@ -29,8 +29,10 @@ from ui.components.kit import (
     LogView,
     Segmented,
     StatusStrip,
+    ask_confirm,
+    show_message,
 )
-from ui.utils.tokens import TOKENS
+from ui.utils.tokens import KIT, TOKENS
 
 _ACTIVITY_MIN_WIDTH = 290
 _ACTIVITY_MAX_WIDTH = 380
@@ -1170,11 +1172,11 @@ class SeraSyncDialog(QDialog):
 
     def _on_add_workstation(self):
         if self._add_workstation_session is not None:
-            QMessageBox.information(self, "Add Workstation", "A pairing window is already open.")
+            show_message(self, "Add Workstation", "A pairing window is already open.")
             return
         own_device_id, own_cert_pem = self._own_identity()
         if own_device_id is None:
-            QMessageBox.warning(self, "Add Workstation", "This PC's device identity could not be read.")
+            show_message(self, "Add Workstation", "This PC's device identity could not be read.", "warning")
             return
 
         import sync_office
@@ -1187,7 +1189,7 @@ class SeraSyncDialog(QDialog):
         try:
             session.start()
         except Exception as exc:
-            QMessageBox.warning(self, "Add Workstation", f"Could not open the pairing window: {exc}")
+            show_message(self, "Add Workstation", f"Could not open the pairing window: {exc}", "warning")
             return
         self._add_workstation_session = session
         self.btn_add_workstation.set_disabled_reason("A code window is already open")
@@ -1199,16 +1201,26 @@ class SeraSyncDialog(QDialog):
             except Exception:
                 pass
 
-        dlg = QMessageBox(self)
+        dlg = QDialog(self)
+        dlg.setModal(True)
         dlg.setWindowTitle("Add Workstation")
-        dlg.setIcon(QMessageBox.Information)
-        dlg.setText(
+        dlg.setMinimumWidth(KIT["w_msg"])
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Add workstation", "Pairing code for a new PC", dlg, icon="mdi.lan-connect")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(dlg.reject)
+        body = QLabel(
             f"Code for the new PC: {session.window.display_code}\n\n"
             "Enter it in \"Join an Existing Office\" on the new PC. This window closes itself "
             "after the PC joins, 3 wrong tries, or 5 minutes."
         )
-        dlg.setStandardButtons(QMessageBox.Cancel)
-        dlg.setDefaultButton(QMessageBox.Cancel)
+        body.setObjectName("KitDlgMessage")
+        body.setWordWrap(True)
+        body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        frame.add_widget(body)
+        cancel_btn = frame.add_action("Cancel")
+        cancel_btn.clicked.connect(dlg.reject)
 
         def _poll():
             if not session.window.is_open:
@@ -1217,15 +1229,15 @@ class SeraSyncDialog(QDialog):
             stalls = session.window.stalled_connections
             blocked = [ip for ip, n in stalls.items() if n >= 3]
             if blocked:
-                dlg.setText(dlg.text().split("\n\n")[0] + "\n\n"
-                           f"Note: {', '.join(blocked)} keeps connecting without trying a code; "
-                           "it may be blocking pairing.")
+                body.setText(body.text().split("\n\n")[0] + "\n\n"
+                             f"Note: {', '.join(blocked)} keeps connecting without trying a code; "
+                             "it may be blocking pairing.")
         poll_timer = QTimer(dlg)
         poll_timer.timeout.connect(_poll)
         poll_timer.start(1000)
         result = dlg.exec()
         poll_timer.stop()
-        if result == QMessageBox.Cancel and session.window.is_open:
+        if result == QDialog.Rejected and session.window.is_open:
             session.close("cancelled")
 
     def _on_add_workstation_closed(self, reason: str):
@@ -1477,10 +1489,11 @@ class SeraSyncDialog(QDialog):
             ip_part = parts[0].strip()
             port_part = parts[1].strip()
             if not port_part.isdigit() or not (1 <= int(port_part) <= 65535):
-                QMessageBox.warning(
+                show_message(
                     self,
                     "Invalid Port",
                     f"Port '{port_part}' is invalid.\nPort must be a number between 1 and 65535.",
+                    "warning",
                 )
                 return
         else:
@@ -1489,10 +1502,11 @@ class SeraSyncDialog(QDialog):
         try:
             ipaddress.IPv4Address(ip_part)
         except ValueError:
-            QMessageBox.warning(
+            show_message(
                 self,
                 "Invalid IP Address",
                 f"'{ip_part}' is not a valid IPv4 address.\nPlease enter a valid IPv4 address.",
+                "warning",
             )
             return
 
@@ -1500,7 +1514,7 @@ class SeraSyncDialog(QDialog):
         existing = self._get_manual_peers_list()
 
         if addr in existing:
-            QMessageBox.information(
+            show_message(
                 self,
                 "Already Added",
                 f"Workstation address '{addr}' is already in the manual peer list.",
@@ -1522,7 +1536,7 @@ class SeraSyncDialog(QDialog):
             if hasattr(self.sync_service, "log_activity"):
                 self.sync_service.log_activity("NETWORK", f"Added manual PC: {addr}", "Probing via unicast beacon")
 
-        QMessageBox.information(
+        show_message(
             self,
             "Workstation Added",
             f"Address '{addr}' added to office manual peer list.\nSera Sync will probe this workstation periodically.",
@@ -1578,7 +1592,7 @@ class SeraSyncDialog(QDialog):
         """
         existing = self._get_manual_peers_list()
         if not existing:
-            QMessageBox.information(
+            show_message(
                 self,
                 "Remove PC by IP",
                 "No manual workstation addresses are currently configured.",
@@ -1610,19 +1624,19 @@ class SeraSyncDialog(QDialog):
             return
 
         addr = item.strip()
-        reply = QMessageBox.question(
+        if not ask_confirm(
             self,
             "Confirm Removal",
             f"Remove workstation address '{addr}' from office manual peer list?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+            yes="Remove",
+            no="Cancel",
+            danger=True,
+        ):
             return
 
         self._remove_manual_peer_address(addr)
 
-        QMessageBox.information(
+        show_message(
             self,
             "Workstation Removed",
             f"Address '{addr}' removed from the manual peer list.\n"
@@ -1665,16 +1679,16 @@ class SeraSyncDialog(QDialog):
 
             chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
             if chosen == act_remove:
-                reply = QMessageBox.question(
+                if ask_confirm(
                     self,
                     "Confirm Removal",
                     f"Remove workstation '{peer_host}' ({matching_addr}) from office manual peer list?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if reply == QMessageBox.Yes:
+                    yes="Remove",
+                    no="Cancel",
+                    danger=True,
+                ):
                     self._remove_manual_peer_address(matching_addr)
-                    QMessageBox.information(
+                    show_message(
                         self,
                         "Workstation Removed",
                         f"Address '{matching_addr}' removed from the manual peer list.\n"

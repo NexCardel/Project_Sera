@@ -9,12 +9,12 @@ import sys
 import threading
 from pathlib import Path
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QProgressBar, QMessageBox, QApplication, QWidget
+    QDialog, QVBoxLayout, QHBoxLayout, QProgressBar, QApplication, QWidget
 )
 from PySide6.QtCore import Qt, Signal, QObject
 
 import version
-from ui.components.kit import Banner, Card, DialogFrame, Pill, TextArea
+from ui.components.kit import Banner, Card, DialogFrame, Pill, TextArea, ask_confirm, show_message
 from ui.utils.tokens import TOKENS
 
 
@@ -105,14 +105,15 @@ class ForceUpdateDialog(QDialog):
         self.status_label.set_text(text)
 
     def _confirm_exit(self) -> bool:
-        reply = QMessageBox.warning(
+        return ask_confirm(
             self,
             "Update Required",
             "Project Sera cannot run without this update. Are you sure you want to exit?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            yes="Exit",
+            no="Stay",
+            level="warning",
+            danger=True,
         )
-        return reply == QMessageBox.Yes
 
     def closeEvent(self, event):
         """Prevent closing the window to bypass the update requirement."""
@@ -177,4 +178,4 @@ class ForceUpdateDialog(QDialog):
         self.exit_btn.setEnabled(True)
         self.progress_bar.hide()
         self._set_status("Download failed. Please try again or contact admin.", "r")
-        QMessageBox.critical(self, "Update Download Failed", f"Could not download update package:\n{err_msg}")
+        show_message(self, "Update Download Failed", f"Could not download update package:\n{err_msg}", "critical")

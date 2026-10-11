@@ -1,18 +1,20 @@
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
-                               QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView)
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTableWidgetItem
+from PySide6.QtCore import QTimer
 import datetime
+
+from ui.components.kit import Banner, Card, DarkListTable, DialogFrame
+
 
 class ScaDiagnosticsDialog(QDialog):
     def __init__(self, listener, parent=None, watcher=None):
         super().__init__(parent)
         self.setWindowTitle("SCA Diagnostics View")
         self.resize(700, 500)
-        
+
         self.listener = listener
         self.watcher = watcher          # clipboard_watch.ClipboardWatchService - owns the arm
         self._setup_ui()
-        
+
         if self.listener:
             self.listener.sca_state_received.connect(self.on_sca_state)
             self.listener.sca_error_received.connect(self.on_sca_error)
@@ -21,43 +23,50 @@ class ScaDiagnosticsDialog(QDialog):
 
         # Trigger a state request initially
         self._request_state()
-        
+
         # Periodic refresh just in case
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self._request_state)
         self.refresh_timer.start(5000)
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # State Section
-        self.status_label = QLabel("Connection: Native Host Listening...")
-        self.status_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(self.status_label)
-        
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("SCA diagnostics", "This PC's view of the SCA arm and its last events",
+                            self, icon="mdi.shield-check-outline", full=True)
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
+
+        self.status_label = Banner("Connection: Native Host Listening...", "i")
+        frame.add_widget(self.status_label)
+
+        arm = Card("Arm")
         self.arm_state_label = QLabel("Current Arm State: IDLE")
-        layout.addWidget(self.arm_state_label)
-        
+        self.arm_state_label.setObjectName("KitFieldVal")
+        arm.add_widget(self.arm_state_label)
         self.client_label = QLabel("Client ID: N/A")
-        layout.addWidget(self.client_label)
-        
+        self.client_label.setObjectName("KitFieldVal")
+        arm.add_widget(self.client_label)
         self.expiry_label = QLabel("Expiry: N/A")
-        layout.addWidget(self.expiry_label)
-        
-        # Table for logs
-        self.log_table = QTableWidget(0, 4)
+        self.expiry_label.setObjectName("KitFieldVal")
+        arm.add_widget(self.expiry_label)
+        frame.add_widget(arm)
+
+        self.log_table = DarkListTable(0, 4)
         self.log_table.setHorizontalHeaderLabels(["Time", "Type", "Status", "Detail"])
-        self.log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        layout.addWidget(self.log_table)
-        
-        btn_layout = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh State")
+        self.log_table.set_column(0, kind="mono", width=90)
+        self.log_table.set_column(1, kind="strong", width=130)
+        self.log_table.set_column(2, kind="text", width=110)
+        self.log_table.set_column(3, kind="text", stretch=3)
+        frame.add_widget(self.log_table, 1)
+
+        refresh_btn = frame.add_action("Refresh State", icon="mdi.refresh")
         refresh_btn.clicked.connect(self._request_state)
-        clear_btn = QPushButton("Clear Logs")
+        clear_btn = frame.add_action("Clear Logs", variant="ghost", icon="mdi.broom")
         clear_btn.clicked.connect(lambda: self.log_table.setRowCount(0))
-        btn_layout.addWidget(refresh_btn)
-        btn_layout.addWidget(clear_btn)
-        layout.addLayout(btn_layout)
+        frame.add_footer_spacer()
+        close_btn = frame.add_action("Close", variant="secondary")
+        close_btn.clicked.connect(self.reject)
 
     def _request_state(self):
         """The desktop's own view of the arm (it decides every password request)."""
@@ -77,7 +86,7 @@ class ScaDiagnosticsDialog(QDialog):
     def _add_log(self, mtype, status, detail):
         row = self.log_table.rowCount()
         self.log_table.insertRow(row)
-        
+
         now = datetime.datetime.now().strftime("%H:%M:%S")
         self.log_table.setItem(row, 0, QTableWidgetItem(now))
         self.log_table.setItem(row, 1, QTableWidgetItem(mtype))
@@ -92,12 +101,12 @@ class ScaDiagnosticsDialog(QDialog):
     def on_sca_error(self, msg):
         detail = msg.get('detail', 'Unknown error')
         self._add_log("SCA_ERROR", "FAILED", detail)
-        
+
     def on_sca_fill_result(self, msg):
         res = msg.get('result', 'unknown')
         detail = msg.get('reason') or msg.get('detail', '')
         self._add_log("SCA_FILL_RESULT", res.upper(), detail)
-        
+
     def on_audit_event(self, msg):
         if msg.get('type') == 'audit_event' and 'SCA' in msg.get('action', ''):
             self._add_log("AUDIT", "INFO", msg.get('detail', ''))

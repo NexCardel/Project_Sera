@@ -251,6 +251,7 @@ KIT = {
     "scrim_alpha": 140,
     "d_dlg_ic": 34,
     "d_dlg_ic_lg": 40,
+    "w_msg": 420,
     "r_dlg_ic": 9,
     "r_tile": 10,
     "r_count": 12,

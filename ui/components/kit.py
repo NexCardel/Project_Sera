@@ -212,7 +212,7 @@ from PySide6.QtGui import (
     QPolygonF, QRegion, QTextBlockFormat, QTextCharFormat, QTextCursor,
 )
 from PySide6.QtWidgets import (
-    QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QFrame,
+    QAbstractButton, QAbstractItemView, QBoxLayout, QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
     QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QToolButton, QToolTip, QVBoxLayout,
     QWidget,
@@ -3112,6 +3112,20 @@ def _dialog_qss(full):
         f" font-size: {T['f_xl']}px; font-weight: 700; }}"
         f"QLabel#KitDlgPurpose {{ color: {T['muted']}; background: transparent; border: none;"
         f" font-size: {K['f_dlg_purpose']}px; }}"
+        f"QLabel#KitDlgMessage {{ color: {T['text']}; background: transparent; border: none;"
+        f" font-size: {T['f_m']}px; }}"
+        f"QLabel#KitFieldKey {{ color: {T['muted']}; background: transparent; border: none;"
+        f" font-size: {T['f_xs']}px; }}"
+        f"QLabel#KitFieldVal {{ color: {T['text']}; background: transparent; border: none;"
+        f" font-size: {T['f_m']}px; font-weight: 600; }}"
+        f"QLabel#KitEmpty {{ color: {T['faint']}; background: transparent; border: none;"
+        f" font-size: {T['f_s']}px; }}"
+        f"QLabel#KitPreview {{ color: {T['faint']}; background: transparent;"
+        f" border: 1px dashed {T['line2']}; border-radius: {T['r_m']}px; }}"
+        f"QListWidget#KitList {{ background: {T['card']}; color: {T['text']}; border: 1px solid {T['line']};"
+        f" border-radius: {T['r_m']}px; outline: none; font-size: {T['f_s']}px; }}"
+        f"QListWidget#KitList::item {{ padding: {T['s_1']}px {T['s_2']}px; border: none; }}"
+        f"QListWidget#KitList::item:selected {{ background: {T['hover']}; color: {T['mint']}; }}"
     )
 
 
@@ -3262,6 +3276,47 @@ class DialogFrame(QFrame):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_mask()
+
+
+_MESSAGE_LOOK = {
+    "info": ("mdi.information-outline", "blue"),
+    "question": ("mdi.help-circle-outline", "emerald"),
+    "warning": ("mdi.alert-outline", "amber"),
+    "critical": ("mdi.alert-octagon-outline", "amber"),
+}
+
+
+def _run_message(parent, title, text, level, actions):
+    icon, tone = _MESSAGE_LOOK[level]
+    dlg = QDialog(parent)
+    dlg.setModal(True)
+    dlg.setWindowTitle(title)
+    dlg.setMinimumWidth(K["w_msg"])
+    outer = QVBoxLayout(dlg)
+    outer.setContentsMargins(0, 0, 0, 0)
+    frame = DialogFrame(title, "", dlg, icon=icon, tone=tone)
+    outer.addWidget(frame)
+    frame.closeRequested.connect(dlg.reject)
+    body = QLabel(text, frame)
+    body.setObjectName("KitDlgMessage")
+    body.setWordWrap(True)
+    body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    frame.add_widget(body)
+    for label, variant, accepts in actions:
+        button = frame.add_action(label, variant=variant)
+        button.clicked.connect(dlg.accept if accepts else dlg.reject)
+    return dlg.exec() == QDialog.Accepted
+
+
+def show_message(parent, title, text, level="info"):
+    """Kit replacement for QMessageBox.information / warning / critical: one OK."""
+    _run_message(parent, title, text, level, [("OK", "primary", True)])
+
+
+def ask_confirm(parent, title, text, *, yes="Yes", no="No", level="question", danger=False):
+    """Kit replacement for QMessageBox.question: True when the user picks yes."""
+    yes_variant = "danger" if danger else "primary"
+    return _run_message(parent, title, text, level, [(no, "secondary", False), (yes, yes_variant, True)])
 
 
 class Scrim(QWidget):
