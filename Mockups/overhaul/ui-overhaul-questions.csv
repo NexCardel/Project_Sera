@@ -1,1 +1,2 @@
 Q,WP,Question,Options,Default,Answer,By,Asked,Answered
+1,S-12,"Sera Sync: the kit has no Tabs or device-card widget, and the lock tests drive the device list as a table (rows, right-click by position). A = build now: kit Segmented switches the three tabs, devices stay one row each in the kit dark list table (all 7 facts as columns, status as a pill, every fact in the row tooltip, empty sentence + Add PC by IP under it). B = stop S-12 and first add kit Tabs + DeviceCard in a small kit package.",A | B,A,A,user,2026-10-11 17:02,2026-10-11 17:03

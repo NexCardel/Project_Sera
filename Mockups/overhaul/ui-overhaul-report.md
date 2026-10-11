@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 16:50)
+# UI overhaul — report (2026-10-11 16:59)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 8 |
+| Not started | 7 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 28 |
+| Done | 29 |
 | Blocked | 0 |
 
-Runs: 37   output tokens: 1497906   API-equivalent cost: $104.73
+Runs: 38   output tokens: 1551074   API-equivalent cost: $108.60
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -42,7 +42,7 @@ Runs: 37   output tokens: 1497906   API-equivalent cost: $104.73
 | S-8 | Done | haiku | d110228 | Screens: Client detail panel | Client detail panel rebuilt on the kit (arrangement only). 34/34 lock tests pass. Goldens at 1366x768, 1024x720 and 1366x768@125% in Mockups/built/detail/, chec |
 | S-9 | Done | sonnet | 1d36af7 | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | Manage Clients on the kit: ChipBar, white DataGrid list, cards, bulk SelectionBar; lock + new kit tests pass, goldens in Mockups/built/manage |
 | S-10 | Done | sonnet | b574da2 | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... | Tracker Dump on the kit: tiles, chips, segmented switch, dark DataGrid with pills and delegate row actions; WIDE columns unchanged; lock tests adapted, 11 new k |
-| S-11 | Not started | sonnet |  | Screens: Audit log (IMPLEMENTATION 4.5) |  |
+| S-11 | Done | sonnet | c067ce0 | Screens: Audit log (IMPLEMENTATION 4.5) | Audit log on the kit: chips drive hidden state widgets, DarkListTable workstations, pill actions, Entry card; 3 goldens; lock tests pass |
 | S-12 | Not started | opus |  | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... |  |
 | S-13 | Not started | sonnet |  | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... |  |
 | S-14 | Not started | haiku |  | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... |  |
@@ -100,6 +100,9 @@ Runs: 37   output tokens: 1497906   API-equivalent cost: $104.73
 - **S-10** Row height and column policy → Kit 52 px tall rows in WIDE and COMPACT; tracker keeps its own fit_columns/_adjust_table_columns and never calls the grid's set_column/apply_width_mode (WIDE column widths stay as today; the old 48/44 px rows were cell widgets, the kit grid draws pills and action buttons itself at 52)
 - **S-10** Row action order and look → Order is autofill, view, create, more (create used to follow the kebab); autofill stays red via T[danger]; SMTI/MECP are tinted non-primary icons (Delegate draws buttons left to right, so create before the kebab keeps the kebab last; same colour as before)
 - **S-10** Window minimum width → Search box is min 180 / max 320 instead of fixed 320 (The kit chips made the WIDE filter row need 1140 px, so the page could never shrink to the COMPACT switch at 1080)
+- **S-11** How do the Action/Staff/Date filters become chips without breaking the lock tests? → Chips are menus that drive the existing hidden Select/Input widgets (action_combo, actor_input, cmb_date_preset) and mirror their state (Lock tests drive those attribute names directly; the kit has no new widget classes to spare)
+- **S-11** Refresh and Export row overflows at 1093 logical px (125 %) → Refresh is an icon-only IconButton (btn_refresh; one lock-test line now calls btn_refresh.click()); Export goes icon-only in COMPACT or below 1180 px (Both keep their DB call and tooltip; nothing disappears; no chip clipping at 125 %)
+- **S-11** Workstation list widget and its count → DarkListTable (kit) with a count column filled from the loaded cache; workstation_list.rowCount() replaces count() in one lock-test line (The plain QListWidget showed a default blue selection; the kit list uses the emerald selection without literals)
 
 ## Checks waiting for you
 
@@ -128,3 +131,4 @@ Runs: 37   output tokens: 1497906   API-equivalent cost: $104.73
 - #23 (S-9) Look at Manage Clients on a real screen: the factory form fields (plain Qt inputs from the global QSS) next to the kit cards, light and dark. — Not run
 - #24 (S-9) At 1366 the bulk bar buttons are icon-only: confirm the tooltips make Attach/detach, Archive, Restore and Delete permanently clear. Also check the soft New client button, the 'Unsaved changes' line (editor header grows by one line), and that all five filter chips fit the 390 px list column at 125 %. — Not run
 - #25 (S-10) Open Tracker Dump on a real 125 percent screen with a real client list (1024 px wide): Client column is narrow there because fit_columns is unchanged; confirm names are still readable enough — Not run
+- #26 (S-11) Open the Audit log at 125 % display scale on a real PC: the Action/Staff/Date chips and the icon-only Export must not clip; Service and Detail columns hide below ~1080 px. — Not run

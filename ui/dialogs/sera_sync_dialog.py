@@ -6,39 +6,76 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
-    QTableWidget,
     QTableWidgetItem,
     QAbstractItemView,
     QMessageBox,
     QInputDialog,
     QMenu,
-    QHeaderView,
-    QSplitter,
-    QListWidget,
-    QListWidgetItem,
-    QGroupBox,
-    QWidget,
-    QSizePolicy,
     QLineEdit,
+    QStackedWidget,
+    QWidget,
     QScrollArea,
     QFrame,
 )
-from PySide6.QtGui import QColor, QFont
 
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
+from ui.components.kit import (
+    ROLE_PILL,
+    Banner,
+    Card,
+    DarkListTable,
+    DialogFrame,
+    EmptyState,
+    LabelledAction,
+    LogView,
+    Segmented,
+    StatusStrip,
+)
+from ui.utils.tokens import TOKENS
 
+_ACTIVITY_MIN_WIDTH = 290
+_ACTIVITY_MAX_WIDTH = 380
+_ACTIVITY_MAX_LINES = 400  # oldest lines drop off so a long session does not slow the list
 
-def _safe_icon(name, **kwargs):
-    if qta:
-        try:
-            return qta.icon(name, **kwargs)
-        except Exception:
-            pass
-    return None
+# (header, DataGrid.set_column spec). Narrow windows hide DB Modified, then Version, then
+# Clients / Dumps; the row tooltip keeps every fact.
+_DEVICE_COLUMNS = (
+    ("Username", dict(minimum=64, stretch=1)),
+    ("Hostname", dict(kind="strong", minimum=96, stretch=2)),
+    ("IP Address", dict(kind="mono", width=124, minimum=124, stretch=0)),
+    ("App Version", dict(kind="num", width=76, minimum=64, stretch=0, priority=2)),
+    ("DB Modified", dict(kind="num", minimum=128, stretch=1, priority=3)),
+    ("Clients / Dumps", dict(kind="num", minimum=132, stretch=1, priority=1)),
+    ("Mode / Status", dict(minimum=110, stretch=2)),
+)
+_MEMBER_COLUMNS = (
+    ("Name", dict(kind="strong", minimum=96, stretch=2)),
+    ("Online", dict(width=150, stretch=0)),
+    ("Role", dict(width=80, stretch=0)),
+    ("Last Successful Sync (this PC)", dict(kind="num", minimum=120, stretch=1)),
+    ("This PC", dict(width=84, stretch=0)),
+)
+_CONFLICT_COLUMNS = (
+    ("Table", dict(minimum=70, stretch=1)),
+    ("Column", dict(minimum=80, stretch=1)),
+    ("Kept", dict(kind="mono", minimum=90, stretch=2)),
+    ("Discarded", dict(kind="mono", minimum=90, stretch=2)),
+    ("When", dict(kind="num", minimum=120, stretch=1)),
+)
+
+# Activity category word -> LogView tag colour; the first match wins (the old emoji badges,
+# same order).
+_ACTIVITY_TONES = (
+    ("INV_FRAMES", "amber"),
+    ("REVISION", "emerald"),
+    ("BEACON", "blue"),
+    ("GUARD", "amber"),
+    ("PULL", "blue"),
+    ("PUSH", "purple"),
+    ("SDIS", "purple"),
+    ("SSAL", "blue"),
+    ("SYNC IN", "emerald"),
+    ("ACCEPTED", "emerald"),
+)
 
 
 class SeraSyncDialog(QDialog):
@@ -106,144 +143,169 @@ class SeraSyncDialog(QDialog):
         self._refresh_timer.start(3000)
 
     def _build_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 4, 14, 10)
-        main_layout.setSpacing(6)
-
-        # Top Header Container
-        header_widget = QWidget()
-        header_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(2, 0, 2, 0)
-        header_layout.setSpacing(8)
-
-        icon_lbl = QLabel()
-        icon = _safe_icon("mdi.sync", color="#4CF9B7")
-        if icon:
-            icon_lbl.setPixmap(icon.pixmap(24, 24))
-        header_layout.addWidget(icon_lbl)
-
-        title = QLabel("Sera Sync Network Control")
-        title.setProperty("class", "DialogTitle")
-        title.setStyleSheet("font-size: 18px; font-weight: 700; margin: 0px; padding: 0px;")
-        header_layout.addWidget(title)
-        header_layout.addStretch()
-
-        # Online indicator
-        self.status_label = QLabel()
-        self.status_label.setStyleSheet("color: #4CF9B7; font-size: 13px; font-weight: 600; margin: 0px; padding: 0px;")
-        header_layout.addWidget(self.status_label)
-
-        main_layout.addWidget(header_widget)
-
+        # Fleet layout (S-12): dialog frame, network banner and status strip on top, the three
+        # tabs (Devices / Office members / Sync status) on the left and the Live activity card
+        # on the right. Office mode opens on Sync status (the old dialog put the office panels
+        # first); legacy mode has only the devices, so the tab switch is hidden there.
+        office_mode = self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
+        self.setObjectName("ToolDialog")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.frame = DialogFrame(
+            "Sera Sync", "Keeps the client database the same on every Sera PC on this network",
+            self, icon="mdi.sync", full=True)
+        outer.addWidget(self.frame)
+        self.frame.closeRequested.connect(self.reject)
+        self.frame.add_close_button()
 
         # Public-network warning (P0-9b). Hidden unless the active network is Public.
-        self.network_warning_banner = QLabel()
-        self.network_warning_banner.setWordWrap(True)
-        self.network_warning_banner.setStyleSheet(
-            "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
-            "padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; }"
-        )
-        self.network_warning_banner.setText(
-            "⚠️ This PC's network is set to Public. Sera Sync is reachable by other devices on it. "
-            "For security, set it to Private: Windows Settings → Network → set this network to Private."
-        )
+        self.network_warning_banner = Banner(
+            "This PC's network is set to Public. Sera Sync is reachable by other devices on it. "
+            "For security, set it to Private: Windows Settings → Network → set this network to Private.",
+            "w")
         self.network_warning_banner.setVisible(False)
-        main_layout.addWidget(self.network_warning_banner)
+        self.frame.add_widget(self.network_warning_banner)
         self._update_network_warning()
 
-        # Main Splitter (Left: Peer Table & Controls, Right: Live Activity Log Sidebar)
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setChildrenCollapsible(False)
+        self.frame.add_widget(self._build_status_strip(office_mode))
 
-        # Left side: the office panels (Members, Sync Status) and the legacy LAN-devices box, as
-        # sibling groups in a scroll area, so no table gets squeezed to nothing when all three
-        # are shown -- the area scrolls instead.
-        office_mode = self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QFrame.NoFrame)
-        left_container = QWidget()
-        left_column = QVBoxLayout(left_container)
-        left_column.setContentsMargins(0, 0, 6, 0)
-        left_column.setSpacing(10)
-        left_scroll.setWidget(left_container)
+        body = QWidget()
+        body_row = QHBoxLayout(body)
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(TOKENS["s_3"])
+        self.frame.add_widget(body, 1)
 
+        left = QWidget()
+        left_col = QVBoxLayout(left)
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.setSpacing(TOKENS["s_3"])
+        self.tabs = Segmented(["Devices", "Office members", "Sync status"])
+        self.tabs.setVisible(office_mode)
+        left_col.addWidget(self.tabs, 0, Qt.AlignLeft)
+        self.tab_stack = QStackedWidget()
+        # Each tab scrolls on its own when taller than the window, so the tallest tab (Sync
+        # status) does not stretch the others.
+        for page in (self._build_devices_tab(), self._build_members_tab(office_mode),
+                     self._build_sync_status_tab(office_mode)):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setWidget(page)
+            self.tab_stack.addWidget(scroll)
+        self.tabs.currentChanged.connect(self.tab_stack.setCurrentIndex)
+        self.tabs.set_current(2 if office_mode else 0)
+        left_col.addWidget(self.tab_stack, 1)
+        body_row.addWidget(left, 2)
+
+        # Live activity (right): the stream and Clear, unchanged.
+        activity = Card("Live activity")
+        activity.setMinimumWidth(_ACTIVITY_MIN_WIDTH)
+        activity.setMaximumWidth(_ACTIVITY_MAX_WIDTH)
+        btn_clear_log = LabelledAction("Clear", variant="ghost", icon="mdi.delete-outline",
+                                       tooltip="Empty the list shown here")
+        btn_clear_log.clicked.connect(self._clear_activity_log)
+        activity.add_action(btn_clear_log)
+        log_info = QLabel("Real-time P2P sync events, revision scores and guard alerts")
+        log_info.setProperty("class", "HintText")
+        log_info.setWordWrap(True)
+        activity.add_widget(log_info)
+        self.log_list = LogView(max_lines=_ACTIVITY_MAX_LINES)
+        activity.add_widget(self.log_list, 1)
+        body_row.addWidget(activity, 1)
+
+        self.btn_close = LabelledAction("Close", icon="mdi.close")
+        self.btn_close.clicked.connect(self.accept)
+        self.frame.add_action(self.btn_close)
+
+    def _build_status_strip(self, office_mode):
+        """Sync on / off, PCs online (the old "N devices online" label), this PC's name and
+        version and, in office mode, the sync mode."""
+        import socket
+        import version
+        strip = StatusStrip()
+        on = self.sync_service is not None
+        self.sync_pill = strip.add_pill("Sync on" if on else "Sync off", "emerald" if on else "neutral", dot=True)
+        self.status_label = strip.add_text(
+            "0 devices online" if on else "Sera Sync is off on this PC", bold=True)
+        strip.add_separator()
+        strip.add_text("This PC:", muted=True)
+        strip.add_text(socket.gethostname(), bold=True)
+        strip.add_text(f"· v{version.APP_VERSION}", muted=True)
+        mode_sep = strip.add_separator()
+        self.mode_pill = strip.add_pill("Mode: off")
+        mode_sep.setVisible(office_mode)
+        self.mode_pill.setVisible(office_mode)
+        strip.add_stretch()
+        return strip
+
+    def _build_devices_tab(self):
         # Discovered LAN devices (beacon discovery; P4-1 removed the legacy whole-database
-        # push/pull buttons that used to live in this box -- Sera Sync v3 exchanges changes
-        # by itself once workstations are paired as office members, below).
-        left_widget = QGroupBox("Discovered LAN Devices")
-        self.devices_group = left_widget
-        left_widget.setStyleSheet("QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(12, 14, 12, 12)
-        left_layout.setSpacing(10)
+        # push/pull buttons that used to live here -- Sera Sync v3 exchanges changes by itself
+        # once workstations are paired as office members).
+        self.devices_group = QWidget()
+        lay = QVBoxLayout(self.devices_group)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(TOKENS["s_3"])
 
-        desc = QLabel(
-            "Devices running Sera on your local network are listed below."
-        )
+        top = QHBoxLayout()
+        top.setSpacing(TOKENS["s_3"])
+        desc = QLabel("Devices running Sera on your local network. Right-click a device to remove a manual address.")
+        desc.setProperty("class", "HintText")
         desc.setWordWrap(True)
-        desc.setProperty("class", "GuidanceText")
-        desc.setStyleSheet("font-size: 12px; color: #B0B0B0;")
-        left_layout.addWidget(desc)
+        top.addWidget(desc, 1)
+        self.btn_refresh = LabelledAction("Scan again", icon="mdi.refresh",
+                                          tooltip="Read the list of Sera PCs on the network again (was: Refresh)")
+        self.btn_refresh.clicked.connect(self._refresh_peers)
+        top.addWidget(self.btn_refresh)
+        lay.addLayout(top)
 
-        # Peer Table (7 Columns: Username, Hostname, IP, Version, DB Modified, Clients / Dumps, Mode / Status)
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels([
-            "Username", "Hostname", "IP Address", "App Version", "DB Modified", "Clients / Dumps", "Mode / Status"
-        ])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        # One row per device with all seven facts (Username, Hostname, IP, Version, DB Modified,
+        # Clients / Dumps, Mode / Status); the row tooltip repeats every fact, so a column that
+        # is elided or hidden on a narrow window loses nothing.
+        card = Card("Discovered LAN devices")
+        self.table = DarkListTable(0, len(_DEVICE_COLUMNS))
+        self.table.setHorizontalHeaderLabels([c[0] for c in _DEVICE_COLUMNS])
+        for col, (_, spec) in enumerate(_DEVICE_COLUMNS):
+            self.table.set_column(col, **spec)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        # Columns fit the width (elided cells keep their text in the tooltip), never scroll sideways.
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
-        self.table.setMinimumHeight(140)
-        left_layout.addWidget(self.table)
+        self.table.setMinimumHeight(100)
+        self.table.setVisible(False)
+        card.add_widget(self.table, 1)
+        self.devices_empty = EmptyState(
+            "No other Sera PC found yet",
+            "Scan again in a moment, or add the PC by its IP address.", icon="mdi.lan-disconnect")
+        self.btn_empty_add_ip = LabelledAction("Add PC by IP", variant="soft", icon="mdi.plus-network",
+                                               tooltip="Add a PC this one cannot find by broadcast")
+        self.btn_empty_add_ip.clicked.connect(self._on_add_pc_by_ip)
+        self.devices_empty.add_action(self.btn_empty_add_ip)
+        card.add_widget(self.devices_empty, 1)
+        lay.addWidget(card, 1)
 
-        # Left Action Buttons
+        lay.addWidget(Banner(
+            "Not seeing a PC? It must be on the same network, running Sera, with Sera Sync switched on.", "i"))
+
+        # Addresses and office-key actions.
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        self.btn_refresh = QPushButton("  Refresh")
-        icon = _safe_icon("mdi.refresh", color="#FFFFFF")
-        if icon:
-            self.btn_refresh.setIcon(icon)
-        self.btn_refresh.clicked.connect(self._refresh_peers)
-        btn_row.addWidget(self.btn_refresh)
-        btn_row.addStretch()
-        left_layout.addLayout(btn_row)
-
-        # Second row: addresses and office-key actions (one row of eight buttons was cut off).
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        self.btn_add_ip = QPushButton("  Add PC by IP")
-        icon = _safe_icon("mdi.plus-network", color="#FFFFFF")
-        if icon:
-            self.btn_add_ip.setIcon(icon)
+        btn_row.setSpacing(TOKENS["s_2"])
+        self.btn_add_ip = LabelledAction("Add PC by IP", icon="mdi.plus-network",
+                                         tooltip="Add a PC this one cannot find by broadcast")
         self.btn_add_ip.clicked.connect(self._on_add_pc_by_ip)
         btn_row.addWidget(self.btn_add_ip)
-
-        self.btn_remove_ip = QPushButton("  Remove PC by IP")
-        icon = _safe_icon("mdi.minus-network", color="#FFFFFF")
-        if icon:
-            self.btn_remove_ip.setIcon(icon)
+        self.btn_remove_ip = LabelledAction("Remove PC by IP", icon="mdi.minus-network",
+                                            tooltip="Stop contacting a manually added address (asks first)")
         self.btn_remove_ip.clicked.connect(self._on_remove_pc_by_ip)
         btn_row.addWidget(self.btn_remove_ip)
+        btn_row.addStretch()
 
-        self.btn_rejoin = QPushButton("  Rejoin office")
-        rejoin_icon = _safe_icon("mdi.database-import", color="#FFFFFF")
-        if rejoin_icon:
-            self.btn_rejoin.setIcon(rejoin_icon)
+        self.btn_rejoin = LabelledAction("Rejoin office", icon="mdi.database-import",
+                                         tooltip="Sera restarts and pairs with the admin PC (asks first)")
         self.btn_rejoin.clicked.connect(self._on_rejoin_office)
         # P2-8: every legacy-mode PC except the admin PC rejoins instead of converting.
         self.btn_rejoin.setVisible(
@@ -251,252 +313,170 @@ class SeraSyncDialog(QDialog):
         )
         btn_row.addWidget(self.btn_rejoin)
 
-        self.btn_export_kit = QPushButton("  Export recovery kit")
-        kit_icon = _safe_icon("mdi.file-key-outline", color="#FFFFFF")
-        if kit_icon:
-            self.btn_export_kit.setIcon(kit_icon)
+        self.btn_export_kit = LabelledAction("Export recovery kit", icon="mdi.file-key-outline")
         self.btn_export_kit.clicked.connect(self._on_export_recovery_kit)
         self.btn_export_kit.setVisible(
             self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
         )
         btn_row.addWidget(self.btn_export_kit)
-        btn_row.addStretch()
+        lay.addLayout(btn_row)
+        return self.devices_group
 
-        left_layout.addLayout(btn_row)
-
+    def _build_members_tab(self, office_mode):
         # Office Members panel (P2-7): members, Add workstation, Remove, Hand over/Become admin,
         # network warnings. Office mode only (legacy-mode PCs have no admin key / member records).
-        self.members_group = QGroupBox("Office Members")
-        self.members_group.setStyleSheet(
-            "QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
-        members_layout = QVBoxLayout(self.members_group)
-        members_layout.setContentsMargins(12, 14, 12, 12)
-        members_layout.setSpacing(8)
+        # The group sits inside its tab page, so it can be off (legacy mode) apart from the
+        # page being hidden by another tab (see _panel_on).
+        page = QWidget()
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(0, 0, 0, 0)
+        self.members_group = QWidget(page)
+        lay = QVBoxLayout(self.members_group)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(TOKENS["s_3"])
 
-        self.members_network_warning = QLabel("")
-        self.members_network_warning.setWordWrap(True)
-        self.members_network_warning.setStyleSheet(
-            "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
-            "padding: 6px 12px; border-radius: 6px; font-size: 11px; }"
-        )
+        self.members_network_warning = Banner("", "r")
         self.members_network_warning.setVisible(False)
-        members_layout.addWidget(self.members_network_warning)
+        lay.addWidget(self.members_network_warning)
 
-        self.members_table = QTableWidget(0, 5)
-        self.members_table.setHorizontalHeaderLabels(
-            ["Name", "Online", "Role", "Last Successful Sync (this PC)", "This PC"])
-        self.members_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.members_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.members_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.members_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.members_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        card = Card("Office members")
+        self.members_table = DarkListTable(0, len(_MEMBER_COLUMNS))
+        self.members_table.setHorizontalHeaderLabels([c[0] for c in _MEMBER_COLUMNS])
+        for col, (_, spec) in enumerate(_MEMBER_COLUMNS):
+            self.members_table.set_column(col, **spec)
         self.members_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.members_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.members_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.members_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.members_table.setMinimumHeight(110)
-        self.members_table.setMaximumHeight(200)
-        members_layout.addWidget(self.members_table)
+        card.add_widget(self.members_table, 1)
+        lay.addWidget(card, 1)
 
-        members_btn_row = QHBoxLayout()
-        self.btn_add_workstation = QPushButton("  Add workstation")
-        icon = _safe_icon("mdi.laptop", color="#FFFFFF")
-        if icon:
-            self.btn_add_workstation.setIcon(icon)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(TOKENS["s_2"])
+        self.btn_add_workstation = LabelledAction("Add workstation", variant="primary", icon="mdi.laptop",
+                                                  tooltip="Shows a code the new PC types in to join this office")
         self.btn_add_workstation.clicked.connect(self._on_add_workstation)
-        members_btn_row.addWidget(self.btn_add_workstation)
-
-        self.btn_remove_member = QPushButton("  Remove")
-        icon = _safe_icon("mdi.account-remove", color="#FFFFFF")
-        if icon:
-            self.btn_remove_member.setIcon(icon)
+        btn_row.addWidget(self.btn_add_workstation)
+        self.btn_remove_member = LabelledAction("Remove", icon="mdi.account-remove", tooltip="Asks first")
         self.btn_remove_member.clicked.connect(self._on_remove_member)
-        members_btn_row.addWidget(self.btn_remove_member)
-
-        self.btn_hand_over_admin = QPushButton("  Hand over admin")
-        icon = _safe_icon("mdi.account-arrow-right", color="#FFFFFF")
-        if icon:
-            self.btn_hand_over_admin.setIcon(icon)
+        btn_row.addWidget(self.btn_remove_member)
+        self.btn_hand_over_admin = LabelledAction("Hand over admin", icon="mdi.account-arrow-right",
+                                                  tooltip="Asks first; the other PC then runs Become admin")
         self.btn_hand_over_admin.clicked.connect(self._on_hand_over_admin)
-        members_btn_row.addWidget(self.btn_hand_over_admin)
-
-        self.btn_become_admin = QPushButton("  Become admin")
-        icon = _safe_icon("mdi.shield-account", color="#FFFFFF")
-        if icon:
-            self.btn_become_admin.setIcon(icon)
+        btn_row.addWidget(self.btn_hand_over_admin)
+        self.btn_become_admin = LabelledAction("Become admin", icon="mdi.shield-account",
+                                               tooltip="Asks for the office master password")
         self.btn_become_admin.clicked.connect(self._on_become_admin)
-        members_btn_row.addWidget(self.btn_become_admin)
-        members_btn_row.addStretch()
-        members_layout.addLayout(members_btn_row)
+        btn_row.addWidget(self.btn_become_admin)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
 
         # Office mode only: key_id is set once office.json exists (legacy PCs have none).
-        self.members_group.setVisible(
-            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
-        )
+        self.members_group.setVisible(office_mode)
+        page_lay.addWidget(self.members_group, 1)
+        return page
 
+    def _build_sync_status_tab(self, office_mode):
         # Sync Status panel (P3-8): pending outgoing count, parked changes, conflicts (with
         # resolution actions) and the shadow-check summary. Office mode only, like Members.
-        self.sync_status_group = QGroupBox("Sync Status")
-        self.sync_status_group.setStyleSheet(
-            "QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
-        sync_status_layout = QVBoxLayout(self.sync_status_group)
-        sync_status_layout.setContentsMargins(12, 14, 12, 12)
-        sync_status_layout.setSpacing(8)
+        page = QWidget()
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(0, 0, 0, 0)
+        self.sync_status_group = QWidget(page)
+        lay = QVBoxLayout(self.sync_status_group)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(TOKENS["s_3"])
 
+        summary = Card("Sync status")
         self.sync_status_summary_label = QLabel("Pending outgoing: 0   •   Parked: 0")
-        self.sync_status_summary_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
-        sync_status_layout.addWidget(self.sync_status_summary_label)
-
-        self.sync_status_warning_label = QLabel("")
-        self.sync_status_warning_label.setWordWrap(True)
+        self.sync_status_summary_label.setWordWrap(True)
+        summary.add_widget(self.sync_status_summary_label)
+        self.sync_status_warning_label = Banner("", "w")
         self.sync_status_warning_label.setVisible(False)
-        sync_status_layout.addWidget(self.sync_status_warning_label)
+        summary.add_widget(self.sync_status_warning_label)
+        lay.addWidget(summary)
 
         # Turning shadow mode on / resetting it (P3-7b). Admin mode (PIN) is asked for again.
-        shadow_mode_row = QHBoxLayout()
+        shadow = Card("Shadow mode")
         self.shadow_mode_label = QLabel("Shadow mode: off")
         self.shadow_mode_label.setWordWrap(True)
-        self.shadow_mode_label.setStyleSheet("font-size: 12px; color: #B0B0B0;")
-        shadow_mode_row.addWidget(self.shadow_mode_label, 1)
-        self.btn_start_shadow = QPushButton("  Start shadow mode")
-        icon = _safe_icon("mdi.play-circle-outline", color="#FFFFFF")
-        if icon:
-            self.btn_start_shadow.setIcon(icon)
-        self.btn_start_shadow.setToolTip("Start the 7-day shadow week on this PC (admin PC first, then every other PC).")
+        shadow.add_widget(self.shadow_mode_label)
+        shadow_btns = QWidget()
+        shadow_btns.setProperty("class", "FormHost")  # transparent inside the card (theme rule)
+        shadow_row = QHBoxLayout(shadow_btns)
+        shadow_row.setContentsMargins(0, 0, 0, 0)
+        shadow_row.setSpacing(TOKENS["s_2"])
+        self.btn_start_shadow = LabelledAction(
+            "Start shadow mode", icon="mdi.play-circle-outline",
+            tooltip="Start the 7-day shadow week on this PC (admin PC first, then every other PC).")
         self.btn_start_shadow.clicked.connect(self._on_start_shadow_mode)
-        shadow_mode_row.addWidget(self.btn_start_shadow)
-        self.btn_reset_shadow = QPushButton("  Reset shadow mode")
-        icon = _safe_icon("mdi.restore", color="#FFFFFF")
-        if icon:
-            self.btn_reset_shadow.setIcon(icon)
-        self.btn_reset_shadow.setToolTip("Set shadow mode off on this PC and set its shadow files aside (the week starts over).")
+        shadow_row.addWidget(self.btn_start_shadow)
+        self.btn_reset_shadow = LabelledAction(
+            "Reset shadow mode", icon="mdi.restore",
+            tooltip="Set shadow mode off on this PC and set its shadow files aside (the week starts over).")
         self.btn_reset_shadow.clicked.connect(self._on_reset_shadow_mode)
-        shadow_mode_row.addWidget(self.btn_reset_shadow)
+        shadow_row.addWidget(self.btn_reset_shadow)
         # Going live (P3-9): per PC, admin mode (PIN), when the owner decides the week passed.
-        self.btn_go_live = QPushButton("  Go live")
-        icon = _safe_icon("mdi.rocket-launch-outline", color="#FFFFFF")
-        if icon:
-            self.btn_go_live.setIcon(icon)
-        self.btn_go_live.setToolTip("Make this PC's shadow copy its live data and switch Sera Sync to live (after a restart).")
+        self.btn_go_live = LabelledAction(
+            "Go live", variant="soft", icon="mdi.rocket-launch-outline",
+            tooltip="Make this PC's shadow copy its live data and switch Sera Sync to live (after a restart).")
         self.btn_go_live.clicked.connect(self._on_go_live)
-        shadow_mode_row.addWidget(self.btn_go_live)
-        sync_status_layout.addLayout(shadow_mode_row)
-
-        shadow_row = QHBoxLayout()
-        self.shadow_status_label = QLabel("Shadow checks: none logged yet")
-        self.shadow_status_label.setWordWrap(True)
-        self.shadow_status_label.setStyleSheet("font-size: 11px; color: #A0A0A0; font-family: Consolas, monospace;")
-        shadow_row.addWidget(self.shadow_status_label, 1)
-
-        self.btn_run_shadow_check = QPushButton("  Run now")
-        icon = _safe_icon("mdi.shield-check", color="#FFFFFF")
-        if icon:
-            self.btn_run_shadow_check.setIcon(icon)
-        self.btn_run_shadow_check.setToolTip("Run the shadow-mode capture check now (also runs every 30 minutes).")
+        shadow_row.addWidget(self.btn_go_live)
+        shadow_row.addStretch()
+        self.btn_run_shadow_check = LabelledAction(
+            "Run now", icon="mdi.shield-check",
+            tooltip="Run the shadow-mode capture check now (also runs every 30 minutes).")
         self.btn_run_shadow_check.clicked.connect(self._on_run_shadow_check)
         shadow_row.addWidget(self.btn_run_shadow_check)
-        sync_status_layout.addLayout(shadow_row)
+        shadow.add_widget(shadow_btns)
+        self.shadow_status_label = QLabel("Shadow checks: none logged yet")
+        self.shadow_status_label.setProperty("class", "HintText")
+        self.shadow_status_label.setWordWrap(True)
+        shadow.add_widget(self.shadow_status_label)
+        lay.addWidget(shadow)
 
-        conflicts_label = QLabel("Conflicts (field edits an older change lost to):")
-        conflicts_label.setStyleSheet("font-size: 11px; color: #B0B0B0;")
-        sync_status_layout.addWidget(conflicts_label)
-
-        self.conflicts_table = QTableWidget(0, 5)
-        self.conflicts_table.setHorizontalHeaderLabels(["Table", "Column", "Kept", "Discarded", "When"])
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.conflicts_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        conflicts = Card("Conflicts")
+        conflicts_label = QLabel("Field edits an older change lost to:")
+        conflicts_label.setProperty("class", "HintText")
+        conflicts.add_widget(conflicts_label)
+        self.conflicts_table = DarkListTable(0, len(_CONFLICT_COLUMNS))
+        self.conflicts_table.setHorizontalHeaderLabels([c[0] for c in _CONFLICT_COLUMNS])
+        for col, (_, spec) in enumerate(_CONFLICT_COLUMNS):
+            self.conflicts_table.set_column(col, **spec)
         self.conflicts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.conflicts_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.conflicts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.conflicts_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.conflicts_table.setMinimumHeight(100)
-        self.conflicts_table.setMaximumHeight(180)
-        sync_status_layout.addWidget(self.conflicts_table)
-
-        conflicts_btn_row = QHBoxLayout()
-        self.btn_conflict_keep = QPushButton("  Keep")
-        icon = _safe_icon("mdi.check", color="#FFFFFF")
-        if icon:
-            self.btn_conflict_keep.setIcon(icon)
-        self.btn_conflict_keep.setToolTip("Acknowledge the row already holds the value that won.")
+        conflicts.add_widget(self.conflicts_table, 1)
+        conflict_btns = QWidget()
+        conflict_btns.setProperty("class", "FormHost")
+        conflicts_btn_row = QHBoxLayout(conflict_btns)
+        conflicts_btn_row.setContentsMargins(0, 0, 0, 0)
+        conflicts_btn_row.setSpacing(TOKENS["s_2"])
+        self.btn_conflict_keep = LabelledAction("Keep", icon="mdi.check",
+                                                tooltip="Acknowledge the row already holds the value that won.")
         self.btn_conflict_keep.clicked.connect(self._on_conflict_keep)
         conflicts_btn_row.addWidget(self.btn_conflict_keep)
-
-        self.btn_conflict_use_discarded = QPushButton("  Use discarded value")
-        icon = _safe_icon("mdi.undo", color="#FFFFFF")
-        if icon:
-            self.btn_conflict_use_discarded.setIcon(icon)
-        self.btn_conflict_use_discarded.setToolTip("Write the discarded value back, as a normal edit.")
+        self.btn_conflict_use_discarded = LabelledAction("Use discarded value", icon="mdi.undo",
+                                                         tooltip="Write the discarded value back, as a normal edit.")
         self.btn_conflict_use_discarded.clicked.connect(self._on_conflict_use_discarded)
         conflicts_btn_row.addWidget(self.btn_conflict_use_discarded)
         conflicts_btn_row.addStretch()
-        sync_status_layout.addLayout(conflicts_btn_row)
+        conflicts.add_widget(conflict_btns)
+        lay.addWidget(conflicts, 1)
 
-        # Mirrors the Members panel's own condition, not members_group.isVisible() -- at this
-        # point in _build_ui() the dialog hasn't been shown yet, so isVisible() would read
-        # False regardless.
-        self.sync_status_group.setVisible(
-            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is not None
-        )
+        self.sync_status_group.setVisible(office_mode)
+        page_lay.addWidget(self.sync_status_group, 1)
+        return page
 
-        # Office mode: the office panels first, legacy push/pull last. Legacy mode shows only the
-        # devices box (the office groups are hidden).
-        if office_mode:
-            left_column.addWidget(self.members_group)
-            left_column.addWidget(self.sync_status_group)
-            left_column.addWidget(left_widget)
-        else:
-            left_column.addWidget(left_widget, 1)
-            left_column.addWidget(self.members_group)
-            left_column.addWidget(self.sync_status_group)
-        left_column.addStretch()
-
-        splitter.addWidget(left_scroll)
-
-        # Right Widget (Activity Log Sidebar)
-        right_widget = QGroupBox("⚡ Live Sync Activity Stream")
-        right_widget.setStyleSheet("QGroupBox { font-weight: 700; border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; padding-top: 14px; }")
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(12, 14, 12, 12)
-        right_layout.setSpacing(8)
-
-        log_top = QHBoxLayout()
-        log_info = QLabel("Real-time P2P sync events, revision scores & guard alerts:")
-        log_info.setStyleSheet("font-size: 11px; color: #A0A0A0;")
-        log_top.addWidget(log_info)
-        log_top.addStretch()
-
-        btn_clear_log = QPushButton("Clear")
-        btn_clear_log.setStyleSheet("padding: 3px 10px; font-size: 11px;")
-        btn_clear_log.clicked.connect(self._clear_activity_log)
-        log_top.addWidget(btn_clear_log)
-        right_layout.addLayout(log_top)
-
-        self.log_list = QListWidget()
-        self.log_list.setStyleSheet(
-            "QListWidget { background-color: #161B22; border: 1px solid #30363D; border-radius: 6px; padding: 4px; font-family: Consolas, monospace; font-size: 11px; }"
-            "QListWidget::item { padding: 5px 6px; border-bottom: 1px solid #21262D; }"
-        )
-        self.log_list.setSelectionMode(QAbstractItemView.NoSelection)
-        right_layout.addWidget(self.log_list)
-
-        splitter.addWidget(right_widget)
-
-        # Set Splitter ratio: Left ~70%, Right ~30%; extra width goes to the left panels
-        splitter.setSizes([880, 360])
-        splitter.setStretchFactor(0, 1)
-        main_layout.addWidget(splitter, 1)  # the panels get the spare height, not the banners
-
-        # Bottom Close Row
-        bottom_row = QHBoxLayout()
-        bottom_row.addStretch()
-        self.btn_close = QPushButton("Close")
-        self.btn_close.setStyleSheet("padding: 6px 18px;")
-        self.btn_close.clicked.connect(self.accept)
-        bottom_row.addWidget(self.btn_close)
-
-        main_layout.addLayout(bottom_row)
+    @staticmethod
+    def _panel_on(group):
+        """The Members / Sync Status refresh gate. The panels now sit on tabs, so a panel on a
+        tab that is not showing reads isVisible() False although the PC is in office mode;
+        visible-to-its-tab-page is False only when the panel is switched off (legacy mode)."""
+        return group.isVisible() or group.isVisibleTo(group.parentWidget())
 
     def _on_rejoin_office(self):
         if not self.sync_service:
@@ -572,7 +552,7 @@ class SeraSyncDialog(QDialog):
         return conn
 
     def _refresh_members(self):
-        if not getattr(self, "members_group", None) or not self.members_group.isVisible() or self.db is None:
+        if not getattr(self, "members_group", None) or not self._panel_on(self.members_group) or self.db is None:
             return
         try:
             import datetime
@@ -646,24 +626,32 @@ class SeraSyncDialog(QDialog):
             name_item = QTableWidgetItem(m.get("name", ""))
             name_item.setData(Qt.UserRole, dev_id)
             self.members_table.setItem(row, 0, name_item)
-            self.members_table.setItem(row, 1, QTableWidgetItem(self._online_status(dev_id, own_device_id)))
+            online = self._online_status(dev_id, own_device_id)
+            online_item = QTableWidgetItem(online)
+            online_item.setData(ROLE_PILL, (online, "emerald" if online.startswith("Online") else "neutral", True))
+            self.members_table.setItem(row, 1, online_item)
             role = "Admin" if dev_id == admin_device_id else "Member"
             self.members_table.setItem(row, 2, QTableWidgetItem(role))
             self.members_table.setItem(row, 3, QTableWidgetItem(last_ok.get(dev_id) or "never"))
-            self.members_table.setItem(row, 4, QTableWidgetItem("This PC" if dev_id == own_device_id else ""))
+            this_pc_item = QTableWidgetItem("This PC" if dev_id == own_device_id else "")
+            if dev_id == own_device_id:
+                this_pc_item.setData(ROLE_PILL, ("This PC", "neutral"))
+            self.members_table.setItem(row, 4, this_pc_item)
         self.members_table.setUpdatesEnabled(True)
 
         if warnings:
-            self.members_network_warning.setText("\n".join(warnings.values()))
+            self.members_network_warning.set_text("\n".join(warnings.values()))
             self.members_network_warning.setVisible(True)
         else:
             self.members_network_warning.setVisible(False)
 
         is_admin = own_device_id is not None and own_device_id == admin_device_id
-        self.btn_add_workstation.setEnabled(is_admin and self._add_workstation_session is None)
-        self.btn_remove_member.setEnabled(is_admin)
-        self.btn_hand_over_admin.setEnabled(is_admin)
-        self.btn_become_admin.setEnabled(not is_admin)
+        not_admin = None if is_admin else "Only the office's admin PC can do this"
+        self.btn_add_workstation.set_disabled_reason(
+            not_admin or ("A code window is already open" if self._add_workstation_session is not None else None))
+        self.btn_remove_member.set_disabled_reason(not_admin)
+        self.btn_hand_over_admin.set_disabled_reason(not_admin)
+        self.btn_become_admin.set_disabled_reason("This PC is already the admin" if is_admin else None)
 
     def _online_status(self, device_id: str, own_device_id: str | None) -> str:
         """Presence for the Members panel. Once the engine is running (P3-7), "Online" means
@@ -702,7 +690,7 @@ class SeraSyncDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _refresh_sync_status(self):
-        if not getattr(self, "sync_status_group", None) or not self.sync_status_group.isVisible() or self.db is None:
+        if not getattr(self, "sync_status_group", None) or not self._panel_on(self.sync_status_group) or self.db is None:
             return
         import sync_panel
         try:
@@ -749,6 +737,7 @@ class SeraSyncDialog(QDialog):
         except Exception as exc:
             print(f"[Sera Sync] could not refresh sync status: {exc}")
             return
+        self.mode_pill.set_text(f"Mode: {mode}")
 
         # P3-8b fix (a): "Run now" only makes sense in mode shadow (see _on_run_shadow_check).
         # Left untouched while a check is already running so its own re-enable at the end wins.
@@ -773,22 +762,16 @@ class SeraSyncDialog(QDialog):
         # Parked age warning (P3-8a): amber > 1 hour in shadow mode, red > 7 days in any mode
         if hasattr(self, "sync_status_warning_label"):
             if oldest_age is not None and oldest_age >= 7 * 86400:
-                self.sync_status_warning_label.setText(
+                self.sync_status_warning_label.set_text(
                     f"Warning: Parked changes exist older than 7 days ({sync_panel.format_age(oldest_age)})."
                 )
-                self.sync_status_warning_label.setStyleSheet(
-                    "QLabel { background-color: #300808; color: #FF8080; border: 1px solid #FF4D4D; "
-                    "padding: 4px 8px; border-radius: 4px; font-size: 11px; }"
-                )
+                self.sync_status_warning_label.set_tone("r")
                 self.sync_status_warning_label.setVisible(True)
             elif mode == "shadow" and oldest_age is not None and oldest_age >= 3600:
-                self.sync_status_warning_label.setText(
+                self.sync_status_warning_label.set_text(
                     f"Warning: Parked changes exist older than 1 hour in shadow mode ({sync_panel.format_age(oldest_age)})."
                 )
-                self.sync_status_warning_label.setStyleSheet(
-                    "QLabel { background-color: #332600; color: #FFD54F; border: 1px solid #FFA000; "
-                    "padding: 4px 8px; border-radius: 4px; font-size: 11px; }"
-                )
+                self.sync_status_warning_label.set_tone("w")
                 self.sync_status_warning_label.setVisible(True)
             else:
                 self.sync_status_warning_label.setVisible(False)
@@ -1207,7 +1190,7 @@ class SeraSyncDialog(QDialog):
             QMessageBox.warning(self, "Add Workstation", f"Could not open the pairing window: {exc}")
             return
         self._add_workstation_session = session
-        self.btn_add_workstation.setEnabled(False)
+        self.btn_add_workstation.set_disabled_reason("A code window is already open")
         if self.discovery_service is not None:
             try:
                 import sera_keys
@@ -1357,67 +1340,39 @@ class SeraSyncDialog(QDialog):
                     detail = entry.get("detail", "")
                     msg = f"{title} - {detail}" if detail else title
                     self._add_log_item(ts, cat, msg, auto_scroll=False)
-                self.log_list.scrollToBottom()
+                bar = self.log_list.verticalScrollBar()
+                bar.setValue(bar.maximum())
                 self.log_list.setUpdatesEnabled(True)
 
     def _on_activity_received(self, timestamp: str, category: str, message: str):
         self._add_log_item(timestamp, category, message, auto_scroll=True)
 
+    @staticmethod
+    def _activity_tone(category: str) -> str:
+        """The tag colour of an activity category (neutral when none of the words match)."""
+        cat_upper = category.upper()
+        for word, tone in _ACTIVITY_TONES:
+            if word in cat_upper:
+                return tone
+        return "neutral"
+
     def _add_log_item(self, ts: str, cat: str, message: str, auto_scroll: bool = True):
-        # Format organized plain-text activity log item with colored badges
-        icon_badge = "ℹ️"
-        color = "#C9D1D9"
-
-        cat_upper = cat.upper()
-        if "INV_FRAMES" in cat_upper:
-            icon_badge = "🛡️"
-            color = "#F2C94C"
-        elif "REVISION" in cat_upper:
-            icon_badge = "📊"
-            color = "#38D9A9"
-        elif "BEACON" in cat_upper:
-            icon_badge = "🟢"
-            color = "#7EE787"
-        elif "GUARD" in cat_upper:
-            icon_badge = "⚠️"
-            color = "#FFA657"
-        elif "PULL" in cat_upper:
-            icon_badge = "📥"
-            color = "#58A6FF"
-        elif "PUSH" in cat_upper:
-            icon_badge = "📤"
-            color = "#D2A8FF"
-        elif "SDIS" in cat_upper:
-            icon_badge = "🗂️"
-            color = "#F778BA"
-        elif "SSAL" in cat_upper:
-            icon_badge = "📋"
-            color = "#79C0FF"
-        elif "SYNC IN" in cat_upper or "ACCEPTED" in cat_upper:
-            icon_badge = "✅"
-            color = "#56D364"
-
-        formatted_text = f"[{ts}] {icon_badge} {cat_upper:^10} | {message}"
-        item = QListWidgetItem(formatted_text)
-        item.setForeground(QColor(color))
-        self.log_list.addItem(item)
-        
-        # Auto-prune if too large to prevent UI lag over long periods
-        if self.log_list.count() > 400:
-            deleted_item = self.log_list.takeItem(0)
-            del deleted_item
-            
-        if auto_scroll:
-            self.log_list.scrollToBottom()
+        # One line per event: "[ts] CATEGORY message", the category coloured by _activity_tone.
+        # LogView keeps the newest _ACTIVITY_MAX_LINES lines (the oldest drop off, as before)
+        # and follows new lines unless the user has scrolled up to read (auto_scroll is kept for
+        # the callers; the history load jumps to the end itself).
+        self.log_list.add_line(message, cat.upper(), tone=self._activity_tone(cat), ts=f"[{ts}]")
 
     def _clear_activity_log(self):
-        self.log_list.clear()
+        self.log_list.clear_log()
 
     def _refresh_peers(self):
         if not self.sync_service:
             return
         peers = self.sync_service.get_peers()
-        self.status_label.setText(f"🟢 {len(peers)} device{'s' if len(peers) != 1 else ''} online")
+        self.status_label.setText(f"{len(peers)} device{'s' if len(peers) != 1 else ''} online")
+        self.table.setVisible(bool(peers))
+        self.devices_empty.setVisible(not peers)
         self._update_network_warning()
         self._refresh_members()
 
@@ -1470,21 +1425,25 @@ class SeraSyncDialog(QDialog):
             t_cnt = peer.get("tracker_count", 0)
             item5 = self.table.item(r_idx, 5) or QTableWidgetItem()
             item5.setText(f"{c_cnt} CLI | {t_cnt} Dumps")
-            item5.setTextAlignment(Qt.AlignCenter)
-            item5.setForeground(QColor("#7DD3FC"))
             if not self.table.item(r_idx, 5): self.table.setItem(r_idx, 5, item5)
 
-            # 6: Status
+            # 6: Status (a pill: emerald Normal, amber when the office key differs)
             item6 = self.table.item(r_idx, 6) or QTableWidgetItem()
             local_key_id = getattr(self.sync_service, "key_id", None)
             peer_key_id = peer.get("key_id")
             if local_key_id != peer_key_id:
                 item6.setText("different office key — rejoin needed")
-                item6.setForeground(QColor("#FFA657"))
+                item6.setData(ROLE_PILL, (item6.text(), "amber"))
             else:
-                item6.setText("🟢 Normal")
-                item6.setForeground(QColor("#4CF9B7"))
+                item6.setText("Normal")
+                item6.setData(ROLE_PILL, (item6.text(), "emerald", True))
             if not self.table.item(r_idx, 6): self.table.setItem(r_idx, 6, item6)
+
+            # Every fact in the row's tooltip, so an elided or hidden column loses nothing.
+            facts = (f"{item0.text()} · {item1.text()}\nIP {item2.text()} · Version {item3.text()}\n"
+                     f"Database changed {item4.text()}\nClients / dumps {c_cnt} / {t_cnt}\n{item6.text()}")
+            for item in (item0, item1, item2, item3, item4, item5, item6):
+                item.setToolTip(facts)
 
         if new_sel_row >= 0:
             self.table.selectRow(new_sel_row)
@@ -1697,10 +1656,12 @@ class SeraSyncDialog(QDialog):
                 break
 
         if matching_addr:
-            icon = _safe_icon("mdi.minus-network", color="#FF5252")
             act_remove = menu.addAction(f"Remove '{matching_addr}' from Manual Peers")
-            if icon:
-                act_remove.setIcon(icon)
+            try:
+                import qtawesome as qta
+                act_remove.setIcon(qta.icon("mdi.minus-network", color=TOKENS["dangertx"]))
+            except Exception:
+                pass
 
             chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
             if chosen == act_remove:

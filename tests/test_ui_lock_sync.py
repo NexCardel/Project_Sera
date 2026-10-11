@@ -110,7 +110,7 @@ def test_device_table_shows_every_column_of_every_peer(make_dialog):
     dlg._refresh_peers()
     assert dlg.table.rowCount() == 2
     assert _row(dlg, 0) == ["Asha", "DESK-ASHA", "192.168.7.21", "v3.1.0", "2026-03-02 10:15",
-                            "42 CLI | 7 Dumps", "🟢 Normal"]
+                            "42 CLI | 7 Dumps", "Normal"]
     assert _row(dlg, 1)[:6] == ["Bhanu", "DESK-BHANU", "192.168.7.22", "v3.0.9",
                                 "2026-03-01 18:00", "40 CLI | 3 Dumps"]
 
@@ -137,13 +137,13 @@ def test_peer_dict_is_kept_on_the_username_cell(make_dialog):
 def test_status_label_counts_devices(make_dialog):
     dlg, svc = make_dialog()
     dlg._refresh_peers()
-    assert dlg.status_label.text() == "🟢 2 devices online"
+    assert dlg.status_label.text() == "2 devices online"
     svc.get_peers.return_value = PEERS[:1]
     dlg._refresh_peers()
-    assert dlg.status_label.text() == "🟢 1 device online"
+    assert dlg.status_label.text() == "1 device online"
     svc.get_peers.return_value = []
     dlg._refresh_peers()
-    assert dlg.status_label.text() == "🟢 0 devices online"
+    assert dlg.status_label.text() == "0 devices online"
     assert dlg.table.rowCount() == 0
 
 
@@ -167,7 +167,7 @@ def test_selection_follows_the_same_device_across_a_refresh(make_dialog):
 
 def test_refresh_button_rereads_the_peers(make_dialog):
     dlg, svc = make_dialog()
-    assert dlg.btn_refresh.text().strip() == "Refresh"
+    assert dlg.btn_refresh.text().strip() == "Scan again"  # S-12: was "Refresh"
     dlg.btn_refresh.click()
     assert dlg.table.rowCount() == 2
     svc.get_peers.return_value = PEERS[:1]
@@ -400,39 +400,43 @@ def test_activity_history_is_loaded_when_the_dialog_opens(make_dialog):
     hist = [{"timestamp": "10:01:02", "category": "PULL", "title": "Pulled", "detail": "3 rows"},
             {"timestamp": "10:02:03", "category": "info", "title": "Idle", "detail": ""}]
     dlg, _ = make_dialog(history=hist)
-    assert dlg.log_list.count() == 2
-    assert dlg.log_list.item(0).text() == "[10:01:02] 📥    PULL    | Pulled - 3 rows"
-    assert dlg.log_list.item(1).text() == "[10:02:03] ℹ️    INFO    | Idle"
+    # S-12: the stream is the kit LogView ("[ts] CATEGORY message", the category coloured).
+    assert dlg.log_list.line_count() == 2
+    assert dlg.log_list.lines()[0] == "[10:01:02] PULL    Pulled - 3 rows"
+    assert dlg.log_list.lines()[1] == "[10:02:03] INFO    Idle"
 
 
 def test_live_activity_arrives_through_the_service_callback(make_dialog):
     dlg, svc = make_dialog()
-    assert dlg.log_list.count() == 0
+    assert dlg.log_list.line_count() == 0
     svc.on_activity("11:00:00", "SYNC IN", "Accepted 4 rows")
-    assert dlg.log_list.count() == 1
-    assert "Accepted 4 rows" in dlg.log_list.item(0).text()
+    assert dlg.log_list.line_count() == 1
+    assert "Accepted 4 rows" in dlg.log_list.lines()[0]
     dlg.activity_signal.emit("11:00:01", "BEACON", "Found DESK-ASHA")
-    assert dlg.log_list.count() == 2
-    assert dlg.log_list.item(1).text().startswith("[11:00:01] 🟢")
+    assert dlg.log_list.line_count() == 2
+    assert dlg.log_list.lines()[1].startswith("[11:00:01] BEACON")
 
 
-@pytest.mark.parametrize("cat,badge", [
-    ("INV_FRAMES", "🛡️"), ("REVISION", "📊"), ("BEACON", "🟢"), ("GUARD", "⚠️"),
-    ("PULL", "📥"), ("PUSH", "📤"), ("SDIS", "🗂️"), ("SSAL", "📋"),
-    ("SYNC IN", "✅"), ("ACCEPTED", "✅"), ("NETWORK", "ℹ️"),
+# S-12: the old emoji badge per category became the LogView tag colour (same categories, same
+# order of matching).
+@pytest.mark.parametrize("cat,tone", [
+    ("INV_FRAMES", "amber"), ("REVISION", "emerald"), ("BEACON", "blue"), ("GUARD", "amber"),
+    ("PULL", "blue"), ("PUSH", "purple"), ("SDIS", "purple"), ("SSAL", "blue"),
+    ("SYNC IN", "emerald"), ("ACCEPTED", "emerald"), ("NETWORK", "neutral"),
 ])
-def test_each_activity_category_has_its_badge(make_dialog, cat, badge):
+def test_each_activity_category_has_its_badge(make_dialog, cat, tone):
     dlg, _ = make_dialog()
     dlg._on_activity_received("t", cat, "m")
-    assert f" {badge} " in dlg.log_list.item(0).text()
+    assert dlg._activity_tone(cat) == tone
+    assert dlg.log_list.lines()[0] == f"[t] {cat.ljust(7)} m"
 
 
 def test_activity_list_is_capped_at_400_oldest_dropped(make_dialog):
     dlg, _ = make_dialog()
     for i in range(405):
         dlg._add_log_item("t", "INFO", f"n{i}", auto_scroll=False)
-    assert dlg.log_list.count() == 400
-    assert dlg.log_list.item(0).text().endswith("| n5")
+    assert dlg.log_list.line_count() == 400
+    assert dlg.log_list.lines()[0].endswith(" n5")
 
 
 def test_clear_button_empties_the_activity_stream(make_dialog):
@@ -443,7 +447,7 @@ def test_clear_button_empties_the_activity_stream(make_dialog):
     clear = [b for b in dlg.findChildren(QPushButton) if b.text().strip() == "Clear"]
     assert len(clear) == 1
     clear[0].click()
-    assert dlg.log_list.count() == 0
+    assert dlg.log_list.line_count() == 0
 
 
 # --- R5.2 reachability / visibility ------------------------------------------------------
@@ -465,11 +469,17 @@ def test_office_mode_shows_recovery_kit_and_members_not_rejoin(make_dialog, real
     dlg, _ = make_dialog(key_id="officekey", db=real_db)
     dlg.show()
     S.app.processEvents()
+    # S-12: the three panels are tabs now; each one shows on its own tab.
+    assert dlg.tabs.isVisible() is True
+    assert dlg.sync_status_group.isVisible() is True  # office mode opens on Sync status
+    dlg.tabs.set_current(1)
+    S.app.processEvents()
+    assert dlg.members_group.isVisible() is True
+    dlg.tabs.set_current(0)
+    S.app.processEvents()
+    assert dlg.devices_group.isVisible() is True
     assert dlg.btn_export_kit.isVisible() is True
     assert dlg.btn_rejoin.isVisible() is False
-    assert dlg.members_group.isVisible() is True
-    assert dlg.sync_status_group.isVisible() is True
-    assert dlg.devices_group.isVisible() is True
 
 
 def test_legacy_mode_shows_rejoin_not_kit_members_or_status(make_dialog):
