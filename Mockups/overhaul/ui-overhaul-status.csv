@@ -31,7 +31,7 @@ S-11,4,Screens: Audit log (IMPLEMENTATION 4.5),Done,claude-sonnet-5-5,1,c067ce0,
 S-12,4,"Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ...",Done,claude-opus-5-5,1,7799b9d,"Sera Sync on the kit: strip, Segmented tabs, DarkListTable devices + EmptyState, LogView activity; feature map in 04-sera-sync.md; lock test adapted, sync UI tests unchanged",2026-10-11 17:18
 S-13,4,"Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ...",Done,claude-sonnet-5-5,1,cd3e59d,Ten small dialogs on the kit; global QProgressBar theme rule; 16 new tests; known pre-existing failures only; human checks 28-29,2026-10-11 17:47
 S-14,4,"Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ...",Done,claude-haiku-5-5,1,fb1490a,S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note,2026-10-11 18:50
-S-R,4,Review phase S (screens),In progress,claude-opus-5-5,1,,,2026-10-12 00:35
+S-R,4,Review phase S (screens),Done,claude-opus-5-5,1,fbcb288,Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite 139 fail all pre-existing/order leaks,2026-10-12 01:27
 F-1,5,Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ...,Not started,gemini-3.8-flash-high -> claude-haiku-5-5,0,,,
 F-2,5,Finish: Real screenshots of every screen into Mockups/built/ (fictional data).,Not started,gemini-3.8-flash-high -> claude-haiku-5-5,0,,,
 F-R,5,Review phase F (finish),Not started,claude-opus-5-5,0,,,
