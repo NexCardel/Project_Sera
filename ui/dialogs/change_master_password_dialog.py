@@ -10,31 +10,26 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QFormLayout,
-    QHBoxLayout,
     QInputDialog,
-    QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 import sera_keys
-
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
+from ui.components.kit import Banner, DialogFrame, FieldLabel, Input
+from ui.utils.tokens import TOKENS
 
 
-def _safe_icon(name: str, color: str = "#FFFFFF"):
-    if qta:
-        try:
-            return qta.icon(name, color=color)
-        except Exception:
-            pass
-    return None
+def _field(label: FieldLabel, widget: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(TOKENS["s_1"])
+    lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
 
 
 class ChangeMasterPasswordDialog(QDialog):
@@ -46,81 +41,50 @@ class ChangeMasterPasswordDialog(QDialog):
         self.app_dir = Path(app_dir)
 
         self.setWindowTitle("Change Office Master Password")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(540)
         self.setModal(True)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-        layout.setContentsMargins(20, 20, 20, 20)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Change master password",
+                            "Update the password used to recover the office key and protect recovery kits.",
+                            self, icon="mdi.lock-reset")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        # Header
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        icon_lbl = QLabel()
-        icon = _safe_icon("mdi.lock-reset", color="#4CF9B7")
-        if icon:
-            icon_lbl.setPixmap(icon.pixmap(28, 28))
-        header.addWidget(icon_lbl)
-
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Change Master Password")
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Update the password used to recover the office key and protect recovery kits.")
-        sub_lbl.setStyleSheet("font-size: 12px; color: #A0A0A0;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        layout.addLayout(header)
-
-        # Form
-        form = QFormLayout()
-        form.setSpacing(10)
-
-        self.current_pw = QLineEdit()
+        self.current_pw = Input(placeholder="Current master password")
         self.current_pw.setEchoMode(QLineEdit.Password)
-        self.current_pw.setPlaceholderText("Current master password")
-        form.addRow("Current password:", self.current_pw)
+        self.current_pw.setAccessibleName("Current password")
+        frame.add_widget(_field(FieldLabel("Current password", for_widget=self.current_pw), self.current_pw))
 
-        self.new_pw = QLineEdit()
+        self.new_pw = Input(placeholder="New master password (min 8 characters)")
         self.new_pw.setEchoMode(QLineEdit.Password)
-        self.new_pw.setPlaceholderText("New master password (min 8 characters)")
-        form.addRow("New password:", self.new_pw)
+        self.new_pw.setAccessibleName("New password")
+        frame.add_widget(_field(FieldLabel("New password", for_widget=self.new_pw), self.new_pw))
 
-        self.confirm_pw = QLineEdit()
+        self.confirm_pw = Input(placeholder="Confirm new master password")
         self.confirm_pw.setEchoMode(QLineEdit.Password)
-        self.confirm_pw.setPlaceholderText("Confirm new master password")
-        form.addRow("Confirm new password:", self.confirm_pw)
+        self.confirm_pw.setAccessibleName("Confirm new password")
+        frame.add_widget(_field(FieldLabel("Confirm new password", for_widget=self.confirm_pw), self.confirm_pw))
 
-        layout.addLayout(form)
+        frame.add_widget(Banner("The database is not modified. Only the key recovery file is re-encrypted.", "i"))
 
-        info_lbl = QLabel("Note: The database is not modified. Only the key recovery file is re-encrypted.")
-        info_lbl.setWordWrap(True)
-        info_lbl.setStyleSheet("font-size: 11px; color: #808080;")
-        layout.addWidget(info_lbl)
+        self.lbl_error = Banner("", "r")
+        self.lbl_error.hide()
+        frame.add_widget(self.lbl_error)
 
-        self.lbl_error = QLabel("")
-        self.lbl_error.setWordWrap(True)
-        self.lbl_error.setStyleSheet("color: #FF5252; font-size: 12px; font-weight: 600;")
-        layout.addWidget(self.lbl_error)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel = frame.add_action("Cancel")
         self.btn_cancel.clicked.connect(self.reject)
-        btn_layout.addWidget(self.btn_cancel)
 
-        self.btn_save = QPushButton("Change Password")
+        self.btn_save = frame.add_action("Change password", variant="primary", icon="mdi.check")
         self.btn_save.setDefault(True)
-        self.btn_save.setStyleSheet("background-color: #2E9B5F; color: #FFFFFF; font-weight: 600;")
         self.btn_save.clicked.connect(self._on_save)
-        btn_layout.addWidget(self.btn_save)
 
-        layout.addLayout(btn_layout)
         self.current_pw.setFocus(Qt.OtherFocusReason)
+
+    def _show_error(self, message: str):
+        self.lbl_error.set_text(message)
+        self.lbl_error.show()
 
     def _on_save(self):
         curr = self.current_pw.text()
@@ -128,24 +92,24 @@ class ChangeMasterPasswordDialog(QDialog):
         confirm = self.confirm_pw.text().strip()
 
         if not curr:
-            self.lbl_error.setText("Enter the current master password.")
+            self._show_error("Enter the current master password.")
             return
 
         if not new:
-            self.lbl_error.setText("Enter a new master password.")
+            self._show_error("Enter a new master password.")
             return
 
         if new != confirm:
-            self.lbl_error.setText("New passwords do not match.")
+            self._show_error("New passwords do not match.")
             return
 
         val_err = sera_keys.validate_master_password(new)
         if val_err:
-            self.lbl_error.setText(val_err)
+            self._show_error(val_err)
             return
 
         if curr == new:
-            self.lbl_error.setText("New password must be different from current password.")
+            self._show_error("New password must be different from current password.")
             return
 
         try:
@@ -159,13 +123,13 @@ class ChangeMasterPasswordDialog(QDialog):
             self.password_changed.emit()
             self.accept()
         except sera_keys.WrongPassword:
-            self.lbl_error.setText("Current master password is incorrect.")
+            self._show_error("Current master password is incorrect.")
             self.current_pw.clear()
             self.current_pw.setFocus()
         except ValueError as ve:
-            self.lbl_error.setText(str(ve))
+            self._show_error(str(ve))
         except Exception as e:
-            self.lbl_error.setText(f"Failed to change master password: {e}")
+            self._show_error(f"Failed to change master password: {e}")
 
 
 def export_recovery_kit_flow(parent, app_dir: str | Path, password: str | None = None, office_name: str | None = None) -> bool:

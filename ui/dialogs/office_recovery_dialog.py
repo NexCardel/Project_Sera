@@ -11,37 +11,31 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QFormLayout,
-    QHBoxLayout,
     QInputDialog,
-    QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 import sera_keys
-
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
+from ui.components.kit import Banner, DialogFrame, FieldLabel, IconButton, Input, LabelledAction
+from ui.utils.tokens import TOKENS
 
 
 MAX_ATTEMPTS = 5
 
 
-def _safe_icon(name: str, color: str = "#FFFFFF"):
-    if qta:
-        try:
-            return qta.icon(name, color=color)
-        except Exception:
-            pass
-    return None
+def _eye_icon(shown: bool):
+    try:
+        import qtawesome as qta
+        return qta.icon("mdi.eye-off-outline" if shown else "mdi.eye-outline", color=TOKENS["muted"])
+    except Exception:
+        return QIcon()
 
 
 class OfficeRecoveryDialog(QDialog):
@@ -57,107 +51,61 @@ class OfficeRecoveryDialog(QDialog):
         self.setMinimumWidth(480)
         self.setModal(True)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-        layout.setContentsMargins(20, 20, 20, 20)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Office key unlock required",
+                            "This Windows account can't unlock Sera. Enter the office master password.",
+                            self, icon="mdi.shield-key-outline")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        # Header with Material icon
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        icon_lbl = QLabel()
-        icon = _safe_icon("mdi.shield-key-outline", color="#2E9B5F")
-        if icon:
-            icon_lbl.setPixmap(icon.pixmap(32, 32))
-        header.addWidget(icon_lbl)
-
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        title_lbl = QLabel("Office Key Unlock Required")
-        title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("This Windows account can't unlock Sera. Enter the office master password.")
-        sub_lbl.setWordWrap(True)
-        sub_lbl.setStyleSheet("font-size: 12px; color: #A0A0A0;")
-        title_vbox.addWidget(title_lbl)
-        title_vbox.addWidget(sub_lbl)
-        header.addLayout(title_vbox)
-        header.addStretch()
-        layout.addLayout(header)
-
-        # Password Form
-        form = QFormLayout()
-        form.setSpacing(10)
-
-        pw_row = QHBoxLayout()
-        self.pw_edit = QLineEdit()
+        self.pw_edit = Input(placeholder="Enter office master password")
         self.pw_edit.setEchoMode(QLineEdit.Password)
-        self.pw_edit.setPlaceholderText("Enter office master password")
+        self.pw_edit.setAccessibleName("Master password")
         self.pw_edit.returnPressed.connect(self._on_unlock)
-        pw_row.addWidget(self.pw_edit)
-
-        self.btn_toggle_pw = QPushButton()
-        self.btn_toggle_pw.setFixedSize(32, 28)
-        self.btn_toggle_pw.setCursor(Qt.PointingHandCursor)
-        eye_icon = _safe_icon("mdi.eye-outline", color="#808080")
-        if eye_icon:
-            self.btn_toggle_pw.setIcon(eye_icon)
-        self.btn_toggle_pw.setToolTip("Show / Hide password")
+        self.btn_toggle_pw = IconButton("mdi.eye-outline", "Show / Hide password", sm=True)
+        self.btn_toggle_pw.setIcon(_eye_icon(False))
         self.btn_toggle_pw.clicked.connect(self._toggle_password_visibility)
-        pw_row.addWidget(self.btn_toggle_pw)
+        self.pw_edit.add_trailing(self.btn_toggle_pw)
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(TOKENS["s_1"])
+        lay.addWidget(FieldLabel("Master password", for_widget=self.pw_edit))
+        lay.addWidget(self.pw_edit)
+        frame.add_widget(box)
 
-        form.addRow("Master password:", pw_row)
-        layout.addLayout(form)
+        self.lbl_error = Banner("", "r")
+        self.lbl_error.hide()
+        frame.add_widget(self.lbl_error)
 
-        # Error / Status label
-        self.lbl_error = QLabel("")
-        self.lbl_error.setWordWrap(True)
-        self.lbl_error.setStyleSheet("color: #FF5252; font-size: 12px; font-weight: 600;")
-        layout.addWidget(self.lbl_error)
-
-        # Kit recovery option
-        kit_row = QHBoxLayout()
-        self.btn_restore_kit = QPushButton("Restore from recovery kit file...")
-        kit_icon = _safe_icon("mdi.file-key-outline", color="#4CF9B7")
-        if kit_icon:
-            self.btn_restore_kit.setIcon(kit_icon)
-        self.btn_restore_kit.setCursor(Qt.PointingHandCursor)
+        self.btn_restore_kit = LabelledAction("Restore from recovery kit file…", icon="mdi.file-key-outline",
+                                              tooltip="Unlock with a .serakit recovery kit instead")
         self.btn_restore_kit.clicked.connect(self._on_restore_kit)
-        kit_row.addWidget(self.btn_restore_kit)
-        kit_row.addStretch()
-        layout.addLayout(kit_row)
+        frame.add_widget(self.btn_restore_kit)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
-
-        self.btn_exit = QPushButton("Exit")
+        self.btn_exit = frame.add_action("Exit")
         self.btn_exit.clicked.connect(self.reject)
-        btn_layout.addWidget(self.btn_exit)
 
-        self.btn_unlock = QPushButton("Unlock")
+        self.btn_unlock = frame.add_action("Unlock", variant="primary", icon="mdi.lock-open-outline")
         self.btn_unlock.setDefault(True)
-        self.btn_unlock.setStyleSheet("background-color: #2E9B5F; color: #FFFFFF; font-weight: 600;")
         self.btn_unlock.clicked.connect(self._on_unlock)
-        btn_layout.addWidget(self.btn_unlock)
 
-        layout.addLayout(btn_layout)
         self.pw_edit.setFocus(Qt.OtherFocusReason)
 
+    def _show_error(self, message: str):
+        self.lbl_error.set_text(message)
+        self.lbl_error.show()
+
     def _toggle_password_visibility(self):
-        if self.pw_edit.echoMode() == QLineEdit.Password:
-            self.pw_edit.setEchoMode(QLineEdit.Normal)
-            eye_off = _safe_icon("mdi.eye-off-outline", color="#808080")
-            if eye_off:
-                self.btn_toggle_pw.setIcon(eye_off)
-        else:
-            self.pw_edit.setEchoMode(QLineEdit.Password)
-            eye_on = _safe_icon("mdi.eye-outline", color="#808080")
-            if eye_on:
-                self.btn_toggle_pw.setIcon(eye_on)
+        shown = self.pw_edit.echoMode() == QLineEdit.Password
+        self.pw_edit.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
+        self.btn_toggle_pw.setIcon(_eye_icon(shown))
 
     def _on_unlock(self):
         pwd = self.pw_edit.text()
         if not pwd:
-            self.lbl_error.setText("Enter the office master password.")
+            self._show_error("Enter the office master password.")
             return
 
         try:
@@ -177,7 +125,7 @@ class OfficeRecoveryDialog(QDialog):
             self._attempts += 1
             rem = MAX_ATTEMPTS - self._attempts
             if rem > 0:
-                self.lbl_error.setText(
+                self._show_error(
                     f"Wrong password. ({rem} attempts remaining)\n\n"
                     "This Windows account can't unlock Sera. Enter the office master password."
                 )
@@ -189,11 +137,11 @@ class OfficeRecoveryDialog(QDialog):
                 )
                 self.reject()
         except sera_keys.KeyUnavailable as e:
-            self.lbl_error.setText(f"Recovery file not found or unavailable:\n{e}")
+            self._show_error(f"Recovery file not found or unavailable:\n{e}")
         except sera_keys.KeyFileInvalid as e:
-            self.lbl_error.setText(f"The recovery data is invalid or damaged:\n{e}")
+            self._show_error(f"The recovery data is invalid or damaged:\n{e}")
         except Exception as e:
-            self.lbl_error.setText(f"Failed to recover office key: {e}")
+            self._show_error(f"Failed to recover office key: {e}")
 
     def _on_restore_kit(self):
         kit_file, _ = QFileDialog.getOpenFileName(
@@ -252,7 +200,7 @@ class OfficeRecoveryDialog(QDialog):
             self._attempts += 1
             rem = MAX_ATTEMPTS - self._attempts
             if rem > 0:
-                self.lbl_error.setText(f"Wrong password for recovery kit file. ({rem} attempts remaining)")
+                self._show_error(f"Wrong password for recovery kit file. ({rem} attempts remaining)")
             else:
                 QMessageBox.critical(
                     self, "Aman Associates — Key Recovery Failed",

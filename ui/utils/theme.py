@@ -548,6 +548,19 @@ QWidget#ManageClientsPage QPushButton[class="ServiceChip"]:checked {
 QFrame[class="BulkBar"] { background-color: #10231A; border: 1px solid #245A3E; border-radius: 7px; }
 QFrame[class="BulkBar"] QLabel[class="BulkLabel"] { color: $mint; font-weight: 600; background: transparent; }
 QWidget#ManageClientsPage QFrame[class="BulkBar"] QPushButton { padding: 4px 10px; }
+
+/* Progress: thin emerald bar on a line-coloured track (loading, force update, join) */
+QProgressBar {
+    background-color: $line;
+    border: none;
+    border-radius: 3px;
+    min-height: 6px;
+    max-height: 6px;
+}
+QProgressBar::chunk {
+    background-color: $em;
+    border-radius: 3px;
+}
 """).substitute(TOKENS)
 
 def get_theme_stylesheet(theme_name: str = "light") -> str:

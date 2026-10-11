@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 16:59)
+# UI overhaul — report (2026-10-11 17:18)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 7 |
+| Not started | 6 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 29 |
+| Done | 30 |
 | Blocked | 0 |
 
-Runs: 38   output tokens: 1551074   API-equivalent cost: $108.60
+Runs: 39   output tokens: 1633568   API-equivalent cost: $115.98
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -43,7 +43,7 @@ Runs: 38   output tokens: 1551074   API-equivalent cost: $108.60
 | S-9 | Done | sonnet | 1d36af7 | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | Manage Clients on the kit: ChipBar, white DataGrid list, cards, bulk SelectionBar; lock + new kit tests pass, goldens in Mockups/built/manage |
 | S-10 | Done | sonnet | b574da2 | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... | Tracker Dump on the kit: tiles, chips, segmented switch, dark DataGrid with pills and delegate row actions; WIDE columns unchanged; lock tests adapted, 11 new k |
 | S-11 | Done | sonnet | c067ce0 | Screens: Audit log (IMPLEMENTATION 4.5) | Audit log on the kit: chips drive hidden state widgets, DarkListTable workstations, pill actions, Entry card; 3 goldens; lock tests pass |
-| S-12 | Not started | opus |  | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... |  |
+| S-12 | Done | opus | 7799b9d | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... | Sera Sync on the kit: strip, Segmented tabs, DarkListTable devices + EmptyState, LogView activity; feature map in 04-sera-sync.md; lock test adapted, sync UI te |
 | S-13 | Not started | sonnet |  | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... |  |
 | S-14 | Not started | haiku |  | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... |  |
 | S-R | Not started | opus |  | Review phase S (screens) |  |
@@ -103,6 +103,9 @@ Runs: 38   output tokens: 1551074   API-equivalent cost: $108.60
 - **S-11** How do the Action/Staff/Date filters become chips without breaking the lock tests? → Chips are menus that drive the existing hidden Select/Input widgets (action_combo, actor_input, cmb_date_preset) and mirror their state (Lock tests drive those attribute names directly; the kit has no new widget classes to spare)
 - **S-11** Refresh and Export row overflows at 1093 logical px (125 %) → Refresh is an icon-only IconButton (btn_refresh; one lock-test line now calls btn_refresh.click()); Export goes icon-only in COMPACT or below 1180 px (Both keep their DB call and tooltip; nothing disappears; no chip clipping at 125 %)
 - **S-11** Workstation list widget and its count → DarkListTable (kit) with a count column filled from the loaded cache; workstation_list.rowCount() replaces count() in one lock-test line (The plain QListWidget showed a default blue selection; the kit list uses the emerald selection without literals)
+- **S-12** Sera Sync: the kit has no Tabs or device-card widget, and the lock tests drive the device list as a table (rows, right-click by position). A = build now: kit Segmented switches the three tabs, devices stay one row each in the kit dark list table (all 7 facts as columns, status as a pill, every fact in the row tooltip, empty sentence + Add PC by IP under it). B = stop S-12 and first add kit Tabs + DeviceCard in a small kit package. → A (asked as Q1)
+- **S-12** Sync selected/all, Inv-Frames switch, device tick and ahead/behind from spec 4.6 → Not built (None exists in today's dialog: Sync selected/all removed in P4-1 (test keeps them absent), no Inv-Frames control or setting, peers carry no revision score; adding them is new behaviour or a protocol change)
+- **S-12** Which tab opens first, and how do hidden tabs still refresh → Office mode opens on Sync status; refresh gate is visible-or-visible-to-its-page (_panel_on) (Old dialog showed office panels first and test_sync_status_panel_ui expects Sync status visible after show; members cache feeds the pending counts so it must refresh while its tab is hidden)
 
 ## Checks waiting for you
 
@@ -132,3 +135,4 @@ Runs: 38   output tokens: 1551074   API-equivalent cost: $108.60
 - #24 (S-9) At 1366 the bulk bar buttons are icon-only: confirm the tooltips make Attach/detach, Archive, Restore and Delete permanently clear. Also check the soft New client button, the 'Unsaved changes' line (editor header grows by one line), and that all five filter chips fit the 390 px list column at 125 %. — Not run
 - #25 (S-10) Open Tracker Dump on a real 125 percent screen with a real client list (1024 px wide): Client column is narrow there because fit_columns is unchanged; confirm names are still readable enough — Not run
 - #26 (S-11) Open the Audit log at 125 % display scale on a real PC: the Action/Staff/Date chips and the icon-only Export must not clip; Service and Detail columns hide below ~1080 px. — Not run
+- #27 (S-12) Sera Sync on a real 1366x768 laptop at 125 %: Devices tab scrolls a little to reach Add/Remove PC by IP when the Public-network banner shows; check two real PCs list, right-click a manual peer, Add workstation code window and the activity stream follow-to-bottom — Not run

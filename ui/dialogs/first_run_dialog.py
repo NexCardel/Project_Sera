@@ -15,47 +15,40 @@ with an old-style database but no office key is offered the P2-8 rejoin/salvage 
 Also provides JoinApprovalDialog for the serving PC to approve incoming join requests.
 """
 
-import os
-import sys
+import html
 import secrets
 import threading
 from pathlib import Path
-from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
-    QWidget,
-    QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QPushButton,
-    QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
-    QProgressBar,
     QMessageBox,
-    QFrame,
+    QProgressBar,
+    QStackedWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
-try:
-    import qtawesome as qta
-except Exception:
-    qta = None
+from ui.components.kit import (
+    Banner, Card, DarkListTable, DialogFrame, FieldLabel, Input, LabelledAction, SectionLabel,
+)
+from ui.utils.tokens import TOKENS
 
 
-def _safe_icon(name: str, color: Optional[str] = None) -> QIcon:
-    if qta:
-        try:
-            if color:
-                return qta.icon(name, color=color)
-            return qta.icon(name)
-        except Exception:
-            pass
-    return QIcon()
+def _field(label: FieldLabel, widget: QWidget) -> QWidget:
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(TOKENS["s_1"])
+    lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
 
 
 class FirstRunDialog(QDialog):
@@ -79,7 +72,8 @@ class FirstRunDialog(QDialog):
         self.actor_alias = actor_alias
 
         self.setWindowTitle("Welcome to Project Sera — Initial Setup")
-        self.setFixedSize(620, 520)
+        self.setMinimumSize(620, 560)
+        self.resize(680, 600)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         # 6-digit join authorization code
@@ -94,8 +88,7 @@ class FirstRunDialog(QDialog):
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
         self.stack = QStackedWidget(self)
         main_layout.addWidget(self.stack)
@@ -118,127 +111,84 @@ class FirstRunDialog(QDialog):
 
     # ---------------- PAGE 0: Mode Choice ----------------
 
+    def _choice_card(self, button: LabelledAction, text: str) -> Card:
+        desc = QLabel(text)
+        desc.setWordWrap(True)
+        card = Card()
+        card.add_widget(button)
+        card.add_widget(desc)
+        return card
+
     def _build_choice_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(16)
+        frame = DialogFrame("Welcome to Project Sera",
+                            "No local database was detected. Choose how to set up this workstation.",
+                            self, icon="mdi.office-building")
+        frame.closeRequested.connect(self.reject)
 
-        title = QLabel("Welcome to Project Sera")
-        title.setFont(QFont("Segoe UI", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        self.new_office_btn = LabelledAction("Create a new office", icon="mdi.office-building",
+                                             tooltip="Make this PC the office admin PC")
+        self.new_office_btn.clicked.connect(lambda: self.stack.setCurrentIndex(1))
+        frame.add_widget(self._choice_card(
+            self.new_office_btn,
+            "Set up a new office on this PC. You will choose the office master password."))
 
-        subtitle = QLabel("No local database was detected. Choose how to set up this workstation:")
-        subtitle.setFont(QFont("Segoe UI", 10))
-        subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("color: #888888;")
-        layout.addWidget(subtitle)
-
-        layout.addSpacing(12)
-
-        # Option 1: New Office (office key, P2-7)
-        new_btn = QPushButton("  Create a New Office")
-        new_btn.setIcon(_safe_icon("mdi.office-building", "#4CAF50"))
-        new_btn.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        new_btn.setMinimumHeight(64)
-        new_btn.setCursor(Qt.PointingHandCursor)
-        new_btn.clicked.connect(lambda: self.stack.setCurrentIndex(1))
-        layout.addWidget(new_btn)
-
-        new_desc = QLabel("Set up a new office on this PC. You will choose the office master password.")
-        new_desc.setFont(QFont("Segoe UI", 9))
-        new_desc.setStyleSheet("color: #777777; margin-left: 16px; margin-bottom: 8px;")
-        new_desc.setWordWrap(True)
-        layout.addWidget(new_desc)
-
-        # Option 2: Join Office (office key, P2-7 pairing)
-        join_btn = QPushButton("  Join an Existing Office")
-        join_btn.setIcon(_safe_icon("mdi.lan-connect", "#2196F3"))
-        join_btn.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        join_btn.setMinimumHeight(64)
-        join_btn.setCursor(Qt.PointingHandCursor)
-        join_btn.clicked.connect(self._start_office_join_page)
-        layout.addWidget(join_btn)
-
-        join_desc = QLabel(
+        self.join_office_btn = LabelledAction("Join an existing office", icon="mdi.lan-connect",
+                                              tooltip="Pair with the office admin PC")
+        self.join_office_btn.clicked.connect(self._start_office_join_page)
+        frame.add_widget(self._choice_card(
+            self.join_office_btn,
             "Pair with the office admin PC using the 6-digit code shown in its "
-            "\"Add workstation\" dialog, then download the office database."
-        )
-        join_desc.setFont(QFont("Segoe UI", 9))
-        join_desc.setStyleSheet("color: #777777; margin-left: 16px;")
-        join_desc.setWordWrap(True)
-        layout.addWidget(join_desc)
+            "\"Add workstation\" dialog, then download the office database."))
 
-        layout.addStretch()
-
-        exit_btn = QPushButton("Exit")
-        exit_btn.clicked.connect(self.reject)
-        layout.addWidget(exit_btn, alignment=Qt.AlignRight)
-
-        return page
+        self.exit_btn = frame.add_action("Exit", icon="mdi.close")
+        self.exit_btn.clicked.connect(self.reject)
+        return frame
 
     # ---------------- PAGE 1: New Office (office key, P2-7) ----------------
 
     def _build_office_new_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        frame = DialogFrame("Create new office",
+                            "This PC becomes the office admin PC.",
+                            self, icon="mdi.office-building")
+        frame.closeRequested.connect(lambda: self.stack.setCurrentIndex(0))
 
-        title = QLabel("Create New Office")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        layout.addWidget(title)
+        frame.add_widget(Banner(
+            "Choose a name for the office and a master password: it unlocks the office if "
+            "Windows can't, and is needed to add other workstations later.", "i"))
 
-        desc = QLabel(
-            "This PC becomes the office admin PC. Choose a name for the office and a master "
-            "password: it unlocks the office if Windows can't, and is needed to add other "
-            "workstations later."
-        )
-        desc.setStyleSheet("color: #888888;")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+        self.office_name_input = Input(placeholder="e.g. Aman Associates")
+        frame.add_widget(_field(FieldLabel("Office name", required=True, for_widget=self.office_name_input),
+                                self.office_name_input))
 
-        layout.addSpacing(8)
+        self.office_new_pwd_input = Input(placeholder="Master password (min 8 characters)")
+        self.office_new_pwd_input.setEchoMode(Input.Password)
+        self.office_new_pwd_input.setAccessibleName("Master password")
+        frame.add_widget(_field(FieldLabel("Master password", required=True, for_widget=self.office_new_pwd_input),
+                                self.office_new_pwd_input))
 
-        layout.addWidget(QLabel("Office Name:"))
-        self.office_name_input = QLineEdit()
-        self.office_name_input.setPlaceholderText("e.g. Aman Associates")
-        layout.addWidget(self.office_name_input)
+        self.office_new_pwd_confirm = Input(placeholder="Confirm master password")
+        self.office_new_pwd_confirm.setEchoMode(Input.Password)
+        self.office_new_pwd_confirm.setAccessibleName("Confirm master password")
+        frame.add_widget(_field(FieldLabel("Confirm master password", required=True,
+                                           for_widget=self.office_new_pwd_confirm),
+                                self.office_new_pwd_confirm))
 
-        layout.addWidget(QLabel("Master Password (min 8 characters):"))
-        self.office_new_pwd_input = QLineEdit()
-        self.office_new_pwd_input.setEchoMode(QLineEdit.Password)
-        layout.addWidget(self.office_new_pwd_input)
+        self.office_new_error_label = Banner("", "r")
+        self.office_new_error_label.hide()
+        frame.add_widget(self.office_new_error_label)
 
-        layout.addWidget(QLabel("Confirm Master Password:"))
-        self.office_new_pwd_confirm = QLineEdit()
-        self.office_new_pwd_confirm.setEchoMode(QLineEdit.Password)
-        layout.addWidget(self.office_new_pwd_confirm)
-
-        self.office_new_error_label = QLabel("")
-        self.office_new_error_label.setStyleSheet("color: #FF5252;")
-        self.office_new_error_label.setWordWrap(True)
-        layout.addWidget(self.office_new_error_label)
-
-        layout.addStretch()
-
-        btn_box = QHBoxLayout()
-        back_btn = QPushButton("Back")
-        back_btn.setIcon(_safe_icon("mdi.arrow-left"))
+        back_btn = frame.add_action("Back", icon="mdi.arrow-left")
         back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
-        btn_box.addWidget(back_btn)
+        frame.add_footer_spacer()
 
-        btn_box.addStretch()
-
-        self.office_create_btn = QPushButton("Create Office")
-        self.office_create_btn.setIcon(_safe_icon("mdi.check-circle", "#4CAF50"))
+        self.office_create_btn = frame.add_action("Create office", variant="primary", icon="mdi.check-circle")
         self.office_create_btn.setDefault(True)
         self.office_create_btn.clicked.connect(self._handle_create_office_v3)
-        btn_box.addWidget(self.office_create_btn)
+        return frame
 
-        layout.addLayout(btn_box)
-        return page
+    def _show_new_error(self, message: str):
+        self.office_new_error_label.set_text(message)
+        self.office_new_error_label.show()
 
     def _handle_create_office_v3(self):
         import sync_office
@@ -248,17 +198,17 @@ class FirstRunDialog(QDialog):
 
         err = sync_office.validate_new_office(office_name, pwd, pwd_confirm)
         if err:
-            self.office_new_error_label.setText(err)
+            self._show_new_error(err)
             return
 
         self.office_create_btn.setEnabled(False)
         try:
             sync_office.create_new_office(self.app_dir, office_name, pwd, self.actor_alias)
         except sync_office.SyncOfficeError as exc:
-            self.office_new_error_label.setText(str(exc))
+            self._show_new_error(str(exc))
             return
         except Exception as exc:
-            self.office_new_error_label.setText(f"Could not create the office: {exc}")
+            self._show_new_error(f"Could not create the office: {exc}")
             return
         finally:
             self.office_create_btn.setEnabled(True)
@@ -269,83 +219,68 @@ class FirstRunDialog(QDialog):
     # ---------------- PAGE 2: Join Office (office key / pairing, P2-7) ----------------
 
     def _build_office_join_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
+        frame = DialogFrame("Join office",
+                            "Pair with the admin PC using its 6-digit code.",
+                            self, icon="mdi.lan-connect", scroll=True)
+        frame.closeRequested.connect(self._back_from_office_join)
 
-        title = QLabel("Join Office (Pairing Code)")
-        title.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        layout.addWidget(title)
-
-        desc = QLabel(
+        frame.add_widget(Banner(
             "On the admin PC, open Sera Sync → Add workstation. Enter the 6-digit code "
-            "shown there below, or select the admin PC from the scan results."
-        )
-        desc.setStyleSheet("color: #888888;")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+            "shown there below, or select the admin PC from the scan results.", "i"))
 
-        pc_header = QHBoxLayout()
-        pc_label = QLabel("Admin PCs with an open pairing window:")
-        pc_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
-        pc_header.addWidget(pc_label)
-        pc_header.addStretch()
-
-        self.office_scan_btn = QPushButton("Scan LAN")
-        self.office_scan_btn.setIcon(_safe_icon("mdi.refresh"))
+        head = QWidget()
+        head_lay = QHBoxLayout(head)
+        head_lay.setContentsMargins(0, 0, 0, 0)
+        head_lay.setSpacing(TOKENS["s_3"])
+        head_lay.addWidget(SectionLabel("Admin PCs with an open pairing window"), 1)
+        self.office_scan_btn = LabelledAction("Scan LAN", icon="mdi.refresh",
+                                              tooltip="Listen for open pairing windows on the LAN")
         self.office_scan_btn.clicked.connect(self._scan_office_peers)
-        pc_header.addWidget(self.office_scan_btn)
-        layout.addLayout(pc_header)
+        head_lay.addWidget(self.office_scan_btn)
+        frame.add_widget(head)
 
-        self.office_peers_table = QTableWidget(0, 3)
+        self.office_peers_table = DarkListTable(0, 3)
         self.office_peers_table.setHorizontalHeaderLabels(["Office", "Admin PC", "IP Address"])
-        self.office_peers_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.office_peers_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.office_peers_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.office_peers_table.setMaximumHeight(90)
-        layout.addWidget(self.office_peers_table)
+        self.office_peers_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.office_peers_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.office_peers_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.office_peers_table.set_column(0, kind="strong", minimum=140)
+        self.office_peers_table.set_column(1, minimum=120)
+        self.office_peers_table.set_column(2, minimum=110)
+        self.office_peers_table.setMinimumHeight(110)
+        self.office_peers_table.setMaximumHeight(150)
+        frame.add_widget(self.office_peers_table)
 
-        manual_box = QHBoxLayout()
-        manual_box.addWidget(QLabel("Or IP:"))
-        self.office_manual_ip_input = QLineEdit()
-        self.office_manual_ip_input.setPlaceholderText("e.g. 192.168.1.50")
-        manual_box.addWidget(self.office_manual_ip_input)
-        manual_box.addWidget(QLabel("Code:"))
-        self.office_code_input = QLineEdit()
-        self.office_code_input.setPlaceholderText("123 456")
-        self.office_code_input.setMaximumWidth(100)
-        manual_box.addWidget(self.office_code_input)
-        layout.addLayout(manual_box)
+        manual = QWidget()
+        manual_lay = QHBoxLayout(manual)
+        manual_lay.setContentsMargins(0, 0, 0, 0)
+        manual_lay.setSpacing(TOKENS["s_3"])
+        self.office_manual_ip_input = Input(placeholder="e.g. 192.168.1.50")
+        manual_lay.addWidget(_field(FieldLabel("Or enter the admin PC's IP", for_widget=self.office_manual_ip_input),
+                                    self.office_manual_ip_input), 3)
+        self.office_code_input = Input(placeholder="123 456")
+        manual_lay.addWidget(_field(FieldLabel("Pairing code", for_widget=self.office_code_input),
+                                    self.office_code_input), 2)
+        frame.add_widget(manual)
 
         self.office_join_status_label = QLabel("")
-        self.office_join_status_label.setStyleSheet("color: #2196F3;")
         self.office_join_status_label.setWordWrap(True)
-        layout.addWidget(self.office_join_status_label)
+        frame.add_widget(self.office_join_status_label)
 
         self.office_join_progress = QProgressBar()
         self.office_join_progress.setRange(0, 0)
+        self.office_join_progress.setTextVisible(False)
         self.office_join_progress.setVisible(False)
-        layout.addWidget(self.office_join_progress)
+        frame.add_widget(self.office_join_progress)
 
-        layout.addStretch()
-
-        btn_box = QHBoxLayout()
-        back_btn = QPushButton("Back")
-        back_btn.setIcon(_safe_icon("mdi.arrow-left"))
+        back_btn = frame.add_action("Back", icon="mdi.arrow-left")
         back_btn.clicked.connect(self._back_from_office_join)
-        btn_box.addWidget(back_btn)
+        frame.add_footer_spacer()
 
-        btn_box.addStretch()
-
-        self.office_join_btn = QPushButton("Pair & Join")
-        self.office_join_btn.setIcon(_safe_icon("mdi.download-network", "#2196F3"))
+        self.office_join_btn = frame.add_action("Pair and join", variant="primary", icon="mdi.download-network")
         self.office_join_btn.setDefault(True)
         self.office_join_btn.clicked.connect(self._handle_office_join)
-        btn_box.addWidget(self.office_join_btn)
-
-        layout.addLayout(btn_box)
-        return page
+        return frame
 
     def _start_office_join_page(self):
         self.stack.setCurrentIndex(2)
@@ -492,7 +427,7 @@ class JoinApprovalDialog(QDialog):
         self.timeout_remaining = timeout_seconds
 
         self.setWindowTitle("Workstation Join Request — Sera Sync")
-        self.setFixedSize(480, 280)
+        self.setMinimumWidth(480)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._build_ui()
@@ -504,55 +439,36 @@ class JoinApprovalDialog(QDialog):
         self._timer.start()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        frame = DialogFrame("Workstation join request",
+                            "Check that the code below matches the one on their screen.",
+                            self, icon="mdi.lan-connect")
+        outer.addWidget(frame)
+        frame.closeRequested.connect(self.reject)
 
-        header = QLabel(f"Workstation <b>{self.host}</b> ({self.username}) wants to join.")
-        header.setFont(QFont("Segoe UI", 11))
+        header = QLabel(f"Workstation <b>{html.escape(self.host)}</b> ({html.escape(self.username)}) wants to join.")
         header.setWordWrap(True)
-        layout.addWidget(header)
-
-        # Code display box
-        code_box = QFrame()
-        code_box.setStyleSheet("background-color: rgba(33, 150, 243, 0.1); border: 1px solid #2196F3; border-radius: 6px;")
-        box_layout = QVBoxLayout(code_box)
-        box_layout.setContentsMargins(10, 8, 10, 8)
-
-        lbl_instruct = QLabel("Code on their screen:")
-        lbl_instruct.setFont(QFont("Segoe UI", 9))
-        box_layout.addWidget(lbl_instruct)
+        frame.add_widget(header)
 
         formatted = f"{self.code[:3]}  {self.code[3:]}" if len(self.code) == 6 else self.code
         self.code_label = QLabel(formatted)
-        self.code_label.setFont(QFont("Consolas", 18, QFont.Bold))
+        self.code_label.setFont(QFont("Consolas", 22, QFont.Bold))
         self.code_label.setAlignment(Qt.AlignCenter)
-        self.code_label.setStyleSheet("color: #2196F3; letter-spacing: 4px;")
-        box_layout.addWidget(self.code_label)
+        code_card = Card("Code on their screen")
+        code_card.add_widget(self.code_label)
+        frame.add_widget(code_card)
 
-        layout.addWidget(code_box)
+        self.timer_label = Banner(f"Allow? (Auto-rejecting in {self.timeout_remaining}s)", "w")
+        frame.add_widget(self.timer_label)
 
-        self.timer_label = QLabel(f"Allow? (Auto-rejecting in {self.timeout_remaining}s)")
-        self.timer_label.setStyleSheet("color: #888888;")
-        layout.addWidget(self.timer_label)
-
-        layout.addStretch()
-
-        btn_box = QHBoxLayout()
-        self.reject_btn = QPushButton("Reject")
-        self.reject_btn.setIcon(_safe_icon("mdi.close", "#F44336"))
+        self.reject_btn = frame.add_action("Reject", icon="mdi.close")
         self.reject_btn.clicked.connect(self.reject)
-        btn_box.addWidget(self.reject_btn)
+        frame.add_footer_spacer()
 
-        btn_box.addStretch()
-
-        self.allow_btn = QPushButton("Allow")
-        self.allow_btn.setIcon(_safe_icon("mdi.check", "#4CAF50"))
+        self.allow_btn = frame.add_action("Allow", variant="primary", icon="mdi.check")
         self.allow_btn.setDefault(True)
         self.allow_btn.clicked.connect(self.accept)
-        btn_box.addWidget(self.allow_btn)
-
-        layout.addLayout(btn_box)
 
     def _on_tick(self):
         self.timeout_remaining -= 1
@@ -560,4 +476,4 @@ class JoinApprovalDialog(QDialog):
             self._timer.stop()
             self.reject()
         else:
-            self.timer_label.setText(f"Allow? (Auto-rejecting in {self.timeout_remaining}s)")
+            self.timer_label.set_text(f"Allow? (Auto-rejecting in {self.timeout_remaining}s)")
