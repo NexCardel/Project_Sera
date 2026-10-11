@@ -334,12 +334,16 @@ def test_header_is_every_visible_mcl_column_plus_services(world):
 
 def test_row_actions_are_admin_only_and_act_on_the_current_client(world):
     db, ids, win = world
+    # S-7: the client actions live in the selection bar, which shows them once a row is selected
+    win.results_table.setCurrentCell(_row_of(win, ids["A"]), 0)
     assert win.btn_add_client.isVisibleTo(win) and win.btn_archive_client.isVisibleTo(win)
     for b in (win.btn_edit_client, win.btn_delete_client, win.btn_manage_services):
         assert not b.isVisibleTo(win)                                    # staff view
     win.set_admin_mode(True)
+    win.results_table.setCurrentCell(_row_of(win, ids["A"]), 0)
     for b in (win.btn_edit_client, win.btn_delete_client, win.btn_manage_services):
         assert b.isVisibleTo(win)
+    win.results_table.clearSelection()
 
     calls = []
     win.edit_client_requested.connect(lambda i: calls.append(("edit", i)))

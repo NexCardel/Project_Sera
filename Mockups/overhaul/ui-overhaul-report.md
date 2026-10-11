@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 01:00)
+# UI overhaul — report (2026-10-11 01:14)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 13 |
+| Not started | 12 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 23 |
+| Done | 24 |
 | Blocked | 0 |
 
-Runs: 31   output tokens: 1061506   API-equivalent cost: $63.97
+Runs: 32   output tokens: 1135634   API-equivalent cost: $70.12
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -37,7 +37,7 @@ Runs: 31   output tokens: 1061506   API-equivalent cost: $63.97
 | S-3 | Done | haiku | 5718c61 | Screens: Settings: SCC vault presets | SCC vault presets on the kit: Cards, eight display-only Tiles, formula Tags, Inputs; 3 goldens in Mockups/built/settings; 56 lock tests pass |
 | S-4 | Done | opus | eaf3752 | Screens: Settings: Columns (MCL) with Shows-on write-through (IMPLEMENTATION 4.3) + the three ... | MCL DarkListTable with staged M/Q/A ticks on one column model; visibility pages with Switch, Find, count; 16 new tests; goldens x12; sm buttons avoided (theme m |
 | S-5 | Done | sonnet | e14dde1 | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs | Services page + MCL manager, column edit, service manager, service edit rebuilt on the kit; 13 new tests, goldens at 1366/1024/125% |
-| S-6 | Not started | sonnet |  | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... |  |
+| S-6 | Done | sonnet | dcdd34a | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... | All Clients on the kit: PageHeader, ChipBar over the hidden combo, white DataGrid, Columns menu; 22 lock tests + 3 new pass; goldens in Mockups/built/search |
 | S-7 | Not started | opus |  | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour |  |
 | S-8 | Not started | haiku |  | Screens: Client detail panel |  |
 | S-9 | Not started | sonnet |  | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) |  |
@@ -84,6 +84,9 @@ Runs: 31   output tokens: 1061506   API-equivalent cost: $63.97
 - **S-4** Visibility pages: Switch or Checkbox per column? → kit Switch (README: 'a switch per column'); lock test now asserts kit.Switch instead of QCheckBox (Mockup and README say switches; setChecked/isChecked/toggled API unchanged so every caller keeps working)
 - **S-4** MCL row actions: sm buttons, drag reorder, Edit button? → Regular-height LabelledActions (Edit, Move up, Move down, Delete column... set apart); per-row drawn Edit CellAction too; Alt+Up/Alt+Down shortcuts; no drag handle (Inside a QDialog the theme rule 'QDialog QPushButton { min-height: 30px }' overrides kit sm height (28) and clips the button; drag reorder in a QTableWidget is new behaviour beyond arrangement)
 - **S-4** When does Save write the visibility flags? → A flag set is written when its visibility page was opened (as before) or when a Shows-on tick made it differ from the loaded value; values come from the shared model self.mcl_columns (Keeps the golden settings and old write behaviour; satisfies 4.3 'Save writes the right rows and only those')
+- **S-6** Where do the client and cell action buttons go on All Clients? → Interim action_row above the grid until S-7 adds the SelectionBar (The kit has no place for them yet; arrangement-only WP keeps every button and handler)
+- **S-6** Keep the ActivityCellDelegate breadcrumb and copy flash? → Dropped; activity detail stays in the ID cell tooltip and the UserRole+2 tag is kept (DataGrid has no hook for them; folding them into the kit is a kit change)
+- **S-6** Which flag does the Columns menu write, and may the last column be hidden? → Staff show_in_search, or admin_show_in_search in admin mode; at least one column must stay visible (Same flags as Settings Main screen; the old code forced no column, so an empty grid is prevented by a disabled switch with a reason)
 
 ## Checks waiting for you
 
@@ -102,3 +105,5 @@ Runs: 31   output tokens: 1061506   API-equivalent cost: $63.97
 - #13 (S-2) On a real 1366x768 screen, open Settings > Backup and confirm the Danger zone is readable and Restore is clearly red. — Not run
 - #14 (S-4) Settings > Master Column List on a real screen: click the M/Q/A ticks with the mouse, Alt+Up/Alt+Down on a selected row, Add/Edit/Delete column with a real column editor dialog, and check that the visibility pages agree before Save. — Not run
 - #15 (S-5) On a real 125% screen, open Settings > Services and the Service edit and Column edit dialogs: check nothing clips and the dropdown lists open fully. — Not run
+- #16 (S-6) On a real 125 % display, open All Clients: no horizontal scrollbar, chips and header not clipped, Columns menu fits. — Not run
+- #17 (S-6) SearchWindow.columns_changed is not connected in main.py: toggle a column in Columns on All Clients while Settings is open and confirm whether Settings needs to refresh. — Not run

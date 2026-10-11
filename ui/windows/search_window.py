@@ -27,7 +27,7 @@ except Exception:
     qta = None
 from ui.components.kit import (
     ROLE_SERVICES, Card, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
-    PageHeader, SettingRow, Switch,
+    PageHeader, SelectionBar, SettingRow, Switch,
 )
 from ui.utils.responsive import WidthAware
 from ui.utils.theme import SmartTableWidgetItem
@@ -49,6 +49,17 @@ _MORE_FILTERS = (
 )
 _SERVICE_DOTS = (T["em"], T["info"], T["purple"], T["warn"], KIT["orange"])
 _LAST_COLUMN_REASON = "At least one column must stay visible"
+_NO_ROW_REASON = "Select a client row first"
+_NO_CELL_REASON = "Select grid cells first"
+_NO_UNDO_REASON = "Nothing to undo (Ctrl+Z)"
+_NO_REDO_REASON = "Nothing to redo (Ctrl+Y)"
+
+
+def _brush_colour(brush, default):
+    """A cell brush's colour for the Fill / Text swatches; no brush or a see-through one is the default."""
+    if not brush or brush.style() == Qt.NoBrush or brush.color().alpha() == 0:
+        return default
+    return brush.color().name()
 
 
 def _column_spec(col):
@@ -190,12 +201,12 @@ class SearchWindow(WidthAware, QWidget):
         self.setup_responsive_chips(
             self.chip_bar, wide_layout=search_row, compact_layout=chip_row_lay, compact_row=self.chip_row)
 
-        # Client and cell actions
-        self.action_row = QWidget(self)
-        action_lay = QHBoxLayout(self.action_row)
-        action_lay.setContentsMargins(0, 0, 0, 0)
-        action_lay.setSpacing(T["s_2"])
-
+        # Selection bar: fixed height, contents follow the grid selection (IMPLEMENTATION 4.1)
+        self.selection_bar = SelectionBar()
+        self.btn_open_client = LabelledAction(
+            "Open", variant="soft", icon="mdi.arrow-right", sm=True,
+            tooltip="Open the selected client (Enter)")
+        self.btn_open_client.clicked.connect(self._request_open_client)
         self.btn_edit_client = LabelledAction(
             "Edit", variant="secondary", icon="mdi.pencil-outline", sm=True,
             tooltip="Edit selected client profile")
@@ -212,32 +223,40 @@ class SearchWindow(WidthAware, QWidget):
             "Fill", variant="secondary", icon="mdi.format-color-fill", sm=True,
             tooltip="Cell Fill Color (Background)")
         self.btn_fill_color.clicked.connect(self._open_fill_menu_from_toolbar)
+        self.btn_fill_color.set_swatch(T["g_bg"])
         self.btn_text_color = LabelledAction(
             "Text", variant="secondary", icon="mdi.format-color-text", sm=True,
             tooltip="Cell Text Color (Foreground)")
         self.btn_text_color.clicked.connect(self._open_text_menu_from_toolbar)
+        self.btn_text_color.set_swatch(T["g_text"])
         self.btn_clear_fmt = LabelledAction(
             "Clear", variant="secondary", icon="mdi.eraser", sm=True,
             tooltip="Clear Selected Cell Formatting")
         self.btn_clear_fmt.clicked.connect(self._clear_selected_formatting_from_toolbar)
         self.btn_undo = IconButton("mdi.undo", "Undo Cell Formatting (Ctrl+Z)", variant="bordered", sm=True)
         self.btn_undo.clicked.connect(self._undo_last_action)
-        self.btn_undo.setEnabled(False)
         self.btn_redo = IconButton("mdi.redo", "Redo Cell Formatting (Ctrl+Y)", variant="bordered", sm=True)
         self.btn_redo.clicked.connect(self._redo_last_action)
-        self.btn_redo.setEnabled(False)
+        self._update_undo_redo_buttons()
         self.btn_delete_client = LabelledAction(
             "Delete…", variant="danger", icon="mdi.delete-outline", sm=True,
             tooltip="Permanently delete selected client record")
         self.btn_delete_client.clicked.connect(self._request_delete_client)
 
-        for w in (self.btn_edit_client, self.btn_manage_services, self.btn_archive_client,
-                  self.btn_fill_color, self.btn_text_color, self.btn_clear_fmt,
-                  self.btn_undo, self.btn_redo):
-            action_lay.addWidget(w)
-        action_lay.addStretch(1)
-        action_lay.addWidget(self.btn_delete_client)
-        layout.addWidget(self.action_row)
+        self._client_buttons = (self.btn_open_client, self.btn_edit_client, self.btn_manage_services,
+                                self.btn_archive_client, self.btn_delete_client)
+        self._cell_buttons = (self.btn_fill_color, self.btn_text_color, self.btn_clear_fmt)
+
+        bar = self.selection_bar
+        for w in self._client_buttons[:-1]:
+            bar.add_action(w)
+        bar.add_divider()
+        bar.add_group_label("Cell")
+        for w in self._cell_buttons + (self.btn_undo, self.btn_redo):
+            bar.add_action(w)
+        bar.add_spacer()
+        bar.add_action(self.btn_delete_client)
+        layout.addWidget(self.selection_bar)
 
         self.results_table = DataGrid()
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectItems)
@@ -253,6 +272,8 @@ class SearchWindow(WidthAware, QWidget):
         self.results_table.installEventFilter(self)
         self.results_table.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         self.results_table.horizontalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.results_table.selectionModel().selectionChanged.connect(self._update_selection_bar)
+        self.results_table.selectionModel().currentChanged.connect(self._update_selection_bar)
 
         from PySide6.QtGui import QKeySequence, QShortcut
         self.copy_shortcut = QShortcut(QKeySequence.Copy, self.results_table)
@@ -273,6 +294,7 @@ class SearchWindow(WidthAware, QWidget):
         layout.addWidget(self.grid_frame, 1)
 
         self.set_admin_mode(False)
+        self._update_selection_bar()
 
         self.search_box.setFocus()
 
@@ -646,6 +668,7 @@ class SearchWindow(WidthAware, QWidget):
             self._current_mcl_cols = mcl_cols
             self.results_table.fit_columns()
             self._update_counts(len(clients), text, svc_val)
+            self._update_selection_bar()
 
             # Retain scroll positions precisely
             if v_val > 0:
@@ -738,9 +761,51 @@ class SearchWindow(WidthAware, QWidget):
 
     def _update_undo_redo_buttons(self):
         if hasattr(self, "btn_undo"):
-            self.btn_undo.setEnabled(len(self._undo_stack) > 0)
+            self.btn_undo.set_disabled_reason(None if self._undo_stack else _NO_UNDO_REASON)
         if hasattr(self, "btn_redo"):
-            self.btn_redo.setEnabled(len(self._redo_stack) > 0)
+            self.btn_redo.set_disabled_reason(None if self._redo_stack else _NO_REDO_REASON)
+
+    # ---- Selection bar: what the current grid selection allows (IMPLEMENTATION 4.1)
+    def _selected_rows(self):
+        return sorted({ix.row() for ix in self.results_table.selectedIndexes()})
+
+    def _who_text(self, row):
+        """The client's name for the bar: the first company / name column shown, else the client id."""
+        t = self.results_table
+        for c_idx, col in enumerate(getattr(self, "_current_mcl_cols", [])):
+            if _column_spec(col)["kind"] in ("strong", "text") and c_idx < t.columnCount():
+                item = t.item(row, c_idx)
+                if item is not None and item.text().strip():
+                    return item.text().strip()
+        item = t.item(row, 0)
+        return f"Client {item.data(Qt.UserRole)}" if item is not None else ""
+
+    def _update_selection_bar(self, *_):
+        if not hasattr(self, "selection_bar"):
+            return
+        rows = self._selected_rows()
+        if not rows:
+            # Nothing selected: only the hint shows; the actions are off too (Delete was always clickable).
+            for btn in self._client_buttons:
+                btn.set_disabled_reason(_NO_ROW_REASON)
+            for btn in self._cell_buttons:
+                btn.set_disabled_reason(_NO_CELL_REASON)
+            self.selection_bar.set_who("")
+            return
+        if len(rows) == 1:
+            reason = None
+            self.selection_bar.set_who(self._who_text(rows[0]))
+        else:
+            # Every client action works on one client today: never act on just one of several rows.
+            reason = f"Works on one client; {len(rows)} rows are selected"
+            self.selection_bar.set_who(f"{len(rows)} clients selected")
+        for btn in self._client_buttons:
+            btn.set_disabled_reason(reason)
+        for btn in self._cell_buttons:
+            btn.set_disabled_reason(None)
+        item = self.results_table.currentItem()
+        self.btn_fill_color.set_swatch(_brush_colour(item and item.background(), T["g_bg"]))
+        self.btn_text_color.set_swatch(_brush_colour(item and item.foreground(), T["g_text"]))
 
     def _undo_last_action(self):
         if hasattr(self, "search_box") and self.search_box.hasFocus():
@@ -960,7 +1025,15 @@ class SearchWindow(WidthAware, QWidget):
             return
             
         menu = QMenu(self)
-        
+
+        # The selection bar's client actions, so each has a keyboard path (menu key) too
+        client_acts = [b for b in self._client_buttons if b.isVisibleTo(self) and b.isEnabled()]
+        for btn in client_acts:
+            act = menu.addAction(btn.toolTip() or btn.text())
+            act.setData(("client", btn))
+        if client_acts:
+            menu.addSeparator()
+
         # Fill Color Submenu
         fill_menu = menu.addMenu("Cell Fill Color (Background)")
         if qta:
@@ -1039,7 +1112,10 @@ class SearchWindow(WidthAware, QWidget):
             return
             
         action_type, val = chosen_action.data()
-        
+        if action_type == "client":
+            val.click()
+            return
+
         if val == "custom":
             color = QColorDialog.getColor(parent=self)
             if not color.isValid():
@@ -1049,8 +1125,18 @@ class SearchWindow(WidthAware, QWidget):
         self._execute_formatting_operation(action_type, val)
 
     def _selected_client_id(self):
+        rows = self._selected_rows()
+        if len(rows) == 1:                  # the bar names this row: act on it, not on a stray current cell
+            item = self.results_table.item(rows[0], 0)
+            if item is not None:
+                return item.data(Qt.UserRole)
         item = self.results_table.currentItem()
         return item.data(Qt.UserRole) if item is not None else None
+
+    def _request_open_client(self):
+        client_id = self._selected_client_id()
+        if client_id is not None:
+            self.client_selected.emit(client_id)
 
     def _request_edit_client(self):
         client_id = self._selected_client_id()

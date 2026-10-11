@@ -16,3 +16,4 @@ Check,WP,Text,Result,Date,Notes
 15,S-5,"On a real 125% screen, open Settings > Services and the Service edit and Column edit dialogs: check nothing clips and the dropdown lists open fully.",Not run,2026-10-11 00:59,
 16,S-6,"On a real 125 % display, open All Clients: no horizontal scrollbar, chips and header not clipped, Columns menu fits.",Not run,2026-10-11 01:14,
 17,S-6,SearchWindow.columns_changed is not connected in main.py: toggle a column in Columns on All Clients while Settings is open and confirm whether Settings needs to refresh.,Not run,2026-10-11 01:14,
+18,S-7,"All Clients selection bar on a real screen at 125 %: select one row, several rows, then cells; bar never jumps, Fill/Text swatches match the cell, Delete asks and Cancel keeps the client. Also delete the two stray test-temp folders 'UsersNexAppDataLocalTemp...scratchpadpt1' and '...pt2' in the APP-ui root (left by an earlier run; not committed)",Not run,2026-10-11 07:55,
