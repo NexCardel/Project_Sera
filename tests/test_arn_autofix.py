@@ -79,6 +79,21 @@ def test_background_runs_only_on_the_admin_pc(fx, monkeypatch):
     assert len(fx_.find_targets(fx.w.db, fx.arn_re)) == 3
 
 
+def test_the_settings_switch_stops_it_before_it_starts_and_before_it_works(fx, monkeypatch):
+    import sync_admin
+    monkeypatch.setattr(sync_admin, "is_admin_pc", lambda *a, **k: True)
+    monkeypatch.setattr(fx_, "default_roots", lambda app_dir: fx.roots)
+    fx.w.db.set_setting("arn_autofix_enabled", "0")
+    assert auto.start_background(fx.w.db, fx.w.app, delay_s=0, log=lambda m: None) is None
+    assert len(fx_.find_targets(fx.w.db, fx.arn_re)) == 3
+    # switched on at start-up, off again during the start-up delay: it does nothing
+    fx.w.db.set_setting("arn_autofix_enabled", "1")
+    t = auto.start_background(fx.w.db, fx.w.app, delay_s=0.3, log=lambda m: None)
+    fx.w.db.set_setting("arn_autofix_enabled", "0")
+    t.join(60)
+    assert len(fx_.find_targets(fx.w.db, fx.arn_re)) == 3
+
+
 def test_background_reports_what_it_fixed(fx, monkeypatch):
     import sync_admin
     monkeypatch.setattr(sync_admin, "is_admin_pc", lambda *a, **k: True)

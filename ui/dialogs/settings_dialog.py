@@ -176,6 +176,12 @@ class SettingsDialog(QDialog):
         self.autostart_check.setToolTip("Automatically launch Project Sera in background when Windows starts.")
         form_general.addRow("", self.autostart_check)
 
+        self.arn_autofix_check = QCheckBox("Run the ARN fixer automatically when Sera starts")
+        self.arn_autofix_check.setToolTip(
+            "Fixes failed ARN-only GST rows from the corpus in the background, on the admin PC only. "
+            "Applies from the next start of Sera; switching it off before it has begun also stops it.")
+        form_general.addRow("", self.arn_autofix_check)
+
         self.fst_enabled_check = QCheckBox("Enable Sera DOM (DOM Detector — File Submission Tracker)")
         self.fst_enabled_check.setToolTip("Toggle DOM detector for capturing on-screen filing confirmations from web pages.")
         form_general.addRow("", self.fst_enabled_check)
@@ -368,6 +374,8 @@ class SettingsDialog(QDialog):
         fst_enabled = self.db.get_setting("fst_enabled", "1")
         self.fst_enabled_check.setChecked(fst_enabled == "1")
 
+        self.arn_autofix_check.setChecked(self.db.get_setting("arn_autofix_enabled", "1") != "0")
+
         sca_enabled = self.db.get_setting("sca_enabled", "1")
         self.sca_enabled_check.setChecked(sca_enabled == "1")
 
@@ -423,6 +431,7 @@ class SettingsDialog(QDialog):
             self.db.set_setting("show_hide_btn_enabled", show_hide_val)
             self.db.set_setting("fst_enabled", fst_val)
             self.db.set_setting("sca_enabled", sca_val)
+            self.db.set_setting("arn_autofix_enabled", "1" if self.arn_autofix_check.isChecked() else "0")
             self.db.set_setting("sca_action_mode", sca_mode_val)
             self.db.set_setting("sca_max_uses", str(sca_max_uses_val))
             self.db.set_setting("tracker_enabled", tracker_val)
