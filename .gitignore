@@ -126,3 +126,5 @@ Mockups/overhaul/logs/
 !Mockups/overhaul/ui-overhaul-decisions.csv
 !Mockups/overhaul/ui-overhaul-checks.csv
 !Mockups/overhaul/ui-overhaul-questions.csv
+# Worker pytest --basetemp paths whose backslashes got stripped (land in the repo root)
+/Users*AppDataLocalTemp*/
