@@ -14,6 +14,27 @@ from sera_db.common import SKELETON_NAME_REGEX
 
 RECOVERED_NAME_MARK = "/-"      # follows the client name of a row the ARN fixer corrected
 
+COMPLETE_RANK = 4               # "Submitted & Verified" and above (get_status_rank)
+
+
+def is_complete(status, arn) -> bool:
+    """A complete dataset: it has an ARN and its status is verified or processed. Derived from the row, so
+    it needs no column and every existing row is covered. Such a row is never lowered by a re-read of the
+    portal or by a peer's older view of it - only by a status change the user confirmed."""
+    if not arn or str(arn).strip().upper() in ("N/A", "NA", ""):
+        return False
+    from core.vsdc.vsdc_assembler import get_status_rank
+    return get_status_rank(status) >= COMPLETE_RANK
+
+
+def _user_confirmed(payload) -> bool:
+    """The payload says a lowered status was confirmed by the user (SGT's demotion dialog)."""
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else payload
+    except Exception:
+        return False
+    return isinstance(p, dict) and bool(p.get("status_correction")) and bool(p.get("status_confirmed"))
+
 
 class TrackerDumpMixin:
 
@@ -162,6 +183,7 @@ class TrackerDumpMixin:
         incoming_form = filing_type or ""
         incoming_pref = ""
         status_correction = False
+        user_confirmed = False
         cli_key = f"CLI_{valid_gid}" if valid_gid else (f"CLI_{valid_id}" if valid_id else None)
         taxpayer_id = pan or unassigned_identity or (candidates[0] if candidates else None) or cli_key
         
@@ -174,6 +196,7 @@ class TrackerDumpMixin:
                     incoming_form = p_obj.get("filing_type") or raw_p.get("filing_type") or incoming_form
                     incoming_pref = p_obj.get("filing_preference") or raw_p.get("filing_preference") or ""
                     status_correction = bool(p_obj.get("status_correction"))
+                    user_confirmed = status_correction and bool(p_obj.get("status_confirmed"))
                     taxpayer_id = p_obj.get("gstin") or p_obj.get("pan") or raw_p.get("gstin") or raw_p.get("pan") or taxpayer_id
                     page_url = p_obj.get("page_key") or p_obj.get("url") or raw_p.get("page_key") or raw_p.get("url")
                     if page_url and isinstance(page_url, str):
@@ -253,14 +276,20 @@ class TrackerDumpMixin:
                 ).fetchone()
                 if ex_row:
                     ex_status, ex_arn = ex_row
+                    # A complete dataset (ARN + verified) is locked: the portal read again, a dashboard tile or an
+                    # unasked "correction" cannot lower it. Only a change the user confirmed gets through.
+                    if status_correction and not user_confirmed and is_complete(ex_status, ex_arn):
+                        status_correction = False
                     try:
                         from core.vsdc.vsdc_assembler import get_status_rank
                         if get_status_rank(ex_status) > get_status_rank(status) and not status_correction:
                             status = ex_status
-                            if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A":
-                                arn_number = ex_arn
                     except Exception:
                         pass
+                    # An ARN, once captured, is never dropped by a later row without one - also at an
+                    # equal status (a dashboard tile "Filed" re-read after the filing carries no ARN).
+                    if (not arn_number or arn_number == "N/A") and ex_arn and ex_arn != "N/A" and not status_correction:
+                        arn_number = ex_arn
                 del_cur = r_conn.execute("DELETE FROM tracker_dump WHERE dataset_key = ?", (final_dataset_key,))
                 if del_cur.rowcount > 0:
                     is_replaced = True
@@ -514,9 +543,19 @@ class TrackerDumpMixin:
                 if dataset_key and not dataset_key.endswith(":UNKNOWN:FORM:CURRENT"):
                     td_cols = {r[1] for r in r_conn.execute("PRAGMA table_info(tracker_dump)").fetchall()}
                     order_sec = "gid DESC" if "gid" in td_cols else "id DESC"
-                    cur = r_conn.execute(f"SELECT id, created_at FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
+                    cur = r_conn.execute(f"SELECT id, created_at, status, arn_number FROM tracker_dump WHERE dataset_key = ? ORDER BY created_at DESC, {order_sec}, id DESC", (dataset_key,))
                     existing = cur.fetchall()
                     if existing:
+                        # A complete dataset here is not replaced by a lower view of it from another PC, however
+                        # new - unless that PC's user confirmed the lowering.
+                        try:
+                            from core.vsdc.vsdc_assembler import get_status_rank
+                            if (any(is_complete(e[2], e[3]) for e in existing)
+                                    and get_status_rank(d.get("status")) < max(get_status_rank(e[2]) for e in existing)
+                                    and not _user_confirmed(d.get("raw_payload_json"))):
+                                continue
+                        except Exception:
+                            pass
                         existing_newest_created = existing[0][1] or ""
                         # If incoming record is newer or same timestamp, purge older duplicates and replace
                         if str(created_at or "") >= str(existing_newest_created):

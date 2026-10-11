@@ -172,6 +172,7 @@ class _Slot:
     owner: Dict[str, str] = field(default_factory=dict)
     waived: bool = False                # written without form + period: the session ended before they came
     lowered: bool = False               # its status was just lowered on purpose: the tracker must accept it
+    confirmed: bool = False             # ... and the user said yes to it (a complete row is lowered only then)
     demotion_asked: Set[str] = field(default_factory=set)   # (status, page visit) pairs already put to the user
 
     @property
@@ -1112,6 +1113,7 @@ class SgtShadow:
         supersedes = slot.sent_key if slot.sent_key and slot.sent_key != key else None
         slot.sent_key = key
         lowered, slot.lowered = slot.lowered, False        # the tracker is told once; later rows are ordinary
+        confirmed, slot.confirmed = slot.confirmed, False
         gstin = prof.get("gstin") or ""
         pan = prof.get("pan") or (gstin[2:12] if len(gstin) == 15 else "")
         status = v.get("status") or SUBMIT_LEVELS[0]
@@ -1141,6 +1143,7 @@ class SgtShadow:
             "dataset_key": key,
             "supersedes_dataset_key": supersedes,
             "status_correction": lowered,
+            "status_confirmed": bool(lowered and confirmed),     # a complete (ARN + verified) row yields only to this
             "raw_payload": {
                 "source": {"engine": "SGT", "mode": self.mode, "record": slot.record, "confidence": slot.confidence,
                            "identity": s.confirm_note or "not confirmed yet"},
@@ -1486,6 +1489,7 @@ class SgtShadow:
         if evidence:
             slot.values["status_evidence"] = evidence
         slot.lowered = True
+        slot.confirmed = True
         self._event(s, "dataset", change="status lowered - confirmed by the user", key=self._label(slot.values),
                     **{"from": old, "to": new})
         self._queue(s, slot)

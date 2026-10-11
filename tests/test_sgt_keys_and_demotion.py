@@ -68,11 +68,13 @@ def rows(db):
         return [tuple(r) for r in c.execute("SELECT dataset_key, status, arn_number FROM tracker_dump ORDER BY id")]
 
 
-def put(db, status, arn, pref="Original", flag=False, form="ITR-4", period="AY 2026-27", portal="Income Tax"):
+def put(db, status, arn, pref="Original", flag=False, confirmed=False, form="ITR-4", period="AY 2026-27", portal="Income Tax"):
     p = {"portal": portal, "pan": PAN, "filing_type": form, "filing_preference": pref, "period_label": period,
          "arn": arn, "status": status, "capture_method": "SGT_live"}
     if flag:
         p["status_correction"] = True
+    if confirmed:
+        p["status_confirmed"] = True
     return db.insert_tracker_dump(portal=f"{portal} ({form})", period_label=period, arn_number=arn,
                                   capture_method="SGT_live", status=status, raw_payload_json=json.dumps(p), pan=PAN,
                                   filing_type=form)
@@ -91,10 +93,18 @@ class TestTracker:
         assert [(r[1]) for r in rows(db)] == ["Submitted & Verified"]
 
     def test_the_tracker_refuses_to_lower_a_status_unless_told_it_is_a_correction(self, db):
+        put(db, "Submitted (Not Verified)", "123456789150726")
+        put(db, "Draft", "123456789150726")
+        assert [r[1] for r in rows(db)] == ["Submitted (Not Verified)"]
+        put(db, "Draft", "123456789150726", flag=True)
+        assert [r[1] for r in rows(db)] == ["Draft"]
+
+    def test_a_complete_row_is_lowered_only_by_a_correction_the_user_confirmed(self, db):
         put(db, "Submitted & Verified", "123456789150726")
         put(db, "Submitted (Not Verified)", "123456789150726")
-        assert [r[1] for r in rows(db)] == ["Submitted & Verified"]
         put(db, "Submitted (Not Verified)", "123456789150726", flag=True)
+        assert [r[1] for r in rows(db)] == ["Submitted & Verified"]
+        put(db, "Submitted (Not Verified)", "123456789150726", flag=True, confirmed=True)
         assert [r[1] for r in rows(db)] == ["Submitted (Not Verified)"]
 
 
@@ -146,6 +156,7 @@ class TestDemotionWithAnArn:
         assert self.status(r) == ["Submitted (Not Verified)"]
         sent = r.sgt.drain()
         assert len(sent) == 1 and sent[0]["status"] == "Submitted (Not Verified)" and sent[0]["status_correction"] is True
+        assert sent[0]["status_confirmed"] is True
 
     def test_the_correction_flag_is_sent_once(self, tmp_path):
         r = self.make(tmp_path)
@@ -183,7 +194,7 @@ class TestDemotionWithoutAnArn:
         sent = r.sgt.drain()
         assert asked == [] and len(sent) == 1
         assert sent[0]["status"] == "Draft"
-        assert sent[0]["status_correction"] is True
+        assert sent[0]["status_correction"] is True and sent[0]["status_confirmed"] is False     # nobody was asked
 
 
 class TestRouterWiring:
