@@ -467,7 +467,7 @@ QPushButton[class="CloseButton"]:hover { color: #FFFFFF; background: $hover; bor
 
 /* Dialog Components */
 QFrame[class="ServiceCard"] { background: #171717; border: 1px solid #262626; border-radius: 6px; }
-QLabel[class="ClientName"] { font-size: 16px; font-weight: 700; color: $text; }
+QLabel[class="ClientName"] { font-size: 16px; font-weight: 700; color: $text; background: transparent; }
 
 /* Admin Window */
 QFrame[class="ConflictBanner"] { background-color: #7f1d1d; border: 1px solid #dc2626; border-radius: 6px; }
@@ -512,7 +512,7 @@ QFrame[class="FormCard"] QLabel, QFrame[class="EditorHeader"] QLabel { backgroun
 QLabel[class="FieldLabel"] { color: $muted; font-size: ${f_s}px; padding-top: 4px; }
 QLabel[class="FieldHint"] { color: #6F6E6A; font-size: ${f_xs}px; background: transparent; }
 QLabel[class="EditorTitle"] { color: $text; font-size: 16px; font-weight: 700; }
-QLabel[class="EditorSub"] { color: $muted; font-size: ${f_s}px; }
+QLabel[class="EditorSub"] { color: $muted; font-size: ${f_s}px; background: transparent; }
 QFrame[class="EditorHeader"] QLabel[class="EditorAvatar"] {
     background-color: $emdim;
     color: $mint;

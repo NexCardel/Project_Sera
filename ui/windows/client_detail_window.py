@@ -5,23 +5,15 @@ Window 2: shows client info, masked passwords, and autofill buttons.
 """
 
 import threading
-import webbrowser
 
 from PySide6.QtCore import Qt, QTimer, QSize, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QScrollArea,
-    QSizePolicy,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -32,25 +24,9 @@ try:
 except Exception:
     qta = None
 from automation import _AutofillBridge
+from ui.components.kit import Card, EmptyState, Key, LabelledAction, Pill, SettingRow, TextArea
 from ui.utils.masking import mask_password
-from pathlib import Path
-
-BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
-
-
-_ICON_CACHE = {}
-
-def _cached_icon(name: str, color: str = None) -> QIcon:
-    key = (name, color)
-    if key not in _ICON_CACHE:
-        if qta:
-            try:
-                _ICON_CACHE[key] = qta.icon(name, color=color) if color else qta.icon(name)
-            except Exception:
-                _ICON_CACHE[key] = QIcon()
-        else:
-            _ICON_CACHE[key] = QIcon()
-    return _ICON_CACHE[key]
+from ui.utils.tokens import TOKENS as T
 
 
 def _get_service_icon(name: str) -> str:
@@ -78,16 +54,16 @@ def _get_service_icon(name: str) -> str:
 def _get_portal_accent_color(name: str) -> str:
     n = (name or "").lower()
     if "gst" in n:
-        return "#D85A30"
+        return T["danger"]
     elif "income" in n or "tax" in n or "itr" in n:
-        return "#378ADD"
+        return T["info"]
     elif "email" in n or "mail" in n:
-        return "#7F77DD"
+        return T["purple"]
     elif "tds" in n or "traces" in n:
-        return "#E6A23C"
+        return T["warn"]
     elif "pf" in n or "provident" in n:
-        return "#2E9B5F"
-    return "#5DCAA5"
+        return T["mint"]
+    return T["muted"]
 
 
 class ClickableLabel(QLabel):
@@ -119,75 +95,51 @@ class ClientDetailWindow(QWidget):
         self.back_shortcut.activated.connect(self._safe_back_request)
 
     def _build_ui(self):
-        self.setStyleSheet("background-color: #1C1C1C;")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 14, 24, 14)
         outer.setSpacing(8)
 
-        # Header Bar: Back Button | Identity Title (2-line) | Token Badge
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 2)
         header.setSpacing(12)
 
-        self.back_btn = QPushButton()
-        self.back_btn.setFixedSize(28, 28)
-        self.back_btn.setToolTip("Back (Esc)")
-        self.back_btn.setIcon(qta.icon("mdi.arrow-left", color="#B4B2A9") if qta else QIcon(BACK_ICON))
-        self.back_btn.setIconSize(QSize(16, 16))
-        self.back_btn.setProperty("class", "GhostIconButton")
-        self.back_btn.setCursor(Qt.PointingHandCursor)
+        self.back_btn = LabelledAction(variant="ghost", icon="mdi.arrow-left", sm=True, tooltip="Back (Esc)")
+        self.back_btn.set_icon_only(True)
         self.back_btn.clicked.connect(self._safe_back_request)
-        header.addWidget(self.back_btn)
+        header.addWidget(self.back_btn, 0, Qt.AlignVCenter)
 
         title_vbox = QVBoxLayout()
         title_vbox.setContentsMargins(0, 0, 0, 0)
         title_vbox.setSpacing(1)
 
         self.primary_name_lbl = QLabel()
-        self.primary_name_lbl.setStyleSheet("font-size: 14px; font-weight: 600; color: #F5F5F0;")
+        self.primary_name_lbl.setProperty("class", "ClientName")
         title_vbox.addWidget(self.primary_name_lbl)
 
         self.secondary_name_lbl = QLabel()
-        self.secondary_name_lbl.setStyleSheet("font-size: 11px; color: #888780;")
+        self.secondary_name_lbl.setProperty("class", "EditorSub")
         title_vbox.addWidget(self.secondary_name_lbl)
 
         header.addLayout(title_vbox, stretch=1)
 
-        self.token_badge = QLabel()
-        self.token_badge.setCursor(Qt.PointingHandCursor)
-        self.token_badge.setStyleSheet("""
-            QLabel {
-                background-color: #123B31;
-                color: #5DCAA5;
-                font-size: 10px;
-                font-weight: 600;
-                padding: 3px 10px;
-                border-radius: 10px;
-            }
-            QLabel:hover {
-                background-color: #16483C;
-            }
-        """)
-        header.addWidget(self.token_badge)
+        self._token = ""
+        self.token_badge = LabelledAction(variant="soft", sm=True)
+        self.token_badge.clicked.connect(self._on_token_clicked)
+        header.addWidget(self.token_badge, 0, Qt.AlignVCenter)
         outer.addLayout(header)
 
-        # Top Hairline Divider
-        top_divider = QFrame()
-        top_divider.setFrameShape(QFrame.HLine)
-        top_divider.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
-        outer.addWidget(top_divider)
-
-        # Scroll Area for Profile Content (Seamless on #1C1C1C)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        scroll.setFrameShape(QFrame.NoFrame)
         self.scroll_widget = QWidget()
-        self.scroll_widget.setStyleSheet("background: transparent;")
         self.scroll_layout = QVBoxLayout(self.scroll_widget)
         self.scroll_layout.setContentsMargins(4, 8, 4, 12)
         self.scroll_layout.setSpacing(12)
         scroll.setWidget(self.scroll_widget)
         outer.addWidget(scroll, stretch=1)
+
+    def _on_token_clicked(self):
+        self._copy_token_to_clipboard(self._token)
 
     def _safe_back_request(self):
         if getattr(self, "_is_navigating_back", False):
@@ -253,8 +205,6 @@ class ClientDetailWindow(QWidget):
             self.back_requested.emit()
             return False
 
-
-        # Header Titles and Token
         primary, secondary = self._get_identity_parts(self.client)
         self.primary_name_lbl.setText(primary)
         if secondary:
@@ -262,19 +212,17 @@ class ClientDetailWindow(QWidget):
             self.secondary_name_lbl.show()
         else:
             self.secondary_name_lbl.hide()
-        
+
         token = self.client.get("client_id_token") or str(client_id)
+        self._token = token
         self.token_badge.setText(f"CLI-{token.zfill(5)}" if token.isdigit() else f"ID: {token}")
         self.token_badge.setToolTip(f"Client ID: {token}\nClick to copy to clipboard")
-        self.token_badge.mousePressEvent = lambda event, t=token: self._copy_token_to_clipboard(t)
-        
-        from PySide6.QtWidgets import QGridLayout
-        
+
         settings = self.db.get_all_settings()    # one connection, not four
         mask_mode = settings.get("mask_mode", "last_n")
         reveal_count = int(settings.get("mask_reveal_count", "4"))
         show_hide_btn_enabled = settings.get("show_hide_btn_enabled", "1") == "1"
-        
+
         timeout_sec = 30
         try:
             timeout_sec = int(settings.get("clipboard_clear_seconds", "30"))
@@ -285,336 +233,164 @@ class ClientDetailWindow(QWidget):
         identity_cols = [c for c in mcl_cols if c["field_type"] != "password"]
         security_cols = [c for c in mcl_cols if c["field_type"] == "password"]
 
-        # ======================================================================
-        # 1. Identity Section (Flowing 2-Column Grid on Canvas)
-        # ======================================================================
+        self._add_services_card(self.db.get_client_services(client_id))
         if identity_cols:
-            sec_lbl = QLabel("IDENTITY")
-            sec_lbl.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
-            self.scroll_layout.addWidget(sec_lbl)
-
-            id_grid = QGridLayout()
-            id_grid.setContentsMargins(0, 2, 0, 6)
-            id_grid.setHorizontalSpacing(24)
-            id_grid.setVerticalSpacing(10)
-
-            id_row, id_col = 0, 0
-            for col in identity_cols:
-                raw_val = self.client["values"].get(col["id"], "")
-                allow_qc = col.get("allow_quick_copy", True)
-
-                field_vbox = QVBoxLayout()
-                field_vbox.setContentsMargins(0, 0, 0, 0)
-                field_vbox.setSpacing(2)
-
-                lbl = QLabel(col['label'])
-                lbl.setStyleSheet("font-size: 10px; color: #7A7972;")
-                field_vbox.addWidget(lbl)
-
-                val_row = QHBoxLayout()
-                val_row.setContentsMargins(0, 0, 0, 0)
-                val_row.setSpacing(6)
-
-                if raw_val:
-                    if allow_qc:
-                        val_label = ClickableLabel(raw_val)
-                        val_label.clicked.connect(
-                            lambda v=raw_val, lbl_name=col['label'], is_sec=False, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                        )
-                        val_label.setCursor(Qt.PointingHandCursor)
-                        val_label.setToolTip(f"Click to copy {col['label']}")
-                    else:
-                        val_label = QLabel(raw_val)
-                    val_label.setStyleSheet("font-size: 12px; font-weight: 500; color: #E8E8E3;")
-                    val_row.addWidget(val_label, stretch=1)
-
-                    if allow_qc:
-                        btn_copy = QPushButton()
-                        btn_copy.setFixedSize(22, 22)
-                        btn_copy.setProperty("class", "GhostIconButton")
-                        btn_copy.setToolTip(f"Copy {col['label']}")
-                        btn_copy.setIcon(_cached_icon("mdi.content-copy", "#8E8D88"))
-                        btn_copy.setIconSize(QSize(13, 13))
-                        btn_copy.clicked.connect(
-                            lambda _, v=raw_val, lbl_name=col['label'], is_sec=False, t=timeout_sec: self._copy_to_clipboard(v, lbl_name, is_sec, t)
-                        )
-                        val_row.addWidget(btn_copy)
-                else:
-                    val_label = QLabel("Not set")
-                    val_label.setStyleSheet("font-size: 12px; color: #57564F;")
-                    val_row.addWidget(val_label, stretch=1)
-
-                field_vbox.addLayout(val_row)
-                id_grid.addLayout(field_vbox, id_row, id_col)
-
-                id_col += 1
-                if id_col > 1:
-                    id_col = 0
-                    id_row += 1
-
-            self.scroll_layout.addLayout(id_grid)
-
-            # Section Divider
-            div1 = QFrame()
-            div1.setFrameShape(QFrame.HLine)
-            div1.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
-            self.scroll_layout.addWidget(div1)
-
-        # ======================================================================
-        # 2. Security Credentials Section (2-Column Grid on Canvas)
-        # ======================================================================
+            self._add_identity_card(identity_cols, timeout_sec)
         if security_cols:
-            sec_lbl2 = QLabel("SECURITY CREDENTIALS")
-            sec_lbl2.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
-            self.scroll_layout.addWidget(sec_lbl2)
-
-            sec_grid = QGridLayout()
-            sec_grid.setContentsMargins(0, 2, 0, 6)
-            sec_grid.setHorizontalSpacing(24)
-            sec_grid.setVerticalSpacing(8)
-
-            sec_row, sec_col = 0, 0
-            for idx, col in enumerate(security_cols):
-                raw_val = self.client["values"].get(col["id"], "")
-                allow_qc = col.get("allow_quick_copy", True)
-
-                field_row_widget = QWidget()
-                fr_layout = QHBoxLayout(field_row_widget)
-                fr_layout.setContentsMargins(0, 4, 0, 4)
-                fr_layout.setSpacing(6)
-
-                text_vbox = QVBoxLayout()
-                text_vbox.setContentsMargins(0, 0, 0, 0)
-                text_vbox.setSpacing(2)
-
-                lbl = QLabel(col['label'])
-                lbl.setStyleSheet("font-size: 10px; color: #7A7972;")
-                text_vbox.addWidget(lbl)
-
-                if raw_val:
-                    masked_val = mask_password(raw_val, mask_mode, reveal_count)
-                    if allow_qc:
-                        val_label = ClickableLabel(masked_val)
-                        val_label.clicked.connect(
-                            lambda v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
-                        )
-                        val_label.setCursor(Qt.PointingHandCursor)
-                        val_label.setToolTip(f"Click to copy {col['label']}")
-                    else:
-                        val_label = QLabel(masked_val)
-                    val_label.setStyleSheet("font-size: 12px; font-weight: 500; color: #E8E8E3;")
-                else:
-                    masked_val = "Not set"
-                    val_label = QLabel("Not set")
-                    val_label.setStyleSheet("font-size: 12px; color: #57564F;")
-
-                text_vbox.addWidget(val_label)
-                fr_layout.addLayout(text_vbox, stretch=1)
-
-                if raw_val:
-                    btn_group = QHBoxLayout()
-                    btn_group.setContentsMargins(0, 0, 0, 0)
-                    btn_group.setSpacing(2)
-
-                    if show_hide_btn_enabled:
-                        btn_show = QPushButton()
-                        btn_show.setFixedSize(24, 24)
-                        btn_show.setProperty("class", "GhostIconButton")
-                        btn_show.setToolTip("Show / Hide Password")
-                        btn_show.setIcon(_cached_icon("mdi.eye-outline", "#8E8D88"))
-                        btn_show.setIconSize(QSize(14, 14))
-                        btn_show.setCheckable(True)
-                        btn_show.toggled.connect(
-                            lambda checked, lbl_w=val_label, m=masked_val, r=raw_val, btn_w=btn_show: (
-                                lbl_w.setText(r if checked else m),
-                                btn_w.setIcon(_cached_icon("mdi.eye-off-outline" if checked else "mdi.eye-outline", "#FFFFFF" if checked else "#8E8D88"))
-                            )
-                        )
-                        btn_group.addWidget(btn_show)
-
-                    if allow_qc:
-                        btn_copy = QPushButton()
-                        btn_copy.setFixedSize(24, 24)
-                        btn_copy.setProperty("class", "GhostIconButton")
-                        btn_copy.setToolTip("Copy Password")
-                        btn_copy.setIcon(_cached_icon("mdi.content-copy", "#8E8D88"))
-                        btn_copy.setIconSize(QSize(13, 13))
-                        btn_copy.clicked.connect(
-                            lambda _, v=raw_val, lbl_name=col['label'], is_sec=True, t=timeout_sec: self._copy_to_clipboard(v, lbl_name, is_sec, t)
-                        )
-                        btn_group.addWidget(btn_copy)
-
-                    fr_layout.addLayout(btn_group)
-
-                sec_grid.addWidget(field_row_widget, sec_row, sec_col)
-                sec_col += 1
-                if sec_col > 1:
-                    sec_col = 0
-                    sec_row += 1
-
-            self.scroll_layout.addLayout(sec_grid)
-
-            # Section Divider
-            div2 = QFrame()
-            div2.setFrameShape(QFrame.HLine)
-            div2.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
-            self.scroll_layout.addWidget(div2)
-
-        # ======================================================================
-        # 3. Services Section (Flowing List on Canvas)
-        # ======================================================================
-        services = self.db.get_client_services(client_id)
-        if services:
-            # One button per service; the service's Automation Mode decides what it runs.
-            action_specs = {
-                automation.ACTION_AUTOFILL: ("Fast Autofill", "mdi.flash", self._launch_extension_autofill),
-                automation.ACTION_SMTI: ("SMTI Manual Assist", "mdi.clipboard-account-outline", self._launch_manual_assist),
-                automation.ACTION_MECP: ("MECP Manual Copy", "mdi.content-copy", self._launch_manual_copy),
-            }
-
-            # Header row above services
-            svc_hdr = QHBoxLayout()
-            svc_hdr.setContentsMargins(0, 0, 0, 0)
-            lbl_svc_sec = QLabel("SERVICES")
-            lbl_svc_sec.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
-            svc_hdr.addWidget(lbl_svc_sec)
-            svc_hdr.addStretch()
-
-            shortcut_info = QLabel("ⓘ shortcuts: Alt+1..9")
-            shortcut_info.setStyleSheet("color: #6E6D67; font-size: 10.5px;")
-            shortcut_info.setToolTip(
-                "Alt+1..9 runs primary autofill (Mode 1)\n"
-                "Alt+Ctrl+1..9 runs secondary autofill (Mode 2, if set)\n"
-                "(Fast Autofill, SMTI Assist or MECP Copy, as set in its Automation Mode)."
-            )
-            svc_hdr.addWidget(shortcut_info)
-            self.scroll_layout.addLayout(svc_hdr)
-
-            svc_list_layout = QVBoxLayout()
-            svc_list_layout.setContentsMargins(0, 0, 0, 4)
-            svc_list_layout.setSpacing(0)
-
-            for i, s in enumerate(services):
-                key_num = i + 1
-                has_shortcut = key_num <= 9
-
-                mode_1 = automation.service_action_mode(s)
-                mode_2 = automation.service_secondary_action_mode(s)
-
-                action_label, action_icon, action_fn = action_specs[mode_1]
-
-                row_widget = QWidget()
-                row_layout = QHBoxLayout(row_widget)
-                row_layout.setContentsMargins(0, 5, 0, 5)
-                row_layout.setSpacing(6)
-
-                # Accent Color Dot / Icon
-                portal_color = _get_portal_accent_color(s["name"])
-                icon_name = _get_service_icon(s["name"])
-                
-                icon_lbl = QLabel()
-                icon_lbl.setPixmap(qta.icon(icon_name, color=portal_color).pixmap(QSize(16, 16)) if qta else QIcon().pixmap(QSize(16, 16)))
-                icon_lbl.setFixedSize(18, 18)
-                row_layout.addWidget(icon_lbl)
-
-                svc_name = QLabel(s["name"])
-                svc_name.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
-                row_layout.addWidget(svc_name, stretch=1)
-
-                # Primary autofill button
-                btn_action = QPushButton()
-                btn_action.setFixedSize(36, 28)
-                btn_action.setCursor(Qt.PointingHandCursor)
-                btn_action.setIconSize(QSize(18, 18))
-                btn_action.setToolTip(f"{action_label}: {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
-                if action_fn == self._launch_extension_autofill:
-                    btn_action.setIcon(qta.icon(action_icon, color="#FFFFFF") if qta else QIcon())
-                    btn_action.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
-                else:
-                    btn_action.setIcon(qta.icon(action_icon, color="#FF4D4D") if qta else QIcon())
-                    btn_action.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                btn_action.clicked.connect(lambda _, svc=s, fn=action_fn: fn(svc))
-                row_layout.addWidget(btn_action)
-
-                if has_shortcut:
-                    sc_action = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
-                    sc_action.activated.connect(lambda svc=s, fn=action_fn: fn(svc))
-                    self._service_shortcuts.append(sc_action)
-
-                # Secondary autofill button (if Automation Mode 2 is set and different from Mode 1)
-                if mode_2 and mode_2 in action_specs and mode_2 != mode_1:
-                    action_label_2, action_icon_2, action_fn_2 = action_specs[mode_2]
-                    btn_action_2 = QPushButton()
-                    btn_action_2.setFixedSize(36, 28)
-                    btn_action_2.setCursor(Qt.PointingHandCursor)
-                    btn_action_2.setIconSize(QSize(18, 18))
-                    btn_action_2.setToolTip(f"{action_label_2}: {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
-                    if action_fn_2 == self._launch_extension_autofill:
-                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FFFFFF") if qta else QIcon())
-                        btn_action_2.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
-                    else:
-                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FF4D4D") if qta else QIcon())
-                        btn_action_2.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                    btn_action_2.clicked.connect(lambda _, svc=s, fn=action_fn_2: fn(svc))
-                    row_layout.addWidget(btn_action_2)
-
-                    if has_shortcut:
-                        sc_action_2 = QShortcut(QKeySequence(f"Alt+Ctrl+{key_num}"), self)
-                        sc_action_2.activated.connect(lambda svc=s, fn=action_fn_2: fn(svc))
-                        self._service_shortcuts.append(sc_action_2)
-
-                svc_list_layout.addWidget(row_widget)
-
-                if i < len(services) - 1:
-                    item_div = QFrame()
-                    item_div.setFrameShape(QFrame.HLine)
-                    item_div.setStyleSheet("background-color: #232323; min-height: 1px; max-height: 1px; border: none;")
-                    svc_list_layout.addWidget(item_div)
-
-            self.scroll_layout.addLayout(svc_list_layout)
-
-            # Section Divider
-            div3 = QFrame()
-            div3.setFrameShape(QFrame.HLine)
-            div3.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
-            self.scroll_layout.addWidget(div3)
-
+            self._add_logins_card(security_cols, mask_mode, reveal_count, show_hide_btn_enabled, timeout_sec)
+        self._add_notes_card()
         self._add_sdis_values(client_id)
 
-        # ======================================================================
-        # 4. Notes Section (Clean White Editor)
-        # ======================================================================
-        notes_header = QHBoxLayout()
-        notes_header.setContentsMargins(0, 0, 0, 0)
-        notes_label = QLabel("NOTES")
-        notes_label.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
-        notes_header.addWidget(notes_label)
+        self.scroll_layout.addStretch()
 
-        self.notes_status_lbl = QLabel("")
-        self.notes_status_lbl.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 600;")
-        notes_header.addWidget(self.notes_status_lbl)
-        notes_header.addStretch()
-        self.scroll_layout.addLayout(notes_header)
+    @staticmethod
+    def _hint(text):
+        lbl = QLabel(text)
+        lbl.setProperty("class", "HintText")
+        return lbl
 
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setObjectName("DetailNotes")
-        self.notes_edit.setReadOnly(False)
-        self.notes_edit.setPlaceholderText("Add notes for this client...")
-        self.notes_edit.setMaximumHeight(64)
-        self.notes_edit.setStyleSheet("""
-            QTextEdit#DetailNotes {
-                background-color: #FFFFFF;
-                border: 1px solid #D8CDB4;
-                border-radius: 7px;
-                padding: 8px;
-                font-size: 12.5px;
-                color: #241F1B;
-            }
-            QTextEdit#DetailNotes:focus {
-                border-color: #2E9B5F;
-            }
-        """)
-        
+    @staticmethod
+    def _set_eye_icon(button, shown):
+        button.setIcon(qta.icon("mdi.eye-off-outline" if shown else "mdi.eye-outline", color=T["text2"]) if qta else QIcon())
+
+    def _copy_button(self, tooltip, value, label_name, is_secret, timeout_sec):
+        btn = LabelledAction(variant="ghost", icon="mdi.content-copy", sm=True, tooltip=tooltip)
+        btn.set_icon_only(True)
+        btn.clicked.connect(lambda _=False, v=value, n=label_name, s=is_secret, t=timeout_sec: self._copy_to_clipboard(v, n, s, t))
+        return btn
+
+    def _add_services_card(self, services):
+        card = Card("Services")
+        if not services:
+            card.add_row(EmptyState("No services for this client", "Services are assigned to a client in Admin Mode."))
+            self.scroll_layout.addWidget(card)
+            return
+
+        hint = Key("Alt+1..9")
+        hint.setToolTip(
+            "Alt+1..9 runs primary autofill (Mode 1)\n"
+            "Alt+Ctrl+1..9 runs secondary autofill (Mode 2, if set)\n"
+            "(Fast Autofill, SMTI Assist or MECP Copy, as set in its Automation Mode)."
+        )
+        card.add_action(hint)
+
+        action_specs = {
+            automation.ACTION_AUTOFILL: ("Fast Autofill", "Autofill", "mdi.flash", self._launch_extension_autofill),
+            automation.ACTION_SMTI: ("SMTI Manual Assist", "Assist", "mdi.clipboard-account-outline", self._launch_manual_assist),
+            automation.ACTION_MECP: ("MECP Manual Copy", "Copy login", "mdi.content-copy", self._launch_manual_copy),
+        }
+
+        for i, s in enumerate(services):
+            key_num = i + 1
+            has_shortcut = key_num <= 9
+            mode_1 = automation.service_action_mode(s)
+            mode_2 = automation.service_secondary_action_mode(s)
+
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
+
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(qta.icon(_get_service_icon(s["name"]), color=_get_portal_accent_color(s["name"])).pixmap(QSize(16, 16)) if qta else QIcon().pixmap(QSize(16, 16)))
+            icon_lbl.setFixedSize(18, 18)
+            row_layout.addWidget(icon_lbl)
+            row_layout.addWidget(QLabel(s["name"]), stretch=1)
+
+            slots = [(mode_1, f"Alt+{key_num}")]
+            if mode_2 and mode_2 in action_specs and mode_2 != mode_1:
+                slots.append((mode_2, f"Alt+Ctrl+{key_num}"))
+            for mode, keys in slots:
+                label, short, icon, fn = action_specs[mode]
+                btn = LabelledAction(
+                    short, variant="primary" if mode == automation.ACTION_AUTOFILL else "secondary",
+                    icon=icon, sm=True,
+                    tooltip=f"{label}: {s['name']}" + (f" ({keys})" if has_shortcut else ""),
+                )
+                btn.clicked.connect(lambda _=False, svc=s, fn=fn: fn(svc))
+                row_layout.addWidget(btn)
+                if has_shortcut:
+                    sc = QShortcut(QKeySequence(keys), self)
+                    sc.activated.connect(lambda svc=s, fn=fn: fn(svc))
+                    self._service_shortcuts.append(sc)
+
+            card.add_widget(row)
+
+        self.scroll_layout.addWidget(card)
+
+    def _add_identity_card(self, identity_cols, timeout_sec):
+        card = Card("Identity")
+        for col in identity_cols:
+            raw_val = self.client["values"].get(col["id"], "")
+            allow_qc = col.get("allow_quick_copy", True)
+            if not raw_val:
+                card.add_row(SettingRow(col["label"], control=self._hint("Not set")))
+                continue
+
+            if allow_qc:
+                val_label = ClickableLabel(raw_val)
+                val_label.clicked.connect(
+                    lambda v=raw_val, lbl_name=col["label"], is_sec=False, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
+                )
+                val_label.setCursor(Qt.PointingHandCursor)
+                val_label.setToolTip(f"Click to copy {col['label']}")
+            else:
+                val_label = QLabel(raw_val)
+            val_label.setProperty("class", "RowValue")
+            controls = [val_label]
+            if allow_qc:
+                controls.append(self._copy_button(f"Copy {col['label']}", raw_val, col["label"], False, timeout_sec))
+            card.add_row(SettingRow(col["label"], control=controls))
+        self.scroll_layout.addWidget(card)
+
+    def _add_logins_card(self, security_cols, mask_mode, reveal_count, show_hide_btn_enabled, timeout_sec):
+        card = Card("Logins")
+        for col in security_cols:
+            raw_val = self.client["values"].get(col["id"], "")
+            allow_qc = col.get("allow_quick_copy", True)
+            if not raw_val:
+                card.add_row(SettingRow(col["label"], control=self._hint("Not set")))
+                continue
+
+            masked_val = mask_password(raw_val, mask_mode, reveal_count)
+            if allow_qc:
+                val_label = ClickableLabel(masked_val)
+                val_label.clicked.connect(
+                    lambda v=raw_val, lbl_name=col["label"], is_sec=True, t=timeout_sec: self._on_label_clicked(v, lbl_name, is_sec, t)
+                )
+                val_label.setCursor(Qt.PointingHandCursor)
+                val_label.setToolTip(f"Click to copy {col['label']}")
+            else:
+                val_label = QLabel(masked_val)
+            val_label.setProperty("class", "RowValue")
+            controls = [val_label]
+
+            if show_hide_btn_enabled:
+                btn_show = LabelledAction(variant="ghost", sm=True, tooltip="Show / Hide Password")
+                btn_show.set_icon_only(True)
+                btn_show.setCheckable(True)
+                self._set_eye_icon(btn_show, False)
+                btn_show.toggled.connect(
+                    lambda checked, lbl_w=val_label, m=masked_val, r=raw_val, btn_w=btn_show: (
+                        lbl_w.setText(r if checked else m),
+                        self._set_eye_icon(btn_w, checked),
+                    )
+                )
+                controls.append(btn_show)
+
+            if allow_qc:
+                controls.append(self._copy_button("Copy Password", raw_val, col["label"], True, timeout_sec))
+
+            card.add_row(SettingRow(col["label"], control=controls))
+        self.scroll_layout.addWidget(card)
+
+    def _add_notes_card(self):
+        card = Card("Notes")
+        self.notes_status_lbl = Pill("", tone="emerald")
+        self.notes_status_lbl.hide()
+        card.add_action(self.notes_status_lbl)
+
+        self.notes_edit = TextArea(rows=3, placeholder="Add notes for this client...")
         self._loading_notes = True
         self.notes_edit.setPlainText(self.client.get("notes") or "")
         self._loading_notes = False
@@ -623,9 +399,8 @@ class ClientDetailWindow(QWidget):
         self._notes_timer.setSingleShot(True)
         self._notes_timer.timeout.connect(self._auto_save_notes)
         self.notes_edit.textChanged.connect(self._on_notes_text_changed)
-        self.scroll_layout.addWidget(self.notes_edit)
-
-        self.scroll_layout.addStretch()
+        card.add_widget(self.notes_edit)
+        self.scroll_layout.addWidget(card)
 
     def _add_sdis_values(self, client_id: int) -> None:
         """SDIS Others and Profile builder values captured on each portal (blueprint S.4), read-only,
@@ -639,31 +414,38 @@ class ClientDetailWindow(QWidget):
             rows = []
         if not rows:
             return
-        hdr = QLabel("PORTAL VALUES")
-        hdr.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
-        hdr.setToolTip("Captured by SGT for Sera Distill's Profile builder and Others containers")
-        self.scroll_layout.addWidget(hdr)
+        card = Card("Portal values")
+        card.title_label.setToolTip("Captured by SGT for Sera Distill's Profile builder and Others containers")
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(12)
         for portal, pairs in rows:
-            box = QFormLayout()
-            box.setContentsMargins(0, 2, 0, 6)
-            box.setHorizontalSpacing(14)
-            box.setVerticalSpacing(4)
-            title = QLabel(portal)
-            title.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
-            box.addRow(title)
+            body_layout.addWidget(self._section_label(portal))
             for label, value in pairs:
-                k = QLabel(label)
-                k.setStyleSheet("color: #8E8D88; font-size: 11.5px;")
                 v = QLabel(value)
-                v.setStyleSheet("color: #E8E8E3; font-size: 12px;")
+                v.setProperty("class", "RowValue")
                 v.setWordWrap(True)
                 v.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                box.addRow(k, v)
-            self.scroll_layout.addLayout(box)
-        div = QFrame()
-        div.setFrameShape(QFrame.HLine)
-        div.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
-        self.scroll_layout.addWidget(div)
+                body_layout.addWidget(SettingRow(label, control=v))
+        body.setVisible(False)
+        toggle = LabelledAction("Show", variant="ghost", sm=True)
+        toggle.clicked.connect(lambda _=False, b=toggle, w=body: self._toggle_section(b, w))
+        card.add_action(toggle)
+        card.add_widget(body)
+        self.scroll_layout.addWidget(card)
+
+    @staticmethod
+    def _section_label(text):
+        lbl = QLabel(text)
+        lbl.setProperty("class", "FieldLabel")
+        return lbl
+
+    @staticmethod
+    def _toggle_section(button, body):
+        opening = body.isHidden()
+        body.setVisible(opening)
+        button.setText("Hide" if opening else "Show")
 
     def run_service_action(self, client_id: int, service: dict) -> None:
         """Loads the client (without showing the window) and runs the service's Automation Mode 1 action."""
@@ -843,12 +625,16 @@ class ClientDetailWindow(QWidget):
             f"Verify the CSS selectors in Admin Mode -> Manage Services."
         )
 
+    def _set_notes_status(self, text, tone):
+        self.notes_status_lbl.set_text(text)
+        self.notes_status_lbl.set_tone(tone)
+        self.notes_status_lbl.show()
+
     def _on_notes_text_changed(self):
         if getattr(self, "_loading_notes", False):
             return
         if hasattr(self, "notes_status_lbl"):
-            self.notes_status_lbl.setText("  • Saving...")
-            self.notes_status_lbl.setStyleSheet("color: #E65100; font-size: 11px; font-style: italic;")
+            self._set_notes_status("Saving...", "amber")
         if hasattr(self, "_notes_timer"):
             self._notes_timer.start(500)
 
@@ -858,7 +644,7 @@ class ClientDetailWindow(QWidget):
         new_notes = self.notes_edit.toPlainText().strip()
         if self.client.get("notes") == new_notes:
             if hasattr(self, "notes_status_lbl"):
-                self.notes_status_lbl.setText("  • Saved ✓")
+                self._set_notes_status("Saved ✓", "emerald")
             return
 
         self.db.update_client_notes(self.client["id"], new_notes)
@@ -869,8 +655,7 @@ class ClientDetailWindow(QWidget):
             detail="Auto-saved client notes"
         )
         if hasattr(self, "notes_status_lbl"):
-            self.notes_status_lbl.setText("  • Saved ✓")
-            self.notes_status_lbl.setStyleSheet("color: #2E7D32; font-size: 11px; font-weight: 600;")
+            self._set_notes_status("Saved ✓", "emerald")
 
 
     def _on_label_clicked(self, val: str, label_name: str, is_secret: bool, timeout_sec: int):

@@ -169,7 +169,7 @@ def test_id_chip_copies_the_client_token_and_toasts(world):
     token = db.get_client(ids["A"])["client_id_token"]
     assert win.token_badge.text() in (f"CLI-{token.zfill(5)}", f"ID: {token}")
     assert token in win.token_badge.toolTip()
-    win.token_badge.mousePressEvent(None)
+    win.token_badge.click()
     assert QApplication.clipboard().text() == token
     assert toasts == [f"Copied Client Token: {token}"]
 
