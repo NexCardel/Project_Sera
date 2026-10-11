@@ -9,49 +9,62 @@ PC's entries now).
 Includes date presets, custom date range, full-text live search, action filter,
 local timezone timestamp conversion, service name resolution, token-safe CSV export,
 and rich row drill-down details.
+
+Built on the shared kit (ui/components/kit.py): the Action / Staff / Date chips open menus that
+drive the same combo, input and date widgets the filter code always read (action_combo, actor_input,
+cmb_date_preset, dt_from, dt_to), which stay as the hidden source of truth.
 """
 
 import csv
 import datetime
 from PySide6.QtCore import Qt, Signal, QDate, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QGuiApplication
+from PySide6.QtGui import QActionGroup, QGuiApplication
 from PySide6.QtWidgets import (
-    QComboBox,
+    QDateEdit,
     QDialog,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
-    QLineEdit,
+    QMenu,
     QMessageBox,
-    QPushButton,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
-    QSplitter,
-    QListWidget,
-    QListWidgetItem,
-    QDateEdit,
-    QFrame,
-    QTextEdit,
-    QCheckBox,
     QWidget,
-    QApplication,
+    QWidgetAction,
+    QAbstractItemView,
 )
 
-try:
-    import qtawesome as qta
-except ImportError:
-    qta = None
+from ui.components.kit import (
+    Card,
+    ChipBar,
+    DarkListTable,
+    DataGrid,
+    DialogFrame,
+    FieldLabel,
+    GridFrame,
+    IconButton,
+    Input,
+    LabelledAction,
+    Pill,
+    Select,
+    TextArea,
+    ROLE_PILL,
+)
+from ui.utils.responsive import WidthAware, WidthMode
+from ui.utils.tokens import TOKENS
 
+_ACTIONS = [
+    "All Actions", "view", "manual_assist", "autofill", "manual_copy",
+    "create", "update", "archive", "unarchive", "delete",
+    "csv_import", "backup", "restore", "csv_export",
+    "filing_submitted", "sync_pushed", "sync_received", "audit_log_viewed",
+]
+_DATE_PRESETS = ["All Time", "Today", "Yesterday", "Last 7 Days", "Last 30 Days", "Custom Date Range"]
+_CUSTOM_RANGE = "Custom Date Range"
 
-def _safe_qta_icon(icon_name: str, color: str = "#FFFFFF") -> QIcon:
-    if qta is not None:
-        try:
-            return qta.icon(icon_name, color=color)
-        except Exception:
-            pass
-    return QIcon()
+_WS_WIDTH = 200
+_CARD_WIDTH = 280
+_EXPORT_TEXT_MIN_WIDTH = 1180
 
 
 def _format_to_local_time(iso_str: str) -> tuple[str, str]:
@@ -75,38 +88,42 @@ def _format_to_local_time(iso_str: str) -> tuple[str, str]:
         return clean[:19].replace("T", " "), clean
 
 
-def _get_action_badge_style(action: str) -> tuple[str, str, str]:
-    """Returns (display_label, fg_color, bg_color) for action pill badges."""
+def _get_action_badge(action: str) -> tuple[str, str, str]:
+    """Returns (display_label, pill_text, pill_tone) for an action. Groups: creates green, views
+    grey, assists and edits amber, audit-log views and deletes red, sync blue; unknown types grey."""
     act = (action or "").lower().strip()
     if act in ("create", "add"):
-        return "➕ Create", "#4CF9B7", "#133829"
+        return "➕ Create", "Create", "green"
     elif act in ("unarchive", "restore"):
-        return "♻️ Restore", "#4CF9B7", "#133829"
+        return "♻️ Restore", "Restore", "green"
     elif act == "view":
-        return "👁️ View", "#58A6FF", "#162B4D"
+        return "👁️ View", "View", "neutral"
     elif act == "audit_log_viewed":
-        return "🛡️ Audit View", "#58A6FF", "#162B4D"
+        return "🛡️ Audit View", "Audit View", "red"
     elif act in ("autofill", "sca_autofill", "autofill_extension", "autofill_playwright"):
-        return "🪄 Autofill", "#BC8CFF", "#2E1D4D"
+        return "🪄 Autofill", "Autofill", "amber"
     elif act in ("manual_assist", "sca_widget"):
-        return "⚡ Manual Assist", "#39FF14", "#183B18"
+        return "⚡ Manual Assist", "Manual Assist", "amber"
     elif act == "manual_copy":
-        return "📋 Copy", "#79C0FF", "#1C304A"
+        return "📋 Copy", "Copy", "amber"
     elif act in ("update", "update_notes", "update_settings"):
-        return "✏️ Update", "#E3B341", "#3B3014"
+        return "✏️ Update", "Update", "amber"
     elif act in ("archive", "delete"):
-        return "🗑️ Delete" if act == "delete" else "📦 Archive", "#FF7B72", "#3D1A1D"
+        word = "Delete" if act == "delete" else "Archive"
+        return ("🗑️ " if act == "delete" else "📦 ") + word, word, "red"
     elif act in ("csv_export", "csv_import", "backup"):
-        return "💾 " + act.replace("_", " ").title(), "#8B949E", "#21262D"
+        word = act.replace("_", " ").title()
+        return "💾 " + word, word, "neutral"
     elif act in ("sync_pushed", "sync_received"):
-        return "🔄 Sync", "#7EE787", "#193B22"
+        return "🔄 Sync", "Sync", "blue"
     elif "filing" in act:
-        return "📑 Filing", "#56D364", "#163820"
+        return "📑 Filing", "Filing", "green"
     else:
-        return act.replace("_", " ").title()[:15], "#C9D1D9", "#21262D"
+        word = act.replace("_", " ").title()[:15]
+        return word, word, "neutral"
 
 
-class AuditLogDialog(QDialog):
+class AuditLogDialog(WidthAware, QDialog):
     toast_requested = Signal(str, int)
 
     def __init__(self, db, actor: str = "Admin", parent=None):
@@ -142,357 +159,236 @@ class AuditLogDialog(QDialog):
             pass
 
     def _build_ui(self):
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0D1117;
-                color: #F0F6FC;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QLabel {
-                color: #F0F6FC;
-            }
-            QLineEdit, QComboBox, QDateEdit {
-                background-color: #161B22;
-                border: 1px solid #30363D;
-                border-radius: 6px;
-                color: #F0F6FC;
-                padding: 5px 8px;
-                font-size: 12px;
-            }
-            QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
-                border: 1px solid #2E9B5F;
-                background-color: #1A222D;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #161B22;
-                color: #F0F6FC;
-                selection-background-color: #1F6FEB;
-                selection-color: #FFFFFF;
-                border: 1px solid #30363D;
-            }
-            QTableWidget {
-                background-color: #0D1117;
-                alternate-background-color: #161B22;
-                gridline-color: #21262D;
-                border: 1px solid #30363D;
-                border-radius: 6px;
-                color: #F0F6FC;
-                selection-background-color: #1F6FEB;
-                selection-color: #FFFFFF;
-            }
-            QTableWidget::item {
-                color: #F0F6FC;
-                padding: 6px 8px;
-                border-bottom: 1px solid #1B2129;
-            }
-            QTableWidget::item:selected {
-                background-color: #1F6FEB;
-                color: #FFFFFF;
-            }
-            QHeaderView::section {
-                background-color: #161B22;
-                color: #4CF9B7;
-                font-weight: 700;
-                font-size: 12px;
-                padding: 7px;
-                border: none;
-                border-bottom: 2px solid #2E9B5F;
-                border-right: 1px solid #21262D;
-            }
-            QPushButton {
-                background-color: #21262D;
-                color: #F0F6FC;
-                border: 1px solid #30363D;
-                border-radius: 6px;
-                padding: 6px 12px;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #30363D;
-                border-color: #8B949E;
-            }
-            QPushButton.PrimaryBtn {
-                background-color: #238636;
-                color: #FFFFFF;
-                border: 1px solid #2EA043;
-            }
-            QPushButton.PrimaryBtn:hover {
-                background-color: #2EA043;
-            }
-        """)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.frame = DialogFrame(
+            "Audit log",
+            "Sera-Sync Audit Log (SSAL): every view, assist, copy and change, from this PC and the other Sera PCs",
+            self, icon="mdi.shield-search", full=True)
+        outer.addWidget(self.frame)
+        self.frame.closeRequested.connect(self.accept)
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        self.host_badge = Pill("Host aggregator active", "emerald", dot=True)
+        self.host_badge.setToolTip("This PC collects the other workstations' entries")
+        self.frame.add_header_widget(self.host_badge)
+        self.frame.add_close_button()
 
-        # Header Title Row
-        title_row = QHBoxLayout()
-        title_row.setSpacing(12)
+        body = QWidget()
+        body_row = QHBoxLayout(body)
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(TOKENS["s_3"])
+        self.frame.add_widget(body, 1)
 
-        icon_lbl = QLabel()
-        icon_lbl.setPixmap(_safe_qta_icon("mdi.shield-search", "#4CF9B7").pixmap(24, 24))
-        title_row.addWidget(icon_lbl)
+        # ---------------- Left: workstations with their entry counts ----------------
+        self._ws_card = Card("Workstations")
+        self._ws_card.setFixedWidth(_WS_WIDTH)
+        self.workstation_list = DarkListTable(0, 2)
+        self.workstation_list.horizontalHeader().hide()
+        self.workstation_list.set_column(0, minimum=90)
+        self.workstation_list.set_column(1, kind="num", width=44, stretch=0)
+        self.workstation_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.workstation_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.workstation_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.workstation_list.currentCellChanged.connect(self._on_workstation_changed)
+        self._ws_card.add_widget(self.workstation_list, 1)
+        body_row.addWidget(self._ws_card)
 
-        title = QLabel("Sera-Sync Audit Log (SSAL)")
-        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #F0F6FC;")
-        title_row.addWidget(title)
+        # ---------------- Middle: filters, count, grid ----------------
+        centre = QWidget()
+        centre_col = QVBoxLayout(centre)
+        centre_col.setContentsMargins(0, 0, 0, 0)
+        centre_col.setSpacing(TOKENS["s_2"])
+        body_row.addWidget(centre, 1)
 
-        title_row.addStretch()
-
-        self.host_badge = QLabel("🟢 Host Aggregator Active")
-        self.host_badge.setStyleSheet("color: #39FF14; font-weight: 700; font-size: 12px; padding: 4px 10px; background-color: #11281E; border: 1px solid #2E9B5F; border-radius: 6px;")
-        title_row.addWidget(self.host_badge)
-
-        btn_close_top = QPushButton("Close")
-        btn_close_top.setIcon(_safe_qta_icon("mdi.close", "#F0F6FC"))
-        btn_close_top.setFixedWidth(80)
-        btn_close_top.clicked.connect(self.accept)
-        title_row.addWidget(btn_close_top)
-
-        main_layout.addLayout(title_row)
-
-        # Main Splitter: Left Sidebar (Workstations) + Right Area (Audit Logs Table)
-        splitter = QSplitter(Qt.Horizontal)
-
-        # ---------------- Left Sidebar (Workstations / Users) ----------------
-        sidebar_frame = QFrame()
-        sidebar_frame.setFixedWidth(190)
-        sidebar_frame.setStyleSheet("""
-            QFrame {
-                background-color: #161B22;
-                border-radius: 8px;
-                border: 1px solid #30363D;
-            }
-        """)
-        sidebar_layout = QVBoxLayout(sidebar_frame)
-        sidebar_layout.setContentsMargins(8, 12, 8, 12)
-        sidebar_layout.setSpacing(8)
-
-        sidebar_title = QLabel("WORKSTATIONS")
-        sidebar_title.setStyleSheet("color: #8B949E; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;")
-        sidebar_layout.addWidget(sidebar_title)
-
-        self.workstation_list = QListWidget()
-        self.workstation_list.setStyleSheet("""
-            QListWidget {
-                background-color: transparent;
-                border: none;
-                color: #F0F6FC;
-                font-size: 12px;
-            }
-            QListWidget::item {
-                padding: 8px 10px;
-                border-radius: 6px;
-                margin-bottom: 3px;
-            }
-            QListWidget::item:selected {
-                background-color: #238636;
-                color: #FFFFFF;
-                font-weight: bold;
-            }
-            QListWidget::item:hover:!selected {
-                background-color: #21262D;
-            }
-        """)
-        self.workstation_list.currentItemChanged.connect(self._on_workstation_changed)
-        sidebar_layout.addWidget(self.workstation_list)
-
-        splitter.addWidget(sidebar_frame)
-
-        # ---------------- Right Main Log Area ----------------
-        right_frame = QFrame()
-        right_layout = QVBoxLayout(right_frame)
-        right_layout.setContentsMargins(8, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        # Filter Controls Bar 1: Full-Text Search + Quick Filters
-        filter_bar_1 = QHBoxLayout()
-        filter_bar_1.setSpacing(8)
-
-        self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("🔍 Search Client, PAN, Actor, Action, Service, Details...")
-        self.txt_search.textChanged.connect(self._on_search_changed)
-        filter_bar_1.addWidget(self.txt_search, stretch=3)
-
-        lbl_action = QLabel("Action:")
-        lbl_action.setStyleSheet("font-weight: 600; color: #C9D1D9;")
-        filter_bar_1.addWidget(lbl_action)
-
-        self.action_combo = QComboBox()
-        self.action_combo.setFixedWidth(145)
-        self.action_combo.addItems([
-            "All Actions", "view", "manual_assist", "autofill", "manual_copy",
-            "create", "update", "archive", "unarchive", "delete",
-            "csv_import", "backup", "restore", "csv_export",
-            "filing_submitted", "sync_pushed", "sync_received", "audit_log_viewed"
-        ])
-        self.action_combo.currentIndexChanged.connect(self._load_logs)
-        filter_bar_1.addWidget(self.action_combo)
-
-        lbl_actor = QLabel("Staff/Actor:")
-        lbl_actor.setStyleSheet("font-weight: 600; color: #C9D1D9;")
-        filter_bar_1.addWidget(lbl_actor)
-
-        self.actor_input = QLineEdit()
-        self.actor_input.setPlaceholderText("All staff...")
-        self.actor_input.setFixedWidth(110)
-        self.actor_input.textChanged.connect(self._on_search_changed)
-        filter_bar_1.addWidget(self.actor_input)
-
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.setIcon(_safe_qta_icon("mdi.refresh", "#F0F6FC"))
-        btn_refresh.clicked.connect(self._load_logs)
-        filter_bar_1.addWidget(btn_refresh)
-
-        btn_export = QPushButton("Export CSV...")
-        btn_export.setIcon(_safe_qta_icon("mdi.file-delimited-outline", "#FFFFFF"))
-        btn_export.setProperty("class", "PrimaryBtn")
-        btn_export.clicked.connect(self._on_export_log_csv)
-        filter_bar_1.addWidget(btn_export)
-
-        right_layout.addLayout(filter_bar_1)
-
-        # Filter Controls Bar 2: Interactive Date Presets & Responsive Date/Time Pickers
-        filter_bar_2 = QHBoxLayout()
-        filter_bar_2.setSpacing(8)
-
-        lbl_preset = QLabel("Date Range:")
-        lbl_preset.setStyleSheet("font-weight: 600; color: #4CF9B7;")
-        filter_bar_2.addWidget(lbl_preset)
-
-        self.cmb_date_preset = QComboBox()
-        self.cmb_date_preset.addItems([
-            "All Time", "Today", "Yesterday", "Last 7 Days", "Last 30 Days", "Custom Date Range"
-        ])
+        # The state behind the chips: the same widgets the filter code always read.
+        self.action_combo = Select(self, _ACTIONS)
+        self.cmb_date_preset = Select(self, _DATE_PRESETS)
         self.cmb_date_preset.setCurrentText("Last 30 Days")
-        self.cmb_date_preset.currentIndexChanged.connect(self._on_date_preset_changed)
-        filter_bar_2.addWidget(self.cmb_date_preset)
-
-        lbl_from = QLabel("From:")
-        lbl_from.setStyleSheet("color: #8B949E; font-size: 12px;")
-        filter_bar_2.addWidget(lbl_from)
-
+        self.actor_input = Input(self, placeholder="All staff…", icon="mdi.account-outline")
+        self.actor_input.setMinimumWidth(200)
         self.dt_from = QDateEdit(QDate.currentDate().addDays(-30))
-        self.dt_from.setCalendarPopup(True)
-        self.dt_from.setDisplayFormat("yyyy-MM-dd")
-        self.dt_from.setFixedWidth(115)
-        self.dt_from.dateChanged.connect(self._on_custom_date_changed)
-        filter_bar_2.addWidget(self.dt_from)
-
-        lbl_to = QLabel("To:")
-        lbl_to.setStyleSheet("color: #8B949E; font-size: 12px;")
-        filter_bar_2.addWidget(lbl_to)
-
         self.dt_to = QDateEdit(QDate.currentDate())
-        self.dt_to.setCalendarPopup(True)
-        self.dt_to.setDisplayFormat("yyyy-MM-dd")
-        self.dt_to.setFixedWidth(115)
-        self.dt_to.dateChanged.connect(self._on_custom_date_changed)
-        filter_bar_2.addWidget(self.dt_to)
+        for edit in (self.dt_from, self.dt_to):
+            edit.setCalendarPopup(True)
+            edit.setDisplayFormat("yyyy-MM-dd")
+        self.action_combo.hide()
+        self.cmb_date_preset.hide()
 
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(TOKENS["s_2"])
+        self.txt_search = Input(placeholder="Search client, PAN, actor, action, service, details…",
+                                icon="mdi.magnify")
+        self.txt_search.setMinimumWidth(160)
+        self.txt_search.setAccessibleName("Search audit log")
+        self.txt_search.textChanged.connect(self._on_search_changed)
+        filter_row.addWidget(self.txt_search, 1)
+
+        self.chip_bar = ChipBar()
+        self.chip_action = self.chip_bar.add_chip(
+            "Action", id="action", menu=self._build_action_menu(),
+            tooltip="All actions, or one of the 17 action types")
+        self.chip_staff = self.chip_bar.add_chip(
+            "Staff", id="staff", menu=self._build_staff_menu(), tooltip="All staff, or type a name")
+        self.chip_date = self.chip_bar.add_chip(
+            "Date", id="date", menu=self._build_date_menu(),
+            tooltip="All time, Today, Yesterday, Last 7 / 30 days, or a custom range (From / To)")
+        filter_row.addWidget(self.chip_bar)
+
+        self.btn_refresh = IconButton("mdi.refresh", "Refresh", variant="bordered")
+        self.btn_refresh.clicked.connect(self._load_logs)
+        filter_row.addWidget(self.btn_refresh)
+
+        self.btn_export = LabelledAction("Export CSV...", variant="soft", icon="mdi.file-delimited-outline",
+                                         tooltip="Export the entries matching the current filters")
+        self.btn_export.clicked.connect(self._on_export_log_csv)
+        filter_row.addWidget(self.btn_export)
+        centre_col.addLayout(filter_row)
+
+        info_row = QHBoxLayout()
+        info_row.setSpacing(TOKENS["s_2"])
         self.lbl_record_count = QLabel("0 log entries")
-        self.lbl_record_count.setStyleSheet("color: #8B949E; font-size: 12px; margin-left: 10px;")
-        filter_bar_2.addWidget(self.lbl_record_count)
+        self.lbl_record_count.setProperty("class", "HintText")
+        info_row.addWidget(self.lbl_record_count)
+        self.lbl_range = QLabel("")
+        self.lbl_range.setProperty("class", "HintText")
+        info_row.addWidget(self.lbl_range)
+        info_row.addStretch(1)
 
-        filter_bar_2.addStretch()
-        right_layout.addLayout(filter_bar_2)
+        self._custom_row = QWidget()
+        custom = QHBoxLayout(self._custom_row)
+        custom.setContentsMargins(0, 0, 0, 0)
+        custom.setSpacing(TOKENS["s_2"])
+        custom.addWidget(FieldLabel("From", for_widget=self.dt_from))
+        custom.addWidget(self.dt_from)
+        custom.addWidget(FieldLabel("To", for_widget=self.dt_to))
+        custom.addWidget(self.dt_to)
+        info_row.addWidget(self._custom_row)
+        centre_col.addLayout(info_row)
 
         # Wide Table (7 Columns)
-        self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table = DataGrid(0, 7)
         self.table.setHorizontalHeaderLabels([
             "ID", "Date & Time (Local)", "Actor", "Action", "Client (Name / Token)", "Service", "Detail"
         ])
-        # Fixed, not ResizeToContents: that re-measures the whole column on every
-        # setItem and made a 1000-row refresh take ~15 s on the UI thread.
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.table.setColumnWidth(0, 70)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
-        self.table.setColumnWidth(1, 175)
-        self.table.setColumnWidth(2, 100)
-        self.table.setColumnWidth(3, 140)
-        self.table.setColumnWidth(4, 200)
-        self.table.setColumnWidth(5, 120)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setShowGrid(True)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setAlternatingRowColors(True)
+        self.table.set_column(0, kind="num", width=52)
+        self.table.set_column(1, kind="num", width=200, minimum=170)
+        self.table.set_column(2, width=92, minimum=72)
+        self.table.set_column(3, width=112, minimum=100)
+        self.table.set_column(4, kind="strong", minimum=140)
+        self.table.set_column(5, width=100, minimum=80, priority=2, compact_hidden=True)
+        self.table.set_column(6, minimum=150, priority=1, compact_hidden=True)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
-        right_layout.addWidget(self.table)
+        centre_col.addWidget(GridFrame(self.table), 1)
 
-        # Enhanced Inspection Card at Bottom
-        inspector_frame = QFrame()
-        inspector_frame.setStyleSheet("""
-            QFrame {
-                background-color: #161B22;
-                border: 1px solid #30363D;
-                border-radius: 6px;
-            }
-        """)
-        inspector_layout = QVBoxLayout(inspector_frame)
-        inspector_layout.setContentsMargins(10, 8, 10, 8)
-        inspector_layout.setSpacing(6)
+        # ---------------- Right: details of the picked entry ----------------
+        self._entry_card = Card("Entry")
+        self._entry_card.setFixedWidth(_CARD_WIDTH)
+        self.entry_pill = Pill("—", "neutral")
+        self.entry_pill.hide()
+        self._entry_card.add_widget(self.entry_pill)
 
-        inspector_header = QHBoxLayout()
-        insp_title = QLabel("AUDIT ENTRY DRILL-DOWN")
-        insp_title.setStyleSheet("color: #4CF9B7; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;")
-        inspector_header.addWidget(insp_title)
-
-        inspector_header.addStretch()
-
-        self.btn_copy_insp = QPushButton("Copy Details")
-        self.btn_copy_insp.setIcon(_safe_qta_icon("mdi.content-copy", "#F0F6FC"))
-        self.btn_copy_insp.setFixedHeight(24)
-        self.btn_copy_insp.setStyleSheet("font-size: 11px; padding: 2px 8px;")
-        self.btn_copy_insp.clicked.connect(self._on_copy_inspector)
-        inspector_header.addWidget(self.btn_copy_insp)
-
-        self.btn_filter_client = QPushButton("Filter Client")
-        self.btn_filter_client.setIcon(_safe_qta_icon("mdi.account-search", "#F0F6FC"))
-        self.btn_filter_client.setFixedHeight(24)
-        self.btn_filter_client.setStyleSheet("font-size: 11px; padding: 2px 8px;")
-        self.btn_filter_client.clicked.connect(self._on_filter_by_selected_client)
-        inspector_header.addWidget(self.btn_filter_client)
-
-        inspector_layout.addLayout(inspector_header)
-
-        self.inspector_box = QTextEdit()
+        self.inspector_box = TextArea(rows=9, placeholder="Pick a row to see the full entry: time, actor, client, service and detail.")
         self.inspector_box.setReadOnly(True)
-        self.inspector_box.setMaximumHeight(80)
-        self.inspector_box.setPlaceholderText("Select any audit log row above to view full drill-down details and timestamps...")
-        self.inspector_box.setStyleSheet("""
-            QTextEdit {
-                background-color: #0D1117;
-                color: #E6EDF3;
-                border: 1px solid #21262D;
-                border-radius: 4px;
-                font-family: 'Segoe UI', Consolas, monospace;
-                font-size: 12px;
-                padding: 6px;
-            }
-        """)
-        inspector_layout.addWidget(self.inspector_box)
-        right_layout.addWidget(inspector_frame)
+        self._entry_card.add_widget(self.inspector_box)
 
-        splitter.addWidget(right_frame)
-        splitter.setSizes([190, 950])
+        self.btn_copy_insp = LabelledAction("Copy details", variant="secondary", icon="mdi.content-copy", sm=True,
+                                            tooltip="Copy the full entry to the clipboard")
+        self.btn_copy_insp.clicked.connect(self._on_copy_inspector)
+        self.btn_filter_client = LabelledAction("Show only this client", variant="secondary",
+                                                icon="mdi.account-search", sm=True,
+                                                tooltip="Search for this client's entries only")
+        self.btn_filter_client.clicked.connect(self._on_filter_by_selected_client)
+        for btn in (self.btn_copy_insp, self.btn_filter_client):
+            self._entry_card.add_widget(btn)
+        body_row.addWidget(self._entry_card, 0, Qt.AlignTop)
 
-        main_layout.addWidget(splitter)
+        self.action_combo.currentIndexChanged.connect(self._on_action_changed)
+        self.cmb_date_preset.currentIndexChanged.connect(self._on_date_preset_changed)
+        self.actor_input.textChanged.connect(self._on_staff_changed)
+        self.dt_from.dateChanged.connect(self._on_custom_date_changed)
+        self.dt_to.dateChanged.connect(self._on_custom_date_changed)
+        self._sync_filter_chips()
 
+    # ---------------- chip menus ----------------
+    def _build_action_menu(self):
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        self._action_menu_items = []
+        for i, name in enumerate(_ACTIONS):
+            act = menu.addAction(name)
+            act.setCheckable(True)
+            act.setActionGroup(group)
+            act.triggered.connect(lambda _checked=False, idx=i: self.action_combo.setCurrentIndex(idx))
+            self._action_menu_items.append(act)
+        return menu
+
+    def _build_staff_menu(self):
+        menu = QMenu(self)
+        holder = QWidgetAction(menu)
+        holder.setDefaultWidget(self.actor_input)
+        menu.addAction(holder)
+        menu.addSeparator()
+        menu.addAction("All staff").triggered.connect(lambda _checked=False: self.actor_input.setText(""))
+        return menu
+
+    def _build_date_menu(self):
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        self._date_menu_items = []
+        for i, name in enumerate(_DATE_PRESETS):
+            act = menu.addAction(name)
+            act.setCheckable(True)
+            act.setActionGroup(group)
+            act.triggered.connect(lambda _checked=False, idx=i: self.cmb_date_preset.setCurrentIndex(idx))
+            self._date_menu_items.append(act)
+        return menu
+
+    def _sync_filter_chips(self):
+        action_idx = self.action_combo.currentIndex()
+        self.chip_action.set_value(self.action_combo.currentText() if action_idx > 0 else None)
+        for i, act in enumerate(self._action_menu_items):
+            act.setChecked(i == action_idx)
+
+        staff = self.actor_input.text().strip()
+        self.chip_staff.set_value(staff or None)
+
+        preset_idx = self.cmb_date_preset.currentIndex()
+        preset = self.cmb_date_preset.currentText()
+        self.chip_date.setText(preset)
+        self.chip_date.setChecked(preset != "All Time")
+        for i, act in enumerate(self._date_menu_items):
+            act.setChecked(i == preset_idx)
+        self._custom_row.setVisible(preset == _CUSTOM_RANGE)
+
+    def on_width_mode_changed(self, mode):
+        compact = mode is WidthMode.COMPACT
+        self._ws_card.setVisible(not compact)
+        self._fit_export_button()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_export_button()
+
+    def _fit_export_button(self):
+        tight = self.width_mode is WidthMode.COMPACT or self.width() < _EXPORT_TEXT_MIN_WIDTH
+        self.btn_export.set_icon_only(tight)
+
+    # ---------------- filter handlers ----------------
     def _on_search_changed(self):
         self._search_timer.start()
+
+    def _on_action_changed(self, _index=0):
+        self._sync_filter_chips()
+        self._load_logs()
+
+    def _on_staff_changed(self, _text=""):
+        self._sync_filter_chips()
+        self._on_search_changed()
 
     def _on_date_preset_changed(self):
         preset = self.cmb_date_preset.currentText()
@@ -518,13 +414,15 @@ class AuditLogDialog(QDialog):
 
         self.dt_from.blockSignals(False)
         self.dt_to.blockSignals(False)
+        self._sync_filter_chips()
         self._load_logs()
 
     def _on_custom_date_changed(self):
-        if self.cmb_date_preset.currentText() != "Custom Date Range":
+        if self.cmb_date_preset.currentText() != _CUSTOM_RANGE:
             self.cmb_date_preset.blockSignals(True)
-            self.cmb_date_preset.setCurrentText("Custom Date Range")
+            self.cmb_date_preset.setCurrentText(_CUSTOM_RANGE)
             self.cmb_date_preset.blockSignals(False)
+        self._sync_filter_chips()
         self._load_logs()
 
     def _load_workstations(self):
@@ -532,29 +430,39 @@ class AuditLogDialog(QDialog):
         # already carries every workstation's entries -- there is no separate per-peer
         # log to switch to any more (see the note in __init__).
         self.workstation_list.blockSignals(True)
-        self.workstation_list.clear()
-        item_local = QListWidgetItem("🖥️ All Workstations (this office)")
+        self.workstation_list.setRowCount(0)
+        self.workstation_list.setRowCount(1)
+        item_local = QTableWidgetItem("All (this office)")
+        item_local.setToolTip("All Workstations (this office)")
         item_local.setData(Qt.UserRole, "local")
-        self.workstation_list.addItem(item_local)
-        self.workstation_list.setCurrentRow(0)
+        self.workstation_list.setItem(0, 0, item_local)
+        self.workstation_list.setItem(0, 1, QTableWidgetItem("0"))
+        self.workstation_list.setCurrentCell(0, 0)
         self.workstation_list.blockSignals(False)
 
-    def _on_workstation_changed(self, current: QListWidgetItem, previous: QListWidgetItem):
-        if not current:
+    def _update_workstation_counts(self):
+        item = self.workstation_list.item(0, 1)
+        if item is not None:
+            item.setText(str(len(self._raw_logs_cache)))
+
+    def _on_workstation_changed(self, row, _column=0, _prev_row=-1, _prev_column=-1):
+        item = self.workstation_list.item(row, 0) if row >= 0 else None
+        if item is None:
             return
-        self.selected_host = current.data(Qt.UserRole)
+        self.selected_host = item.data(Qt.UserRole)
         self._load_logs()
+
+    def _date_window(self):
+        preset = self.cmb_date_preset.currentText()
+        if preset == "All Time":
+            return None, None
+        return (self.dt_from.date().toString("yyyy-MM-dd") + "T00:00:00",
+                self.dt_to.date().addDays(1).toString("yyyy-MM-dd") + "T00:00:00")
 
     def _load_logs(self):
         actor_filter = self.actor_input.text().strip()
         action_filter = self.action_combo.currentText()
-        preset = self.cmb_date_preset.currentText()
-
-        from_date = None
-        to_date = None
-        if preset != "All Time":
-            from_date = self.dt_from.date().toString("yyyy-MM-dd") + "T00:00:00"
-            to_date = self.dt_to.date().addDays(1).toString("yyyy-MM-dd") + "T00:00:00"
+        from_date, to_date = self._date_window()
 
         logs = self.db.get_audit_logs(
             actor=actor_filter, action=action_filter,
@@ -562,6 +470,12 @@ class AuditLogDialog(QDialog):
         )
 
         self._raw_logs_cache = logs
+        if self.cmb_date_preset.currentText() == "All Time":
+            self.lbl_range.setText("· all time")
+        else:
+            self.lbl_range.setText(f"· {self.dt_from.date().toString('dd MMM')} – "
+                                   f"{self.dt_to.date().toString('dd MMM yyyy')}")
+        self._update_workstation_counts()
         self._apply_client_side_filter()
 
     def _apply_client_side_filter(self):
@@ -593,37 +507,27 @@ class AuditLogDialog(QDialog):
 
             for row, log in enumerate(filtered):
                 # 0. ID
-                id_item = QTableWidgetItem(str(log["id"]))
-                id_item.setTextAlignment(Qt.AlignCenter)
-                id_item.setForeground(QColor("#8B949E"))
-                self.table.setItem(row, 0, id_item)
+                self.table.setItem(row, 0, QTableWidgetItem(str(log["id"])))
 
                 # 1. Date & Time (Local IST Conversion)
                 local_ts, raw_utc = _format_to_local_time(log["ts"])
                 ts_item = QTableWidgetItem(local_ts)
                 ts_item.setToolTip(f"Local Time: {local_ts}\nUTC: {raw_utc}")
-                ts_item.setForeground(QColor("#E6EDF3"))
                 self.table.setItem(row, 1, ts_item)
 
                 # 2. Actor
-                actor_item = QTableWidgetItem(str(log["actor"] or "System"))
-                actor_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-                actor_item.setForeground(QColor("#4CF9B7") if log["actor"] != "System" else QColor("#8B949E"))
-                self.table.setItem(row, 2, actor_item)
+                self.table.setItem(row, 2, QTableWidgetItem(str(log["actor"] or "System")))
 
-                # 3. Action Badge
-                badge_label, fg_col, bg_col = _get_action_badge_style(log["action"])
+                # 3. Action pill (the item text stays the readable label for search and copy)
+                badge_label, pill_text, pill_tone = _get_action_badge(log["action"])
                 action_item = QTableWidgetItem(badge_label)
-                action_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-                action_item.setForeground(QColor(fg_col))
+                action_item.setData(ROLE_PILL, (pill_text, pill_tone))
                 action_item.setToolTip(f"Action: {log['action']}")
                 self.table.setItem(row, 3, action_item)
 
                 # 4. Client (Name / Token)
                 client_display = log.get("client_name") or (f"CLI-{log['client_id']:05d}" if log.get("client_id") else "—")
                 item_client = QTableWidgetItem(client_display)
-                item_client.setFont(QFont("Segoe UI", 9, QFont.Bold))
-                item_client.setForeground(QColor("#FFFFFF") if client_display != "—" else QColor("#8B949E"))
                 item_client.setData(Qt.UserRole, log)
                 item_client.setToolTip(f"Client: {client_display} (ID: {log.get('client_id', 'N/A')})")
                 self.table.setItem(row, 4, item_client)
@@ -631,15 +535,12 @@ class AuditLogDialog(QDialog):
                 # 5. Service Name
                 srv_str = log.get("service_name") or (str(log["service_id"]) if log.get("service_id") else "—")
                 srv_item = QTableWidgetItem(srv_str)
-                srv_item.setTextAlignment(Qt.AlignCenter)
-                srv_item.setForeground(QColor("#58A6FF") if srv_str != "—" else QColor("#8B949E"))
                 srv_item.setToolTip(f"Service: {srv_str}")
                 self.table.setItem(row, 5, srv_item)
 
                 # 6. Detail
                 det_str = log.get("detail") or ("Viewed client profile" if log.get("action") == "view" else "—")
                 det_item = QTableWidgetItem(det_str)
-                det_item.setForeground(QColor("#C9D1D9") if det_str != "—" else QColor("#6E7681"))
                 det_item.setToolTip(det_str)
                 self.table.setItem(row, 6, det_item)
         finally:
@@ -647,8 +548,10 @@ class AuditLogDialog(QDialog):
 
     def _on_row_selected(self):
         row = self.table.currentRow()
-        if row < 0:
+        if row < 0 or not self.table.selectedItems():
             self.inspector_box.clear()
+            self._entry_card.set_title("Entry")
+            self.entry_pill.hide()
             return
         item_client = self.table.item(row, 4)
         if not item_client:
@@ -668,6 +571,11 @@ class AuditLogDialog(QDialog):
             f"📝 Detail Payload: {det_val}"
         )
         self.inspector_box.setPlainText(detail_text)
+        self._entry_card.set_title(f"Entry #{log.get('id')}")
+        _label, pill_text, pill_tone = _get_action_badge(log.get("action"))
+        self.entry_pill.set_text(pill_text)
+        self.entry_pill.set_tone("emerald" if pill_tone == "green" else pill_tone)
+        self.entry_pill.show()
 
     def _on_copy_inspector(self):
         text = self.inspector_box.toPlainText().strip()
@@ -696,13 +604,7 @@ class AuditLogDialog(QDialog):
             try:
                 actor_filter = self.actor_input.text().strip()
                 action_filter = self.action_combo.currentText()
-                preset = self.cmb_date_preset.currentText()
-
-                from_date = None
-                to_date = None
-                if preset != "All Time":
-                    from_date = self.dt_from.date().toString("yyyy-MM-dd") + "T00:00:00"
-                    to_date = self.dt_to.date().addDays(1).toString("yyyy-MM-dd") + "T00:00:00"
+                from_date, to_date = self._date_window()
 
                 logs = self.db.get_audit_logs(
                     actor=actor_filter, action=action_filter,

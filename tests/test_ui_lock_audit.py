@@ -88,7 +88,7 @@ def test_window_layout_and_defaults(world):
     assert win.cmb_date_preset.currentText() == "Last 30 Days"
     assert [win.cmb_date_preset.itemText(i) for i in range(win.cmb_date_preset.count())] == [
         "All Time", "Today", "Yesterday", "Last 7 Days", "Last 30 Days", "Custom Date Range"]
-    assert win.workstation_list.count() == 1 and win.selected_host == "local"
+    assert win.workstation_list.rowCount() == 1 and win.selected_host == "local"
     assert win.table.rowCount() == 0     # seeded rows are older than 30 days; its own "viewed" entry is logged after the first load
     assert "audit_log_viewed" in [l["action"] for l in db.get_audit_logs(actor="Admin")]
 
@@ -268,7 +268,7 @@ def test_refresh_button_picks_up_new_entries(world):
     before = win.table.rowCount()
     db.log_action("Asha", "backup", detail="a new entry")
     assert win.table.rowCount() == before
-    [b for b in win.findChildren(type(win.btn_copy_insp)) if b.text() == "Refresh"][0].click()
+    win.btn_refresh.click()
     assert win.table.rowCount() == before + 1
     assert "a new entry" in _col(win, 6)
 

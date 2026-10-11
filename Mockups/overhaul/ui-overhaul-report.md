@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 08:33)
+# UI overhaul — report (2026-10-11 16:50)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 9 |
+| Not started | 8 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 27 |
+| Done | 28 |
 | Blocked | 0 |
 
-Runs: 36   output tokens: 1398789   API-equivalent cost: $91.24
+Runs: 37   output tokens: 1497906   API-equivalent cost: $104.73
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -41,7 +41,7 @@ Runs: 36   output tokens: 1398789   API-equivalent cost: $91.24
 | S-7 | Done | opus | a3e2407 | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour | SelectionBar replaces action_row: none/one/many-row states, Open, menu path, live swatches, COMPACT icon-only; 13 new tests; goldens in Mockups/built/search |
 | S-8 | Done | haiku | d110228 | Screens: Client detail panel | Client detail panel rebuilt on the kit (arrangement only). 34/34 lock tests pass. Goldens at 1366x768, 1024x720 and 1366x768@125% in Mockups/built/detail/, chec |
 | S-9 | Done | sonnet | 1d36af7 | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | Manage Clients on the kit: ChipBar, white DataGrid list, cards, bulk SelectionBar; lock + new kit tests pass, goldens in Mockups/built/manage |
-| S-10 | Not started | sonnet |  | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... |  |
+| S-10 | Done | sonnet | b574da2 | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... | Tracker Dump on the kit: tiles, chips, segmented switch, dark DataGrid with pills and delegate row actions; WIDE columns unchanged; lock tests adapted, 11 new k |
 | S-11 | Not started | sonnet |  | Screens: Audit log (IMPLEMENTATION 4.5) |  |
 | S-12 | Not started | opus |  | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... |  |
 | S-13 | Not started | sonnet |  | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... |  |
@@ -97,6 +97,9 @@ Runs: 36   output tokens: 1398789   API-equivalent cost: $91.24
 - **S-9** Bulk bar and header buttons at narrow widths → Bulk buttons are icon-only with tooltips at every width; New client and More go icon-only in COMPACT (The 390-460 px list column cannot hold four labelled bulk buttons plus Clear; the kit LabelledAction.set_icon_only keeps tooltips)
 - **S-9** Filter chips vs hidden combo → Four ChipBar chips plus a More menu drive the hidden filter_combo and show_archived_cb, which stay the source of truth (Keeps every attribute and the lock tests unchanged; same pattern as S-6)
 - **S-9** Form fields and the dialog title tests → Fields from dynamic_form_widgets stay plain Qt widgets styled by the global QSS; a theme rule makes the card field-grid hosts transparent; the card-title lock test compares upper-case text (The shared factory is outside this WP and the kit has no Card title case guarantee; one minimal test adaptation)
+- **S-10** Row height and column policy → Kit 52 px tall rows in WIDE and COMPACT; tracker keeps its own fit_columns/_adjust_table_columns and never calls the grid's set_column/apply_width_mode (WIDE column widths stay as today; the old 48/44 px rows were cell widgets, the kit grid draws pills and action buttons itself at 52)
+- **S-10** Row action order and look → Order is autofill, view, create, more (create used to follow the kebab); autofill stays red via T[danger]; SMTI/MECP are tinted non-primary icons (Delegate draws buttons left to right, so create before the kebab keeps the kebab last; same colour as before)
+- **S-10** Window minimum width → Search box is min 180 / max 320 instead of fixed 320 (The kit chips made the WIDE filter row need 1140 px, so the page could never shrink to the COMPACT switch at 1080)
 
 ## Checks waiting for you
 
@@ -124,3 +127,4 @@ Runs: 36   output tokens: 1398789   API-equivalent cost: $91.24
 - #22 (S-8) Visual check of the collapsed Portal values card: header row, Show toggle and expanded rows on a real screen. — Not run
 - #23 (S-9) Look at Manage Clients on a real screen: the factory form fields (plain Qt inputs from the global QSS) next to the kit cards, light and dark. — Not run
 - #24 (S-9) At 1366 the bulk bar buttons are icon-only: confirm the tooltips make Attach/detach, Archive, Restore and Delete permanently clear. Also check the soft New client button, the 'Unsaved changes' line (editor header grows by one line), and that all five filter chips fit the 390 px list column at 125 %. — Not run
+- #25 (S-10) Open Tracker Dump on a real 125 percent screen with a real client list (1024 px wide): Client column is narrow there because fit_columns is unchanged; confirm names are still readable enough — Not run
