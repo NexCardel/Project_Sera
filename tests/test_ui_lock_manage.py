@@ -204,8 +204,8 @@ def test_cards_are_identity_logins_contact_other_services_notes(world):
     _, _, win = world
     titles = []
     for card in win._cards:
-        lbl = next(l for l in card.findChildren(aw.QLabel) if l.property("class") == "SectionLabel")
-        titles.append(lbl.text())
+        # S-9: the card is a kit Card now; its title is natural case, shown upper-case by the font.
+        titles.append(card.title().upper())
     assert titles[0] == "IDENTITY" and "PORTAL LOGINS" in titles
     assert titles[-2:] == ["ATTACHED SERVICES", "NOTES"]
 

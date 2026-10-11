@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-11 07:56)
+# UI overhaul — report (2026-10-11 08:31)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 11 |
+| Not started | 9 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 25 |
+| Retry | 1 |
+| Done | 26 |
 | Blocked | 0 |
 
-Runs: 33   output tokens: 1150771   API-equivalent cost: $71.76
+Runs: 35   output tokens: 1394972   API-equivalent cost: $90.76
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -39,8 +39,8 @@ Runs: 33   output tokens: 1150771   API-equivalent cost: $71.76
 | S-5 | Done | sonnet | e14dde1 | Screens: Settings: Services; MCL manager, MCL column edit, Service manager, Service edit dialogs | Services page + MCL manager, column edit, service manager, service edit rebuilt on the kit; 13 new tests, goldens at 1366/1024/125% |
 | S-6 | Done | sonnet | dcdd34a | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... | All Clients on the kit: PageHeader, ChipBar over the hidden combo, white DataGrid, Columns menu; 22 lock tests + 3 new pass; goldens in Mockups/built/search |
 | S-7 | Done | opus | a3e2407 | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour | SelectionBar replaces action_row: none/one/many-row states, Open, menu path, live swatches, COMPACT icon-only; 13 new tests; goldens in Mockups/built/search |
-| S-8 | Not started | haiku |  | Screens: Client detail panel |  |
-| S-9 | Not started | sonnet |  | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) |  |
+| S-8 | Done | haiku | d110228 | Screens: Client detail panel | Client detail panel rebuilt on the kit (arrangement only). 34/34 lock tests pass. Goldens at 1366x768, 1024x720 and 1366x768@125% in Mockups/built/detail/, chec |
+| S-9 | Retry | sonnet |  | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | attempt 1: no finish. The full suite is running (3,499 tests). Remaining after it finishes: the hand-off note, the commit, `finish S-9` and the tracker commit. |
 | S-10 | Not started | sonnet |  | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... |  |
 | S-11 | Not started | sonnet |  | Screens: Audit log (IMPLEMENTATION 4.5) |  |
 | S-12 | Not started | opus |  | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... |  |
@@ -89,6 +89,14 @@ Runs: 33   output tokens: 1150771   API-equivalent cost: $71.76
 - **S-6** Which flag does the Columns menu write, and may the last column be hidden? → Staff show_in_search, or admin_show_in_search in admin mode; at least one column must stay visible (Same flags as Settings Main screen; the old code forced no column, so an empty grid is prevented by a disabled switch with a reason)
 - **S-7** Which client actions stay enabled with several rows selected? → None: Open/Edit/Services/Archive/Delete disable with 'Works on one client; N rows are selected'; the cell group stays on (Every old handler acts on one client id; spec 4.1 forbids anything that silently acts on the first row)
 - **S-7** How do bar actions get a keyboard path (spec 4.1)? → The grid right-click / menu-key menu lists the visible, enabled client actions above the existing cell-formatting submenus; each just clicks the bar button (Cheapest path that reuses the same handlers; no new shortcuts to collide with)
+- **S-8** Service buttons: add an Off state when a client has no credentials? → No Off state; buttons stay enabled and warn on click (The lock test clicks service buttons for clients without credentials; disabling them would break the locked behaviour.)
+- **S-8** Control column width for identity, logins and portal rows → Fixed 230 px control column (default), not wide 360 px (360 px clipped the panel at 1366x768 with the 540 px slide panel.)
+- **S-8** Copy and show/hide controls → Icon-only ghost LabelledAction (IconButton is a QToolButton, so the lock tests' findChildren(QPushButton) would miss it; LabelledAction keeps the buttons findable.)
+- **S-8** Card order and the Services card when no services exist → Services first; EmptyState card when none; Portal values last and collapsed (Actions sit at the top; an empty card explains why nothing is listed.)
+- **S-8** Value label style and header name background → Values use theme RowValue; ClientName and EditorSub get background transparent in theme.py (The global QWidget rule boxed every plain label; reusing the theme class keeps the kit look without literals.)
+- **S-9** Bulk bar and header buttons at narrow widths → Bulk buttons are icon-only with tooltips at every width; New client and More go icon-only in COMPACT (The 390-460 px list column cannot hold four labelled bulk buttons plus Clear; the kit LabelledAction.set_icon_only keeps tooltips)
+- **S-9** Filter chips vs hidden combo → Four ChipBar chips plus a More menu drive the hidden filter_combo and show_archived_cb, which stay the source of truth (Keeps every attribute and the lock tests unchanged; same pattern as S-6)
+- **S-9** Form fields and the dialog title tests → Fields from dynamic_form_widgets stay plain Qt widgets styled by the global QSS; a theme rule makes the card field-grid hosts transparent; the card-title lock test compares upper-case text (The shared factory is outside this WP and the kit has no Card title case guarantee; one minimal test adaptation)
 
 ## Checks waiting for you
 
@@ -110,3 +118,9 @@ Runs: 33   output tokens: 1150771   API-equivalent cost: $71.76
 - #16 (S-6) On a real 125 % display, open All Clients: no horizontal scrollbar, chips and header not clipped, Columns menu fits. — Not run
 - #17 (S-6) SearchWindow.columns_changed is not connected in main.py: toggle a column in Columns on All Clients while Settings is open and confirm whether Settings needs to refresh. — Not run
 - #18 (S-7) All Clients selection bar on a real screen at 125 %: select one row, several rows, then cells; bar never jumps, Fill/Text swatches match the cell, Delete asks and Cancel keeps the client. Also delete the two stray test-temp folders 'UsersNexAppDataLocalTemp...scratchpadpt1' and '...pt2' in the APP-ui root (left by an earlier run; not committed) — Not run
+- #19 (S-8) Real 125 % screen: open a client in the detail panel and check the Services, Identity and Logins rows fit; the Notes and collapsed Portal values sections are not in the goldens. — Not run
+- #20 (S-8) Real clipboard: copy a password, then confirm the clipboard is cleared after 30 s. — Not run
+- #21 (S-8) Two-PC checks: Alt+1..9 autofill and Alt+Ctrl+1..9 on a real browser, with the detail panel open. — Not run
+- #22 (S-8) Visual check of the collapsed Portal values card: header row, Show toggle and expanded rows on a real screen. — Not run
+- #23 (S-9) Look at Manage Clients on a real screen: the factory form fields (plain Qt inputs from the global QSS) next to the kit cards, light and dark. — Not run
+- #24 (S-9) At 1366 the bulk bar buttons are icon-only: confirm the tooltips make Attach/detach, Archive, Restore and Delete permanently clear. Also check the soft New client button, the 'Unsaved changes' line (editor header grows by one line), and that all five filter chips fit the 390 px list column at 125 %. — Not run

@@ -21,3 +21,5 @@ Check,WP,Text,Result,Date,Notes
 20,S-8,"Real clipboard: copy a password, then confirm the clipboard is cleared after 30 s.",Not run,2026-10-11 08:09,
 21,S-8,"Two-PC checks: Alt+1..9 autofill and Alt+Ctrl+1..9 on a real browser, with the detail panel open.",Not run,2026-10-11 08:09,
 22,S-8,"Visual check of the collapsed Portal values card: header row, Show toggle and expanded rows on a real screen.",Not run,2026-10-11 08:09,
+23,S-9,"Look at Manage Clients on a real screen: the factory form fields (plain Qt inputs from the global QSS) next to the kit cards, light and dark.",Not run,2026-10-11 08:31,
+24,S-9,"At 1366 the bulk bar buttons are icon-only: confirm the tooltips make Attach/detach, Archive, Restore and Delete permanently clear. Also check the soft New client button, the 'Unsaved changes' line (editor header grows by one line), and that all five filter chips fit the 390 px list column at 125 %.",Not run,2026-10-11 08:31,

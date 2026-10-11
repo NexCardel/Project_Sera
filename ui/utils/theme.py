@@ -502,7 +502,7 @@ QWidget#ManageClientsPage QToolButton[class="FilterChip"]:checked {
     font-weight: 600;
 }
 QWidget#ManageClientsPage QToolButton[class="FilterChip"]::menu-indicator { image: none; width: 0; }
-QWidget#ClientFormCanvas { background: transparent; }
+QWidget#ClientFormCanvas, QWidget[class="FormHost"] { background: transparent; }
 QFrame[class="FormCard"], QFrame[class="EditorHeader"] {
     background-color: $panel;
     border: 1px solid #262626;
@@ -513,7 +513,7 @@ QLabel[class="FieldLabel"] { color: $muted; font-size: ${f_s}px; padding-top: 4p
 QLabel[class="FieldHint"] { color: #6F6E6A; font-size: ${f_xs}px; background: transparent; }
 QLabel[class="EditorTitle"] { color: $text; font-size: 16px; font-weight: 700; }
 QLabel[class="EditorSub"] { color: $muted; font-size: ${f_s}px; background: transparent; }
-QFrame[class="EditorHeader"] QLabel[class="EditorAvatar"] {
+QLabel[class="EditorAvatar"] {
     background-color: $emdim;
     color: $mint;
     border-radius: 8px;
