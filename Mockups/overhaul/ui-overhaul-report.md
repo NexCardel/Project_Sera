@@ -1,4 +1,4 @@
-# UI overhaul — report (2026-10-11 08:31)
+# UI overhaul — report (2026-10-11 08:33)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-12T23:00:00+05:30
 | :--- | ---: |
 | Not started | 9 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 26 |
+| Retry | 0 |
+| Done | 27 |
 | Blocked | 0 |
 
-Runs: 35   output tokens: 1394972   API-equivalent cost: $90.76
+Runs: 36   output tokens: 1398789   API-equivalent cost: $91.24
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -40,7 +40,7 @@ Runs: 35   output tokens: 1394972   API-equivalent cost: $90.76
 | S-6 | Done | sonnet | dcdd34a | Screens: All Clients / Search: header, chips (combo stays hidden), grid tone white, Columns ▾ menu ... | All Clients on the kit: PageHeader, ChipBar over the hidden combo, white DataGrid, Columns menu; 22 lock tests + 3 new pass; goldens in Mockups/built/search |
 | S-7 | Done | opus | a3e2407 | Screens: All Clients: selection bar (IMPLEMENTATION 4.1) and COMPACT behaviour | SelectionBar replaces action_row: none/one/many-row states, Open, menu path, live swatches, COMPACT icon-only; 13 new tests; goldens in Mockups/built/search |
 | S-8 | Done | haiku | d110228 | Screens: Client detail panel | Client detail panel rebuilt on the kit (arrangement only). 34/34 lock tests pass. Goldens at 1366x768, 1024x720 and 1366x768@125% in Mockups/built/detail/, chec |
-| S-9 | Retry | sonnet |  | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | attempt 1: no finish. The full suite is running (3,499 tests). Remaining after it finishes: the hand-off note, the commit, `finish S-9` and the tracker commit. |
+| S-9 | Done | sonnet | 1d36af7 | Screens: Manage Clients onto the kit (list tone white, chips, cards, bulk bar as SelectionBar) | Manage Clients on the kit: ChipBar, white DataGrid list, cards, bulk SelectionBar; lock + new kit tests pass, goldens in Mockups/built/manage |
 | S-10 | Not started | sonnet |  | Screens: Tracker Dump onto the kit (dark tone grid, tiles, chips, row actions by delegate; WIDE ... |  |
 | S-11 | Not started | sonnet |  | Screens: Audit log (IMPLEMENTATION 4.5) |  |
 | S-12 | Not started | opus |  | Screens: Sera Sync: feature map first (IMPLEMENTATION 4.6), then strip, three tabs, device cards, ... |  |

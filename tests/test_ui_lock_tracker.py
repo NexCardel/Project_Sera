@@ -17,7 +17,7 @@ import PySide6.QtWidgets as QtWidgets
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QShortcut
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QToolButton
 
 import ui.windows.tracker_dump_window as tdw
 
@@ -145,8 +145,7 @@ def _names(win):
 
 
 def _pill(win, row):
-    label = win.table.cellWidget(row, W.COL_STATUS).findChild(QLabel, "status_label")
-    return label.property("full_text") or label.text()
+    return win.table.item(row, W.COL_STATUS).data(tdw.ROLE_PILL)[0]
 
 
 def _search(win, text):
@@ -258,25 +257,25 @@ def test_summary_tiles_count_over_everything_loaded(make_window):
     win, _ = make_window()
     tiles = win._summary_tiles
     assert list(tiles) == ["total", "unregistered", "pending", "not_submitted", "today"]
-    assert {k: v[1].text() for k, v in tiles.items()} == {
+    assert {k: v.value() for k, v in tiles.items()} == {
         "total": "6", "unregistered": "1", "pending": "1", "not_submitted": "2", "today": "2"}
-    assert tiles["total"][2].text() == "Client containers"
-    assert tiles["total"][0].isChecked() and not tiles["pending"][0].isChecked()
+    assert tiles["total"].label() == "Client containers"
+    assert tiles["total"].isChecked() and not tiles["pending"].isChecked()
 
 
 def test_a_tile_applies_its_filter_and_a_second_click_clears_it(make_window):
     win, _ = make_window()
     tiles = win._summary_tiles
-    tiles["pending"][0].click()
+    tiles["pending"].click()
     assert win.cmb_status.currentText() == "Pending e-Verification" and _names(win) == ["Charlie Foods"]
-    assert tiles["pending"][0].isChecked() and not tiles["total"][0].isChecked()
-    tiles["pending"][0].click()
-    assert win.cmb_status.currentIndex() == 0 and len(_names(win)) == 6 and tiles["total"][0].isChecked()
-    tiles["unregistered"][0].click()
+    assert tiles["pending"].isChecked() and not tiles["total"].isChecked()
+    tiles["pending"].click()
+    assert win.cmb_status.currentIndex() == 0 and len(_names(win)) == 6 and tiles["total"].isChecked()
+    tiles["unregistered"].click()
     assert win.cmb_client.currentText() == "Unregistered / Action Required" and _names(win) == ["Delta Clinic"]
-    tiles["not_submitted"][0].click()
+    tiles["not_submitted"].click()
     assert win.cmb_status.currentText() == "Not submitted"
-    tiles["today"][0].click()
+    tiles["today"].click()
     assert win.cmb_date.currentText() == "Today"
 
 
@@ -285,7 +284,7 @@ def test_the_total_tile_clears_search_and_every_filter(make_window):
     win.cmb_portal.setCurrentText("GST Portal")
     win.cmb_source.setCurrentText("SGT Only")
     _search(win, "bravo")
-    win._summary_tiles["total"][0].click()
+    win._summary_tiles["total"].click()
     assert win.txt_search.text() == "" and len(_names(win)) == 6
     assert all(c.currentIndex() == 0 for c in (win.cmb_status, win.cmb_portal, win.cmb_client, win.cmb_date, win.cmb_source))
 
@@ -308,7 +307,7 @@ def test_view_buttons_drive_the_hidden_combo_and_swap_the_table(make_window):
     seg["Raw captures"].click()
     assert win.cmb_view_mode.currentIndex() == 1 and seg["Raw captures"].isChecked()
     assert win.table.horizontalHeaderItem(W.COL_PERIOD).text() == "Period"
-    assert win._summary_tiles["total"][2].text() == "Raw captures"
+    assert win._summary_tiles["total"].label() == "Raw captures"
     assert win.table.rowCount() == 6 and win.table.item(0, W.COL_CLIENT).data(tdw._SUBLINE_ROLE).startswith("Record #")
     seg["Containers"].click()
     assert win.cmb_view_mode.currentIndex() == 0 and win.table.horizontalHeaderItem(W.COL_PERIOD).text() == "Filings & History"
@@ -351,7 +350,7 @@ def test_f5_and_the_refresh_button_reload_from_the_database(make_window):
     assert len(f5) == 1 and f5[0].context() == Qt.WidgetWithChildrenShortcut
     f5[0].activated.emit()
     assert db.loads == before + 1
-    refresh = next(b for b in win.findChildren(QPushButton) if b.toolTip() == "Refresh (F5)")
+    refresh = next(b for b in win.findChildren(QToolButton) if b.toolTip() == "Refresh (F5)")
     refresh.click()
     assert db.loads == before + 2
 
@@ -372,14 +371,13 @@ def test_row_buttons_exist_and_tooltips_follow_the_view(make_window):
     win, _ = make_window()
 
     def buttons(row):
-        cell = win.table.cellWidget(row, W.COL_ACTIONS)
-        return {n: cell.findChild(QPushButton, n) for n in ("act_autofill", "act_view", "act_more", "act_create")}
+        return {a.key: a.tooltip for a in win.table.item(row, W.COL_ACTIONS).data(tdw.ROLE_ACTIONS)}
     b0, b1 = buttons(0), buttons(1)
-    assert b0["act_view"].toolTip() == "Inspect (2 captures)"
-    assert b0["act_create"].isHidden() and not b1["act_create"].isHidden()
-    assert b1["act_autofill"].isHidden() and not b0["act_autofill"].isHidden()
+    assert b0["view"] == "Inspect (2 captures)" and "more" in b0 and "more" in b1
+    assert "create" not in b0 and "create" in b1
+    assert "autofill" not in b1 and "autofill" in b0
     win.cmb_view_mode.setCurrentIndex(1)
-    assert buttons(0)["act_view"].toolTip() == "View Payload"
+    assert buttons(0)["view"] == "View Payload"
 
 
 def test_view_and_create_buttons_open_the_row_item(make_window, monkeypatch):
@@ -388,10 +386,10 @@ def test_view_and_create_buttons_open_the_row_item(make_window, monkeypatch):
     monkeypatch.setattr(win, "_show_container_dialog", lambda i: seen.append(("container", i["display_name"])))
     monkeypatch.setattr(win, "_show_payload_dialog", lambda i: seen.append(("payload", i["id"])))
     monkeypatch.setattr(win, "_create_client_from_capture", lambda i: seen.append(("create", i["display_name"] if "display_name" in i else i["client_name"])))
-    win.table.cellWidget(2, W.COL_ACTIONS).findChild(QPushButton, "act_view").click()
-    win.table.cellWidget(1, W.COL_ACTIONS).findChild(QPushButton, "act_create").click()
+    win._on_grid_action(2, W.COL_ACTIONS, "view")
+    win._on_grid_action(1, W.COL_ACTIONS, "create")
     win.cmb_view_mode.setCurrentIndex(1)
-    win.table.cellWidget(0, W.COL_ACTIONS).findChild(QPushButton, "act_view").click()
+    win._on_grid_action(0, W.COL_ACTIONS, "view")
     assert seen == [("container", "Bravo Textiles"), ("create", "Delta Clinic"), ("payload", 1)]
 
 
@@ -436,10 +434,10 @@ def test_right_click_menu_lists_the_actions_for_the_row_and_view(make_window, mo
 def test_kebab_menu_lists_create_and_delete(make_window, monkeypatch):
     win, _ = make_window()
     shown = _fake_menu(monkeypatch)
-    win.table.cellWidget(0, W.COL_ACTIONS).findChild(QPushButton, "act_more").click()
-    win.table.cellWidget(1, W.COL_ACTIONS).findChild(QPushButton, "act_more").click()
+    win._on_grid_action(0, W.COL_ACTIONS, "more")
+    win._on_grid_action(1, W.COL_ACTIONS, "more")
     win.cmb_view_mode.setCurrentIndex(1)
-    win.table.cellWidget(0, W.COL_ACTIONS).findChild(QPushButton, "act_more").click()
+    win._on_grid_action(0, W.COL_ACTIONS, "more")
     assert shown == [["Delete Container"], ["+ Create Client", "Delete Container"], ["Delete Record"]]
 
 
@@ -479,7 +477,7 @@ def test_kebab_and_menu_create_client_open_the_capture_dialog(make_window, monke
     monkeypatch.setattr(win, "_create_client_from_capture", lambda i: seen.append(i["identity_key"]))
     _fake_menu(monkeypatch, pick="+ Create Client")
     _right_click(win, 1)
-    win.table.cellWidget(1, W.COL_ACTIONS).findChild(QPushButton, "act_more").click()
+    win._on_grid_action(1, W.COL_ACTIONS, "more")
     assert seen == ["PAN:ABCPD1004E", "PAN:ABCPD1004E"]
 
 

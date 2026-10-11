@@ -188,7 +188,7 @@ class TestWidthModes(_WindowCase):
         assert self.win._width_mode is WidthMode.WIDE
         assert not self.win._lbl_subtitle.isHidden()
         assert not self.win._chip_row.isVisible()
-        assert self.win.table.verticalHeader().defaultSectionSize() == 48
+        assert self.win.table.verticalHeader().defaultSectionSize() == 52
         assert self.win.txt_search.width() == 320
 
     def test_compact_page_moves_the_chips_to_their_own_row_and_back(self):
@@ -197,16 +197,17 @@ class TestWidthModes(_WindowCase):
         assert self.win._width_mode is WidthMode.COMPACT
         assert self.win._lbl_subtitle.isHidden()
         assert self.win._chip_row.isVisible()
-        assert all(self.win._chip_layout.indexOf(chip) >= 0 for chip, *_ in self.win._filter_chips)
-        assert self.win.table.verticalHeader().defaultSectionSize() == 44
+        assert self.win._chip_layout.indexOf(self.win.chip_bar) >= 0
+        assert all(chip.parent() is self.win.chip_bar for chip, *_ in self.win._filter_chips)
+        assert self.win.table.verticalHeader().defaultSectionSize() == 52
         assert self.win._lbl_per_page.isHidden()
 
         self.win.resize(1600, 900)
         self.settle()
         assert self.win._width_mode is WidthMode.WIDE
         assert not self.win._chip_row.isVisible()
-        assert all(self.win._filter_layout.indexOf(chip) >= 0 for chip, *_ in self.win._filter_chips)
-        assert self.win.table.verticalHeader().defaultSectionSize() == 48
+        assert self.win._filter_layout.indexOf(self.win.chip_bar) >= 0
+        assert self.win.table.verticalHeader().defaultSectionSize() == 52
 
     def test_compact_uses_the_short_segment_labels(self):
         self.win.resize(1000, 700)

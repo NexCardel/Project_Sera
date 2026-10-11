@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import security
 from database import SeraDatabase
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication
 from shiboken6 import getCppPointer
 
 import ui.windows.tracker_dump_window as tdw
@@ -46,34 +46,35 @@ class TestTrackerRefresh(unittest.TestCase):
         self.tmp.cleanup()
 
     def cells(self, col):
-        return [getCppPointer(self.win.table.cellWidget(r, col))[0] for r in range(self.win.table.rowCount())]
+        return [getCppPointer(self.win.table.item(r, col))[0] for r in range(self.win.table.rowCount())]
 
-    def test_a_refresh_reuses_the_row_widgets(self):
+    def test_a_refresh_builds_no_row_widgets_and_reuses_the_items(self):
         assert self.win.table.rowCount() == 3
-        actions, statuses = self.cells(tdw.TrackerDumpWindow.COL_ACTIONS), self.cells(tdw.TrackerDumpWindow.COL_STATUS)
+        cols = (tdw.TrackerDumpWindow.COL_ACTIONS, tdw.TrackerDumpWindow.COL_STATUS)
+        before = [self.cells(c) for c in cols]
+        widgets = len(self.win.table.findChildren(tdw.QWidget))
         for _ in range(5):
             self.win.load_data()
             APP.processEvents()
-        assert (self.cells(tdw.TrackerDumpWindow.COL_ACTIONS) == actions
-                and self.cells(tdw.TrackerDumpWindow.COL_STATUS) == statuses)
+        assert [self.cells(c) for c in cols] == before
+        assert len(self.win.table.findChildren(tdw.QWidget)) == widgets
+        assert all(self.win.table.cellWidget(r, c) is None for r in range(3) for c in range(self.win.table.columnCount()))
 
     def test_a_click_acts_on_the_rows_current_data(self):
         opened = []
         self.win._show_payload_dialog = lambda item: opened.append(item.get("arn_number"))
-        btn = self.win.table.cellWidget(0, tdw.TrackerDumpWindow.COL_ACTIONS).findChild(QPushButton, "act_view")
         first = self.win._current_page_items[0]["arn_number"]
-        btn.click()
+        self.win._on_grid_action(0, tdw.TrackerDumpWindow.COL_ACTIONS, "view")
         self.win.cmb_date.setCurrentIndex(0)
         self.win.txt_search.setText("XYZAB9876C")                    # row 0 is now another record
         self.win._apply_filters()
         APP.processEvents()
-        btn = self.win.table.cellWidget(0, tdw.TrackerDumpWindow.COL_ACTIONS).findChild(QPushButton, "act_view")
-        btn.click()
+        self.win._on_grid_action(0, tdw.TrackerDumpWindow.COL_ACTIONS, "view")
         assert opened[0] == first and opened[1] == "123456789150921" and opened[0] != opened[1]
 
     def test_the_status_cell_follows_the_row(self):
-        label = self.win.table.cellWidget(0, tdw.TrackerDumpWindow.COL_STATUS).findChild(tdw.QLabel, "status_label")
-        assert label is not None and label.text()
+        pill = self.win.table.item(0, tdw.TrackerDumpWindow.COL_STATUS).data(tdw.ROLE_PILL)
+        assert pill and pill[0]
 
     def test_raw_generation_increments_on_raw_write(self):
         initial_gen = self.db.raw_generation()

@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import QApplication, QPushButton, QMessageBox, QWidget
 
 import automation
+from ui.utils.tokens import TOKENS as T
 import ui.windows.tracker_dump_window as tdw
 from ui.windows.tracker_dump_window import TrackerDumpWindow, _service_matches_portal
 from ui.windows.client_detail_window import ClientDetailWindow
@@ -75,71 +76,23 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         win.deleteLater()
         APP.processEvents()
 
-    def test_build_action_cell_layout_and_order(self):
+    def test_row_actions_order_and_buttons(self):
         mock_db = MagicMock()
         win = TrackerDumpWindow(mock_db, defer_first_load=True)
-        item = {"client_id": 5, "portal": "Income Tax"}
 
-        cell = win._build_action_cell(item, is_grouped=True)
-        btn_autofill = cell.findChild(QPushButton, "act_autofill")
-        btn_view = cell.findChild(QPushButton, "act_view")
-        btn_more = cell.findChild(QPushButton, "act_more")
-        btn_create = cell.findChild(QPushButton, "act_create")
+        registered = win._row_actions({"client_id": 5, "portal": "Income Tax"}, is_grouped=True)
+        self.assertEqual([a.key for a in registered], ["autofill", "view", "more"])
 
-        self.assertIsNotNone(btn_autofill)
-        self.assertIsNotNone(btn_view)
-        self.assertIsNotNone(btn_more)
-        self.assertIsNotNone(btn_create)
+        unassigned = win._row_actions({"client_id": None, "is_unassigned": True, "portal": "Income Tax"}, is_grouped=True)
+        self.assertEqual([a.key for a in unassigned], ["view", "create", "more"])
 
-        # Verify layout order: autofill before view
-        layout = cell.layout()
-        idx_autofill = layout.indexOf(btn_autofill)
-        idx_view = layout.indexOf(btn_view)
-        self.assertLess(idx_autofill, idx_view)
+        raw_no_client = win._row_actions({"client_id": None, "portal": "Income Tax"}, is_grouped=False)
+        self.assertEqual([a.key for a in raw_no_client], ["view", "create", "more"])
 
         win.deleteLater()
         APP.processEvents()
 
-    def test_set_action_cell_visibility_and_rebuild(self):
-        mock_db = MagicMock()
-        win = TrackerDumpWindow(mock_db, defer_first_load=True)
-        win.table.setRowCount(2)
-        win.table.setColumnCount(TrackerDumpWindow.COLUMN_COUNT)
-
-        # Row 0: matched client
-        matched_item = {"client_id": 42, "is_unassigned": False, "portal": "Income Tax"}
-        win._set_action_cell(0, matched_item, is_grouped=True)
-        cell_0 = win.table.cellWidget(0, TrackerDumpWindow.COL_ACTIONS)
-        btn_autofill_0 = cell_0.findChild(QPushButton, "act_autofill")
-        self.assertFalse(btn_autofill_0.isHidden())
-
-        # Row 1: unassigned capture (no client)
-        unassigned_item = {"client_id": None, "is_unassigned": True, "portal": "Income Tax"}
-        win._set_action_cell(1, unassigned_item, is_grouped=True)
-        cell_1 = win.table.cellWidget(1, TrackerDumpWindow.COL_ACTIONS)
-        btn_autofill_1 = cell_1.findChild(QPushButton, "act_autofill")
-        self.assertTrue(btn_autofill_1.isHidden())
-
-        # Rebuilding a cell that lacks act_autofill
-        dummy_cell = QWidget()
-        dummy_layout = win.table.layout()
-        btn_old_view = QPushButton()
-        btn_old_view.setObjectName("act_view")
-        # Notice dummy_cell has no act_autofill
-        dummy_btn_layout = tdw.QHBoxLayout(dummy_cell)
-        dummy_btn_layout.addWidget(btn_old_view)
-        win.table.setCellWidget(0, TrackerDumpWindow.COL_ACTIONS, dummy_cell)
-
-        # _set_action_cell should detect missing act_autofill and rebuild it
-        win._set_action_cell(0, matched_item, is_grouped=True)
-        new_cell = win.table.cellWidget(0, TrackerDumpWindow.COL_ACTIONS)
-        self.assertIsNot(new_cell, dummy_cell)
-        self.assertIsNotNone(new_cell.findChild(QPushButton, "act_autofill"))
-
-        win.deleteLater()
-        APP.processEvents()
-
-    def test_set_action_cell_dynamic_service_mode_styling(self):
+    def test_autofill_action_follows_the_service_mode(self):
         mock_db = MagicMock()
         services = [
             {"id": 1, "name": "Income Tax", "automation_mode": "extension"},
@@ -149,29 +102,23 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         mock_db.get_client_services.return_value = services
 
         win = TrackerDumpWindow(mock_db, defer_first_load=True)
-        win.table.setRowCount(3)
-        win.table.setColumnCount(TrackerDumpWindow.COLUMN_COUNT)
 
-        # Fast Autofill row
-        row_ext = {"client_id": 1, "portal": "Income Tax"}
-        win._set_action_cell(0, row_ext, is_grouped=True)
-        btn_0 = win.table.cellWidget(0, TrackerDumpWindow.COL_ACTIONS).findChild(QPushButton, "act_autofill")
-        self.assertIn("Fast Autofill", btn_0.toolTip())
-        self.assertIn("#FF4D4D", btn_0.styleSheet())
+        fast = win._autofill_action({"client_id": 1, "portal": "Income Tax"})
+        self.assertIn("Fast Autofill", fast.tooltip)
+        self.assertTrue(fast.primary)
+        self.assertEqual(fast.colour, T["danger"])
 
-        # SMTI Assist row
-        row_smti = {"client_id": 1, "portal": "GST"}
-        win._set_action_cell(1, row_smti, is_grouped=True)
-        btn_1 = win.table.cellWidget(1, TrackerDumpWindow.COL_ACTIONS).findChild(QPushButton, "act_autofill")
-        self.assertIn("SMTI Manual Assist", btn_1.toolTip())
-        self.assertIn("1.5px solid #FF4D4D", btn_1.styleSheet())
+        smti = win._autofill_action({"client_id": 1, "portal": "GST"})
+        self.assertIn("SMTI Manual Assist", smti.tooltip)
+        self.assertFalse(smti.primary)
 
-        # MECP Manual Copy row
-        row_mecp = {"client_id": 1, "portal": "TRACES"}
-        win._set_action_cell(2, row_mecp, is_grouped=True)
-        btn_2 = win.table.cellWidget(2, TrackerDumpWindow.COL_ACTIONS).findChild(QPushButton, "act_autofill")
-        self.assertIn("MECP Manual Copy", btn_2.toolTip())
-        self.assertIn("1.5px solid #FF4D4D", btn_2.styleSheet())
+        mecp = win._autofill_action({"client_id": 1, "portal": "TRACES"})
+        self.assertIn("MECP Manual Copy", mecp.tooltip)
+        self.assertFalse(mecp.primary)
+
+        none = win._autofill_action({"client_id": 1, "portal": "Unknown Portal"})
+        self.assertIn("Fast Autofill", none.tooltip)
+        self.assertTrue(none.primary)
 
         win.deleteLater()
         APP.processEvents()
@@ -183,18 +130,15 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
 
         win = TrackerDumpWindow(mock_db, defer_first_load=True)
         win.table.setRowCount(1)
-        win.table.setColumnCount(TrackerDumpWindow.COLUMN_COUNT)
 
         matched_item = {"client_id": 7, "is_unassigned": False, "portal": "Income Tax"}
         win._current_page_items = [matched_item]
-        win._set_action_cell(0, matched_item, is_grouped=True)
+        win.cmb_view_mode.setCurrentIndex(0)
 
         emitted = []
         win.service_action_requested.connect(lambda cid, svc: emitted.append((cid, svc)))
 
-        cell = win.table.cellWidget(0, TrackerDumpWindow.COL_ACTIONS)
-        btn_autofill = cell.findChild(QPushButton, "act_autofill")
-        btn_autofill.click()
+        win._on_grid_action(0, TrackerDumpWindow.COL_ACTIONS, "autofill")
         APP.processEvents()
 
         self.assertEqual(len(emitted), 1)
@@ -202,9 +146,10 @@ class TestTrackerDumpAutofillButton(unittest.TestCase):
         self.assertEqual(emitted[0][1]["id"], 1)
 
         # Unmatched service scenario -> shows QMessageBox and emits nothing
+        win._client_services_cache = {}
         mock_db.get_client_services.return_value = []
         with patch.object(QMessageBox, "information") as mock_info:
-            btn_autofill.click()
+            win._on_grid_action(0, TrackerDumpWindow.COL_ACTIONS, "autofill")
             APP.processEvents()
             self.assertEqual(len(emitted), 1)  # No new emission
             mock_info.assert_called_once()

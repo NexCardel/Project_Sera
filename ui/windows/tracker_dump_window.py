@@ -14,19 +14,22 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QCursor, QFont,QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QComboBox, QMessageBox, QDialog, QTextEdit, QTextBrowser, QFrame,
     QFileDialog, QScrollArea, QFormLayout, QCheckBox, QTabWidget,
-    QApplication, QSizePolicy, QMenu, QButtonGroup, QGridLayout,
-    QStyle, QStyledItemDelegate, QStyleOptionViewItem
+    QApplication, QSizePolicy, QMenu, QGridLayout, QStyledItemDelegate
 )
 
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
 from ui.utils.responsive import WidthMode, mode_for
-from ui.components.kit import Chip
+from ui.components.kit import (
+    CellAction, Chip, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
+    PageHeader, Segmented, Select, Tile, ROLE_ACTIONS, ROLE_PILL, ROLE_SUB,
+)
+from ui.utils.tokens import KIT as K, TOKENS as T
 import automation
 
 
@@ -222,24 +225,25 @@ def _status_pill_style(status_text: str) -> str:
             f"border: 1px solid {theme['border']}; border-radius: 11px; padding: 3px 11px; }}")
 
 
-def _set_status_cell(table, row: int, col: int, status_text: str, bg_color: str = "", tooltip: str = "") -> None:
-    """
-    Puts a status pill in (row, col), REUSING the widget already there. The table is
-    refreshed after every capture; building a new styled widget per row each time leaked ~3 MB
-    of memory per refresh (measured 2026-09-21: +335 MB over 100 refreshes).
-    bg_color is unused (kept for callers); the pill takes its colours from STATUS_THEMES.
-    """
-    existing = table.cellWidget(row, col)
-    label = existing.findChild(QLabel, "status_label") if existing is not None else None
-    if label is None:
-        table.setCellWidget(row, col, _create_colored_cell_widget(status_text, bg_color, tooltip=tooltip))
-        return
-    if label.property("full_text") != status_text:  # restyle only when the status changes
-        label.setStyleSheet(_status_pill_style(status_text))
-        label.setText(status_text)
-        label.setProperty("full_text", status_text)
-    existing.setToolTip(tooltip)
-    label.setToolTip(tooltip)
+_STATUS_PILL_TONES = {
+    "Submitted & E-verified": "emerald",
+    "Submitted": "green",
+    "Submitted (e-verification pending)": "amber",
+    "Not submitted": "red",
+    "Other EVC": "blue",
+    "Option Expired (NA)": "neutral",
+    "Not Applicable (NA)": "neutral",
+}
+
+
+def _status_pill(status_text: str) -> tuple[str, str]:
+    """The grid delegate's pill for a submission status: (text, tone)."""
+    return status_text, _STATUS_PILL_TONES.get(status_text, "red")
+
+
+def _portal_ink(label: str) -> str:
+    """Token colour for the short portal label that _portal_short returns."""
+    return {"Income Tax": K["blue_tx"], "GST": T["mint"], "TDS": T["purple"]}.get(label, T["muted"])
 
 
 def _create_colored_cell_widget(status_text: str, bg_color: str = "", fg_color: str = "", tooltip: str = "") -> QWidget:
@@ -530,40 +534,6 @@ def _save_column_choices(hidden: set, shown: set) -> None:
         s.sync()
     except Exception:
         pass
-
-
-class _ClientCellDelegate(QStyledItemDelegate):
-    """Client column: bold name over a muted '#ID · PAN' line (orange when unregistered)."""
-
-    def paint(self, painter, option, index):
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        name, opt.text = opt.text, ""
-        widget = opt.widget
-        style = widget.style() if widget else QApplication.style()
-        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
-
-        painter.save()
-        rect = option.rect.adjusted(10, 5, -8, -5)
-        unassigned = bool(index.data(_UNASSIGNED_ROLE))
-        selected = bool(option.state & QStyle.State_Selected)
-
-        name_font = QFont("Segoe UI", 10, QFont.Bold)
-        painter.setFont(name_font)
-        fm = painter.fontMetrics()
-        painter.setPen(QColor("#FFFFFF" if selected else ("#FFA657" if unassigned else "#F0F6FC")))
-        painter.drawText(rect.left(), rect.top() + fm.ascent(),
-                         fm.elidedText(name, Qt.ElideRight, rect.width()))
-
-        subline = str(index.data(_SUBLINE_ROLE) or "")
-        if subline:
-            sub_font = QFont("Consolas", 9)
-            painter.setFont(sub_font)
-            sfm = painter.fontMetrics()
-            painter.setPen(QColor("#DDE6F0" if selected else ("#C98A55" if unassigned else "#8B949E")))
-            painter.drawText(rect.left(), rect.bottom() - sfm.descent(),
-                             sfm.elidedText(subline, Qt.ElideRight, rect.width()))
-        painter.restore()
 
 
 def _safe_qta_icon(icon_name, color="#FFFFFF"):
@@ -1805,272 +1775,87 @@ class TrackerDumpWindow(QWidget):
         self._auto_hidden_cols = set()
         self._user_hidden_cols, self._user_shown_cols = _load_column_choices()
         self._seg_buttons = []       # (button, full text, short text)
-        self._tile_meta = {}         # key -> (caption, tooltip, colour)
         self._setup_ui()
 
     def _setup_ui(self):
-        self.setStyleSheet("""
-            QWidget {
-                background-color: #202020;
-                color: #F8F5F2;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QFrame#HeaderCard { background: transparent; border: none; }
-            QLabel#TitleLbl {
-                font-size: 18px;
-                font-weight: 700;
-                color: #F8F5F2;
-            }
-            QLabel#SubtitleLbl {
-                font-size: 12px;
-                color: #A0A0A0;
-            }
-            QLineEdit, QComboBox {
-                background-color: #171717;
-                border: 1px solid #444444;
-                border-radius: 5px;
-                color: #F8F5F2;
-                padding: 6px 10px;
-                font-size: 13px;
-            }
-            QLineEdit:focus, QComboBox:focus {
-                border: 1px solid #2E9B5F;
-            }
-            QPushButton.ActionBtn {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-                font-weight: 600;
-                border: none;
-                border-radius: 5px;
-                padding: 7px 14px;
-                font-size: 12px;
-            }
-            QPushButton.ActionBtn:hover {
-                background-color: #247C4C;
-            }
-            QPushButton.ActionBtnGhost {
-                background-color: transparent;
-                color: #C9C9C9;
-                font-weight: 600;
-                border: none;
-                border-radius: 5px;
-                padding: 7px 14px;
-                font-size: 12px;
-            }
-            QPushButton.ActionBtnGhost:hover {
-                background-color: #3A3A3A;
-                color: #FFFFFF;
-            }
-            QPushButton.DangerBtn {
-                background-color: #D9534F;
-                color: #FFFFFF;
-                font-weight: 600;
-                border: none;
-                border-radius: 5px;
-                padding: 7px 14px;
-                font-size: 12px;
-            }
-            QPushButton.DangerBtn:hover {
-                background-color: #C9302C;
-            }
-            QTableWidget {
-                background-color: #121212;
-                alternate-background-color: #1A1A1A;
-                gridline-color: #2D2D2D;
-                border: 1px solid #333333;
-                border-radius: 8px;
-                color: #F0F6FC;
-                selection-background-color: #1F6FEB;
-                selection-color: #FFFFFF;
-            }
-            QTableWidget::item {
-                padding: 9px 10px;
-                border-bottom: 1px solid #222222;
-            }
-            QTableWidget::item:selected {
-                background-color: #1F6FEB;
-                color: #FFFFFF;
-            }
-            QHeaderView::section {
-                background-color: #0D1117;
-                color: #4CF9B7;
-                font-weight: 700;
-                font-size: 12px;
-                padding: 8px;
-                border: none;
-                border-bottom: 2px solid #2E9B5F;
-            }
-            QPushButton#SummaryTile {
-                background-color: #141414;
-                border: 1px solid #262626;
-                border-radius: 7px;
-                padding: 0;
-                text-align: left;
-            }
-            QPushButton#SummaryTile:hover { border-color: #3F3F3F; }
-            QPushButton#SummaryTile:checked { border: 2px solid #2E9B5F; }
-            QPushButton#ToolsBtn {
-                background-color: #1B1B1B;
-                border: 1px solid #333333;
-                border-radius: 5px;
-                color: #E6EDF3;
-                padding: 6px 12px;
-                font-size: 12px;
-            }
-            QPushButton#ToolsBtn:hover { background-color: #262626; border-color: #4F4F4F; }
-            QPushButton#SummaryTile QLabel { background: transparent; }
-            QLabel#TileValue { font-size: 20px; font-weight: 700; }
-            QLabel#TileCaption { font-size: 12px; color: #A0A0A0; }
-            QPushButton#SegBtn {
-                background-color: #171717;
-                border: 1px solid #444444;
-                color: #C9C9C9;
-                padding: 6px 14px;
-                font-size: 12px;
-            }
-            QPushButton#SegBtn:checked { background-color: #2E9B5F; border-color: #2E9B5F; color: #FFFFFF; font-weight: 700; }
-            QComboBox[active="true"] {
-                color: #4CF9B7;
-                border: 1px solid #2E9B5F;
-                background-color: #10231A;
-                font-weight: 600;
-            }
-            QFrame#HeaderCard QLabel { background: transparent; }
-            QFrame#StatusBar { background: transparent; border-top: 1px solid #333333; }
-            QFrame#StatusBar QLabel { background: transparent; }
-        """)
-
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 14, 14, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(T["s_6"], T["s_6"], T["s_6"], T["s_6"])
+        main_layout.setSpacing(T["s_4"])
 
         # ---- Header: title on the left, page actions on the right ----
-        header_card = QFrame()
-        header_card.setObjectName("HeaderCard")
-        header_card_layout = QVBoxLayout(header_card)
-        header_card_layout.setContentsMargins(2, 0, 2, 0)
-        header_card_layout.setSpacing(12)
+        self.page_header = PageHeader(
+            "Tracker Dump", lead="Filings captured by the browser extension, VSDC and SGT, grouped per client")
+        self._lbl_subtitle = self.page_header.lead_label
 
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_card_layout.addLayout(header_layout)
-
-        title_vbox = QVBoxLayout()
-        title_vbox.setSpacing(2)
-        lbl_title = QLabel("Tracker Dump")
-        lbl_title.setObjectName("TitleLbl")
-        lbl_sub = QLabel("Filings captured by the browser extension, VSDC and SGT, grouped per client")
-        lbl_sub.setObjectName("SubtitleLbl")
-        self._lbl_subtitle = lbl_sub
-        title_vbox.addWidget(lbl_title)
-        title_vbox.addWidget(lbl_sub)
-        header_layout.addLayout(title_vbox)
-        header_layout.addStretch()
-
-        btn_refresh = QPushButton()
-        btn_refresh.setProperty("class", "ActionBtnGhost")
-        btn_refresh.setIcon(_safe_qta_icon("mdi.refresh", "#C9D1D9"))
-        btn_refresh.setToolTip("Refresh (F5)")
-        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh = IconButton("mdi.refresh", "Refresh (F5)", variant="bordered")
         btn_refresh.clicked.connect(self.load_data)
-        header_layout.addWidget(btn_refresh)
+        self.page_header.add_action(btn_refresh)
         refresh_sc = QShortcut(QKeySequence(Qt.Key_F5), self)
         refresh_sc.setContext(Qt.WidgetWithChildrenShortcut)
         refresh_sc.activated.connect(self.load_data)
 
-        self.btn_preferences = QPushButton("Tools  ▾")
-        self.btn_preferences.setObjectName("ToolsBtn")
-        self.btn_preferences.setIcon(_safe_qta_icon("mdi.cog-outline", "#C9D1D9"))
-        self.btn_preferences.setToolTip("Re-resolve identities, reports, CSV export, clear captures")
-        self.btn_preferences.setCursor(Qt.PointingHandCursor)
+        self.btn_preferences = LabelledAction(
+            "Tools  ▾", variant="secondary", icon="mdi.cog-outline",
+            tooltip="Re-resolve identities, reports, CSV export, clear captures")
         self.btn_preferences.clicked.connect(self._show_preferences_menu)
-        header_layout.addWidget(self.btn_preferences)
+        self.page_header.add_action(self.btn_preferences)
+        main_layout.addWidget(self.page_header)
 
         # ---- Summary strip: totals over everything loaded; each tile applies a filter ----
         tiles_row = QHBoxLayout()
-        tiles_row.setSpacing(8)
+        tiles_row.setSpacing(T["s_2"])
         self._summary_tiles = {}
-        for key, caption, color, tip in (
-            ("total", "Client containers", "#F0F6FC", "Show everything (clears all filters)"),
-            ("unregistered", "Need a client", "#FFA657", "Captures not matched to a registered client"),
-            ("pending", "Awaiting e-verification", "#E3B341", "Submitted, e-verification still pending"),
-            ("not_submitted", "Not submitted", "#FF8A8A", "Not submitted or option expired"),
-            ("today", "Captured today", "#4CF9B7", "Updated since midnight"),
+        for key, caption, tone, tip in (
+            ("total", "Client containers", None, "Show everything (clears all filters)"),
+            ("unregistered", "Need a client", "amber", "Captures not matched to a registered client"),
+            ("pending", "Awaiting e-verification", "amber", "Submitted, e-verification still pending"),
+            ("not_submitted", "Not submitted", "red", "Not submitted or option expired"),
+            ("today", "Captured today", "emerald", "Updated since midnight"),
         ):
-            tile = QPushButton()
-            tile.setObjectName("SummaryTile")
-            tile.setCheckable(True)
-            tile.setCursor(Qt.PointingHandCursor)
-            tile.setToolTip(tip)
-            tile.setMinimumHeight(50)
-            tl = QVBoxLayout(tile)
-            tl.setContentsMargins(12, 6, 12, 6)
-            tl.setSpacing(0)
-            val = QLabel("0")
-            val.setObjectName("TileValue")
-            val.setStyleSheet(f"color: {color};")
-            cap = QLabel(caption)
-            cap.setObjectName("TileCaption")
-            for lbl in (val, cap):
-                lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
-                tl.addWidget(lbl)
+            tile = Tile("0", caption, tone=tone, tooltip=tip)
             tile.clicked.connect(lambda _=False, k=key: self._on_summary_tile(k))
             tiles_row.addWidget(tile, stretch=1)
-            self._summary_tiles[key] = (tile, val, cap)
-            self._tile_meta[key] = (caption, tip, color)
-        header_card_layout.addLayout(tiles_row)
+            self._summary_tiles[key] = tile
+        main_layout.addLayout(tiles_row)
 
         # ---- Filter row ----
         filter_layout = QHBoxLayout()
         filter_layout.setContentsMargins(0, 0, 0, 0)
-        filter_layout.setSpacing(8)
-        header_card_layout.addLayout(filter_layout)
+        filter_layout.setSpacing(T["s_2"])
+        main_layout.addLayout(filter_layout)
         self._filter_layout = filter_layout
         # COMPACT moves the filter chips onto this second row (hidden in WIDE, so it takes no space).
         self._chip_row = QWidget()
         self._chip_layout = QHBoxLayout(self._chip_row)
         self._chip_layout.setContentsMargins(0, 0, 0, 0)
-        self._chip_layout.setSpacing(8)
+        self._chip_layout.setSpacing(T["s_2"])
         self._chip_layout.addStretch()
         self._chip_row.hide()
         self._chips_on_row = False
-        header_card_layout.addWidget(self._chip_row)
+        main_layout.addWidget(self._chip_row)
 
         # The view-mode combo stays the source of truth (load_data reads it); the segmented
-        # buttons in front of it just drive it.
+        # switch in front of it just drives it.
         self.cmb_view_mode = QComboBox(self)
         self.cmb_view_mode.addItems(["Grouped by Client Container (SRPF)", "Individual Raw Captures"])
         self.cmb_view_mode.hide()
         self.cmb_view_mode.currentIndexChanged.connect(self.load_data)
         self.cmb_view_mode.currentIndexChanged.connect(self._sync_view_buttons)
 
-        seg = QHBoxLayout()
-        seg.setSpacing(0)
-        self._view_group = QButtonGroup(self)
-        self._view_group.setExclusive(True)
-        for idx, (text, short, tip, radius) in enumerate((
-            ("Containers", "Containers", "One row per client (SRPF container)", "border-top-left-radius: 5px; border-bottom-left-radius: 5px;"),
-            ("Raw captures", "Raw", "One row per individual capture", "border-top-right-radius: 5px; border-bottom-right-radius: 5px; border-left: none;"),
+        self.view_switch = Segmented(["Containers", "Raw captures"])
+        for button, (text, short, tip) in zip(self.view_switch.buttons, (
+            ("Containers", "Containers", "One row per client (SRPF container)"),
+            ("Raw captures", "Raw", "One row per individual capture"),
         )):
-            b = QPushButton(text)
-            b.setObjectName("SegBtn")
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setToolTip(tip)
-            b.setStyleSheet(f"QPushButton#SegBtn {{ {radius} }}")
-            self._seg_buttons.append((b, text, short))
-            self._view_group.addButton(b, idx)
-            seg.addWidget(b)
-        self._view_group.idClicked.connect(self.cmb_view_mode.setCurrentIndex)
-        filter_layout.addLayout(seg)
-        filter_layout.addSpacing(4)
+            button.setToolTip(tip)
+            self._seg_buttons.append((button, text, short))
+        self.view_switch.currentChanged.connect(self.cmb_view_mode.setCurrentIndex)
+        filter_layout.addWidget(self.view_switch)
 
-        self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Search client, PAN, GSTIN, ARN, period, portal…")
+        self.txt_search = Input(placeholder="Search client, PAN, GSTIN, ARN, period, portal…", icon="mdi.magnify")
         self.txt_search.setClearButtonEnabled(True)
-        self.txt_search.addAction(_safe_qta_icon("mdi.magnify", "#8B949E"), QLineEdit.LeadingPosition)
         self.txt_search.textChanged.connect(self._on_search_text_changed)
-        self.txt_search.setFixedWidth(320)
+        self.txt_search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         filter_layout.addWidget(self.txt_search)
 
         self.cmb_status = QComboBox()
@@ -2126,6 +1911,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_source.currentIndexChanged.connect(self._on_filter_changed)
 
         # Filter chips: "Status ▾" etc.; a chip that's switched on shows its value, e.g. "Client: Unregistered".
+        self.chip_bar = ChipBar()
         self._filter_chips = []
         for combo, label, short in (
             (self.cmb_status, "Status", {"Submitted & E-verified": "E-verified", "Submitted": "Submitted (no ARN)", "Pending e-Verification": "Pending e-verification"}),
@@ -2144,79 +1930,60 @@ class TrackerDumpWindow(QWidget):
                 if i == 0:
                     menu.addSeparator()
             chip.setMenu(menu)
-            filter_layout.addWidget(chip)
+            self.chip_bar.add_chip(chip, id=label)
             self._filter_chips.append((chip, combo, label, short))
+        filter_layout.addWidget(self.chip_bar)
         filter_layout.addStretch()
 
-        self.btn_reset_filters = QPushButton(" Reset")
-        self.btn_reset_filters.setProperty("class", "ActionBtnGhost")
-        self.btn_reset_filters.setIcon(_safe_qta_icon("mdi.filter-off", "#C9D1D9"))
-        self.btn_reset_filters.setToolTip("Reset all search & filter options")
+        self.btn_reset_filters = LabelledAction(
+            "Reset", variant="ghost", icon="mdi.filter-off", tooltip="Reset all search & filter options")
         self.btn_reset_filters.clicked.connect(self._reset_filters)
         filter_layout.addWidget(self.btn_reset_filters, stretch=0)
 
-        main_layout.addWidget(header_card)
-
-        # Data Table
-        self.table = QTableWidget()
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(48)
-        self.table.verticalHeader().setVisible(False)
+        # Data table: cells, pills and row buttons are drawn by the grid's delegate
+        self.table = DataGrid(tone="dark")
+        self.table.set_tall_rows(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setShowGrid(False)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.table.setWordWrap(False)
         self._user_col_widths = {}
         self.table.horizontalHeader().sectionResized.connect(self._on_section_resized)
         self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
-        self.table.setItemDelegateForColumn(self.COL_CLIENT, _ClientCellDelegate(self.table))
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.actionTriggered.connect(self._on_grid_action)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
-        main_layout.addWidget(self.table, stretch=1)
 
-        # ---- Status bar: AI meter on the left, paging on the right ----
-        status_bar = QFrame()
-        status_bar.setObjectName("StatusBar")
-        pagination_layout = QHBoxLayout(status_bar)
-        pagination_layout.setContentsMargins(4, 6, 4, 0)
-        pagination_layout.setSpacing(10)
+        # ---- Footer: entry count on the left, paging on the right ----
+        self.grid_footer = GridFooter(tone="dark")
+        self.lbl_page_info = self.grid_footer.count_label
+        self.lbl_page_info.setText("Showing 0 to 0 of 0 entries")
 
-        pagination_layout.addStretch()
+        self._lbl_per_page = QLabel("Rows per page:")
+        self._lbl_per_page.setObjectName("KitGridFootText")
+        self.grid_footer.add_widget(self._lbl_per_page)
 
-        self.lbl_page_info = QLabel("Showing 0 to 0 of 0 entries")
-        self.lbl_page_info.setStyleSheet("color: #8B949E; font-size: 12px; font-weight: 500;")
-        pagination_layout.addWidget(self.lbl_page_info)
-        pagination_layout.addSpacing(8)
-
-        lbl_per_page = QLabel("Rows per page:")
-        lbl_per_page.setStyleSheet("color: #8B949E; font-size: 12px;")
-        self._lbl_per_page = lbl_per_page
-        pagination_layout.addWidget(lbl_per_page)
-
-        self.cmb_page_size = QComboBox()
-        self.cmb_page_size.addItems(["25", "50", "100", "200", "All"])
+        self.cmb_page_size = Select(items=["25", "50", "100", "200", "All"])
+        self.cmb_page_size.setFixedHeight(K["h_sm"])
         self.cmb_page_size.setCurrentText("25")
         self.cmb_page_size.currentIndexChanged.connect(self._on_page_size_changed)
-        self.cmb_page_size.setStyleSheet("padding: 3px 8px; font-size: 12px;")
-        pagination_layout.addWidget(self.cmb_page_size)
+        self.grid_footer.add_widget(self.cmb_page_size)
 
-        self.btn_prev_page = QPushButton("◀ Prev")
-        self.btn_prev_page.setProperty("class", "ActionBtnGhost")
+        self.btn_prev_page = LabelledAction("◀ Prev", variant="ghost", sm=True)
         self.btn_prev_page.clicked.connect(self._prev_page)
-        pagination_layout.addWidget(self.btn_prev_page)
+        self.grid_footer.add_widget(self.btn_prev_page)
 
         self.lbl_current_page = QLabel("Page 1 / 1")
-        self.lbl_current_page.setStyleSheet("font-weight: 700; color: #4CF9B7; padding: 0 6px; font-size: 12px;")
-        pagination_layout.addWidget(self.lbl_current_page)
+        self.lbl_current_page.setObjectName("KitGridFootText")
+        self.grid_footer.add_widget(self.lbl_current_page)
 
-        self.btn_next_page = QPushButton("Next ▶")
-        self.btn_next_page.setProperty("class", "ActionBtnGhost")
+        self.btn_next_page = LabelledAction("Next ▶", variant="ghost", sm=True)
         self.btn_next_page.clicked.connect(self._next_page)
-        pagination_layout.addWidget(self.btn_next_page)
+        self.grid_footer.add_widget(self.btn_next_page)
 
-        main_layout.addWidget(status_bar)
+        self.grid_frame = GridFrame(self.table, self.grid_footer)
+        main_layout.addWidget(self.grid_frame, stretch=1)
+
         self._sync_view_buttons()
         self._sync_filter_indicators()
         self._apply_width_mode(WidthMode.WIDE)
@@ -2270,8 +2037,6 @@ class TrackerDumpWindow(QWidget):
         mode = mode_for(self.width(), current)
         if mode is not current:
             self._apply_width_mode(mode)
-        elif mode is WidthMode.COMPACT:
-            self._refresh_tile_captions()
 
     def _apply_width_mode(self, mode: WidthMode):
         """WIDE is the layout Tracker Dump has always had. COMPACT trims the header and filters for a
@@ -2280,9 +2045,8 @@ class TrackerDumpWindow(QWidget):
         compact = mode is WidthMode.COMPACT
         self._lbl_subtitle.setVisible(not compact)
 
-        self.txt_search.setFixedWidth(320)
-        if compact:
-            self.txt_search.setMinimumWidth(180)
+        self.txt_search.setMinimumWidth(180)
+        self.txt_search.setMaximumWidth(320)
 
         for button, text, short in self._seg_buttons:
             label = short if compact else text
@@ -2293,26 +2057,20 @@ class TrackerDumpWindow(QWidget):
 
         self._move_chips(compact)
 
-        for key, (tile, val, cap) in self._summary_tiles.items():
-            _caption, _tip, color = self._tile_meta[key]
-            tile.setMinimumHeight(40 if compact else 50)
-            val.setStyleSheet(f"color: {color}; font-size: 16px;" if compact else f"color: {color};")
-        self._refresh_tile_captions()
+        for tile in self._summary_tiles.values():
+            tile.apply_width_mode(mode)
 
-        self.table.verticalHeader().setDefaultSectionSize(44 if compact else 48)
         self._lbl_per_page.setVisible(not compact)
         self._col_resize_timer.start()
 
     def _move_chips(self, compact: bool):
         if compact != self._chips_on_row:
             if compact:
-                for chip, *_ in self._filter_chips:
-                    self._filter_layout.removeWidget(chip)
-                    self._chip_layout.insertWidget(self._chip_layout.count() - 1, chip)   # before the stretch
+                self._filter_layout.removeWidget(self.chip_bar)
+                self._chip_layout.insertWidget(self._chip_layout.count() - 1, self.chip_bar)   # before the stretch
             else:
-                for chip, *_ in self._filter_chips:
-                    self._chip_layout.removeWidget(chip)
-                    self._filter_layout.insertWidget(self._filter_spacer_index(), chip)
+                self._chip_layout.removeWidget(self.chip_bar)
+                self._filter_layout.insertWidget(self._filter_spacer_index(), self.chip_bar)
             self._chips_on_row = compact
         self._chip_row.setVisible(compact)
 
@@ -2322,16 +2080,6 @@ class TrackerDumpWindow(QWidget):
             if self._filter_layout.itemAt(i).spacerItem() is not None:
                 return i
         return self._filter_layout.count()
-
-    def _refresh_tile_captions(self):
-        compact = self._width_mode is WidthMode.COMPACT
-        for key, (tile, _val, cap) in self._summary_tiles.items():
-            caption, tip, _color = self._tile_meta[key]
-            text = caption
-            if compact:
-                text = cap.fontMetrics().elidedText(caption, Qt.ElideRight, max(40, tile.width() - 28))
-            cap.setText(text)
-            tile.setToolTip(f"{caption} — {tip}" if text != caption else tip)
 
     def _adjust_table_columns(self):
         """Fits the columns to the table's width (see fit_columns). Nothing ratchets wider on refresh,
@@ -2359,19 +2107,6 @@ class TrackerDumpWindow(QWidget):
         if auto_hidden != self._auto_hidden_cols:
             self._auto_hidden_cols = auto_hidden
             self._refresh_client_tooltips()
-        self._elide_status_labels()
-
-    def _elide_status_labels(self):
-        """Shortens a status pill that is wider than its column ('…' at the end). The full text stays in the tooltip."""
-        avail = max(40, self.table.columnWidth(self.COL_STATUS) - 64)     # cell margins + pill padding and border
-        for row in range(self.table.rowCount()):
-            cell = self.table.cellWidget(row, self.COL_STATUS)
-            label = cell.findChild(QLabel, "status_label") if cell is not None else None
-            if label is None:
-                continue
-            full = label.property("full_text") or label.text()
-            label.ensurePolished()        # the pill's stylesheet sets its font; measure with that font
-            label.setText(label.fontMetrics().elidedText(full, Qt.ElideRight, avail))
 
     def _on_header_context_menu(self, pos):
         """Tick the optional columns to show or hide them. Choices are kept per PC and beat auto-hiding."""
@@ -2481,23 +2216,22 @@ class TrackerDumpWindow(QWidget):
         is_grouped = (self.cmb_view_mode.currentIndex() == 0)
 
         menu = QMenu(self)
-        menu.setStyleSheet("background-color: #1E1E1E; color: #FFFFFF; border: 1px solid #333333;")
 
         if is_grouped:
-            act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", "#4CF9B7"), "Inspect Client Container")
+            act_inspect = menu.addAction(_safe_qta_icon("mdi.eye", T["mint"]), "Inspect Client Container")
             act_inspect.triggered.connect(lambda: self._show_container_dialog(item))
             if item.get('is_unassigned'):
-                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
+                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
-            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Container")
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Container")
             act_del.triggered.connect(lambda: self._delete_srpf_container(item.get("identity_key")))
         else:
-            act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", "#4CF9B7"), "View Raw Payload")
+            act_inspect = menu.addAction(_safe_qta_icon("mdi.code-json", T["mint"]), "View Raw Payload")
             act_inspect.triggered.connect(lambda: self._show_payload_dialog(item))
             if item.get('is_unassigned') or not item.get('client_id'):
-                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
+                act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
                 act_create.triggered.connect(lambda: self._create_client_from_capture(item))
-            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Record")
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Record")
             act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
@@ -2574,24 +2308,17 @@ class TrackerDumpWindow(QWidget):
             rec_dt = _parse_record_datetime(d.get("last_updated") if is_grouped else d.get("created_at"))
             if rec_dt and rec_dt.date() == today:
                 counts["today"] += 1
-        for key, (tile, val, cap) in self._summary_tiles.items():
-            val.setText(f"{counts[key]:,}")
-        self._summary_tiles["total"][2].setText("Client containers" if is_grouped else "Raw captures")
+        for key, tile in self._summary_tiles.items():
+            tile.set_value(f"{counts[key]:,}")
+        self._summary_tiles["total"].set_label("Client containers" if is_grouped else "Raw captures")
 
     def _sync_filter_indicators(self):
         """Highlights filters that are switched on, checks the matching tile, shows Reset only when useful."""
         if not hasattr(self, "_summary_tiles"):
             return
         combos = (self.cmb_status, self.cmb_portal, self.cmb_client, self.cmb_date, self.cmb_source)
-        any_active = bool(self.txt_search.text().strip())
-        for combo in combos:
-            active = combo.currentIndex() > 0
-            any_active = any_active or active
-            if combo.property("active") != active:
-                combo.setProperty("active", active)
-                combo.style().unpolish(combo)
-                combo.style().polish(combo)
-        for key, (tile, _, _) in self._summary_tiles.items():
+        any_active = bool(self.txt_search.text().strip()) or any(combo.currentIndex() > 0 for combo in combos)
+        for key, tile in self._summary_tiles.items():
             if key == "total":
                 tile.setChecked(not any_active)
             else:
@@ -2605,10 +2332,8 @@ class TrackerDumpWindow(QWidget):
             chip.setText(f"{label}: {value}" if on else label)     # the chip draws its own ▾
 
     def _sync_view_buttons(self, *_):
-        if hasattr(self, "_view_group"):
-            btn = self._view_group.button(self.cmb_view_mode.currentIndex())
-            if btn is not None:
-                btn.setChecked(True)
+        if hasattr(self, "view_switch"):
+            self.view_switch.set_current(self.cmb_view_mode.currentIndex())
 
     def load_data(self):
         """Fetch tracker dumps or SRPF unified containers from database."""
@@ -2794,66 +2519,38 @@ class TrackerDumpWindow(QWidget):
         finally:
             self.table.setUpdatesEnabled(True)
 
-    def _set_action_cell(self, row_idx: int, item: dict, is_grouped: bool) -> None:
-        """
-        Puts the Actions cell in a row, REUSING the one already there: the table is refreshed
-        after every capture, and a new pair of styled buttons per row per refresh - each holding
-        a copy of the row's full payload history in its click handler - leaked ~3 MB per
-        refresh (measured 2026-09-21). The cell only remembers its row number; the buttons look
-        the row's current item up when clicked.
-        """
-        cell = self.table.cellWidget(row_idx, self.COL_ACTIONS)
-        if cell is None or cell.findChild(QPushButton, "act_view") is None or cell.findChild(QPushButton, "act_autofill") is None:
-            cell = self._build_action_cell(item, is_grouped)
-            self.table.setCellWidget(row_idx, self.COL_ACTIONS, cell)
-        cell.setProperty("row", row_idx)
-        cell.setProperty("grouped", bool(is_grouped))
-        btn_view = cell.findChild(QPushButton, "act_view")
+    def _row_actions(self, item: dict, is_grouped: bool) -> list:
+        """The buttons the grid draws in a row's Actions cell: autofill (registered clients), inspect,
+        create client (unregistered rows) and the ⋮ overflow menu. A click arrives in _on_grid_action."""
+        actions = []
+        if bool(item.get("client_id")) and not item.get("is_unassigned"):
+            actions.append(self._autofill_action(item))
         if is_grouped:
-            tot = item.get('total_captures', 1)
-            btn_view.setToolTip(f"Inspect ({tot} capture{'s' if tot != 1 else ''})")
+            tot = item.get("total_captures", 1)
+            actions.append(CellAction("view", "mdi.eye-outline", f"Inspect ({tot} capture{'s' if tot != 1 else ''})"))
         else:
-            btn_view.setToolTip("View Payload")
-        needs_create = item.get('is_unassigned') or (not is_grouped and not item.get('client_id'))
-        btn_create = cell.findChild(QPushButton, "act_create")
-        if btn_create is not None:
-            btn_create.setVisible(bool(needs_create))
-        btn_autofill = cell.findChild(QPushButton, "act_autofill")
-        if btn_autofill is not None:
-            has_client = bool(item.get("client_id")) and not item.get("is_unassigned")
-            btn_autofill.setVisible(has_client)
-            if has_client:
-                service = self._service_for_row(item)
-                if service:
-                    mode_1 = automation.service_action_mode(service)
-                    action_specs = {
-                        automation.ACTION_AUTOFILL: (
-                            "Fast Autofill", "mdi.flash", "#FFFFFF",
-                            "QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }"
-                        ),
-                        automation.ACTION_SMTI: (
-                            "SMTI Manual Assist", "mdi.clipboard-account-outline", "#FF4D4D",
-                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
-                        ),
-                        automation.ACTION_MECP: (
-                            "MECP Manual Copy", "mdi.content-copy", "#FF4D4D",
-                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
-                        ),
-                    }
-                    action_label, action_icon, icon_color, btn_style = action_specs.get(mode_1, action_specs[automation.ACTION_AUTOFILL])
-                    btn_autofill.setIcon(_safe_qta_icon(action_icon, icon_color))
-                    btn_autofill.setStyleSheet(btn_style)
-                    btn_autofill.setToolTip(f"{action_label}: {service.get('name', 'Service')}")
-                else:
-                    portal_name = item.get("service_name") or item.get("portal") or "Portal"
-                    btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
-                    btn_autofill.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }")
-                    btn_autofill.setToolTip(f"Fast Autofill: {portal_name}")
+            actions.append(CellAction("view", "mdi.eye-outline", "View Payload"))
+        if item.get("is_unassigned") or (not is_grouped and not item.get("client_id")):
+            actions.append(CellAction("create", "mdi.account-plus", "Create a client from this capture"))
+        actions.append(CellAction("more", "mdi.dots-vertical", "More actions (Create Client, Delete)"))
+        return actions
 
-    def _on_action_create(self, cell: QWidget) -> None:
-        item = self._action_cell_item(cell)
-        if item is not None:
-            self._create_client_from_capture(item)
+    def _autofill_action(self, item: dict) -> CellAction:
+        service = self._service_for_row(item)
+        if not service:
+            portal_name = item.get("service_name") or item.get("portal") or "Portal"
+            return CellAction("autofill", "mdi.flash", f"Fast Autofill: {portal_name}", primary=True, colour=T["danger"])
+        specs = {
+            automation.ACTION_AUTOFILL: ("Fast Autofill", "mdi.flash"),
+            automation.ACTION_SMTI: ("SMTI Manual Assist", "mdi.clipboard-account-outline"),
+            automation.ACTION_MECP: ("MECP Manual Copy", "mdi.content-copy"),
+        }
+        mode = automation.service_action_mode(service)
+        label, icon = specs.get(mode, specs[automation.ACTION_AUTOFILL])
+        tip = f"{label}: {service.get('name', 'Service')}"
+        if mode in specs and mode != automation.ACTION_AUTOFILL:
+            return CellAction("autofill", _safe_qta_icon(icon, T["danger"]), tip)
+        return CellAction("autofill", icon, tip, primary=True, colour=T["danger"])
 
     def _service_for_row(self, item: dict):
         cid = item.get("client_id")
@@ -2880,10 +2577,25 @@ class TrackerDumpWindow(QWidget):
             return matched[0]
         return None
 
-    def _on_action_autofill(self, cell: QWidget) -> None:
-        item = self._action_cell_item(cell)
-        if item is None:
+    def _on_grid_action(self, row: int, _col: int, key: str) -> None:
+        items = getattr(self, "_current_page_items", None) or []
+        if not 0 <= row < len(items):
             return
+        item = items[row]
+        is_grouped = self.cmb_view_mode.currentIndex() == 0
+        if key == "autofill":
+            self._on_action_autofill(item)
+        elif key == "view":
+            if is_grouped:
+                self._show_container_dialog(item)
+            else:
+                self._show_payload_dialog(item)
+        elif key == "create":
+            self._create_client_from_capture(item)
+        elif key == "more":
+            self._show_row_action_menu(item, is_grouped, QCursor.pos())
+
+    def _on_action_autofill(self, item: dict) -> None:
         cid = item.get("client_id")
         if not cid:
             return
@@ -2906,138 +2618,9 @@ class TrackerDumpWindow(QWidget):
             return
         self.service_action_requested.emit(int(cid), service)
 
-    def _action_cell_item(self, cell: QWidget):
-        """The item currently shown in the action cell's row (None if the page changed under it)."""
-        row = cell.property("row")
-        items = getattr(self, "_current_page_items", None) or []
-        if row is None or not (0 <= int(row) < len(items)):
-            return None
-        return items[int(row)]
-
-    def _on_action_view(self, cell: QWidget) -> None:
-        item = self._action_cell_item(cell)
-        if item is None:
-            return
-        if cell.property("grouped"):
-            self._show_container_dialog(item)
-        else:
-            self._show_payload_dialog(item)
-
-    def _on_action_more(self, cell: QWidget, anchor: QPushButton) -> None:
-        item = self._action_cell_item(cell)
-        if item is not None:
-            self._show_row_action_menu(item, bool(cell.property("grouped")), anchor)
-
-    def _build_action_cell(self, item: dict, is_grouped: bool) -> QWidget:
-        """
-        Builds the per-row Actions cell: an Automation 1 autofill button,
-        a primary Inspect/View button, and a kebab (⋮) overflow menu for
-        Create Client / Delete.
-        """
-        widget = QWidget()
-        widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
-        widget.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(4)
-
-        # Built once per table row and reused (see _set_action_cell); the handlers find the
-        # row's current item when clicked instead of holding a copy of it.
-        btn_autofill = QPushButton()
-        btn_autofill.setObjectName("act_autofill")
-        btn_autofill.setCursor(Qt.PointingHandCursor)
-        btn_autofill.setFixedSize(34, 26)
-        btn_autofill.setIconSize(QSize(16, 16))
-        btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
-        btn_autofill.setToolTip("Automation 1 (Fast Autofill)")
-        btn_autofill.setStyleSheet("""
-            QPushButton {
-                background-color: #FF4D4D;
-                border: none;
-                border-radius: 6px;
-                padding: 3px 0px;
-            }
-            QPushButton:hover {
-                background-color: #E63939;
-            }
-        """)
-        btn_autofill.clicked.connect(lambda _=False, c=widget: self._on_action_autofill(c))
-        layout.addWidget(btn_autofill)
-
-        btn_view = QPushButton()
-        btn_view.setObjectName("act_view")
-        btn_view.clicked.connect(lambda _=False, c=widget: self._on_action_view(c))
-        btn_view.setIcon(_safe_qta_icon("mdi.eye-outline", "#8FA6C2"))
-        btn_view.setFixedWidth(30)
-        # Styled inline rather than via the QSS class selector: buttons embedded through
-        # setCellWidget() don't reliably repolish dynamic-property selectors in Qt, so the
-        # class-based rule silently falls back to default chrome for these specifically.
-        btn_view.setStyleSheet("""
-            QPushButton {
-                background-color: #1E1E1E;
-                border: 1px solid #333333;
-                border-radius: 4px;
-                padding: 3px 0px;
-            }
-            QPushButton:hover {
-                background-color: #2A2A2A;
-                border: 1px solid #8FA6C2;
-            }
-        """)
-        layout.addWidget(btn_view)
-
-        btn_more = QPushButton("⋮")
-        btn_more.setFixedWidth(24)
-        btn_more.setToolTip("More actions (Create Client, Delete)")
-        btn_more.setStyleSheet("""
-            QPushButton {
-                background-color: #1E1E1E;
-                color: #C9C9C9;
-                border: 1px solid #333333;
-                border-radius: 4px;
-                font-size: 13px;
-                font-weight: 700;
-                padding: 3px 0px;
-            }
-            QPushButton:hover {
-                background-color: #2A2A2A;
-                color: #FFFFFF;
-                border: 1px solid #4CF9B7;
-            }
-        """)
-        btn_more.setObjectName("act_more")
-        btn_more.clicked.connect(lambda _=False, c=widget, b=btn_more: self._on_action_more(c, b))
-        layout.addWidget(btn_more)
-
-        # Only shown on rows with no matching client (see _set_action_cell)
-        btn_create = QPushButton()
-        btn_create.setObjectName("act_create")
-        btn_create.setIcon(_safe_qta_icon("mdi.account-plus", "#4CF9B7"))
-        btn_create.setFixedWidth(30)
-        btn_create.setToolTip("Create a client from this capture")
-        btn_create.setStyleSheet("""
-            QPushButton {
-                background-color: #10231A;
-                border: 1px solid #245A3E;
-                border-radius: 4px;
-                padding: 3px 0px;
-            }
-            QPushButton:hover {
-                background-color: #1A382B;
-                border: 1px solid #4CF9B7;
-            }
-        """)
-        btn_create.clicked.connect(lambda _=False, c=widget: self._on_action_create(c))
-        btn_create.hide()
-        layout.addWidget(btn_create)
-        layout.addStretch()
-
-        return widget
-
-    def _show_row_action_menu(self, item: dict, is_grouped: bool, anchor: QPushButton):
-        """Overflow menu anchored to the kebab button — mirrors the right-click context menu."""
+    def _show_row_action_menu(self, item: dict, is_grouped: bool, global_pos):
+        """Overflow menu under the ⋮ button - mirrors the right-click context menu."""
         menu = QMenu(self)
-        menu.setStyleSheet("background-color: #1E1E1E; color: #FFFFFF; border: 1px solid #333333;")
 
         if is_grouped:
             needs_create = item.get('is_unassigned')
@@ -3045,17 +2628,17 @@ class TrackerDumpWindow(QWidget):
             needs_create = item.get('is_unassigned') or not item.get('client_id')
 
         if needs_create:
-            act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", "#2E9B5F"), "+ Create Client")
+            act_create = menu.addAction(_safe_qta_icon("mdi.account-plus", T["em2"]), "+ Create Client")
             act_create.triggered.connect(lambda: self._create_client_from_capture(item))
 
         if is_grouped:
-            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Container")
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Container")
             act_del.triggered.connect(lambda: self._delete_srpf_container(item.get("identity_key")))
         else:
-            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", "#FF6B6B"), "Delete Record")
+            act_del = menu.addAction(_safe_qta_icon("mdi.trash-can-outline", T["dangertx"]), "Delete Record")
             act_del.triggered.connect(lambda: self._delete_dump(item.get("id")))
 
-        menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        menu.exec_(global_pos)
 
     def _prepare_columns(self, is_grouped: bool):
         """Sets headers and widths for the current view."""
@@ -3070,6 +2653,18 @@ class TrackerDumpWindow(QWidget):
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._adjust_table_columns()
 
+    def _table_item(self, row_idx: int, col: int, color=None) -> QTableWidgetItem:
+        """The row's item in `col` (created on first use); its text colour is reset on every refresh."""
+        item = self.table.item(row_idx, col)
+        if not item:
+            item = QTableWidgetItem()
+            self.table.setItem(row_idx, col, item)
+        if color:
+            item.setForeground(QColor(color))
+        else:
+            item.setData(Qt.ForegroundRole, None)
+        return item
+
     def _populate_grouped_table(self, containers: list[dict]):
         """Populates table in SRPF Grouped Container view: 1 row per unique client container."""
         self._client_services_cache = {}
@@ -3077,15 +2672,6 @@ class TrackerDumpWindow(QWidget):
         self.table.setRowCount(len(containers))
 
         for row_idx, r in enumerate(containers):
-            def _get_item(col, color=None, align=None):
-                item = self.table.item(row_idx, col)
-                if not item:
-                    item = QTableWidgetItem()
-                    self.table.setItem(row_idx, col, item)
-                if color: item.setForeground(QColor(color))
-                if align is not None: item.setTextAlignment(align)
-                return item
-
             unassigned = bool(r.get('is_unassigned'))
             identity_key = r.get('identity_key') or ""
 
@@ -3098,8 +2684,9 @@ class TrackerDumpWindow(QWidget):
                 name = _strip_pan_suffix(disp_name or identity_key or "Unknown client", r.get("pan") or "")
                 token_str = str(r.get("client_id_token") or (f"CLI-{r['client_id']:05d}" if r.get("client_id") else ""))
                 subline = " · ".join(p for p in (f"#{token_str}" if token_str else "", r.get("pan") or "") if p)
-            c_item = _get_item(self.COL_CLIENT)
+            c_item = self._table_item(row_idx, self.COL_CLIENT, T["warn"] if unassigned else None)
             c_item.setText(name)
+            c_item.setData(ROLE_SUB, subline)
             c_item.setData(_SUBLINE_ROLE, subline)
             c_item.setData(_UNASSIGNED_ROLE, unassigned)
             tooltip_txt = f"{name}\n{subline}"
@@ -3108,41 +2695,42 @@ class TrackerDumpWindow(QWidget):
             c_item.setData(_TIP_BASE_ROLE, tooltip_txt)
 
             portal_str = r.get("portal") or "Income Tax Portal"
-            short, color = _portal_short(portal_str)
-            p_item = _get_item(self.COL_FILING, color=color)
+            short, _ = _portal_short(portal_str)
+            p_item = self._table_item(row_idx, self.COL_FILING, _portal_ink(short))
             p_item.setText(_filing_type(portal_str, short))
             p_item.setToolTip(portal_str)
 
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
-            hist_item = _get_item(self.COL_PERIOD, color="#58A6FF")
+            hist_item = self._table_item(row_idx, self.COL_PERIOD, K["blue_tx"])
             hist_item.setText(_filings_short(period_sum))
             hist_item.setToolTip(period_sum)
 
             # Submission Status
-            status_text, status_theme = _resolve_ltt_submission_status(r)
-            _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
+            status_text, _ = _resolve_ltt_submission_status(r)
             arn_val = r.get("latest_arn", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"Latest ARN / Ack: {arn_val}")
-            _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
-                             tooltip="\n".join(tooltip_lines))
+            s_item = self._table_item(row_idx, self.COL_STATUS)
+            s_item.setText("")
+            s_item.setData(ROLE_PILL, _status_pill(status_text))
+            s_item.setToolTip("\n".join(tooltip_lines))
 
             dev_name = _extract_device_name(r)
-            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item = self._table_item(row_idx, self.COL_DEVICE, K["orange"])
             dev_item.setText(dev_name)
             method_val = r.get("capture_method", "Unknown")
             dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method_val}")
 
             ts_raw = r.get("last_updated", "")
-            ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
+            ts_item = self._table_item(row_idx, self.COL_UPDATED, T["muted"])
             ts_item.setText(_short_local_time(ts_raw))
             ts_item.setToolTip(_format_to_local_time(ts_raw))
 
-            # Actions - reused; the buttons read this row's item when clicked
-            self._set_action_cell(row_idx, r, is_grouped=True)
+            # Actions: drawn by the grid; a click comes back through _on_grid_action
+            a_item = self._table_item(row_idx, self.COL_ACTIONS)
+            a_item.setData(ROLE_ACTIONS, self._row_actions(r, is_grouped=True))
             self._finish_client_tooltip(c_item, row_idx)
-        self._elide_status_labels()
 
     def _populate_raw_table(self, records: list[dict]):
         """Populates table in granular Individual Raw Captures view."""
@@ -3151,15 +2739,6 @@ class TrackerDumpWindow(QWidget):
         self.table.setRowCount(len(records))
 
         for row_idx, r in enumerate(records):
-            def _get_item(col, color=None, align=None):
-                item = self.table.item(row_idx, col)
-                if not item:
-                    item = QTableWidgetItem()
-                    self.table.setItem(row_idx, col, item)
-                if color: item.setForeground(QColor(color))
-                if align is not None: item.setTextAlignment(align)
-                return item
-
             unassigned = bool(r.get('is_unassigned')) or not r.get('client_id')
             client_name = _strip_pan_suffix(r.get('client_name') or "Unknown Client", r.get('pan') or "")
             subline_parts = [f"Record #{r['id']}"]
@@ -3168,49 +2747,50 @@ class TrackerDumpWindow(QWidget):
             if unassigned:
                 subline_parts.append("no matching client")
             subline = " · ".join(subline_parts)
-            c_item = _get_item(self.COL_CLIENT)
+            c_item = self._table_item(row_idx, self.COL_CLIENT, T["warn"] if unassigned else None)
             c_item.setText(client_name)
+            c_item.setData(ROLE_SUB, subline)
             c_item.setData(_SUBLINE_ROLE, subline)
             c_item.setData(_UNASSIGNED_ROLE, unassigned)
             raw_tooltip = f"{client_name}\n{subline}"
             c_item.setData(_TIP_BASE_ROLE, raw_tooltip)
 
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
-            short, color = _portal_short(portal_str)
-            portal_item = _get_item(self.COL_FILING, color=color)
+            short, _ = _portal_short(portal_str)
+            portal_item = self._table_item(row_idx, self.COL_FILING, _portal_ink(short))
             portal_item.setText(_filing_type(portal_str, short))
             portal_item.setToolTip(portal_str)
 
             period_val = r.get("period_label") or "N/A"
-            period_item = _get_item(self.COL_PERIOD, color="#D29922" if r.get("period_label") else "#8B949E")
+            period_item = self._table_item(row_idx, self.COL_PERIOD, T["warn"] if r.get("period_label") else T["muted"])
             period_item.setText(re.sub(r"\bAssessment Year\b", "AY", period_val))
             period_item.setToolTip(period_val)
 
             # Submission Status
-            status_text, status_theme = _resolve_ltt_submission_status(r)
-            _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
+            status_text, _ = _resolve_ltt_submission_status(r)
             arn_val = r.get("arn_number", "N/A")
             tooltip_lines = [f"Submission Status: {status_text}"]
             if arn_val and arn_val != "N/A":
                 tooltip_lines.append(f"ARN / Ack Number: {arn_val}")
-            _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
-                             tooltip="\n".join(tooltip_lines))
+            s_item = self._table_item(row_idx, self.COL_STATUS)
+            s_item.setText("")
+            s_item.setData(ROLE_PILL, _status_pill(status_text))
+            s_item.setToolTip("\n".join(tooltip_lines))
 
             dev_name = _extract_device_name(r)
-            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item = self._table_item(row_idx, self.COL_DEVICE, K["orange"])
             dev_item.setText(dev_name)
             method = r.get("capture_method", "DOM_Tracker")
             dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method}")
 
             ts_raw = r.get("created_at", "")
-            ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
+            ts_item = self._table_item(row_idx, self.COL_UPDATED, T["muted"])
             ts_item.setText(_short_local_time(ts_raw))
             ts_item.setToolTip(_format_to_local_time(ts_raw))
 
-            # Actions Column - reused; the buttons read this row's item when clicked
-            self._set_action_cell(row_idx, r, is_grouped=False)
+            a_item = self._table_item(row_idx, self.COL_ACTIONS)
+            a_item.setData(ROLE_ACTIONS, self._row_actions(r, is_grouped=False))
             self._finish_client_tooltip(c_item, row_idx)
-        self._elide_status_labels()
 
     def _full_container(self, item: dict) -> dict:
         """List rows are slim (no payloads); dialogs need the whole container, or the whole raw row."""
@@ -3375,52 +2955,28 @@ class TrackerDumpWindow(QWidget):
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #171717;
-                border: 1px solid #2E9B5F;
-                border-radius: 8px;
-                padding: 6px;
-                color: #F8F5F2;
-                font-size: 13px;
-            }
-            QMenu::item {
-                padding: 8px 24px 8px 12px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #333333;
-                margin: 4px 8px;
-            }
-        """)
-
-        act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
+        act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", T["mint"]), "Re-Resolve Identities (SRPF)")
         act_reresolve.triggered.connect(self._reresolve_identities)
 
-        act_map = menu.addAction(_safe_qta_icon("mdi.table-arrow-right", "#4CF9B7"), "Map Datapoints to MCL Columns…")
+        act_map = menu.addAction(_safe_qta_icon("mdi.table-arrow-right", T["mint"]), "Map Datapoints to MCL Columns…")
         act_map.triggered.connect(self._open_mcl_mapping_dialog)
 
         menu.addSeparator()
 
-        act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
+        act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", T["mint"]), "Open LTT sheet")
         act_ltt_open.triggered.connect(self._open_ltt_sheet)
 
         menu.addSeparator()
 
-        act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
+        act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", T["mint"]), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
 
-        act_distill = menu.addAction(_safe_qta_icon("mdi.flask-outline", "#4CF9B7"), "Distill…")
+        act_distill = menu.addAction(_safe_qta_icon("mdi.flask-outline", T["mint"]), "Distill…")
         act_distill.triggered.connect(self._open_distill)
 
         menu.addSeparator()
 
-        act_clear = menu.addAction(_safe_qta_icon("mdi.delete-sweep", "#FF6B6B"), "Clear All Captures")
+        act_clear = menu.addAction(_safe_qta_icon("mdi.delete-sweep", T["dangertx"]), "Clear All Captures")
         act_clear.triggered.connect(self._clear_all_dumps)
 
         # Spawn popup directly below Preferences button

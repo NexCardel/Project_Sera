@@ -58,7 +58,7 @@ def test_the_status_filter_separates_submitted_from_everified(tmp_path):
     assert "Submitted" in items
 
     def pills():
-        return sorted(win.table.cellWidget(r, win.COL_STATUS).findChild(tdw.QLabel, "status_label").text()
+        return sorted(win.table.item(r, win.COL_STATUS).data(tdw.ROLE_PILL)[0]
                       for r in range(win.table.rowCount()))
     assert pills() == ["Submitted", "Submitted & E-verified"]
     win.cmb_status.setCurrentText("Submitted")
