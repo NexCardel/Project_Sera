@@ -33,5 +33,5 @@ S-13,4,"Screens: Small dialogs: CSV import (+ summary), Change master password, 
 S-14,4,"Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ...",Done,claude-haiku-5-5,1,fb1490a,S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note,2026-10-11 18:50
 S-R,4,Review phase S (screens),Done,claude-opus-5-5,1,fbcb288,Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite 139 fail all pre-existing/order leaks,2026-10-12 01:27
 F-1,5,Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ...,Done,gemini-3.8-flash-high,1,91f3522,"Rewrote docs/Sera_UI.md, updated statuses to built in README and BUILD-PLAN, removed legacy settings_dialog.py",2026-10-12 01:44
-F-2,5,Finish: Real screenshots of every screen into Mockups/built/ (fictional data).,Not started,gemini-3.8-flash-high -> claude-haiku-5-5,0,,,
+F-2,5,Finish: Real screenshots of every screen into Mockups/built/ (fictional data).,In progress,claude-haiku-5-5,1,,reset by hand,2026-10-12 12:03
 F-R,5,Review phase F (finish),Not started,claude-opus-5-5,0,,,

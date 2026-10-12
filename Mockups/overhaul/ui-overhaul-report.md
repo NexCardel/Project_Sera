@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-12 01:27)
+# UI overhaul — report (2026-10-12 01:46)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 3 |
+| Not started | 2 |
 | In progress | 0 |
 | Retry | 0 |
-| Done | 33 |
+| Done | 34 |
 | Blocked | 0 |
 
-Runs: 42   output tokens: 1939647   API-equivalent cost: $150.58
+Runs: 43   output tokens: 1975266   API-equivalent cost: $150.58
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -47,7 +47,7 @@ Runs: 42   output tokens: 1939647   API-equivalent cost: $150.58
 | S-13 | Done | sonnet | cd3e59d | Screens: Small dialogs: CSV import (+ summary), Change master password, Office recovery, Rejoin ... | Ten small dialogs on the kit; global QProgressBar theme rule; 16 new tests; known pre-existing failures only; human checks 28-29 |
 | S-14 | Done | haiku | fb1490a | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... | S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note |
 | S-R | Done | opus | fbcb288 | Review phase S (screens) | Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite |
-| F-1 | Not started | mechanical |  | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... |  |
+| F-1 | Done | mechanical | 91f3522 | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... | Rewrote docs/Sera_UI.md, updated statuses to built in README and BUILD-PLAN, removed legacy settings_dialog.py |
 | F-2 | Not started | mechanical |  | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). |  |
 | F-R | Not started | opus |  | Review phase F (finish) |  |
 
@@ -122,6 +122,7 @@ Runs: 42   output tokens: 1939647   API-equivalent cost: $150.58
 - **S-R** Phase S review: about 130 QMessageBox prompts (Manage Clients, Settings, Sera Sync, Rejoin, Tracker, main.py...) are still plain Qt message boxes, themed dark by the app stylesheet but not on the kit's dialog frame. S-14 built the kit helper (show_message / ask_confirm) but converted only a few. Converting all of them touches many tests that patch QMessageBox. What should happen? → Convert them all now in S-R (large, risky near the deadline) (asked as Q3)
 - **S-R** Tracker Dump row autofill button: keep main's solid red or follow the mockup? → Emerald kit primary (no colour override); SMTI/MECP icon mint (index.html draws it as ibtn pri (emerald); rule 4 says red means danger only; main's red was a fixed colour, not a per-service one)
 - **S-R** Settings dialog still set a literal hex stylesheet (_apply_global_style) - keep or drop? → Dropped it and its palette constants (Rule 11; offscreen before/after renders of all 12 pages differ only in scrollbar width (app theme now) and the scale combo's 160 px min-width)
+- **F-1** Should settings_dialog.py be removed? → Remove settings_dialog.py and clean up references (Unused legacy tabbed dialog superseded by UnifiedSettingsDialog; verified nothing in live app opens it)
 
 ## Checks waiting for you
 
