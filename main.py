@@ -382,6 +382,8 @@ class SeraApp:
         loading_dlg.set_status("Verifying staff identity & pre-loading workspace...")
         loading_dlg.hide()
         self.actor, self.actor_alias = self._ensure_user_identity()
+        if getattr(self, "clipboard_watcher", None) is not None:
+            self.clipboard_watcher.actor = self.actor      # SCA steps are audited under this staff name
         loading_dlg.show()
 
         # Start Sera Sync LAN peer service

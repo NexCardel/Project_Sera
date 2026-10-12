@@ -36,9 +36,11 @@ class TestClipboardAssist(unittest.TestCase):
                                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                                raw_db_path=os.path.join(self.temp_dir, "raw.db"))
         cols = self.db.get_mcl_columns()
-        self.pan_id = next(c["id"] for c in cols if c.get("is_internal_pk"))
+        # Two columns are primary keys now (NAME OF COMPANY and PAN): the PAN one is picked by label
+        self.pan_id = next(c["id"] for c in cols if c.get("is_internal_pk") and "pan" in c["label"].lower())
+        self.name_pk_id = next(c["id"] for c in cols if c.get("is_internal_pk") and c["id"] != self.pan_id)
         self.pwd_id = next(c["id"] for c in cols if "pass" in c["label"].lower())
-        self.other_id = next(c["id"] for c in cols if c["id"] not in (self.pan_id, self.pwd_id)
+        self.other_id = next(c["id"] for c in cols if c["id"] not in (self.pan_id, self.pwd_id, self.name_pk_id)
                              and not any(k in c["label"].lower() for k in clipboard_watch.IDENTITY_LABEL_TERMS))
         self.itr = self.db.create_service(name="Income Tax Portal", login_page_link=ITR_URL,
                                           userid_column_id=self.pan_id, password_column_id=self.pwd_id,
@@ -49,7 +51,7 @@ class TestClipboardAssist(unittest.TestCase):
                                           username_selector="#username", password_selector="#user_pass",
                                           automation_mode="manual")
         self.client = self.db.add_client(values={self.pan_id: "ABCPD1234E", self.pwd_id: "Pw#Fictional1",
-                                                 self.other_id: "NEWDELHI"},
+                                                 self.other_id: "NEWDELHI", self.name_pk_id: "Fictional Traders"},
                                          notes="", service_ids=[self.itr, self.gst])
         self.sent = []
         self.arm_patch = patch("automation.arm_sca", side_effect=lambda req, **k: self.sent.append(req))
@@ -92,7 +94,8 @@ class TestClipboardAssist(unittest.TestCase):
         self.assertNotIn("NEWDELHI", arm["candidate_uids"])
 
     def test_a_client_added_later_is_armable_without_a_restart(self):
-        new = self.db.add_client(values={self.pan_id: "XYZAB9876C", self.pwd_id: "Pw#Fictional2"},
+        new = self.db.add_client(values={self.pan_id: "XYZAB9876C", self.pwd_id: "Pw#Fictional2",
+                                         self.name_pk_id: "Fictional Two"},
                                  notes="", service_ids=[self.gst])
         self.watch._ensure_index_fresh()
         self.assertEqual(self.watch._uid_index.get("XYZAB9876C"), new)
@@ -209,6 +212,62 @@ class TestClipboardAssist(unittest.TestCase):
         arm = self.arm()
         self.watch.set_enabled(False)
         self.assertEqual(self.request(arm, self.gst, "services.gst.gov.in")["reason"], "SCA is turned off")
+
+    # ------------------------------------------------------------------ audit log
+    def audit_rows(self):
+        # resolve_names=False: the viewer's client_name is the PAN, a read-time lookup - the rows must stand alone
+        return [r for r in self.db.get_audit_logs(limit=500, resolve_names=False)
+                if str(r.get("action", "")).startswith("sca_")]
+
+    def test_each_sca_step_is_in_the_audit_log(self):
+        self.watch.actor = "Tester"
+        arm = self.arm()
+        self.request(arm, self.gst, "services.gst.gov.in")
+        self.fill(arm, self.gst)
+        self.request(arm, self.gst, "web.whatsapp.com")
+        rows = self.audit_rows()
+        self.assertEqual([r["action"] for r in rows],
+                         ["sca_password_denied", "sca_fill_filled", "sca_password_granted", "sca_armed"])
+        self.assertTrue(all(r["actor"] == "Tester" for r in rows))
+        granted = next(r for r in rows if r["action"] == "sca_password_granted")
+        self.assertEqual((granted["client_id"], granted["service_id"]), (self.client, self.gst))
+        self.assertIn("services.gst.gov.in", granted["detail"])
+
+    def test_the_audit_never_holds_a_password_or_the_copied_id(self):
+        arm = self.arm()
+        self.request(arm, self.gst, "services.gst.gov.in")
+        self.fill(arm, self.gst, "failed", "no visible password field")
+        self.request(arm, self.gst, "web.whatsapp.com")
+        text = repr(self.audit_rows())
+        self.assertNotIn("Pw#Fictional1", text)
+        self.assertNotIn("ABCPD1234E", text)
+
+    def test_a_refused_request_is_audited_with_its_reason(self):
+        arm = self.arm()
+        self.request(arm, self.itr, "eportal.incometax.gov.in")
+        denied = [r for r in self.audit_rows() if r["action"] == "sca_password_denied"]
+        self.assertEqual(len(denied), 1)
+        self.assertIn("not SCC-verified", denied[0]["detail"])
+
+    def test_a_failed_fill_is_audited_with_its_reason(self):
+        arm = self.arm()
+        self.fill(arm, self.gst, "failed", "no visible password field")
+        failed = [r for r in self.audit_rows() if r["action"] == "sca_fill_failed"]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("no visible password field", failed[0]["detail"])
+
+    def test_a_pause_is_audited(self):
+        for _ in range(clipboard_watch.UNUSED_ARMS_BEFORE_PAUSE + 1):
+            self.arm()
+        paused = [r for r in self.audit_rows() if r["action"] == "sca_paused"]
+        self.assertEqual(len(paused), 1)
+        self.assertEqual(paused[0]["client_id"], self.client)
+
+    def test_a_failed_audit_write_does_not_stop_the_grant(self):
+        arm = self.arm()
+        with patch.object(self.db, "log_action", side_effect=RuntimeError("disk full")):
+            reply = self.request(arm, self.gst, "services.gst.gov.in")
+        self.assertEqual((reply["type"], reply["password"]), ("SCA_PASSWORD_GRANT", "Pw#Fictional1"))
 
 
 if __name__ == "__main__":

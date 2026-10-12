@@ -113,6 +113,7 @@ class ClipboardWatchService(QObject):
     def __init__(self, db, parent=None):
         super().__init__(parent)
         self.db = db
+        self.actor = "System"      # set by main once the staff identity is known; written to the audit log
         self.enabled = True
         self._uid_index: Dict[str, int] = {}
         self._identity_column_ids: set = set()
@@ -265,7 +266,18 @@ class ClipboardWatchService(QObject):
             self._unused_streak[old.client_id] = streak
             if streak >= UNUSED_ARMS_BEFORE_PAUSE:
                 self._paused_clients.add(old.client_id)
+                self._audit("sca_paused", old.client_id, None,
+                            f"Paused for this session: {streak} copies armed with no password filled")
         self._arm = None
+
+    def _audit(self, action: str, client_id, service_id, detail: str) -> None:
+        """One audit-log row for an SCA step. Never holds a password or the copied id. A failed write
+        is printed and does not stop the step: a fill must not be lost to a log error."""
+        try:
+            self.db.log_action(self.actor, action, client_id=client_id,
+                               service_id=service_id if isinstance(service_id, int) else None, detail=detail)
+        except Exception as e:
+            print(f"[SCA] audit write failed ({action}): {e}")
 
     def _arm_client_services(self, client_id: int, client_token: str, matched_uid: str):
         try:
@@ -336,6 +348,10 @@ class ClipboardWatchService(QObject):
                             expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
                             max_uses=max_uses)
             print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}]")
+            minutes = max(0, round((arm["expires_at"] / 1000.0 - time.time()) / 60))
+            self._audit("sca_armed", client_id, None,
+                        f"Armed {len(services)} portal(s), mode {sca_mode}, up to {max_uses} use(s), "
+                        f"expires in {minutes} min, on a copied client id")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
         except Exception as e:
@@ -349,6 +365,8 @@ class ClipboardWatchService(QObject):
 
         def denied(reason: str) -> dict:
             print(f"[SCA] Password request refused: {reason}")
+            self._audit("sca_password_denied", arm.client_id if arm else None, msg.get("service_id"),
+                        f"Password refused: {reason}")
             return {"type": sca_protocol.MSG_SCA_PASSWORD_DENIED, "request_id": request_id,
                     "arm_id": msg.get("arm_id"), "reason": reason}
 
@@ -383,6 +401,8 @@ class ClipboardWatchService(QObject):
             return denied("this Income Tax password is not SCC-verified - it needs a click on the page card")
         arm.grants += 1
         self._unused_streak.pop(arm.client_id, None)
+        self._audit("sca_password_granted", arm.client_id, svc_id,
+                    f"Password released for {svc.get('name') or 'portal'} to the page at {msg.get('page_host')}")
         return {"type": sca_protocol.MSG_SCA_PASSWORD_GRANT, "request_id": request_id,
                 "arm_id": arm.arm_id, "service_id": svc_id, "password": password,
                 "password_selector": svc.get("password_selector", "")}
@@ -394,18 +414,18 @@ class ClipboardWatchService(QObject):
         arm = self._arm
         client_id = arm.client_id if arm and arm.arm_id == msg.get("arm_id") else None
         portal = (arm.services.get(msg.get("service_id"), {}).get("name") if client_id else None) or "portal"
+        service_id = msg.get("service_id")
         if msg.get("result") == "filled":
             print(f"[SCA] Password filled on {portal}")
             if client_id:
                 arm.fills.append(portal)
                 arm.uses_remaining = max(0, arm.uses_remaining - 1)
-                try:
-                    self.db.record_client_activity(client_id, "SCA", f"Password filled on {portal}")
-                except Exception:
-                    pass
+            # log_action also adds the client's activity line ("Password filled on ...")
+            self._audit("sca_fill_filled", client_id, service_id, f"Password filled on {portal}")
         else:
             reason = msg.get("reason") or "unknown"
             print(f"[SCA] Fill on {portal} failed: {reason}")
+            self._audit("sca_fill_failed", client_id, service_id, f"Fill failed on {portal}: {reason}")
             self.sca_notice.emit(self.explain(portal, reason), "warning")
 
     @staticmethod
