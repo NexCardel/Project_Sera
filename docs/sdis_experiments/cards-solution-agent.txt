@@ -1,0 +1,54 @@
+You are the one agent asked to design the solution for SDIS card and row detection. This is a DESIGN job: you read, measure and think, and you write ONE report. You change nothing in the project. Keep going without waiting for replies; nobody is watching between steps.
+
+WHERE
+- You run in a cloud session on a copy of the repository. The owner's captures are NOT in tools/pre_dev/class_diff/output/ (git-ignored, empty for you). Use the copies in docs/sdis_experiments/captures/ instead: the same files, with PAN and GSTIN replaced by consistent fake ones. Wherever this prompt or a doc says "output/" or "the real captures", read docs/sdis_experiments/captures/.
+- The tools look in output/ by default: pass the capture paths explicitly (e.g. cards.py docs/sdis_experiments/captures/comp_*.json), or load the JSON files in your own scratch scripts.
+- Use the python of your environment. If a package is missing, install it in your environment only; never add it to the project.
+
+NO EDITS (hard rule)
+- Do not edit, create, move or delete any file in the repository, with ONE exception: you create docs/sdis_experiments/cards-solution.md (your report). Nothing else. If your session must commit to hand the work back, commit that one file only.
+- Scratch scripts and their output go only in a temporary folder outside the repository (e.g. /tmp/sdis_cards_design). Never into tools/, tests/, docs/ or output/.
+- Do not run the full test suite. You may run the narrow tests: python -m pytest tests/test_class_diff_cards.py tests/test_class_diff_render.py tests/test_class_diff_align.py -q -p no:cacheprovider --basetemp=/tmp/sdis_cards_design/bt (if some cannot run outside Windows, say so in the report and carry on)
+
+PRIVACY (hard rule)
+- docs/sdis_experiments/captures/ holds real client captures (names, acknowledgement numbers, dates, amounts; PAN and GSTIN are masked). You may read and measure them. Your report and your console output contain COUNTS, SHAPES, SLOT NAMES and PIXEL NUMBERS only, never a page value. Refer to captures by their file stamp (e.g. comp_20261012_121834), to fields by their label wording only when it is portal furniture ("Filing Date :"), never by a client's value.
+
+READ FIRST
+1. docs/sdis_experiments/progress.md: why this work exists, the experiments so far, the 17 bugs caught and their status.
+2. docs/cards_rows/plan.md, all of it: the method built as experiment 2, section 9 (what was fixed, θ = 0.4167 measured, ρ not set and why), section 10.
+3. tools/pre_dev/class_diff/cards.py and the --cards part of tools/pre_dev/class_diff/compare.py: the current implementation.
+4. core/sdis/align.py, core/sdis/keys.py (flatten, the key and loose key), core/sdis/tables.py (header comment): shared with production, the solution may use them, never change them.
+5. tools/pre_dev/class_diff/render.py (how screen boxes are used) and docs/uia_render/plan.md section 9.
+6. tests/test_class_diff_cards.py: the fixture shapes, including the Firefox-shaped and top-level ones.
+
+THE PROBLEM TO SOLVE
+Find the repeating parts of a portal page (cards / tiles, list rows, table rows, field rows inside a card) from a raw UIA read, and compare two clients' pages of the same link so that every datapoint is paired with the SAME field on the other client's page. Open bugs your design must answer (numbers from progress.md section 4):
+- 7, 8: Firefox drops a card's wrapper (its parts become loose siblings) or adds an inner Group; the tree method misses those cards.
+- 9: unrelated single-text boxes grouped by type likeness.
+- 10: field rows inside a card are paired with the wrong card's field rows (inner groups matched independently of their parent's pairing), and each value is reported twice.
+- 11: label vs value is guessed from shape (variable_alignment); a value should be known by its label.
+- 12: the same page from Chrome and Firefox has differently shaped trees.
+- 13: ρ (name recurrence cut-off) cannot be chosen; r depends on how many cards each capture has.
+The owner's idea to evaluate (experiment 3, "arrangement" / "packing pattern"): start from the leaf elements and their screen boxes; find arrangements of neighbouring elements (relative position of one element to the next, by element kind) that REPEAT within one page; each set of elements held together by a repeating arrangement is one card or row, nesting falls out (small patterns inside big ones); then compare two clients top-down by arrangement (directions and order, not pixels, across clients): cards paired by their name text, fields by their place in the matched card. Known limit: the arrangement cannot tell two cards with identical layouts apart (IFF vs GSTR-1); identity still needs the name text.
+
+RULES THE SOLUTION MUST KEEP (the owner's)
+- Fix the kind, not the case: no portal, class name, wording, language or browser is known to the code. Shapes, boxes, texts and counts only.
+- No AI, no machine learning, no cloud. Plain maths and statistics.
+- No quick heuristics: every cut-off or tolerance is MEASURED on the real captures with a stated rule (as θ was: middle of the widest empty gap), and the design says how. If a measurement shows no clear separation, the design says so and stops rather than picking a number.
+- Deterministic: same input, same output.
+- Pre-dev only (tools/pre_dev/class_diff/); nothing in core/ changes.
+
+HOW TO WORK
+1. Reproduce the open bugs on the captures in output/ (and, where the captures lack a case, on the test fixtures): for each bug, a count or a small shape-only trace that shows it. Note which captures exist (browser, page link, clients by stamp) and which cases are missing.
+2. Measure what the arrangement idea needs, on the real captures, with throwaway scripts in your temporary folder: for example the distribution of neighbour offsets between leaf elements, how exactly repeated arrangements recur within a page (pixel spread), how much wrapping and text length disturb them, how present/left nodes and zero boxes affect them. Report the numbers.
+3. Design the solution. Cover at least: element selection (which leaves, visibility, zero/stale boxes, hover popups), the neighbour relation, how a repeating arrangement is found and how it becomes a member, nesting, how tables fit (tables.py), how the tree method is kept or retired (second opinion?), how two pages are compared top-down (card identity by name, fields by place, lists by template), label/value, the cross-browser case, ρ (or what replaces it, e.g. "a name never changes during one capture": comp nodes keep every value they showed), cost on a 500-node page, and what to measure before any cut-off is fixed.
+4. Check the design by hand against EVERY open bug and against the fixed ones (1 to 6 must stay fixed): walk each through the steps on the real capture or fixture and say what comes out.
+5. Compare with prior art in one short section (RoadRunner, MDR/DEPTA, VIPS, ViNTs/ViPER): what to borrow, what failed for them that applies here.
+6. Give a build plan for a later agent: work packages in order, each with its files, its tests (fictional fixtures, incl. a Firefox-shaped page with a wrapper-less card and an extra inner Group, an ITR-like page with cards holding field rows and a timeline, an IFF/GSTR-1 trap), and its measurement step.
+
+THE REPORT: docs/sdis_experiments/cards-solution.md
+Sections: 1 Summary (the solution in ten lines, and a clear verdict on the arrangement idea: adopt / adopt with changes / reject, and why). 2 What the captures show (the bug reproductions and the measurements, counts only). 3 The design, step by step. 4 Bug by bug walk-through (1 to 17, what the design does for each; say plainly which it does not solve). 5 Measurements still needed and the rule for each cut-off. 6 Risks and failure cases. 7 Prior art. 8 Build plan (work packages). 9 Questions for the owner (only real decisions, each with your recommendation).
+Plain language, short sentences, tables where they help. No page values.
+
+AT THE END
+Print a short summary: the verdict, the three most important design choices, the open questions, and confirm that the only file you created is docs/sdis_experiments/cards-solution.md and that nothing else changed (show git status --short).
