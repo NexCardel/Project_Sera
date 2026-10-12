@@ -34,6 +34,4 @@ S-14,4,"Screens: Remaining not-drawn dialogs by recipe: Container inspector, Cre
 S-R,4,Review phase S (screens),Done,claude-opus-5-5,1,fbcb288,Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite 139 fail all pre-existing/order leaks,2026-10-12 01:27
 F-1,5,Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ...,Done,gemini-3.8-flash-high,1,91f3522,"Rewrote docs/Sera_UI.md, updated statuses to built in README and BUILD-PLAN, removed legacy settings_dialog.py",2026-10-12 01:44
 F-2,5,Finish: Real screenshots of every screen into Mockups/built/ (fictional data).,Done,claude-haiku-5-5,1,507b259,Screenshots of every screen regenerated at HEAD with fictional data; display scale dialog added; clipped sub-label recorded for R-3,2026-10-12 12:07
-F-R,5,Review phase F (finish),In progress,claude-opus-5-5,2,,"attempt 1: no finish. The full suite is still running in the background (about 220 of 3643 tests done), and I'll pick up when it finishes. So far:
-
-- **Merge conflict fixed on the branch:** `main` added the ""Run the ARN fixer automatically"" switch to the old settings dialog, which this branch deletes. The switch is now i",2026-10-12 12:13
+F-R,5,Review phase F (finish),Done,claude-opus-5-5,2,717ffd8,Mockups/MERGE-READINESS.md: ready after 2 documented conflict fixes; ARN switch ported; suite 3505/137 fail (all outside branch),2026-10-12 12:48
