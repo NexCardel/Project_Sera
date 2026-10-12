@@ -1,0 +1,26 @@
+Page link  : eportal.incometax.gov.in/iec/foservices#/dashboard/itrStatus
+Session    : 20261012_121834   browser: msedge
+Snapshots  : 20   anchor page: settled, fixed at +1.0s
+Comp page  : 429 nodes, 178 with text   anchor 429, attached 0, gone by the end 0
+====================================================================================================
+ snapshot phase   nodes paired rescue   new  left  back text~
+    +0.0s anchor    429      0      0   429     0     0     0
+    +1.0s anchor    429    429      0     0     0     0     1
+    +2.0s attach    429    429      0     0     0     0     1
+    +3.0s attach    429    429      0     0     0     0     2
+    +4.0s attach    429    429      0     0     0     0     1
+    +5.0s attach    429    429      0     0     0     0     1
+    +6.0s attach    429    429      0     0     0     0     1
+    +7.0s attach    429    429      0     0     0     0     1
+    +8.0s attach    429    429      0     0     0     0     1
+    +9.0s attach    429    429      0     0     0     0     1
+   +10.0s attach    429    429      0     0     0     0     1
+   +11.0s attach    429    429      0     0     0     0     1
+   +12.0s attach    429    429      0     0     0     0     1
+   +13.0s attach    429    429      0     0     0     0     2
+   +14.0s attach    429    429      0     0     0     0     1
+   +15.0s attach    429    429      0     0     0     0     1
+   +16.0s attach    429    429      0     0     0     0     1
+   +17.0s attach    429    429      0     0     0     0     1
+   +18.0s attach    429    429      0     0     0     0     1
+   +19.0s attach    429    429      0     0     0     0     1
