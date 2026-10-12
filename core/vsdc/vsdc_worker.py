@@ -12,6 +12,7 @@ from PySide6.QtCore import QThread, Signal
 from .vsdc_router import VSDCRouter
 from .vsdc_ocr import VSDCOcrEngine
 from .vsdc_assembler import VisualSessionAssembler
+from . import vsdc_diag
 
 
 class VSDCWorker(QThread):
@@ -32,6 +33,7 @@ class VSDCWorker(QThread):
         self.check_interval_sec = check_interval_sec
         self._running = False
         self._paused = False
+        self.last_progress = 0.0        # time.monotonic() after each tick - vsdc_diag's stall watch
 
         self.ocr_engine = VSDCOcrEngine()
         self.assembler = VisualSessionAssembler()
@@ -54,30 +56,52 @@ class VSDCWorker(QThread):
         self._running = True
         self.status_changed.emit("Running")
         print("⚡ VSDC (Visual SDC Engine): Worker started (High-Speed Burst Mode).")
+        # logs/vsdc.log: a heartbeat every minute, and a watcher that dumps every thread's stack
+        # to hang.log if a tick never finishes (the installed app has no console - see vsdc_diag).
+        vsdc_diag.note("capture worker started")
+        beat = vsdc_diag.Heartbeat()
+        self.last_progress = time.monotonic()
+        vsdc_diag.watch_worker(self)
 
-        while self._running:
-            sleep_time = self.check_interval_sec
-            if not self._paused:
-                try:
-                    payload = self.router.evaluate_tick()
-                    if payload:
-                        who = "SGT row" if str(payload.get("capture_method", "")).startswith("SGT") else "VSDC Captured Filing!"
-                        print(f"🎯 {who} Form={payload.get('filing_type')} ARN={payload.get('arn')}")
-                        self.filing_captured.emit(payload)
+        try:
+            while self._running:
+                sleep_time = self.check_interval_sec
+                if not self._paused:
+                    t0 = time.monotonic()
+                    failed = False
+                    try:
+                        payload = self.router.evaluate_tick()
+                        if payload:
+                            who = "SGT row" if str(payload.get("capture_method", "")).startswith("SGT") else "VSDC Captured Filing!"
+                            print(f"🎯 {who} Form={payload.get('filing_type')} ARN={payload.get('arn')}")
+                            self.filing_captured.emit(payload)
 
-                    # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll
-                    if getattr(self.router, "burst_ticks_remaining", 0) > 0:
-                        self.router.burst_ticks_remaining -= 1
-                        sleep_time = 0.015  # Ultra-fast 15ms burst loop
-                    else:
-                        sleep_time = self.check_interval_sec
-                except Exception as e:
-                    print(f"⚠️ VSDC Worker Tick Error: {e}")
+                        # Dynamic Burst Snapping: If route changed, poll rapidly (15ms) before user can scroll
+                        if getattr(self.router, "burst_ticks_remaining", 0) > 0:
+                            self.router.burst_ticks_remaining -= 1
+                            sleep_time = 0.015  # Ultra-fast 15ms burst loop
+                        else:
+                            sleep_time = self.check_interval_sec
+                    except Exception as e:
+                        failed = True
+                        print(f"⚠️ VSDC Worker Tick Error: {e}")
+                        vsdc_diag.tick_error(e)
+                    beat.tick((time.monotonic() - t0) * 1000, failed)
+                self.last_progress = time.monotonic()
+                if beat.due():
+                    beat.write(self.router, paused=self._paused)
 
-            time.sleep(sleep_time)
+                time.sleep(sleep_time)
+
+        except BaseException as e:
+            # Nothing above should ever get here; if something does, the thread is gone and
+            # nothing captures until a restart - say so on disk, not just on a console.
+            vsdc_diag.note(f"capture worker DIED: {type(e).__name__}: {str(e)[:160]}")
+            raise
 
         self.status_changed.emit("Stopped")
         print("⚡ VSDC: Worker stopped.")
+        vsdc_diag.note("capture worker stopped")
 
     def pause(self):
         self._paused = True

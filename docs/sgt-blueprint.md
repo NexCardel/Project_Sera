@@ -576,6 +576,21 @@ place, so every later read queued behind it and failed after 3 s, until a restar
 VSDC-X and SGT alike. Now the wedged worker is abandoned and a fresh one (with its own COM
 objects, kept thread-local) takes over. After 5 in one run, UIA is switched off.
 
+**Revised 2026-10-13 (an office PC blind on GST 3-3.5 h into two evenings).** "Still running
+when the next read is asked for" also caught reads that were merely SLOW (a heavy page on a slow
+PC); the count never went down, and "switched off" lasted until a restart. GST has no OCR
+fallback, so every GST page was skipped, and the only notice was a print() with no console.
+Now: a read running < `SLOW_GRACE_SEC` (20 s) is slow - the next read is skipped as `busy`
+and SGT asks again next tick (not counted as a read); past that it is wedged and replaced;
+only workers still stuck count (one that comes back leaves the count); `MAX_WEDGED_WORKERS`
+(5) stuck at once pauses UIA for `PAUSE_SEC` (5 min), then it is tried again - never off for
+the run. Everything goes to `~/AmanAssociates_Sera/logs/vsdc.log` (`core/vsdc/vsdc_diag.py`):
+late reads with their time, replacements, pauses, tick errors with their stack, engine
+settings, and a once-a-minute heartbeat from the capture worker (ticks, errors, slowest tick,
+what was in front, scope, portal and page link inside the scope gate only, SGT reads / blind /
+skipped / busy, UIA read times). A capture tick not finishing for 30 s writes every thread's
+stack to `hang.log`. Tests: `tests/test_vsdc_diag.py`.
+
 ## 11. Risks to hold onto
 
 | Risk | Mitigation |

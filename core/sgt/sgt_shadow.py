@@ -343,6 +343,9 @@ class SgtShadow:
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
+        # Counts since the last capture-worker heartbeat (core/vsdc/vsdc_diag, logs/vsdc.log):
+        # counts and the portal only, never a page's text.
+        self._diag: Dict[str, Any] = self._fresh_diag()
         self._sdis_doc: Optional[Dict[str, Any]] = None   # the containers document instances were built under
         if self._state_path is not None:
             self._recover()
@@ -551,18 +554,30 @@ class SgtShadow:
         scc = self._scc        # one read, as sgt_i; also the host the page is handed to below
         if not changed and scc is not None:
             changed = scc.wants_read(s.session_id)     # SCC-U too: at most 30 s after a copy
+        prev_hash, prev_read = s.last_hash, s.last_read
         s.last_hash = h
         if not changed:
             return None
         s.last_read = now
 
         t0 = time.perf_counter()
-        lines = list((self._read_uia(hwnd) or {}).get("lines") or [])
+        res = self._read_uia(hwnd) or {}
+        if res.get("busy"):
+            # The previous UIA read is still running (a slow page, not a hung one): this page was
+            # not read at all, so it must not count as read - the next tick asks again.
+            s.last_hash, s.last_read = prev_hash, prev_read
+            self._diag["busy"] += 1
+            return None
+        lines = list(res.get("lines") or [])
         source = "uia"
+        self._diag["reads"] += 1
+        self._diag["portal"] = portal or "?"
         if is_blind(lines):
             s.blind_pages += 1
+            self._diag["blind"] += 1
             lines = []
             if portal in NO_OCR_PORTALS:
+                self._diag["skipped"] += 1
                 s.ocr_skips += 1
                 if s.ocr_skips == 1:
                     self._echo(f"[SGT] {self._tag} {portal}: page unreadable by UI Automation - OCR is off here, skipped")
@@ -570,8 +585,11 @@ class SgtShadow:
                 lines = list((ocr.scan_image(frame, region_type="full") or {}).get("lines") or [])
                 source = "ocr"
                 s.ocr_reads += 1
+                self._diag["ocr"] += 1
         s.read_ms += (time.perf_counter() - t0) * 1000
         s.reads += 1
+        self._diag["last_lines"] = len(lines)
+        self._diag["last_source"] = source
         if not lines:
             return None
         today = self._today()
@@ -1031,6 +1049,19 @@ class SgtShadow:
         carrier = s.sdis.carrier
         if carrier is not None and (every or carrier.sent_key is not None):
             self._queue(s, carrier)
+
+    @staticmethod
+    def _fresh_diag() -> Dict[str, Any]:
+        return {"reads": 0, "blind": 0, "skipped": 0, "ocr": 0, "busy": 0,
+                "last_lines": None, "last_source": None, "portal": None}
+
+    def take_diag(self) -> Dict[str, Any]:
+        """Page reads since the last call - total, blind (UIA gave nothing usable), blind and
+        skipped (a no-OCR portal such as GST), read by OCR, skipped because UIA was still busy -
+        the last read's line count and source, the open sessions. Resets the counts."""
+        out, self._diag = self._diag, self._fresh_diag()
+        out["sessions"] = len(self._sessions)
+        return out
 
     def pending(self) -> int:
         return len(self._outbox)

@@ -19,3 +19,10 @@ def _no_real_phone_alerts(monkeypatch, tmp_path):
     monkeypatch.setenv("VSDC_ALERT_CONFIG", str(tmp_path / "no_such_vsdc_alert.json"))
     for var in ("VSDC_ALERT_TOPIC", "VSDC_ALERT_SERVER", "VSDC_ALERT_MACHINE"):
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _diag_log_in_tmp(monkeypatch, tmp_path):
+    """The capture engine's diagnostics log (core/vsdc/vsdc_diag) goes to the test's own folder,
+    never to the real ~/AmanAssociates_Sera/logs/vsdc.log."""
+    monkeypatch.setenv("VSDC_DIAG_LOG", str(tmp_path / "vsdc.log"))

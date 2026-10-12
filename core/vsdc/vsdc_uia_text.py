@@ -20,6 +20,7 @@ much heavier capture + BMP encode + WinRT async decode + recognize round trip.
 
 import ctypes
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
@@ -87,18 +88,70 @@ _POOL = ThreadPoolExecutor(max_workers=1, initializer=_init_com_on_worker_thread
 # (see _run_with_timeout) and the new one creates its own.
 _tls = threading.local()
 
-# A read that times out may still be running - wedged inside a UIA call that never
-# returns. The pool has ONE worker, so before 2026-09-22 every later read queued
-# behind it and failed after the full timeout, forever: VSDC-X and SGT were blind
-# (and each tick 3-6 s slower) until the app restarted. Now the wedged worker is
-# abandoned and a fresh one takes over; after MAX_ABANDONED_WORKERS in one run UIA is
-# switched off rather than leak threads.
-MAX_ABANDONED_WORKERS = 5
+# A read that times out may still be running - wedged inside a UIA call that never returns, or
+# just slow (a heavy page on a slow PC). The pool has ONE worker, so a wedged read would make
+# every later read queue behind it and fail after the full timeout, forever.
+#
+# Before 2026-10-13 any read still running when the next one was asked for counted as wedged,
+# and after MAX_ABANDONED_WORKERS of those in one run UIA was switched off until the app
+# restarted. A merely slow read counted too, the count never went down, and the only notice was
+# a print() the installed app has no console for: an office PC went blind on the GST portal
+# (no OCR there) 3-3.5 hours into two evenings in a row. Now:
+#   - a read still running for less than SLOW_GRACE_SEC is SLOW: this read is skipped (the
+#     caller gets "busy" and asks again next tick), nothing is abandoned;
+#   - past that it is WEDGED: its worker is abandoned and a fresh one takes over;
+#   - only workers still stuck count; once one comes back its thread ends and leaves the count;
+#   - MAX_WEDGED_WORKERS stuck at once pauses UIA for PAUSE_SEC, then it is tried again -
+#     never switched off for the rest of the run.
+# Every one of these goes to logs/vsdc.log (core/vsdc/vsdc_diag).
+SLOW_GRACE_SEC = 20.0
+MAX_WEDGED_WORKERS = 5
+PAUSE_SEC = 300.0
 _pool_lock = threading.Lock()
 _inflight = None
-_abandoned = 0
-_disabled_reason: Optional[str] = None
+_inflight_started = 0.0
+_abandoned = 0                  # workers abandoned this run (all time)
+_wedged: List[Any] = []         # futures of abandoned workers - pruned as they finish
+_paused_until = 0.0             # time.monotonic(); 0 = not paused
+_disabled_reason: Optional[str] = None      # set only while paused
 _uia_init_failed = False
+_caller = threading.local()     # .busy: the calling thread's last read was skipped
+_stats_lock = threading.Lock()
+_stats: Dict[str, Any] = {"reads": 0, "late": 0, "busy": 0, "max_ms": 0.0, "last_ms": 0.0}
+
+
+def _diag(text: str, key: Optional[str] = None) -> None:
+    try:
+        from core.vsdc import vsdc_diag
+        if key:
+            vsdc_diag.note_limited(key, text)
+        else:
+            vsdc_diag.note(text)
+    except Exception:
+        pass
+
+
+def _timed(fn, timeout_sec: float):
+    """fn, timing itself on the worker - a read that comes back after its caller gave up is the
+    evidence of a slow page, so it is logged with how long it took."""
+    def run():
+        t0 = time.perf_counter()
+        try:
+            return fn()
+        finally:
+            ms = (time.perf_counter() - t0) * 1000
+            late = ms > timeout_sec * 1000
+            with _stats_lock:
+                _stats["reads"] += 1
+                _stats["last_ms"] = ms
+                if ms > _stats["max_ms"]:
+                    _stats["max_ms"] = ms
+                if late:
+                    _stats["late"] += 1
+            if late:
+                _diag(f"UIA read came back after {ms / 1000:.1f} s (caller gave up at {timeout_sec:g} s)",
+                      key="uia-late")
+    return run
 
 
 def _get_uia_on_worker():
@@ -128,28 +181,50 @@ def _run_with_timeout(fn, timeout_sec: float):
     matters a lot here since callers run on VSDCWorker's single background
     QThread, and OCR capture shares that same per-tick loop: an unguarded
     hang would silently kill the entire VSDC pipeline, not just UIA reads.
+
+    None on a timeout, an error, a pause, or when the previous read is still running (slow, not
+    yet wedged) - was_busy() tells that last case apart, so a caller can ask again next tick.
     """
-    global _POOL, _inflight, _abandoned, _disabled_reason
+    global _POOL, _inflight, _inflight_started, _abandoned, _paused_until, _disabled_reason
+    _caller.busy = False
     with _pool_lock:
-        if _disabled_reason:
-            return None
-        if _inflight is not None and not _inflight.done():
-            # The last read never came back: its worker is wedged. Leave it, start afresh.
-            _abandoned += 1
-            old = _POOL
-            if _abandoned > MAX_ABANDONED_WORKERS:
-                _disabled_reason = (f"{_abandoned - 1} UI Automation reads hung this run - UIA reading is "
-                                    f"off until the app restarts (OCR still works)")
-                print(f"[VSDC-X] {_disabled_reason}")
+        now = time.monotonic()
+        if _paused_until:
+            if now < _paused_until:
                 return None
+            _wedged[:] = [f for f in _wedged if not f.done()]
+            _paused_until, _disabled_reason = 0.0, None
+            _diag(f"UIA pause over - reading again ({len(_wedged)} worker(s) still stuck)")
+        if _inflight is not None and not _inflight.done():
+            running = now - _inflight_started
+            if running < SLOW_GRACE_SEC:
+                # Slow, not wedged: let it finish rather than abandon it.
+                _caller.busy = True
+                with _stats_lock:
+                    _stats["busy"] += 1
+                return None
+            # Wedged: leave it, start afresh.
+            _abandoned += 1
+            _wedged.append(_inflight)
+            _wedged[:] = [f for f in _wedged if not f.done()]
+            old = _POOL
             _POOL = ThreadPoolExecutor(max_workers=1, initializer=_init_com_on_worker_thread)
+            _inflight = None
             try:
                 old.shutdown(wait=False, cancel_futures=True)
             except Exception:
                 pass
-            print(f"[VSDC-X] a UI Automation read hung - replaced its worker ({_abandoned} this run)")
-        future = _POOL.submit(fn)
+            _diag(f"UIA read stuck {running:.0f} s - replaced its worker "
+                  f"({_abandoned} this run, {len(_wedged)} still stuck)")
+            if len(_wedged) >= MAX_WEDGED_WORKERS:
+                _paused_until = now + PAUSE_SEC
+                _disabled_reason = (f"{len(_wedged)} UI Automation workers stuck - UIA paused for "
+                                    f"{PAUSE_SEC / 60:.0f} min (OCR still works)")
+                _diag(_disabled_reason)
+                return None
+        future = _POOL.submit(_timed(fn, timeout_sec))
         _inflight = future
+        _inflight_started = now
     try:
         return future.result(timeout=timeout_sec)
     except FutureTimeoutError:
@@ -158,9 +233,32 @@ def _run_with_timeout(fn, timeout_sec: float):
         return None
 
 
+def was_busy() -> bool:
+    """Whether this thread's last _run_with_timeout was skipped because the previous read was
+    still running (slow, not wedged)."""
+    return bool(getattr(_caller, "busy", False))
+
+
 def worker_health() -> Dict[str, Any]:
-    """How many UIA workers were abandoned this run, and whether UIA reading is off."""
-    return {"abandoned_workers": _abandoned, "disabled": _disabled_reason}
+    """Workers abandoned this run, how many are still stuck, and why UIA is paused (None if not)."""
+    with _pool_lock:
+        _wedged[:] = [f for f in _wedged if not f.done()]
+        return {"abandoned_workers": _abandoned, "stuck_workers": len(_wedged),
+                "disabled": _disabled_reason}
+
+
+def take_read_stats() -> Dict[str, Any]:
+    """Reads since the last call (the heartbeat's line): count, slowest / last ms, reads that
+    came back after their caller gave up, reads skipped while one was still running, plus the
+    worker health. Resets the per-interval counts."""
+    with _stats_lock:
+        out = {"reads": _stats["reads"], "max_ms": round(_stats["max_ms"]), "last_ms": round(_stats["last_ms"]),
+               "late": _stats["late"], "busy": _stats["busy"]}
+        _stats.update(reads=0, late=0, busy=0, max_ms=0.0)
+    h = worker_health()
+    out.update(abandoned=h["abandoned_workers"], stuck=h["stuck_workers"],
+               paused="yes" if h["disabled"] else None)
+    return out
 
 
 def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:
@@ -361,4 +459,6 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_line
         return {"text": "\n".join(all_lines), "lines": all_lines}
 
     result = _run_with_timeout(_do_read, timeout_sec)
+    if result is None and was_busy():
+        return {"text": "", "lines": [], "busy": True}
     return result if result is not None else empty

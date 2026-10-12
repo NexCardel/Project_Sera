@@ -17,6 +17,7 @@ import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
+from . import vsdc_diag
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
     sanitize_page_url, registered_domain,
@@ -363,6 +364,7 @@ class VSDCRouter:
         self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
         self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
         self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
+        self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
         if self._sgt_mode != SGT_OFF:
             print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
 
@@ -428,10 +430,13 @@ class VSDCRouter:
             self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
         self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
         self._engines_off = not (vsdc or vsdc_x or vsdc247 or sgt_on) and not self._env_247_only
-        print(f"[VSDC] engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
-              f"VSDC247={self._mode_247.upper()}"
-              f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
-              f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
+        engines = (f"engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
+                   f"VSDC247={self._mode_247.upper()}"
+                   f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
+                   f"{' (works alone)' if self._sgt_alone else ''} | SGT-I={'on' if sgt_i else 'off'}"
+                   f"{' - ALL OFF' if self._engines_off else ''}")
+        print(f"[VSDC] {engines}")
+        vsdc_diag.note(engines)
 
     def _apply_sgt_i(self) -> None:
         """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
@@ -1023,8 +1028,12 @@ class VSDCRouter:
                 stamp_device_name(sgt_row)
                 return sgt_row
         if self._engines_off:
+            self.diag_tick = {"engines": "all off"}
             return None
         hwnd, title, proc_name = self.get_foreground_info()
+        # What the heartbeat says was in front (logs/vsdc.log): the exe only, until the scope
+        # gate has passed - a page outside the portals is never named there.
+        self.diag_tick = {"front": proc_name or ("none" if not hwnd else "?")}
         if not hwnd or not title:
             return None
 
@@ -1144,6 +1153,10 @@ class VSDCRouter:
         # only) have no portal host, so they fall back to what the window title implies.
         self._tick_portal = (portal_for_url(extracted_url) if address_bar_readable else None) or self.active_portal
         self._tick_page_url = sanitize_page_url(extracted_url) if address_bar_readable else ""
+        self.diag_tick.update(address_bar="read" if address_bar_readable else "unreadable",
+                              in_scope="yes" if in_scope else "no")
+        if in_scope:
+            self.diag_tick.update(portal=self._tick_portal, page=self._tick_page_url or None)
 
         matched_crosshair = None
         if in_scope and (address_bar_readable or is_portal_title):
