@@ -95,6 +95,19 @@ def test_fixed_sequence_of_inputs_writes_exactly_the_golden_settings(env):
     assert not dlg._btn_save.isEnabled()                               # saved = no longer dirty
 
 
+def test_arn_fixer_switch_reads_and_writes_its_key(env):
+    """main's ARN fixer switch (legacy settings_dialog.py) lives on General > Start-up here."""
+    db, ids, dlg, written, outside = env
+    assert dlg.arn_autofix_check.isChecked()                       # default on, as core/sdis/arn_autofix.py
+    dlg.arn_autofix_check.setChecked(False)
+    assert dlg._btn_save.isEnabled()
+    dlg._on_save_settings()
+    assert db.get_setting("arn_autofix_enabled") == "0"
+    dlg.arn_autofix_check.setChecked(True)
+    dlg._load_settings(force=True)
+    assert not dlg.arn_autofix_check.isChecked()
+
+
 def test_save_also_tells_the_extension_and_the_startup_entry(env):
     db, ids, dlg, written, outside = env
     _apply_fixed_inputs(dlg)

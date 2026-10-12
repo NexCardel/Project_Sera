@@ -97,7 +97,8 @@ _STATE_COMBOS = {"theme": "theme_combo", "window_mode": "window_mode_combo", "ma
 _STATE_STEPPERS = {"reveal_count": "reveal_count_spin", "clipboard": "clipboard_spin",
                    "sca_max_uses": "sca_max_uses_spin"}
 _STATE_CHECKS = {"quick_copy": "quick_copy_check", "run_in_bg": "run_in_bg_check",
-                 "autostart": "autostart_check", "sca": "sca_check", "show_hide": "show_hide_check",
+                 "autostart": "autostart_check", "arn_autofix": "arn_autofix_check",
+                 "sca": "sca_check", "show_hide": "show_hide_check",
                  "scc_enabled": "scc_check", "vsdc_enabled": "vsdc_check", "vsdc_x_enabled": "vsdc_x_check",
                  "vsdc247_enabled": "vsdc247_check", "vsdc_hud_enabled": "vsdc_hud_check",
                  "sgt_record_pages": "sgt_record_check", "sdis_record": "sdis_record_check"}
@@ -445,6 +446,12 @@ class UnifiedSettingsDialog(QDialog):
         startup.add_row(SettingRow("Launch at Windows startup",
                                    "Automatically starts Project Sera in the background when Windows boots.",
                                    self.autostart_check))
+        self.arn_autofix_check = Switch()
+        self.arn_autofix_check.setAccessibleName("Run the ARN fixer automatically")
+        startup.add_row(SettingRow("Run the ARN fixer automatically",
+                                   "Fixes failed ARN-only GST rows from the corpus in the background, on the admin PC "
+                                   "only. Applies from the next start of Sera.",
+                                   self.arn_autofix_check))
 
         assist = Card("Clipboard assist (SCA)")
         self.sca_check = Switch()
@@ -477,7 +484,8 @@ class UnifiedSettingsDialog(QDialog):
             combo.currentIndexChanged.connect(self._on_control_changed)
         for stepper in (self.reveal_count_spin, self.clipboard_spin, self.sca_max_uses_spin):
             stepper.valueChanged.connect(self._on_control_changed)
-        for switch in (self.quick_copy_check, self.run_in_bg_check, self.autostart_check, self.sca_check):
+        for switch in (self.quick_copy_check, self.run_in_bg_check, self.autostart_check, self.arn_autofix_check,
+                       self.sca_check):
             switch.toggled.connect(self._on_control_changed)
         self.mask_mode_combo.currentIndexChanged.connect(self._update_mask_preview)
         self.reveal_count_spin.valueChanged.connect(self._update_mask_preview)
@@ -980,6 +988,7 @@ class UnifiedSettingsDialog(QDialog):
             state["quick_copy"] = self.quick_copy_check.isChecked()
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
+            state["arn_autofix"] = self.arn_autofix_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
@@ -1164,6 +1173,7 @@ class UnifiedSettingsDialog(QDialog):
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
+            self.arn_autofix_check.setChecked(g("arn_autofix_enabled", "1") != "0")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
             except (TypeError, ValueError):
@@ -1230,6 +1240,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
                 bulk_settings["sca_enabled"]                = b(self.sca_check)
+                bulk_settings["arn_autofix_enabled"]        = b(self.arn_autofix_check)
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
 

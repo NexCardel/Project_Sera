@@ -1,16 +1,16 @@
-# UI overhaul — report (2026-10-12 01:46)
+# UI overhaul — report (2026-10-12 12:13)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
 | Status | WPs |
 | :--- | ---: |
-| Not started | 2 |
+| Not started | 0 |
 | In progress | 0 |
-| Retry | 0 |
-| Done | 34 |
+| Retry | 1 |
+| Done | 35 |
 | Blocked | 0 |
 
-Runs: 43   output tokens: 1975266   API-equivalent cost: $150.58
+Runs: 45   output tokens: 2032990   API-equivalent cost: $155.76
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -48,8 +48,10 @@ Runs: 43   output tokens: 1975266   API-equivalent cost: $150.58
 | S-14 | Done | haiku | fb1490a | Screens: Remaining not-drawn dialogs by recipe: Container inspector, Create client from capture, ... | S-14 dialogs on the kit; 9 new tests; 137 full-suite failures reproduce on HEAD; handed-off QMessageBox sites in hand-off note |
 | S-R | Done | opus | fbcb288 | Review phase S (screens) | Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite |
 | F-1 | Done | mechanical | 91f3522 | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... | Rewrote docs/Sera_UI.md, updated statuses to built in README and BUILD-PLAN, removed legacy settings_dialog.py |
-| F-2 | Not started | mechanical |  | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). |  |
-| F-R | Not started | opus |  | Review phase F (finish) |  |
+| F-2 | Done | mechanical | 507b259 | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). | Screenshots of every screen regenerated at HEAD with fictional data; display scale dialog added; clipped sub-label recorded for R-3 |
+| F-R | Retry | opus |  | Review phase F (finish) | attempt 1: no finish. The full suite is still running in the background (about 220 of 3643 tests done), and I'll pick up when it finishes. So far:
+
+- **Merge co |
 
 ## Decisions taken for you
 
@@ -123,6 +125,10 @@ Runs: 43   output tokens: 1975266   API-equivalent cost: $150.58
 - **S-R** Tracker Dump row autofill button: keep main's solid red or follow the mockup? → Emerald kit primary (no colour override); SMTI/MECP icon mint (index.html draws it as ibtn pri (emerald); rule 4 says red means danger only; main's red was a fixed colour, not a per-service one)
 - **S-R** Settings dialog still set a literal hex stylesheet (_apply_global_style) - keep or drop? → Dropped it and its palette constants (Rule 11; offscreen before/after renders of all 12 pages differ only in scrollbar width (app theme now) and the scale combo's 160 px min-width)
 - **F-1** Should settings_dialog.py be removed? → Remove settings_dialog.py and clean up references (Unused legacy tabbed dialog superseded by UnifiedSettingsDialog; verified nothing in live app opens it)
+- **F-2** Which screens get a PNG in Mockups/built/? → Regenerate the harness flat set (01-04, settings_*, dlg_*) and the shell goldens at 1366x768, 1024x700 and 1366x768 @125 %; add dlg_display_scale; keep the S-package subfolder goldens unchanged (The harness writes the flat set and the shell sizes with fictional seed data; the subfolder goldens cannot be reproduced by the harness and were reviewed in S-R)
+- **F-2** Capture the prompts that have no dialog class (by-IP, Map datapoints, Shadow start)? → Not captured; they are kit MessageBox prompts (They are built inline by the screen code; the kit MessageBox goldens (message_warning, confirm_remove) show the look)
+- **F-R** main added the arn_autofix_enabled switch only to ui/dialogs/settings_dialog.py, which this branch deletes (F-1). Where does it go? → Settings > General > Start-up card, kit Switch arn_autofix_check, same key and default (on); golden settings updated (Same-behaviour rule: a control on main may move, not disappear; the legacy dialog was never opened on main either, so the merge keeps the deletion and the switch becomes reachable)
+- **F-R** Fix or only report small defects found in the merge review? → Fix the cheap ones (Display scale clipping, light-grey ID field in the client form); report the rest (SeraAlert toast colours, tag_widget, conflicts with main) (Each fix is a few lines with a test or render; bigger items change shared behaviour and are the owner's call)
 
 ## Checks waiting for you
 
@@ -157,3 +163,5 @@ Runs: 43   output tokens: 1975266   API-equivalent cost: $150.58
 - #29 (S-13) On a throwaway office: change the master password and unlock via Office recovery; confirm the password fields stay masked and the eye toggle works — Not run
 - #30 (S-14) Review the S-14 dialogs at 125 percent on a real screen (SCA diagnostics, LTT rules, McL mapping, payload inspector, add client from capture, add workstation pairing window, add/remove PC by IP prompts, message and confirm boxes); check the goldens in Mockups/built/dialogs/ match — Not run
 - #31 (S-14) Payload inspector table headers elide at 1024x700 (Period and Submission status are cut); decide whether the columns need priority or a wider minimum — Not run
+- #32 (F-2) Display scale dialog: the Running at 100 % sub-label under Screen is clipped at 100 % and 125 % (Mockups/built/dlg_display_scale*.png), and the combo text is elided at 125 %. Fix in the R-3 DisplayScaleControl SettingRow; not changed in F-2 (capture only). — Not run
+- #33 (F-2) Compare Mockups/built/ screen by screen with Mockups/fleet/index.html on a real 125 % display; the screenshots are offscreen renders with fictional data. — Not run

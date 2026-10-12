@@ -6,6 +6,7 @@ Shared UI pieces for rendering dynamic fields at runtime.
 
 from PySide6.QtCore import QDate, QRegularExpression, Qt
 from PySide6.QtGui import QRegularExpressionValidator
+from ui.utils.tokens import TOKENS
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -51,7 +52,8 @@ def make_input_widget(field: dict, value: str = "", mask_password: bool = True):
         widget = QLineEdit(value or "(Auto-Generated)")
         widget.setReadOnly(True)
         widget.setFocusPolicy(Qt.NoFocus)
-        widget.setStyleSheet("background-color: #EFEFEF; color: #2E9B5F; font-weight: 700; border: 1px solid #CCCCCC;")
+        widget.setStyleSheet(f"background-color: {TOKENS['panel']}; color: {TOKENS['mint']}; font-weight: 700;"
+                             f" border: 1px solid {TOKENS['line2']};")
         return widget
 
     if field_type == "password":

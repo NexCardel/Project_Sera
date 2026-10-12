@@ -786,3 +786,9 @@ files, tests, decisions taken, what the next WP must know.`
   Defect, not fixed (capture only): Display scale dialog clips the "Running at 100 %" sub-label at 100 % and 125 %, and elides the combo text at 125 % (check 32).
   Tests: `tests/test_ui_overhaul_rules.py` 76 pass; no code changed. Pytest exits 1 at temp-folder cleanup (WinError 5 on `pytest-current`), after the tests pass. The harness exits 139 at `os._exit` after writing PNGs (known, harmless).
   For F-R: check 33 (real 125 % display); decide whether to re-render the subfolder goldens at HEAD.
+- **F-R** (2026-10-12, claude-opus-5-5): Merge-readiness report `Mockups/MERGE-READINESS.md` (W8-R). Verdict: ready after two conflict fixes, which the report spells out
+  (`settings_dialog.py` modify/delete → keep the deletion; `tracker_dump_window.py` one hunk → keep the branch's `_table_item` line and take main's latest-period lines). Merging is the owner's call; nothing was merged.
+  Fixes: main's "Run the ARN fixer automatically" switch (`arn_autofix_enabled`) moved to Settings → General → Start-up (`arn_autofix_check`, kit Switch, default on; lock test + golden updated);
+  the Display scale dialog no longer clips "Running at …" (stacked row, 600 px wide, re-rendered at 100 % / 125 %); `dynamic_form_widgets.py` read-only ID field now uses tokens.
+  Full suite: 3505 pass / 137 fail / 1 skip. The failures are all outside the branch: 132 DB-fixture failures (PK/EPFO seed), 1 SDIS, and 4 UI order leaks that pass alone. Open owner decisions are in report §5
+  (masking of password columns in the grid, `SeraAlert` toast colours, `tools/sgt_overhaul.py` placement).

@@ -79,13 +79,15 @@ class DisplayScaleDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Display scale")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(600)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.frame = DialogFrame("Display scale", _HINT, self, icon="mdi.monitor")
         self.control = DisplayScaleControl()
+        # Stacked: beside three controls the "Running at ..." line had no room (clipped at 520 px).
+        self.control.set_compact(True)
         self.frame.add_widget(self.control)
         close = self.frame.add_action("Close", variant="secondary")
         close.clicked.connect(self.accept)
