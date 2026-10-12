@@ -571,6 +571,19 @@ class SeraSyncDialog(QDialog):
         conn.execute("PRAGMA key = \"x'%s'\";" % self.db.hex_key)
         return conn
 
+    @staticmethod
+    def _local_stamp(stamp):
+        """UTC '...Z' stamp -> local 'YYYY-MM-DD HH:MM:SS' for display; 'never' when empty."""
+        if not stamp:
+            return "never"
+        import datetime
+        try:
+            utc = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+            return utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return str(stamp)
+
     def _refresh_members(self):
         if not getattr(self, "members_group", None) or not self.members_group.isVisible() or self.db is None:
             return
@@ -649,7 +662,7 @@ class SeraSyncDialog(QDialog):
             self.members_table.setItem(row, 1, QTableWidgetItem(self._online_status(dev_id, own_device_id)))
             role = "Admin" if dev_id == admin_device_id else "Member"
             self.members_table.setItem(row, 2, QTableWidgetItem(role))
-            self.members_table.setItem(row, 3, QTableWidgetItem(last_ok.get(dev_id) or "never"))
+            self.members_table.setItem(row, 3, QTableWidgetItem(self._local_stamp(last_ok.get(dev_id))))
             self.members_table.setItem(row, 4, QTableWidgetItem("This PC" if dev_id == own_device_id else ""))
         self.members_table.setUpdatesEnabled(True)
 

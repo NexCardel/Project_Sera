@@ -39,6 +39,7 @@ from ui.utils.icon_fonts import restrict_icon_fonts
 from ui.utils.ui_scale import choose_startup_scale, next_manual_value, read_settings, write_settings, MODE_MANUAL
 restrict_icon_fonts()
 from core.memlog import mark as memory_mark
+from core import startup_boost
 
 def _safe_qta_icon(icon_name, color=None):
     if qta is not None:
@@ -336,7 +337,13 @@ class SeraApp:
                 loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
-            self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
+            def _open_db():
+                return SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
+            if startup_boost.launched_at_startup():
+                # At logon a virus scan or sync client can hold the file for a few seconds.
+                self.db = startup_boost.retry(_open_db, attempts=4, delay=3.0, pump=self.app.processEvents)
+            else:
+                self.db = _open_db()
             memory_mark("  vault: database opened")
             # Sera Sync v3 (P3-3): seals captured changes every 5 s, incl. writes by the parsers.
             # A no-op while the sync mode is 'off'.
@@ -613,6 +620,18 @@ class SeraApp:
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
         self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
+        # Screentime: when Sera opened / closed on this PC (core/screentime.py), published to the office
+        # through app_settings so every PC's Settings > Screentime tab lists every PC.
+        try:
+            from core import screentime
+            screentime.attach(self.db, getattr(getattr(self, "sync_engine", None), "device_id", None))
+            screentime.start(APP_DIR)
+            self._screentime_timer = QTimer(self.app)
+            self._screentime_timer.timeout.connect(screentime.heartbeat)
+            self._screentime_timer.start(int(screentime.HEARTBEAT_S * 1000))
+            self.app.aboutToQuit.connect(screentime.stop)
+        except Exception as exc:
+            print(f"[Screentime] not started: {exc}")
         # Handlers are wired: release any messages the extension sent while start-up was running.
         self.bridge.mark_ready()
 
@@ -2466,7 +2485,23 @@ class SeraApp:
         import version
         version.restart_app()
 
+    def _after_startup(self):
+        """Once per launch: drop the logon priority boost, and keep the autostart entry right."""
+        if startup_boost.launched_at_startup():
+            QTimer.singleShot(startup_boost.BOOST_SECONDS * 1000, startup_boost.restore_priority)
+
+        def _repair():
+            try:
+                from ui.utils import autostart
+                result = autostart.repair_autostart()
+                if result is not None:
+                    print(f"[Autostart] repaired: ok={result.ok} method={result.method} {result.message}")
+            except Exception as exc:
+                print(f"[Autostart] repair failed: {exc}")
+        threading.Thread(target=_repair, name="autostart-repair", daemon=True).start()
+
     def run(self):
+        self._after_startup()
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
@@ -2475,6 +2510,11 @@ if __name__ == "__main__":
         # The update agent is replacing these files: get out of its way, reopen when it is done.
         update_agent.start_relauncher(trigger_agent=False)
         sys.exit(0)
+    first_instance = startup_boost.claim_instance()
+    if startup_boost.launched_at_startup():
+        if not first_instance:
+            sys.exit(0)     # Sera is already open in this session; the logon launch has nothing to add
+        startup_boost.raise_priority()
     _setup_sync_log(APP_DIR)
     SeraApp().run()
 

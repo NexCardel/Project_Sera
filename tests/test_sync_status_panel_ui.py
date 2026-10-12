@@ -654,7 +654,7 @@ def test_last_successful_sync_stamps_use_the_same_format_for_engine_and_address_
     import sync_discovery
     from ui.dialogs.sera_sync_dialog import SeraSyncDialog
 
-    stamp_re = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+    stamp_re = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")      # local time, via _local_stamp
 
     db = _office_db(tmp_path)
     svc = _office_sync_service(tmp_path)
@@ -672,7 +672,7 @@ def test_last_successful_sync_stamps_use_the_same_format_for_engine_and_address_
     with db._connect() as conn:
         sync_discovery.ensure_address_book_table(conn)
         sync_discovery.record_successful_session(conn, own_device_id, "10.0.0.5", 49159,
-                                                   ok_at="2026-09-25T00:00:00")
+                                                   ok_at="2026-09-25T00:00:00Z")
     dlg._refresh_members()
     addr_text = dlg.members_table.item(0, 3).text()
     assert stamp_re.match(addr_text), addr_text

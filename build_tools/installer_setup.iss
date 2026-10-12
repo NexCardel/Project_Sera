@@ -2,7 +2,7 @@
 ; Project Sera - Amas Sera Application Installer Setup Script
 
 #define MyAppName "Amas Sera"
-#define MyAppVersion "2.12.8"
+#define MyAppVersion "2.12.9"
 #define MyAppPublisher "Aman Associates"
 #define MyAppExeName "Amas_Sera.exe"
 #define ShortcutName "CompanyInfo1"
@@ -78,6 +78,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Amas Sera Sync"""; Flags: runhidden; RunOnceId: "DelAmasSeraSyncRule"
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""\Amas Sera\Updater"" /F"; Flags: runhidden; RunOnceId: "DelAmasSeraUpdater"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ""Get-ScheduledTask -TaskPath '\Amas Sera\' -TaskName 'Startup-*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false"""; Flags: runhidden; RunOnceId: "DelAmasSeraStartupTasks"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{commonappdata}\AmasSera\updater"

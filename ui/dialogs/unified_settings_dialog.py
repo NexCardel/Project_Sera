@@ -13,7 +13,7 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,6 +33,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -268,6 +271,7 @@ _P_EXPORT    = 8
 _P_BACKUP    = 9
 _P_PURGE     = 10
 _P_TRACKER   = 11
+_P_SCREENTIME = 12
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -282,6 +286,7 @@ _PAGE_MAP = {
     "backup":   _P_BACKUP,
     "purge":    _P_PURGE,
     "tracker":  _P_TRACKER,
+    "screentime": _P_SCREENTIME,
 }
 
 _SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
@@ -338,6 +343,7 @@ class UnifiedSettingsDialog(QDialog):
             _P_BACKUP: self._build_page_backup,
             _P_PURGE: self._build_page_purge,
             _P_TRACKER: self._build_page_tracker,
+            _P_SCREENTIME: self._build_page_screentime,
         }
         self._page_widgets = {}
 
@@ -542,6 +548,7 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
         _item("mdi.radar",                  "Tracker",            _P_TRACKER)
+        _item("mdi.timer-outline",          "Screentime",         _P_SCREENTIME)
 
         _sec("Column Schema")
         _item("mdi.view-column-outline",    "Master Column List", _P_MCL)
@@ -1185,6 +1192,13 @@ class UnifiedSettingsDialog(QDialog):
             "Accept writes one to this PC's local override file; Reject only remembers your choice.",
             lab_btn))
 
+        lay.addWidget(_sub_header("ARN fixer"))
+        self.arn_autofix_check = QCheckBox()
+        lay.addWidget(_setting_row("Run the ARN fixer automatically when Sera starts",
+            "Fixes failed ARN-only GST rows from the page corpus in the background, on the admin PC only. "
+            "Applies from the next start of Sera; switching it off before it has begun also stops it.",
+            self.arn_autofix_check))
+
         lay.addWidget(_sub_header("HUD Pill"))
         self.vsdc_hud_check = QCheckBox()
         lay.addWidget(_setting_row("Show HUD pill",
@@ -1198,9 +1212,92 @@ class UnifiedSettingsDialog(QDialog):
         self.sgt_record_check.toggled.connect(self._on_control_changed)
         self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
+        self.arn_autofix_check.toggled.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
+
+    def _build_page_screentime(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(8)
+
+        lay.addWidget(_page_header("Screentime",
+            "When Sera was opened and closed on each PC in the office. Every PC publishes its own sessions "
+            "through Sera Sync, so this list is the same on all of them (a PC that is switched off shows "
+            "its last session once it has synced). Only times and PC names are kept."))
+
+        self._st_summary = QLabel("")
+        self._st_summary.setWordWrap(True)
+        self._st_summary.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 12px; font-weight: 600;")
+        lay.addWidget(self._st_summary)
+
+        self._st_table = QTableWidget(0, 4)
+        self._st_table.setHorizontalHeaderLabels(["PC", "Opened", "Closed", "Time open"])
+        self._st_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._st_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._st_table.verticalHeader().setVisible(False)
+        self._st_table.setAlternatingRowColors(False)
+        hdr = self._st_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self._st_table.setStyleSheet(
+            f"QTableWidget {{ background: #1a1a1a; color: {_TEXT_PRI}; border: 1px solid {_BORDER}; "
+            f"border-radius: 6px; gridline-color: #2a2a2a; font-size: 12px; }}"
+            f"QHeaderView::section {{ background: #222222; color: {_TEXT_SEC}; border: none; padding: 6px 8px; "
+            f"font-weight: 600; }}")
+        lay.addWidget(self._st_table, 1)
+
+        btns = QHBoxLayout()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh_screentime)
+        open_btn = QPushButton("Open this PC's text file")
+        open_btn.clicked.connect(self._open_screentime_file)
+        btns.addWidget(refresh)
+        btns.addWidget(open_btn)
+        btns.addStretch()
+        lay.addLayout(btns)
+
+        self._refresh_screentime()
+        return w
+
+    def _refresh_screentime(self):
+        from core import screentime
+        rows = screentime.read_office(self.db)
+        table = self._st_table
+        table.setRowCount(len(rows))
+        running = sorted({r["pc"] for r in rows if r.get("running")})
+        for i, r in enumerate(rows):
+            if r.get("running"):
+                closed, span = "Open now", screentime.duration_text(r["seconds"])
+            elif r.get("stale"):
+                closed, span = f"No close recorded (last seen {r['seen'][5:16]})", ""
+            else:
+                closed = r["closed"] + ("" if r["clean"] else "  (not a clean close)")
+                span = screentime.duration_text(r["seconds"])
+            for col, text in enumerate((r["pc"], r["started"], closed, span)):
+                item = QTableWidgetItem(text)
+                if r.get("running"):
+                    item.setForeground(QColor(_ACCENT_LIGHT))
+                table.setItem(i, col, item)
+        self._st_summary.setText("Open now: " + ", ".join(running) if running else
+                                 ("No PC has Sera open right now." if rows else
+                                  "No sessions yet. They appear after Sera has started once with this version."))
+
+    def _open_screentime_file(self):
+        import os
+        from core import screentime
+        folder = screentime.app_dir_now()
+        path = screentime.file_path(folder) if folder else None
+        if path is None or not path.exists():
+            QMessageBox.information(self, "Screentime", "This PC has no screentime file yet.")
+            return
+        try:
+            os.startfile(str(path))
+        except OSError as exc:
+            QMessageBox.warning(self, "Screentime", f"Could not open the file: {exc}")
 
     def _build_page_export(self) -> QScrollArea:
         w = QWidget()
@@ -1341,6 +1438,7 @@ class UnifiedSettingsDialog(QDialog):
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
             state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
+            state["arn_autofix_enabled"] = self.arn_autofix_check.isChecked()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1458,11 +1556,13 @@ class UnifiedSettingsDialog(QDialog):
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
             self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))
+            self.arn_autofix_check.setChecked(g("arn_autofix_enabled", "1") != "0")
 
     #── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
         try:
             bulk_settings = {}
+            autostart_message = ""
             b = lambda cb: "1" if cb.isChecked() else "0"
 
             if hasattr(self, "theme_combo"):
@@ -1491,9 +1591,17 @@ class UnifiedSettingsDialog(QDialog):
 
                 try:
                     from ui.utils import autostart
-                    autostart.set_autostart_enabled(self.autostart_check.isChecked())
-                except Exception:
-                    pass
+                    want = self.autostart_check.isChecked()
+                    # Only touch Windows when the box changed, so every Save is not a registry write.
+                    if want != autostart.is_autostart_enabled() or (want and autostart.user_mismatch()):
+                        result = autostart.apply_autostart(want)
+                        autostart_message = result.message
+                        if not result.ok:
+                            self.autostart_check.blockSignals(True)
+                            self.autostart_check.setChecked(autostart.is_autostart_enabled())
+                            self.autostart_check.blockSignals(False)
+                except Exception as exc:
+                    autostart_message = f"Start at logon could not be changed: {exc}"
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)
@@ -1528,6 +1636,7 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
                 bulk_settings["sdis_record"] = b(self.sdis_record_check)
                 bulk_settings["sgt_i_mode"] = self.sgt_i_combo.currentData() or "off"
+                bulk_settings["arn_autofix_enabled"] = b(self.arn_autofix_check)
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
@@ -1551,6 +1660,8 @@ class UnifiedSettingsDialog(QDialog):
             self.settings_saved.emit()
             self._initial_state = self._capture_state()
             self._update_save_btn_state()
+            if autostart_message:
+                QMessageBox.warning(self, "Start at Windows logon", autostart_message)
 
         except Exception as e:
             QMessageBox.critical(self, "Error Saving Settings", str(e))

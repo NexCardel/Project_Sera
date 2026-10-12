@@ -149,7 +149,6 @@ project_sera/
     |   |-- csv_import_dialog.py
     |   |-- mcl_manager_dialog.py
     |   |-- service_manager_dialog.py
-    |   |-- settings_dialog.py # General settings & autostart configuration
     |   |-- unified_settings_dialog.py # Unified Settings Hub with tabbed drawer navigation
     |   `-- update_dialog.py
     |-- services/

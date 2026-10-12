@@ -68,7 +68,7 @@ import os
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE / "output"
@@ -90,6 +90,7 @@ from core.sdis.labels import (CT_HYPERLINK, CT_IMAGE, CT_TABLE, FIXABLE_TYPES, L
                               _children, _container, _end, _first_label, _label, _same_column,
                               _table_label, composites, element_type, is_period, value_type)
 from core.sdis.paths import write_csv                            # noqa: E402
+import cards                                                     # noqa: E402
 
 FIXED, SEMI_VARIABLE, VARIABLE, ONLY_LATEST, ONLY_PREVIOUS, VARIABLE_ALIGNMENT = (
     "fixed", "semi-variable", "variable", "only latest", "only previous", "variable_alignment")
@@ -237,6 +238,104 @@ FIELDS = ["page", "status", "key_matched", "check", "label", "example_value", "p
 
 MEMORY_FIELDS = ["status", "label", "value_type", "clients", "example_value", "key"]
 
+# --comp --cards (plan 7): the card columns come after the ordinary ones.
+CARD_FIELDS = ["group", "group_kind", "member", "card_name", "slot", "slot_role", "pairing"]
+CARDS_CSV_FIELDS = FIELDS + CARD_FIELDS
+
+
+def _texts_of(member: Dict[str, Any]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for it in member["items"]:
+        out.setdefault(it["slot"], it["text"])
+    return out
+
+
+def _group_rows(gi: int, g: Dict[str, Any], h: Dict[str, Any], out: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Plan 6.2-6.3: the rows of one paired group. Cards: one row per slot of each pair (fixed / variable /
+    only latest / only previous). list, table or unknown: the template, one row per slot with its values
+    from both pages (first few and the count) and a row-count row."""
+    rows: List[Dict[str, Any]] = []
+    roles_l, roles_p = cards.roles(g), cards.roles(h)
+    base = {"group": gi, "group_kind": g["kind"]}
+    if out["mode"] == "cards":
+        name = g.get("name_slot")
+        for pr in out["pairs"]:
+            ma = g["members"][pr["a"]] if pr["a"] is not None else None
+            mb = h["members"][pr["b"]] if pr["b"] is not None else None
+            ta, tb = (_texts_of(ma) if ma else {}), (_texts_of(mb) if mb else {})
+            card = (ta.get(name) if ma else None) or (tb.get(h.get("name_slot")) if mb else None) or ""
+            for slot in out["slots"]:
+                if slot not in ta and slot not in tb:
+                    continue
+                if slot not in tb:
+                    st = ONLY_LATEST
+                elif slot not in ta:
+                    st = ONLY_PREVIOUS
+                else:
+                    st = FIXED if ta[slot] == tb[slot] else VARIABLE
+                role = (roles_l.get(slot) or roles_p.get(slot) or {}).get("role", "")
+                rows.append(dict(base, member=(pr["a"] if pr["a"] is not None else f"p{pr['b']}"), card_name=card,
+                                 slot=slot, slot_role=role, pairing=pr["pairing"], status=st,
+                                 example_value=ta.get(slot, ""), previous_example=tb.get(slot, "")))
+        return rows
+    na, nb = out["rows"]
+    for slot in out["slots"]:
+        ta = [it["text"] for m in g["members"] for it in m["items"] if it["slot"] == slot]
+        tb = [it["text"] for m in h["members"] for it in m["items"] if it["slot"] == slot]
+        rows.append(dict(base, member="", card_name="", slot=slot,
+                         slot_role=(roles_l.get(slot) or roles_p.get(slot) or {}).get("role", ""),
+                         pairing="template", status="template",
+                         example_value=" | ".join(ta[:3]) + (f" (+{len(ta) - 3})" if len(ta) > 3 else ""),
+                         previous_example=" | ".join(tb[:3]) + (f" (+{len(tb) - 3})" if len(tb) > 3 else "")))
+    rows.append(dict(base, member="", card_name="", slot="", slot_role="", pairing="rows",
+                     status="row counts", example_value=f"latest {na} rows", previous_example=f"previous {nb} rows"))
+    return rows
+
+
+def cards_rows(lrec: Dict[str, Any], prec: Dict[str, Any], page: str, lclient: Any = "latest",
+               pclient: Any = "previous") -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """--comp --cards for one page link: the groups of both comp pages (classified across the two clients),
+    paired by identity, then the rest of each page compared with the group members taken out (plan 6.4).
+    Returns (rows, counts). Counts only, for the console."""
+    lfl, pfl = flat_of(lrec), flat_of(prec)
+    lg = cards.find_groups(lfl, cards.docs_for(lrec, lfl))
+    pg = cards.find_groups(pfl, cards.docs_for(prec, pfl))
+    counts: Counter = Counter()
+    if cards.RHO is None:
+        # plan 8: until RHO is measured no group is a card; every group is compared as its template
+        counts["rho not measured: templates"] = 1
+    else:
+        cards.classify([(page, lfl, lg, lclient), (page, pfl, pg, pclient)])
+    rows: List[Dict[str, Any]] = []
+    used: Set[int] = set()
+    for gi, g in enumerate(lg):
+        j = cards.match_group(g, lfl, pg, pfl, used)
+        if j is None:
+            counts["group only latest"] += 1
+            rows.append(dict(group=gi, group_kind=g["kind"], pairing="page", status=ONLY_LATEST,
+                             example_value=f"{len(g['members'])} members", slot="", member="", card_name=""))
+            continue
+        used.add(j)
+        h = pg[j]
+        counts["group paired"] += 1
+        rows += _group_rows(gi, g, h, cards.compare_groups(g, h))
+    for j, h in enumerate(pg):
+        if j not in used:
+            counts["group only previous"] += 1
+            rows.append(dict(group=j, group_kind=h["kind"], pairing="page", status=ONLY_PREVIOUS,
+                             example_value="", previous_example=f"{len(h['members'])} members", slot="", member="", card_name=""))
+    outside = compare_flat(cards.outside_flat(lfl, lg), cards.outside_flat(pfl, pg))
+    counts["rows outside groups"] = len(outside)
+    rows += outside
+    for r in rows:
+        r.setdefault("page", page)
+        for f in CARD_FIELDS:
+            r.setdefault(f, "")
+        for f in FIELDS:
+            r.setdefault(f, "")
+    return rows, dict(counts)
+
+
 
 def memory_rows(m: Any) -> List[Dict[str, Any]]:
     """One row per memory node with a text: example_value is the latest client's, from its own view."""
@@ -284,7 +383,7 @@ class _Comp:
         return self.rec["nodes"]
 
 
-def main_comp(stamp_out: bool = True) -> int:
+def main_comp(stamp_out: bool = True, cards_mode: bool = False) -> int:
     """Experiment 1: for every page link, the LATEST comp page vs the latest comp page of the same
     link from another client (another session whose PAN / GSTIN differ; a session with none is
     compared anyway, with a warning)."""
@@ -313,6 +412,20 @@ def main_comp(stamp_out: bool = True) -> int:
         print(f"Previous : {pp.name}  [{masked(pids)}]  {len(prec['nodes'])} nodes")
         if not (lids and pids):
             print("  WARNING: no PAN / GSTIN on one side - it may be the same client")
+        if cards_mode:
+            try:
+                card_rows, card_counts = cards_rows(lrec, prec, page,
+                                                   "|".join(sorted(lids)) or "latest", "|".join(sorted(pids)) or "previous")
+            except ValueError as e:
+                raise SystemExit(str(e))
+            for msg, k in card_counts.items():
+                print(f"  {msg:22s} {k:5d}")
+            out = write_csv(OUT_DIR / f"compare_cards_{lrec.get('session', '')}__{page_slug(page)}.csv",
+                            CARDS_CSV_FIELDS, card_rows)
+            print(f"CSV      : {out.name}")
+            print()
+            done += 1
+            continue
         page_rows = compare(lrec, prec)
         counts = Counter(r["status"] for r in page_rows)
         for st in STATUSES:
@@ -339,6 +452,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--two", action="store_true", help="the old mode: the latest client vs the previous one")
     ap.add_argument("--comp", action="store_true",
                     help="experiment 1: each link's latest comp page (snapshot_diff.py) vs another client's")
+    ap.add_argument("--rho", type=float, default=None,
+                    help="with --cards: try a recurrence cut-off before it is measured (an experiment knob; "
+                         "the measured value goes in cards.RHO, plan docs/cards_rows/plan.md section 9)")
+    ap.add_argument("--cards", action="store_true",
+                    help="with --comp: compare the cards and rows of each page (plan docs/cards_rows/plan.md section 6)")
     ap.add_argument("--latest", help="a key_probe_*.json - compare two single reads instead of client maps")
     ap.add_argument("--previous", help="a key_probe_*.json (default with --latest: the newest earlier read of that page)")
     ap.add_argument("--view", choices=("raw", "sgt"), default="raw",
@@ -352,7 +470,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ALIGN = args.align == "on"
     print(f"View     : {args.view}    Align: {args.align}")
     if args.comp:
-        return main_comp()
+        if args.rho is not None:
+            cards.RHO = args.rho
+            print(f"Rho      : {args.rho:g} (given on the command line, not measured)")
+        return main_comp(cards_mode=args.cards)
     if not (args.two or args.latest or args.previous):
         return main_memory()
 

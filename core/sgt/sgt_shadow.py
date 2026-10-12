@@ -244,6 +244,7 @@ class _Session:
     linked: Set[str] = field(default_factory=set)   # portal user IDs already looked up in the saved clients
     confirmed: bool = False             # the client's identity may go on rows
     confirm_note: str = ""
+    browser: str = ""                   # the window's browser ('chrome', 'msedge', 'firefox'); on every row and log line
     strict: bool = False                # born from a contradiction: a single sighting never confirms
     # SDIS dataset containers and Others values (core/sgt/sgt_containers.py, blueprint S.2/S.4)
     sdis: ContainerSession = field(default_factory=ContainerSession)
@@ -526,6 +527,8 @@ class SgtShadow:
                 s = self._sessions[hwnd] = _Session(portal=portal)
         if not s.portal:
             s.portal = portal
+        if not s.browser:
+            s.browser = _browser_of(hwnd)
         s.last_seen = now
 
         url_changed = url != s.last_url
@@ -963,6 +966,7 @@ class SgtShadow:
             "filing_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "raw_text": "",                         # SGT never stores page text
             "capture_method": method,
+            "capture_browser": s.browser,
             "identity_resolved": bool(pan),
             "page_url": next(iter(obj.evidence.values()), s.last_url) if isinstance(obj, Instance) else s.last_url,
             "dataset_key": key,
@@ -1138,6 +1142,7 @@ class SgtShadow:
             "filing_date": filing_date,
             "raw_text": "",                         # SGT never stores page text
             "capture_method": CAPTURE_METHODS[self.mode],
+            "capture_browser": s.browser,
             "identity_resolved": bool(pan),
             "page_url": slot.first_page,
             "dataset_key": key,
@@ -1836,14 +1841,23 @@ class SgtShadow:
 
     def _event(self, s: _Session, event: str, **data: Any) -> None:
         self._append_log({"ts": datetime.now().isoformat(timespec="seconds"), "event": event,
-                          "session": s.session_id, "portal": s.portal, **data})
+                          "session": s.session_id, "portal": s.portal, "capture_browser": s.browser, **data})
+
+
+def _browser_of(hwnd: int) -> str:
+    """'chrome' | 'msedge' | 'firefox' | ... for a window, '' when it cannot be read (a test's fake window)."""
+    try:
+        from core.sdis.recorder import browser_of
+        return browser_of(hwnd)
+    except Exception:
+        return ""
 
 
 def _session_to_json(s: _Session) -> Dict[str, Any]:
     return {
         "session_id": s.session_id, "started": s.started, "last_seen": s.last_seen, "portal": s.portal,
         "profile": s.profile, "timeline": s.timeline, "last_url": s.last_url,
-        "confirmed": s.confirmed, "confirm_note": s.confirm_note, "strict": s.strict,
+        "confirmed": s.confirmed, "confirm_note": s.confirm_note, "strict": s.strict, "browser": s.browser,
         "slots": [{"values": sl.values, "record": sl.record, "confidence": sl.confidence,
                    "first_page": sl.first_page, "sent_key": sl.sent_key, "held": sl.held,
                    "claimed": sl.claimed, "waived": sl.waived} for sl in s.slots],
@@ -1858,6 +1872,7 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
 def _session_from_json(raw: Dict[str, Any]) -> _Session:
     s = _Session(session_id=str(raw["session_id"]), started=float(raw.get("started") or time.time()),
                  last_seen=float(raw.get("last_seen") or time.time()), portal=str(raw.get("portal") or ""))
+    s.browser = str(raw.get("browser") or "")
     s.profile = dict(raw.get("profile") or {})
     s.timeline = list(raw.get("timeline") or [])
     s.last_url = str(raw.get("last_url") or "")

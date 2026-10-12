@@ -48,7 +48,6 @@ import security
 from ui.dialogs.csv_import_dialog import CSVImportDialog
 from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
-from ui.dialogs.settings_dialog import SettingsDialog
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
@@ -430,7 +429,7 @@ class AdminWindow(QWidget):
     request_slide_panel = Signal(QWidget, str)
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
-    settings_saved = Signal()  # Forwarded from SettingsDialog when user saves
+    settings_saved = Signal()  # Forwarded from UnifiedSettingsDialog when user saves
 
     def __init__(self, db, actor: str = "Admin"):
         super().__init__()

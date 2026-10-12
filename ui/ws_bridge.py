@@ -41,11 +41,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Qt, QThread
+from PySide6.QtCore import QObject, Signal, Qt, QThread, QTimer
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
 
 WS_PORTS = (48765, 48766, 48767, 48768)  # tried in order; all below Windows' dynamic port range
+_BIND_RETRY_MS = 5000
+_BIND_RETRY_TRIES = 24                   # 2 minutes in all
 
 CHROME_ORIGIN_PREFIX = "chrome-extension://"
 EDGE_ORIGIN_PREFIX = "chrome-extension://"  # Edge is Chromium; same scheme, same id
@@ -187,14 +189,34 @@ class WSBridge(QObject):
         self._server = QWebSocketServer("Sera Bridge", QWebSocketServer.SslMode.NonSecureMode, self)
         self._server.newConnection.connect(self._on_new_connection)
 
+        if not self._try_listen():
+            # At logon another program (or this app's previous run) can still hold the ports for
+            # a few seconds; keep trying instead of leaving the extension offline until a restart.
+            print(f"[WSBridge] Could not bind any of {WS_PORTS} - will retry every "
+                  f"{_BIND_RETRY_MS // 1000} s for {_BIND_RETRY_TRIES * _BIND_RETRY_MS // 60000} min.")
+            self._bind_attempts_left = _BIND_RETRY_TRIES
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+
+    def _try_listen(self) -> bool:
+        if self._server is None:
+            return False
         for port in WS_PORTS:
             if self._server.listen(QHostAddress.LocalHost, port):
                 self._bound_port = port
-                break
-        else:
-            print(f"[WSBridge] Could not bind any of {WS_PORTS} - extension bridge is offline.")
+                print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+                return True
+        return False
+
+    def _retry_listen(self):
+        if self._server is None or self._bound_port is not None:
+            return    # stopped, or already bound
+        if self._try_listen():
             return
-        print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+        self._bind_attempts_left -= 1
+        if self._bind_attempts_left > 0:
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+        else:
+            print(f"[WSBridge] Gave up binding {WS_PORTS} - extension bridge is offline.")
 
 
     def stop(self):
