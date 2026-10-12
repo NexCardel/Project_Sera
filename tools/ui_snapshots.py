@@ -271,7 +271,13 @@ build("dlg_office_recovery", lambda: OfficeRecoveryDialog(tmp))
 build("dlg_rejoin_office", lambda: RejoinOfficeDialog())
 build("dlg_sera_sync", lambda: SeraSyncDialog(None, db=db, actor="Admin"))
 build("dlg_sgt_lab", lambda: SgtLabDialog())
-build("dlg_force_update", lambda: ForceUpdateDialog({"current_version": "2.12.0", "latest_version": "2.13.0", "release_notes": "Demo release notes.", "download_url": ""}, auto_start=False))
+def _force_update():
+    d = ForceUpdateDialog({"current_version": "2.12.0", "latest_version": "2.13.0", "release_notes": "Demo release notes.", "download_url": ""}, auto_start=False)
+    d.mandatory = False     # closing a mandatory one asks "Exit or Stay?" and waits for a click offscreen
+    return d
+
+
+build("dlg_force_update", _force_update)
 
 print("FAILED:", failed)
 shutil.rmtree(tmp, ignore_errors=True)

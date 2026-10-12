@@ -28,7 +28,7 @@
     }
   },
   "tiers": {
-    "_note": "Owner decision 2026-10-10: one preferred model per WP; the second entry is used only when the first one's runner is at its usage limit, signed out or missing (Claude <-> Gemini). Mechanical WPs prefer Gemini 3.8 Flash; everything else prefers its Claude model. Opus WPs never fall back to Gemini; they wait for Claude (owner 2026-10-10).",
+    "_note": "Owner decision 2026-10-10: one preferred model per WP; the second entry is used only when the first one's runner is at its usage limit, signed out or missing (Claude <-> Gemini). Mechanical WPs prefer Gemini 3.8 Flash; everything else prefers its Claude model. Opus WPs never fall back to Gemini; they wait for Claude (owner 2026-10-10). 2026-10-12: owner switched to Claude only (antigravity runner off); mechanical WPs run on Haiku 5.5.",
     "mechanical": [
       "gemini-flash",
       "haiku"
@@ -69,7 +69,7 @@
       "coauthor": "Claude <noreply@anthropic.com>"
     },
     "antigravity": {
-      "enabled": true,
+      "enabled": false,
       "exe": "agy",
       "prompt": "arg",
       "args": [
