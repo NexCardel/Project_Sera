@@ -28,6 +28,9 @@ def test_kit_has_no_colour_literals():
 
 def test_kit_tokens_are_hex_or_px():
     for name, value in KIT.items():
+        if name == "icon_scale":  # the one ratio (qtawesome's 0.875 glyph factor undone)
+            assert isinstance(value, float), name
+            continue
         assert isinstance(value, int) or re.fullmatch(r"#[0-9A-F]{6}", value), name
 
 
