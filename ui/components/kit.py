@@ -256,7 +256,9 @@ def _icon(icon, colour):
         return icon
     try:
         import qtawesome as qta
-        return qta.icon(icon, color=_qcolor(colour), color_disabled=_qcolor(colour, _DISABLED_ALPHA))
+        # scale_factor undoes qtawesome's 0.875 glyph factor: the mockup's svg.i fills its box
+        return qta.icon(icon, color=_qcolor(colour), color_disabled=_qcolor(colour, _DISABLED_ALPHA),
+                        scale_factor=K["icon_scale"])
     except Exception:
         return QIcon()
 
@@ -300,7 +302,9 @@ def _action_qss(variant, sm, icon_only):
     size = T["f_s"] if sm else K["f_btn"]
     return (
         f"QPushButton {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_m']}px;"
-        f" color: {tx}; font-size: {size}px; font-weight: 600; padding: 0 {pad}px; }}"
+        f" color: {tx}; font-size: {size}px; font-weight: 600; padding: 0 {pad}px;"
+        f" min-height: 0px; max-height: {T['h_ctl']}px; }}"
+        f"QPushButton::menu-indicator {{ image: none; width: 0px; }}"
         f"QPushButton:hover, QPushButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
         f"QPushButton:focus {{ border: 2px solid {T['mint']}; padding: 0 {max(pad - 1, 0)}px; }}"
         f"QPushButton:disabled {{ background: {_rgba(bg, _DISABLED_ALPHA)};"
@@ -323,7 +327,7 @@ class LabelledAction(_ReasonMixin, QPushButton):
         self.variant = variant
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(K["h_sm"] if sm else T["h_ctl"])
-        self.setIconSize(QSize(14, 14))
+        self.setIconSize(QSize(K["d_icon_s"], K["d_icon_s"]))
         if tooltip:
             self.setToolTip(tooltip)
         self._restyle()
@@ -369,10 +373,23 @@ class LabelledAction(_ReasonMixin, QPushButton):
         if icon is not None and icon.isNull():
             icon = None
         if self._swatch is None:
-            self.setIcon(icon if icon is not None else QIcon())
-            self.setIconSize(QSize(14, 14))
+            side, gap = K["d_icon_s"], K["gap_btn_icon"]
+            if icon is None:
+                self.setIcon(QIcon())
+                self.setIconSize(QSize(side, side))
+                return
+            # Qt puts ~4 px between icon and text; the transparent right margin makes it the mockup's 7 px
+            ratio = self.devicePixelRatioF() or 1.0
+            pm = QPixmap(int((side + gap) * ratio), int(side * ratio))
+            pm.setDevicePixelRatio(ratio)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            icon.paint(p, 0, 0, side, side)
+            p.end()
+            self.setIcon(QIcon(pm))
+            self.setIconSize(QSize(side + gap, side))
             return
-        side, sw, gap = 14, 12, 4
+        side, sw, gap = K["d_icon_s"], 12, 4
         width = (side + gap if icon is not None else 0) + sw
         ratio = self.devicePixelRatioF() or 1.0
         pm = QPixmap(int(width * ratio), int(side * ratio))
@@ -406,7 +423,7 @@ def _icon_qss(variant):
     bg, bd, _ic, hbg, hbd = _ICON_TONES[variant]
     return (
         f"QToolButton {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_m']}px;"
-        f" padding: 0; }}"
+        f" padding: 0; min-height: 0px; max-height: {T['h_ctl']}px; }}"
         f"QToolButton:hover, QToolButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
         f"QToolButton:focus {{ border: 2px solid {T['mint']}; }}"
         f"QToolButton:disabled {{ background: {_rgba(bg, _DISABLED_ALPHA)};"
@@ -426,7 +443,7 @@ class IconButton(_ReasonMixin, QToolButton):
         self.variant = variant
         side = K["h_ibtn_sm"] if sm else T["h_ctl"]
         self.setFixedSize(side, side)
-        self.setIconSize(QSize(14, 14) if sm else QSize(16, 16))
+        self.setIconSize(QSize(K["d_icon"], K["d_icon"]))
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(tooltip)
         self.setAccessibleName(tooltip)
@@ -754,10 +771,8 @@ class FieldLabel(QLabel):
         self.required = required
         font = QFont(self.font())
         font.setPixelSize(T["f_xs"])
-        font.setCapitalization(QFont.AllUppercase)
-        font.setLetterSpacing(QFont.PercentageSpacing, 108)
         self.setFont(font)
-        self.setStyleSheet(f"QLabel {{ color: {T['ink3']}; background: transparent; }}")
+        self.setStyleSheet(f"QLabel {{ color: {T['muted']}; background: transparent; margin-bottom: 4px; }}")
         if required:
             from html import escape
             self.setTextFormat(Qt.RichText)
@@ -788,7 +803,7 @@ class Input(QLineEdit):
             self._icon_label = QLabel(self)
             self._icon_label.setAttribute(Qt.WA_TransparentForMouseEvents)
             self._icon_label.setStyleSheet("background: transparent; border: none;")
-            self._icon_label.setFixedSize(14, 14)
+            self._icon_label.setFixedSize(K["d_icon"], K["d_icon"])
             self._paint_icon()
         self._relayout()
 
@@ -811,7 +826,7 @@ class Input(QLineEdit):
         icon = _icon(self._icon_spec, K["inp_icon"])
         if icon is not None:
             mode = QIcon.Normal if self.isEnabled() else QIcon.Disabled
-            self._icon_label.setPixmap(icon.pixmap(14, 14, mode))
+            self._icon_label.setPixmap(icon.pixmap(K["d_icon"], K["d_icon"], mode))
 
     def _relayout(self):
         left = K["pad_inp_icon"] - K["pad_inp"] if self._icon_label is not None else 0
@@ -824,7 +839,7 @@ class Input(QLineEdit):
 
     def _place(self):
         if self._icon_label is not None:
-            self._icon_label.move(11, (self.height() - 14) // 2)
+            self._icon_label.move(11, (self.height() - K["d_icon"]) // 2)
         if self._tail is not None:
             self._tail.move(self.width() - self._tail.width() - 6, (self.height() - self._tail.height()) // 2)
 
@@ -1341,7 +1356,7 @@ class Banner(QFrame):
         self.setObjectName("KitBanner")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(K["pad_banner_h"], K["pad_banner_v"], K["pad_banner_h"], K["pad_banner_v"])
-        lay.setSpacing(T["s_3"])
+        lay.setSpacing(K["gap_banner"])
         self._icon_name = icon
         self.icon_label = QLabel(self)
         self.icon_label.setFixedSize(K["d_banner_icon"], K["d_banner_icon"])
@@ -1400,7 +1415,7 @@ class Toast(QFrame):
         self.level = None
         lay = QHBoxLayout(self)
         lay.setContentsMargins(T["s_4"], K["pad_toast_v"], T["s_4"], K["pad_toast_v"])
-        lay.setSpacing(T["s_3"])
+        lay.setSpacing(K["gap_banner"])
         self.icon_label = QLabel(self)
         self.icon_label.setFixedSize(K["d_banner_icon"], K["d_banner_icon"])
         lay.addWidget(self.icon_label, 0, Qt.AlignVCenter)
@@ -1640,7 +1655,7 @@ class Chip(_ReasonMixin, QAbstractButton):
             bw = bfm.horizontalAdvance(str(self._count)) + 2 * K["pad_badge_h"]
             w += K["gap_chip"] + bw
         if self._has_menu:
-            w += K["gap_chip"] + 8
+            w += K["gap_chip"] + K["d_icon_s"]
         w += K["pad_chip_h"]
         return QSize(max(w, 28), T["h_chip"])
 
@@ -1717,18 +1732,15 @@ class Chip(_ReasonMixin, QAbstractButton):
 
         # Draw chevron
         if self._has_menu:
+            # the mockup's stroked chevron (pen 1.8, round caps) centred in a d_icon_s box
             cur_x += float(K["gap_chip"])
-            ch_w = 8.0
-            ch_h = 5.0
-            ch_y = (self.height() - ch_h) / 2.0
-            poly = QPolygonF([
-                QPointF(cur_x, ch_y),
-                QPointF(cur_x + ch_w, ch_y),
-                QPointF(cur_x + ch_w / 2.0, ch_y + ch_h),
-            ])
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(chevron_col))
-            p.drawPolygon(poly)
+            cx = cur_x + K["d_icon_s"] / 2.0
+            cy = self.height() / 2.0
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(QPen(chevron_col, 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.setBrush(Qt.NoBrush)
+            p.drawPolyline(QPolygonF([QPointF(cx - 3, cy - 1.5), QPointF(cx, cy + 1.5),
+                                      QPointF(cx + 3, cy - 1.5)]))
 
         p.end()
 
@@ -2099,11 +2111,11 @@ class UnsavedBar(QFrame):
         lay.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         self.icon_label = QLabel(self)
-        self.icon_label.setFixedSize(18, 18)
+        self.icon_label.setFixedSize(K["d_icon"], K["d_icon"])
         self.icon_label.setStyleSheet("QLabel { background: transparent; }")
         ic = _icon("mdi.alert-outline", K["unsaved_tx"])
         if ic is not None:
-            self.icon_label.setPixmap(ic.pixmap(18, 18))
+            self.icon_label.setPixmap(ic.pixmap(K["d_icon"], K["d_icon"]))
         lay.addWidget(self.icon_label)
 
         self.label = QLabel("0 unsaved changes", self)
@@ -2496,7 +2508,7 @@ class GridDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(QRectF(r).adjusted(0.5, 0.5, -0.5, -0.5), T["r_s"], T["r_s"])
             icon = action.icon if isinstance(action.icon, QIcon) else _cell_icon(action.icon, ink)
             if icon is not None and not icon.isNull():
-                side = 14
+                side = K["d_icon"]
                 icon.paint(painter, QRect(r.center().x() - side // 2 + 1, r.center().y() - side // 2 + 1,
                                           side, side))
         painter.setOpacity(1.0)
@@ -3103,7 +3115,7 @@ class IconTile(QLabel):
                            f" border-radius: {K['r_dlg_ic']}px; }}")
         ic = _icon(icon, fg)
         if ic is not None and not ic.isNull():
-            self.setPixmap(ic.pixmap(side // 2, side // 2))
+            self.setPixmap(ic.pixmap(K["d_icon_l"], K["d_icon_l"]))
 
 
 @lru_cache(maxsize=None)
@@ -3510,7 +3522,8 @@ class PageHeader(QFrame):
         self.count_label = QLabel(str(count), text)
         self.count_label.setObjectName("KitPageCount")
         self.count_label.setVisible(bool(count))
-        row.addWidget(self.count_label)
+        self.count_label.setFixedHeight(K["h_count"])
+        row.addWidget(self.count_label, 0, Qt.AlignVCenter)
         row.addStretch(1)
         col.addLayout(row)
         self.lead_label = _ElideLabel(lead, text)
@@ -3640,11 +3653,11 @@ class Tile(_ReasonMixin, QAbstractButton):
         return max(0, self.width() - 2 * self._pad()[0])
 
     def _value_height(self):
-        return round(QFontMetrics(self._value_font()).height() * 1.1)
+        return K["h_tile_num_sm"] if self._compact else K["h_tile_num"]
 
     def _height(self):
         floor = K["h_tile_sm"] if self._compact else K["h_tile"]
-        need = 2 * self._pad()[1] + self._value_height() + QFontMetrics(self._label_font()).height()
+        need = 2 * self._pad()[1] + self._value_height() + K["h_tile_lbl"]
         return max(floor, need)
 
     def _refresh(self):
@@ -3837,6 +3850,8 @@ class NavItem(QPushButton):
         self._icons = {}
         self._active = False
         self.setFixedHeight(K["h_nav"])
+        # paints itself; the app sheet's QDialog QPushButton min-height would make it 40 px in a dialog
+        self.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; border: none; background: transparent; }")
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.TabFocus)

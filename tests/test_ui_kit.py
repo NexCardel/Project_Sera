@@ -246,14 +246,16 @@ def _press(w, key):
     QTest.keyClick(w, key)
 
 
-def test_field_label_uppercase_required_and_buddy(app):
+def test_field_label_sentence_case_required_and_buddy(app):
     f = kit.Input()
     lab = kit.FieldLabel("Name of company", required=True, for_widget=f)
     assert lab.label_text == "Name of company"
-    assert lab.font().capitalization().name == "AllUppercase"
+    # the mockup's .lab: sentence case, muted, not upper-cased
+    assert lab.font().capitalization().name == "MixedCase"
     assert "*" in lab.text() and TOKENS["dangertx"] in lab.text()
     assert lab.buddy() is f
     assert kit.FieldLabel("PAN").text() == "PAN"
+    assert TOKENS["muted"] in lab.styleSheet()
 
 
 def test_input_height_icon_and_placeholder(app):
