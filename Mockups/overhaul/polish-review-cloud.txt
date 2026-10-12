@@ -1,0 +1,51 @@
+You are the designer who made the Sera fleet redesign mockup (Mockups/fleet/). The redesign has now been BUILT in the app (Python + PySide6 on Windows) by unattended agent sessions, following your Mockups/fleet/BUILD-PLAN.md. The owner's verdict: the layout matches, but everything is rough around the edges and does not have the visual harmony your HTML promised.
+
+Your job: REVIEW the built UI against your mockup and write a precise FIX PLAN. Do not change app code in this session.
+
+SETUP
+- git checkout ui-overhaul, git pull, then git checkout -b polish-plan.
+- Write only inside Mockups/fleet/polish/. Do not edit any other file.
+- At the end push only this branch: git push -u origin polish-plan. Never push to ui-overhaul or main, never merge, never force-push.
+
+WHAT YOU HAVE (all rendered on 2026-10-12 from the current ui-overhaul branch)
+- Your design: Mockups/fleet/index.html, Mockups/fleet/README.md, Mockups/fleet/BUILD-PLAN.md.
+- Your design as pictures: Mockups/fleet/renders/<screen>.png, one per screen of index.html (1700x950 page; the app frame is the 1366x768 area inside it; WIDE mode, scale 100 %, admin on). Names match the index.html screen ids: kit, search, panel, manage, tracker, display, set-general ... loading.
+- The built app as pictures:
+  - Mockups/built/sized/: the real app shell at 1366x768 and 1024x700, plus 1366x768 at display scale 1.25 (search = All Clients, admin = Manage Clients, tracker_dump = Tracker Dump with sample rows). These are the best like-for-like comparison.
+  - Mockups/built/*.png: every screen and dialog on its own (01_all_clients_search, 02_manage_clients_admin, 03_tracker_dump, 04_client_detail_panel, settings_*, dlg_*). Rendered offscreen with fictional data. Admin mode was off, so admin-only sidebar items are missing; that is expected.
+  - Mockups/built/kit/*.png: the component kit gallery, every component in every state.
+  - Mockups/built/<area>/ subfolders: older per-package goldens, for reference only.
+- Today's screens before the redesign: Mockups/current/.
+- The code: ui/utils/tokens.py (the token values), ui/components/kit.py (every component; read its docstring first), ui/shell/sidebar.py, and the screens in ui/windows/ and ui/dialogs/.
+- The build history: Mockups/IMPLEMENTATION.md section 11 (hand-off notes), Mockups/overhaul/ui-overhaul-decisions.csv and ui-overhaul-checks.csv, Mockups/MERGE-READINESS.md.
+
+WHAT THE OWNER AND THE LAST REVIEWER ALREADY SAW (confirm or correct, then go further)
+- Icons render too small (about 8-10 px where the mockup uses about 16 px): search magnifier, Columns, sidebar icons.
+- Type sits off the scale: chips, sidebar items and buttons look a size smaller and lighter than the mockup; headings are close.
+- Spacing is uneven: chips are shorter with tighter padding, the search box is thin, the empty selection bar is a tall box instead of a slim bar, gaps between groups differ per screen.
+- The All Clients grid crowds its columns (names truncate) and shows password columns in clear; the mockup leaves those columns out by default.
+- Colour accents (active sidebar marker, switch on-state) are not carried through consistently.
+The suspected root cause: each package was built in a fresh session judged by tests, and nobody compared pixels with the mockup. Most fixes should therefore land in tokens.py and kit.py once, not per screen.
+
+HOW TO REVIEW
+1. Extract the real numbers from index.html (its :root tokens and each component's CSS: font size and weight, line height, padding, height, gap, radius, border, icon size, colours). Compare them with ui/utils/tokens.py and the sizes hard-coded in kit.py. Note every mismatch with file and line.
+2. Compare picture pairs screen by screen, starting with the daily screens: sidebar, All Clients, Client detail, Tracker Dump, Manage Clients; then Settings, then the dialogs. For each screen list what differs: size, weight, spacing, alignment, icon, colour, column widths, empty states, anything that breaks harmony.
+3. For each difference, decide where it is fixed: a token, a kit component, the sidebar, or the screen. Prefer the token or kit fix that repairs many screens at once.
+4. Note honestly what Qt cannot reproduce exactly (soft shadows, letter spacing, CSS transitions, sub-pixel borders) and give the closest Qt approach.
+5. Respect the rules in Mockups/IMPLEMENTATION.md section 1 and BUILD-PLAN.md section 2 (tokens only, no literal stylesheets in screens, no behaviour changes, same attribute names).
+
+DELIVERABLES (in Mockups/fleet/polish/)
+1. POLISH-PLAN.md:
+   - a one-paragraph verdict;
+   - a table of token changes (name, current value, mockup value, why);
+   - per kit component: what to change, with the exact numbers;
+   - per screen: the remaining differences after the token and kit fixes, each with the exact fix;
+   - the Qt-cannot-do list with the closest approach;
+   - work packages in the same table format as BUILD-PLAN.md (WP id P-1, P-2 ..., model tier opus / sonnet / haiku, kind, size, deps, what), ordered so the token and kit fixes come first and every package ends with a side-by-side render check against Mockups/fleet/renders/;
+   - a short list of decisions the owner must take (for example: hide password columns in All Clients by default).
+2. Optional: annotated side-by-side images (mockup left, built right, with numbered marks) for the five daily screens, as PNGs in Mockups/fleet/polish/. Keep each under 1 MB.
+
+FINISH
+Commit Mockups/fleet/polish with the message: Fleet polish review and fix plan, and the last line of the message: Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Then: git push -u origin polish-plan
+Final message: the verdict, the top ten fixes by visual impact, the number of work packages, and the owner decisions.

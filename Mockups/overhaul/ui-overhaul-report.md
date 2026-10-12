@@ -1,4 +1,4 @@
-# UI overhaul — report (2026-10-12 12:13)
+# UI overhaul — report (2026-10-12 12:49)
 
 Deadline: 2026-10-12T23:00:00+05:30
 
@@ -6,11 +6,11 @@ Deadline: 2026-10-12T23:00:00+05:30
 | :--- | ---: |
 | Not started | 0 |
 | In progress | 0 |
-| Retry | 1 |
-| Done | 35 |
+| Retry | 0 |
+| Done | 36 |
 | Blocked | 0 |
 
-Runs: 45   output tokens: 2032990   API-equivalent cost: $155.76
+Runs: 46   output tokens: 2044650   API-equivalent cost: $156.85
 
 | WP | Status | Model | Commit | What | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -49,9 +49,7 @@ Runs: 45   output tokens: 2032990   API-equivalent cost: $155.76
 | S-R | Done | opus | fbcb288 | Review phase S (screens) | Phase S reviewed: controls all kept; ~125 QMessageBox -> kit.MessageBox (owner Q3); Settings literal QSS dropped; tracker autofill emerald; rules test 76; suite |
 | F-1 | Done | mechanical | 91f3522 | Finish: Rewrite docs/Sera_UI.md from the kit docstring and tokens; update Mockups/README.md and ... | Rewrote docs/Sera_UI.md, updated statuses to built in README and BUILD-PLAN, removed legacy settings_dialog.py |
 | F-2 | Done | mechanical | 507b259 | Finish: Real screenshots of every screen into Mockups/built/ (fictional data). | Screenshots of every screen regenerated at HEAD with fictional data; display scale dialog added; clipped sub-label recorded for R-3 |
-| F-R | Retry | opus |  | Review phase F (finish) | attempt 1: no finish. The full suite is still running in the background (about 220 of 3643 tests done), and I'll pick up when it finishes. So far:
-
-- **Merge co |
+| F-R | Done | opus | 717ffd8 | Review phase F (finish) | Mockups/MERGE-READINESS.md: ready after 2 documented conflict fixes; ARN switch ported; suite 3505/137 fail (all outside branch) |
 
 ## Decisions taken for you
 
