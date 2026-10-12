@@ -11,7 +11,7 @@ Deterministic extraction and optical character confusion self-repair for:
 """
 
 import re
-from typing import Optional, Dict, Tuple, List
+from typing import Any, Optional, Dict, Tuple, List
 from .vsdc_name_parser import is_valid_name, sanitize_visual_name
 
 
