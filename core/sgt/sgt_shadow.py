@@ -104,7 +104,7 @@ IDLE_END_SEC = 2 * 3600
 IDLE_REASON = "idle 2 hr"
 CLIENT_LINK_SPEC = "client_db:user_id"       # the "spec" of a PAN / GSTIN taken from the saved client that owns the portal user ID
 IDENTITY_PROBLEM = "form and period are not known yet"      # why an ack-only row waits (see _queue)
-RESUME_WINDOW_SEC = 4 * 3600
+RESUME_WINDOW_SEC = 8 * 3600
 # Portals whose pages are never read by OCR: a canvas read there loses the label markers
 # ("Period •") and used to clear values the accessibility tree had just set (GST bug, 2026-10-06).
 # A blind page of these portals is simply not read.

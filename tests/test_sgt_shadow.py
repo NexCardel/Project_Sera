@@ -863,7 +863,7 @@ class TestIdleResume:
     def test_gap_exceeding_resume_window_does_not_resume(self, tmp_path):
         r = Rig(tmp_path)
         r.see(PROFILE_URL, PROFILE_PAGE, shade=90)
-        # Gap > RESUME_WINDOW_SEC (4 hours + 1s)
+        # Gap > RESUME_WINDOW_SEC (8 hours + 1s)
         r.see(FILED_URL, filed_page()[1:], shade=100, advance=RESUME_WINDOW_SEC + 1)
         r.sgt.end_all("test")
         assert len(r.events("session_resumed")) == 0
