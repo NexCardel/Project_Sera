@@ -1,8 +1,8 @@
 {
-  "version": "2.12.8",
+  "version": "2.12.9",
   "min_required_version": "2.9.9",
   "mandatory": false,
-  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.12.8/Amas_Sera_Setup_v2.12.8.exe",
-  "sha256": "a2054359ea7d21650048b17e350437c83a7d4b15886ddbb25c42515bdef7222a",
-  "release_notes": "Project Sera v2.12.8: GST login username linked to the master DB company, SGT abrupt-close safety, unattended ARN-row fixer."
+  "download_url": "https://github.com/NexCardel/Project_Sera/releases/download/v2.12.9/Amas_Sera_Setup_v2.12.9.exe",
+  "sha256": "78a264a4da7791924c4e6a59d2f892f86af6395cf0266bee73f0120a3c043306",
+  "release_notes": "Project Sera v2.12.9: Screentime tab (when Sera was open on each PC), SGT records the capture browser and no longer doubles a name printed twice, staff PCs delete the SDIS corpus instead of sending it, ARN fixer switch."
 }
