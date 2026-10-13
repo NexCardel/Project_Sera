@@ -503,8 +503,16 @@ class VSDCRouter:
                                   resolve_client=getattr(self, "_client_lookup", None))
             self._apply_sgt_i()
             self._apply_scc()
+        # Which tab of the window is in front: SGT keeps one session per tab, so a page that
+        # names no client never feeds the client of the tab the user came from. When UIA is
+        # still busy with a slow page read, the tab cannot be told and the page could not be
+        # read either - SGT simply looks again next tick.
+        tab = vsdc_uia_text.selected_tab_id(hwnd)
+        if tab is None and vsdc_uia_text.was_busy():
+            return
+        self.diag_tick["tab"] = "known" if tab else "unknown"
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
-                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
+                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title, tab=tab)
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0

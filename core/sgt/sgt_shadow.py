@@ -245,7 +245,17 @@ class _Session:
     confirmed: bool = False             # the client's identity may go on rows
     confirm_note: str = ""
     browser: str = ""                   # the window's browser ('chrome', 'msedge', 'firefox'); on every row and log line
-    strict: bool = False                # born from a contradiction: a single sighting never confirms
+    # Born from a contradiction (another client's PAN/GSTIN with no session of its own here). The
+    # values that caused it are not taken from the read that caused it. When the tab is known, not
+    # from that page's re-reads either (strict_block) - a stray PAN/GSTIN (a supplier in a table)
+    # is the same evidence on every re-read; see the clash branch of _observe for why not without
+    # a tab id. Any OTHER page that shows them names it at once (one sighting, user rule 2026-09-22).
+    strict: bool = False
+    strict_block: Dict[str, Any] = field(default_factory=dict)    # {"url": ..., "values": {key: value}}
+    # The browser tabs this session is the one for (vsdc_uia_text.selected_tab_id). A tab opened
+    # from it joins it (same login); switching to another tab brings that tab's own session back.
+    tabs: Set[str] = field(default_factory=set)
+    unread_tabs: Set[str] = field(default_factory=set)   # joined, not read yet (see _observe's clash)
     # SDIS dataset containers and Others values (core/sgt/sgt_containers.py, blueprint S.2/S.4)
     sdis: ContainerSession = field(default_factory=ContainerSession)
 
@@ -343,6 +353,9 @@ class SgtShadow:
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
+        # Tabs whose session ended (insertion-ordered, capped): seen again, they start a session of
+        # their own instead of joining the one in view (_retire_tabs).
+        self._retired_tabs: Dict[str, None] = {}
         # Counts since the last capture-worker heartbeat (core/vsdc/vsdc_diag, logs/vsdc.log):
         # counts and the portal only, never a page's text.
         self._diag: Dict[str, Any] = self._fresh_diag()
@@ -378,9 +391,11 @@ class SgtShadow:
 
     # ── Entry points ─────────────────────────────────────────────────────────────
     def observe(self, hwnd: int, portal: Optional[str], url: str, frame: Any = None,
-                ocr: Any = None, title: str = "") -> Optional[PageResult]:
+                ocr: Any = None, title: str = "", tab: Optional[str] = None) -> Optional[PageResult]:
+        """tab: the id of the browser tab in front (None = not known: the window is one session,
+        as before tabs were told apart)."""
         try:
-            return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "")
+            return self._observe(hwnd, portal or "", url or "", frame, ocr, title or "", tab or None)
         except Exception as e:                  # shadow mode must never disturb capture
             self._echo(f"[SGT] {self._tag} error, page skipped: {e}")
             return None
@@ -429,13 +444,16 @@ class SgtShadow:
         return back
 
     def _unshelve(self, hwnd: int, portal: str, key: Optional[str] = None,
-                  value: Optional[str] = None) -> Optional[_Session]:
+                  value: Optional[str] = None, tab: Optional[str] = None) -> Optional[_Session]:
         """The most recently seen set-aside session of this window for `portal` (and, with
-        `key`/`value`, for that client PAN / GSTIN), taken off the shelf - or None."""
+        `key`/`value`, for that client PAN / GSTIN), taken off the shelf - or None. With `tab`,
+        only a session that is that tab's own, or one that never learnt its tabs; a client match
+        (`key`) needs no tab - the same client's page belongs to its session in any tab."""
         aside = self._shelf.get(hwnd) or []
         fit = [x for x in aside
                if (not portal or not x.portal or x.portal == portal)
-               and (key is None or (x.profile.get(key) or {}).get("value") == value)]
+               and (key is None or (x.profile.get(key) or {}).get("value") == value)
+               and (key is not None or not tab or not x.tabs or tab in x.tabs)]
         if not fit:
             return None
         pick = max(fit, key=lambda x: x.last_seen)
@@ -444,8 +462,28 @@ class SgtShadow:
             self._shelf.pop(hwnd, None)
         return pick
 
+    def _claim_tab(self, hwnd: int, s: _Session, tab: Optional[str]) -> None:
+        """`tab` is s's from now on - and no other session's of this window."""
+        if not tab:
+            return
+        s.tabs.add(tab)
+        self._retired_tabs.pop(tab, None)
+        for x in self._shelf.get(hwnd) or []:
+            if x is not s:
+                x.tabs.discard(tab)
+
+    def _retire_tabs(self, s: _Session) -> None:
+        """s has ended: a tab of its, seen again, is not joined to whatever session is in view -
+        its page is from a login that is over (or from the one that replaced it), so it starts a
+        session of its own that names its client only from what it shows."""
+        for t in s.tabs:
+            self._retired_tabs[t] = None
+        while len(self._retired_tabs) > 500:
+            self._retired_tabs.pop(next(iter(self._retired_tabs)))
+
     # ── One tick ─────────────────────────────────────────────────────────────────
-    def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "") -> Optional[PageResult]:
+    def _observe(self, hwnd: int, portal: str, url: str, frame: Any, ocr: Any, title: str = "",
+                 tab: Optional[str] = None) -> Optional[PageResult]:
         now = self._clock()
         if self._state_dirty:
             self._save_state()              # the last change before a still page must not wait for the next one
@@ -453,12 +491,31 @@ class SgtShadow:
         self._end_idle(now)
         self._daily_health_check()
         s = self._sessions.get(hwnd)
+        if tab and s is not None and s.tabs and tab not in s.tabs:
+            # The window shows another of its tabs. Each tab has its own session (2026-10-13): a
+            # page that names no client must never feed the client of the tab the user came from.
+            owner = self._unshelve(hwnd, "", tab=tab) if any(
+                tab in x.tabs for x in self._shelf.get(hwnd) or []) else None
+            if owner is not None:
+                self._shelve(hwnd, s)
+                s = self._sessions[hwnd] = owner
+                self._echo(f"[SGT] {self._tag} another tab: back on its own session")
+            elif tab in self._retired_tabs:
+                self._shelve(hwnd, s)
+                self._sessions.pop(hwnd, None)
+                s = None
+                self._echo(f"[SGT] {self._tag} a tab whose session ended: a new session for it")
+            else:
+                # A tab never seen before: opened from the session in view, under the same login -
+                # it joins that session (claimed below). Until its first page is read: one that
+                # names another client makes it that client's tab (a tab open before Sera started).
+                s.unread_tabs.add(tab)
         if s is not None and portal and s.portal and portal != s.portal:
             # The window is on another portal (another tab). That is NOT a boundary: this
             # session is set aside, and the one the window had on that portal comes back. An
             # empty session (say, opened on the GST login page before going to the ITR portal)
             # just takes the portal it is on.
-            back = self._unshelve(hwnd, portal)
+            back = self._unshelve(hwnd, portal, tab=tab)
             if s.has_content:
                 self._shelve(hwnd, s)
                 s = back
@@ -483,7 +540,7 @@ class SgtShadow:
                 s = None
         if s is None and not (url and (_LOGIN.search(url) or _LOGOUT.search(url))):
             # A session of this window that was set aside for this portal comes back.
-            s = self._unshelve(hwnd, portal)
+            s = self._unshelve(hwnd, portal, tab=tab)
             if s is not None:
                 self._sessions[hwnd] = s
         if s is None:
@@ -492,7 +549,8 @@ class SgtShadow:
             cands = self._parked.get(hwnd) or []
             if cands:
                 fit = [c for c in cands
-                       if not portal or not c[1].get("portal") or portal == c[1].get("portal")]
+                       if (not portal or not c[1].get("portal") or portal == c[1].get("portal"))
+                       and (not tab or not c[1].get("tabs") or tab in c[1]["tabs"])]
                 rest = [c for c in cands if c not in fit]
                 if rest:
                     self._parked[hwnd] = rest
@@ -533,6 +591,7 @@ class SgtShadow:
         if not s.browser:
             s.browser = _browser_of(hwnd)
         s.last_seen = now
+        self._claim_tab(hwnd, s, tab)
 
         url_changed = url != s.last_url
         if url_changed:
@@ -614,6 +673,13 @@ class SgtShadow:
         # client, a different value means this window is now on another client.
         skip = (set(s.profile) & registry.latching_fields()) - set(_CLIENT_KEYS)
         res = resolve_page(registry, lines, portal, url, today, skip_profile=skip, title=title)
+        block = s.strict_block if s.strict else None
+        if block and url == block.get("url"):
+            # The page that started this session, read again: its clashing PAN/GSTIN still does
+            # not name it (see _Session.strict).
+            for k, v in (block.get("values") or {}).items():
+                if getattr(res.profile.get(k), "value", None) == v:
+                    res.profile.pop(k, None)
         if self._stats is not None:
             self._stats.record_hits(portal, [h.spec for h in res.profile.values()]
                                     + [h.spec for h in res.current.values()]
@@ -623,18 +689,36 @@ class SgtShadow:
             # Another client's PAN/GSTIN: this window moved to someone else without passing a
             # login page (another tab). That is not a boundary either: the session is set aside
             # untouched, and the window's own session for that client comes back if it has one.
-            # Otherwise a new one starts that must see its client twice; the clashing value is NOT
-            # taken from this page - a stray GSTIN (a supplier in a table) must not name it.
+            # Otherwise a new one starts (strict): the clashing value is NOT taken from this page,
+            # not even when it is read again - a stray GSTIN (a supplier in a table) must not name
+            # it. Another page that shows it names it at once.
             seen = getattr(res.profile.get(clash), "value", None)
+            first_read = bool(tab) and tab in s.unread_tabs
+            s.unread_tabs.discard(tab)
             self._shelve(hwnd, s)
             back = self._unshelve(hwnd, portal, key=clash, value=seen) if seen else None
             if back is not None:
                 s = self._bring_back(hwnd, back, url, h, now)
+            elif first_read:
+                # The first page of a tab that had only joined the session in view: it is simply
+                # that client's tab, named from this page like any session's first page.
+                s = self._sessions[hwnd] = _Session(portal=portal, last_url=url, last_hash=h, last_read=now,
+                                                    timeline=[url] if url else [])
             else:
-                s = self._sessions[hwnd] = _Session(portal=portal, strict=True, last_url=url, last_hash=h,
-                                                    last_read=now, timeline=[url] if url else [])
+                # The re-reads of this page are blocked too, but only when the tab is known: then a
+                # switch to another client's tab never comes this way (each tab has its session), so
+                # this is a clash INSIDE one tab - most likely a stray row, the same evidence again
+                # on every re-read. With no tab id, two clients' tabs are told apart only by this
+                # path, and GST gives every client's welcome page the same link - blocking it would
+                # leave the second client unnamed (test_two_gst_clients_in_two_tabs_never_end_or_mix).
+                blocked = {k: getattr(res.profile.get(k), "value", None) for k in _CLIENT_KEYS} if tab else {}
+                s = self._sessions[hwnd] = _Session(
+                    portal=portal, strict=True, last_url=url, last_hash=h, last_read=now,
+                    timeline=[url] if url else [],
+                    strict_block={"url": url, "values": {k: v for k, v in blocked.items() if v}} if tab else {})
                 for k in _CLIENT_KEYS:
                     res.profile.pop(k, None)
+            self._claim_tab(hwnd, s, tab)
         elif not res.is_list:
             # A session that has no client yet (one born from a stray PAN/GSTIN, say) meets the
             # page of a client this window already has a session for: that session comes back.
@@ -645,7 +729,9 @@ class SgtShadow:
                     if back is not None:
                         self._shelve(hwnd, s)       # nothing to keep when it is still empty
                         s = self._bring_back(hwnd, back, url, h, now)
+                        self._claim_tab(hwnd, s, tab)
                         break
+        s.unread_tabs.discard(tab)
         s.conflicts += len(res.conflicts)
         self._page_pans = {p for ln in lines for p in _PAN_TOKEN.findall(ln or "")}
         self._foreign_pans = self._other_pans_on_page(s, res, lines)
@@ -1687,6 +1773,7 @@ class SgtShadow:
         }
 
     def _finish(self, s: _Session, reason: str) -> None:
+        self._retire_tabs(s)
         if not s.has_content:
             return
         if not self._client_pan(s):
@@ -1889,6 +1976,7 @@ def _session_to_json(s: _Session) -> Dict[str, Any]:
         "session_id": s.session_id, "started": s.started, "last_seen": s.last_seen, "portal": s.portal,
         "profile": s.profile, "timeline": s.timeline, "last_url": s.last_url,
         "confirmed": s.confirmed, "confirm_note": s.confirm_note, "strict": s.strict, "browser": s.browser,
+        "strict_block": s.strict_block, "tabs": sorted(s.tabs),
         "slots": [{"values": sl.values, "record": sl.record, "confidence": sl.confidence,
                    "first_page": sl.first_page, "sent_key": sl.sent_key, "held": sl.held,
                    "claimed": sl.claimed, "waived": sl.waived} for sl in s.slots],
@@ -1908,6 +1996,8 @@ def _session_from_json(raw: Dict[str, Any]) -> _Session:
     s.timeline = list(raw.get("timeline") or [])
     s.last_url = str(raw.get("last_url") or "")
     s.confirmed, s.confirm_note, s.strict = bool(raw.get("confirmed")), str(raw.get("confirm_note") or ""), bool(raw.get("strict"))
+    s.strict_block = dict(raw.get("strict_block") or {})
+    s.tabs = set(raw.get("tabs") or [])
     for sl in raw.get("slots") or []:
         s.slots.append(_Slot(dict(sl["values"]), sl.get("record") or CURRENT_RECORD, int(sl.get("confidence") or 0),
                              sl.get("first_page") or "", sl.get("sent_key"), sl.get("held"), sl.get("claimed"),
