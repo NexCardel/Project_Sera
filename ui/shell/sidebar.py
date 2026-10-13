@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QScrollArea
 )
 
-from ui.components.kit import IconButton, LabelledAction, NavItem, NavLabel, Switch, sidebar_qss
+from ui.components.kit import IconButton, LabelledAction, NavItem, NavLabel, Switch, dot_icon, sidebar_qss
 from ui.utils.tokens import KIT, TOKENS
 
 SIDEBAR_WIDTH = TOKENS["w_side"]
@@ -90,7 +90,8 @@ class Sidebar(QFrame):
 
     def _build_ui(self):
         self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(KIT["pad_sb_h"], KIT["pad_sb_top"], KIT["pad_sb_h"], KIT["pad_sb_bot"])
+        # side margins are per child (_pad_row) so the nav scroll area can reach the sidebar's edge
+        self.main_layout.setContentsMargins(0, KIT["pad_sb_top"], 0, KIT["pad_sb_bot"])
         self.main_layout.setSpacing(0)
 
         # Title / Brand
@@ -132,7 +133,7 @@ class Sidebar(QFrame):
         brand_layout.addWidget(logo)
         brand_layout.addLayout(names, stretch=1)
         brand_layout.addWidget(self.btn_toggle_sidebar)
-        self.main_layout.addWidget(brand)
+        self._pad_row(brand)
 
         # Admin Toggle (Top Area)
         admin_row = QWidget()
@@ -148,12 +149,12 @@ class Sidebar(QFrame):
         self.admin_layout.addWidget(self.lbl_admin)
         self.admin_layout.addStretch()
         self.admin_layout.addWidget(self.toggle_admin)
-        self.main_layout.addWidget(admin_row)
+        self._pad_row(admin_row)
 
         divider = QFrame()
         divider.setObjectName("SidebarDivider")
         divider.setFrameShape(QFrame.HLine)
-        self.main_layout.addWidget(divider)
+        self._pad_row(divider)
 
         # Scroll Area for Buttons
         self.scroll_area = QScrollArea()
@@ -166,8 +167,9 @@ class Sidebar(QFrame):
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("SidebarScrollContent")
         self.layout = QVBoxLayout(self.scroll_content)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(2)
+        # no left margin (the edge bar sits on the sidebar's edge); the right keeps the items 10 px in
+        self.layout.setContentsMargins(0, 0, KIT["pad_sb_h"], 0)
+        self.layout.setSpacing(0)
 
         self.scroll_area.setWidget(self.scroll_content)
         self.main_layout.addWidget(self.scroll_area)
@@ -204,7 +206,7 @@ class Sidebar(QFrame):
         footer_divider = QFrame()
         footer_divider.setObjectName("SidebarDivider")
         footer_divider.setFrameShape(QFrame.HLine)
-        self.main_layout.addWidget(footer_divider)
+        self._pad_row(footer_divider)
         self.main_layout.addSpacing(KIT["pad_sb_bot"])
         self.profile_row = QWidget()
         self.profile_row.setObjectName("SidebarProfileRow")
@@ -222,15 +224,15 @@ class Sidebar(QFrame):
         profile_layout.addWidget(profile)
         profile_layout.addWidget(self.profile_name, stretch=1)
         self.profile_row.installEventFilter(self)
-        self.main_layout.addWidget(self.profile_row)
+        self._pad_row(self.profile_row)
         self.main_layout.addSpacing(8)
 
         self.sync_status_badge = LabelledAction(
-            _SYNC_IDLE_TEXT, variant="soft", sm=True, icon="mdi.circle-medium",
+            _SYNC_IDLE_TEXT, variant="soft", sm=True, icon=dot_icon("ok"),
             tooltip="Sera LAN Mesh • Live Link Active\nClick to Broadcast Sync with LAN Peers")
         self.sync_status_badge.setObjectName("SyncDeckPill")
         self.sync_status_badge.clicked.connect(self._on_sync_pill_clicked)
-        self.main_layout.addWidget(self.sync_status_badge)
+        self._pad_row(self.sync_status_badge)
         self.main_layout.addSpacing(8)
 
         # App version, so staff (and a two-PC sync test) can tell which build a PC runs --
@@ -239,7 +241,7 @@ class Sidebar(QFrame):
         self.version_lbl = QLabel(f"v{APP_VERSION}")
         self.version_lbl.setObjectName("SidebarVersion")
         self.version_lbl.setAlignment(Qt.AlignCenter)
-        self.main_layout.addWidget(self.version_lbl)
+        self._pad_row(self.version_lbl)
 
         self._update_visibility()
 
@@ -324,8 +326,18 @@ class Sidebar(QFrame):
         self.toggle_admin.setChecked(self._admin_mode)
         self.toggle_admin.blockSignals(False)
 
+    def _pad_row(self, widget):
+        """Adds a widget to the sidebar column with the sidebar's side padding."""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(KIT["pad_sb_h"], 0, KIT["pad_sb_h"], 0)
+        lay.setSpacing(0)
+        lay.addWidget(widget)
+        self.main_layout.addWidget(row)
+
     def _create_nav_button(self, text, signal, icon_name=None, hint=None) -> NavItem:
-        btn = NavItem(text, icon=icon_name, hint=hint)
+        # the mockup's .nav::before bar sits on the sidebar's edge, 10 px left of the item
+        btn = NavItem(text, icon=icon_name, hint=hint, edge_inset=KIT["pad_sb_h"])
         btn.clicked.connect(signal.emit)
         btn.clicked.connect(lambda _checked=False, button=btn: self._set_active_button(button))
         self.layout.addWidget(btn)

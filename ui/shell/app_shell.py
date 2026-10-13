@@ -140,8 +140,9 @@ class AppShell(QWidget):
         self.slide_panel = SlidePanel(parent=self)
 
         # 4. Sera Alert Notification System
-        from ui.components.toast import SeraAlert
-        self.alert = SeraAlert(self)
+        # the kit's Toast (same API as the old SeraAlert, mockup colours)
+        from ui.components.kit import Toast
+        self.alert = Toast(self)
         self.toast = self.alert  # Backward compatibility alias
 
     def toggle_sidebar(self):

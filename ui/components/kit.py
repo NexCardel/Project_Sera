@@ -331,6 +331,8 @@ class LabelledAction(_ReasonMixin, QPushButton):
         self.variant = variant
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(K["h_sm"] if sm else T["h_ctl"])
+        # focus-visible: a click does not leave the mint ring behind, Tab still reaches the button
+        self.setFocusPolicy(Qt.TabFocus)
         self.setIconSize(QSize(K["d_icon_s"], K["d_icon_s"]))
         if tooltip:
             self.setToolTip(tooltip)
@@ -465,6 +467,7 @@ class IconButton(_ReasonMixin, QToolButton):
         self.variant = variant
         side = K["h_ibtn_sm"] if sm else T["h_ctl"]
         self.setFixedSize(side, side)
+        self.setFocusPolicy(Qt.TabFocus)
         self.setIconSize(QSize(K["d_icon"], K["d_icon"]))
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(tooltip)
