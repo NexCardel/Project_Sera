@@ -32,7 +32,6 @@ def test_importing_the_app_does_not_load_the_capture_engines():
 
 def test_the_dialogs_package_does_not_load_the_capture_engines():
     assert "core.vsdc" not in _modules_after("import ui.dialogs.csv_import_dialog")
-    assert "core.vsdc" in _modules_after("from ui.dialogs import AISettingsDialog")   # still works
 
 
 class TestDatabaseOpen(unittest.TestCase):
@@ -72,9 +71,8 @@ def test_the_hidden_tracker_page_fills_when_first_shown():
         security.generate_and_save_salt(salt)
         key = security.derive_key_hex("testpass123", security.load_salt(salt))
         db = SeraDatabase(os.path.join(tmp, "m.db"), key, raw_db_path=os.path.join(tmp, "rawPayload.db"))
-        with patch.object(tdw, "_request_live_feed_export", lambda: None), \
-                patch.object(tdw.TrackerDumpWindow, "load_data", autospec=True,
-                             side_effect=tdw.TrackerDumpWindow.load_data) as load:
+        with patch.object(tdw.TrackerDumpWindow, "load_data", autospec=True,
+                          side_effect=tdw.TrackerDumpWindow.load_data) as load:
             win = tdw.TrackerDumpWindow(db, defer_first_load=True)
             assert load.call_count == 0
             win.show()

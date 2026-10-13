@@ -176,6 +176,8 @@ def nodes_from_uia(docs: Sequence[Sequence[Dict[str, Any]]]) -> List[Node]:
             if d.get("heading"):
                 role = "heading"
             landmark = _ARIA_LANDMARK.get(aria) or _UIA_LANDMARK.get(d.get("landmark") or 0, "")
+            if d.get("own"):
+                landmark = "navigation"    # Sera's own injected panel: never portal content
             parent = d.get("parent", -1)
             parent = base + parent if parent >= 0 else -1
             grid = d.get("grid")

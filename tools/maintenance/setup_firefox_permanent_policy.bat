@@ -27,6 +27,18 @@ IF NOT EXIST "%DIST_DIR%" (
     mkdir "%DIST_DIR%"
 )
 
+:: Firefox only accepts a Mozilla-signed xpi: build it with  python build_tools/sign_firefox.py
+SET "SIGNED_XPI=%~dp0..\..\package_assets\extension\ProjectSeraCompanion.signed.xpi"
+IF EXIST "%SIGNED_XPI%" (
+    IF NOT EXIST "C:\Users\Nex\AmanAssociates_Sera" mkdir "C:\Users\Nex\AmanAssociates_Sera"
+    copy /Y "%SIGNED_XPI%" "%XPI_FILE%" >nul
+    echo Copied signed xpi to "%XPI_FILE%"
+) ELSE IF NOT EXIST "%XPI_FILE%" (
+    echo [ERROR] No signed xpi found. Run: python build_tools/sign_firefox.py
+    pause
+    exit /b 1
+)
+
 echo Writing policies.json...
 (
 echo {

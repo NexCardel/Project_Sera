@@ -5,6 +5,10 @@ App entry point for Project Sera.
 """
 
 import sys
+# SDIS "Find datapoints" (Part O): the app's own program started as a mining child, before Qt or the database.
+if '--sdis-mine' in sys.argv:
+    from core.sdis.mine_process import run
+    sys.exit(run(sys.argv))
 import os
 import socket
 import json
@@ -32,8 +36,10 @@ except Exception:
     qta = None
 # Only the Material Design icon font is used; loading qtawesome's other 11 costs ~15 MB.
 from ui.utils.icon_fonts import restrict_icon_fonts
+from ui.utils.ui_scale import choose_startup_scale, next_manual_value, read_settings, write_settings, MODE_MANUAL
 restrict_icon_fonts()
 from core.memlog import mark as memory_mark
+from core import startup_boost
 
 def _safe_qta_icon(icon_name, color=None):
     if qta is not None:
@@ -53,9 +59,17 @@ class SyncSignalBridge(QObject):
     update_found_signal = Signal(dict)
     update_ready_signal = Signal(str, dict)
     maintenance_done_signal = Signal()
+    # The ARN-row fixer (core/sdis/arn_autofix.py) changed tracker rows on its thread: refresh the view.
+    arn_autofix_done_signal = Signal(int)
     join_approval_signal = Signal(str, str, str, object)
     # SyncEngine's "synced" event (P3-5/P3-8): sorted list of tables an applied batch touched.
     engine_synced_signal = Signal(list)
+    # A message from the sync engine's thread for the toast (text, level); stays until dismissed.
+    engine_alert_signal = Signal(str, str)
+    # An SCC save (core/scc/save.py) from SCC-U's thread: client id, client name, PAN, outcome.
+    scc_saved_signal = Signal(int, str, str, str)
+    # SGT saw a LOWER status for a filing that has an ARN: ask before lowering it (info dict).
+    sgt_demotion_signal = Signal(dict)
 
 import security
 from database import SeraDatabase
@@ -173,6 +187,11 @@ class SeraApp:
             except Exception:
                 pass
 
+        # Per-PC UI scale for small screens (ui/utils/ui_scale.py). Must run before QApplication reads
+        # QT_SCALE_FACTOR; it never raises, and falls back to 100 %.
+        self.ui_scale, _scale_note = choose_startup_scale()
+        memory_mark(f"[UI] scale={self.ui_scale:.2f} ({_scale_note})")
+
         # Enable High-DPI and smooth fractional scaling (125%, 150%, etc.)
         if hasattr(Qt, "HighDpiScaleFactorRoundingPolicy"):
             QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -186,7 +205,16 @@ class SeraApp:
         self.app.setFont(QFont("Segoe UI", 10))
         self.app.setQuitOnLastWindowClosed(False)
         APP_DIR.mkdir(parents=True, exist_ok=True)
-        
+
+        # Bind the extension bridge port as early as possible, before the DB unlock and services,
+        # so an extension already waiting for the app connects within ~1 s of launch. Messages
+        # that arrive before the handlers are connected are held (see WSBridge.mark_ready).
+        from ui import ws_bridge as _ws_bridge_module
+        self.bridge = WSBridge(self.app)
+        self.app.aboutToQuit.connect(self.bridge.stop)
+        self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
+        _ws_bridge_module.set_active_bridge(self.bridge)
+
         self.sync_bridge = SyncSignalBridge()
         self.sync_bridge.sync_received_signal.connect(self._lock_and_force_restart)
         self.sync_bridge.live_sync_received_signal.connect(self._handle_live_sync_received_main_thread)
@@ -195,8 +223,13 @@ class SeraApp:
         self.sync_bridge.update_found_signal.connect(self._handle_update_found)
         self.sync_bridge.update_ready_signal.connect(self._handle_update_ready)
         self.sync_bridge.maintenance_done_signal.connect(self._on_startup_maintenance_done)
+        self.sync_bridge.arn_autofix_done_signal.connect(lambda _n: self._refresh_tracker_dump_ui())
         self.sync_bridge.join_approval_signal.connect(self._handle_join_approval_modal_main_thread)
         self.sync_bridge.engine_synced_signal.connect(self._handle_engine_synced_main_thread)
+        self.sync_bridge.scc_saved_signal.connect(self._after_scc_save)
+        self.sync_bridge.sgt_demotion_signal.connect(self._ask_sgt_demotion)
+        self.sync_bridge.engine_alert_signal.connect(
+            lambda text, level: getattr(self, "shell", None) and self.shell.show_alert(text, level=level, duration=0))
         self._synced_tables_lock = threading.Lock()
         self._synced_tables_pending = set()
         self._synced_tables_last_emit = 0.0
@@ -241,11 +274,14 @@ class SeraApp:
         self.identity_path = APP_DIR / "device_identity.txt"
         self.app_dir = APP_DIR
 
-        self._run_pending_office_key_migration()
         self._run_pending_rejoin()
         self._run_pending_shadow_start()
         self._go_live_alert = None
         self._run_pending_go_live()
+        self._restore_alert = None
+        self._run_pending_restore()
+        self._catch_up_alert = None
+        self._run_pending_catch_up()
         self.key_mode, self.key_id, hex_key = self._resolve_encryption_key()
 
         # In office mode, check whether master.db exists; prevent silent empty DB initialization (P1-6)
@@ -301,7 +337,13 @@ class SeraApp:
                 loading_dlg.set_status("Decrypting vault & deriving PBKDF2 key...")
             
             loading_dlg.set_status("Connecting to SQLCipher database & resolving service selectors...")
-            self.db = SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
+            def _open_db():
+                return SeraDatabase(self.db_path, hex_key, defer_startup_maintenance=True, key_mode=self.key_mode)
+            if startup_boost.launched_at_startup():
+                # At logon a virus scan or sync client can hold the file for a few seconds.
+                self.db = startup_boost.retry(_open_db, attempts=4, delay=3.0, pump=self.app.processEvents)
+            else:
+                self.db = _open_db()
             memory_mark("  vault: database opened")
             # Sera Sync v3 (P3-3): seals captured changes every 5 s, incl. writes by the parsers.
             # A no-op while the sync mode is 'off'.
@@ -320,15 +362,9 @@ class SeraApp:
             self._backup_scheduler.start()
             self.app.aboutToQuit.connect(self._backup_scheduler.stop)
 
-            # Ensure FST, SDC, SCA, and tracker settings are initialized
-            if self.db.get_setting("sdc_enabled") is None:
-                self.db.set_setting("sdc_enabled", "1")
-            if self.db.get_setting("fst_enabled") is None:
-                self.db.set_setting("fst_enabled", "1")
+            # Ensure SCA, SCC, and VSDC settings are initialized
             if self.db.get_setting("sca_enabled") is None:
                 self.db.set_setting("sca_enabled", "1")
-            if self.db.get_setting("tracker_enabled") is None:
-                self.db.set_setting("tracker_enabled", "1")
             if self.db.get_setting("scc_enabled") is None:
                 self.db.set_setting("scc_enabled", "1")
             if self.db.get_setting("vsdc_enabled") is None:
@@ -467,6 +503,12 @@ class SeraApp:
                         target=sync_shadow.mirror_own_changes_to_replica, args=(self.db, self.app_dir),
                         name="shadow-mirror-catch-up", daemon=True).start()
                 self.db.set_seal_timing_callback(_seal_timing_cb)
+                # SDIS excavator: on its own timer, sends unsent capture files to the admin PC (or parks
+                # them with a live line in the sync panel); on the admin PC it checks what arrived.
+                from core.sdis.excavator import Excavator
+                self._sdis_excavator = Excavator(self.sync_engine, on_event=self.sync_service.log_activity)
+                self._sdis_excavator.start()
+                self.app.aboutToQuit.connect(self._sdis_excavator.stop)
                 self.sync_engine.start()
                 self.app.aboutToQuit.connect(self.sync_engine.stop)
                 self.app.aboutToQuit.connect(self._sync_engine_server.stop)
@@ -501,16 +543,25 @@ class SeraApp:
             self._shadow_check_timer.start(30 * 60 * 1000)
             _run_shadow_check_async()
 
-        # Asynchronous background auto-updater (non-blocking, silent)
+        # Updates. Installed builds have the SYSTEM update agent (core/update_agent.py): it downloads
+        # and installs with no prompt; the app only closes itself when the PC is idle. Without the
+        # agent (source runs, older installs) the in-app updater below downloads and installs on exit.
         loading_dlg.set_status("Initializing Background Auto-Updater...")
         import version
-        self.update_manager = version.BackgroundUpdateManager(
-            check_interval_seconds=7200,
-            on_update_found=lambda info: self.sync_bridge.update_found_signal.emit(info),
-            on_update_ready=lambda path, info: self.sync_bridge.update_ready_signal.emit(str(path), info),
-            on_error=lambda err: print(f"[AutoUpdater] {err}")
-        )
-        self.update_manager.start(initial_delay_seconds=3)
+        from core import update_agent
+        self.update_manager = None
+        if update_agent.is_available():
+            self._agent_update_timer = QTimer(self.app)
+            self._agent_update_timer.timeout.connect(self._check_agent_update)
+            self._agent_update_timer.start(30_000)
+        else:
+            self.update_manager = version.BackgroundUpdateManager(
+                check_interval_seconds=7200,
+                on_update_found=lambda info: self.sync_bridge.update_found_signal.emit(info),
+                on_update_ready=lambda path, info: self.sync_bridge.update_ready_signal.emit(str(path), info),
+                on_error=lambda err: print(f"[AutoUpdater] {err}")
+            )
+            self.update_manager.start(initial_delay_seconds=3)
         memory_mark("start-up: sync + updater started")
 
         loading_dlg.set_status("Initializing User Interface...")
@@ -548,8 +599,9 @@ class SeraApp:
             except OSError:
                 pass
 
-        if getattr(self, "_go_live_alert", None):
-            startup_alerts.append(self._go_live_alert)
+        for attr in ("_go_live_alert", "_restore_alert", "_catch_up_alert"):
+            if getattr(self, attr, None):
+                startup_alerts.append(getattr(self, attr))
 
         if startup_alerts:
             level = "error" if any(a[0] == "error" for a in startup_alerts) else "warning"
@@ -558,24 +610,30 @@ class SeraApp:
 
         # Start the WebSocket bridge to the extension (ui/ws_bridge.py). Only the Sera extension's
         # own background page may connect - see that module for how the origin is checked.
-        from ui import ws_bridge as _ws_bridge_module
-        self.bridge = WSBridge(self.app)
+        # (The bridge itself was created and bound early in __init__; only the handlers connect here.)
         self.bridge.filing_result_received.connect(self._handle_extension_result)
-        self.bridge.uncertain_result_received.connect(self._handle_extension_result)
-        self.bridge.session_started_received.connect(self._handle_session_started)
-        self.bridge.scc_password_verified_received.connect(self._handle_scc_password_verified)
-        self.bridge.sdc_timeline_received.connect(self._handle_sdc_timeline)
-        self.bridge.sudr_capture_received.connect(self._handle_sudr_capture)
+        self.bridge.scc_row_worked_received.connect(self._handle_scc_row_worked)
+        self.bridge.scc_card_closed_received.connect(self._handle_scc_card_closed)
+        self.bridge.scc_row_none_received.connect(self._handle_scc_row_none)
         self.bridge.extension_settings_updated_received.connect(self._handle_extension_settings_updated)
         self.bridge.settings_provider = self._get_extension_settings_payload
         self.bridge.sca_password_requested.connect(self._handle_sca_password_request)
         self.bridge.sca_fill_result_received.connect(self.clipboard_watcher.handle_fill_result)
-        self.app.aboutToQuit.connect(self.bridge.stop)
         self.app.aboutToQuit.connect(self._on_app_about_to_quit)
-        self.bridge.start(chrome_manifest_path=self._permanent_extension_dir / "manifest.json")
-        # automation.py's module-level functions (autofill, SCA arm, settings push) reach this
-        # bridge through here - they have no object of their own to hold a reference on.
-        _ws_bridge_module.set_active_bridge(self.bridge)
+        # Screentime: when Sera opened / closed on this PC (core/screentime.py), published to the office
+        # through app_settings so every PC's Settings > Screentime tab lists every PC.
+        try:
+            from core import screentime
+            screentime.attach(self.db, getattr(getattr(self, "sync_engine", None), "device_id", None))
+            screentime.start(APP_DIR)
+            self._screentime_timer = QTimer(self.app)
+            self._screentime_timer.timeout.connect(screentime.heartbeat)
+            self._screentime_timer.start(int(screentime.HEARTBEAT_S * 1000))
+            self.app.aboutToQuit.connect(screentime.stop)
+        except Exception as exc:
+            print(f"[Screentime] not started: {exc}")
+        # Handlers are wired: release any messages the extension sent while start-up was running.
+        self.bridge.mark_ready()
 
         # The capture engines start on the first turn of the event loop, i.e. right after the
         # window has painted: loading them (OCR, numpy, UI Automation) is ~0.5 s the window used
@@ -583,6 +641,17 @@ class SeraApp:
         self.app.processEvents()                      # paint the window now
         memory_mark("start-up: window painted")
         QTimer.singleShot(0, self._start_capture_engines)
+        # Failed ARN-only GST rows are fixed from the corpus on the admin PC, unattended, a while after
+        # start-up (core/sdis/arn_autofix.py); the excavator fills the corpus in the meantime.
+        try:
+            from core.sdis import arn_autofix
+            _svc = getattr(self, "sync_service", None)
+            arn_autofix.start_background(
+                self.db, self.app_dir,
+                on_event=(_svc.log_activity if _svc is not None else None),
+                on_done=lambda n: self.sync_bridge.arn_autofix_done_signal.emit(n))
+        except Exception as exc:
+            print(f"[ARN fixer] not started: {exc}")
 
         # Memory over the working day (~/AmanAssociates_Sera/logs/memory.log): once a minute after
         # start-up, then every 10 minutes - steady growth here is a leak, a jump is a feature
@@ -620,7 +689,12 @@ class SeraApp:
                 if sys._MEIPASS not in sys.path:
                     sys.path.insert(0, sys._MEIPASS)
 
-            from core.vsdc import VSDCWorker
+            from core.vsdc import VSDCWorker, vsdc_scope
+            # SDIS Part T: portals registered from service login links join the scope gate (read lazily).
+            vsdc_scope.set_services_source(self.db.get_services)
+            # SDIS Part Q / S.3: the synced sdis_fields table -> sdis_fields.json, SGT's third spec
+            # file; the sdis_config row -> sdis_containers.json.
+            threading.Thread(target=self._write_sdis_files, name="sdis-fields", daemon=True).start()
             self.vsdc_hud = VSDCHudPill()
             self.vsdc_worker = VSDCWorker(parent=self.app)
             self.vsdc_worker.filing_captured.connect(self._handle_extension_result)
@@ -631,6 +705,12 @@ class SeraApp:
             self.app.aboutToQuit.connect(self._flush_capture_queue_on_quit)
             # Settings -> Tracker decides which of VSDC / VSDC-X / VSDC 24/7 run; the worker
             # itself only starts when at least one of them is on.
+            self.vsdc_worker.router.set_scc_handlers(self._make_scc_handlers)
+            from core.sgt.sgt_client_link import ClientLink
+            self.vsdc_worker.router.set_client_lookup(ClientLink(self.db))   # portal user ID -> saved client
+            self.vsdc_worker.router.on_demotion = self.sync_bridge.sgt_demotion_signal.emit
+            from core.scc import manual as scc_manual
+            scc_manual.set_opener(self._open_scc_manual)
             self._apply_vsdc_engine_settings()
             memory_mark("start-up: capture engines ready")
         except Exception as vsdc_exc:
@@ -675,24 +755,9 @@ class SeraApp:
                 print(f"[Startup] Refresh after maintenance failed ({name}): {exc}")
 
     def _handle_extension_settings_updated(self, msg: dict):
-        """Persists extension settings toggled from browser popup into SQLite database and controls VSDC worker."""
+        """Persists extension settings toggled from browser popup into SQLite database."""
         try:
             to_set = {}
-            if "vsdc_enabled" in msg:
-                vsdc_on = bool(msg["vsdc_enabled"])
-                to_set["vsdc_enabled"] = "1" if vsdc_on else "0"
-                if hasattr(self, "vsdc_worker") and self.vsdc_worker:
-                    if vsdc_on:
-                        self.vsdc_worker.resume()
-                    else:
-                        self.vsdc_worker.pause()
-                    print(f"[main] VSDC Worker {'resumed' if vsdc_on else 'paused'} via extension popup toggle")
-            if "sdc_enabled" in msg:
-                to_set["sdc_enabled"] = "1" if msg["sdc_enabled"] else "0"
-            if "fst_enabled" in msg:
-                to_set["fst_enabled"] = "1" if msg["fst_enabled"] else "0"
-            if "tracker_enabled" in msg:
-                to_set["tracker_enabled"] = "1" if msg["tracker_enabled"] else "0"
             if "sca_enabled" in msg:
                 to_set["sca_enabled"] = "1" if msg["sca_enabled"] else "0"
             if to_set:
@@ -702,54 +767,45 @@ class SeraApp:
             print(f"[main] Error handling extension_settings_updated: {e}")
 
     def _get_extension_settings_payload(self) -> dict:
-        """Packages current services, settings, registered PANs and SCC configuration."""
+        """Packages current services and settings for the extension."""
         try:
-            sdc = self.db.get_setting("sdc_enabled", "1") in ("1", "true", "True")
-            fst = self.db.get_setting("fst_enabled", "1") in ("1", "true", "True")
-            vsdc = self.db.get_setting("vsdc_enabled", "1") in ("1", "true", "True")
             sca_en = self.db.get_setting("sca_enabled", "1") in ("1", "true", "True")
             sca_mode = self.db.get_setting("sca_action_mode", "autofill")
             try:
                 sca_max = int(self.db.get_setting("sca_max_uses", "1"))
             except (ValueError, TypeError):
                 sca_max = 1
-            reg_pans = self.db.get_all_registered_pans()
-            scc_cfg = self.db.get_scc_settings()
             svcs = self.db.get_services()
+            try:
+                clip_secs = max(5, min(int(self.db.get_setting("clipboard_clear_seconds", "30")), 300))
+            except (ValueError, TypeError):
+                clip_secs = 30
+            from automation import allowed_portal_domains
             return {
                 "status": "ok",
-                "sdc_enabled": sdc,
-                "fst_enabled": fst or sdc,
-                "vsdc_enabled": vsdc,
-                "tracker_enabled": sdc or fst or vsdc,
+                "allowed_domains": allowed_portal_domains(svcs),
+                "clipboard_clear_seconds": clip_secs,
                 "sca_enabled": sca_en,
                 "sca_mode": sca_mode,
                 "sca_max_uses": sca_max,
                 "allowed_services": svcs,
-                "registered_pans": reg_pans,
-                "scc_settings": scc_cfg,
             }
         except Exception as e:
             print(f"[main] Failed to get extension settings payload: {e}")
             return {"status": "error", "message": str(e)}
 
     def _sync_extension_settings(self):
-        """Pushes current services, settings, registered PANs and SCC configuration to extension."""
+        """Pushes current services and settings to the extension."""
         try:
             from automation import update_extension_settings
             payload = self._get_extension_settings_payload()
             if payload.get("status") == "ok":
                 update_extension_settings(
-                    fst_enabled=payload.get("fst_enabled", True),
-                    sdc_enabled=payload.get("sdc_enabled", True),
-                    vsdc_enabled=payload.get("vsdc_enabled", True),
-                    tracker_enabled=payload.get("tracker_enabled", True),
                     sca_enabled=payload.get("sca_enabled", True),
                     sca_mode=payload.get("sca_mode", "autofill"),
                     allowed_services=payload.get("allowed_services", []),
                     sca_max_uses=payload.get("sca_max_uses", 1),
-                    registered_pans=payload.get("registered_pans", []),
-                    scc_settings=payload.get("scc_settings", {}),
+                    clipboard_clear_seconds=payload.get("clipboard_clear_seconds"),
                 )
         except Exception as e:
             print(f"[main] Failed to sync extension settings: {e}")
@@ -845,34 +901,12 @@ class SeraApp:
             self._refresh_when_seen("tracker_dump_win", self.tracker_dump_win.load_data)
 
     def _handle_extension_result(self, msg: dict):
-        # Queue all extension captures; the database/report pipeline is too
-        # expensive to execute in the Qt signal handler during burst traffic.
-        if msg.get("type") != "audit_event":
-            self._capture_queue.put(msg)
-            return
-        self._process_extension_result(msg)
+        # Queue all captures (SGT/VSDC, via vsdc_worker.filing_captured); the database/report
+        # pipeline is too expensive to execute in the Qt signal handler during burst traffic.
+        self._capture_queue.put(msg)
 
     def _process_extension_result(self, msg: dict):
         print(f"[main._handle_extension_result] Processing incoming message: {msg}")
-        if msg.get("type") == "audit_event":
-            try:
-                cid = msg.get("client_id")
-                action_name = msg.get("action", "SCA autofill triggered")
-                short_act = "SCA Auto" if "autofill" in action_name.lower() else ("SCA Widget" if "widget" in action_name.lower() else "SCA")
-                self.db.log_action(
-                    actor=self.actor,
-                    action=action_name,
-                    client_id=cid,
-                    detail=msg.get("detail", "")
-                )
-                if cid:
-                    self.db.record_client_activity(int(cid), short_act, msg.get("detail", ""))
-                    if hasattr(self, "search_win"):
-                        self.search_win._on_search_changed()
-            except Exception as e:
-                print(f"[main] audit_event error: {e}")
-            return
-
         # Every stored capture says which PC produced it (the name from this PC's
         # device_identity.txt), inside its own payload.
         try:
@@ -1068,13 +1102,6 @@ class SeraApp:
         try:
             results = []
             for dataset_msg in dataset_messages:
-                # Enrich payload with Gemini AI extraction on raw text before Tracker Dump insertion
-                try:
-                    from core.vsdc.vsdc_gemini_parser import enrich_payload_with_gemini
-                    enrich_payload_with_gemini(dataset_msg)
-                except Exception as gem_e:
-                    print(f"[main] Gemini enrichment notice: {gem_e}")
-
                 dataset_raw = dataset_msg.get("raw_payload") if isinstance(dataset_msg.get("raw_payload"), dict) else {}
                 dataset_pan = str(dataset_msg.get("pan") or pan or "").strip()
                 dataset_arn = dataset_msg.get("arn", "N/A")
@@ -1104,324 +1131,162 @@ class SeraApp:
                 )
                 results.append(result)
             print(f"[main._handle_extension_result] Successfully inserted {len(results)} tracker_dump dataset row(s): {results}")
-
-            # If payload carried an SCC verified password, ensure client/password is synced/auto-created
-            scc_pwd = msg.get("scc_verified_password") or (msg.get("raw_payload", {}).get("scc_verified_password") if isinstance(msg.get("raw_payload"), dict) else None)
-            if scc_pwd:
-                scc_msg = dict(msg)
-                scc_msg["password"] = scc_pwd
-                self._handle_scc_password_verified(scc_msg)
+            try:
+                from core.ltt import monthly as _ltt_monthly
+                _ltt_monthly.schedule_export(self.db)
+            except Exception:
+                pass
 
             return results[0] if len(results) == 1 else {"datasets": results, "count": len(results)}
         except Exception as e:
             print(f"[Tracker Dump Error] {e}")
             return None
 
-    def _handle_session_started(self, msg: dict):
-        """Displays a toast notification when a new client session starts and processes SCC verification if attached."""
-        portal = msg.get("portal", "Income Tax")
-        pan = str(msg.get("pan") or "").strip()
-        name = str(msg.get("client_name") or "").strip()
-        
-        if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-            self.tray_icon.showMessage(
-                "Sera SDC Tracking Active", 
-                f"Live tracking started for {name} ({pan}) on {portal.upper()}.", 
-                QSystemTrayIcon.Information, 
-                3000
-            )
+    def _ask_sgt_demotion(self, info: dict):
+        """A page shows a lower status than a filing that has an ARN. Lowering it is risky, so the user decides;
+        the default is to keep the status that is recorded."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(getattr(self, "shell", None))
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Lower this filing's status?")
+        what = " ".join(x for x in (info.get("form"), info.get("period")) if x)
+        box.setText(f"{info.get('client') or 'This client'} - {what}\n\n"
+                    f"This filing has an acknowledgement ({info.get('arn')}). The portal page now shows a LOWER "
+                    f"status than the one recorded.")
+        box.setInformativeText(f"Recorded: {info.get('from')}\nThe page now shows: {info.get('to')}\n"
+                               f"\"{info.get('evidence') or ''}\"\n\n"
+                               f"Keep the recorded status unless you are sure the page is right.")
+        keep = box.addButton("Keep current status", QMessageBox.RejectRole)
+        lower = box.addButton("Lower the status", QMessageBox.AcceptRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        router = getattr(getattr(self, "vsdc_worker", None), "router", None)
+        if router is not None:
+            router.answer_demotion(info.get("token"), box.clickedButton() is lower)
 
-        # If session_start included an active SCC verified password from link mutation
-        if msg.get("scc_verified_password"):
-            self._handle_scc_password_verified(msg)
+    def _make_scc_handlers(self):
+        """SCC-U's handlers (once, when its host is created)."""
+        return self._ensure_scc()
 
-    def _handle_scc_password_verified(self, msg: dict):
-        """Persists the verified password from SCC link mutation to master.db."""
-        password = str(msg.get("password") or msg.get("scc_verified_password") or "").strip()
-        if not password:
-            return
+    def _open_scc_manual(self, pan: str, client_id, on_error=None) -> bool:
+        """Client Detail's MECP on an unverified Income Tax client (core/scc/manual.py): the card, with
+        desktop-generated rows, in the portal's login page. An attempt SGT already has for this PAN is
+        reused; otherwise a manual one is registered (SGT adopts it if it reads the password page, else
+        only "This one worked" saves). Works with Detect login automatically Off."""
+        opener, _outcome = self._ensure_scc()
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        att, is_new = opener.register_manual(pan, client_id)
+        if is_new:
+            self._scc_counter.on_attempt_opened()
+        sent = self._scc_card.open(att, open_tab=att.manual, on_error=on_error)
+        if not sent and is_new:
+            opener.end(att.hwnd, "closed")
+        return sent
 
-        client_id = msg.get("client_id")
-        service_id = msg.get("service_id")
-        userid = str(msg.get("userid") or msg.get("pan") or "").strip().upper()
-        combo_label = str(msg.get("combo_label") or "SCC").strip()
-        portal = str(msg.get("portal") or "Income Tax").strip()
-        portal_clean = portal.lower()
-        # Strictly enforce: SCC is exclusively an ITR-only one-time utility. Ignore any non-ITR portal attempts.
-        if "gst" in portal_clean or not any(k in portal_clean for k in ("income", "itr", "tax")):
-            print(f"[main.SCC] Ignored non-ITR SCC verification attempt for portal: {portal}")
-            return
+    def _ensure_scc(self):
+        """Builds SCC-U's objects once: the attempt opener, the MECP SCC card it feeds (core/scc/card.py)
+        and the outcome reader (core/scc/outcome.py). The card's copy ledger reads the clipboard through
+        clipboard_watch; each copy opens the host's read window. Returns [opener, outcome reader]."""
+        existing = getattr(self, "_scc_parts", None)
+        if existing is not None:
+            return existing
+        import automation
+        import clipboard_watch
+        from core.scc import AttemptOpener, OutcomeReader, SccCard, SccSaver, WhichOne, db_client_names, db_lookup, SccCounter
+        counter = SccCounter()
+        self._scc_counter = counter
 
+        def on_attempt_opened(att):
+            counter.on_attempt_opened()
+            self._scc_card.open(att)
+
+        opener = AttemptOpener(db_lookup(self.db), on_open=on_attempt_opened,
+                               on_end=lambda att, reason: self._scc_card.end(att, reason))
+        self._scc_opener = opener
+
+        def read_harder(att, _label):
+            host = getattr(getattr(self.vsdc_worker, "router", None), "_scc_host", None)
+            if host is not None and att.session_id:
+                host.open_read_window(att.session_id)
+
+        def on_worked_with_close_and_count(att, row_label):
+            saver = SccSaver(self.db, lambda aid, label: self._scc_card.row_text(aid, label),
+                           lambda: getattr(self, "actor", "Staff"), after=self._scc_saved)
+            result = saver.on_worked(att, row_label)
+            if result is not None:
+                counter.on_password_saved()
+                # Close the card and mark the attempt as closed in the opener
+                automation.close_scc_card(att.attempt_id)
+                opener.close(att.hwnd)
+            return result
+
+        self._scc_card = SccCard(
+            self.db,
+            open_card=lambda service, pan, rows, title, client_id, attempt_id, **opts:
+                automation.send_scc_card(service, pan, rows, title, client_id, attempt_id, **opts),
+            close_card=automation.close_scc_card,
+            suppress=clipboard_watch.suppress_client, release=clipboard_watch.release_client,
+            on_closed=lambda att: opener.close(att.hwnd),
+            update_card=automation.update_scc_card, on_copy=read_harder,
+            on_none=lambda att: opener.end(att.hwnd, "typed own"),
+            on_asking=lambda: counter.on_card_asked(),
+            on_worked=on_worked_with_close_and_count)
+        # Step 5: which row gets the login's credit (SccCard.credit -> the guarded save).
+        def on_outcome_with_counter(att, kind, detail):
+            counter.on_outcome(kind)
+
+        which = WhichOne(self._scc_card, lambda att: self._scc_outcome.copied_since_refusal(att),
+                        then=on_outcome_with_counter)
+        self._scc_outcome = OutcomeReader(opener, self._scc_card, client_names=db_client_names(self.db),
+                                          on_outcome=which.on_outcome)
+        watcher = getattr(self, "clipboard_watcher", None)
+        if watcher is not None:
+            watcher.scc_ledger = self._scc_card.note_clipboard
+        self._scc_parts = [opener, self._scc_outcome]
+        return self._scc_parts
+
+    def _handle_scc_row_worked(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.row_worked(msg.get("attempt_id"), msg.get("row_label"))    # credit -> the guarded save
+
+    def _handle_scc_card_closed(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.card_closed(msg.get("attempt_id"))
+
+    def _handle_scc_row_none(self, msg: dict):
+        card = getattr(self, "_scc_card", None)
+        if card is not None:
+            card.none_typed(msg.get("attempt_id"))
+
+    def _scc_saved(self, result):
+        """SccSaver's `after`: SCC-U's thread or the Qt thread - the refresh always runs on the Qt thread."""
+        self.sync_bridge.scc_saved_signal.emit(result.client_id, result.client_name, result.pan, result.outcome)
+
+    def _after_scc_save(self, client_id: int, client_name: str, pan: str, outcome: str):
+        """UI refresh after an SCC save: toast, Client Detail, grid, search, extension settings."""
         try:
-            actor = getattr(self, "actor", "Staff")
-
-            try:
-                client_id = int(client_id) if client_id is not None else None
-            except (ValueError, TypeError):
-                client_id = None
-
-            try:
-                service_id = int(service_id) if service_id is not None else None
-            except (ValueError, TypeError):
-                service_id = None
-
-            # Resolve client if client_id is None
-            if not client_id and userid:
-                client = self.db.get_client_by_pan(userid)
-                client_id = client.get("id") if client else None
-
-            # Resolve service & password column
-            pwd_col_id = None
-            if service_id:
-                svc = self.db.get_service(service_id)
-                if svc:
-                    pwd_col_id = svc.get("password_column_id")
-
-            if not pwd_col_id:
-                svc = self.db.get_service_for_portal(portal)
-                if svc:
-                    service_id = svc.get("id")
-                    pwd_col_id = svc.get("password_column_id")
-
-            # Fallback: search MCL columns for ITR password column
-            if not pwd_col_id:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").strip().lower()
-                    if ("itr" in lbl or "income" in lbl) and "pass" in lbl:
-                        pwd_col_id = c["id"]
-                        break
-
-            client_name_val = str(msg.get("client_name") or "").strip()
-
-            if not client_id:
-                # Unregistered client: auto-create in master.db
-                mcl = self.db.get_mcl_columns()
-                # 1. Resolve PAN column: check is_internal_pk first, or exact 'pan' in tokens
-                pan_col_id = next((c["id"] for c in mcl if c.get("is_internal_pk")), None)
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl_tokens = (c.get("label") or "").lower().split()
-                        if "pan" in lbl_tokens:
-                            pan_col_id = c["id"]
-                            break
-                if not pan_col_id:
-                    for c in mcl:
-                        lbl = (c.get("label") or "").lower()
-                        if "pan" in lbl and "pass" not in lbl and "company" not in lbl:
-                            pan_col_id = c["id"]
-                            break
-
-                # 2. Resolve Name column
-                name_col_id = None
-                for c in mcl:
-                    lbl = (c.get("label") or "").lower()
-                    if c["id"] != pan_col_id and any(k in lbl for k in ("company", "name", "client", "proprietor")):
-                        name_col_id = c["id"]
-                        break
-
-                values = {}
-                # Ensure all internal PK columns are populated
-                for c in mcl:
-                    if c.get("is_internal_pk") and userid:
-                        values[c["id"]] = userid
-
-                if pan_col_id and userid:
-                    values[pan_col_id] = userid
-                if name_col_id:
-                    values[name_col_id] = client_name_val or f"Client ({userid})"
-                if pwd_col_id:
-                    values[pwd_col_id] = password
-
-                svc = self.db.get_service_for_portal(portal)
-                svc_ids = [svc["id"]] if svc else []
-
-                client_id = self.db.add_client(
-                    values=values,
-                    notes="Password verified via SCC",
-                    service_ids=svc_ids,
-                    actor=actor
-                )
-                print(f"[main.SCC] Auto-created client record #{client_id} with verified password ({combo_label})")
-            else:
-                # Existing client: update single password field if column is known
-                if pwd_col_id:
-                    self.db.update_client_single_field(
-                        client_id=client_id,
-                        column_id=pwd_col_id,
-                        value=password,
-                        actor=actor,
-                        log_action=True
-                    )
-                self.db.tag_client_scc_verified(client_id=client_id, combo_label=combo_label, actor=actor)
-                print(f"[main.SCC] Updated client #{client_id} password via {combo_label} and marked 'Password verified via SCC'")
-
-            # Resolve client name for toast
-            client = self.db.get_client(client_id)
-            if not client_name_val and client:
-                for c in self.db.get_mcl_columns():
-                    lbl = (c.get("label") or "").lower()
-                    if "name" in lbl or "client" in lbl or "proprietor" in lbl:
-                        val = str(client.get("values", {}).get(c["id"]) or "").strip()
-                        if val:
-                            client_name_val = val
-                            break
-            if not client_name_val:
-                client_name_val = "Client"
-
             if hasattr(self, "tray_icon") and self.tray_icon and self.tray_icon.isVisible():
-                self.tray_icon.showMessage(
-                    "Password Verified via SCC",
-                    f"Permanent password saved for {client_name_val} ({userid}).",
-                    QSystemTrayIcon.Information,
-                    5000
-                )
+                what = {"created": "Client added with the verified password", "replaced": "Saved password replaced",
+                        "verified": "Marked verified"}.get(outcome, "Permanent password saved")
+                self.tray_icon.showMessage("Password Verified via SCC", f"{what} for {client_name} ({pan}).",
+                                           QSystemTrayIcon.Information, 5000)
 
-            # Refresh client detail window if currently open for this client
             if hasattr(self, "client_detail_win") and self.client_detail_win and self.client_detail_win.isVisible():
                 cur_c = getattr(self.client_detail_win, "client", None)
                 if cur_c and cur_c.get("id") == client_id:
-                    refreshed = self.db.get_client(client_id)
-                    self.client_detail_win.set_client(refreshed)
+                    self.client_detail_win.set_client(self.db.get_client(client_id))
 
-            # Notify shell / main grid to refresh if visible
             if hasattr(self, "shell") and self.shell and hasattr(self.shell, "refresh_clients"):
                 self.shell.refresh_clients()
             if hasattr(self, "search_win") and self.search_win:
                 self.search_win._on_search_changed()
-            # Push updated registered PANs to extension so newly verified client won't trigger unregistered pop-in
             self._sync_extension_settings()
         except Exception as e:
-            print(f"[main._handle_scc_password_verified error] {e}")
-
-    def _handle_sdc_timeline(self, msg: dict):
-        """Persists SDC session timeline updates from browser into SQLite database."""
-        try:
-            res = self.db.upsert_sdc_session_timeline(msg)
-            print(f"[main._handle_sdc_timeline] Timeline synced for session {msg.get('session_id')}: {res}")
-        except Exception as e:
-            print(f"[main._handle_sdc_timeline Error] {e}")
-
-    def _handle_sudr_capture(self, msg: dict):
-        """
-        Handles the SUDR canonical envelope (see sdcClaude.md §6). Portal-agnostic
-        by design: reads only msg['event']['type'] and msg['identity'] — never
-        branches on msg['source']['protocol']. This one function is meant to work
-        unchanged for ITR, GST, TRACES, or any future portal, as long as that
-        portal's protocol.js calls SDC.emit() with the standard envelope shape.
-
-        Stores into the existing tracker_dump table (no schema migration needed):
-        raw_payload_json holds the full envelope for now; canonical columns
-        (event_type, capture_id) can be promoted later per the migration plan.
-        """
-        try:
-            event = msg.get("event", {}) or {}
-            identity = msg.get("identity", {}) or {}
-            source = msg.get("source", {}) or {}
-
-            event_type = event.get("type", "UNKNOWN")
-            status = event.get("status", "pending")
-            portal = source.get("protocol", "unknown")
-
-            # insert_tracker_dump() already does identity resolution internally
-            # (pan + raw_payload_json -> candidate matching against master.db) —
-            # no need to duplicate that logic here. gstin/tan currently ride
-            # along inside raw_payload_json until _extract_identity_candidates_from_payload
-            # is extended to also key off them directly (see sdcClaude.md §6.6 step 3).
-            self.db.insert_tracker_dump(
-                portal=portal,
-                arn_number=None,
-                capture_method=f"SUDR_{source.get('crosshair_id', '')}",
-                status=status,
-                raw_payload_json=json.dumps(msg),
-                captured_by="sudr",
-                pan=identity.get("pan"),
-                session_id=msg.get("session_id"),
-            )
-            print(f"[main._handle_sudr_capture] {portal} :: {event_type} ({status}) capture_id={msg.get('capture_id')}")
-        except Exception as e:
-            print(f"[main._handle_sudr_capture Error] {e}")
-
-    def _run_pending_office_key_migration(self) -> None:
-        """P1-4: finish an interrupted office-key conversion, then run a requested one.
-
-        Runs before any database is opened. On success, _resolve_encryption_key finds
-        keys/office.json and continues in office mode; on failure the PC stays legacy.
-        """
-        import sync_migrate
-        app_dir = Path(self.app_dir)
-        title = "Aman Associates — Convert to Office Key"
-
-        try:
-            outcome = sync_migrate.resume_interrupted_migration(app_dir)
-        except sync_migrate.MigrationError as e:
-            self._show_office_key_migration_message(
-                "critical", title,
-                f"An earlier office-key conversion was interrupted and can't be finished automatically:\n\n{e}\n\n"
-                "Sera will close so nothing is damaged. Contact the office administrator."
-            )
-            sys.exit(1)
-        if outcome == "completed":
-            self._show_office_key_migration_message(
-                "info", title, "An interrupted office-key conversion has been completed.")
-        elif outcome == "rolled_back":
-            self._show_office_key_migration_message(
-                "warning", title,
-                "An interrupted office-key conversion was undone. This PC still uses its old password key.")
-
-        if sync_migrate.read_migrate_request(app_dir) is None:
-            return
-        # Consume the request first, so a failure or crash can never loop on every start.
-        sync_migrate.clear_migrate_request(app_dir)
-        import sera_keys
-        if (sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE).exists():
-            self._show_office_key_migration_message("info", title, "This PC already uses an office key.")
-            return
-
-        details = self._ask_office_key_migration_details(app_dir)
-        if not details:
-            return
-
-        from PySide6.QtWidgets import QApplication
-        busy = QApplication.instance() is not None
-        if busy:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            result = sync_migrate.migrate_to_office_key(
-                app_dir, details["legacy_password"], details["office_name"],
-                new_password=details.get("new_password"),
-            )
-        except sync_migrate.RowCountMismatch as e:
-            self._show_office_key_migration_message(
-                "critical", title,
-                "The conversion was stopped: the converted database did not contain the same rows "
-                f"as the original.\n\n{e}\n\nNothing was changed. This PC keeps its old password key. "
-                "Please report this to the owner before trying again."
-            )
-            return
-        except sync_migrate.MigrationRollbackFailed as e:
-            self._show_office_key_migration_message(
-                "critical", title, f"The conversion failed and could not be undone automatically:\n\n{e}")
-            sys.exit(1)
-        except Exception as e:
-            self._show_office_key_migration_message(
-                "warning", title,
-                f"The conversion failed and nothing was changed:\n\n{e}\n\n"
-                "Sera will continue with the old password key."
-            )
-            return
-        finally:
-            if busy:
-                QApplication.restoreOverrideCursor()
-
-        self._show_office_key_migration_message(
-            "info", title,
-            f"This PC now uses the office key for \"{details['office_name']}\".\n\n"
-            f"The old files were kept in:\n{result.backup_dir}\n\n"
-            "Keep the office master password safe: it is needed to unlock Sera on this PC "
-            "if Windows can't, and to add other PCs to the office."
-        )
-
-        self._offer_export_recovery_kit(app_dir, details)
+            print(f"[main._after_scc_save error] {type(e).__name__}")
 
     def _run_pending_rejoin(self) -> None:
         """P2-8: finish or run a requested "Rejoin office", then offer the salvage import.
@@ -1480,22 +1345,53 @@ class SeraApp:
                                           "in your data directly. The previous database is kept in the "
                                           "shadow folder.", 15000)
 
-    def _offer_export_recovery_kit(self, app_dir, details: dict) -> None:
-        """Prompt to export recovery kit right after migration (P1-6 / blueprint §6 step 3)."""
-        from PySide6.QtWidgets import QMessageBox
-        from ui.dialogs.change_master_password_dialog import export_recovery_kit_flow
+    def _run_pending_restore(self) -> None:
+        """P4-3b: a backup restore staged on the admin PC is done now, before any database is
+        opened; it then replicates to every PC. The outcome is a start-up alert."""
+        import sync_restore
+        app_dir = Path(self.app_dir)
+        if not sync_restore.has_pending_restore(app_dir):
+            return
+        try:
+            info = sync_restore.apply_pending_restore(app_dir)
+        except sync_restore.RestoreError as e:
+            print(f"[SeraApp] Restore failed: {e}")
+            self._restore_alert = ("error", f"The backup was not restored: {e}. Your data is unchanged.", 0)
+            return
+        except Exception as e:
+            # The office key couldn't be loaded: nothing was touched, retried at the next start.
+            print(f"[SeraApp] Restore not done yet: {e}")
+            self._restore_alert = ("warning", f"The backup could not be restored yet ({type(e).__name__}); "
+                                              "Sera will try again at the next start.", 0)
+            return
+        if info:
+            self._restore_alert = (
+                "warning",
+                f"Backup {info.get('backup_name')} restored: {info.get('clients_back', 0)} client(s) back, "
+                f"{info.get('clients_removed', 0)} removed, {info.get('fields_revert', 0)} field(s) reverted. "
+                "The other PCs follow when they sync.", 15000)
 
-        reply = QMessageBox.question(
-            None,
-            "Aman Associates — Export Recovery Kit",
-            "Would you like to export a recovery kit to USB now? (Recommended)\n\n"
-            "The recovery kit contains encrypted key files to restore access if Windows credentials change.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if reply == QMessageBox.Yes:
-            pwd = details.get("new_password") or details.get("legacy_password")
-            export_recovery_kit_flow(None, app_dir, password=pwd, office_name=details.get("office_name"))
+    def _run_pending_catch_up(self) -> None:
+        """P4-4: a snapshot downloaded because this PC was below another PC's compaction floor
+        is installed now, before any database is opened."""
+        import sync_compaction
+        app_dir = Path(self.app_dir)
+        if not sync_compaction.has_pending_catch_up(app_dir):
+            return
+        try:
+            sync_compaction.apply_pending_catch_up(app_dir)
+        except sync_compaction.CatchUpError as e:
+            print(f"[SeraApp] Catch-up failed: {e}")
+            self._catch_up_alert = ("warning", f"Sera Sync could not install the office data it downloaded: {e}. "
+                                               "It will download it again.", 0)
+            return
+        except Exception as e:
+            print(f"[SeraApp] Catch-up not installed yet: {e}")
+            self._catch_up_alert = ("warning", f"Sera Sync could not install the downloaded office data yet "
+                                               f"({type(e).__name__}); it will try again at the next start.", 0)
+            return
+        self._catch_up_alert = ("warning", "This PC is up to date with the office again (it had been away "
+                                           "for a long time). Its own changes were kept.", 15000)
 
     def _handle_missing_office_db(self, app_dir: Path, db_path: str, hex_key: str) -> None:
         """Office mode requires an existing database; prevent silent initialization of empty DB (P1-6)."""
@@ -1574,26 +1470,9 @@ class SeraApp:
             )
         sys.exit(0)
 
-    def _ask_office_key_migration_details(self, app_dir) -> dict | None:
-        import sync_migrate
-        from ui.dialogs.office_key_migration_dialog import OfficeKeyMigrationDialog
-        dlg = OfficeKeyMigrationDialog(lambda pwd: sync_migrate.check_legacy_password(app_dir, pwd))
-        if dlg.exec() != QDialog.Accepted:
-            return None
-        return dlg.details
-
-    def _show_office_key_migration_message(self, level: str, title: str, text: str) -> None:
-        from PySide6.QtWidgets import QMessageBox
-        if level == "critical":
-            QMessageBox.critical(None, title, text)
-        elif level == "warning":
-            QMessageBox.warning(None, title, text)
-        else:
-            QMessageBox.information(None, title, text)
-
     def _resolve_encryption_key(self) -> tuple[str, str | None, str]:
         """
-        Resolves the database encryption key according to blueprint §5 P1-2:
+        Resolves the database encryption key according to blueprint §5 P1-2/P4-2:
         Order:
           1. apply_pending_swap (P0-4) - executed before this call.
           2. If keys/office.json exists -> office mode:
@@ -1601,8 +1480,16 @@ class SeraApp:
              hex_key = dek_hex(dek).
              Check key_id against office.json.
              Never read or write sera.key in this mode.
-          3. Else -> legacy mode: today's path with P0-5.
-        Expose self.key_mode ('office'/'legacy') and return (key_mode, key_id, hex_key).
+          3. Else, if master.db doesn't exist either -> first run: FirstRunDialog
+             ("New Office" / "Join Office", P2-7; both office-key only since P4-2 removed the
+             "Legacy: new/join" pages). Re-resolve once it completes.
+          4. Else (master.db exists but there is no office key): P4-2 removed the legacy
+             password+salt start-up path and the "Convert to office key" migration tool --
+             every real PC already has an office key since Sera Sync v3 went live (P3-9). The
+             only surviving reader of sera.key/sera.salt is the P2-8 rejoin/salvage importer,
+             so offer that directly instead of opening the database with the old password.
+        Expose self.key_mode ('office') and return (key_mode, key_id, hex_key). key_mode is
+        always 'office'; legacy mode no longer exists.
         """
         app_dir = getattr(self, "app_dir", None)
         if not app_dir:
@@ -1612,86 +1499,78 @@ class SeraApp:
         import sera_keys
         office_path = sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE
 
-        if office_path.exists():
-            # Office Mode
-            self.key_mode = "office"
-            try:
-                office_info = sera_keys.load_office(app_dir)
-            except sera_keys.KeyFileInvalid as e:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Office Configuration Error",
-                    f"The office configuration file is invalid or corrupted:\n\n{e}\n\n"
-                    "Please restore keys/office.json or contact your office administrator."
-                )
-                sys.exit(0)
+        if not office_path.exists():
+            db_path = getattr(self, "db_path", str(app_dir / "master.db"))
 
-            if office_info is None:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Office Configuration Error",
-                    "The office configuration file could not be loaded.\n\n"
-                    "Please contact your office administrator."
-                )
-                sys.exit(0)
-
-            try:
-                dek = sera_keys.load_dek(app_dir)
-            except sera_keys.KeyUnavailable:
-                dek = self._recover_office_dek(app_dir)
-                if not dek:
+            if not os.path.exists(db_path):
+                from ui.dialogs.first_run_dialog import FirstRunDialog
+                first_run_dlg = FirstRunDialog(app_dir, getattr(self, "actor_alias", "Admin"))
+                if first_run_dlg.exec() != QDialog.Accepted:
                     sys.exit(0)
-
-            import hmac
-            computed_key_id = sera_keys.key_id(dek)
-            if not hmac.compare_digest(computed_key_id, office_info.key_id):
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(
-                    None, "Aman Associates — Office Key Mismatch",
-                    "The loaded office data key does not match the office configuration in office.json.\n\n"
-                    "Startup aborted to prevent database damage."
-                )
-                sys.exit(0)
-
-            self.key_id = computed_key_id
-            hex_key = sera_keys.dek_hex(dek)
-            return self.key_mode, self.key_id, hex_key
-
-        # Legacy Mode
-        self.key_mode = "legacy"
-        self.key_id = None
-
-        master_password = None
-        db_path = getattr(self, "db_path", str(app_dir / "master.db"))
-        salt_path = getattr(self, "salt_path", str(app_dir / security.SALT_FILE))
-
-        if not os.path.exists(db_path):
-            from ui.dialogs.first_run_dialog import FirstRunDialog
-            first_run_dlg = FirstRunDialog(app_dir, getattr(self, "actor_alias", "Admin"))
-            if first_run_dlg.exec() != QDialog.Accepted:
-                sys.exit(0)
-            if getattr(first_run_dlg, "office_mode", False):
-                # P2-7: "New Office" / "Join Office" (pairing) wrote keys/office.json and
-                # (for New Office) master.db directly -- re-resolve from scratch so this now
-                # takes the office-mode branch above instead of deriving a legacy password key
-                # from sera.salt, which can't open an office-key-encrypted database. A Join
-                # whose pairing succeeded but whose snapshot download didn't still leaves
-                # office.json without master.db; the office-mode branch's pending-join check
-                # in __init__ (has_pending_join) picks that up on this same call.
+                # "New Office" / "Join Office" wrote keys/office.json (and, for New Office,
+                # master.db directly) -- re-resolve so this call takes the office-mode branch
+                # below. A Join whose pairing succeeded but whose snapshot download didn't
+                # still leaves office.json without master.db; the office-mode branch's
+                # pending-join check in __init__ (has_pending_join) picks that up on this
+                # same call.
                 return self._resolve_encryption_key()
-            master_password = first_run_dlg.master_password or self._get_master_password()
-        else:
-            if not os.path.exists(salt_path):
-                print(f"[SeraApp Error] Database exists at {db_path} but salt is missing at {salt_path}")
-            master_password = self._get_master_password()
 
-        if not master_password:
-            if os.path.exists(db_path):
-                self._show_startup_auth_error()
+            # A database exists but this PC has no office key: a pre-office-key install that
+            # was never converted or rejoined. Offer the P2-8 rejoin/salvage wizard (the one
+            # surviving reader of this PC's sera.key/sera.salt) instead of opening it directly.
+            from ui.dialogs.rejoin_office_dialog import run_pending_rejoin
+            result = run_pending_rejoin(app_dir, requested=True)
+            if result == "exit":
+                sys.exit(1)
+            if result == "quit":
+                sys.exit(0)
+            if not (sera_keys.keys_dir(app_dir) / sera_keys.OFFICE_FILE).exists():
+                # The user declined to rejoin; there is no other way to open this database.
+                sys.exit(0)
+            return self._resolve_encryption_key()
+
+        # Office Mode
+        self.key_mode = "office"
+        try:
+            office_info = sera_keys.load_office(app_dir)
+        except sera_keys.KeyFileInvalid as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "Aman Associates — Office Configuration Error",
+                f"The office configuration file is invalid or corrupted:\n\n{e}\n\n"
+                "Please restore keys/office.json or contact your office administrator."
+            )
             sys.exit(0)
 
-        salt = security.load_salt(salt_path)
-        hex_key = security.derive_key_hex(master_password, salt)
+        if office_info is None:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "Aman Associates — Office Configuration Error",
+                "The office configuration file could not be loaded.\n\n"
+                "Please contact your office administrator."
+            )
+            sys.exit(0)
+
+        try:
+            dek = sera_keys.load_dek(app_dir)
+        except sera_keys.KeyUnavailable:
+            dek = self._recover_office_dek(app_dir)
+            if not dek:
+                sys.exit(0)
+
+        import hmac
+        computed_key_id = sera_keys.key_id(dek)
+        if not hmac.compare_digest(computed_key_id, office_info.key_id):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "Aman Associates — Office Key Mismatch",
+                "The loaded office data key does not match the office configuration in office.json.\n\n"
+                "Startup aborted to prevent database damage."
+            )
+            sys.exit(0)
+
+        self.key_id = computed_key_id
+        hex_key = sera_keys.dek_hex(dek)
         return self.key_mode, self.key_id, hex_key
 
     def _recover_office_dek(self, app_dir: Path | str | None = None) -> bytes | None:
@@ -1706,179 +1585,6 @@ class SeraApp:
         if dlg.exec() == QDialog.Accepted:
             return dlg.recovered_dek
         return None
-
-    def _verify_master_password(self, password: str) -> bool:
-        if not password:
-            self._last_auth_error = "EMPTY_PASSWORD"
-            return False
-        db_path = getattr(self, "db_path", str(APP_DIR / "master.db"))
-        if not os.path.exists(db_path):
-            self._last_auth_error = "MISSING_DB"
-            return False
-        salt_path = getattr(self, "salt_path", str(Path(db_path).parent / security.SALT_FILE))
-        if not os.path.exists(salt_path):
-            self._last_auth_error = "MISSING_SALT"
-            return False
-        try:
-            salt = security.load_salt(salt_path)
-            hex_key = security.derive_key_hex(password, salt)
-            import sqlcipher3.dbapi2 as sqlite3
-            conn = None
-            try:
-                conn = sqlite3.connect(db_path)
-                conn.execute(f"PRAGMA key = \"x'{hex_key}'\";")
-                conn.execute("SELECT count(*) FROM sqlite_master;").fetchone()
-                self._last_auth_error = None
-                return True
-            except sqlite3.OperationalError as op_err:
-                err_str = str(op_err).lower()
-                if "locked" in err_str or "busy" in err_str:
-                    self._last_auth_error = "DATABASE_LOCKED"
-                else:
-                    self._last_auth_error = "WRONG_PASSWORD"
-                return False
-            except Exception:
-                self._last_auth_error = "WRONG_PASSWORD"
-                return False
-            finally:
-                if conn:
-                    conn.close()
-        except Exception as e:
-            err_str = str(e).lower()
-            if "locked" in err_str or "busy" in err_str:
-                self._last_auth_error = "DATABASE_LOCKED"
-            else:
-                self._last_auth_error = "AUTH_ERROR"
-            return False
-
-    def _get_master_password(self) -> str:
-        db_path = getattr(self, "db_path", str(APP_DIR / "master.db"))
-        app_dir = Path(db_path).parent
-        key_file = app_dir / "sera.key"
-        self._last_auth_error = None
-
-        # Check existence first: never create a DB as a side effect of the check.
-        # If master.db does not exist, first-run DB creation moves to P0-6.
-        if not os.path.exists(db_path):
-            self._last_auth_error = "MISSING_DB"
-            return ""
-
-        salt_path = getattr(self, "salt_path", str(app_dir / security.SALT_FILE))
-        if not os.path.exists(salt_path):
-            self._last_auth_error = "MISSING_SALT"
-            return ""
-
-        prompt_saved_fail_text = (
-            "This PC's saved password doesn't open the office database. "
-            "Enter the office master password."
-        )
-
-        # 1. If sera.key exists, test it
-        if key_file.exists():
-            saved_pwd = ""
-            try:
-                saved_pwd = key_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
-
-            if saved_pwd and self._verify_master_password(saved_pwd):
-                return saved_pwd
-
-            if self._last_auth_error == "DATABASE_LOCKED":
-                return ""
-
-            # If it fails, show the prompt, up to 3 tries, with the specified text.
-            # Save to sera.key only after a password opens the DB.
-            for _ in range(3):
-                pwd = self._prompt_master_password(prompt_saved_fail_text)
-                if not pwd:
-                    self._last_auth_error = "CANCELLED"
-                    return ""
-                if self._verify_master_password(pwd):
-                    try:
-                        key_file.write_text(pwd, encoding="utf-8")
-                    except Exception:
-                        pass
-                    return pwd
-                if self._last_auth_error == "DATABASE_LOCKED":
-                    return ""
-            self._last_auth_error = "WRONG_PASSWORD"
-            return ""
-
-        # 2. When sera.key does not exist, default password check (only when master.db already exists)
-        default_pwd = "admin123"
-        if self._verify_master_password(default_pwd):
-            try:
-                key_file.write_text(default_pwd, encoding="utf-8")
-            except Exception:
-                pass
-            return default_pwd
-
-        if self._last_auth_error == "DATABASE_LOCKED":
-            return ""
-
-        # Fallback: Prompt if custom password was set without a saved sera.key
-        prompt_text = "Enter Master Password:"
-        for _ in range(3):
-            pwd = self._prompt_master_password(prompt_text)
-            if not pwd:
-                self._last_auth_error = "CANCELLED"
-                return ""
-            if self._verify_master_password(pwd):
-                try:
-                    key_file.write_text(pwd, encoding="utf-8")
-                except Exception:
-                    pass
-                return pwd
-            if self._last_auth_error == "DATABASE_LOCKED":
-                return ""
-        self._last_auth_error = "WRONG_PASSWORD"
-        return ""
-
-    def _prompt_master_password(self, prompt_text: str = "Enter Master Password:") -> str:
-        from PySide6.QtWidgets import QInputDialog, QLineEdit
-        password, ok = QInputDialog.getText(
-            None, "Aman Associates — Login",
-            prompt_text, QLineEdit.Password
-        )
-
-        return password if ok and password else ""
-
-    def _show_startup_auth_error(self):
-        from PySide6.QtWidgets import QMessageBox
-        err = getattr(self, "_last_auth_error", None)
-        if err == "MISSING_SALT":
-            title = "Aman Associates — Missing Salt"
-            msg = (
-                f"The office database salt ({security.SALT_FILE}) is missing.\n\n"
-                f"Location: {getattr(self, 'salt_path', security.SALT_FILE)}\n\n"
-                "The database cannot be opened without its original salt file. "
-                "Please restore sera.salt from a backup or previous installation."
-            )
-        elif err == "DATABASE_LOCKED":
-            title = "Aman Associates — Database Locked"
-            msg = (
-                "The office database is currently locked by another process.\n\n"
-                "Please check if another instance of Sera is already running "
-                "or if another application has master.db open."
-            )
-        elif err == "CANCELLED":
-            return
-        elif err == "WRONG_PASSWORD":
-            title = "Aman Associates — Authentication Failed"
-            msg = (
-                "Could not open the office database.\n\n"
-                "Wrong password, or the database file is damaged. "
-                "The maximum number of attempts (3) was exceeded."
-            )
-        else:
-            title = "Aman Associates — Database Error"
-            msg = (
-                "Could not unlock the office database. "
-                "Wrong password, or the database file is damaged."
-            )
-
-        QMessageBox.critical(None, title, msg)
 
     def _ensure_user_identity(self) -> tuple[str, str]:
         """Get or create a simple username for this workstation (non-intrusive).
@@ -1981,6 +1687,7 @@ class SeraApp:
         self.detail_win.back_requested.connect(self._show_search_from_detail)
         self.detail_win.toast_requested.connect(self.shell.show_toast)
         self.detail_win.action_alert_requested.connect(self.shell.show_action_alert)
+        self.tracker_dump_win.service_action_requested.connect(self.detail_win.run_service_action)
         self.admin_win.back_requested.connect(self._show_search_from_admin)
         self.admin_win.request_slide_panel.connect(self._open_in_slide_panel)
         self.admin_win.toast_requested.connect(self.shell.show_toast)
@@ -2000,6 +1707,7 @@ class SeraApp:
         sidebar.action_trigger_sync.connect(self.search_win._on_manual_refresh)
 
         sidebar.action_settings.connect(self.admin_win._on_open_settings)
+        sidebar.action_display_scale.connect(self._open_display_scale_dialog)
         sidebar.action_enter_admin.connect(self._request_admin_mode)
         sidebar.action_exit_admin.connect(self._exit_admin_mode)
         
@@ -2013,6 +1721,14 @@ class SeraApp:
         # Toggle Sidebar Hotkey (Ctrl+B)
         self.sc_ctrl_b = QShortcut(QKeySequence("Ctrl+B"), self.shell)
         self.sc_ctrl_b.activated.connect(self.shell.toggle_sidebar)
+
+        # Per-PC display scale: Ctrl+= / Ctrl+- step it by 5 %, Ctrl+0 returns to Automatic. Next start.
+        self.sc_scale_up = QShortcut(QKeySequence("Ctrl+="), self.shell)
+        self.sc_scale_up.activated.connect(lambda: self._step_display_scale(0.05))
+        self.sc_scale_down = QShortcut(QKeySequence("Ctrl+-"), self.shell)
+        self.sc_scale_down.activated.connect(lambda: self._step_display_scale(-0.05))
+        self.sc_scale_reset = QShortcut(QKeySequence("Ctrl+0"), self.shell)
+        self.sc_scale_reset.activated.connect(self._reset_display_scale)
 
         # Inject sync service into admin window for Sera Sync dialog
         self.admin_win.set_sync_service(self.sync_service)
@@ -2042,7 +1758,8 @@ class SeraApp:
             # The HUD pill switch is independent of the engines: it only decides whether the
             # pill is shown, so it applies even when no engine is on.
             from core.vsdc.vsdc_engines import (apply_sgt_live_rollout, read_engine_flags, read_hud_enabled,
-                                                read_sgt_i_mode, read_sgt_mode, read_sgt_record_pages)
+                                                read_scc_detect_mode, read_sgt_i_mode, read_sgt_mode,
+                                                read_sdis_record, read_sgt_record_pages)
             # Once per office: SGT live becomes the capture engine, the other three go off.
             apply_sgt_live_rollout(self.db.get_setting, self.db.set_settings_bulk)
             hud = getattr(self, "vsdc_hud", None)
@@ -2055,7 +1772,9 @@ class SeraApp:
             sgt = read_sgt_mode(self.db.get_setting)
             worker.router.apply_engine_settings(vsdc, vsdc_x, vsdc247, sgt=sgt,
                                                 sgt_record=read_sgt_record_pages(self.db.get_setting),
-                                                sgt_i=read_sgt_i_mode(self.db.get_setting) == "on")
+                                                sgt_i=False,   # SGT-I unhooked: never attached, whatever the sgt_i_mode setting says
+                                                scc_detect=read_scc_detect_mode(self.db.get_setting) == "on",
+                                                sdis_record=read_sdis_record(self.db.get_setting))
             if (vsdc or vsdc_x or vsdc247 or sgt != "off") and not worker.isRunning():
                 worker.start()
                 print("⚡ [main] VSDC Worker started "
@@ -2288,6 +2007,22 @@ class SeraApp:
                 import version
                 version.apply_and_restart(installer, silent=True)
 
+    def _check_agent_update(self):
+        """The update agent has staged a newer version: close at an idle moment so it can install.
+        A helper reopens the app once the install is done."""
+        from core import update_agent
+        if self._update_applied:
+            return
+        ver = update_agent.should_close_now(APP_DIR, captures_busy=bool(self._capture_queue.unfinished_tasks))
+        if not ver:
+            return
+        print(f"[AutoUpdater] Closing for the staged v{ver} update (PC idle); it reopens after the install.")
+        update_agent.record_close(APP_DIR, ver)
+        self._update_applied = True
+        self._agent_update_timer.stop()
+        update_agent.start_relauncher()
+        self._quit_application()
+
     def _flush_capture_queue_on_quit(self, timeout_sec: float = 5.0):
         """Waits (bounded) for queued captures to be written; the capture thread is a daemon."""
         import time as _time
@@ -2340,6 +2075,24 @@ class SeraApp:
                 return
         self.app.quit()
 
+    def _step_display_scale(self, delta: float):
+        """Ctrl+= / Ctrl+-: steps the saved manual value (or the scale in use, when still on Automatic)."""
+        mode, saved = read_settings()
+        base = saved if mode == MODE_MANUAL and saved is not None else self.ui_scale
+        value = next_manual_value(base, delta)
+        write_settings(MODE_MANUAL, value)
+        self.shell.show_alert(f"Display scale {round(value * 100)} % — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _reset_display_scale(self):
+        write_settings("auto")
+        self.shell.show_alert("Display scale set back to Automatic — restart Sera to apply",
+                              level="info", duration=3000)
+
+    def _open_display_scale_dialog(self):
+        from ui.dialogs.display_scale_dialog import DisplayScaleDialog
+        DisplayScaleDialog(parent=self.shell).exec()
+
     def _global_search_shortcut(self):
         self.shell.dismiss_detail_on_outside = False
         self.shell.set_current_page(0)
@@ -2352,12 +2105,15 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_search_from_admin(self):
+        self.shell.dismiss_detail_on_outside = False
+        self.shell.set_current_page(0)
+        self.shell.slide_panel.slide_out()
+        QTimer.singleShot(0, self._refresh_search_after_switch)
+
+    def _refresh_search_after_switch(self):
         from core.memlog import timed
-        with timed("opening the search grid"):
-            self.shell.dismiss_detail_on_outside = False
+        with timed("loading the search grid"):
             self.search_win.refresh()
-            self.shell.set_current_page(0)
-            self.shell.slide_panel.slide_out()
 
     def _show_client_detail(self, client_id: int):
         self.shell.dismiss_detail_on_outside = True
@@ -2443,17 +2199,20 @@ class SeraApp:
         self.shell.slide_panel.slide_out()
 
     def _show_tracker_dump(self):
-        from core.memlog import timed
-        with timed("opening the tracker"):
-            self._show_tracker_dump_now()
+        self._show_tracker_dump_now()
 
     def _show_tracker_dump_now(self):
         self.shell.dismiss_detail_on_outside = False
         if hasattr(self, "tracker_dump_win") and self.tracker_dump_win:
-            self.tracker_dump_win.load_data()
             self.shell.set_current_page(self.tracker_dump_win)
             self.shell.sidebar.set_active_navigation(self.shell.sidebar.btn_tracker_dump)
+            QTimer.singleShot(0, self._load_tracker_after_switch)
         self.shell.slide_panel.slide_out()
+
+    def _load_tracker_after_switch(self):
+        from core.memlog import timed
+        with timed("loading the tracker"):
+            self.tracker_dump_win.load_data_if_stale()
 
     def _open_in_slide_panel(self, widget, title: str):
         from PySide6.QtWidgets import QDialog
@@ -2467,7 +2226,32 @@ class SeraApp:
     def _on_sync_received(self):
         """Called from SyncPeerService background TCP thread when an incoming
         database push has been accepted and written to disk. Emits Qt signal for main thread handling."""
+        try:
+            from core.vsdc import vsdc_scope
+            vsdc_scope.reload_extra_domains()   # another PC may have saved or deleted a service (Part T)
+        except Exception:
+            pass
         self.sync_bridge.sync_received_signal.emit()
+
+    def _write_sdis_fields(self):
+        """SDIS Part Q: rewrite <Sera data>/sdis_fields.json from the synced table (SGT reloads it)."""
+        try:
+            from core.sdis.register import refresh
+            refresh(self.db)
+        except Exception as e:
+            print(f"[SDIS] sdis_fields.json not written: {type(e).__name__}")
+
+    def _write_sdis_containers(self):
+        """SDIS Part S.3: rewrite <Sera data>/sdis_containers.json from the synced sdis_config row."""
+        try:
+            from core.sdis.config import refresh
+            refresh(self.db)
+        except Exception as e:
+            print(f"[SDIS] sdis_containers.json not written: {type(e).__name__}")
+
+    def _write_sdis_files(self):
+        self._write_sdis_fields()
+        self._write_sdis_containers()
 
     def _on_live_sync_received(self, sender_username: str = "", sender_host: str = ""):
         """Called from SyncPeerService background thread. Under v3 (P0-4), live in-place replacement
@@ -2511,7 +2295,7 @@ class SeraApp:
 
             # Re-sync allied reports & workbooks in background thread
             threading.Thread(
-                target=lambda: (self.db.sync_fst_reports(), self.db.sync_dom_parser(), self.db.re_resolve_all_tracker_dumps()),
+                target=lambda: (self.db.re_resolve_all_tracker_dumps(),),
                 name="sync-live-allied-reports",
                 daemon=True
             ).start()
@@ -2525,6 +2309,14 @@ class SeraApp:
     # ------------------------------------------------------------------
 
     def on_sync_engine_event(self, kind: str, info: dict):
+        if kind == "catch_up_staged":
+            # P4-4: this PC was below another PC's compaction floor; a snapshot is staged.
+            self.sync_bridge.engine_alert_signal.emit(
+                "This PC was away from the office for a long time. Sera Sync has downloaded a fresh "
+                "copy of the office data; restart Sera to finish (your own changes are kept).", "warning")
+            return
+        if kind == "synced" and getattr(self, "_sdis_excavator", None) is not None:
+            self._sdis_excavator.nudge()    # peers are reachable: let the excavator look now
         if kind == "synced":
             # In mode shadow, remote changes went to the replica, not the live DBs -- nothing
             # for the UI to reload, and refreshing anyway would falsely tell the user a live
@@ -2533,6 +2325,21 @@ class SeraApp:
             if db is not None and db.get_sync_mode() != "live":
                 return
             self._queue_synced_tables(info.get("tables") or ())
+            if "sdis_fields" in (info.get("tables") or ()):
+                self._write_sdis_fields()   # SDIS Part Q: another PC registered/renamed/retired a field
+            if "sdis_config" in (info.get("tables") or ()):
+                self._write_sdis_containers()   # SDIS Part S.3: another PC edited the containers
+            if "tracker_dump" in (info.get("tables") or ()):
+                # Another PC filed something or its status changed. The containers the LTT sheet
+                # and tracker list read are a local cache of tracker_dump that sync does not touch:
+                # rebuild them, rewrite the LTT sheet, then refresh the windows with the new data.
+                try:
+                    from core.ltt import monthly as _ltt_monthly
+                    _ltt_monthly.refresh_after_sync(
+                        db, on_done=lambda: self.sync_bridge.engine_synced_signal.emit(
+                            ["tracker_dump", "client_raw_containers"]))
+                except Exception as e:
+                    print(f"[ltt] could not schedule the refresh after sync: {e}")
         elif kind == "clock_ahead":
             name = info.get("name") or info.get("device_id") or "Peer"
             ahead_ms = info.get("ahead_ms", 0)
@@ -2678,10 +2485,36 @@ class SeraApp:
         import version
         version.restart_app()
 
+    def _after_startup(self):
+        """Once per launch: drop the logon priority boost, and keep the autostart entry right."""
+        if startup_boost.launched_at_startup():
+            QTimer.singleShot(startup_boost.BOOST_SECONDS * 1000, startup_boost.restore_priority)
+
+        def _repair():
+            try:
+                from ui.utils import autostart
+                result = autostart.repair_autostart()
+                if result is not None:
+                    print(f"[Autostart] repaired: ok={result.ok} method={result.method} {result.message}")
+            except Exception as exc:
+                print(f"[Autostart] repair failed: {exc}")
+        threading.Thread(target=_repair, name="autostart-repair", daemon=True).start()
+
     def run(self):
+        self._after_startup()
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
+    from core import update_agent
+    if update_agent.is_available() and update_agent.install_in_progress():
+        # The update agent is replacing these files: get out of its way, reopen when it is done.
+        update_agent.start_relauncher(trigger_agent=False)
+        sys.exit(0)
+    first_instance = startup_boost.claim_instance()
+    if startup_boost.launched_at_startup():
+        if not first_instance:
+            sys.exit(0)     # Sera is already open in this session; the logon launch has nothing to add
+        startup_boost.raise_priority()
     _setup_sync_log(APP_DIR)
     SeraApp().run()
 

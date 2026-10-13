@@ -1,5 +1,5 @@
 {
- "about": "GST: the welcome page names the client and GSTIN (PAN and GSTIN agree), GSTR-1 page gives FY and month, the success page the ARN.",
+ "about": "GST: every page carries the top header 'NAME GSTIN' (PAN and GSTIN agree), GSTR-1 page gives FY and month, the success page the ARN.",
  "pages": [
   {
    "portal": "GST Portal",
@@ -7,6 +7,7 @@
    "title": "",
    "source": "uia",
    "lines": [
+    " ASHOK KUMAR SEN 19ABCPD1234E1ZB",
     "Welcome ASHOK KUMAR SEN to GST Common Portal",
     "19ABCPD1234E1ZB",
     "View Profile"
@@ -21,6 +22,7 @@
    "title": "",
    "source": "uia",
    "lines": [
+    " ASHOK KUMAR SEN 19ABCPD1234E1ZB",
     "ASHOK KUMAR SEN",
     "19ABCPD1234E1ZB",
     "View Profile"
@@ -35,6 +37,7 @@
    "title": "",
    "source": "uia",
    "lines": [
+    " ASHOK KUMAR SEN 19ABCPD1234E1ZB",
     "GSTR-1 - Details of outward supplies",
     "FY -",
     "2026-27",
@@ -52,6 +55,7 @@
    "title": "",
    "source": "uia",
    "lines": [
+    " ASHOK KUMAR SEN 19ABCPD1234E1ZB",
     "Success",
     "Return submitted successfully. ARN: AA070826000001Z",
     "OK"

@@ -1,0 +1,105 @@
+== maps: 11 (session, page link) ==
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr1/file | capture 20261001_131804
+  snapshots 3  text nodes 57  double count 0  lost 0  multi 1
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr1/file | capture 20261001_131835
+  snapshots 3  text nodes 57  double count 0  lost 0  multi 1
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr3b/filing | capture 20261001_131804
+  snapshots 4  text nodes 63  double count 0  lost 0  multi 0
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr3b/filing | capture 20261001_131835
+  snapshots 4  text nodes 63  double count 0  lost 0  multi 0
+Page: return.gst.gov.in/returns/auth/dashboard | capture 20261001_235545
+  snapshots 7  text nodes 104  double count 0  lost 0  multi 0
+Page: return.gst.gov.in/returns/auth/dashboard | capture 20261001_235833
+  snapshots 6  text nodes 107  double count 0  lost 0  multi 0
+Page: return.gst.gov.in/returns/auth/gstr1 | capture 20261001_235545
+  snapshots 4  text nodes 124  double count 0  lost 0  multi 13
+Page: return.gst.gov.in/returns/auth/gstr1 | capture 20261001_235833
+  snapshots 7  text nodes 128  double count 0  lost 0  multi 13
+Page: services.gst.gov.in/services/auth/dashboard | capture 20261001_235545
+  snapshots 1  text nodes 165  double count 0  lost 0  multi 0
+Page: services.gst.gov.in/services/auth/dashboard | capture 20261001_235833
+  snapshots 1  text nodes 165  double count 0  lost 0  multi 0
+Page: title: Goods & Service Tax (GST) | User Dashboard - Google Chrome | capture 20261001_235545
+  snapshots 1  text nodes 1334  double count 0  lost 0  multi 0
+TOTAL  snapshots 41  text nodes 2367  double count 0  lost 0  multi 28
+
+== memory: 5 page links with 2+ clients (N = 2) ==
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr1/file | clients 2
+  forward: memory 95 nodes, pending 0
+    unidentified capture 20261001_131804 nodes   95  matched   95 (100.0%)  FIRST
+    unidentified capture 20261001_131835 nodes   95  matched   95 (100.0%)  SAME SCREEN
+      confirmed changes within one client      1
+      confirmed differs between clients        8
+      confirmed same for all clients          48
+  reversed: memory 95 nodes, pending 0
+    unidentified capture 20261001_131835 nodes   95  matched   95 (100.0%)  FIRST
+    unidentified capture 20261001_131804 nodes   95  matched   95 (100.0%)  SAME SCREEN
+      confirmed changes within one client      1
+      confirmed differs between clients        8
+      confirmed same for all clients          48
+  orders agree: yes
+Page: /Users/Nex/AppData/Local/Temp/gst_capture_test.html#/returns/auth/gstr3b/filing | clients 2
+  forward: memory 106 nodes, pending 0
+    unidentified capture 20261001_131804 nodes  106  matched  106 (100.0%)  FIRST
+    unidentified capture 20261001_131835 nodes  106  matched  106 (100.0%)  SAME SCREEN
+      confirmed differs between clients        8
+      confirmed same for all clients          55
+  reversed: memory 106 nodes, pending 0
+    unidentified capture 20261001_131835 nodes  106  matched  106 (100.0%)  FIRST
+    unidentified capture 20261001_131804 nodes  106  matched  106 (100.0%)  SAME SCREEN
+      confirmed differs between clients        8
+      confirmed same for all clients          55
+  orders agree: yes
+Page: return.gst.gov.in/returns/auth/dashboard | clients 2
+  forward: memory 214 nodes, pending 7
+    client 1               nodes  214  matched  214 (100.0%)  FIRST
+    client 2               nodes  219  matched  212 ( 96.8%)  CHANGED
+      confirmed composite                      7
+      confirmed differs between clients        6
+      confirmed same for all clients          90
+      waiting   only one client so far         2
+      waiting   repeat                         3
+  reversed: memory 219 nodes, pending 2
+    client 2               nodes  219  matched  219 (100.0%)  FIRST
+    client 1               nodes  214  matched  212 ( 99.1%)  SAME SCREEN
+      confirmed composite                      7
+      confirmed differs between clients        6
+      confirmed same for all clients          90
+      waiting   only one client so far         2
+      waiting   repeat                         3
+  orders agree: yes
+Page: return.gst.gov.in/returns/auth/gstr1 | clients 2
+  forward: memory 321 nodes, pending 10
+    client 1               nodes  321  matched  321 (100.0%)  FIRST
+    client 2               nodes  331  matched  321 ( 97.0%)  CHANGED
+      confirmed changes within one client      1
+      confirmed composite                     18
+      confirmed differs between clients       13
+      confirmed same for all clients          92
+      waiting   only one client so far         4
+  reversed: memory 331 nodes, pending 0
+    client 2               nodes  331  matched  331 (100.0%)  FIRST
+    client 1               nodes  321  matched  321 (100.0%)  SAME SCREEN
+      confirmed changes within one client      1
+      confirmed composite                     18
+      confirmed differs between clients       13
+      confirmed same for all clients          92
+      waiting   only one client so far         4
+  orders agree: yes
+Page: services.gst.gov.in/services/auth/dashboard | clients 2
+  forward: memory 306 nodes, pending 0
+    client 1               nodes  306  matched  306 (100.0%)  FIRST
+    client 2               nodes  306  matched  306 (100.0%)  SAME SCREEN
+      confirmed composite                     11
+      confirmed differs between clients       39
+      confirmed same for all clients         115
+  reversed: memory 306 nodes, pending 0
+    client 2               nodes  306  matched  306 (100.0%)  FIRST
+    client 1               nodes  306  matched  306 (100.0%)  SAME SCREEN
+      confirmed composite                     11
+      confirmed differs between clients       39
+      confirmed same for all clients         115
+  orders agree: yes
+
+orders agree: yes
+total seconds: 3.4

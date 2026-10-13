@@ -41,11 +41,13 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Qt, QThread
+from PySide6.QtCore import QObject, Signal, Qt, QThread, QTimer
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocketServer, QWebSocket
 
 WS_PORTS = (48765, 48766, 48767, 48768)  # tried in order; all below Windows' dynamic port range
+_BIND_RETRY_MS = 5000
+_BIND_RETRY_TRIES = 24                   # 2 minutes in all
 
 CHROME_ORIGIN_PREFIX = "chrome-extension://"
 EDGE_ORIGIN_PREFIX = "chrome-extension://"  # Edge is Chromium; same scheme, same id
@@ -88,16 +90,19 @@ def _load_chrome_extension_id(manifest_path: Path) -> Optional[str]:
 
 
 class WSBridge(QObject):
+    # Fed only by core/vsdc's filing_captured signal (SGT/VSDC desktop capture), connected
+    # directly to main.py's _handle_extension_result - not by anything over this websocket.
+    # The extension used to also feed it via "filing_result"/"audit_event" messages; that
+    # tracking was removed (autofill-tweaks Part A/W1-1), so dispatch() below no longer emits it.
     filing_result_received = Signal(dict)
-    uncertain_result_received = Signal(dict)
     sca_state_received = Signal(dict)
     sca_error_received = Signal(dict)
     sca_fill_result_received = Signal(dict)
     sca_password_requested = Signal(dict)   # reply with WSBridge.reply(msg, payload)
-    session_started_received = Signal(dict)
-    scc_password_verified_received = Signal(dict)
-    sdc_timeline_received = Signal(dict)
-    sudr_capture_received = Signal(dict)  # SUDR canonical envelope
+    # Staff clicks on the MECP SCC card (SCC-U step 3): {attempt_id, row_label}. Labels only.
+    scc_row_worked_received = Signal(dict)
+    scc_card_closed_received = Signal(dict)     # {attempt_id}
+    scc_row_none_received = Signal(dict)        # {attempt_id}: "None - I typed my own" (step 5)
     extension_settings_updated_received = Signal(dict)
 
     # automation.py calls broadcast()/send_first() from plain background threads (autofill
@@ -128,12 +133,17 @@ class WSBridge(QObject):
         self._server: Optional[QWebSocketServer] = None
         self._sockets: list[QWebSocket] = []
         self._chrome_id: Optional[str] = None
+        self._kinds: dict = {}   # socket -> browser kind, see _browser_kind()
         self._bound_port: Optional[int] = None
         # A reply to SCA_PASSWORD_REQUEST must go back only to the browser that asked, never to
         # every connected browser. Keyed by the request's "_id" (every message the extension
         # sends carries one); the socket itself never goes into a message dict, so nothing here
         # risks being json.dumps()'d by a signal handler that logs/echoes the message it received.
         self._pending_replies: dict[str, QWebSocket] = {}
+        # The server may be started before the app has connected its signal handlers; messages
+        # received in that window are held here and replayed by mark_ready().
+        self._ready = False
+        self._held: list[tuple[QWebSocket, str]] = []
         # Explicit BlockingQueuedConnection (not the default AutoConnection) so this is a queued
         # hop even in the one case Qt's own thread-affinity check can't tell apart from "already
         # on the Qt thread": a connection made before this object's thread affinity is what it
@@ -179,14 +189,34 @@ class WSBridge(QObject):
         self._server = QWebSocketServer("Sera Bridge", QWebSocketServer.SslMode.NonSecureMode, self)
         self._server.newConnection.connect(self._on_new_connection)
 
+        if not self._try_listen():
+            # At logon another program (or this app's previous run) can still hold the ports for
+            # a few seconds; keep trying instead of leaving the extension offline until a restart.
+            print(f"[WSBridge] Could not bind any of {WS_PORTS} - will retry every "
+                  f"{_BIND_RETRY_MS // 1000} s for {_BIND_RETRY_TRIES * _BIND_RETRY_MS // 60000} min.")
+            self._bind_attempts_left = _BIND_RETRY_TRIES
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+
+    def _try_listen(self) -> bool:
+        if self._server is None:
+            return False
         for port in WS_PORTS:
             if self._server.listen(QHostAddress.LocalHost, port):
                 self._bound_port = port
-                break
-        else:
-            print(f"[WSBridge] Could not bind any of {WS_PORTS} - extension bridge is offline.")
+                print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+                return True
+        return False
+
+    def _retry_listen(self):
+        if self._server is None or self._bound_port is not None:
+            return    # stopped, or already bound
+        if self._try_listen():
             return
-        print(f"[WSBridge] Listening on 127.0.0.1:{self._bound_port}")
+        self._bind_attempts_left -= 1
+        if self._bind_attempts_left > 0:
+            QTimer.singleShot(_BIND_RETRY_MS, self._retry_listen)
+        else:
+            print(f"[WSBridge] Gave up binding {WS_PORTS} - extension bridge is offline.")
 
 
     def stop(self):
@@ -261,10 +291,30 @@ class WSBridge(QObject):
                 sock.close()
                 continue
             self._sockets.append(sock)
+            self._kinds[sock] = self._browser_kind(sock, origin)
             sock.textMessageReceived.connect(lambda text, s=sock: self._on_text_message(s, text))
             sock.disconnected.connect(lambda s=sock: self._on_disconnected(s))
 
+    @staticmethod
+    def _browser_kind(sock: QWebSocket, origin: str) -> str:
+        """'firefox' | 'edge' | 'chrome' | '' (unknown). Chrome and Edge share the
+        chrome-extension:// origin, so the handshake's User-Agent tells them apart."""
+        if (origin or "").startswith(FIREFOX_ORIGIN_PREFIX):
+            return "firefox"
+        try:
+            ua = bytes(sock.request().rawHeader("User-Agent")).decode("latin-1")
+        except Exception:
+            return ""
+        if "Edg/" in ua or "EdgA/" in ua:
+            return "edge"
+        if "Firefox/" in ua:
+            return "firefox"
+        if "Chrome/" in ua:
+            return "chrome"
+        return ""
+
     def _on_disconnected(self, sock: QWebSocket):
+        self._kinds.pop(sock, None)
         try:
             self._sockets.remove(sock)
         except ValueError:
@@ -277,7 +327,18 @@ class WSBridge(QObject):
         except RuntimeError:
             pass  # C++ object already deleted by Qt - harmless
 
+    def mark_ready(self):
+        """Call once every signal/settings_provider is connected; replays held messages."""
+        self._ready = True
+        held, self._held = self._held, []
+        for sock, text in held:
+            if sock in self._sockets:
+                self._on_text_message(sock, text)
+
     def _on_text_message(self, sock: QWebSocket, text: str):
+        if not self._ready:
+            self._held.append((sock, text))
+            return
         try:
             msg = json.loads(text)
         except (json.JSONDecodeError, TypeError):
@@ -300,11 +361,7 @@ class WSBridge(QObject):
 
     def dispatch(self, msg: dict):
         mtype = msg.get("type")
-        if mtype in ("filing_result", "audit_event"):
-            self.filing_result_received.emit(msg)
-        elif mtype == "uncertain_result":
-            self.uncertain_result_received.emit(msg)
-        elif mtype == "SCA_ACK":
+        if mtype == "SCA_ACK":
             cmd_id = msg.get("command_id")
             if cmd_id:
                 import automation
@@ -317,14 +374,18 @@ class WSBridge(QObject):
             self.sca_fill_result_received.emit(msg)
         elif mtype == "SCA_PASSWORD_REQUEST":
             self.sca_password_requested.emit(msg)
-        elif mtype == "session_start":
-            self.session_started_received.emit(msg)
-        elif mtype == "scc_password_verified":
-            self.scc_password_verified_received.emit(msg)
-        elif mtype == "sdc_session_timeline":
-            self.sdc_timeline_received.emit(msg)
-        elif mtype == "sudr_capture":
-            self.sudr_capture_received.emit(msg)
+        elif mtype == "scc_row_worked":
+            attempt_id, label = msg.get("attempt_id"), msg.get("row_label")
+            if isinstance(attempt_id, str) and isinstance(label, str) and 0 < len(attempt_id) <= 64 and 0 < len(label) <= 100:
+                self.scc_row_worked_received.emit({"type": mtype, "attempt_id": attempt_id, "row_label": label})
+        elif mtype == "scc_card_closed":
+            attempt_id = msg.get("attempt_id")
+            if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
+                self.scc_card_closed_received.emit({"type": mtype, "attempt_id": attempt_id})
+        elif mtype == "scc_row_none":
+            attempt_id = msg.get("attempt_id")
+            if isinstance(attempt_id, str) and 0 < len(attempt_id) <= 64:
+                self.scc_row_none_received.emit({"type": mtype, "attempt_id": attempt_id})
         elif mtype == "extension_settings_updated":
             self.extension_settings_updated_received.emit(msg)
         elif mtype in ("request_settings", "get_settings"):
@@ -378,16 +439,20 @@ class WSBridge(QObject):
             return sent
         return self._call_on_qt_thread(_do)
 
-    def send_first(self, payload: dict) -> bool:
+    def send_first(self, payload: dict, browser: Optional[str] = None) -> bool:
         """Sends to one connected browser only - whichever connected first. Used for autofill,
         where pushing the same command to every open browser would fill the same portal twice.
 
+        `browser` ('chrome' | 'edge' | 'firefox') restricts that to a browser of that kind; with
+        none connected it returns False rather than falling back to another browser.
+
         Safe to call from any thread - see broadcast() above for why that matters."""
         def _do():
-            if not self._sockets:
-                return False
-            self._send(self._sockets[0], payload)
-            return True
+            for sock in self._sockets:
+                if not browser or self._kinds.get(sock) == browser:
+                    self._send(sock, payload)
+                    return True
+            return False
         return self._call_on_qt_thread(_do)
 
     @property

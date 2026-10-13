@@ -6,7 +6,7 @@ Make start-up maintenance admin-only / id-independent (F12, F13).
 Verifies:
 1. is_admin_pc: admin PC vs joiner PC vs legacy mode.
 2. Data-rewriting maintenance in run_startup_maintenance and _init_raw_schema
-   runs only on the admin PC; non-admin runs sync_fst_reports & optimize_storage.
+   runs only on the admin PC; non-admin runs optimize_storage.
 3. Tie-breakers: deduplicate_tracker_dumps and _init_raw_schema purge use
    (created_at, gid) instead of MAX(id).
 4. resequence_client_serial_numbers orders by (created_at, gid), not id.
@@ -86,7 +86,7 @@ def test_is_admin_pc_and_token_letter(tmp_path):
 
 def test_startup_maintenance_runs_only_on_admin(tmp_path):
     """Verifies that the 5 data-rewriting maintenance methods run only on admin PC,
-    while sync_fst_reports and optimize_storage run on all PCs."""
+    while optimize_storage runs on all PCs."""
     with SyncHarness(num_nodes=2, base_dir=tmp_path / "harness_maint") as harness:
         n0, n1 = harness.nodes[0], harness.nodes[1]
 
@@ -98,7 +98,6 @@ def test_startup_maintenance_runs_only_on_admin(tmp_path):
              patch.object(admin_db, "deduplicate_tracker_dumps") as a_dedup, \
              patch.object(admin_db, "upgrade_all_placeholder_client_names") as a_upg, \
              patch.object(admin_db, "re_resolve_all_tracker_dumps") as a_reres, \
-             patch.object(admin_db, "sync_fst_reports") as a_fst, \
              patch.object(admin_db, "optimize_storage") as a_opt:
             admin_db.run_startup_maintenance()
             assert a_reseq.called
@@ -106,7 +105,6 @@ def test_startup_maintenance_runs_only_on_admin(tmp_path):
             assert a_dedup.called
             assert a_upg.called
             assert a_reres.called
-            assert a_fst.called
             assert a_opt.called
 
         with patch.object(joiner_db, "resequence_client_serial_numbers") as j_reseq, \
@@ -114,7 +112,6 @@ def test_startup_maintenance_runs_only_on_admin(tmp_path):
              patch.object(joiner_db, "deduplicate_tracker_dumps") as j_dedup, \
              patch.object(joiner_db, "upgrade_all_placeholder_client_names") as j_upg, \
              patch.object(joiner_db, "re_resolve_all_tracker_dumps") as j_reres, \
-             patch.object(joiner_db, "sync_fst_reports") as j_fst, \
              patch.object(joiner_db, "optimize_storage") as j_opt:
             joiner_db.run_startup_maintenance()
             assert not j_reseq.called
@@ -122,7 +119,6 @@ def test_startup_maintenance_runs_only_on_admin(tmp_path):
             assert not j_dedup.called
             assert not j_upg.called
             assert not j_reres.called
-            assert j_fst.called
             assert j_opt.called
 
 

@@ -58,7 +58,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "template_min_clients": 3,       # 14.4 step 4: "identical for several different clients"
     "template_share": 0.6,           # ...and for most of the page's clients (a shared surname is not)
     "match_threshold": 0.5,          # Jaccard needed to call a read a known page
-    "url_match_threshold": 0.3,      # ...when the address path is one the page is known by
+    "url_match_threshold": 0.1,      # ...when the address (with its #/route) is one the page is known by (measured, 2026-09-28)
+    "url_mismatch_threshold": 0.8,   # ...when both have addresses and they differ
+    "min_new_page_tokens": 10,       # fewer, at an address already known = still loading
     "core_share": 0.5,               # a token is part of a page's fingerprint on >= half its visits
     "fade_days": 30,
     "retire_days": 90,
@@ -101,15 +103,31 @@ def _file_name(portal: str) -> str:
     return (re.sub(r"[^a-z0-9._-]+", "_", (portal or "").strip().lower()) or "_") + ".json"
 
 
+def _mask_path(path: str) -> str:
+    segs = [mask_shape(s) if any(c.isdigit() for c in s) else s for s in path.split("/")]
+    return "/".join(segs).rstrip("/")
+
+
 def url_hint(url: str) -> str:
-    """The address path only - no query, no fragment - with any segment holding a digit masked,
-    so an id in the path never enters the atlas."""
+    """The address path - no query - with any segment holding a digit masked, so an id in the path
+    never enters the atlas. A single-page app's route after '#/' (or '#!/') IS the page's address
+    ("eportal.../foservices/#/dashboard/itrStatus"), so it is kept, masked the same way; any other
+    fragment ("#top") is not. Without the route every screen of such a portal shared one hint and
+    the lower url_match_threshold merged different screens (field test 2026-09-28: 12 in one)."""
     try:
-        path = urlparse(url or "").path
+        parsed = urlparse(url or "")
     except ValueError:
         return ""
-    segs = [mask_shape(s) if any(c.isdigit() for c in s) else s for s in path.split("/")]
-    return "/".join(segs).rstrip("/") or ("/" if path else "")
+    path = parsed.path
+    out = _mask_path(path) or ("/" if path else "")
+    frag = (parsed.fragment or "").split("?")[0]
+    if frag.startswith("!"):
+        frag = frag[1:]
+    if frag.startswith("/"):
+        route = _mask_path(frag)
+        if route:
+            out = (out if out != "/" else "") + "#" + route
+    return out
 
 
 def _elements(page: pm.PageMap) -> List[Element]:
@@ -177,6 +195,7 @@ class PortalAtlas:
         self.data: Dict[str, Any] = _empty(portal)
         self.private: Dict[str, Any] = {"pages": {}}
         self._last_page: Dict[str, str] = {}
+        self._counted: Dict[str, Set[Any]] = {}     # session -> what this page visit already counted
         self._dirty = False
         self._last_save = 0.0
         self._furniture: Optional[frozenset] = None
@@ -226,16 +245,29 @@ class PortalAtlas:
                   if structural and z not in _NO_FINGERPRINT}
         pid = self._match(tokens, hint)
         if pid is None:
-            if not tokens or len(self.pages) >= cfg["max_pages"]:
+            # A thin read at an address the atlas already knows is that screen still loading (a
+            # spinner, half the page): it never founds a page of its own - it would be a junk page.
+            # Measured on the 2026-09-28 corpus: with this, 18 screens -> 26 pages (was 46).
+            thin = len(tokens) < cfg["min_new_page_tokens"] and bool(hint) and any(
+                hint in (p.get("urls") or {}) for p in self.private["pages"].values())
+            if not tokens or thin or len(self.pages) >= cfg["max_pages"]:
                 return None
             pid = self._new_page(today)
         pub, priv = self.pages[pid], self.private["pages"].setdefault(pid, _new_private_page())
-        pub["visits"] += 1
+        # A VISIT is arriving on a page; the Core hands over a new read whenever any line changes,
+        # so one visit can be dozens of reads. Counts are per visit: a re-read only adds what this
+        # visit had not shown yet (a dialog, a new value).
+        counted = self._visit(session, pid)
+        if not counted:
+            pub["visits"] += 1
+            if hint:
+                priv["urls"][hint] = priv["urls"].get(hint, 0) + 1
         pub["last_seen"] = today
         for t in tokens:
-            priv["tokens"][t] = priv["tokens"].get(t, 0) + 1
+            if ("t", t) not in counted:
+                counted.add(("t", t))
+                priv["tokens"][t] = priv["tokens"].get(t, 0) + 1
         if hint:
-            priv["urls"][hint] = priv["urls"].get(hint, 0) + 1
             pub["url_hints"] = sorted(priv["urls"], key=lambda u: -priv["urls"][u])[:cfg["max_url_hints"]]
         client_hash = self._h("atlas-client", client) if client else None
         if client_hash and client_hash not in priv["clients"] and len(priv["clients"]) < MAX_CLIENTS:
@@ -243,19 +275,39 @@ class PortalAtlas:
             pub["clients"] += 1
         self._count_texts(page, pid, client_hash, today)
         self._count_words(priv, elements, client_hash)
-        self._merge_elements(pub, priv, elements, today)
-        self._merge_slots(pub, priv, page, today, client)
+        self._merge_elements(pub, priv, elements, today, counted)
+        self._merge_slots(pub, priv, page, today, client, counted)
         self._transition(session, pid, today)
         self._touch()
         return pid
+
+    def _visit(self, session: Optional[str], pid: str) -> Set[Any]:
+        """What the current visit to `pid` has already counted - empty on a new visit (a different
+        page than this session's last read, or no session at all). Memory only."""
+        if session is None:
+            return set()
+        if self._last_page.get(session) != pid:
+            self._counted.pop(session, None)
+        counted = self._counted.setdefault(session, set())
+        while len(self._counted) > MAX_SESSIONS:
+            self._counted.pop(next(iter(self._counted)))
+        return counted
 
     def _match(self, tokens: Set[str], hint: str) -> Optional[str]:
         cfg = self.config
         best, best_score = None, -1.0
         for pid, pub in self.pages.items():
             priv = self.private["pages"].get(pid) or {}
-            known_url = bool(hint) and hint in priv.get("urls", {})
-            need = cfg["url_match_threshold"] if known_url else cfg["match_threshold"]
+            urls = priv.get("urls", {})
+            known_url = bool(hint) and hint in urls
+            if known_url:
+                need = cfg["url_match_threshold"]
+            elif hint and urls:
+                # Both have an address and they differ (a route is kept, so '#/itrStatus' vs
+                # '#/fileIncomeTaxReturn'): only a near-identical structure is the same page.
+                need = cfg["url_mismatch_threshold"]
+            else:
+                need = cfg["match_threshold"]
             floor = cfg["core_share"] * max(pub["visits"], 1)
             core = {t for t, n in priv.get("tokens", {}).items() if n >= floor}
             union = tokens | core
@@ -417,7 +469,9 @@ class PortalAtlas:
             keys[key] = xid
         return item
 
-    def _merge_elements(self, pub, priv, elements: List[Element], today: str) -> None:
+    def _merge_elements(self, pub, priv, elements: List[Element], today: str,
+                        counted: Optional[Set[Any]] = None) -> None:
+        counted = counted if counted is not None else set()
         counts: Dict[int, Tuple[Dict[str, Any], int]] = {}
         for role, zone, text, structural, region in elements:
             render, template = self._render(priv, role, zone, text)
@@ -438,13 +492,17 @@ class PortalAtlas:
             prev = counts.get(id(el))
             counts[id(el)] = (el, prev[1] + 1 if prev else 1)
         for el, n in counts.values():
-            el["seen"] += 1
+            if ("e", id(el)) not in counted:
+                counted.add(("e", id(el)))
+                el["seen"] += 1
             el["last_seen"] = today
             if n > 1:
                 el["repeats"] = max(el.get("repeats", 1), n)
 
-    def _merge_slots(self, pub, priv, page: pm.PageMap, today: str, client: Optional[str]) -> None:
+    def _merge_slots(self, pub, priv, page: pm.PageMap, today: str, client: Optional[str],
+                     counted: Optional[Set[Any]] = None) -> None:
         cfg = self.config
+        counted = counted if counted is not None else set()
         visit: Dict[int, Tuple[Dict[str, Any], Set[Any]]] = {}
         for p in page.pairs:
             if p.zone in _SKIP_ZONES:
@@ -465,6 +523,12 @@ class PortalAtlas:
                 slot["clients"] = len(seen_by)
             slot["container"] = SEP.join(self._render(priv, r, p.zone, t)[0] for r, t in zip(roles, texts))
             slot["zone"] = p.zone
+            entry = visit.setdefault(id(slot), (slot, set()))
+            entry[1].add(p.row)
+            sighting = ("v", id(slot), p.row, p.value)    # the value lives in memory only, per visit
+            if sighting in counted:
+                continue                                  # a re-read of the same value: counted once
+            counted.add(sighting)
             types = slot.setdefault("types", {})
             typ = classify_type(p.value, p.method)
             types[typ] = types.get(typ, 0) + 1
@@ -482,10 +546,10 @@ class PortalAtlas:
                 kind = self._stats.classify(raw)
                 if kind is not None and kind.kind:
                     slot["kind"] = kind.kind
-            entry = visit.setdefault(id(slot), (slot, set()))
-            entry[1].add(p.row)
         for slot, rows in visit.values():
-            slot["seen"] += 1
+            if ("s", id(slot)) not in counted:
+                counted.add(("s", id(slot)))
+                slot["seen"] += 1
             slot["last_seen"] = today
             n = len(rows - {None})
             if n:

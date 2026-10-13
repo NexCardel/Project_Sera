@@ -240,18 +240,6 @@ class SeraSyncDialog(QDialog):
         self.btn_remove_ip.clicked.connect(self._on_remove_pc_by_ip)
         btn_row.addWidget(self.btn_remove_ip)
 
-        self.btn_office_key = QPushButton("  Convert to office key")
-        self.btn_office_key.setToolTip("Admin PC only: the PC with the most complete database. Every other PC uses Rejoin office.")
-        icon = _safe_icon("mdi.key-change", color="#FFFFFF")
-        if icon:
-            self.btn_office_key.setIcon(icon)
-        self.btn_office_key.clicked.connect(self._on_convert_to_office_key)
-        # Only a legacy-mode PC (no office key id yet) can be converted.
-        self.btn_office_key.setVisible(
-            self.sync_service is not None and getattr(self.sync_service, "key_id", None) is None
-        )
-        btn_row.addWidget(self.btn_office_key)
-
         self.btn_rejoin = QPushButton("  Rejoin office")
         rejoin_icon = _safe_icon("mdi.database-import", color="#FFFFFF")
         if rejoin_icon:
@@ -510,33 +498,6 @@ class SeraSyncDialog(QDialog):
 
         main_layout.addLayout(bottom_row)
 
-    def _on_convert_to_office_key(self):
-        if not self.sync_service:
-            return
-        reply = QMessageBox.question(
-            self, "Convert to Office Key",
-            "Convert this PC to an office key?\n\n"
-            "Do this only on the admin PC: the one with the most complete database.\n\n"
-            "Sera will restart and ask for the current master password and an office name. "
-            "The current files are backed up first.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-        from pathlib import Path
-        import sync_migrate
-        try:
-            sync_migrate.write_migrate_request(Path(self.sync_service.db_path).parent, requested_by=self.actor)
-        except OSError as e:
-            QMessageBox.warning(self, "Convert to Office Key", f"Could not schedule the conversion: {e}")
-            return
-        try:
-            self.sync_service.stop()
-        except Exception:
-            pass
-        import version
-        version.restart_app()
-
     def _on_rejoin_office(self):
         if not self.sync_service:
             return
@@ -609,6 +570,19 @@ class SeraSyncDialog(QDialog):
         conn = sqlite3.connect(self.db.db_path)
         conn.execute("PRAGMA key = \"x'%s'\";" % self.db.hex_key)
         return conn
+
+    @staticmethod
+    def _local_stamp(stamp):
+        """UTC '...Z' stamp -> local 'YYYY-MM-DD HH:MM:SS' for display; 'never' when empty."""
+        if not stamp:
+            return "never"
+        import datetime
+        try:
+            utc = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+            return utc.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return str(stamp)
 
     def _refresh_members(self):
         if not getattr(self, "members_group", None) or not self.members_group.isVisible() or self.db is None:
@@ -688,7 +662,7 @@ class SeraSyncDialog(QDialog):
             self.members_table.setItem(row, 1, QTableWidgetItem(self._online_status(dev_id, own_device_id)))
             role = "Admin" if dev_id == admin_device_id else "Member"
             self.members_table.setItem(row, 2, QTableWidgetItem(role))
-            self.members_table.setItem(row, 3, QTableWidgetItem(last_ok.get(dev_id) or "never"))
+            self.members_table.setItem(row, 3, QTableWidgetItem(self._local_stamp(last_ok.get(dev_id))))
             self.members_table.setItem(row, 4, QTableWidgetItem("This PC" if dev_id == own_device_id else ""))
         self.members_table.setUpdatesEnabled(True)
 
@@ -1426,6 +1400,9 @@ class SeraSyncDialog(QDialog):
         elif "PUSH" in cat_upper:
             icon_badge = "📤"
             color = "#D2A8FF"
+        elif "SDIS" in cat_upper:
+            icon_badge = "🗂️"
+            color = "#F778BA"
         elif "SSAL" in cat_upper:
             icon_badge = "📋"
             color = "#79C0FF"

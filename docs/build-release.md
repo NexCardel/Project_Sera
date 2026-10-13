@@ -37,7 +37,7 @@ installer_output\Amas_Sera_Setup_v2.4.2.exe
 
 ### Key Installer Specifications:
 - **Shortcut Name**: Configured as **`CompanyInfo1`** on Desktop and Start Menu.
-- **Application AppID**: `D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B`
+- **Application AppID**: `D37F8E9C-4A2B-4F1E-9C8A-1B3D5E7F9A0B`. The `.iss` writes it as `{{GUID}}`, so the uninstall key is `{GUID}}_is1` (doubled closing brace). Never change it: a new AppId installs beside the old app instead of upgrading it. The update agent looks up this exact key (`tests/test_update_agent_appid.py`).
 - **App-Extension Bridge**: One local WebSocket (`ui/ws_bridge.py`, ports `48765-48768`) - no registration step. (Before 2026-09-22 this installed a native messaging host manifest and registry entries; see `docs/app-extension-communication-report.md`.)
 
 ---

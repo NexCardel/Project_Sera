@@ -10,10 +10,10 @@ import json
 import re
 import os
 import shutil
-import threading
+import time
 from pathlib import Path
 from datetime import datetime, timezone
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QSize, QThread, QSettings
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QClipboard, QPixmap, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -25,14 +25,10 @@ from PySide6.QtWidgets import (
 )
 
 from ui.utils.profile_parser import extract_profile_from_payload, map_profile_to_mcl_columns
+from ui.utils.responsive import WidthMode, mode_for
+import automation
 
 
-
-def get_token_usage_summary():
-    # Imported on use: importing anything under core.vsdc loads the whole capture-engine package
-    # (OCR, numpy, UI Automation, ~0.4 s), which then happened before the app's window appeared.
-    from core.vsdc.vsdc_token_tracker import get_token_usage_summary as summary
-    return summary()
 
 try:
     import qtawesome as qta
@@ -84,7 +80,7 @@ def _parse_record_datetime(ts_str: str) -> datetime | None:
 
 def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
     """
-    Evaluates raw record status via SDC_Parser logic into an authoritative
+    Evaluates raw record status into an authoritative
     human-readable LTT submission status and corresponding UI display theme.
     Returns: (status_text, theme_dict)
     """
@@ -99,12 +95,15 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         if not arn:
             arn = (latest_f.get("arn") or "").strip()
 
-    # If raw_payload has explicit status or ltt captures
+    # If raw_payload has explicit status or ltt captures. List rows come without payloads
+    # (get_srpf_containers(slim=True)) and carry the payload's status ready-made.
     raw_json = record.get("raw_payload_json") or ""
     if not raw_json and filing_hist:
         raw_json = filing_hist[-1].get("raw_payload_json") or ""
 
-    if raw_json:
+    if record.get("payload_status"):
+        raw_status = record["payload_status"]
+    elif raw_json:
         try:
             p_obj = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
             if isinstance(p_obj, dict):
@@ -113,29 +112,26 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         except Exception:
             pass
 
-    # Evaluate using SDC_Parser's standard logic
-    try:
-        from SDC_Parser.sdc_parser import evaluate_status
-        ltt_status = evaluate_status(raw_status)
-    except Exception:
-        raw_lower = str(raw_status).lower()
-        if "not filed" in raw_lower or "unfiled" in raw_lower or "to be filed" in raw_lower or "not submitted" in raw_lower:
-            ltt_status = "Not submitted"
-        elif "visited" in raw_lower or "in progress" in raw_lower or "form selected" in raw_lower or "draft" in raw_lower:
-            ltt_status = "Not submitted"
-        elif ("not e-verified" in raw_lower or "not verified" in raw_lower or "pending" in raw_lower
-              or "verify later" in raw_lower or "unverified" in raw_lower):
-            ltt_status = "Submitted (e-verification pending)"
-        elif "filed" in raw_lower or "portal confirmed" in raw_lower or "verified" in raw_lower:
-            ltt_status = "Submitted & E-verified"
-        elif "submitted" in raw_lower or "submit" in raw_lower or "success" in raw_lower:
-            ltt_status = "Submitted & E-verified"
-        elif "evc" in raw_lower:
-            ltt_status = "Other EVC"
-        elif "option expired" in raw_lower:
-            ltt_status = "Option Expired (NA)"
-        else:
-            ltt_status = "Not submitted"
+    raw_lower = str(raw_status).lower().strip()
+    if "not filed" in raw_lower or "unfiled" in raw_lower or "to be filed" in raw_lower or "not submitted" in raw_lower:
+        ltt_status = "Not submitted"
+    elif "visited" in raw_lower or "in progress" in raw_lower or "form selected" in raw_lower or "draft" in raw_lower:
+        ltt_status = "Not submitted"
+    elif ("not e-verified" in raw_lower or "not verified" in raw_lower or "pending" in raw_lower
+          or "verify later" in raw_lower or "unverified" in raw_lower):
+        ltt_status = "Submitted (e-verification pending)"
+    elif "filed" in raw_lower or "portal confirmed" in raw_lower or "verified" in raw_lower:
+        ltt_status = "Submitted & E-verified"
+    elif "submitted" in raw_lower or "submit" in raw_lower or "success" in raw_lower:
+        ltt_status = "Submitted & E-verified"
+    elif "evc" in raw_lower:
+        ltt_status = "Other EVC"
+    elif "option expired" in raw_lower:
+        ltt_status = "Option Expired (NA)"
+    elif re.search(r"\b(?:not applicable|na)\b", raw_lower):
+        ltt_status = "Not Applicable (NA)"
+    else:
+        ltt_status = "Not submitted"
 
     # Only promote if an ARN is present and status is "Not submitted",
     # but NEVER override pending verification!
@@ -146,18 +142,30 @@ def _resolve_ltt_submission_status(record: dict) -> tuple[str, dict]:
         else:
             ltt_status = "Submitted & E-verified"
 
+    # The acknowledgement is what makes it "& E-verified": a submit message on its own (form + period +
+    # message) is only "Submitted"; form + period + message + ARN is "Submitted & E-verified".
+    if ltt_status == "Submitted & E-verified" and not (arn and arn.upper() != "N/A"):
+        ltt_status = "Submitted"
+
     # Assign color palette matching Google Material / Sera design
     theme = _get_status_theme(ltt_status)
     return ltt_status, theme
 
 
 STATUS_THEMES = {
-    "Submitted & E-verified": {
+    "Submitted & E-verified": {                  # dark green
         "fg": "#39FF14",
-        "bg": "#11281E",
-        "border": "#2E9B5F",
+        "bg": "#0B2A17",
+        "border": "#1E7A43",
         "cell_bg": "#1A5936",
         "icon": "mdi.check-circle"
+    },
+    "Submitted": {                               # light green: a submit message, no ARN yet
+        "fg": "#0A2616",
+        "bg": "#7FD8A0",
+        "border": "#A8EBC0",
+        "cell_bg": "#7FD8A0",
+        "icon": "mdi.check"
     },
     "Submitted (e-verification pending)": {
         "fg": "#F1E05A",
@@ -207,39 +215,6 @@ def _get_status_theme(status_text: str) -> dict:
     })
 
 
-_feed_lock = threading.Lock()
-_feed_state = {"running": False, "again": False}
-
-
-def _request_live_feed_export() -> None:
-    """
-    Rewrites the live CSV feed in the background - at most ONE export at a time. The tracker
-    refreshes after every capture; starting a thread per refresh piled up 14 concurrent exports
-    (+23 MB) over 100 quick refreshes (measured). A request that arrives while one is running
-    just marks it to run once more afterwards, which writes the latest data anyway.
-    """
-    with _feed_lock:
-        if _feed_state["running"]:
-            _feed_state["again"] = True
-            return
-        _feed_state["running"] = True
-
-    def _worker():
-        while True:
-            try:
-                from SDC_Parser import sdc_parser
-                sdc_parser.export_ltt_live_feed()
-            except Exception:
-                pass
-            with _feed_lock:
-                if not _feed_state["again"]:
-                    _feed_state["running"] = False
-                    return
-                _feed_state["again"] = False
-
-    threading.Thread(target=_worker, name="sera-live-feed", daemon=True).start()
-
-
 def _status_pill_style(status_text: str) -> str:
     theme = _get_status_theme(status_text)
     return (f"QLabel {{ color: {theme['fg']}; background-color: {theme['bg']}; "
@@ -258,9 +233,10 @@ def _set_status_cell(table, row: int, col: int, status_text: str, bg_color: str 
     if label is None:
         table.setCellWidget(row, col, _create_colored_cell_widget(status_text, bg_color, tooltip=tooltip))
         return
-    if label.text() != status_text:               # restyle only when the status changes
+    if label.property("full_text") != status_text:  # restyle only when the status changes
         label.setStyleSheet(_status_pill_style(status_text))
         label.setText(status_text)
+        label.setProperty("full_text", status_text)
     existing.setToolTip(tooltip)
     label.setToolTip(tooltip)
 
@@ -277,6 +253,7 @@ def _create_colored_cell_widget(status_text: str, bg_color: str = "", fg_color: 
 
     lbl = QLabel(status_text)
     lbl.setObjectName("status_label")
+    lbl.setProperty("full_text", status_text)      # the text before the column elides it
     lbl.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
     lbl.setStyleSheet(_status_pill_style(status_text))
     lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
@@ -345,6 +322,12 @@ def _portal_short(text: str) -> tuple[str, str]:
     return str(text or "—"), "#8B949E"
 
 
+def _filing_type(portal: str, fallback: str) -> str:
+    """'GST Portal (GSTR-3B)' -> 'GSTR-3B'; a portal text without a filing type shows the short portal name."""
+    m = re.search(r"\(([^()]+)\)\s*$", str(portal or ""))
+    return m.group(1).strip() if m else fallback
+
+
 def _method_short(method: str) -> str:
     """'VSDC-X_itr_submitted' -> 'VSDC-X'; 'SGT_live' -> 'SGT live'. Full value in the tooltip."""
     method = str(method or "").strip()
@@ -354,6 +337,35 @@ def _method_short(method: str) -> str:
         return method.replace("_", " ")
     head = method.split("_", 1)[0]
     return "Extension" if head.lower().startswith("extension") else head
+
+
+def _extract_device_name(record: dict) -> str:
+    """Extracts device_name from payload JSON or captured_by field, with sensible fallback."""
+    if not isinstance(record, dict):
+        return "Unknown"
+    # 1. Direct device_name in record
+    dev = record.get("device_name")
+    if dev:
+        return str(dev).strip()
+    # 2. Check raw_payload_json
+    raw_json = record.get("raw_payload_json")
+    if raw_json:
+        try:
+            p = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+            if isinstance(p, dict):
+                dev = p.get("device_name") or (p.get("raw_payload", {}).get("device_name") if isinstance(p.get("raw_payload"), dict) else None)
+                if dev:
+                    return str(dev).strip()
+        except Exception:
+            pass
+    # 3. Check filing_history for containers
+    for fh in reversed(record.get("filing_history") or []):
+        dev = _extract_device_name(fh)
+        if dev and dev != "Unknown":
+            return dev
+    # 4. Fallback to captured_by or Unknown
+    cb = record.get("captured_by")
+    return str(cb).strip() if cb else "Unknown"
 
 
 def _short_local_time(ts_raw) -> str:
@@ -398,6 +410,125 @@ def _strip_pan_suffix(name: str, pan: str) -> str:
 
 _SUBLINE_ROLE = Qt.UserRole + 3
 _UNASSIGNED_ROLE = Qt.UserRole + 4
+_TIP_BASE_ROLE = Qt.UserRole + 5        # Client cell tooltip without the auto-hidden values
+_HIDDEN_VALUES_ROLE = Qt.UserRole + 6   # {column: text} for the Client tooltip if that column is auto-hidden
+
+CLIENT_MIN_PX = 240          # Client keeps at least this much width whenever the table can give it
+CLIENT_FLOOR_PX = 60         # absolute minimum (the table's minimum section size)
+
+
+def fit_columns(available: int, is_grouped: bool, user_widths: dict, user_hidden: set,
+                user_shown: set = frozenset()) -> tuple[dict, set]:
+    """Column widths and hidden columns for a table `available` px wide.
+
+    Preferred widths are the ones the table has always used. When they leave Client less than
+    CLIENT_MIN_PX, every column first shrinks toward its minimum. Only if the minimums still leave
+    too little room are columns hidden, in the order Device -> Updated -> Filing (Status, Period and
+    Actions are never hidden). user_hidden is always hidden; user_shown is never auto-hidden;
+    user_widths replace the preferred widths. Returns ({col: width} for the visible columns, including
+    Client, and the full set of hidden columns, user-hidden and auto-hidden together).
+    """
+    C = TrackerDumpWindow
+    prefs = {
+        C.COL_FILING: 120,
+        C.COL_PERIOD: 250 if is_grouped else 170,
+        C.COL_STATUS: 280,
+        C.COL_ACTIONS: 120,
+        C.COL_UPDATED: 150,
+        C.COL_DEVICE: 130,
+    }
+    # Minimums are the narrowest a cell can get without clipping its content. They are a little above
+    # the plan's first numbers (Filing 90, Status 200, Actions 110, Updated 120): at 1024 px at 80 %
+    # those clipped the status pill and the time, and the plan's own rule then hides Device instead.
+    mins = {
+        C.COL_FILING: 110,
+        C.COL_PERIOD: 170 if is_grouped else 140,
+        C.COL_STATUS: 270,
+        C.COL_ACTIONS: 120,
+        C.COL_UPDATED: 130,
+        C.COL_DEVICE: 100,
+    }
+    never_hidden = {C.COL_PERIOD, C.COL_STATUS, C.COL_ACTIONS}
+    for col, width in user_widths.items():
+        if col in prefs and width > 0:
+            prefs[col] = width
+    for col in prefs:
+        mins[col] = min(mins[col], prefs[col])
+
+    hidden = {c for c in user_hidden if c in prefs and c not in never_hidden}
+    budget = available - CLIENT_MIN_PX
+
+    def visible():
+        return [c for c in prefs if c not in hidden]
+
+    # Hide only when even the minimums do not fit: Device, then Updated, then Filing.
+    for col in (C.COL_DEVICE, C.COL_UPDATED, C.COL_FILING):
+        if sum(mins[c] for c in visible()) <= budget:
+            break
+        if col not in hidden and col not in user_shown:
+            hidden.add(col)
+
+    cols = visible()
+    widths = {c: prefs[c] for c in cols}
+    deficit = sum(prefs[c] for c in cols) - budget
+    room = {c: prefs[c] - mins[c] for c in cols}
+    total_room = sum(room.values())
+    if deficit > 0 and total_room > 0:
+        # Shrink in proportion to how much room each column has above its minimum.
+        cut = min(deficit, total_room)
+        exact = {c: cut * room[c] / total_room for c in cols}
+        cuts = {c: int(exact[c]) for c in cols}
+        left = cut - sum(cuts.values())
+        for c in sorted(cols, key=lambda c: exact[c] - cuts[c], reverse=True):
+            if left <= 0:
+                break
+            if cuts[c] < room[c]:
+                cuts[c] += 1
+                left -= 1
+        widths = {c: prefs[c] - cuts[c] for c in cols}
+
+    if user_shown and sum(widths.values()) > available - CLIENT_FLOOR_PX:
+        # A column the user forced on must never push the table past its edge: drop the last
+        # forced column (Device first) and fit again. The saved choice stays, so it returns when there is room.
+        drop = next((c for c in (C.COL_DEVICE, C.COL_UPDATED, C.COL_FILING) if c in user_shown), None)
+        if drop is not None:
+            return fit_columns(available, is_grouped, user_widths, user_hidden, set(user_shown) - {drop})
+
+    widths[C.COL_CLIENT] = max(CLIENT_FLOOR_PX, available - sum(widths.values()))
+    return widths, hidden
+
+
+def _optional_cols() -> tuple:
+    """Columns the header menu may show or hide. Status, Period and Actions are always visible."""
+    C = TrackerDumpWindow
+    return (C.COL_FILING, C.COL_UPDATED, C.COL_DEVICE)
+
+
+def _load_column_choices() -> tuple[set, set]:
+    """Per-PC header-menu choices: (hidden, shown). Kept in QSettings, never app_settings (that syncs)."""
+    try:
+        s = QSettings("AmanAssociates", "ProjectSera")
+        optional = _optional_cols()
+
+        def _read(key):
+            raw = s.value(key, [])
+            if isinstance(raw, str):
+                raw = [raw] if raw else []
+            return {int(v) for v in raw if str(v).isdigit() and int(v) in optional}
+
+        return _read("tracker_dump_hidden_cols"), _read("tracker_dump_shown_cols")
+    except Exception:
+        return set(), set()
+
+
+def _save_column_choices(hidden: set, shown: set) -> None:
+    try:
+        s = QSettings("AmanAssociates", "ProjectSera")
+        s.setValue("tracker_dump_hidden_cols", sorted(hidden))
+        s.setValue("tracker_dump_shown_cols", sorted(shown))
+        s.sync()
+    except Exception:
+        pass
 
 
 class _ClientCellDelegate(QStyledItemDelegate):
@@ -442,6 +573,15 @@ def _safe_qta_icon(icon_name, color="#FFFFFF"):
             pass
     from PySide6.QtGui import QIcon
     return QIcon()
+
+
+def _service_matches_portal(service_name: str, portal_name: str) -> bool:
+    """Matches a compliance service to a portal name using substring and keyword rules."""
+    s_name = (service_name or "").strip().lower()
+    p_name = (portal_name or "").strip().lower()
+    if not s_name or not p_name:
+        return False
+    return s_name in p_name or p_name in s_name or ("income" in p_name and "income" in s_name)
 
 
 class AddClientFromCaptureDialog(QDialog):
@@ -591,7 +731,7 @@ class AddClientFromCaptureDialog(QDialog):
         for s in all_services:
             cb = QCheckBox(s["name"])
             # Auto-check matching portal service
-            if s["name"].lower() in portal_name or portal_name in s["name"].lower() or ("income" in portal_name and "income" in s["name"].lower()):
+            if _service_matches_portal(s["name"], portal_name):
                 cb.setChecked(True)
             self.svc_checkboxes[s["id"]] = cb
             svc_checks_box.addWidget(cb)
@@ -620,7 +760,7 @@ class AddClientFromCaptureDialog(QDialog):
         from ui.utils.profile_parser import extract_profile_from_payload
         unassigned_key = self.item_data.get("unassigned_identity") or self.item_data.get("pan") or ""
 
-        # Priority 1: Extract profile from current payload (prioritizes Gemini AI extraction)
+        # Priority 1: Extract profile from current payload 
         raw_str = self.item_data.get("raw_payload_json") or "{}"
         parsed = extract_profile_from_payload(raw_str)
 
@@ -694,10 +834,6 @@ class PayloadInspectorDialog(QDialog):
             QLabel#CardTitle { color: #8E8D88; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
             QLabel#FieldKey { color: #8E8D88; font-size: 11px; }
             QLabel#FieldVal { color: #F0F6FC; font-size: 13px; font-weight: 600; }
-            QLabel#AiBadge {
-                color: #58A6FF; background-color: #10233A; border: 1px solid #1F4F8F;
-                border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600;
-            }
             QLabel#UnregBadge {
                 color: #FFA657; background-color: #2E1D0E; border: 1px solid #6B4214;
                 border-radius: 10px; padding: 2px 9px; font-size: 11px; font-weight: 600;
@@ -739,17 +875,9 @@ class PayloadInspectorDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(14)
 
-        # Extract profile from payload (prioritizes Gemini AI extraction)
+        # Extract profile from payload
         raw_json = item_data.get("raw_payload_json") or "{}"
         profile_data = extract_profile_from_payload(raw_json)
-
-        gemini_info = profile_data.get("gemini_extracted") or {}
-        if not gemini_info and isinstance(raw_json, str):
-            try:
-                pj = json.loads(raw_json)
-                gemini_info = pj.get("gemini_extracted") or (pj.get("raw_payload", {}).get("gemini_extracted") if isinstance(pj.get("raw_payload"), dict) else {})
-            except Exception:
-                pass
 
         # SGT-I's enrichment (blueprint 14.2 rule 4): its own key, beside the Core's values,
         # never in place of them - shown read-only, never editable from here.
@@ -762,23 +890,14 @@ class PayloadInspectorDialog(QDialog):
         except Exception:
             pass
 
-        # Give priority to Gemini-extracted details for display
-        prop_name = ""
-        comp_name = ""
-        if gemini_info:
-            if gemini_info.get("legal_name"):
-                prop_name = str(gemini_info["legal_name"]).strip()
-            if gemini_info.get("trade_name"):
-                comp_name = str(gemini_info["trade_name"]).strip()
-
-        comp_name = comp_name or item_data.get("company_name") or profile_data.get("company_name") or ""
-        prop_name = prop_name or item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
+        comp_name = item_data.get("company_name") or profile_data.get("company_name") or ""
+        prop_name = item_data.get("proprietor_name") or profile_data.get("proprietor_name") or ""
         pan_val = item_data.get("pan") or profile_data.get("pan") or item_data.get("identity_key") or ""
         gstin_val = item_data.get("gstin") or profile_data.get("gstin") or ""
 
         # Resolve clean display name for header (kept as before: also used by Copy Summary)
         client_name = item_data.get('display_name')
-        if not client_name or client_name.startswith("Unregistered") or (gemini_info and (prop_name or comp_name)):
+        if not client_name or client_name.startswith("Unregistered"):
             if prop_name or comp_name:
                 client_name = f"{prop_name or comp_name} ({pan_val or gstin_val})"
             elif item_data.get('client_name') and not item_data.get('client_name').startswith("Unregistered"):
@@ -804,11 +923,6 @@ class PayloadInspectorDialog(QDialog):
         if is_unreg:
             b = QLabel("No matching client")
             b.setObjectName("UnregBadge")
-            name_row.addWidget(b)
-        if gemini_info:
-            b = QLabel("✨ Gemini AI verified")
-            b.setObjectName("AiBadge")
-            b.setToolTip("Client and filing details below were read by Gemini Flash AI (statutory priority applied)")
             name_row.addWidget(b)
         name_row.addStretch()
         head_text.addLayout(name_row)
@@ -902,19 +1016,6 @@ class PayloadInspectorDialog(QDialog):
         client_v.addStretch()
         cards_row.addWidget(client_card, stretch=3)
 
-        if gemini_info:
-            ai_card, ai_v = _card("Filing — read by Gemini AI")
-            ai_card.setToolTip("Gemini AI Extraction Active (Statutory Priority Applied)")
-            grid, _ = _field_grid([
-                ("Form type", gemini_info.get("form_type")),
-                ("Financial year", gemini_info.get("fy")),
-                ("Tax period", gemini_info.get("tax_period")),
-                ("Filing status", gemini_info.get("status")),
-            ], cols=2)
-            ai_v.addLayout(grid)
-            ai_v.addStretch()
-            cards_row.addWidget(ai_card, stretch=2)
-
         if sgt_i_info:
             sgti_card, sgti_v = _card("SGT-I — advisory, read-only")
             sgti_card.setToolTip("SGT Intelligence's own facts about this row (route, explanation, second "
@@ -930,6 +1031,13 @@ class PayloadInspectorDialog(QDialog):
             cards_row.addWidget(sgti_card, stretch=2)
 
         sum_layout.addLayout(cards_row)
+
+        # SDIS Others and Profile builder values, per portal (blueprint S.4), sdis_mcl labels
+        for portal, pairs in self._sdis_values(item_data, raw_json):
+            sdis_card, sdis_v = _card(f"{portal} — portal values (SDIS)")
+            grid, _ = _field_grid(pairs, cols=3)
+            sdis_v.addLayout(grid)
+            sum_layout.addWidget(sdis_card)
 
         # Filing History Table
         filing_history = item_data.get("filing_history") or []
@@ -986,10 +1094,10 @@ class PayloadInspectorDialog(QDialog):
             port_item.setToolTip(portal_full)
             hist_table.setItem(idx, 3, port_item)
 
-            method = fh.get("capture_method") or "Unknown"
-            m_item = QTableWidgetItem(_method_short(method))
-            m_item.setForeground(QColor(_capture_method_color(method)))
-            m_item.setToolTip(method)
+            method = _extract_device_name(fh)
+            m_item = QTableWidgetItem(method)
+            m_item.setForeground(QColor("#FFA657"))
+            m_item.setToolTip(f"Device: {method}")
             hist_table.setItem(idx, 4, m_item)
 
             ts_raw = fh.get("created_at") or ""
@@ -1031,85 +1139,7 @@ class PayloadInspectorDialog(QDialog):
         json_layout.addWidget(self.txt_json)
         tabs.addTab(tab_json, "Raw JSON")
 
-        # Tab 3: Timeline (Session Interaction Flow Diagram)
-        from ui.utils.timeline_decoder import group_captures_into_sessions, format_timeline_flow_html, format_timeline_flow_plain
-
-        tab_timeline = QWidget()
-        tl_layout = QVBoxLayout(tab_timeline)
-        tl_layout.setContentsMargins(0, 14, 0, 0)
-
-        self.txt_timeline = QTextBrowser()
-        self.txt_timeline.setReadOnly(True)
-        self.txt_timeline.setOpenLinks(False)
-        self.expanded_repeats = set()
-
-        captures = []
-        if self.db and hasattr(self.db, "get_captures_for_container"):
-            cid = item_data.get("client_id")
-            pan_val = item_data.get("pan")
-            ikey = item_data.get("identity_key")
-            try:
-                captures = self.db.get_captures_for_container(identity_key=ikey, client_id=cid, pan=pan_val)
-            except Exception:
-                captures = []
-
-        # Also merge any dedicated SDC session timelines for this client/PAN
-        if self.db and hasattr(self.db, "get_sdc_session_timelines"):
-            try:
-                sdc_tls = self.db.get_sdc_session_timelines(client_id=item_data.get("client_id"), pan=item_data.get("pan"))
-                for st in sdc_tls:
-                    captures.append({
-                        "session_id": st.get("session_id"),
-                        "client_id": st.get("client_id"),
-                        "pan": st.get("pan"),
-                        "client_name": st.get("client_name"),
-                        "portal": st.get("portal"),
-                        "status": st.get("status"),
-                        "timestamp": st.get("start_time"),
-                        "created_at": st.get("start_time"),
-                        "timeline": st.get("timeline")
-                    })
-            except Exception:
-                pass
-
-        if not captures:
-            captures = [item_data]
-
-        decoded_sessions = group_captures_into_sessions(captures)
-        self.decoded_timeline_sessions = decoded_sessions
-        html_content = format_timeline_flow_html(decoded_sessions, title_tag, expanded_step_uids=self.expanded_repeats)
-        self.txt_timeline.setHtml(html_content)
-
-        def _on_timeline_anchor_clicked(url):
-            raw_url = url.toString()
-            frag = url.fragment()
-            full_target = frag if frag else raw_url
-            
-            if "toggle_repeat" in full_target:
-                uid = full_target.replace("#", "").replace("toggle_repeat:", "").replace("toggle_repeat_", "")
-                if uid in self.expanded_repeats:
-                    self.expanded_repeats.remove(uid)
-                else:
-                    self.expanded_repeats.add(uid)
-                
-                sb = self.txt_timeline.verticalScrollBar()
-                v_scroll = sb.value() if sb else 0
-                
-                new_html = format_timeline_flow_html(
-                    self.decoded_timeline_sessions,
-                    title_tag=title_tag,
-                    expanded_step_uids=self.expanded_repeats
-                )
-                self.txt_timeline.setHtml(new_html)
-                if sb:
-                    sb.setValue(v_scroll)
-
-        self.txt_timeline.anchorClicked.connect(_on_timeline_anchor_clicked)
-
-        tl_layout.addWidget(self.txt_timeline)
-        tabs.addTab(tab_timeline, "Timeline")
-
-        # Tab 4: Notes & Media
+        # Tab 3: Notes & Media
         tab_notes = QWidget()
         notes_layout = QVBoxLayout(tab_notes)
         notes_layout.setContentsMargins(0, 14, 0, 0)
@@ -1208,13 +1238,11 @@ class PayloadInspectorDialog(QDialog):
         btn_copy.setProperty("class", "SecondaryBtn")
 
         def _on_tab_changed(idx):
-            btn_copy.setVisible(idx != 3)
+            btn_copy.setVisible(idx != 2)
             if idx == 0:
                 btn_copy.setText("Copy Container Summary")
             elif idx == 1:
                 btn_copy.setText("Copy JSON")
-            elif idx == 2:
-                btn_copy.setText("Copy Timeline")
 
         tabs.currentChanged.connect(_on_tab_changed)
 
@@ -1244,14 +1272,6 @@ class PayloadInspectorDialog(QDialog):
                 self.txt_json.copy()
                 btn_copy.setText("✓ Copied JSON!")
                 QTimer.singleShot(1500, lambda: btn_copy.setText("Copy JSON"))
-            elif curr_tab == 2:
-                txt = format_timeline_flow_plain(self.decoded_timeline_sessions, title_tag)
-                try:
-                    QGuiApplication.clipboard().setText(txt)
-                except Exception:
-                    QApplication.clipboard().setText(txt)
-                btn_copy.setText("✓ Copied Timeline!")
-                QTimer.singleShot(1500, lambda: btn_copy.setText("Copy Timeline"))
 
         btn_copy.clicked.connect(_handle_bottom_copy)
 
@@ -1288,6 +1308,24 @@ class PayloadInspectorDialog(QDialog):
                 self._show_preview(spath)
         except Exception as e:
             print(f"Error loading media: {e}")
+
+    def _sdis_values(self, item_data: dict, raw_json) -> list:
+        """[(portal, [(label, value)])]: a container's SRPF columns, or a single row's own 'sdis' key."""
+        from sera_db.srpf import fold_sdis, sdis_info_of, sdis_value_rows
+        aggregates = item_data.get("raw_aggregates") or {}
+        profiles = item_data.get("portal_profiles") or {}
+        if not (aggregates or profiles):
+            try:
+                payload = json.loads(raw_json) if isinstance(raw_json, str) else (raw_json or {})
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                aggregates, profiles = {}, {}
+                fold_sdis(aggregates, profiles, sdis_info_of(payload))
+        if not (aggregates or profiles):
+            return []
+        labels = self.db.sdis_field_labels() if self.db is not None else {}
+        return sdis_value_rows(aggregates, profiles, labels)
 
     def _show_preview(self, path):
         pixmap = QPixmap(path)
@@ -1415,11 +1453,325 @@ class PayloadInspectorDialog(QDialog):
             self.accept()
 
 
+class _DatapointScanThread(QThread):
+    """Reads the captured datapoints off the UI thread (every DB call opens its own connection)."""
+    scanned = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self._db = db
+
+    def run(self):
+        try:
+            self.scanned.emit(self._db.get_capture_datapoints())
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+_LIVE_SCAN_THREADS: set = set()   # a scan outlives a dialog closed mid-scan until it finishes
+
+
+class _ResolveThread(QThread):
+    """Re-resolves every capture into its SRPF container, off the UI thread (the periodic pass)."""
+    done = Signal(int)
+    failed = Signal(str)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self._db = db
+
+    def run(self):
+        try:
+            self.done.emit(self._db.re_resolve_all_tracker_dumps())
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+_LIVE_RESOLVE_THREADS: set = set()   # a pass outlives the window closed mid-pass until it finishes
+
+
+class _McLColumnDelegate(QStyledItemDelegate):
+    """One shared combo editor for the "Map to" column instead of a combo widget per row."""
+    def __init__(self, options, parent=None):
+        super().__init__(parent)
+        self._options = options          # [(label, column_id)]
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        combo.addItem("—", None)
+        for label, col_id in self._options:
+            combo.addItem(label, col_id)
+        combo.activated.connect(lambda _=0, c=combo: self.commitData.emit(c))
+        combo.activated.connect(lambda _=0, c=combo: self.closeEditor.emit(c))
+        QTimer.singleShot(0, combo.showPopup)
+        return combo
+
+    def setEditorData(self, editor, index):
+        idx = editor.findData(index.data(Qt.UserRole))
+        editor.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def setModelData(self, editor, model, index):
+        col_id = editor.currentData()
+        model.setData(index, editor.currentText() if col_id is not None else "—", Qt.DisplayRole)
+        model.setData(index, col_id, Qt.UserRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+
+class McLMappingDialog(QDialog):
+    """Maps captured datapoints (payload keys) to Master Column List columns.
+
+    Used when the automatic mapping misses a column. Saved mappings are applied whenever a
+    capture arrives for an already registered client (blank MCL columns only are filled).
+    """
+    _KEY, _SEEN, _SAMPLE, _AUTO, _MAP = range(5)
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Map Captured Datapoints to MCL Columns")
+        self.setModal(True)
+        self.resize(1040, 680)
+        self._mcl_cols = [c for c in self.db.get_mcl_columns() if c.get("field_type") != "id"]
+        self._col_label = {c["id"]: c["label"] for c in self._mcl_cols}
+        self._scan = None
+        self._setup_ui()
+        self._start_scan()
+
+    # ---------------- UI ----------------
+    def _setup_ui(self):
+        self.setStyleSheet("""
+            QDialog { background-color: #141414; color: #F8F5F2; font-family: 'Segoe UI', sans-serif; }
+            QLabel { color: #C9D1D9; font-size: 12px; }
+            QLabel#title { color: #F8F5F2; font-size: 17px; font-weight: 700; }
+            QLabel#hint { color: #8B949E; font-size: 12px; }
+            QLabel#stat { color: #8B949E; font-size: 11.5px; }
+            QLineEdit { background-color: #0D1117; border: 1px solid #30363D; border-radius: 8px;
+                        color: #F0F6FC; padding: 8px 12px; font-size: 13px; }
+            QLineEdit:focus { border: 1px solid #2E9B5F; }
+            QComboBox { background-color: #0D1117; border: 1px solid #2E9B5F; border-radius: 6px;
+                        color: #F0F6FC; padding: 3px 8px; font-size: 12.5px; }
+            QComboBox QAbstractItemView { background-color: #0D1117; color: #F0F6FC;
+                                          selection-background-color: #2E9B5F; border: 1px solid #30363D; }
+            QCheckBox { color: #C9D1D9; font-size: 12px; spacing: 6px; }
+            QTableWidget { background-color: #0F0F0F; alternate-background-color: #141414;
+                           border: 1px solid #262626; border-radius: 8px; color: #E6EDF3;
+                           font-size: 12.5px; outline: 0; }
+            QTableWidget::item { padding: 0 10px; border: none; }
+            QTableWidget::item:hover { background-color: #1B2A22; }
+            QTableWidget::item:selected { background-color: #1B2A22; color: #E6EDF3; }
+            QHeaderView::section { background-color: #0F0F0F; color: #8B949E; border: none;
+                                   border-bottom: 1px solid #2E9B5F; padding: 8px 10px;
+                                   font-size: 11px; font-weight: 700; text-align: left; }
+            QScrollBar:vertical { background: #0F0F0F; width: 10px; margin: 0; }
+            QScrollBar::handle:vertical { background: #333333; border-radius: 5px; min-height: 30px; }
+            QScrollBar::handle:vertical:hover { background: #2E9B5F; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QPushButton { background-color: #1F1F1F; color: #E6EDF3; border: 1px solid #3A3A3A;
+                          border-radius: 8px; padding: 9px 18px; font-size: 13px; }
+            QPushButton:hover { background-color: #2A2A2A; border-color: #4A4A4A; }
+            QPushButton:disabled { color: #5A5A5A; border-color: #262626; }
+            QPushButton#primary { background-color: #2E9B5F; color: #FFFFFF; font-weight: 700; border: none; }
+            QPushButton#primary:hover { background-color: #36B06D; }
+            QPushButton#primary:disabled { background-color: #1F3A2B; color: #5E7F6C; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("Map captured datapoints to MCL columns")
+        title.setObjectName("title")
+        hint = QLabel("Pick the MCL column a datapoint belongs to where auto-mapping misses it. "
+                      "When a capture arrives for a registered client, mapped values fill that client's "
+                      "blank columns; existing values are never overwritten.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(hint)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(14)
+        self.txt_filter = QLineEdit()
+        self.txt_filter.setPlaceholderText("Search datapoints or sample values…")
+        self.txt_filter.setClearButtonEnabled(True)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(120)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self.txt_filter.textChanged.connect(lambda _: self._filter_timer.start())
+        self.chk_unmapped = QCheckBox("Only unmapped")
+        self.chk_unmapped.toggled.connect(self._apply_filter)
+        bar.addWidget(self.txt_filter, stretch=1)
+        bar.addWidget(self.chk_unmapped)
+        layout.addLayout(bar)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["DATAPOINT", "SEEN", "SAMPLE VALUE", "AUTO-MAPPED TO", "MAP TO MCL COLUMN"])
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setHighlightSections(False)
+        hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        hdr.setSectionResizeMode(self._KEY, QHeaderView.Interactive)
+        hdr.setSectionResizeMode(self._SEEN, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(self._SAMPLE, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(self._AUTO, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(self._MAP, QHeaderView.Fixed)
+        self.table.setColumnWidth(self._KEY, 210)
+        self.table.setColumnWidth(self._SEEN, 64)
+        self.table.setColumnWidth(self._AUTO, 170)
+        self.table.setColumnWidth(self._MAP, 210)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideRight)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setItemDelegateForColumn(
+            self._MAP, _McLColumnDelegate([(c["label"], c["id"]) for c in self._mcl_cols], self.table))
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        layout.addWidget(self.table, stretch=1)
+
+        foot = QHBoxLayout()
+        self.lbl_status = QLabel("Reading recent captures…")
+        self.lbl_status.setObjectName("stat")
+        foot.addWidget(self.lbl_status, stretch=1)
+        layout.addLayout(foot)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        self.btn_apply = QPushButton("Save && apply to registered clients")
+        self.btn_apply.setToolTip("Saves the mappings, then fills blank MCL columns of registered clients from their existing captures.")
+        self.btn_apply.clicked.connect(lambda: self._save(apply_now=True))
+        self.btn_save = QPushButton("Save")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.clicked.connect(lambda: self._save(apply_now=False))
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.reject)
+        self.btn_save.setEnabled(False)
+        self.btn_apply.setEnabled(False)
+        btns.addWidget(self.btn_apply)
+        btns.addStretch(1)
+        btns.addWidget(btn_close)
+        btns.addWidget(self.btn_save)
+        layout.addLayout(btns)
+
+    # ---------------- loading (off the UI thread) ----------------
+    def _start_scan(self):
+        self._scan = _DatapointScanThread(self.db)
+        _LIVE_SCAN_THREADS.add(self._scan)
+        self._scan.finished.connect(lambda t=self._scan: _LIVE_SCAN_THREADS.discard(t))
+        self._scan.scanned.connect(self._populate)
+        self._scan.failed.connect(lambda msg: self.lbl_status.setText(f"Could not read captures: {msg}"))
+        self._scan.start()
+
+    def done(self, result):
+        if self._scan is not None:
+            try:
+                self._scan.scanned.disconnect(self._populate)
+            except (RuntimeError, TypeError):
+                pass
+        super().done(result)
+
+    def _populate(self, points: list):
+        saved = {m["source"]: m["column_id"] for m in self.db.get_capture_mcl_mappings()}
+        # a saved mapping stays editable even when its datapoint has aged out of recent captures
+        known = {p["key"] for p in points}
+        for key in saved:
+            if key not in known:
+                points.append({"key": key, "count": 0, "sample": "", "auto_column_id": None})
+
+        green, cyan, dim = QColor("#4CF9B7"), QColor("#58C4FF"), QColor("#6E7681")
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(points))
+        for r, p in enumerate(points):
+            key_item = QTableWidgetItem(p["key"])
+            key_item.setToolTip(p["key"])
+            key_item.setFont(QFont("Consolas", 10))
+            seen_item = QTableWidgetItem(str(p["count"]))
+            seen_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            seen_item.setForeground(dim)
+            sample_item = QTableWidgetItem(p["sample"])
+            sample_item.setToolTip(p["sample"])
+            sample_item.setForeground(QColor("#9DA7B3"))
+            auto_item = QTableWidgetItem(self._col_label.get(p["auto_column_id"], ""))
+            auto_item.setForeground(green)
+            col_id = saved.get(p["key"])
+            map_item = QTableWidgetItem(self._col_label.get(col_id, "—"))
+            map_item.setData(Qt.UserRole, col_id)
+            map_item.setForeground(cyan if col_id is not None else dim)
+            for item in (key_item, seen_item, sample_item, auto_item):
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            map_item.setFlags(map_item.flags() | Qt.ItemIsEditable)
+            for c, item in enumerate((key_item, seen_item, sample_item, auto_item, map_item)):
+                self.table.setItem(r, c, item)
+        self.table.setUpdatesEnabled(True)
+        self.btn_save.setEnabled(True)
+        self.btn_apply.setEnabled(True)
+        self._apply_filter()
+
+    # ---------------- interaction ----------------
+    def _on_cell_clicked(self, row, col):
+        if col == self._MAP:
+            self.table.editItem(self.table.item(row, col))
+
+    def _is_mapped(self, row: int) -> bool:
+        return bool(self.table.item(row, self._AUTO).text()) or self.table.item(row, self._MAP).data(Qt.UserRole) is not None
+
+    def _apply_filter(self, *_):
+        needle = self.txt_filter.text().strip().lower()
+        only_unmapped = self.chk_unmapped.isChecked()
+        shown = mapped = 0
+        self.table.setUpdatesEnabled(False)
+        for r in range(self.table.rowCount()):
+            hay = f"{self.table.item(r, self._KEY).text()} {self.table.item(r, self._SAMPLE).text()}".lower()
+            is_mapped = self._is_mapped(r)
+            mapped += is_mapped
+            hide = (bool(needle) and needle not in hay) or (only_unmapped and is_mapped)
+            self.table.setRowHidden(r, hide)
+            shown += 0 if hide else 1
+        self.table.setUpdatesEnabled(True)
+        total = self.table.rowCount()
+        self.lbl_status.setText(f"{shown} of {total} datapoints shown  ·  {mapped} mapped, {total - mapped} unmapped")
+
+    def _save(self, apply_now: bool):
+        mappings = []
+        for r in range(self.table.rowCount()):
+            col_id = self.table.item(r, self._MAP).data(Qt.UserRole)
+            if col_id is not None:
+                mappings.append({"source": self.table.item(r, self._KEY).text(), "column_id": col_id})
+        try:
+            self.db.save_capture_mcl_mappings(mappings)
+            if apply_now:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    changed = self.db.enrich_registered_clients_from_containers()
+                finally:
+                    QApplication.restoreOverrideCursor()
+                QMessageBox.information(self, "Mappings saved",
+                                        f"{len(mappings)} mapping(s) saved. {changed} registered client record(s) updated.")
+            else:
+                QMessageBox.information(self, "Mappings saved",
+                                        f"{len(mappings)} mapping(s) saved. They apply to future captures of registered clients.")
+            self.accept()
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", f"Could not save the mappings: {e}")
+
+
 class TrackerDumpWindow(QWidget):
     """Full-featured workspace for inspecting client tracker dumps and SRPF unified containers."""
 
+    skip_page_fade = True
+
+    service_action_requested = Signal(int, dict)
+
     # Table columns (same order in both views)
-    COL_CLIENT, COL_PORTAL, COL_PERIOD, COL_STATUS, COL_METHOD, COL_UPDATED, COL_ACTIONS = range(7)
+    COL_CLIENT, COL_FILING, COL_PERIOD, COL_STATUS, COL_ACTIONS, COL_UPDATED, COL_DEVICE = range(7)
+    COL_METHOD = COL_DEVICE  # Backwards compatibility alias
     COLUMN_COUNT = 7
     
     def __init__(self, db, parent=None, defer_first_load: bool = False):
@@ -1442,6 +1794,17 @@ class TrackerDumpWindow(QWidget):
         self._col_resize_timer.setSingleShot(True)
         self._col_resize_timer.setInterval(40)
         self._col_resize_timer.timeout.connect(self._adjust_table_columns)
+        # Periodic SRPF re-resolve: runs every 30 seconds while this window is open (see showEvent)
+        self._resolve_timer = QTimer(self)
+        self._resolve_timer.setInterval(30_000)
+        self._resolve_timer.timeout.connect(self._start_periodic_resolve)
+        self._resolve_thread = None
+        # Width mode (WIDE / COMPACT) follows the page's own width; see ui/utils/responsive.py.
+        self._width_mode = WidthMode.WIDE
+        self._auto_hidden_cols = set()
+        self._user_hidden_cols, self._user_shown_cols = _load_column_choices()
+        self._seg_buttons = []       # (button, full text, short text)
+        self._tile_meta = {}         # key -> (caption, tooltip, colour)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1582,24 +1945,6 @@ class TrackerDumpWindow(QWidget):
                 background-color: #10231A;
                 font-weight: 600;
             }
-            QToolButton#LttBtn {
-                background-color: #2E9B5F;
-                color: #FFFFFF;
-                font-weight: 600;
-                border: none;
-                border-radius: 5px;
-                padding: 7px 26px 7px 12px;
-                font-size: 12px;
-            }
-            QToolButton#LttBtn:hover { background-color: #247C4C; }
-            QToolButton#LttBtn::menu-button {
-                border: none;
-                border-left: 1px solid #247C4C;
-                border-top-right-radius: 5px;
-                border-bottom-right-radius: 5px;
-                width: 22px;
-            }
-            QToolButton#LttBtn::menu-arrow { width: 8px; height: 8px; }
             QFrame#HeaderCard QLabel { background: transparent; }
             QFrame#StatusBar { background: transparent; border-top: 1px solid #333333; }
             QFrame#StatusBar QLabel { background: transparent; }
@@ -1626,6 +1971,7 @@ class TrackerDumpWindow(QWidget):
         lbl_title.setObjectName("TitleLbl")
         lbl_sub = QLabel("Filings captured by the browser extension, VSDC and SGT, grouped per client")
         lbl_sub.setObjectName("SubtitleLbl")
+        self._lbl_subtitle = lbl_sub
         title_vbox.addWidget(lbl_title)
         title_vbox.addWidget(lbl_sub)
         header_layout.addLayout(title_vbox)
@@ -1645,26 +1991,10 @@ class TrackerDumpWindow(QWidget):
         self.btn_preferences = QPushButton("Tools  ▾")
         self.btn_preferences.setObjectName("ToolsBtn")
         self.btn_preferences.setIcon(_safe_qta_icon("mdi.cog-outline", "#C9D1D9"))
-        self.btn_preferences.setToolTip("Re-resolve identities, Gemini settings, reports, CSV export, clear captures")
+        self.btn_preferences.setToolTip("Re-resolve identities, reports, CSV export, clear captures")
         self.btn_preferences.setCursor(Qt.PointingHandCursor)
         self.btn_preferences.clicked.connect(self._show_preferences_menu)
         header_layout.addWidget(self.btn_preferences)
-
-        # Main click exports the LTT Excel report (as before); the arrow opens the other LTT actions.
-        self.btn_ltt_report = QToolButton()
-        self.btn_ltt_report.setObjectName("LttBtn")
-        self.btn_ltt_report.setText("Live Tracking Table")
-        self.btn_ltt_report.setIcon(_safe_qta_icon("mdi.file-excel", "#FFFFFF"))
-        self.btn_ltt_report.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_ltt_report.setPopupMode(QToolButton.MenuButtonPopup)
-        self.btn_ltt_report.setCursor(Qt.PointingHandCursor)
-        self.btn_ltt_report.setToolTip("Generate and open the multi-sheet Live Tracking Table (LTT) Excel report. "
-                                       "Use the arrow for the LTT workspace and live-linked Excel.")
-        self.btn_ltt_report.clicked.connect(self._export_ltt_excel)
-        self.btn_ltt_report.setMenu(self._build_ltt_menu())
-        self.btn_ltt_report.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.btn_ltt_report.customContextMenuRequested.connect(self._show_ltt_menu)
-        header_layout.addWidget(self.btn_ltt_report)
 
         # ---- Summary strip: totals over everything loaded; each tile applies a filter ----
         tiles_row = QHBoxLayout()
@@ -1697,6 +2027,7 @@ class TrackerDumpWindow(QWidget):
             tile.clicked.connect(lambda _=False, k=key: self._on_summary_tile(k))
             tiles_row.addWidget(tile, stretch=1)
             self._summary_tiles[key] = (tile, val, cap)
+            self._tile_meta[key] = (caption, tip, color)
         header_card_layout.addLayout(tiles_row)
 
         # ---- Filter row ----
@@ -1704,6 +2035,16 @@ class TrackerDumpWindow(QWidget):
         filter_layout.setContentsMargins(0, 0, 0, 0)
         filter_layout.setSpacing(8)
         header_card_layout.addLayout(filter_layout)
+        self._filter_layout = filter_layout
+        # COMPACT moves the filter chips onto this second row (hidden in WIDE, so it takes no space).
+        self._chip_row = QWidget()
+        self._chip_layout = QHBoxLayout(self._chip_row)
+        self._chip_layout.setContentsMargins(0, 0, 0, 0)
+        self._chip_layout.setSpacing(8)
+        self._chip_layout.addStretch()
+        self._chip_row.hide()
+        self._chips_on_row = False
+        header_card_layout.addWidget(self._chip_row)
 
         # The view-mode combo stays the source of truth (load_data reads it); the segmented
         # buttons in front of it just drive it.
@@ -1717,9 +2058,9 @@ class TrackerDumpWindow(QWidget):
         seg.setSpacing(0)
         self._view_group = QButtonGroup(self)
         self._view_group.setExclusive(True)
-        for idx, (text, tip, radius) in enumerate((
-            ("Containers", "One row per client (SRPF container)", "border-top-left-radius: 5px; border-bottom-left-radius: 5px;"),
-            ("Raw captures", "One row per individual capture", "border-top-right-radius: 5px; border-bottom-right-radius: 5px; border-left: none;"),
+        for idx, (text, short, tip, radius) in enumerate((
+            ("Containers", "Containers", "One row per client (SRPF container)", "border-top-left-radius: 5px; border-bottom-left-radius: 5px;"),
+            ("Raw captures", "Raw", "One row per individual capture", "border-top-right-radius: 5px; border-bottom-right-radius: 5px; border-left: none;"),
         )):
             b = QPushButton(text)
             b.setObjectName("SegBtn")
@@ -1727,9 +2068,7 @@ class TrackerDumpWindow(QWidget):
             b.setCursor(Qt.PointingHandCursor)
             b.setToolTip(tip)
             b.setStyleSheet(f"QPushButton#SegBtn {{ {radius} }}")
-            bold = QFont(b.font())
-            bold.setBold(True)
-            b.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(text) + 32)
+            self._seg_buttons.append((b, text, short))
             self._view_group.addButton(b, idx)
             seg.addWidget(b)
         self._view_group.idClicked.connect(self.cmb_view_mode.setCurrentIndex)
@@ -1748,6 +2087,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_status.addItems([
             "All Statuses",
             "Submitted & E-verified",
+            "Submitted",
             "Pending e-Verification",
             "Other EVC",
             "Not submitted"
@@ -1798,7 +2138,7 @@ class TrackerDumpWindow(QWidget):
         # Filter chips: "Status ▾" etc.; a chip that's switched on shows its value, e.g. "Client: Unregistered".
         self._filter_chips = []
         for combo, label, short in (
-            (self.cmb_status, "Status", {"Submitted & E-verified": "E-verified", "Pending e-Verification": "Pending e-verification"}),
+            (self.cmb_status, "Status", {"Submitted & E-verified": "E-verified", "Submitted": "Submitted (no ARN)", "Pending e-Verification": "Pending e-verification"}),
             (self.cmb_portal, "Portal", {"Income Tax (ITR)": "Income Tax", "GST Portal": "GST", "TRACES / TDS": "TDS"}),
             (self.cmb_client, "Client", {"Registered Clients": "Registered", "Unregistered / Action Required": "Unregistered"}),
             (self.cmb_date, "Time", {}),
@@ -1843,6 +2183,8 @@ class TrackerDumpWindow(QWidget):
         self.table.setWordWrap(False)
         self._user_col_widths = {}
         self.table.horizontalHeader().sectionResized.connect(self._on_section_resized)
+        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         self.table.setItemDelegateForColumn(self.COL_CLIENT, _ClientCellDelegate(self.table))
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1856,20 +2198,6 @@ class TrackerDumpWindow(QWidget):
         pagination_layout.setContentsMargins(4, 6, 4, 0)
         pagination_layout.setSpacing(10)
 
-        self.btn_gemini_ai = QPushButton("⚡ Gemini: 0 Calls | 1,500 Free Left")
-        self.btn_gemini_ai.setCursor(Qt.PointingHandCursor)
-        self.btn_gemini_ai.setFlat(True)
-        self.btn_gemini_ai.setStyleSheet(
-            "QPushButton { font-weight: 600; font-size: 12px; color: #58A6FF; border: none; background: transparent; padding: 0; }"
-            "QPushButton:hover { color: #79C0FF; text-decoration: underline; }"
-        )
-        self.btn_gemini_ai.setToolTip("Google AI Studio Gemini Flash Engine — Click to configure AI settings, multiple API keys, and model parameters")
-        self.btn_gemini_ai.clicked.connect(self._open_ai_settings_dialog)
-        pagination_layout.addWidget(self.btn_gemini_ai)
-        self.lbl_token_meter = self.btn_gemini_ai
-        if not self._defer_first_load:          # otherwise the first load_data() fills it
-            self._update_token_meter()
-
         pagination_layout.addStretch()
 
         self.lbl_page_info = QLabel("Showing 0 to 0 of 0 entries")
@@ -1879,6 +2207,7 @@ class TrackerDumpWindow(QWidget):
 
         lbl_per_page = QLabel("Rows per page:")
         lbl_per_page.setStyleSheet("color: #8B949E; font-size: 12px;")
+        self._lbl_per_page = lbl_per_page
         pagination_layout.addWidget(lbl_per_page)
 
         self.cmb_page_size = QComboBox()
@@ -1905,6 +2234,7 @@ class TrackerDumpWindow(QWidget):
         main_layout.addWidget(status_bar)
         self._sync_view_buttons()
         self._sync_filter_indicators()
+        self._apply_width_mode(WidthMode.WIDE)
 
         # Initial Load
         if self._defer_first_load:
@@ -1916,40 +2246,207 @@ class TrackerDumpWindow(QWidget):
         super().showEvent(event)
         if self._first_load_pending:
             self.load_data()
+        if hasattr(self, "_col_resize_timer"):
+            self._col_resize_timer.start()
+        if hasattr(self, "_resolve_timer"):
+            self._resolve_timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "_resolve_timer"):
+            self._resolve_timer.stop()
+
+    def _start_periodic_resolve(self):
+        """Timer tick: one re-resolve pass in the background, unless the previous pass is still running."""
+        if self._resolve_thread is not None and self._resolve_thread.isRunning():
+            return
+        thread = _ResolveThread(self.db, self)
+        thread.done.connect(self._on_periodic_resolve_done)
+        thread.failed.connect(lambda msg: print(f"[SRPF] periodic re-resolve failed: {msg}"))
+        thread.finished.connect(lambda t=thread: _LIVE_RESOLVE_THREADS.discard(t))
+        _LIVE_RESOLVE_THREADS.add(thread)
+        self._resolve_thread = thread
+        thread.start()
+
+    def _on_periodic_resolve_done(self, updated: int):
+        """Reloads the list only when the pass changed a capture's client, and keeps the page the user is on."""
+        if not updated or not self.isVisible():
+            return
+        page = self._current_page
+        self.load_data()          # resets to page 1 ...
+        self._current_page = page  # ... so put the user's page back
+        self._apply_filters()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_col_resize_timer"):
             self._col_resize_timer.start()
+        current = getattr(self, "_width_mode", WidthMode.WIDE)
+        mode = mode_for(self.width(), current)
+        if mode is not current:
+            self._apply_width_mode(mode)
+        elif mode is WidthMode.COMPACT:
+            self._refresh_tile_captions()
+
+    def _apply_width_mode(self, mode: WidthMode):
+        """WIDE is the layout Tracker Dump has always had. COMPACT trims the header and filters for a
+        narrow page (see the plan, docs/ui-scale-adaptive-layout-plan.md, B2)."""
+        self._width_mode = mode
+        compact = mode is WidthMode.COMPACT
+        self._lbl_subtitle.setVisible(not compact)
+
+        self.txt_search.setFixedWidth(320)
+        if compact:
+            self.txt_search.setMinimumWidth(180)
+
+        for button, text, short in self._seg_buttons:
+            label = short if compact else text
+            button.setText(label)
+            bold = QFont(button.font())
+            bold.setBold(True)
+            button.setMinimumWidth(QFontMetrics(bold).horizontalAdvance(label) + 32)
+
+        self._move_chips(compact)
+
+        for key, (tile, val, cap) in self._summary_tiles.items():
+            _caption, _tip, color = self._tile_meta[key]
+            tile.setMinimumHeight(40 if compact else 50)
+            val.setStyleSheet(f"color: {color}; font-size: 16px;" if compact else f"color: {color};")
+        self._refresh_tile_captions()
+
+        self.table.verticalHeader().setDefaultSectionSize(44 if compact else 48)
+        self._lbl_per_page.setVisible(not compact)
+        self._col_resize_timer.start()
+
+    def _move_chips(self, compact: bool):
+        if compact != self._chips_on_row:
+            if compact:
+                for chip, *_ in self._filter_chips:
+                    self._filter_layout.removeWidget(chip)
+                    self._chip_layout.insertWidget(self._chip_layout.count() - 1, chip)   # before the stretch
+            else:
+                for chip, *_ in self._filter_chips:
+                    self._chip_layout.removeWidget(chip)
+                    self._filter_layout.insertWidget(self._filter_spacer_index(), chip)
+            self._chips_on_row = compact
+        self._chip_row.setVisible(compact)
+
+    def _filter_spacer_index(self) -> int:
+        """Index of the stretch that sits just before the Reset button (the last spacer in the row)."""
+        for i in reversed(range(self._filter_layout.count())):
+            if self._filter_layout.itemAt(i).spacerItem() is not None:
+                return i
+        return self._filter_layout.count()
+
+    def _refresh_tile_captions(self):
+        compact = self._width_mode is WidthMode.COMPACT
+        for key, (tile, _val, cap) in self._summary_tiles.items():
+            caption, tip, _color = self._tile_meta[key]
+            text = caption
+            if compact:
+                text = cap.fontMetrics().elidedText(caption, Qt.ElideRight, max(40, tile.width() - 28))
+            cap.setText(text)
+            tile.setToolTip(f"{caption} — {tip}" if text != caption else tip)
 
     def _adjust_table_columns(self):
-        """Client column takes the spare width; the others get a fixed width, or the width the
-        user dragged them to. Nothing ratchets wider on refresh, so no horizontal scrollbar."""
+        """Fits the columns to the table's width (see fit_columns). Nothing ratchets wider on refresh,
+        so no horizontal scrollbar. A column dragged by hand keeps its width while there is room."""
         if not hasattr(self, "table") or self.table.columnCount() != self.COLUMN_COUNT:
             return
         is_grouped = self.cmb_view_mode.currentIndex() == 0 if hasattr(self, "cmb_view_mode") else True
-        widths = {
-            self.COL_PORTAL: 120,
-            self.COL_PERIOD: 250 if is_grouped else 170,
-            self.COL_STATUS: 280,
-            self.COL_METHOD: 130,
-            self.COL_UPDATED: 150,
-            self.COL_ACTIONS: 100,
-        }
+        user_widths = {col: w for (grouped, col), w in self._user_col_widths.items() if grouped == is_grouped}
+        widths, hidden = fit_columns(self.table.viewport().width(), is_grouped, user_widths,
+                                     self._user_hidden_cols, self._user_shown_cols)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(self.COL_CLIENT, QHeaderView.Stretch)
         header.setMinimumSectionSize(60)
         self._auto_sizing = True
         try:
-            for col, w in widths.items():
-                self.table.setColumnWidth(col, self._user_col_widths.get((is_grouped, col), w))
+            for col in range(self.COLUMN_COUNT):
+                if col == self.COL_CLIENT:
+                    continue
+                self.table.setColumnHidden(col, col in hidden)
+                if col not in hidden:
+                    self.table.setColumnWidth(col, widths[col])
         finally:
             self._auto_sizing = False
+        auto_hidden = hidden - self._user_hidden_cols
+        if auto_hidden != self._auto_hidden_cols:
+            self._auto_hidden_cols = auto_hidden
+            self._refresh_client_tooltips()
+        self._elide_status_labels()
+
+    def _elide_status_labels(self):
+        """Shortens a status pill that is wider than its column ('…' at the end). The full text stays in the tooltip."""
+        avail = max(40, self.table.columnWidth(self.COL_STATUS) - 64)     # cell margins + pill padding and border
+        for row in range(self.table.rowCount()):
+            cell = self.table.cellWidget(row, self.COL_STATUS)
+            label = cell.findChild(QLabel, "status_label") if cell is not None else None
+            if label is None:
+                continue
+            full = label.property("full_text") or label.text()
+            label.ensurePolished()        # the pill's stylesheet sets its font; measure with that font
+            label.setText(label.fontMetrics().elidedText(full, Qt.ElideRight, avail))
+
+    def _on_header_context_menu(self, pos):
+        """Tick the optional columns to show or hide them. Choices are kept per PC and beat auto-hiding."""
+        header = self.table.horizontalHeader()
+        labels = {self.COL_FILING: "Filing type", self.COL_UPDATED: "Updated", self.COL_DEVICE: "Captured by"}
+        menu = QMenu(self)
+        for col in _optional_cols():
+            act = menu.addAction(labels[col])
+            act.setCheckable(True)
+            act.setChecked(not self.table.isColumnHidden(col))
+            act.toggled.connect(lambda checked, c=col: self._set_column_visible(c, checked))
+        menu.addSeparator()
+        menu.addAction("Automatic (fit to width)").triggered.connect(self._reset_column_choices)
+        menu.exec(header.mapToGlobal(pos))
+
+    def _set_column_visible(self, col: int, visible: bool):
+        if visible:
+            self._user_shown_cols.add(col)
+            self._user_hidden_cols.discard(col)
+        else:
+            self._user_hidden_cols.add(col)
+            self._user_shown_cols.discard(col)
+        _save_column_choices(self._user_hidden_cols, self._user_shown_cols)
+        self._adjust_table_columns()
+
+    def _reset_column_choices(self):
+        self._user_hidden_cols.clear()
+        self._user_shown_cols.clear()
+        _save_column_choices(self._user_hidden_cols, self._user_shown_cols)
+        self._adjust_table_columns()
+
+    def _client_tooltip(self, item) -> str:
+        """Client tooltip, plus the values of any column that fitting the width has hidden."""
+        base = item.data(_TIP_BASE_ROLE) or ""
+        values = item.data(_HIDDEN_VALUES_ROLE) or {}
+        parts = [f"{label}: {values[col]}"
+                 for col, label in ((self.COL_FILING, "Filing"), (self.COL_UPDATED, "Updated"), (self.COL_DEVICE, "Device"))
+                 if col in self._auto_hidden_cols and values.get(col)]
+        return "\n".join([base, " · ".join(parts)]) if parts else base
+
+    def _finish_client_tooltip(self, c_item, row_idx: int):
+        """Called once a row's cells are filled: remembers what a hidden column would show, then sets the tooltip."""
+        c_item.setData(_HIDDEN_VALUES_ROLE, {
+            col: self.table.item(row_idx, col).text()
+            for col in (self.COL_FILING, self.COL_UPDATED, self.COL_DEVICE)
+        })
+        c_item.setToolTip(self._client_tooltip(c_item))
+
+    def _refresh_client_tooltips(self):
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, self.COL_CLIENT)
+            if item is not None and item.data(_TIP_BASE_ROLE) is not None:
+                item.setToolTip(self._client_tooltip(item))
 
     def _on_section_resized(self, col: int, _old: int, new: int):
-        if not getattr(self, "_auto_sizing", False) and col != self.COL_CLIENT:
-            is_grouped = self.cmb_view_mode.currentIndex() == 0
-            self._user_col_widths[(is_grouped, col)] = new
+        # A hidden column reports size 0 as Qt lays out; that is not a width the user dragged to.
+        if getattr(self, "_auto_sizing", False) or col == self.COL_CLIENT or new <= 0 or self.table.isColumnHidden(col):
+            return
+        is_grouped = self.cmb_view_mode.currentIndex() == 0
+        self._user_col_widths[(is_grouped, col)] = new
 
     def _on_search_text_changed(self):
         """Debounced search filter."""
@@ -2020,16 +2517,6 @@ class TrackerDumpWindow(QWidget):
 
         menu.exec_(self.table.viewport().mapToGlobal(pos))
 
-    def _update_token_meter(self):
-        """Updates the Gemini Flash token usage meter badge and tooltip."""
-        if get_token_usage_summary and hasattr(self, "lbl_token_meter"):
-            try:
-                stats = get_token_usage_summary()
-                self.lbl_token_meter.setText(stats["badge_text"])
-                self.lbl_token_meter.setToolTip(stats["tooltip"])
-            except Exception:
-                pass
-
     def _reset_filters(self):
         """Resets all search and filter dropdowns to their default state."""
         self.txt_search.blockSignals(True)
@@ -2062,20 +2549,26 @@ class TrackerDumpWindow(QWidget):
     # ---- summary strip / filter indicators ----
 
     _TILE_FILTERS = {
-        # tile key -> (combo attribute, index that tile selects)
-        "unregistered": ("cmb_client", 2),
-        "pending": ("cmb_status", 2),
-        "not_submitted": ("cmb_status", 4),
-        "today": ("cmb_date", 1),
+        # tile key -> (combo attribute, item text that tile selects). Looked up by text, not by
+        # position, so the tile cannot drift from the dropdown when items are added or reordered.
+        "unregistered": ("cmb_client", "Unregistered / Action Required"),
+        "pending": ("cmb_status", "Pending e-Verification"),
+        "not_submitted": ("cmb_status", "Not submitted"),
+        "today": ("cmb_date", "Today"),
     }
+
+    def _tile_index(self, key: str) -> int:
+        attr, text = self._TILE_FILTERS[key]
+        return getattr(self, attr).findText(text)
 
     def _on_summary_tile(self, key: str):
         """A tile sets its filter; clicking the active tile again clears it. 'total' clears all."""
         if key == "total":
             self._reset_filters()
             return
-        attr, idx = self._TILE_FILTERS[key]
+        attr, _ = self._TILE_FILTERS[key]
         combo = getattr(self, attr)
+        idx = self._tile_index(key)
         combo.setCurrentIndex(0 if combo.currentIndex() == idx else idx)  # -> _on_filter_changed
 
     def _update_summary(self):
@@ -2117,8 +2610,8 @@ class TrackerDumpWindow(QWidget):
             if key == "total":
                 tile.setChecked(not any_active)
             else:
-                attr, idx = self._TILE_FILTERS[key]
-                tile.setChecked(getattr(self, attr).currentIndex() == idx)
+                attr, _ = self._TILE_FILTERS[key]
+                tile.setChecked(getattr(self, attr).currentIndex() == self._tile_index(key))
         self.btn_reset_filters.setVisible(any_active)
         for chip, combo, label, short in getattr(self, "_filter_chips", []):
             on = combo.currentIndex() > 0
@@ -2136,23 +2629,41 @@ class TrackerDumpWindow(QWidget):
         """Fetch tracker dumps or SRPF unified containers from database."""
         self._first_load_pending = False
         try:
+            gen_at_start = self.db.data_generation() if hasattr(self.db, "data_generation") else None
+            raw_gen_at_start = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
             is_grouped = (self.cmb_view_mode.currentIndex() == 0)
+            # Every row is loaded so search and the filters see the whole database; the slim reads
+            # keep payloads out of the list, and a dialog fetches its one row's payload on demand.
             if is_grouped:
-                self._dumps_cache = self.db.get_srpf_containers(limit=200)
+                self._dumps_cache = self.db.get_srpf_containers(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda c: str(c.get("last_updated") or ""), reverse=True)
             else:
-                self._dumps_cache = self.db.get_tracker_dumps(limit=200)
+                self._dumps_cache = self.db.get_tracker_dumps(limit=-1, slim=True)
                 # Default chronological organisation: latest entry at top
                 self._dumps_cache.sort(key=lambda r: (str(r.get("created_at") or ""), r.get("id") or 0), reverse=True)
             self._current_page = 1
             self._update_summary()
             self._apply_filters()
-
-            # Automatically update the live CSV feed in the background so Excel Refresh is instant
-            _request_live_feed_export()
+            self._loaded_state = (gen_at_start, raw_gen_at_start, self.cmb_view_mode.currentIndex(), time.monotonic())
         except Exception as e:
             QMessageBox.critical(self, "Error Loading Dumps", f"Could not load tracker dumps: {e}")
+
+    REUSE_DATA_FOR_S = 60.0
+
+    def load_data_if_stale(self):
+        """Opening the tracker: reload only if something was written or the view changed."""
+        state = getattr(self, "_loaded_state", None)
+        if state is not None and not self._first_load_pending:
+            gen, raw_gen, view, when = state
+            db_gen = self.db.data_generation() if hasattr(self.db, "data_generation") else None
+            db_raw = self.db.raw_generation() if hasattr(self.db, "raw_generation") else None
+            if (db_gen is not None and db_raw is not None
+                    and gen == db_gen and raw_gen == db_raw
+                    and view == self.cmb_view_mode.currentIndex()
+                    and time.monotonic() - when < self.REUSE_DATA_FOR_S):
+                return
+        self.load_data()
 
     def _apply_filters(self):
         """Filter cached records and populate table."""
@@ -2179,6 +2690,8 @@ class TrackerDumpWindow(QWidget):
                 res_status, _ = _resolve_ltt_submission_status(d)
                 if status_filter == "Submitted & E-verified" and res_status != "Submitted & E-verified":
                     continue
+                elif status_filter == "Submitted" and res_status != "Submitted":
+                    continue
                 elif status_filter == "Pending e-Verification" and res_status != "Submitted (e-verification pending)":
                     continue
                 elif status_filter == "Other EVC" and res_status != "Other EVC":
@@ -2188,7 +2701,10 @@ class TrackerDumpWindow(QWidget):
 
             # 2. Portal / Jurisdiction Filter
             if portal_filter != "All Portals":
-                p_text = f"{d.get('portal', '')} {d.get('service_name', '')} {d.get('form_type', '')}".lower()
+                # A client container matches when ANY of its filings is on the portal, not just the latest
+                filings = d.get("filing_history") or [d]
+                p_text = " ".join(f"{f.get('portal', '')} {f.get('service_name', '')} {f.get('form_type', '')}"
+                                  for f in filings).lower()
                 if portal_filter == "Income Tax (ITR)":
                     if not any(k in p_text for k in ("income tax", "itr")):
                         continue
@@ -2239,6 +2755,9 @@ class TrackerDumpWindow(QWidget):
                     d.get("company_name", ""), d.get("proprietor_name", ""),
                     d.get("identity_key", ""), d.get("notes", "")
                 ]
+                # a container also matches on any of its earlier filings' ARNs, periods and portals
+                for h in d.get("filing_history") or ():
+                    match_fields += [h.get("arn", ""), h.get("period_label", ""), h.get("portal", "")]
                 if not any(search_txt in str(f).lower() for f in match_fields):
                     continue
 
@@ -2299,7 +2818,7 @@ class TrackerDumpWindow(QWidget):
         the row's current item up when clicked.
         """
         cell = self.table.cellWidget(row_idx, self.COL_ACTIONS)
-        if cell is None or cell.findChild(QPushButton, "act_view") is None:
+        if cell is None or cell.findChild(QPushButton, "act_view") is None or cell.findChild(QPushButton, "act_autofill") is None:
             cell = self._build_action_cell(item, is_grouped)
             self.table.setCellWidget(row_idx, self.COL_ACTIONS, cell)
         cell.setProperty("row", row_idx)
@@ -2314,11 +2833,93 @@ class TrackerDumpWindow(QWidget):
         btn_create = cell.findChild(QPushButton, "act_create")
         if btn_create is not None:
             btn_create.setVisible(bool(needs_create))
+        btn_autofill = cell.findChild(QPushButton, "act_autofill")
+        if btn_autofill is not None:
+            has_client = bool(item.get("client_id")) and not item.get("is_unassigned")
+            btn_autofill.setVisible(has_client)
+            if has_client:
+                service = self._service_for_row(item)
+                if service:
+                    mode_1 = automation.service_action_mode(service)
+                    action_specs = {
+                        automation.ACTION_AUTOFILL: (
+                            "Fast Autofill", "mdi.flash", "#FFFFFF",
+                            "QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }"
+                        ),
+                        automation.ACTION_SMTI: (
+                            "SMTI Manual Assist", "mdi.clipboard-account-outline", "#FF4D4D",
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                        ),
+                        automation.ACTION_MECP: (
+                            "MECP Manual Copy", "mdi.content-copy", "#FF4D4D",
+                            "QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }"
+                        ),
+                    }
+                    action_label, action_icon, icon_color, btn_style = action_specs.get(mode_1, action_specs[automation.ACTION_AUTOFILL])
+                    btn_autofill.setIcon(_safe_qta_icon(action_icon, icon_color))
+                    btn_autofill.setStyleSheet(btn_style)
+                    btn_autofill.setToolTip(f"{action_label}: {service.get('name', 'Service')}")
+                else:
+                    portal_name = item.get("service_name") or item.get("portal") or "Portal"
+                    btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
+                    btn_autofill.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; padding: 3px 0px; } QPushButton:hover { background-color: #E63939; }")
+                    btn_autofill.setToolTip(f"Fast Autofill: {portal_name}")
 
     def _on_action_create(self, cell: QWidget) -> None:
         item = self._action_cell_item(cell)
         if item is not None:
             self._create_client_from_capture(item)
+
+    def _service_for_row(self, item: dict):
+        cid = item.get("client_id")
+        if not cid:
+            return None
+        cache = getattr(self, "_client_services_cache", None)
+        if cache is not None and cid in cache:
+            services = cache[cid]
+        else:
+            services = self.db.get_client_services(cid)
+            if cache is not None:
+                cache[cid] = services
+        if not services:
+            return None
+        portal_name = (item.get("service_name") or item.get("portal") or "").strip()
+        if not portal_name:
+            return None
+        p_lower = portal_name.lower()
+        for s in services:
+            if s.get("name", "").strip().lower() == p_lower:
+                return s
+        matched = [s for s in services if _service_matches_portal(s.get("name", ""), portal_name)]
+        if matched:
+            return matched[0]
+        return None
+
+    def _on_action_autofill(self, cell: QWidget) -> None:
+        item = self._action_cell_item(cell)
+        if item is None:
+            return
+        cid = item.get("client_id")
+        if not cid:
+            return
+        service = self._service_for_row(item)
+        if not service:
+            portal_name = item.get("service_name") or item.get("portal") or "Unknown portal"
+            client_name = (
+                item.get("display_name")
+                or item.get("client_name")
+                or item.get("company_name")
+                or item.get("proprietor_name")
+                or item.get("pan")
+                or f"Client #{cid}"
+            )
+            QMessageBox.information(
+                self,
+                "No matching service",
+                f"No service matching portal '{portal_name}' was found for {client_name}."
+            )
+            return
+        self.service_action_requested.emit(int(cid), service)
 
     def _action_cell_item(self, cell: QWidget):
         """The item currently shown in the action cell's row (None if the page changed under it)."""
@@ -2344,9 +2945,9 @@ class TrackerDumpWindow(QWidget):
 
     def _build_action_cell(self, item: dict, is_grouped: bool) -> QWidget:
         """
-        Builds the per-row Actions cell: a single primary Inspect/View button
-        plus a kebab (⋮) overflow menu for Create Client / Delete. Keeps every
-        action from the old 3-button layout, just not all visible at once.
+        Builds the per-row Actions cell: an Automation 1 autofill button,
+        a primary Inspect/View button, and a kebab (⋮) overflow menu for
+        Create Client / Delete.
         """
         widget = QWidget()
         widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Minimum)
@@ -2357,6 +2958,27 @@ class TrackerDumpWindow(QWidget):
 
         # Built once per table row and reused (see _set_action_cell); the handlers find the
         # row's current item when clicked instead of holding a copy of it.
+        btn_autofill = QPushButton()
+        btn_autofill.setObjectName("act_autofill")
+        btn_autofill.setCursor(Qt.PointingHandCursor)
+        btn_autofill.setFixedSize(34, 26)
+        btn_autofill.setIconSize(QSize(16, 16))
+        btn_autofill.setIcon(_safe_qta_icon("mdi.flash", "#FFFFFF"))
+        btn_autofill.setToolTip("Automation 1 (Fast Autofill)")
+        btn_autofill.setStyleSheet("""
+            QPushButton {
+                background-color: #FF4D4D;
+                border: none;
+                border-radius: 6px;
+                padding: 3px 0px;
+            }
+            QPushButton:hover {
+                background-color: #E63939;
+            }
+        """)
+        btn_autofill.clicked.connect(lambda _=False, c=widget: self._on_action_autofill(c))
+        layout.addWidget(btn_autofill)
+
         btn_view = QPushButton()
         btn_view.setObjectName("act_view")
         btn_view.clicked.connect(lambda _=False, c=widget: self._on_action_view(c))
@@ -2454,8 +3076,8 @@ class TrackerDumpWindow(QWidget):
         """Sets headers and widths for the current view."""
         self.table.setColumnCount(self.COLUMN_COUNT)
         self.table.setHorizontalHeaderLabels([
-            "Client", "Portal", "Filings & History" if is_grouped else "Period",
-            "Submission Status", "Captured by", "Updated", ""
+            "Client", "Filing type", "Filings & History" if is_grouped else "Period",
+            "Submission Status", "", "Updated", "Captured by"
         ])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -2465,9 +3087,9 @@ class TrackerDumpWindow(QWidget):
 
     def _populate_grouped_table(self, containers: list[dict]):
         """Populates table in SRPF Grouped Container view: 1 row per unique client container."""
+        self._client_services_cache = {}
         self._prepare_columns(is_grouped=True)
         self.table.setRowCount(len(containers))
-        self._update_token_meter()
 
         for row_idx, r in enumerate(containers):
             def _get_item(col, color=None, align=None):
@@ -2498,22 +3120,21 @@ class TrackerDumpWindow(QWidget):
             tooltip_txt = f"{name}\n{subline}"
             if unassigned:
                 tooltip_txt += "\nUse the + button, ⋮ or right-click → Create Client to register this client."
-            if r.get("has_gemini"):
-                tooltip_txt += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
-            c_item.setToolTip(tooltip_txt)
+            c_item.setData(_TIP_BASE_ROLE, tooltip_txt)
 
             portal_str = r.get("portal") or "Income Tax Portal"
             short, color = _portal_short(portal_str)
-            p_item = _get_item(self.COL_PORTAL, color=color)
-            p_item.setText(short)
+            p_item = _get_item(self.COL_FILING, color=color)
+            p_item.setText(_filing_type(portal_str, short))
             p_item.setToolTip(portal_str)
 
             period_sum = r.get("period_summary") or f"{r.get('total_captures', 1)} Capture(s)"
             hist_item = _get_item(self.COL_PERIOD, color="#58A6FF")
-            hist_item.setText(_filings_short(period_sum))
-            hist_item.setToolTip(period_sum)
+            latest = str(r.get("latest_period") or "").strip()
+            hist_item.setText(re.sub(r"\bAssessment Year\b", "AY", latest) if latest and latest != "N/A" else _filings_short(period_sum))
+            hist_item.setToolTip(f"Latest period captured: {latest}\n{period_sum}" if latest else period_sum)
 
-            # Submission Status (Hooked to LTT / SDC_Parser)
+            # Submission Status
             status_text, status_theme = _resolve_ltt_submission_status(r)
             _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
             arn_val = r.get("latest_arn", "N/A")
@@ -2523,10 +3144,11 @@ class TrackerDumpWindow(QWidget):
             _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
                              tooltip="\n".join(tooltip_lines))
 
+            dev_name = _extract_device_name(r)
+            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item.setText(dev_name)
             method_val = r.get("capture_method", "Unknown")
-            method_item = _get_item(self.COL_METHOD, color=_capture_method_color(method_val))
-            method_item.setText(_method_short(method_val))
-            method_item.setToolTip(method_val)
+            dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method_val}")
 
             ts_raw = r.get("last_updated", "")
             ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
@@ -2535,12 +3157,14 @@ class TrackerDumpWindow(QWidget):
 
             # Actions - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=True)
+            self._finish_client_tooltip(c_item, row_idx)
+        self._elide_status_labels()
 
     def _populate_raw_table(self, records: list[dict]):
         """Populates table in granular Individual Raw Captures view."""
+        self._client_services_cache = {}
         self._prepare_columns(is_grouped=False)
         self.table.setRowCount(len(records))
-        self._update_token_meter()
 
         for row_idx, r in enumerate(records):
             def _get_item(col, color=None, align=None):
@@ -2565,14 +3189,12 @@ class TrackerDumpWindow(QWidget):
             c_item.setData(_SUBLINE_ROLE, subline)
             c_item.setData(_UNASSIGNED_ROLE, unassigned)
             raw_tooltip = f"{client_name}\n{subline}"
-            if r.get("has_gemini"):
-                raw_tooltip += "\n✨ Client details verified by Gemini Flash AI (Statutory Priority)"
-            c_item.setToolTip(raw_tooltip)
+            c_item.setData(_TIP_BASE_ROLE, raw_tooltip)
 
             portal_str = r.get("service_name") or r.get("portal") or "Portal"
             short, color = _portal_short(portal_str)
-            portal_item = _get_item(self.COL_PORTAL, color=color)
-            portal_item.setText(short)
+            portal_item = _get_item(self.COL_FILING, color=color)
+            portal_item.setText(_filing_type(portal_str, short))
             portal_item.setToolTip(portal_str)
 
             period_val = r.get("period_label") or "N/A"
@@ -2580,7 +3202,7 @@ class TrackerDumpWindow(QWidget):
             period_item.setText(re.sub(r"\bAssessment Year\b", "AY", period_val))
             period_item.setToolTip(period_val)
 
-            # Submission Status (Hooked to LTT / SDC_Parser)
+            # Submission Status
             status_text, status_theme = _resolve_ltt_submission_status(r)
             _get_item(self.COL_STATUS).setText("")  # Prevent text bleed
             arn_val = r.get("arn_number", "N/A")
@@ -2590,10 +3212,11 @@ class TrackerDumpWindow(QWidget):
             _set_status_cell(self.table, row_idx, self.COL_STATUS, status_text, status_theme["cell_bg"],
                              tooltip="\n".join(tooltip_lines))
 
+            dev_name = _extract_device_name(r)
+            dev_item = _get_item(self.COL_DEVICE, color="#FFA657")
+            dev_item.setText(dev_name)
             method = r.get("capture_method", "DOM_Tracker")
-            method_item = _get_item(self.COL_METHOD, color=_capture_method_color(method))
-            method_item.setText(_method_short(method))
-            method_item.setToolTip(method)
+            dev_item.setToolTip(f"Device: {dev_name}\nCapture Method: {method}")
 
             ts_raw = r.get("created_at", "")
             ts_item = _get_item(self.COL_UPDATED, color="#8B949E")
@@ -2602,18 +3225,37 @@ class TrackerDumpWindow(QWidget):
 
             # Actions Column - reused; the buttons read this row's item when clicked
             self._set_action_cell(row_idx, r, is_grouped=False)
+            self._finish_client_tooltip(c_item, row_idx)
+        self._elide_status_labels()
+
+    def _full_container(self, item: dict) -> dict:
+        """List rows are slim (no payloads); dialogs need the whole container, or the whole raw row."""
+        if not item.get("_slim"):
+            return item
+        if item.get("identity_key"):
+            full = self.db.get_srpf_containers(limit=1, identity_key=item["identity_key"])
+            if full:
+                return full[0]
+        elif item.get("id") is not None:
+            full = self.db.get_tracker_dumps(limit=1, dump_id=item["id"])
+            if full:
+                return full[0]
+        return item
 
     def _show_container_dialog(self, container_item: dict):
+        container_item = self._full_container(container_item)
         dlg = PayloadInspectorDialog(container_item, db=self.db, is_container=True, parent=self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
 
     def _show_payload_dialog(self, dump_item: dict):
+        dump_item = self._full_container(dump_item)
         dlg = PayloadInspectorDialog(dump_item, db=self.db, is_container=False, parent=self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
 
     def _create_client_from_capture(self, dump_item: dict):
+        dump_item = self._full_container(dump_item)
         dlg = AddClientFromCaptureDialog(self.db, dump_item, self)
         if dlg.exec() == QDialog.Accepted:
             self.load_data()
@@ -2703,77 +3345,46 @@ class TrackerDumpWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Re-resolve Error", f"Could not re-resolve captures: {e}")
 
-    def _open_fst_classifier_report(self):
-        """Generates and opens the latest FST Classification Excel report from FST_Classifier_1."""
-        import os, sys
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        classifier_dir = os.path.join(app_dir, "FST_Classifier_1")
-        report_path = os.path.join(classifier_dir, "payload_report.xlsx")
-        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
-        
-        target_dump = None
-        for p in dump_paths:
-            if os.path.exists(p) and os.path.getsize(p) > 100:
-                target_dump = p
-                break
-        if not target_dump and dump_paths:
-            self.db.rebuild_raw_payload_dumps_file()
-            target_dump = dump_paths[0]
-
+    def _open_mcl_mapping_dialog(self):
         try:
-            if classifier_dir not in sys.path:
-                sys.path.insert(0, classifier_dir)
-            import fst_classifier
-
-            os.makedirs(classifier_dir, exist_ok=True)
-            success = fst_classifier.process_data(target_dump, report_path)
-            if success and os.path.exists(report_path):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
-            else:
-                QMessageBox.warning(self, "Classification Notice", "Could not generate classification report from available payloads.")
+            McLMappingDialog(self.db, self).exec()
         except Exception as e:
-            QMessageBox.critical(self, "Classifier Error", f"Failed to run FST Classifier: {e}")
+            QMessageBox.critical(self, "Mapping Error", f"Could not open the mapping dialog: {e}")
 
-    def _open_dom_parser_report(self):
-        """Generates and opens the latest DOM Parser 1 audit Excel report."""
-        import os, sys
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        app_dir = sys._MEIPASS if getattr(sys, 'frozen', False) else os.path.dirname(os.path.dirname(base_dir))
-        parser_dir = os.path.join(app_dir, "DOM_Parser_1")
-        live_dir = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera")
-        os.makedirs(live_dir, exist_ok=True)
-        report_path = os.path.join(live_dir, "dom_audit_report.xlsx")
-
-        live_db = os.path.join(live_dir, "rawPayload.db")
-        app_db = os.path.join(app_dir, "rawPayload.db")
-        db_path = live_db if os.path.exists(live_db) else app_db
-        dump_paths = self.db._get_daily_dump_file_paths(self.db._extract_dump_date_key(None))
-        target_dump = db_path if os.path.exists(db_path) else next((p for p in dump_paths if os.path.exists(p) and os.path.getsize(p) > 100), None)
-
+    def _open_ltt_rules(self):
+        """Plain-language setup of the return forms the LTT sheet tracks (core/ltt)."""
+        from ui.windows.ltt_rules_dialog import LttRulesDialog
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            if parser_dir not in sys.path:
-                sys.path.insert(0, parser_dir)
-            try:
-                import dom_parser
-            except ImportError:
-                from DOM_Parser_1 import dom_parser
+            dlg = LttRulesDialog(self.db, self)
+        finally:
+            QApplication.restoreOverrideCursor()
+        dlg.exec()
 
-            success = dom_parser.process_data(target_dump, report_path)
-            if success and os.path.exists(report_path):
-                try:
-                    os.startfile(report_path)
-                except Exception:
-                    QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
-            else:
-                QMessageBox.warning(self, "DOM Parser Notice", "Could not generate DOM audit report from available captures.")
+    def _open_ltt_sheet(self):
+        """Writes this month's LTT workbook (latest period filed per client, a sheet per form) and opens it."""
+        from core.ltt import monthly as ltt_monthly
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            path = ltt_monthly.export_month(self.db, create=True)
+            os.startfile(str(path))
         except Exception as e:
-            QMessageBox.critical(self, "DOM Parser Error", f"Failed to run DOM Parser 1: {e}")
+            QMessageBox.warning(self, "LTT sheet", f"Could not open the LTT sheet: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _open_distill(self):
+        """Sera Distill (SDIS Part L): the admin PC only; the dialog is non-modal and kept alive here."""
+        if not self.db.is_admin_pc():
+            QMessageBox.information(self, "Sera Distill", "Sera Distill runs on the admin PC only.")
+            return
+        dlg = getattr(self, "_distill_dialog", None)
+        if dlg is None:
+            from ui.dialogs.sdis_dialog import SdisDialog
+            dlg = self._distill_dialog = SdisDialog(self.db, self)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _show_preferences_menu(self):
         """Displays a floating Preferences menu for dump utilities, classification, and maintenance."""
@@ -2807,28 +3418,21 @@ class TrackerDumpWindow(QWidget):
         act_reresolve = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Re-Resolve Identities (SRPF)")
         act_reresolve.triggered.connect(self._reresolve_identities)
 
+        act_map = menu.addAction(_safe_qta_icon("mdi.table-arrow-right", "#4CF9B7"), "Map Datapoints to MCL Columns…")
+        act_map.triggered.connect(self._open_mcl_mapping_dialog)
+
         menu.addSeparator()
 
-        act_ai_config = menu.addAction(_safe_qta_icon("mdi.robot", "#58A6FF"), "Gemini AI Configuration")
-        act_ai_config.triggered.connect(self._open_ai_settings_dialog)
+        act_ltt_open = menu.addAction(_safe_qta_icon("mdi.microsoft-excel", "#4CF9B7"), "Open LTT sheet")
+        act_ltt_open.triggered.connect(self._open_ltt_sheet)
 
-        act_ltt_ws = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7"), "Live Tracking Table (LTT) Workspace")
-        act_ltt_ws.triggered.connect(self._open_ltt_workspace)
-
-        act_ltt_live = menu.addAction(_safe_qta_icon("mdi.autorenew", "#58A6FF"), "Open Live-Linked Excel (Power Query)")
-        act_ltt_live.triggered.connect(self._open_ltt_live_excel)
-
-        act_ltt_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7"), "Update Live Data Feed (CSV)")
-        act_ltt_feed.triggered.connect(self._update_ltt_data_feed)
-
-        act_classifier = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "FST Classifier (Excel Report)")
-        act_classifier.triggered.connect(self._open_fst_classifier_report)
-
-        act_dom_parser = menu.addAction(_safe_qta_icon("mdi.file-excel", "#4CF9B7"), "SDC Audit Report (Excel)")
-        act_dom_parser.triggered.connect(self._open_dom_parser_report)
+        menu.addSeparator()
 
         act_export_csv = menu.addAction(_safe_qta_icon("mdi.file-export", "#4CF9B7"), "Export Captures (CSV)")
         act_export_csv.triggered.connect(self._export_csv)
+
+        act_distill = menu.addAction(_safe_qta_icon("mdi.flask-outline", "#4CF9B7"), "Distill…")
+        act_distill.triggered.connect(self._open_distill)
 
         menu.addSeparator()
 
@@ -2841,152 +3445,4 @@ class TrackerDumpWindow(QWidget):
             menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
         else:
             menu.exec_(self.cursor().pos())
-
-    def _open_ai_settings_dialog(self):
-        """Opens the full Gemini AI Configuration dialog."""
-        try:
-            from ui.dialogs.ai_settings_dialog import AISettingsDialog
-            dlg = AISettingsDialog(self)
-            dlg.settings_changed.connect(self._update_token_meter)
-            dlg.exec()
-            self._update_token_meter()
-        except Exception as e:
-            QMessageBox.critical(self, "AI Settings Error", f"Could not launch AI Settings Dialog: {e}")
-
-
-    def _open_ltt_workspace(self):
-        """Opens the full-featured interactive Live Tracking Table (LTT) workspace."""
-        try:
-            from ui.windows.ltt_window import LttWorkspaceWindow
-            win = LttWorkspaceWindow(self)
-            win.exec_()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open LTT Workspace: {e}")
-
-    def _open_ltt_live_excel(self):
-        """Opens the permanent live-linked Excel workbook powered by Power Query / QueryTable."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-
-        live_xlsx = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_Live.xlsx")
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
-            target = xlsx_p if (xlsx_p and os.path.exists(xlsx_p)) else live_xlsx
-            QApplication.restoreOverrideCursor()
-
-            if os.path.exists(target):
-                try:
-                    os.startfile(target)
-                except Exception as e:
-                    QMessageBox.warning(self, "Notice", f"Could not launch Excel automatically: {e}")
-            else:
-                QMessageBox.warning(self, "Warning", f"Live workbook was not found at:\n{target}")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to initialize live Excel feed: {e}")
-
-    def _update_ltt_data_feed(self):
-        """Refreshes the backend CSV data feed without modifying or closing user's open Excel workbook."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            csv_p, xlsx_p = sdc_parser.export_ltt_live_feed()
-            QApplication.restoreOverrideCursor()
-            if csv_p and os.path.exists(csv_p):
-                QMessageBox.information(
-                    self, "Data Feed Updated",
-                    f"Live CSV Data Feed updated successfully!\n\n"
-                    f"Saved to:\n{csv_p}\n\n"
-                    f"In Microsoft Excel, simply click:\n"
-                    f"• [Ctrl + Alt + F5]  or  Data -> 'Refresh All'\n"
-                    f"• Or right-click inside the table and click 'Refresh'.\n\n"
-                    f"All your custom columns, notes, and formulas will be preserved!"
-                )
-            else:
-                QMessageBox.warning(self, "Warning", "Data feed could not be generated.")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to update data feed: {e}")
-
-    def _generate_ltt(self):
-        """Backward-compatible alias for generating the LTT Excel report."""
-        self._export_ltt_excel()
-
-    def _show_ltt_menu(self, pos):
-        """Right-click on the LTT button: the same menu as its arrow."""
-        menu = self._build_ltt_menu()
-        btn = getattr(self, "btn_ltt_report", None)
-        if btn:
-            menu.exec_(btn.mapToGlobal(btn.rect().bottomLeft()))
-        else:
-            menu.exec_(self.cursor().pos())
-
-    def _build_ltt_menu(self) -> QMenu:
-        """LTT quick actions: workspace, live-linked Excel, feed update, Excel export."""
-        menu = QMenu(self)
-        act_open = menu.addAction(_safe_qta_icon("mdi.table-eye", "#4CF9B7") or "", "Open Interactive LTT Workspace")
-        act_open.triggered.connect(self._open_ltt_workspace)
-
-        act_live = menu.addAction(_safe_qta_icon("mdi.autorenew", "#58A6FF") or "", "Open Live-Linked Excel (Auto-Refresh)")
-        act_live.triggered.connect(self._open_ltt_live_excel)
-
-        act_feed = menu.addAction(_safe_qta_icon("mdi.database-sync", "#4CF9B7") or "", "Update Live Data Feed (CSV)")
-        act_feed.triggered.connect(self._update_ltt_data_feed)
-
-        menu.addSeparator()
-
-        act_export = menu.addAction(_safe_qta_icon("mdi.file-excel", "#FFFFFF") or "", "Export Multi-Sheet Excel Report")
-        act_export.triggered.connect(self._export_ltt_excel)
-        return menu
-
-    def _export_ltt_excel(self):
-        """Generates and opens the enhanced multi-sheet LTT Excel file."""
-        import os, sys
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        sdc_parser_dir = os.path.abspath(os.path.join(base_dir, '..', '..', 'SDC_Parser'))
-        if getattr(sys, 'frozen', False):
-            sdc_parser_dir = os.path.join(sys._MEIPASS, 'SDC_Parser')
-        if sdc_parser_dir not in sys.path:
-            sys.path.insert(0, sdc_parser_dir)
-            
-        ltt_output = os.path.join(os.path.expanduser("~"), "AmanAssociates_Sera", "Live_Tracking_Table_LTT.xlsx")
-        
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from SDC_Parser import sdc_parser
-            import importlib
-            importlib.reload(sdc_parser)
-            generated_path = sdc_parser.generate_ltt_excel()
-            target_file = generated_path if (generated_path and os.path.exists(generated_path)) else ltt_output
-            QApplication.restoreOverrideCursor()
-            if os.path.exists(target_file):
-                QMessageBox.information(self, "Success", f"Multi-Sheet Live Tracking Table (LTT) generated successfully!\n\nSaved to:\n{target_file}")
-                try:
-                    os.startfile(target_file)
-                except Exception: pass
-            else:
-                QMessageBox.warning(self, "Warning", "Parser ran, but the LTT Excel file was not found.")
-        except Exception as e:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Failed to generate LTT Excel: {e}")
 

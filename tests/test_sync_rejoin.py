@@ -846,7 +846,6 @@ def _sync_dialog(key_id, db_path):
     svc.get_peers.return_value = []
     svc.get_activity_history.return_value = []
     svc.get_network_category.return_value = {"is_public": False}
-    svc.inv_frames = False
     svc.key_id = key_id
     svc.db_path = str(db_path)
     return SeraSyncDialog(sync_service=svc, db=None, actor="User 1"), svc

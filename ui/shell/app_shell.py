@@ -1,9 +1,13 @@
 from PySide6.QtWidgets import QHBoxLayout, QLayout, QSizePolicy, QStackedWidget, QWidget, QGraphicsBlurEffect, QGraphicsOpacityEffect
-from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent
+from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QEvent, Qt
 
 
 from ui.shell.sidebar import Sidebar
 from ui.services.alert_service import ActionAlertFormatter
+
+
+SIDEBAR_AUTO_COLLAPSE_BELOW = 1000   # logical px: narrower than this, the sidebar folds away by itself
+SIDEBAR_AUTO_EXPAND_ABOVE = 1060     # wider than this again (the gap stops it flapping at the edge)
 
 
 class AppShell(QWidget):
@@ -11,6 +15,8 @@ class AppShell(QWidget):
         super().__init__(parent)
         self.setWindowTitle("Aman Associates — SERA Workspace")
         self.dismiss_detail_on_outside = False
+        # Once the user has toggled the sidebar (button or Ctrl+B) this session, the window width no longer moves it.
+        self._sidebar_user_toggled = False
 
         from pathlib import Path
         from PySide6.QtGui import QIcon
@@ -27,10 +33,22 @@ class AppShell(QWidget):
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange and self.isMinimized():
-            callback = getattr(self, "on_minimized", None)
+        if event.type() == QEvent.WindowStateChange:
+            if self.isMinimized():
+                callback = getattr(self, "on_minimized", None)
+            elif event.oldState() & Qt.WindowMinimized:
+                callback = getattr(self, "on_restored", None)
+            else:
+                callback = None
             if callable(callback):
                 callback()
+
+    def showEvent(self, event):
+        """Back from the tray: refreshes held back while hidden run now (on_restored)."""
+        super().showEvent(event)
+        callback = getattr(self, "on_restored", None)
+        if callable(callback) and not self.isMinimized():
+            callback()
 
     def closeEvent(self, event):
         """Intercept close button (X).
@@ -65,6 +83,16 @@ class AppShell(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "slide_panel") and self.slide_panel:
             self.slide_panel.update_position()
+        self._auto_sidebar_for_width()
+
+    def _auto_sidebar_for_width(self):
+        """Folds the sidebar away on a narrow window, and opens it again on a wide one. Ignored once the user has toggled it."""
+        if getattr(self, "_sidebar_user_toggled", False) or not hasattr(self, "sidebar_collapsed"):
+            return
+        if not self.sidebar_collapsed and self.width() < SIDEBAR_AUTO_COLLAPSE_BELOW:
+            self.collapse_sidebar()
+        elif self.sidebar_collapsed and self.width() > SIDEBAR_AUTO_EXPAND_ABOVE:
+            self.expand_sidebar()
 
     def eventFilter(self, watched, event):
         """Close Client Detail when the area outside the slide panel is clicked."""
@@ -118,6 +146,7 @@ class AppShell(QWidget):
 
     def toggle_sidebar(self):
         """Smoothly toggle sidebar between collapsed (0px) and expanded (172px)."""
+        self._sidebar_user_toggled = True
         if self.sidebar_collapsed:
             self.expand_sidebar()
         else:
@@ -181,12 +210,16 @@ class AppShell(QWidget):
             self.content_area.setCurrentIndex(index)
             return
 
+        if getattr(new_widget, "skip_page_fade", False):
+            self.content_area.setCurrentIndex(index)
+            return
+
         # Prepare smooth fade-in effect for the incoming page
         effect = QGraphicsOpacityEffect(new_widget)
         new_widget.setGraphicsEffect(effect)
         
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(180)
+        anim.setDuration(120)
         anim.setStartValue(0.15)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.OutCubic)

@@ -1,4 +1,4 @@
-﻿import unittest
+import unittest
 import tempfile
 import os
 import shutil
@@ -77,29 +77,96 @@ class TestServiceAutomationMode(unittest.TestCase):
         self.assertTrue(automation.is_extension_portal(empty_svc))
         self.assertFalse(automation.is_manual_portal(empty_svc))
 
+    def test_service_action_mode(self):
+        self.assertEqual(automation.service_action_mode({"automation_mode": "extension"}), automation.ACTION_AUTOFILL)
+        self.assertEqual(automation.service_action_mode({"automation_mode": "automated"}), automation.ACTION_AUTOFILL)
+        self.assertEqual(automation.service_action_mode({}), automation.ACTION_AUTOFILL)
+        self.assertEqual(automation.service_action_mode({"automation_mode": "smti"}), automation.ACTION_SMTI)
+        self.assertEqual(automation.service_action_mode({"automation_mode": "manual"}), automation.ACTION_MECP)
+        self.assertTrue(automation.is_manual_portal({"automation_mode": "smti"}))
+
+    def test_smti_mode_round_trips_through_database(self):
+        sid = self.db.create_service(
+            name="Assist Portal", login_page_link="https://example.com/login",
+            userid_column_id=1, password_column_id=2,
+            username_selector="", password_selector="", automation_mode="smti")
+        self.assertEqual(self.db.get_service(sid)["automation_mode"], "smti")
+
     def test_service_edit_dialog_mode_options_and_toggling(self):
         dlg = ServiceEditDialog(self.db)
-        
+
         modes = [dlg.mode_combo.itemData(i) for i in range(dlg.mode_combo.count())]
-        self.assertEqual(modes, ["extension", "manual"])
-        
+        self.assertEqual(modes, ["extension", "smti", "manual"])
+        for gone in ("uid_sel", "pwd_sel", "success_sel", "arn_sel"):
+            self.assertFalse(hasattr(dlg, gone))
+
         self.assertEqual(dlg.mode_combo.currentData(), "extension")
-        self.assertTrue(dlg.uid_sel.isEnabled())
-        self.assertTrue(dlg.pwd_sel.isEnabled())
         self.assertTrue(dlg.ext_flow_combo.isEnabled())
 
-        idx_manual = dlg.mode_combo.findData("manual")
-        dlg.mode_combo.setCurrentIndex(idx_manual)
-        self.assertEqual(dlg.mode_combo.currentData(), "manual")
-        self.assertFalse(dlg.uid_sel.isEnabled())
-        self.assertFalse(dlg.pwd_sel.isEnabled())
+        for mode in ("smti", "manual"):
+            dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData(mode))
+            self.assertEqual(dlg.result_data()["automation_mode"], mode)
+            self.assertFalse(dlg.ext_flow_combo.isEnabled())
+
+        dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("extension"))
+        self.assertTrue(dlg.ext_flow_combo.isEnabled())
+
+    def test_edit_keeps_existing_selectors(self):
+        svc = {"id": 1, "name": "Custom", "login_page_link": "https://custom.example/login",
+               "userid_column_id": None, "password_column_id": None,
+               "username_selector": "#u", "password_selector": "#p",
+               "success_selector": ".ok", "arn_selector": "#arn",
+               "automation_mode": "smti", "extension_flow": "single"}
+        dlg = ServiceEditDialog(self.db, None, svc)
+        self.assertEqual(dlg.mode_combo.currentData(), "smti")
+        data = dlg.result_data()
+        self.assertEqual((data["username_selector"], data["password_selector"],
+                          data["success_selector"], data["arn_selector"]),
+                         ("#u", "#p", ".ok", "#arn"))
+
+
+    def test_service_secondary_action_mode(self):
+        self.assertIsNone(automation.service_secondary_action_mode({}))
+        self.assertIsNone(automation.service_secondary_action_mode({"automation_mode_2": ""}))
+        self.assertIsNone(automation.service_secondary_action_mode({"automation_mode_2": "none"}))
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "extension"}), automation.ACTION_AUTOFILL)
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "smti"}), automation.ACTION_SMTI)
+        self.assertEqual(automation.service_secondary_action_mode({"automation_mode_2": "manual"}), automation.ACTION_MECP)
+
+    def test_automation_mode_2_round_trips_through_database(self):
+        sid = self.db.create_service(
+            name="Dual Mode Portal", login_page_link="https://example.com/login",
+            userid_column_id=1, password_column_id=2,
+            username_selector="", password_selector="",
+            automation_mode="smti", automation_mode_2="extension")
+        svc = self.db.get_service(sid)
+        self.assertEqual(svc["automation_mode"], "smti")
+        self.assertEqual(svc["automation_mode_2"], "extension")
+
+        self.db.update_service(
+            sid, name="Dual Mode Portal", login_page_link="https://example.com/login",
+            userid_column_id=1, password_column_id=2,
+            username_selector="", password_selector="",
+            automation_mode="extension", automation_mode_2="manual")
+        svc2 = self.db.get_service(sid)
+        self.assertEqual(svc2["automation_mode"], "extension")
+        self.assertEqual(svc2["automation_mode_2"], "manual")
+
+    def test_service_edit_dialog_mode_2_options_and_toggling(self):
+        dlg = ServiceEditDialog(self.db)
+        modes_2 = [dlg.mode_2_combo.itemData(i) for i in range(dlg.mode_2_combo.count())]
+        self.assertEqual(modes_2, ["", "extension", "smti", "manual"])
+
+        # When mode 1 is smti and mode 2 is None, ext_flow is disabled
+        dlg.mode_combo.setCurrentIndex(dlg.mode_combo.findData("smti"))
+        dlg.mode_2_combo.setCurrentIndex(dlg.mode_2_combo.findData(""))
         self.assertFalse(dlg.ext_flow_combo.isEnabled())
+        self.assertEqual(dlg.result_data()["automation_mode_2"], "")
 
-        idx_ext = dlg.mode_combo.findData("extension")
-        dlg.mode_combo.setCurrentIndex(idx_ext)
-        self.assertTrue(dlg.uid_sel.isEnabled())
-        self.assertTrue(dlg.pwd_sel.isEnabled())
+        # When mode 1 is smti but mode 2 is extension, ext_flow becomes enabled
+        dlg.mode_2_combo.setCurrentIndex(dlg.mode_2_combo.findData("extension"))
         self.assertTrue(dlg.ext_flow_combo.isEnabled())
+        self.assertEqual(dlg.result_data()["automation_mode_2"], "extension")
 
 
 if __name__ == "__main__":

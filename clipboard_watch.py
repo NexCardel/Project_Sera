@@ -44,6 +44,36 @@ IDENTITY_LABEL_TERMS = ("pan", "gstin", "user id", "userid", "username", "login 
 REPEAT_COPY_S = 2.0          # Excel fires dataChanged more than once per copy
 UNUSED_ARMS_BEFORE_PAUSE = 5  # guardrail: a client armed this often without a fill is paused
 
+_suppressed_until: Dict[int, float] = {}   # client_id -> time.time() deadline
+
+
+def suppress_client(client_id, seconds: float = 300):
+    """Client Detail launched MECP/SMTI for this client: copying its ids from that card must not
+    also arm SCA (#15). Copies of this client's ids are ignored until the time runs out."""
+    try:
+        cid = int(client_id)
+    except (TypeError, ValueError):
+        return
+    _suppressed_until[cid] = time.time() + max(0.0, float(seconds))
+
+
+def release_client(client_id) -> None:
+    """The SCC attempt that suppressed this client has ended: its ids arm SCA again."""
+    try:
+        _suppressed_until.pop(int(client_id), None)
+    except (TypeError, ValueError):
+        pass
+
+
+def is_suppressed(client_id) -> bool:
+    until = _suppressed_until.get(client_id)
+    if until is None:
+        return False
+    if time.time() >= until:
+        _suppressed_until.pop(client_id, None)
+        return False
+    return True
+
 
 def is_allowed_clipboard_identifier(value: str) -> bool:
     """Shape gate for PAN/GSTIN and configured service user IDs."""
@@ -72,6 +102,7 @@ class Arm:
     uses_remaining: int
     grants: int = 0
     fills: List[str] = field(default_factory=list)
+    max_uses: int = 1
 
 
 class ClipboardWatchService(QObject):
@@ -87,6 +118,7 @@ class ClipboardWatchService(QObject):
         self._identity_column_ids: set = set()
         self._index_generation = None
         self._arm: Optional[Arm] = None
+        self.scc_ledger = None     # SccCard.note_clipboard, set by main: SCC attempt copy ledger
         self._last_copy = ("", 0.0)
         self._unused_streak: Dict[int, int] = {}
         self._paused_clients: set = set()
@@ -157,14 +189,21 @@ class ClipboardWatchService(QObject):
 
     # ------------------------------------------------------------------ copy -> arm
     def _on_clipboard_changed(self):
-        if not self.enabled:
-            return
         app = QApplication.instance()
         if not app:
             return
         clipboard = app.clipboard()
+        if not self.enabled and self.scc_ledger is None:
+            return
         text = clipboard.text()
         if not text:
+            return
+        if self.scc_ledger is not None:
+            try:
+                self.scc_ledger(text)      # in memory only; the text is never stored or printed
+            except Exception:
+                pass
+        if not self.enabled:
             return
         candidate = sca_protocol.normalize_uid(text)
         if not (3 <= len(candidate) <= 80) or not sca_protocol.looks_like_uid(candidate):
@@ -176,6 +215,9 @@ class ClipboardWatchService(QObject):
             return
         client_id = self._uid_index.get(candidate)
         if not client_id:
+            return
+        if is_suppressed(client_id):
+            print(f"[SCA] Client {client_id} has a Manual Copy/Assist open - not arming.")
             return
         last_uid, last_t = self._last_copy
         now = time.time()
@@ -203,15 +245,11 @@ class ClipboardWatchService(QObject):
                              2026-09-22 - before, it was never given, so SCA did nothing on the
                              IT portal for 468 of 521 clients).
 
-        A portal with its own password column uses ONLY that column. The old "general password"
-        fallback took the first column typed as password - USER ID, EMAIL and TAN are typed that
-        way here - so an empty IT_Password would have typed the GST user id into the box."""
+        Only the portal's own password column is used. Falling back to "any column with pass in
+        its label" (or the first column typed as password - USER ID, EMAIL and TAN are typed that
+        way here) could type another portal's password, or the GST user id, into the box."""
         pwd_col_id = svc.get("password_column_id")
-        if pwd_col_id:
-            password = str(values.get(pwd_col_id) or "").strip()
-        else:
-            labelled = [c["id"] for c in mcl_cols.values() if "pass" in c.get("label", "").lower()]
-            password = next((str(values[p]).strip() for p in labelled if values.get(p)), "")
+        password = str(values.get(pwd_col_id) or "").strip() if pwd_col_id else ""
         if not password:
             return "", "no_password"
         if automation.is_itr_service(svc) and not self.db.is_client_scc_verified(client_id=client_id):
@@ -295,7 +333,8 @@ class ClipboardWatchService(QObject):
             arm = request["arm"]
             self._arm = Arm(arm_id=arm["arm_id"], client_id=client_id, client_token=client_token,
                             matched_uid=matched_uid, services=arm_services,
-                            expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses)
+                            expires_at=arm["expires_at"] / 1000.0, uses_remaining=max_uses,
+                            max_uses=max_uses)
             print(f"[SCA] Armed client {client_token}: {len(services)} portal(s) [mode: {sca_mode}]")
             automation.arm_sca(request)
             self.sca_armed.emit(client_id, client_token, services)
@@ -323,6 +362,8 @@ class ClipboardWatchService(QObject):
             return denied("the arm expired")
         if arm.uses_remaining <= 0:
             return denied("no uses left for this copy")
+        if arm.grants >= arm.max_uses + 2:
+            return denied("too many password requests for this copy")
         svc_id = msg.get("service_id")
         svc = arm.services.get(svc_id)
         if svc is None:
@@ -340,7 +381,6 @@ class ClipboardWatchService(QObject):
             return denied("no password SCA may use for that portal")
         if caveat == "scc_unverified" and msg.get("confirmed") is not True:
             return denied("this Income Tax password is not SCC-verified - it needs a click on the page card")
-        arm.uses_remaining -= 1
         arm.grants += 1
         self._unused_streak.pop(arm.client_id, None)
         return {"type": sca_protocol.MSG_SCA_PASSWORD_GRANT, "request_id": request_id,
@@ -348,7 +388,9 @@ class ClipboardWatchService(QObject):
                 "password_selector": svc.get("password_selector", "")}
 
     def handle_fill_result(self, msg: dict) -> None:
-        """SCA_FILL_RESULT {arm_id, service_id, result: filled|failed, reason} - audit only."""
+        """SCA_FILL_RESULT {arm_id, service_id, result: filled|failed, reason}: a use is spent only
+        when the password was really filled; failures (and desktop denials, which the extension
+        reports as failures) reach staff through sca_notice."""
         arm = self._arm
         client_id = arm.client_id if arm and arm.arm_id == msg.get("arm_id") else None
         portal = (arm.services.get(msg.get("service_id"), {}).get("name") if client_id else None) or "portal"
@@ -356,6 +398,7 @@ class ClipboardWatchService(QObject):
             print(f"[SCA] Password filled on {portal}")
             if client_id:
                 arm.fills.append(portal)
+                arm.uses_remaining = max(0, arm.uses_remaining - 1)
                 try:
                     self.db.record_client_activity(client_id, "SCA", f"Password filled on {portal}")
                 except Exception:

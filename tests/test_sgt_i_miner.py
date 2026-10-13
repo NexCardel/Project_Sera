@@ -170,13 +170,14 @@ def _row(pan, synonyms=(), opinions=(), portal="Income Tax"):
 
 
 def test_a_new_wording_for_a_known_field_is_proposed_from_three_clients():
-    syn = {"field": "ack", "container": ["Filing Details", "Acknowledgement Ref"]}
+    # (The ack is read by shape now, with no label, so it has no wording to learn: use a labelled field.)
+    syn = {"field": "filing_type", "container": ["Filing Details", "Kind Of Filing"]}
     rows = [_row(pan, [syn]) for pan, *_ in CLIENTS]
     props = miner.from_synonyms(rows, registry(), cfg())
     assert len(props) == 1
     p = props[0]
-    assert p["source"] == "known_value" and p["type"] == "arn" and p["section"] == "records"
-    assert p["spec"]["fields"][0]["labels"] == ["Acknowledgement Ref"]
+    assert p["source"] == "known_value" and p["type"] == "filing_type" and p["section"] == "records"
+    assert p["spec"]["fields"][0]["labels"] == ["Kind Of Filing"]
     assert miner.check_spec(p["section"], p["spec"], BASE) is None, p["spec"]
     dropped = Counter()
     assert miner.from_synonyms(rows[:2], registry(), cfg(), dropped) == [] and dropped["support"] == 1
@@ -287,3 +288,34 @@ def test_the_core_never_imports_the_miner():
     core = Path(__file__).resolve().parents[1] / "core" / "sgt"
     for f in core.glob("*.py"):
         assert "sgt_i.miner" not in f.read_text(encoding="utf-8")
+
+
+# ── labels that may never become a datapoint (field test 2026-09-29) ──────────────
+def _slot(container, typ="text"):
+    return {"container": container, "zone": "main", "clients": 6, "types": {typ: 30}, "kind": "profile"}
+
+
+@pytest.mark.parametrize("container,why", [
+    ("Login › Password", "sensitive label"),
+    ("Change Password", "sensitive label"),
+    ("Change Password › New", "sensitive label"),            # a heading above the label counts too
+    ("Login › Enter OTP", "sensitive label"),
+    ("Secure Access Message", "sensitive label"),
+    ("Captcha", "sensitive label"),
+    ("SCA", "placement: Sera's own UI"),                     # Sera Clipboard Assist
+    ("Username Injected", "placement: Sera's own UI"),
+    ("View Filed Returns › 1", "placement: no words"),        # a counter / page number
+    ("0", "placement: no words"),
+])
+def test_blocked_labels_never_pass_the_slot_gate(container, why):
+    label = container.split(" › ")[-1]
+    assert miner._slot_gate(_slot(container), label, cfg(), registry()) == why
+
+
+def test_learnt_furniture_never_passes_the_slot_gate():
+    furniture = {"English", "Skip to main content", "CoBrowse Help"}.__contains__
+    for label in ("English", "Skip to main content", "CoBrowse Help"):
+        assert miner._slot_gate(_slot(label), label, cfg(), registry(), furniture) == "placement: furniture"
+    assert miner._slot_gate(_slot("Profile › Residential Status"), "Residential Status", cfg(), registry(),
+                            furniture) is None                # real data labels still pass
+    assert miner._slot_gate(_slot("Pinpoint Code"), "Pinpoint Code", cfg(), registry()) is None   # not "pin"

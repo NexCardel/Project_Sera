@@ -58,7 +58,7 @@ def _diff_lines(today: List[str], nodes: List[str]) -> List[Diff]:
 
 # Sentinel pattern/property ids - only need to be distinct and consistent between the fake
 # uia_client and the fake element's GetCurrentPattern, never real UIAutomationClient.h values.
-_PID_VALUE, _PID_SELECTION, _PID_TOGGLE = object(), object(), object()
+_PID_VALUE, _PID_SELECTION, _PID_TOGGLE, _PID_IS_PASSWORD = object(), object(), object(), object()
 
 
 class _FakeUiaClient:
@@ -66,6 +66,7 @@ class _FakeUiaClient:
     UIA_ValuePatternId = _PID_VALUE
     UIA_SelectionItemPatternId = _PID_SELECTION
     UIA_TogglePatternId = _PID_TOGGLE
+    UIA_IsPasswordPropertyId = _PID_IS_PASSWORD
     IUIAutomationValuePattern = "IValue"
     IUIAutomationSelectionItemPattern = "ISelectionItem"
     IUIAutomationTogglePattern = "IToggle"
@@ -107,12 +108,13 @@ class FakeElement:
 
     def __init__(self, name: str = "", ctype: int = 0, value: Optional[str] = None,
                  selected: Optional[bool] = None, heading: Optional[int] = None,
-                 children: Tuple["FakeElement", ...] = ()):
+                 is_password: bool = False, children: Tuple["FakeElement", ...] = ()):
         self.name = name
         self.ctype = ctype
         self.value = value
         self.selected = selected
         self.heading = heading
+        self.is_password = is_password
         self.children = list(children)
 
     # --- live API ---
@@ -133,6 +135,11 @@ class FakeElement:
         if pattern_id is _PID_TOGGLE and self.ctype == text_mod.UIA_CHECKBOX_CONTROL_TYPE_ID \
                 and self.selected is not None:
             return _FakePattern(CurrentToggleState=1 if self.selected else 0)
+        return None
+
+    def GetCurrentPropertyValue(self, pid):
+        if pid is _PID_IS_PASSWORD:
+            return bool(self.is_password)
         return None
 
     def FindAll(self, _scope, _cond) -> _Collection:
@@ -156,6 +163,8 @@ class FakeElement:
             return (1.0, 2.0, 3.0, 4.0)
         if pid == nodes_mod.PID_HEADING_LEVEL:
             return nodes_mod._HEADING_NONE + self.heading if self.heading else None
+        if pid == nodes_mod.PID_IS_PASSWORD:
+            return self.is_password
         if pid == nodes_mod.PID_VALUE and self.ctype in nodes_mod._VALUE_BEARING:
             return self.value or ""
         if pid == nodes_mod.PID_SELECTION_IS_SELECTED and self.ctype == nodes_mod.CT_RADIOBUTTON:
@@ -174,6 +183,10 @@ def _combobox(name: str, value: str) -> FakeElement:
 
 def _edit(name: str, value: str) -> FakeElement:
     return FakeElement(name, text_mod.UIA_EDIT_CONTROL_TYPE_ID, value=value)
+
+
+def _password_edit(name: str, value: str) -> FakeElement:
+    return FakeElement(name, text_mod.UIA_EDIT_CONTROL_TYPE_ID, value=value, is_password=True)
 
 
 def _radio(name: str, selected: bool) -> FakeElement:
@@ -208,6 +221,9 @@ def synthetic_pages() -> List[Tuple[str, FakeElement]]:
         ))),
         ("value_equals_name_not_duplicated", FakeElement("", children=(
             _edit("GSTIN", "GSTIN"),             # a field whose value happens to echo its label
+        ))),
+        ("password_value_never_read", FakeElement("", children=(
+            _password_edit("Portal Password", "hunter2"),   # label kept, value must never surface
         ))),
     ]
 

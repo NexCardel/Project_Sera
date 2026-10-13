@@ -13,7 +13,7 @@ A session runs over a mutual-TLS ``sync_transport.Session`` (P2-3). Frames (``"t
   changes {stream: "master"|"raw", items: [...]}   at most 500 changes / about 1 MB
   ack     {vectors}                  after each applied batch
   done    {}                         end of one side's changes
-  need_snapshot {streams: [...]}     peer is below our compaction floor (P4-4; floor is 0 today)
+  need_snapshot {streams: [...]}     peer is below our compaction floor (P4-4)
   digest_request {}                  shadow-mode replica convergence check (P3-7a)
   digest_reply   {vectors, digest} | {busy: true}
 
@@ -37,6 +37,13 @@ Scheduler: every 20 s +- 5 s each reachable member, one at a time; a UDP poke af
 (``{"magic":"sera-sync-v3","office":tag,"dev":id,"poke":true}``) makes the member sync with this
 PC within 1 s (debounced 1 s). At most one session per peer and 3 in total, both directions.
 When both PCs dial each other at once, the one with the smaller device id keeps its session.
+
+Compaction (P4-4, ``sync_compaction``): in mode live, ``compact()`` runs after a scheduler round
+at most every ``COMPACTION_INTERVAL_SECONDS``. A peer whose vector for a stream is below our floor
+gets ``need_snapshot`` and no changes. The PC told so has sent its own changes in the same
+session; if the peer's final vectors show they arrived, it downloads a snapshot from that peer on
+a background thread and stages it (``sync_compaction.download_catch_up``); the event
+``catch_up_staged`` asks for a restart, and the snapshot is installed at the next start-up.
 
 A stream whose vector can't advance (this PC holds later changes of it, but not the next one,
 for ``STALL_SECONDS``) is reported by ``stalled_streams()`` and an ``on_event("stalled", ...)``,
@@ -278,6 +285,8 @@ class SyncEngine:
         self._stall_reported: set[tuple] = set()
         self._digest_last: dict[str, float] = {}   # device_id -> last digest exchange (monotonic)
         self._last_local_change_at: Optional[float] = None
+        self._last_compaction: Optional[float] = None
+        self._catch_up_thread: Optional[threading.Thread] = None
 
         self._cond = threading.Condition()
         self._poke_due: dict[str, float] = {}
@@ -364,9 +373,34 @@ class SyncEngine:
             return device_id[:8]
 
     def compaction_floors(self) -> dict:
-        """``{stream: floor}``: changes at or below it are no longer kept (P4-4). No compaction
-        exists yet, so nothing is ever below the floor."""
-        return {}
+        """``{stream: floor}``: changes at or below it are no longer kept here (P4-4)."""
+        import sync_compaction
+        out = {}
+        for which in DBS:
+            with self._conn(which) as conn:
+                out.update(sync_compaction.read_floors(conn))
+        return out
+
+    def compact(self, now=None) -> dict:
+        """Compacts both DB files (``sync_compaction.compact``). Only in mode live."""
+        import sync_compaction
+        if self._mode() != "live":
+            return {"skipped": "mode %s" % self._mode()}
+        self._last_compaction = time.monotonic()
+        return sync_compaction.compact(self.db.db_path, self.db.raw_db_path, self.db.hex_key,
+                                       admin_pubkey=self.admin_pubkey, own_device_id=self.device_id,
+                                       now=now)
+
+    def _maybe_compact(self) -> None:
+        import sync_compaction
+        last = self._last_compaction
+        if last is not None and time.monotonic() - last < sync_compaction.COMPACTION_INTERVAL_SECONDS:
+            return
+        try:
+            self.compact()
+        except Exception:
+            self._last_compaction = time.monotonic()
+            _log.exception("compaction failed")
 
     # ------------------------------------------------------------ events / status
 
@@ -614,6 +648,8 @@ class SyncEngine:
         try:
             try:
                 self._exchange(session, result, initiator)
+                if result.need_snapshot:
+                    self._maybe_catch_up(session.peer_device_id, result.peer_vectors)
             except SessionAborted as exc:
                 result.error = exc.reason
                 if exc.reason == "bad_batch" and not exc.by_peer:
@@ -882,7 +918,13 @@ class SyncEngine:
             return self.shadow_apply(which, items)
 
     def _store_peer_vectors(self, device_id: str, vectors: dict) -> None:
+        import sync_compaction
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            with self._conn("master") as conn:
+                sync_compaction.note_peer_seen(conn, device_id, now)
+        except Exception:
+            _log.exception("could not record the session with %s", device_id)
         for which in DBS:
             rows = [(device_id, s, v, now) for s, v in vectors.items() if stream_db(s) == which]
             if not rows:
@@ -997,6 +1039,54 @@ class SyncEngine:
         status = "OK" if convergence.ok else "MISMATCH"
         sync_shadow.log_peer_digest_check(self.app_dir, name, status, since_text)
         self._event("digest_checked", device_id=dev, name=name, ok=convergence.ok, skipped=False)
+
+    # ------------------------------------------------------------ catch-up (P4-4)
+
+    def _own_streams(self) -> list:
+        return [self.device_id + _STREAM_SUFFIX[w] for w in DBS]
+
+    def _maybe_catch_up(self, device_id: str, peer_vectors: dict) -> bool:
+        """``device_id`` said this PC is below its compaction floor. If it has all of this PC's
+        own changes (its final vectors), download a snapshot from it on a background thread.
+        Returns True if a download was started."""
+        import sync_compaction
+        if self._mode() != "live" or sync_compaction.has_pending_catch_up(self.app_dir):
+            return False
+        own = {s: v for s, v in self.own_vectors().items() if s in self._own_streams()}
+        missing = {s: v for s, v in own.items() if peer_vectors.get(s, 0) < v}
+        if missing:
+            _log.warning("PC %s says this PC needs a snapshot; waiting until it has all of this PC's "
+                         "own changes first", self._member_name(device_id))
+            return False
+        with self._lock:
+            if self._catch_up_thread is not None and self._catch_up_thread.is_alive():
+                return False
+            t = threading.Thread(target=self._catch_up, args=(device_id, own),
+                                 name="sera-sync-catchup", daemon=True)
+            self._catch_up_thread = t
+        t.start()
+        return True
+
+    def _open_session_to(self, device_id: str) -> Session:
+        last = None
+        for ip, port in self.connect_order(device_id)[:MAX_ADDRESSES_PER_ROUND]:
+            try:
+                return self._connect_fn(ip, port, device_id)
+            except TransportError as exc:
+                last = exc
+        raise TransportError("PC %s is not reachable (%s)" % (device_id[:8], type(last).__name__ if last else "no address"))
+
+    def _catch_up(self, device_id: str, own: dict) -> None:
+        import sync_compaction
+        name = self._member_name(device_id)
+        try:
+            sync_compaction.download_catch_up(self.app_dir, self.db.hex_key,
+                                              lambda: self._open_session_to(device_id), device_id, own)
+        except Exception as exc:
+            _log.warning("catch-up snapshot from PC %s failed: %s", name, exc)
+            self._event("catch_up_failed", device_id=device_id, name=name, reason=str(exc))
+            return
+        self._event("catch_up_staged", device_id=device_id, name=name)
 
     # ------------------------------------------------------------ stuck streams
 
@@ -1228,6 +1318,8 @@ class SyncEngine:
                     self._check_stalls()
                 except Exception:
                     _log.exception("stuck-stream check failed")
+                if not self._stop.is_set() and self._mode() == "live":
+                    self._maybe_compact()
 
     def _safe_sync(self, device_id: str) -> None:
         try:

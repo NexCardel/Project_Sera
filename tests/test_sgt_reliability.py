@@ -182,8 +182,12 @@ class TestPortalChangeWatch:
 
 
 # ── #5 one hung UI Automation read must not blind every later one ────────────────
-def test_a_hung_uia_read_does_not_block_the_next_one():
+def test_a_hung_uia_read_does_not_block_the_next_one(monkeypatch):
     import core.vsdc.vsdc_uia_text as u
+    # A read still running is only "hung" past the grace (slower ones are skipped as busy -
+    # tests/test_vsdc_diag.py); shortened here so the test need not wait 20 s.
+    monkeypatch.setattr(u, "SLOW_GRACE_SEC", 0.1)
+    monkeypatch.setattr(u, "_inflight", None)
     before = u.worker_health()["abandoned_workers"]
     gate = threading.Event()
     try:

@@ -53,6 +53,20 @@ REPO = Path(__file__).resolve().parent.parent
 DOCS = REPO / "docs"
 LOG_DIR = REPO / "logs" / "sgt-overhaul"
 LOCK = REPO / ".sgt-overhaul.lock"
+# Which project this dispatcher runs. Other projects reuse this module through use_project()
+# (e.g. tools/autofill_tweaks.py); the defaults are the SGT overhaul, unchanged.
+PREFIX = "sgt-overhaul"                         # file names: <PREFIX>-plan.json, <PREFIX>-status.csv...
+TITLE = "SGT overhaul"                          # window titles and report headings
+CLI = "tools/sgt_overhaul.py"                   # how a person runs this project's CLI
+
+
+def use_project(docs: Path, prefix: str, title: str, cli: str) -> None:
+    """Points this dispatcher at another project's plan, trackers, logs and lock."""
+    global DOCS, LOG_DIR, LOCK, PREFIX, TITLE, CLI, WAIT_FILE
+    DOCS, PREFIX, TITLE, CLI = docs, prefix, title, cli
+    LOG_DIR = REPO / "logs" / prefix
+    LOCK = REPO / f".{prefix}.lock"
+    WAIT_FILE = LOG_DIR / "waiting.json"
 
 STATUSES = ["Not started", "In progress", "Retry", "Done", "Blocked"]
 STATUS_FIELDS = ["WP", "Phase", "What", "Status", "Model", "Attempts", "Commit", "Notes", "Updated"]
@@ -104,20 +118,22 @@ def _write_csv(path: Path, fields: List[str], rows: List[Dict[str, str]]) -> Non
 class Tracker:
     def __init__(self, docs: Optional[Path] = None):
         self.docs = docs = docs or DOCS
-        self.plan = json.loads((docs / "sgt-overhaul-plan.json").read_text(encoding="utf-8"))
+        self.plan = json.loads((docs / f"{PREFIX}-plan.json").read_text(encoding="utf-8"))
         self.wps = {w["wp"]: w for w in self.plan["wps"]}
         self.order = [w["wp"] for w in self.plan["wps"]]
-        self.p_status = docs / "sgt-overhaul-status.csv"
-        self.p_runs = docs / "sgt-overhaul-runs.csv"
-        self.p_decisions = docs / "sgt-overhaul-decisions.csv"
-        self.p_checks = docs / "sgt-overhaul-checks.csv"
-        self.p_questions = docs / "sgt-overhaul-questions.csv"
+        self.p_status = docs / f"{PREFIX}-status.csv"
+        self.p_runs = docs / f"{PREFIX}-runs.csv"
+        self.p_decisions = docs / f"{PREFIX}-decisions.csv"
+        self.p_checks = docs / f"{PREFIX}-checks.csv"
+        self.p_questions = docs / f"{PREFIX}-questions.csv"
         rows = {r["WP"]: r for r in _read_csv(self.p_status, STATUS_FIELDS)}
         self.status = {wp: rows.get(wp) or {"WP": wp, "Status": "Not started", "Model": self.model_id(wp),
                                             "Attempts": "0", "Commit": "", "Notes": "", "Updated": ""}
                        for wp in self.order}
         for wp, row in self.status.items():     # plan columns, so the live sheet explains itself
             row["Phase"], row["What"] = str(self.wps[wp]["phase"]), self.wps[wp]["what"]
+            if row["Status"] == "Not started" and (row.get("Attempts") or "0") == "0":
+                row["Model"] = self.planned_models(wp)   # follows a re-plan until the WP first runs
         for p, fields in ((self.p_runs, RUN_FIELDS), (self.p_decisions, DECISION_FIELDS),
                           (self.p_checks, CHECK_FIELDS), (self.p_questions, QUESTION_FIELDS)):
             if not p.exists():                  # the viewer's queries need every file, even empty
@@ -127,9 +143,13 @@ class Tracker:
 
     # plan
     def model_id(self, wp: str) -> str:
-        """The model a WP last ran on, else its tier's last-resort (Claude) model."""
+        """The model a WP last ran on, else the models its tier will try, in order."""
         used = getattr(self, "status", {}).get(wp, {}).get("Model")
-        return used or self.plan["models"][self.plan["tiers"][self.wps[wp]["model"]][-1]]["id"]
+        return used or self.planned_models(wp)
+
+    def planned_models(self, wp: str) -> str:
+        """The tier's models in the order the dispatcher tries them: "gemini-3.8-flash-high -> claude-sonnet-5-5"."""
+        return " -> ".join(self.plan["models"][k]["id"] for k in self.plan["tiers"][self.wps[wp]["model"]])
 
     def deadline(self) -> dt.datetime:
         return dt.datetime.fromisoformat(self.plan["deadline"])
@@ -218,7 +238,7 @@ class Tracker:
         counts = {k: sum(1 for s in self.status.values() if s["Status"] == k) for k in STATUSES}
         tok = sum(int(r["Output tokens"] or 0) for r in runs)
         cost = sum(float(r["Cost USD"] or 0) for r in runs)
-        out = [f"# SGT overhaul — report ({stamp()})", "",
+        out = [f"# {TITLE} — report ({stamp()})", "",
                f"Deadline: {self.plan['deadline']}", "",
                "| Status | WPs |", "| :--- | ---: |"] + [f"| {k} | {v} |" for k, v in counts.items()] + [
                "", f"Runs: {len(runs)}   output tokens: {tok}   API-equivalent cost: ${cost:.2f}", "",
@@ -234,7 +254,7 @@ class Tracker:
         if chk:
             out += ["", "## Checks waiting for you", ""] + [f"- #{c['Check']} ({c['WP']}) {c['Text']} — {c['Result']}" for c in chk]
         text = "\n".join(out) + "\n"
-        (self.docs / "sgt-overhaul-report.md").write_text(text, encoding="utf-8")
+        (self.docs / f"{PREFIX}-report.md").write_text(text, encoding="utf-8")
         return text
 
     # questions: a worker asks, the user has ASK_WAIT_S to answer, then the default stands
@@ -287,24 +307,27 @@ class Tracker:
         the workbook can stay open while the agents work. Needs Excel (COM); close the file first.
         """
         from openpyxl import Workbook
-        out = self.docs / "sgt-overhaul-agents.xlsx"
+        out = self.docs / f"{PREFIX}-agents.xlsx"
         if out.with_name("~$" + out.name).exists():
             raise Refused(f"{out.name} is open in Excel - close it and run again")
+        self.save()                             # the Status sheet lists every WP of the current plan
         wb = Workbook()
         ws = wb.active
         ws.title = "How to use"
-        for line in ("SGT overhaul tracker - read-only viewer.",
+        for line in (f"{TITLE} tracker - read-only viewer.",
                      "Every sheet except Plan is a live copy of a CSV in this folder: it refreshes when the",
                      "file opens and every minute (or Data -> Refresh All). Nothing typed here is saved back.",
                      "Answer a worker's question in the pop-up window, or:",
-                     r"  ..\APP\venv\Scripts\python.exe tools\sgt_overhaul.py answer <Q> <choice>",
+                     "  ..\\APP\\venv\\Scripts\\python.exe " + CLI.replace("/", "\\") + " answer <Q> <choice>",
+                     "Model: a WP not started yet shows the models it will try, in order (Plan sheet: always);",
+                     "once it runs, Status shows the model that actually ran it.",
                      f"Deadline: {self.plan['deadline']}"):
             ws.append([line])
         ws.column_dimensions["A"].width = 100
         plan = wb.create_sheet("Plan")
         plan.append(["WP", "Phase", "What", "Model", "Kind", "Size", "Deps", "Focus"])
         for w in self.plan["wps"]:
-            plan.append([w["wp"], w["phase"], w["what"], self.model_id(w["wp"]), w["kind"], w["size"],
+            plan.append([w["wp"], w["phase"], w["what"], self.planned_models(w["wp"]), w["kind"], w["size"],
                          ", ".join(w["deps"]), w["focus"]])
         plan.freeze_panes = "A2"
         links = [("Status", self.p_status), ("Questions", self.p_questions), ("Decisions", self.p_decisions),
@@ -330,7 +353,7 @@ def _popup(q: str, wp: str, question: str, options: List[str], default: str, wai
     except Exception:
         return None
     end = time.time() + wait_s
-    root.title(f"SGT overhaul - {wp} asks (Q{q})")
+    root.title(f"{TITLE} - {wp} asks (Q{q})")
     root.attributes("-topmost", True)
     tk.Label(root, text=question, wraplength=520, justify="left", font=("Segoe UI", 11)).pack(padx=16, pady=(14, 8))
     left = tk.Label(root, font=("Segoe UI", 9))
@@ -423,9 +446,15 @@ def runner_exe(t: Tracker, runner: str) -> Optional[List[str]]:
 def pick_model(t: Tracker, wp: str, held: Dict[str, dt.datetime]) -> Optional[str]:
     """The model key to run `wp` with now, or None if every allowed runner is unavailable."""
     w = t.wp(wp)
-    for key in t.plan["tiers"][w["model"]]:
+    tier = t.plan["tiers"][w["model"]]
+    attempts = int(getattr(t, "status", {}).get(wp, {}).get("Attempts") or 0)
+    claude_later = any(t.plan["models"][k]["runner"] == "claude" for k in tier)
+    for key in tier:
         runner = t.plan["models"][key]["runner"]
         if w.get("claude_only") and runner != "claude":
+            continue
+        # A retry goes to Claude once the other runner has had its tries (plan cli.non_claude_attempts).
+        if runner != "claude" and claude_later and attempts >= t.plan["cli"].get("non_claude_attempts", 99):
             continue
         if held.get(runner) and held[runner] > now():
             continue
@@ -451,7 +480,7 @@ def build_prompt(t: Tracker, wp: str, key: Optional[str] = None) -> str:
     w, s = t.wp(wp), t.status[wp]
     key = key or t.plan["tiers"][w["model"]][-1]
     m = t.plan["models"][key]
-    text = (t.docs / "sgt-overhaul-runner.md").read_text(encoding="utf-8")
+    text = (t.docs / f"{PREFIX}-runner.md").read_text(encoding="utf-8")
     for k, v in {"{WP}": wp, "{WHAT}": w["what"], "{FOCUS}": w["focus"], "{KIND}": w["kind"],
                  "{MODEL}": m["id"], "{COAUTHOR}": t.plan["runners"][m["runner"]]["coauthor"],
                  "{ATTEMPT}": str(int(s["Attempts"] or 0)),
@@ -592,7 +621,7 @@ def run_one(t: Tracker, wp: str, key: Optional[str] = None, dry: bool = False, l
     else:
         outcome = "timeout" if code == -1 else ("error" if code else "no finish")
         if attempt >= cli["max_attempts"]:
-            fresh.block(wp, f"{outcome} after {attempt} attempts; see logs/sgt-overhaul/{run_id}-{wp}.json")
+            fresh.block(wp, f"{outcome} after {attempt} attempts; see logs/{PREFIX}/{run_id}-{wp}.json")
         else:
             fresh.set(wp, Status="Retry", Notes=f"attempt {attempt}: {outcome}. {result[:300]}")
     fresh.add_row(fresh.p_runs, RUN_FIELDS, {
@@ -714,7 +743,7 @@ def watch(poll_s: float = 1.0) -> None:
 
 # ── CLI ───────────────────────────────────────────────────────────────────────────
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="SGT overhaul tracker and dispatcher")
+    ap = argparse.ArgumentParser(description=f"{TITLE} tracker and dispatcher")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("show"); s.add_argument("wp", nargs="?")
     sub.add_parser("next")

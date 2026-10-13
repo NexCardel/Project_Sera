@@ -94,7 +94,7 @@ def build() -> tuple[str, str]:
     firefox_zip_path = OUTPUT_DIR / "ProjectSeraCompanion.firefox.zip"
     # SCA is one source for both browsers (tests/test_sca_v2.py checks the copies match)
     shutil.copytree(EXTENSION_DIR / "sca", FIREFOX_EXTENSION_DIR / "sca", dirs_exist_ok=True)
-    for rel in ("content_scripts/login.js", "content_scripts/sca_adapters.js"):
+    for rel in ("content_scripts/login.js", "content_scripts/sca_adapters.js", "content_scripts/sera_dom.js"):
         shutil.copy2(EXTENSION_DIR / rel, FIREFOX_EXTENSION_DIR / rel)
     create_zip(firefox_zip_path, FIREFOX_EXTENSION_DIR)
     xpi_path.write_bytes(firefox_zip_path.read_bytes())

@@ -48,7 +48,6 @@ import security
 from ui.dialogs.csv_import_dialog import CSVImportDialog
 from ui.dialogs.mcl_manager_dialog import MCLManagerDialog
 from ui.dialogs.service_manager_dialog import ServiceManagerDialog
-from ui.dialogs.settings_dialog import SettingsDialog
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 
 BACK_ICON = str(Path(__file__).resolve().parents[2] / "assets" / "icons" / "arrow_back_24dp_E3E3E3_FILL0_wght400_GRAD0_opsz24.svg")
@@ -430,7 +429,7 @@ class AdminWindow(QWidget):
     request_slide_panel = Signal(QWidget, str)
     toast_requested = Signal(str, int)
     action_alert_requested = Signal(str, str)
-    settings_saved = Signal()  # Forwarded from SettingsDialog when user saves
+    settings_saved = Signal()  # Forwarded from UnifiedSettingsDialog when user saves
 
     def __init__(self, db, actor: str = "Admin"):
         super().__init__()
@@ -1234,6 +1233,12 @@ class AdminWindow(QWidget):
             self._on_new()
 
     def _refresh_activity_tags(self):
+        # Only while someone can see it (see SearchWindow._on_activity_tick); SeraApp catches up
+        # when the window is back.
+        if not self.isVisible() or self.window().isMinimized():
+            self._activity_stale = True
+            return
+        self._activity_stale = False
         try:
             recent_acts = self.db.get_recent_client_activities(max_age_seconds=1800)
             for r in range(self.table.rowCount()):

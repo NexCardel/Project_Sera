@@ -89,6 +89,8 @@ def test_create_new_office_creates_db_key_and_admin_membership(tmp_path):
         assert members[0]["token_letter"] == "A"
         office_admin = sync_admin.get_office_admin(conn, office.admin_pubkey)
         assert office_admin["device_id"] == identity.device_id
+        # A new office starts live: "off" would leave every PC without sync until a go-live.
+        assert conn.execute("SELECT value FROM _sync_meta WHERE key='mode'").fetchone()[0] == "live"
     finally:
         conn.close()
 
@@ -160,6 +162,14 @@ def test_add_workstation_and_join_office_end_to_end(tmp_path):
         assert (sera_keys.keys_dir(joiner_dir) / sera_keys.OFFICE_FILE).exists()
         assert not sync_snapshot.has_pending_join(joiner_dir)
         assert progress_calls  # on_progress was called at least once
+
+        # A PC joining a live office is live too.
+        jconn = _open_db_factory(joiner_dir / sync_office.MASTER_DB_NAME,
+                                 sera_keys.dek_hex(sera_keys.load_dek(joiner_dir)))()
+        try:
+            assert jconn.execute("SELECT value FROM _sync_meta WHERE key='mode'").fetchone()[0] == "live"
+        finally:
+            jconn.close()
 
         joiner_dek = sera_keys.load_dek(joiner_dir)
         assert joiner_dek == sera_keys.load_dek(admin_dir)

@@ -165,6 +165,34 @@ tracker_dump = _register(TableSpec(
           "gids with a separate read connection (§4.4).",
 ))
 
+sdis_fields = _register(TableSpec(
+    "sdis_fields", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part Q (D7): a datapoint the user registered, as an SGT "
+          "spec (spec_json) plus its user-edited label. Every PC writes the "
+          "active rows to <Sera data>/sdis_fields.json for SGT. A retire is an "
+          "UPDATE of status, never a DELETE.",
+))
+
+sdis_decisions = _register(TableSpec(
+    "sdis_decisions", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part Q (D6): rejections, dismissed datapoints and "
+          "container moves, one row per signature, read by mining on the admin PC.",
+))
+
+sdis_mcl = _register(TableSpec(
+    "sdis_mcl", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part U (D23): the field library, one row per field; "
+          "sdis_fields.mcl_gid points here. Separate from mcl_columns. A retire "
+          "is an UPDATE of status, never a DELETE.",
+))
+
+sdis_config = _register(TableSpec(
+    "sdis_config", RAW_DB, LWW, row_key=("gid",),
+    notes="Sera Distill Part S.3: ONE row (name 'containers') holding the whole "
+          "containers document + its version. Every PC writes it to "
+          "<Sera data>/sdis_containers.json.",
+))
+
 sdc_session_timelines = _register(TableSpec(
     "sdc_session_timelines", RAW_DB, LWW, row_key=("session_id",),
     fk={"client_id": "clients"},
@@ -207,6 +235,16 @@ client_raw_containers = _register(TableSpec(
           "table now that it's local, but the same identity_key is reused as "
           "client_container_notes's row key below, so the caveat carries "
           "over there.",
+))
+
+client_raw_container_light = _register(TableSpec(
+    "client_raw_container_light", RAW_DB, LOCAL, row_key=("identity_key",),
+    notes="Owner decision 2026-10-03: `local`. A derived cache of client_raw_containers "
+          "(payload-free filing history, the latest payload's status, total_captures, "
+          "last_updated, and a mirror of notes) so the tracker list never reads the big "
+          "filing_history column. Rebuilt with the containers in "
+          "re_resolve_all_tracker_dumps() and backfilled on read when a row is missing, so it "
+          "never needs to replicate; the hand-typed notes sync through client_container_notes.",
 ))
 
 client_container_notes = _register(TableSpec(

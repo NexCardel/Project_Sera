@@ -4,6 +4,54 @@ All notable changes to **Project Sera** are documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **The unattended ARN-row fixer no longer hogs the CPU.** On the admin PC it re-read the whole SDIS corpus (about 1.7 GB) at every start, for minutes at 50-90% of a core, stalling the app's own thread for 4-7 seconds. It now works in short bursts (a quarter of one core at most), and a row it judged "not sure" is not looked at again until the corpus files for its two days change (remembered in `mr_fixer/auto_state.json`). `core/sdis/arn_autofix.py`, `core/sdis/arn_fixer.py`; tests in `tests/test_arn_autofix.py`.
+
+---
+
+## [2.12.8] - 2026-10-09
+
+Patch release: 2.12.7 was built before the GST ARN recovery work was merged, so its installer does not carry it. 2.12.8 is the first build that does.
+
+### Added
+- **Unattended ARN-row fixer on the admin PC** (`core/sdis/arn_autofix.py`, `core/sdis/arn_fixer.py`) and the `tools/mr_fixer.py` command-line tool (plans in `docs/gst_arn_recovery/`).
+- `tools/inject_unknown_gst_arn.py` injector and shared `tools/sera_tool_common.py`.
+- Tracker dump marks recovered rows.
+- Tests: `tests/test_mr_fixer.py`, `tests/test_arn_autofix.py`, `tests/test_inject_unknown_gst_arn.py`.
+- **GST login user name is captured and linked to the master DB.** SGT reads the user name as it is typed on the GST login page (new spec `gst_login_username`, new profile merge `latest`; the password box is never read). Once the portal moves on from the login page, the saved client that holds that user ID is looked up and the session takes its GSTIN / PAN and the company name registered in the master DB (`core/sgt/sgt_client_link.py`). Before, a session whose pages showed a name but no GSTIN was written unattributed.
+
+### Fixed
+- **SGT lost its last change when the app was closed abruptly.** The crash snapshot is throttled to one write per 2 seconds and a change inside that window was only written on the next page *change*, so a still page left it unsaved. It is now written on the next tick.
+- **A torn crash snapshot or log line no longer costs captures.** The snapshot is flushed to disk before it replaces the good copy, the previous good snapshot is kept and used if the newest one is unreadable (the unreadable one is kept as `.corrupt`), and a log line cut short by a kill is ended before the next record is appended, so the next record is no longer glued onto it.
+- Tests: `tests/test_sgt_crash_safety.py`, and login-page cases in `tests/test_sgt_client_link.py`.
+
+---
+
+## [2.12.7] - 2026-10-07
+
+2.12.6 was built and merged but never released; 2.12.7 is the first release that carries it. Everything under 2.12.6 below ships in 2.12.7 too, together with the `home-work` work merged with it (SGT header-only GSTIN, ARN read by shape, user-ID client link; LTT monthly workbook, rules and wording; tracker-dump "Captured by"; SDIS class_diff tooling).
+
+### Fixed
+- **LTT sheet did not update an entry when it was submitted or its status changed.** Sync v3 writes `tracker_dump` directly and only refreshed windows, so the client containers the LTT sheet and tracker list read (a local cache of `tracker_dump`) kept the old status when another PC filed or changed a return. After a live sync batch that touches `tracker_dump`, the app now rebuilds the containers, rewrites the month's LTT CSVs, then refreshes the windows (debounced; a burst of batches makes one run).
+- **A locked LTT CSV is retried.** If Excel held the month's CSV open past the 6 seconds the swap waits, the export gave up until some later capture. It now retries every 20 seconds, up to 6 times.
+- Known limit: the sheet is still written only once the `LTT` folder exists (Tools > Open LTT sheet); the older `ltt_feed.csv` is no longer refreshed.
+
+---
+
+## [2.12.6] - 2026-10-06
+
+### Changed
+- **SGT session boundaries.** A session ends only on a login page, a logout page, 2 hours idle, a closed window or shutdown. Switching tabs (another portal, a mail tab, another client of the same portal) no longer ends it: the session is set aside and comes back when the window returns to it. Each window keeps one session per portal and per client; a login or logout ends only the session it belongs to, and a closed window or shutdown writes every session of the window. The idle limit is 2 hours (SGT was 20 minutes, the VSDC window prune 30 minutes).
+- A different PAN/GSTIN appearing in a window no longer ends its session: the session is set aside untouched and the window's own session for that client comes back when it returns.
+
+### Fixed
+- GST filing / success page (`/returns/auth/file`, GSTR-1 and GSTR-3B): the form is read from `Return Type - GSTR1` and from the "Returns Filing for GST" heading; the GSTIN from `GSTIN - ...` and from the banner "... of GSTIN ... has been successfully filed"; the legal name from `Legal Name - ...` / `Legal Name / Trade Name`; the period from the success message itself ("for the period January - 2021 has been successfully filed"). Without the form and period the dataset gate held the submission, so a live GST submission was not detected.
+- Tests: `tests/test_sgt_boundaries.py` (tab switches, boundaries, two clients in a window, randomized stress run).
+
+---
+
 ## [Unreleased] - SGT live
 
 ### Changed

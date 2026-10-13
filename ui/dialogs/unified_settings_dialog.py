@@ -13,7 +13,7 @@ Audit Log and CSV Import are intentionally kept as separate dialogs.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -32,6 +33,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -268,6 +271,7 @@ _P_EXPORT    = 8
 _P_BACKUP    = 9
 _P_PURGE     = 10
 _P_TRACKER   = 11
+_P_SCREENTIME = 12
 
 _PAGE_MAP = {
     "general":  _P_GENERAL,
@@ -282,6 +286,7 @@ _PAGE_MAP = {
     "backup":   _P_BACKUP,
     "purge":    _P_PURGE,
     "tracker":  _P_TRACKER,
+    "screentime": _P_SCREENTIME,
 }
 
 _SETTINGS_PAGES = {_P_GENERAL, _P_ACTIONS, _P_SCC, _P_MAIN_VIS, _P_QC, _P_ADMIN_VIS, _P_TRACKER}
@@ -338,22 +343,18 @@ class UnifiedSettingsDialog(QDialog):
             _P_BACKUP: self._build_page_backup,
             _P_PURGE: self._build_page_purge,
             _P_TRACKER: self._build_page_tracker,
+            _P_SCREENTIME: self._build_page_screentime,
         }
         self._page_widgets = {}
 
         self._initial_state = None
+        self._loaded_groups = set()
         self._apply_global_style()
         self._build_ui()
-        # Pre-build settings pages so all controls exist for unified load & dirty tracking
-        for p in _SETTINGS_PAGES:
-            if p not in self._page_widgets:
-                builder = self._page_builders.get(p)
-                if builder:
-                    widget = builder()
-                    self._page_widgets[p] = widget
-                    self._stack.addWidget(widget)
 
-        # Switch to requested page (or default to general)
+        # Only the requested page is built now (building all eight settings pages cost ~0.75-1.5 s
+        # before the dialog could show); each other page is built, loaded and added to the
+        # dirty-tracking baseline the first time it is visited - see _on_page_built.
         target_page = _PAGE_MAP.get(self._start_page, _P_GENERAL)
         self._switch_page(target_page)
         self._load_settings()
@@ -364,8 +365,23 @@ class UnifiedSettingsDialog(QDialog):
         self._start_page = page
         target_page = _PAGE_MAP.get(page, _P_GENERAL) if isinstance(page, str) else page
         self._switch_page(target_page)
-        self._load_settings()
+        self._load_settings(force=True)         # reopening shows the saved values again
         self._initial_state = self._capture_state()
+        self._update_save_btn_state()
+
+    def _on_page_built(self):
+        """A page was just built: load its controls and treat their loaded values as 'unchanged'
+        - without touching what the user may have changed on pages already built."""
+        self._load_settings()
+        if self._initial_state is None:
+            return
+        for key, value in self._capture_state().items():
+            if isinstance(value, dict):
+                base = self._initial_state.setdefault(key, {})
+                for cid, checked in value.items():
+                    base.setdefault(cid, checked)
+            else:
+                self._initial_state.setdefault(key, value)
         self._update_save_btn_state()
 
     # ── Global style ──────────────────────────────────────────────────────────
@@ -532,6 +548,7 @@ class UnifiedSettingsDialog(QDialog):
         _item("mdi.gesture-tap-button",     "Action Buttons",     _P_ACTIONS)
         _item("mdi.shield-key-outline",     "SCC Vault Presets",  _P_SCC)
         _item("mdi.radar",                  "Tracker",            _P_TRACKER)
+        _item("mdi.timer-outline",          "Screentime",         _P_SCREENTIME)
 
         _sec("Column Schema")
         _item("mdi.view-column-outline",    "Master Column List", _P_MCL)
@@ -585,6 +602,8 @@ class UnifiedSettingsDialog(QDialog):
                 widget = builder()
                 self._page_widgets[page_idx] = widget
                 self._stack.addWidget(widget)
+                if page_idx in _SETTINGS_PAGES:
+                    self._on_page_built()
 
         target_widget = self._page_widgets.get(page_idx)
         if target_widget:
@@ -621,6 +640,12 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Window Display Mode",
             "Controls how the app window opens on launch.", self.window_mode_combo))
 
+        # Per PC, not saved with the other settings (app_settings syncs to every PC); saves on its own buttons.
+        from ui.dialogs.display_scale_dialog import DisplayScaleControl
+        lay.addWidget(_setting_row("Screen Scale",
+            "Makes text and layout smaller or larger on this PC only. Applies after restarting Sera.",
+            DisplayScaleControl()))
+
         lay.addWidget(_sub_header("Security & Masking"))
 
         self.mask_mode_combo = QComboBox()
@@ -656,13 +681,6 @@ class UnifiedSettingsDialog(QDialog):
         self.autostart_check = QCheckBox()
         lay.addWidget(_setting_row("Launch at Windows startup",
             "Automatically starts Project Sera in the background when Windows boots.", self.autostart_check))
-
-        lay.addWidget(_sub_header("File Submission Tracker (FST) Daemons"))
-
-        self.fst_check = QCheckBox()
-        lay.addWidget(_setting_row("Sera SDC \u2014 DOM Crosshair (FST)",
-            "DOM Crosshair engine that watches on-screen confirmation messages and elements on web pages.",
-            self.fst_check))
 
         self.sca_check = QCheckBox()
         lay.addWidget(_setting_row("SCA \u2014 Sera Clipboard Assist",
@@ -701,7 +719,6 @@ class UnifiedSettingsDialog(QDialog):
         self.quick_copy_check.toggled.connect(self._on_control_changed)
         self.run_in_bg_check.toggled.connect(self._on_control_changed)
         self.autostart_check.toggled.connect(self._on_control_changed)
-        self.fst_check.toggled.connect(self._on_control_changed)
         self.sca_check.toggled.connect(self._on_control_changed)
         self.sca_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sca_max_uses_spin.valueChanged.connect(self._on_control_changed)
@@ -716,27 +733,13 @@ class UnifiedSettingsDialog(QDialog):
         lay.setSpacing(0)
 
         lay.addWidget(_page_header("Action Buttons",
-            "Control which action buttons appear in the Client Detail view."))
-
-        self.btn_ext_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Ext\u2019 Button",
-            "Extension Autofill \u2014 fills portal credentials via the Sera browser extension.", self.btn_ext_check))
-
-        self.btn_assist_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Assist\u2019 Button",
-            "SMTI Manual Assist \u2014 manually triggers the multi-tab portal interaction flow.", self.btn_assist_check))
-
-        self.btn_copy_check = QCheckBox()
-        lay.addWidget(_setting_row("Enable \u2018Copy\u2019 Button",
-            "MECP Manual Copy \u2014 copies all service credentials to the clipboard in one click.", self.btn_copy_check))
+            "Each service gets one autofill button in Client Detail. Its type (Fast Autofill, "
+            "SMTI Assist or MECP Copy) is chosen per service in Services \u2192 Automation Mode."))
 
         self.show_hide_check = QCheckBox()
         lay.addWidget(_setting_row("Enable \u2018Show / Hide\u2019 Eye Buttons",
             "Shows a password-reveal toggle next to each credential field in Client Detail.", self.show_hide_check))
 
-        self.btn_ext_check.toggled.connect(self._on_control_changed)
-        self.btn_assist_check.toggled.connect(self._on_control_changed)
-        self.btn_copy_check.toggled.connect(self._on_control_changed)
         self.show_hide_check.toggled.connect(self._on_control_changed)
 
         lay.addStretch()
@@ -756,6 +759,23 @@ class UnifiedSettingsDialog(QDialog):
         lay.addWidget(_setting_row("Enable SCC One-Time Verification",
             "When logging into a tax portal for an unverified client, show 4 resolved password buttons in the in-browser SMTI widget.",
             self.scc_check))
+
+        self.scc_detect_combo = QComboBox()
+        self.scc_detect_combo.addItem("Off", "off")
+        self.scc_detect_combo.addItem("On", "on")
+        lay.addWidget(_setting_row("Detect login automatically",
+            "Uses the Income Tax pages SGT already reads to tell whether a copied password worked. It never "
+            "changes what SGT captures. If it ever fails or runs slow it switches itself off until the app "
+            "restarts. Needs SGT on.", self.scc_detect_combo))
+
+        # ── Counts ──────────────────────────────────────────────────────────
+        self.scc_counts_label = QLabel()
+        self._update_scc_counts_display()
+        lay.addWidget(_setting_row("Counts (local, this session and earlier)",
+            "Attempts: attempts opened. Worked: login succeeded. Failed: wrong password. Locked: locked out. "
+            "No conclusion: other outcome. Asked: card asked which row. Saved: password saved. "
+            "Not understood: portal wording not recognized.",
+            self.scc_counts_label))
 
         # ── Option 1 Card ───────────────────────────────────────────────────
         lay.addWidget(_sub_header("Option 1: [4 Letters] + [Fixed String] + [4 Digits]"))
@@ -967,6 +987,7 @@ class UnifiedSettingsDialog(QDialog):
         self.scc_opt4_str_edit.textChanged.connect(_update_previews)
 
         self.scc_check.toggled.connect(self._on_control_changed)
+        self.scc_detect_combo.currentIndexChanged.connect(self._on_control_changed)
         self.scc_opt1_label_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt1_str_edit.textChanged.connect(self._on_control_changed)
         self.scc_opt2_label_edit.textChanged.connect(self._on_control_changed)
@@ -1148,6 +1169,13 @@ class UnifiedSettingsDialog(QDialog):
             "deleted after 30 days) so a change to SGT's field list can be replayed against real pages "
             "before it is used. The pages contain client details; they never leave this PC.",
             self.sgt_record_check))
+        self.sdis_record_check = QCheckBox()
+        lay.addWidget(_setting_row("Record pages for Sera Distill (SDIS)",
+            "While SGT is on, also keeps the full structure of each changed portal page on this PC "
+            "(sdis_capture folder, at most 500 MB - the oldest go first) so Sera Distill can find the "
+            "datapoints of a page. Read after SGT's own read and dropped if it takes over 1.5 s, so SGT "
+            "captures exactly as before. The pages contain client details; they leave this PC only for "
+            "the admin PC.", self.sdis_record_check))
         self.sgt_i_combo = QComboBox()
         self.sgt_i_combo.addItem("Off", "off")
         self.sgt_i_combo.addItem("On", "on")
@@ -1164,6 +1192,13 @@ class UnifiedSettingsDialog(QDialog):
             "Accept writes one to this PC's local override file; Reject only remembers your choice.",
             lab_btn))
 
+        lay.addWidget(_sub_header("ARN fixer"))
+        self.arn_autofix_check = QCheckBox()
+        lay.addWidget(_setting_row("Run the ARN fixer automatically when Sera starts",
+            "Fixes failed ARN-only GST rows from the page corpus in the background, on the admin PC only. "
+            "Applies from the next start of Sera; switching it off before it has begun also stops it.",
+            self.arn_autofix_check))
+
         lay.addWidget(_sub_header("HUD Pill"))
         self.vsdc_hud_check = QCheckBox()
         lay.addWidget(_setting_row("Show HUD pill",
@@ -1175,10 +1210,94 @@ class UnifiedSettingsDialog(QDialog):
         self.vsdc_hud_check.toggled.connect(self._on_control_changed)
         self.sgt_mode_combo.currentIndexChanged.connect(self._on_control_changed)
         self.sgt_record_check.toggled.connect(self._on_control_changed)
+        self.sdis_record_check.toggled.connect(self._on_control_changed)
         self.sgt_i_combo.currentIndexChanged.connect(self._on_control_changed)
+        self.arn_autofix_check.toggled.connect(self._on_control_changed)
 
         lay.addStretch()
         return _wrap_scroll(w)
+
+    def _build_page_screentime(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 28)
+        lay.setSpacing(8)
+
+        lay.addWidget(_page_header("Screentime",
+            "When Sera was opened and closed on each PC in the office. Every PC publishes its own sessions "
+            "through Sera Sync, so this list is the same on all of them (a PC that is switched off shows "
+            "its last session once it has synced). Only times and PC names are kept."))
+
+        self._st_summary = QLabel("")
+        self._st_summary.setWordWrap(True)
+        self._st_summary.setStyleSheet(f"color: {_ACCENT_LIGHT}; font-size: 12px; font-weight: 600;")
+        lay.addWidget(self._st_summary)
+
+        self._st_table = QTableWidget(0, 4)
+        self._st_table.setHorizontalHeaderLabels(["PC", "Opened", "Closed", "Time open"])
+        self._st_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._st_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._st_table.verticalHeader().setVisible(False)
+        self._st_table.setAlternatingRowColors(False)
+        hdr = self._st_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self._st_table.setStyleSheet(
+            f"QTableWidget {{ background: #1a1a1a; color: {_TEXT_PRI}; border: 1px solid {_BORDER}; "
+            f"border-radius: 6px; gridline-color: #2a2a2a; font-size: 12px; }}"
+            f"QHeaderView::section {{ background: #222222; color: {_TEXT_SEC}; border: none; padding: 6px 8px; "
+            f"font-weight: 600; }}")
+        lay.addWidget(self._st_table, 1)
+
+        btns = QHBoxLayout()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self._refresh_screentime)
+        open_btn = QPushButton("Open this PC's text file")
+        open_btn.clicked.connect(self._open_screentime_file)
+        btns.addWidget(refresh)
+        btns.addWidget(open_btn)
+        btns.addStretch()
+        lay.addLayout(btns)
+
+        self._refresh_screentime()
+        return w
+
+    def _refresh_screentime(self):
+        from core import screentime
+        rows = screentime.read_office(self.db)
+        table = self._st_table
+        table.setRowCount(len(rows))
+        running = sorted({r["pc"] for r in rows if r.get("running")})
+        for i, r in enumerate(rows):
+            if r.get("running"):
+                closed, span = "Open now", screentime.duration_text(r["seconds"])
+            elif r.get("stale"):
+                closed, span = f"No close recorded (last seen {r['seen'][5:16]})", ""
+            else:
+                closed = r["closed"] + ("" if r["clean"] else "  (not a clean close)")
+                span = screentime.duration_text(r["seconds"])
+            for col, text in enumerate((r["pc"], r["started"], closed, span)):
+                item = QTableWidgetItem(text)
+                if r.get("running"):
+                    item.setForeground(QColor(_ACCENT_LIGHT))
+                table.setItem(i, col, item)
+        self._st_summary.setText("Open now: " + ", ".join(running) if running else
+                                 ("No PC has Sera open right now." if rows else
+                                  "No sessions yet. They appear after Sera has started once with this version."))
+
+    def _open_screentime_file(self):
+        import os
+        from core import screentime
+        folder = screentime.app_dir_now()
+        path = screentime.file_path(folder) if folder else None
+        if path is None or not path.exists():
+            QMessageBox.information(self, "Screentime", "This PC has no screentime file yet.")
+            return
+        try:
+            os.startfile(str(path))
+        except OSError as exc:
+            QMessageBox.warning(self, "Screentime", f"Could not open the file: {exc}")
 
     def _build_page_export(self) -> QScrollArea:
         w = QWidget()
@@ -1225,7 +1344,7 @@ class UnifiedSettingsDialog(QDialog):
         restore_btn.setIcon(_icon("mdi.database-arrow-down", color=_DANGER))
         restore_btn.clicked.connect(self._on_restore_backup)
         lay.addWidget(_setting_row("Restore Database",
-            "Replace the live database with a previous backup. The app will restart. Use with caution.",
+            "Make a previous backup the data again (in an office: on every PC). The app will restart. Use with caution.",
             restore_btn, danger=True))
 
         import sera_keys
@@ -1293,17 +1412,14 @@ class UnifiedSettingsDialog(QDialog):
             state["quick_copy"] = self.quick_copy_check.isChecked()
             state["run_in_bg"] = self.run_in_bg_check.isChecked()
             state["autostart"] = self.autostart_check.isChecked()
-            state["fst"] = self.fst_check.isChecked()
             state["sca"] = self.sca_check.isChecked()
             state["sca_mode"] = self.sca_mode_combo.currentData()
             state["sca_max_uses"] = self.sca_max_uses_spin.value()
-        if hasattr(self, "btn_ext_check"):
-            state["btn_ext"] = self.btn_ext_check.isChecked()
-            state["btn_assist"] = self.btn_assist_check.isChecked()
-            state["btn_copy"] = self.btn_copy_check.isChecked()
+        if hasattr(self, "show_hide_check"):
             state["show_hide"] = self.show_hide_check.isChecked()
         if hasattr(self, "scc_check"):
             state["scc_enabled"] = self.scc_check.isChecked()
+            state["scc_detect_mode"] = self.scc_detect_combo.currentData()
             state["scc_opt1_label"] = getattr(self, "scc_opt1_label_edit", QLineEdit()).text()
             state["scc_opt1_str"] = getattr(self, "scc_opt1_str_edit", QLineEdit()).text()
             state["scc_opt2_label"] = getattr(self, "scc_opt2_label_edit", QLineEdit()).text()
@@ -1320,7 +1436,9 @@ class UnifiedSettingsDialog(QDialog):
             state["vsdc_hud_enabled"] = self.vsdc_hud_check.isChecked()
             state["sgt_mode"] = self.sgt_mode_combo.currentData()
             state["sgt_record_pages"] = self.sgt_record_check.isChecked()
+            state["sdis_record"] = self.sdis_record_check.isChecked()
             state["sgt_i_mode"] = self.sgt_i_combo.currentData()
+            state["arn_autofix_enabled"] = self.arn_autofix_check.isChecked()
         state["vis"] = {cid: cb.isChecked() for cid, cb in self.vis_cbs.items()}
         state["qc"] = {cid: cb.isChecked() for cid, cb in self.qc_cbs.items()}
         state["admin_vis"] = {cid: cb.isChecked() for cid, cb in self.admin_vis_cbs.items()}
@@ -1346,15 +1464,39 @@ class UnifiedSettingsDialog(QDialog):
             self._btn_save.setIcon(_icon("mdi.check", color="#4f6e5c"))
             self._btn_save.setCursor(Qt.ArrowCursor)
 
+    def _update_scc_counts_display(self):
+        """Update the SCC counts display in the UI."""
+        try:
+            from core.scc.counts import load_counts
+            counts = load_counts()
+            text = f"Attempts: {counts.attempts}  •  Worked: {counts.worked}  •  Failed: {counts.failed}  •  Locked: {counts.locked}  •  No conclusion: {counts.no_conclusion}  •  Asked: {counts.asked}  •  Saved: {counts.saved}  •  Not understood: {counts.not_understood}"
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText(text)
+                self.scc_counts_label.setStyleSheet("font-family: monospace; font-size: 10px; color: #999999;")
+        except Exception:
+            if hasattr(self, "scc_counts_label"):
+                self.scc_counts_label.setText("(counts not available)")
+
     # ── Load settings into controls ───────────────────────────────────────────
-    def _load_settings(self):
-        g = self.db.get_setting
+    def _pending(self, group: str, sentinel: str, force: bool) -> bool:
+        """True when `group` of controls exists (its page is built) and still needs its values."""
+        if not hasattr(self, sentinel):
+            return False
+        if group in self._loaded_groups and not force:
+            return False
+        self._loaded_groups.add(group)
+        return True
+
+    def _load_settings(self, force: bool = False):
+        # one database connection for all ~30 reads (each get_setting opened its own, ~8 ms)
+        snapshot = self.db.get_all_settings()
+        g = lambda key, default=None: snapshot.get(key, default)
         def _set(combo: QComboBox, val: str):
             idx = combo.findData(val)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
 
-        if hasattr(self, "theme_combo"):
+        if self._pending("general", "theme_combo", force):
             _set(self.theme_combo,       g("theme", "light"))
             _set(self.window_mode_combo, g("window_mode", "fullscreen"))
             _set(self.mask_mode_combo,   g("mask_mode", "last_n"))
@@ -1363,7 +1505,6 @@ class UnifiedSettingsDialog(QDialog):
             self.clipboard_spin.setValue(int(g("clipboard_clear_seconds", "30")))
             self.quick_copy_check.setChecked(g("quick_copy_enabled", "0") == "1")
             self.run_in_bg_check.setChecked(g("run_in_background", "1") == "1")
-            self.fst_check.setChecked(g("sdc_enabled", g("fst_enabled", "1")) == "1")
             self.sca_check.setChecked(g("sca_enabled", "1") == "1")
             try:
                 self.sca_max_uses_spin.setValue(max(1, min(int(g("sca_max_uses", "1")), 20)))
@@ -1381,8 +1522,9 @@ class UnifiedSettingsDialog(QDialog):
             except Exception:
                 self.autostart_check.setChecked(False)
 
-        if hasattr(self, "scc_check"):
+        if self._pending("scc", "scc_check", force):
             self.scc_check.setChecked(g("scc_enabled", "1") == "1")
+            _set(self.scc_detect_combo, g("scc_detect_mode", "off"))
             if hasattr(self, "scc_opt1_label_edit"):
                 self.scc_opt1_label_edit.setText(g("scc_opt1_label", "Combo 1"))
             if hasattr(self, "scc_opt1_str_edit"):
@@ -1400,14 +1542,11 @@ class UnifiedSettingsDialog(QDialog):
             if hasattr(self, "scc_opt4_str_edit"):
                 self.scc_opt4_str_edit.setText(g("scc_opt4_fixed_str", ""))
 
-        if hasattr(self, "btn_ext_check"):
-            self.btn_ext_check.setChecked(g("extension_autofill_enabled", "1") == "1")
-            self.btn_assist_check.setChecked(g("manual_assist_enabled", "1") == "1")
-            self.btn_copy_check.setChecked(g("manual_copy_btn_enabled", "1") == "1")
+        if self._pending("actions", "show_hide_check", force):
             self.show_hide_check.setChecked(g("show_hide_btn_enabled", "1") == "1")
 
 
-        if hasattr(self, "vsdc_check"):
+        if self._pending("tracker", "vsdc_check", force):
             # Same defaults as core/vsdc/vsdc_engines.py, so the page shows what runs.
             self.vsdc_check.setChecked(g("vsdc_enabled", "0") == "1")
             self.vsdc_x_check.setChecked(g("vsdc_x_enabled", "0") == "1")
@@ -1415,12 +1554,15 @@ class UnifiedSettingsDialog(QDialog):
             self.vsdc_hud_check.setChecked(g("vsdc_hud_enabled", "1") == "1")
             _set(self.sgt_mode_combo, g("sgt_mode", "live"))
             self.sgt_record_check.setChecked(g("sgt_record_pages", "1") == "1")
+            self.sdis_record_check.setChecked(g("sdis_record", "1") == "1")
             _set(self.sgt_i_combo, g("sgt_i_mode", "off"))
+            self.arn_autofix_check.setChecked(g("arn_autofix_enabled", "1") != "0")
 
     #── Save settings ─────────────────────────────────────────────────────────
     def _on_save_settings(self):
         try:
             bulk_settings = {}
+            autostart_message = ""
             b = lambda cb: "1" if cb.isChecked() else "0"
 
             if hasattr(self, "theme_combo"):
@@ -1431,49 +1573,39 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["clipboard_clear_seconds"]    = str(self.clipboard_spin.value())
                 bulk_settings["quick_copy_enabled"]         = b(self.quick_copy_check)
                 bulk_settings["run_in_background"]          = b(self.run_in_bg_check)
-                bulk_settings["sdc_enabled"]                = b(self.fst_check)
-                bulk_settings["fst_enabled"]                = b(self.fst_check)
                 bulk_settings["sca_enabled"]                = b(self.sca_check)
                 bulk_settings["sca_action_mode"]            = self.sca_mode_combo.currentData() or "autofill"
                 bulk_settings["sca_max_uses"]               = str(self.sca_max_uses_spin.value())
-                bulk_settings["tracker_enabled"]            = "1" if self.fst_check.isChecked() else "0"
 
                 try:
                     from automation import update_extension_settings
-                    scc_payload = {
-                        "enabled": self.scc_check.isChecked() if hasattr(self, "scc_check") else True,
-                        "opt1_label": self.scc_opt1_label_edit.text().strip() if hasattr(self, "scc_opt1_label_edit") else "Combo 1",
-                        "opt1_fixed_str": self.scc_opt1_str_edit.text() if hasattr(self, "scc_opt1_str_edit") else "@",
-                        "opt2_label": self.scc_opt2_label_edit.text().strip() if hasattr(self, "scc_opt2_label_edit") else "Combo 2",
-                        "opt2_fixed_str": self.scc_opt2_str_edit.text() if hasattr(self, "scc_opt2_str_edit") else "",
-                        "opt3_label": self.scc_opt3_label_edit.text().strip() if hasattr(self, "scc_opt3_label_edit") else "Combo 3",
-                        "opt3_fixed_str": self.scc_opt3_str_edit.text() if hasattr(self, "scc_opt3_str_edit") else "",
-                        "opt4_label": self.scc_opt4_label_edit.text().strip() if hasattr(self, "scc_opt4_label_edit") else "Combo 4",
-                        "opt4_fixed_str": self.scc_opt4_str_edit.text() if hasattr(self, "scc_opt4_str_edit") else "",
-                    }
                     update_extension_settings(
-                        fst_enabled=self.fst_check.isChecked(),
-                        sdc_enabled=self.fst_check.isChecked(),
-                        tracker_enabled=self.fst_check.isChecked(),
                         sca_enabled=self.sca_check.isChecked(),
                         sca_mode=self.sca_mode_combo.currentData() or "autofill",
                         sca_max_uses=self.sca_max_uses_spin.value(),
                         allowed_services=self.db.get_services(),
-                        registered_pans=self.db.get_all_registered_pans(),
-                        scc_settings=scc_payload,
-                        vsdc_enabled=self.vsdc_check.isChecked() if hasattr(self, "vsdc_check") else True,
+                        clipboard_clear_seconds=self.clipboard_spin.value(),
                     )
                 except Exception:
                     pass
 
                 try:
                     from ui.utils import autostart
-                    autostart.set_autostart_enabled(self.autostart_check.isChecked())
-                except Exception:
-                    pass
+                    want = self.autostart_check.isChecked()
+                    # Only touch Windows when the box changed, so every Save is not a registry write.
+                    if want != autostart.is_autostart_enabled() or (want and autostart.user_mismatch()):
+                        result = autostart.apply_autostart(want)
+                        autostart_message = result.message
+                        if not result.ok:
+                            self.autostart_check.blockSignals(True)
+                            self.autostart_check.setChecked(autostart.is_autostart_enabled())
+                            self.autostart_check.blockSignals(False)
+                except Exception as exc:
+                    autostart_message = f"Start at logon could not be changed: {exc}"
 
             if hasattr(self, "scc_check"):
                 bulk_settings["scc_enabled"] = b(self.scc_check)
+                bulk_settings["scc_detect_mode"] = self.scc_detect_combo.currentData() or "off"
                 if hasattr(self, "scc_opt1_label_edit"):
                     bulk_settings["scc_opt1_label"] = self.scc_opt1_label_edit.text().strip() or "Combo 1"
                 if hasattr(self, "scc_opt1_str_edit"):
@@ -1491,10 +1623,7 @@ class UnifiedSettingsDialog(QDialog):
                 if hasattr(self, "scc_opt4_str_edit"):
                     bulk_settings["scc_opt4_fixed_str"] = self.scc_opt4_str_edit.text()
 
-            if hasattr(self, "btn_ext_check"):
-                bulk_settings["extension_autofill_enabled"] = b(self.btn_ext_check)
-                bulk_settings["manual_assist_enabled"]      = b(self.btn_assist_check)
-                bulk_settings["manual_copy_btn_enabled"]    = b(self.btn_copy_check)
+            if hasattr(self, "show_hide_check"):
                 bulk_settings["show_hide_btn_enabled"]      = b(self.show_hide_check)
 
 
@@ -1505,7 +1634,9 @@ class UnifiedSettingsDialog(QDialog):
                 bulk_settings["vsdc_hud_enabled"] = b(self.vsdc_hud_check)
                 bulk_settings["sgt_mode"] = self.sgt_mode_combo.currentData() or "live"
                 bulk_settings["sgt_record_pages"] = b(self.sgt_record_check)
+                bulk_settings["sdis_record"] = b(self.sdis_record_check)
                 bulk_settings["sgt_i_mode"] = self.sgt_i_combo.currentData() or "off"
+                bulk_settings["arn_autofix_enabled"] = b(self.arn_autofix_check)
 
             if hasattr(self.db, "set_settings_bulk"):
                 self.db.set_settings_bulk(bulk_settings)
@@ -1529,6 +1660,8 @@ class UnifiedSettingsDialog(QDialog):
             self.settings_saved.emit()
             self._initial_state = self._capture_state()
             self._update_save_btn_state()
+            if autostart_message:
+                QMessageBox.warning(self, "Start at Windows logon", autostart_message)
 
         except Exception as e:
             QMessageBox.critical(self, "Error Saving Settings", str(e))
@@ -1610,13 +1743,10 @@ class UnifiedSettingsDialog(QDialog):
 
     # ── Service actions ───────────────────────────────────────────────────────
     def _svc_reload(self):
+        from ui.dialogs.service_manager_dialog import service_mode_tag
         self._svc_list.clear()
         for svc in self.db.get_services():
-            mode_val = svc.get("automation_mode", "extension")
-            if mode_val in ("automated", "playwright") or not mode_val:
-                mode_val = "extension"
-            tag = "Extension (Autofill)" if mode_val == "extension" else "Manual (MECP)"
-            item = QListWidgetItem(f"{svc['name']}  [{tag}]")
+            item = QListWidgetItem(f"{svc['name']}  [{service_mode_tag(svc)}]")
             item.setData(Qt.UserRole, svc["id"])
             self._svc_list.addItem(item)
 
@@ -1707,6 +1837,9 @@ class UnifiedSettingsDialog(QDialog):
             QMessageBox.critical(self, "Backup Failed", str(e))
 
     def _on_restore_backup(self):
+        if getattr(self.db, "key_mode", None) == "office":
+            self._on_restore_office_backup()
+            return
         msg = QMessageBox(self)
         msg.setWindowTitle("Restore Source")
         msg.setText("How would you like to locate the backup?")
@@ -1742,6 +1875,63 @@ class UnifiedSettingsDialog(QDialog):
                 version.restart_app()
             except Exception as e:
                 QMessageBox.critical(self, "Restore Error", str(e))
+
+    def _on_restore_office_backup(self):
+        """Sera Sync v3 (P4-3b, D9): the restored backup becomes the data on every PC. Admin PC
+        only; a dry run with counts, and the user types RESTORE. Done at the next start."""
+        import os
+        import sync_restore
+        start = os.path.join(os.path.dirname(os.path.abspath(self.db.db_path)), "backups")
+        path = QFileDialog.getExistingDirectory(self, "Choose Backup Folder",
+                                                start if os.path.isdir(start) else "")
+        if not path:
+            return
+        try:
+            plan = sync_restore.plan_restore(self.db, path)
+        except sync_restore.RestoreRefused as e:
+            QMessageBox.warning(self, "Restore Not Possible", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Restore Error", str(e))
+            return
+        if not self._confirm_office_restore(plan):
+            return
+        try:
+            sync_restore.stage_restore(self.db, path, actor=self.actor)
+        except (sync_restore.RestoreRefused, sync_restore.RestoreError) as e:
+            QMessageBox.critical(self, "Restore Error", str(e))
+            return
+        QMessageBox.information(
+            self, "Restore Ready",
+            "The backup is ready to be restored. Sera will now restart to do it.")
+        import version
+        version.restart_app()
+
+    def _confirm_office_restore(self, plan) -> bool:
+        import sync_restore
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Restore Backup for the Whole Office")
+        lay = QVBoxLayout(dlg)
+        text = QLabel(plan.confirmation_text())
+        text.setWordWrap(True)
+        lay.addWidget(text)
+        lay.addWidget(QLabel(f"Type {sync_restore.CONFIRM_WORD} to continue:"))
+        edit = QLineEdit()
+        lay.addWidget(edit)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        ok = QPushButton("Restore")
+        ok.setProperty("class", "danger")
+        ok.setEnabled(False)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+        edit.textChanged.connect(lambda t: ok.setEnabled(t.strip() == sync_restore.CONFIRM_WORD))
+        cancel.clicked.connect(dlg.reject)
+        ok.clicked.connect(dlg.accept)
+        dlg.setMinimumWidth(480)
+        return dlg.exec() == QDialog.Accepted and edit.text().strip() == sync_restore.CONFIRM_WORD
 
     def _on_purge_duplicates(self):
         if QMessageBox.question(

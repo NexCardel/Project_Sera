@@ -4,8 +4,7 @@ Memory fixes from the 2026-09-21 measurement, locked in:
   * only the Material Design icon font is loaded (~15 MB) - so no code may ask for an icon from
     another font, or that icon would come out blank;
   * numpy's OpenBLAS runs one thread (~225 MB of private commit) - set before anything imports
-    numpy;
-  * sdc_parser no longer drags pandas + openpyxl (~60 MB) into the app for the live CSV feed.
+    numpy.
 """
 import ast
 import re
@@ -68,51 +67,6 @@ def test_openblas_is_limited_before_anything_is_imported():
     src = (ROOT / "main.py").read_text(encoding="utf-8").splitlines()
     setting = next(i + 1 for i, l in enumerate(src) if 'setdefault("OPENBLAS_NUM_THREADS", "1")' in l)
     assert setting < first_import
-
-
-def _fresh(code: str) -> str:
-    out = subprocess.run([sys.executable, "-c", code], cwd=ROOT / "SDC_Parser", capture_output=True,
-                         text=True, timeout=120)
-    return out.stdout + out.stderr
-
-
-def test_importing_sdc_parser_does_not_load_pandas_or_openpyxl():
-    out = _fresh("import sys; sys.path.insert(0, '..'); import sdc_parser; "
-                 "print('HEAVY', 'pandas' in sys.modules, 'openpyxl' in sys.modules)")
-    assert "HEAVY False False" in out, out[-600:]
-
-
-def test_live_feed_is_written_without_pandas(tmp_path):
-    """The feed's CSV logic on fixed rows: columns, empty values, line breaks, defaulters filter."""
-    (tmp_path / "Live_Tracking_Table_Live.xlsx").write_bytes(b"")        # skip the workbook step
-    code = f"""
-import sys, csv
-sys.path.insert(0, '..')
-import sdc_parser
-rows = [
-    {{"Client": "ASHOK SEN", "Submit Status": "Not submitted", "Compliance Alert": "", "Discrepancy Note": "",
-      "Note": "line one\\nline two"}},
-    {{"Client": "MEERA DAS", "Submit Status": "Submitted & E-verified", "Compliance Alert": "Overdue",
-      "Discrepancy Note": "", "Note": None}},
-    {{"Client": "RAVI MEHTA", "Submit Status": "Submitted", "Compliance Alert": "due soon", "Discrepancy Note": "",
-      "Note": "nan", "Extra": 5}},
-]
-sdc_parser.get_ltt_dataset = lambda: (rows, {{}})
-master, _ = sdc_parser.export_ltt_live_feed(output_dir=r"{tmp_path}")
-with open(master, encoding="utf-8-sig", newline="") as f:
-    got = list(csv.DictReader(f))
-with open(r"{tmp_path}" + "/LTT_Defaulters_Feed.csv", encoding="utf-8-sig", newline="") as f:
-    act = [r["Client"] for r in csv.DictReader(f)]
-print("COLS", list(got[0].keys()))
-print("NOTES", [r["Note"] for r in got], [r["Extra"] for r in got])
-print("ACTION", act)
-print("HEAVY", "pandas" in sys.modules)
-"""
-    out = _fresh(code)
-    assert "COLS ['Client', 'Submit Status', 'Compliance Alert', 'Discrepancy Note', 'Note', 'Extra']" in out, out[-800:]
-    assert "NOTES ['line one ; line two', '', ''] ['', '', '5']" in out, out[-800:]
-    assert "ACTION ['ASHOK SEN', 'RAVI MEHTA']" in out, out[-800:]          # E-verified is excluded
-    assert "HEAVY False" in out
 
 
 def test_trim_releases_memory_and_logs_it(tmp_path, monkeypatch):

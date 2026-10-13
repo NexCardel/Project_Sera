@@ -41,11 +41,20 @@ SGT_LIVE_ROLLOUT_VALUES = {SGT_SETTING: "live", "vsdc_enabled": "0", "vsdc_x_ena
 # (core/sgt/sgt_corpus.py - local only, 30 days). Only matters while SGT is on.
 SGT_RECORD_SETTING = "sgt_record_pages"
 SGT_RECORD_DEFAULT = "1"
+# Record the raw node tree of each page SGT reads, for Sera Distill (core/sdis/recorder.py,
+# sdis_capture folder, 500 MB cap). Only matters while SGT is on; never changes what SGT reads.
+SDIS_RECORD_SETTING = "sdis_record"
+SDIS_RECORD_DEFAULT = "1"
 # SGT-I - SGT's Intelligence half (core/sgt_i, blueprint 14.2): "off" or "on". It watches the
 # pages SGT reads on its own thread and never changes what SGT captures. Off = SGT exactly as before.
 SGT_I_SETTING = "sgt_i_mode"
 SGT_I_DEFAULT = "off"
 SGT_I_MODES = ("off", "on")
+# SCC-U - Income Tax login detection on SGT's reads (core/scc, autofill-tweaks blueprint Part G):
+# "off" or "on" (Settings -> SCC -> Detect login automatically). Off = SGT exactly as before.
+SCC_DETECT_SETTING = "scc_detect_mode"
+SCC_DETECT_DEFAULT = "off"
+SCC_DETECT_MODES = ("off", "on")
 
 _TRUE = ("1", "true", "yes", "on")
 
@@ -96,6 +105,14 @@ def read_sgt_record_pages(get_setting: Callable[..., object]) -> bool:
         return True
 
 
+def read_sdis_record(get_setting: Callable[..., object]) -> bool:
+    """Whether SDIS records the pages SGT reads (default on)."""
+    try:
+        return str(get_setting(SDIS_RECORD_SETTING, SDIS_RECORD_DEFAULT) or SDIS_RECORD_DEFAULT).strip() == "1"
+    except Exception:
+        return True
+
+
 def read_sgt_i_mode(get_setting: Callable[..., object]) -> str:
     """SGT-I's mode: "off" or "on". Anything unrecognised reads as off."""
     try:
@@ -103,6 +120,15 @@ def read_sgt_i_mode(get_setting: Callable[..., object]) -> str:
     except Exception:
         return SGT_I_DEFAULT
     return value if value in SGT_I_MODES else SGT_I_DEFAULT
+
+
+def read_scc_detect_mode(get_setting: Callable[..., object]) -> str:
+    """SCC-U's mode: "off" or "on". Anything unrecognised reads as off."""
+    try:
+        value = str(get_setting(SCC_DETECT_SETTING, SCC_DETECT_DEFAULT) or SCC_DETECT_DEFAULT).strip().lower()
+    except Exception:
+        return SCC_DETECT_DEFAULT
+    return value if value in SCC_DETECT_MODES else SCC_DETECT_DEFAULT
 
 
 def read_hud_enabled(get_setting: Callable[..., object]) -> bool:

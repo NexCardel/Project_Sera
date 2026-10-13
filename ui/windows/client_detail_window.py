@@ -4,6 +4,7 @@ client_detail_window.py
 Window 2: shows client info, masked passwords, and autofill buttons.
 """
 
+import threading
 import webbrowser
 
 from PySide6.QtCore import Qt, QTimer, QSize, Signal
@@ -222,13 +223,21 @@ class ClientDetailWindow(QWidget):
     def load_client(self, client_id: int):
         self.scroll_widget.setUpdatesEnabled(False)
         try:
-            self._load_client_internal(client_id)
+            if self._load_client_internal(client_id) is not False:
+                self._record_view_async(client_id)
+        finally:
+            self.scroll_widget.setUpdatesEnabled(True)
+
+    def _record_view_async(self, client_id: int):
+        """The audit entry and the activity counter are three database connections; they are
+        bookkeeping, so they run off the UI thread and never delay the panel sliding in."""
+        def work():
             try:
+                self.db.log_action(self.actor, "view", client_id=client_id)
                 self.db.record_client_activity(client_id, "Viewed", "Opened profile")
             except Exception:
                 pass
-        finally:
-            self.scroll_widget.setUpdatesEnabled(True)
+        threading.Thread(target=work, name="client-view-log", daemon=True).start()
 
     def _load_client_internal(self, client_id: int):
         self._clear_layout(self.scroll_layout)
@@ -242,9 +251,8 @@ class ClientDetailWindow(QWidget):
         if not self.client:
             QMessageBox.warning(self, "Not found", "That client record no longer exists.")
             self.back_requested.emit()
-            return
+            return False
 
-        self.db.log_action(self.actor, "view", client_id=client_id)
 
         # Header Titles and Token
         primary, secondary = self._get_identity_parts(self.client)
@@ -262,13 +270,14 @@ class ClientDetailWindow(QWidget):
         
         from PySide6.QtWidgets import QGridLayout
         
-        mask_mode = self.db.get_setting("mask_mode", "last_n")
-        reveal_count = int(self.db.get_setting("mask_reveal_count", "4"))
-        show_hide_btn_enabled = self.db.get_setting("show_hide_btn_enabled", "1") == "1"
+        settings = self.db.get_all_settings()    # one connection, not four
+        mask_mode = settings.get("mask_mode", "last_n")
+        reveal_count = int(settings.get("mask_reveal_count", "4"))
+        show_hide_btn_enabled = settings.get("show_hide_btn_enabled", "1") == "1"
         
         timeout_sec = 30
         try:
-            timeout_sec = int(self.db.get_setting("clipboard_clear_seconds", "30"))
+            timeout_sec = int(settings.get("clipboard_clear_seconds", "30"))
         except Exception:
             pass
 
@@ -456,9 +465,12 @@ class ClientDetailWindow(QWidget):
         # ======================================================================
         services = self.db.get_client_services(client_id)
         if services:
-            ext_setting = self.db.get_setting("extension_autofill_enabled", "1") == "1"
-            assist_setting = self.db.get_setting("manual_assist_enabled", "1") == "1"
-            copy_setting = self.db.get_setting("manual_copy_btn_enabled", "1") == "1"
+            # One button per service; the service's Automation Mode decides what it runs.
+            action_specs = {
+                automation.ACTION_AUTOFILL: ("Fast Autofill", "mdi.flash", self._launch_extension_autofill),
+                automation.ACTION_SMTI: ("SMTI Manual Assist", "mdi.clipboard-account-outline", self._launch_manual_assist),
+                automation.ACTION_MECP: ("MECP Manual Copy", "mdi.content-copy", self._launch_manual_copy),
+            }
 
             # Header row above services
             svc_hdr = QHBoxLayout()
@@ -471,10 +483,9 @@ class ClientDetailWindow(QWidget):
             shortcut_info = QLabel("ⓘ shortcuts: Alt+1..9")
             shortcut_info.setStyleSheet("color: #6E6D67; font-size: 10.5px;")
             shortcut_info.setToolTip(
-                "Shortcuts:\n"
-                "Alt+1..9 = Extension Autofill\n"
-                "Alt+Ctrl+1..9 = Manual Assist\n"
-                "Alt+Shift+1..9 = Manual Copy"
+                "Alt+1..9 runs primary autofill (Mode 1)\n"
+                "Alt+Ctrl+1..9 runs secondary autofill (Mode 2, if set)\n"
+                "(Fast Autofill, SMTI Assist or MECP Copy, as set in its Automation Mode)."
             )
             svc_hdr.addWidget(shortcut_info)
             self.scroll_layout.addLayout(svc_hdr)
@@ -487,17 +498,15 @@ class ClientDetailWindow(QWidget):
                 key_num = i + 1
                 has_shortcut = key_num <= 9
 
-                portal_mode = s.get("automation_mode", "extension")
-                is_manual_only = (portal_mode == "manual")
+                mode_1 = automation.service_action_mode(s)
+                mode_2 = automation.service_secondary_action_mode(s)
 
-                ext_on = ext_setting and not is_manual_only
-                assist_on = assist_setting
-                copy_on = copy_setting
+                action_label, action_icon, action_fn = action_specs[mode_1]
 
                 row_widget = QWidget()
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(0, 5, 0, 5)
-                row_layout.setSpacing(10)
+                row_layout.setSpacing(6)
 
                 # Accent Color Dot / Icon
                 portal_color = _get_portal_accent_color(s["name"])
@@ -512,62 +521,47 @@ class ClientDetailWindow(QWidget):
                 svc_name.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
                 row_layout.addWidget(svc_name, stretch=1)
 
-                # 1. Ext Button (Extension Autofill)
-                if ext_setting:
-                    btn_ext = QPushButton()
-                    btn_ext.setFixedSize(36, 28)
-                    btn_ext.setCursor(Qt.PointingHandCursor if ext_on else Qt.ForbiddenCursor)
-                    btn_ext.setEnabled(ext_on)
-                    if ext_on:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#FFFFFF") if qta else QIcon())
-                        btn_ext.setIconSize(QSize(18, 18))
-                        btn_ext.setToolTip(f"Extension Autofill {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
-                        btn_ext.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
-                        btn_ext.clicked.connect(lambda _, svc=s: self._launch_extension_autofill(svc))
-                    else:
-                        btn_ext.setIcon(qta.icon("mdi.flash", color="#555555") if qta else QIcon())
-                        btn_ext.setIconSize(QSize(18, 18))
-                        btn_ext.setToolTip("Extension Autofill is OFF" if not ext_setting else "Manual-only portal")
-                        btn_ext.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_ext)
+                # Primary autofill button
+                btn_action = QPushButton()
+                btn_action.setFixedSize(36, 28)
+                btn_action.setCursor(Qt.PointingHandCursor)
+                btn_action.setIconSize(QSize(18, 18))
+                btn_action.setToolTip(f"{action_label}: {s['name']}" + (f" (Alt+{key_num})" if has_shortcut else ""))
+                if action_fn == self._launch_extension_autofill:
+                    btn_action.setIcon(qta.icon(action_icon, color="#FFFFFF") if qta else QIcon())
+                    btn_action.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
+                else:
+                    btn_action.setIcon(qta.icon(action_icon, color="#FF4D4D") if qta else QIcon())
+                    btn_action.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                btn_action.clicked.connect(lambda _, svc=s, fn=action_fn: fn(svc))
+                row_layout.addWidget(btn_action)
 
-                # 2. Assist Button (Manual Assist)
-                if assist_setting:
-                    btn_assist = QPushButton()
-                    btn_assist.setFixedSize(36, 28)
-                    btn_assist.setCursor(Qt.PointingHandCursor if assist_on else Qt.ForbiddenCursor)
-                    btn_assist.setEnabled(assist_on)
-                    if assist_on:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#FF4D4D") if qta else QIcon())
-                        btn_assist.setIconSize(QSize(18, 18))
-                        btn_assist.setToolTip(f"Manual Assist {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
-                        btn_assist.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                        btn_assist.clicked.connect(lambda _, svc=s: self._launch_manual_assist(svc))
-                    else:
-                        btn_assist.setIcon(qta.icon("mdi.clipboard-account-outline", color="#555555") if qta else QIcon())
-                        btn_assist.setIconSize(QSize(18, 18))
-                        btn_assist.setToolTip("Manual Assist is OFF")
-                        btn_assist.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_assist)
+                if has_shortcut:
+                    sc_action = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
+                    sc_action.activated.connect(lambda svc=s, fn=action_fn: fn(svc))
+                    self._service_shortcuts.append(sc_action)
 
-                # 3. Copy Button (Manual Copy)
-                if copy_setting:
-                    btn_copy = QPushButton()
-                    btn_copy.setFixedSize(36, 28)
-                    btn_copy.setCursor(Qt.PointingHandCursor if copy_on else Qt.ForbiddenCursor)
-                    btn_copy.setEnabled(copy_on)
-                    if copy_on:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#FF4D4D") if qta else QIcon())
-                        btn_copy.setIconSize(QSize(17, 17))
-                        btn_copy.setToolTip(f"Manual Copy {s['name']}" + (f" (Alt+Shift+{key_num})" if has_shortcut else ""))
-                        btn_copy.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
-                        btn_copy.clicked.connect(lambda _, svc=s: self._launch_manual_copy(svc))
+                # Secondary autofill button (if Automation Mode 2 is set and different from Mode 1)
+                if mode_2 and mode_2 in action_specs and mode_2 != mode_1:
+                    action_label_2, action_icon_2, action_fn_2 = action_specs[mode_2]
+                    btn_action_2 = QPushButton()
+                    btn_action_2.setFixedSize(36, 28)
+                    btn_action_2.setCursor(Qt.PointingHandCursor)
+                    btn_action_2.setIconSize(QSize(18, 18))
+                    btn_action_2.setToolTip(f"{action_label_2}: {s['name']}" + (f" (Alt+Ctrl+{key_num})" if has_shortcut else ""))
+                    if action_fn_2 == self._launch_extension_autofill:
+                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FFFFFF") if qta else QIcon())
+                        btn_action_2.setStyleSheet("QPushButton { background-color: #FF4D4D; border: none; border-radius: 6px; } QPushButton:hover { background-color: #E63939; }")
                     else:
-                        btn_copy.setIcon(qta.icon("mdi.content-copy", color="#555555") if qta else QIcon())
-                        btn_copy.setIconSize(QSize(17, 17))
-                        btn_copy.setToolTip("Manual Copy is OFF")
-                        btn_copy.setStyleSheet("QPushButton { background-color: #171717; border: 1px solid #262626; border-radius: 6px; }")
-                    row_layout.addWidget(btn_copy)
+                        btn_action_2.setIcon(qta.icon(action_icon_2, color="#FF4D4D") if qta else QIcon())
+                        btn_action_2.setStyleSheet("QPushButton { background-color: #1A1A1A; border: 1.5px solid #FF4D4D; border-radius: 6px; } QPushButton:hover { background-color: rgba(255, 77, 77, 0.2); }")
+                    btn_action_2.clicked.connect(lambda _, svc=s, fn=action_fn_2: fn(svc))
+                    row_layout.addWidget(btn_action_2)
+
+                    if has_shortcut:
+                        sc_action_2 = QShortcut(QKeySequence(f"Alt+Ctrl+{key_num}"), self)
+                        sc_action_2.activated.connect(lambda svc=s, fn=action_fn_2: fn(svc))
+                        self._service_shortcuts.append(sc_action_2)
 
                 svc_list_layout.addWidget(row_widget)
 
@@ -577,22 +571,6 @@ class ClientDetailWindow(QWidget):
                     item_div.setStyleSheet("background-color: #232323; min-height: 1px; max-height: 1px; border: none;")
                     svc_list_layout.addWidget(item_div)
 
-                if has_shortcut:
-                    if ext_on:
-                        sc_ext = QShortcut(QKeySequence(f"Alt+{key_num}"), self)
-                        sc_ext.activated.connect(lambda svc=s: self._launch_extension_autofill(svc))
-                        self._service_shortcuts.append(sc_ext)
-
-                    if assist_on:
-                        sc_assist = QShortcut(QKeySequence(f"Alt+Ctrl+{key_num}"), self)
-                        sc_assist.activated.connect(lambda svc=s: self._launch_manual_assist(svc))
-                        self._service_shortcuts.append(sc_assist)
-
-                    if copy_on:
-                        sc_copy = QShortcut(QKeySequence(f"Alt+Shift+{key_num}"), self)
-                        sc_copy.activated.connect(lambda svc=s: self._launch_manual_copy(svc))
-                        self._service_shortcuts.append(sc_copy)
-
             self.scroll_layout.addLayout(svc_list_layout)
 
             # Section Divider
@@ -600,6 +578,8 @@ class ClientDetailWindow(QWidget):
             div3.setFrameShape(QFrame.HLine)
             div3.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
             self.scroll_layout.addWidget(div3)
+
+        self._add_sdis_values(client_id)
 
         # ======================================================================
         # 4. Notes Section (Clean White Editor)
@@ -647,6 +627,63 @@ class ClientDetailWindow(QWidget):
 
         self.scroll_layout.addStretch()
 
+    def _add_sdis_values(self, client_id: int) -> None:
+        """SDIS Others and Profile builder values captured on each portal (blueprint S.4), read-only,
+        labelled from sdis_mcl. Nothing is shown when the client has none."""
+        try:
+            from sera_db.srpf import sdis_value_rows
+            container = self.db.get_client_raw_container(client_id=client_id) or {}
+            rows = sdis_value_rows(container.get("raw_aggregates") or {}, container.get("portal_profiles") or {},
+                                   self.db.sdis_field_labels())
+        except Exception:
+            rows = []
+        if not rows:
+            return
+        hdr = QLabel("PORTAL VALUES")
+        hdr.setStyleSheet("font-size: 10px; font-weight: 600; letter-spacing: 0.5px; color: #6E6D67;")
+        hdr.setToolTip("Captured by SGT for Sera Distill's Profile builder and Others containers")
+        self.scroll_layout.addWidget(hdr)
+        for portal, pairs in rows:
+            box = QFormLayout()
+            box.setContentsMargins(0, 2, 0, 6)
+            box.setHorizontalSpacing(14)
+            box.setVerticalSpacing(4)
+            title = QLabel(portal)
+            title.setStyleSheet("font-weight: 500; font-size: 12px; color: #E8E8E3;")
+            box.addRow(title)
+            for label, value in pairs:
+                k = QLabel(label)
+                k.setStyleSheet("color: #8E8D88; font-size: 11.5px;")
+                v = QLabel(value)
+                v.setStyleSheet("color: #E8E8E3; font-size: 12px;")
+                v.setWordWrap(True)
+                v.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                box.addRow(k, v)
+            self.scroll_layout.addLayout(box)
+        div = QFrame()
+        div.setFrameShape(QFrame.HLine)
+        div.setStyleSheet("background-color: #2A2A2A; min-height: 1px; max-height: 1px; border: none;")
+        self.scroll_layout.addWidget(div)
+
+    def run_service_action(self, client_id: int, service: dict) -> None:
+        """Loads the client (without showing the window) and runs the service's Automation Mode 1 action."""
+        fresh = self.db.get_client(client_id)
+        if not fresh:
+            return
+        prev = self.client
+        self.client = fresh
+        try:
+            mode_1 = automation.service_action_mode(service)
+            action_map = {
+                automation.ACTION_AUTOFILL: self._launch_extension_autofill,
+                automation.ACTION_SMTI: self._launch_manual_assist,
+                automation.ACTION_MECP: self._launch_manual_copy,
+            }
+            fn = action_map.get(mode_1, self._launch_extension_autofill)
+            fn(service)
+        finally:
+            self.client = prev
+
     def _get_identity_parts(self, client):
         identity_cols = [c for c in self.db.get_mcl_columns() if c["is_identity"]]
         vals = [client["values"].get(c["id"], "") for c in identity_cols if client["values"].get(c["id"])]
@@ -682,9 +719,6 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("autofill", self._get_identity_label(self.client))
 
-        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        service["_fst_enabled"] = fst_on
-        service["_tracker_enabled"] = fst_on
         service["_client_name"] = self._get_identity_label(self.client)
         automation._send_to_extension(
             service, uid, pwd, self.client["id"],
@@ -723,9 +757,6 @@ class ClientDetailWindow(QWidget):
         if automation.is_manual_portal(service):
             self._launch_manual(service, uid, pwd)
         else:
-            fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-            service["_fst_enabled"] = fst_on
-            service["_tracker_enabled"] = fst_on
             automation.autofill_login(
                 service, uid, pwd, self.client["id"],
                 on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
@@ -733,6 +764,11 @@ class ClientDetailWindow(QWidget):
         self.window().showMinimized()
 
 
+
+    def _suppress_sca_for_client(self):
+        # MECP/SMTI hand staff this client's ids to copy; those copies must not arm SCA (#15).
+        import clipboard_watch
+        clipboard_watch.suppress_client(self.client["id"], seconds=300)
 
     def _launch_manual_copy(self, service: dict):
         uid, pwd = self._get_credentials(service)
@@ -742,15 +778,23 @@ class ClientDetailWindow(QWidget):
         client_id = self.client.get("id") if self.client else None
         is_scc_verified = self.db.is_client_scc_verified(client_id=client_id) if client_id else False
 
-        scc_mode = False
-        scc_combos = None
-        if is_itr and uid and scc_enabled and not is_scc_verified:
-            scc_combos = self.db.generate_scc_passwords(uid)
-            scc_mode = True
+        scc_mode = bool(is_itr and uid and scc_enabled and not is_scc_verified)
 
         if not uid or (not pwd and not scc_mode):
             QMessageBox.warning(self, "Missing credentials", f"No User ID / Password saved for {service['name']}.")
             return
+
+        service["_client_name"] = self._get_identity_label(self.client)
+        on_error = lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)
+        self._suppress_sca_for_client()
+        if scc_mode:
+            # The desktop builds the combinations and the SCC-U attempt; the card is the MECP card in SCC mode.
+            from core.scc import manual as scc_manual
+            scc_mode = scc_manual.open_card(uid, client_id, on_error)
+            if not scc_mode and not pwd:
+                QMessageBox.warning(self, "Missing credentials", f"Could not open the SCC card for {service['name']}: "
+                                    "no password combinations to show and no saved password.")
+                return
 
         try:
             self.db.record_client_activity(self.client["id"], service["name"], "Manual Copy (SCC)" if scc_mode else "Manual Copy")
@@ -765,16 +809,8 @@ class ClientDetailWindow(QWidget):
         )
         self.action_alert_requested.emit("manual_copy", self._get_identity_label(self.client))
 
-        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        service["_fst_enabled"] = fst_on
-        service["_tracker_enabled"] = fst_on
-        service["_client_name"] = self._get_identity_label(self.client)
-        automation.trigger_mecp(
-            service, uid, pwd or "", self.client["id"],
-            on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg),
-            scc_mode=scc_mode,
-            scc_combos=scc_combos
-        )
+        if not scc_mode:
+            automation.trigger_mecp(service, uid, pwd or "", self.client["id"], on_error=on_error)
         self.window().showMinimized()
 
     def _launch_manual_assist(self, service: dict):
@@ -792,10 +828,8 @@ class ClientDetailWindow(QWidget):
             detail=f"Manual assist triggered for {service['name']}"
         )
         self.action_alert_requested.emit("manual_assist", self._get_identity_label(self.client))
-        fst_on = self.db.get_setting("fst_enabled", "1") == "1"
-        service["_fst_enabled"] = fst_on
-        service["_tracker_enabled"] = fst_on
         service["_client_name"] = self._get_identity_label(self.client)
+        self._suppress_sca_for_client()
         automation.trigger_manual_assist(
             service, uid, pwd, self.client["id"],
             on_error=lambda msg, s=service['name']: self._bridge.failed.emit(s, msg)

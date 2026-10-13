@@ -25,6 +25,8 @@ PID_CONTROL_TYPE = 30003
 PID_NAME = 30005
 PID_AUTOMATION_ID = 30011
 PID_IS_OFFSCREEN = 30022
+PID_IS_PASSWORD = 30019
+PID_FRAMEWORK_ID = 30024
 PID_VALUE = 30045
 PID_GRID_ROW = 30064
 PID_GRID_COLUMN = 30065
@@ -35,8 +37,8 @@ PID_LANDMARK_TYPE = 30157
 PID_HEADING_LEVEL = 30173
 
 _CACHED_PROPERTIES = (
-    PID_BOUNDING_RECT, PID_CONTROL_TYPE, PID_NAME, PID_AUTOMATION_ID, PID_IS_OFFSCREEN, PID_VALUE,
-    PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
+    PID_BOUNDING_RECT, PID_CONTROL_TYPE, PID_NAME, PID_AUTOMATION_ID, PID_IS_OFFSCREEN, PID_IS_PASSWORD,
+    PID_FRAMEWORK_ID, PID_VALUE, PID_GRID_ROW, PID_GRID_COLUMN, PID_SELECTION_IS_SELECTED, PID_TOGGLE_STATE, PID_ARIA_ROLE,
     PID_LANDMARK_TYPE, PID_HEADING_LEVEL,
 )
 
@@ -50,8 +52,11 @@ CT_TABITEM = 50019
 CT_DATAITEM = 50029
 CT_DOCUMENT = 50030
 _VALUE_BEARING = frozenset({CT_COMBOBOX, CT_EDIT, CT_SPINNER})
+_CONTAINERS = frozenset({50025, 50026, 50033})      # Custom, Group, Pane: what a host <div> becomes
+OWN_ID_PREFIX = "sera-"                             # element ids Sera's browser extension gives its UI
 _CHOICE = frozenset({CT_RADIOBUTTON, CT_CHECKBOX})
 SELECTED_PREFIX = "Selected: "      # same as vsdc_uia_text.SELECTED_PREFIX
+GECKO_KEY = "gecko"                 # set on a Firefox document's first node
 
 # UIA HeadingLevel_None = 80050, HeadingLevel1..9 = 80051..80059.
 _HEADING_NONE = 80050
@@ -92,8 +97,17 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
     role = _cached(el, PID_ARIA_ROLE)
     if role:
         node["role"] = role
+    # The element's HTML id (Chromium's AutomationId), kept when the markup sets one: the corpus
+    # carries it so tools/sgt_i_id_census.py can measure whether portal ids are stable node keys.
+    aid = _cached(el, PID_AUTOMATION_ID)
+    aid = aid.strip() if isinstance(aid, str) else ""
+    if aid:
+        node["aid"] = aid
     if ctype in _VALUE_BEARING:
-        node["value"] = (_cached(el, PID_VALUE) or "").strip()
+        # A password field's content must never reach a node, the corpus, or a log - the label
+        # (name, above) is kept, the value simply isn't cached.
+        if not _cached(el, PID_IS_PASSWORD):
+            node["value"] = (_cached(el, PID_VALUE) or "").strip()
     elif ctype in (CT_RADIOBUTTON, CT_TABITEM):     # a tab item's selection = the current step
         node["selected"] = bool(_cached(el, PID_SELECTION_IS_SELECTED))
     elif ctype == CT_CHECKBOX:
@@ -102,6 +116,11 @@ def _node(el, parent: int, depth: int) -> Dict[str, Any]:
         row, col = _cached(el, PID_GRID_ROW), _cached(el, PID_GRID_COLUMN)
         if isinstance(row, int) and isinstance(col, int):
             node["grid"] = (row, col)
+    elif ctype in _CONTAINERS:
+        # Sera's own extension panel injected into the portal page (sera-manual-assist-host,
+        # sera-mecp-host, ...): not the portal - page_map keeps it out of content and structure.
+        if aid.startswith(OWN_ID_PREFIX):
+            node["own"] = True
     return node
 
 
@@ -149,22 +168,43 @@ def read_page_nodes(hwnd: int, timeout_sec: float = 3.0, raw_view: bool = False)
 
     def _do_read():
         uia, uia_client = uia_text._get_uia_on_worker()
-        if not uia:
-            return empty
-        root = uia.ElementFromHandle(hwnd)
-        if not root:
-            return empty
-        condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
-        found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
-        docs: List[List[Dict[str, Any]]] = []
-        for d in range(found.Length if found else 0):
-            nodes: List[Dict[str, Any]] = []
-            _walk(found.GetElement(d), -1, 0, nodes)
-            docs.append(nodes)
-        return {"docs": docs}
+        return _read_docs(uia, uia_client, hwnd, raw_view)
 
     result = uia_text._run_with_timeout(_do_read, timeout_sec)
     return result if result is not None else empty
+
+
+def read_page_nodes_here(uia: Any, uia_client: Any, hwnd: int, raw_view: bool = False) -> Dict[str, Any]:
+    """read_page_nodes on the CALLING thread, with the caller's own UIA object (SDIS's recorder,
+    core/sdis/recorder.py): it never touches vsdc_uia_text's shared worker, so it can never make
+    SGT's next read wait or abandon that worker. No timeout - the caller's thread is its own."""
+    from core.vsdc import vsdc_uia_text as uia_text
+
+    if not hwnd or not uia_text.user32.IsWindow(hwnd):
+        return {"docs": []}
+    return _read_docs(uia, uia_client, hwnd, raw_view)
+
+
+def _read_docs(uia: Any, uia_client: Any, hwnd: int, raw_view: bool) -> Dict[str, Any]:
+    from core.vsdc import vsdc_uia_text as uia_text
+
+    empty: Dict[str, Any] = {"docs": []}
+    if not uia:
+        return empty
+    root = uia.ElementFromHandle(hwnd)
+    if not root:
+        return empty
+    condition = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, CT_DOCUMENT)
+    found = root.FindAllBuildCache(_SCOPE_DESCENDANTS, condition, build_cache_request(uia, raw_view))
+    docs: List[List[Dict[str, Any]]] = []
+    elements = [found.GetElement(d) for d in range(found.Length if found else 0)]
+    for element in uia_text.onscreen_only(elements):     # never a background tab's page
+        nodes: List[Dict[str, Any]] = []
+        _walk(element, -1, 0, nodes)
+        if nodes and _cached(element, PID_FRAMEWORK_ID) == uia_text.FRAMEWORK_GECKO:
+            nodes[0][GECKO_KEY] = True      # lines_from_nodes applies Gecko's two line rules
+        docs.append(nodes)
+    return {"docs": docs}
 
 
 def lines_from_nodes(docs: List[List[Dict[str, Any]]], include_selection: bool = False,
@@ -172,10 +212,23 @@ def lines_from_nodes(docs: List[List[Dict[str, Any]]], include_selection: bool =
     """Today's read_page_text lines, rebuilt from nodes - the 14.2 identity gate compares these."""
     lines: List[str] = []
     for nodes in docs:
-        for n in nodes:
+        gecko = bool(nodes and nodes[0].get(GECKO_KEY))
+        in_dropdown: set = set()        # Gecko: indexes of a dropdown's option elements
+        container_name = ""             # Gecko: the container read just before this node
+        for idx, n in enumerate(nodes):
             if max_lines is not None and len(lines) >= max_lines:
                 return lines[:max_lines]
             name, ctype = n["name"], n["ctype"]
+            if gecko:
+                parent = n["parent"]
+                if parent in in_dropdown or (parent >= 0 and nodes[parent]["ctype"] == CT_COMBOBOX):
+                    in_dropdown.add(idx)
+                    continue
+                echoed, container_name = container_name, ""
+                if ctype in _CONTAINERS:
+                    container_name = name
+                elif name and name == echoed and ctype in _CHOICE and lines and lines[-1] == name:
+                    lines.pop()
             if name:
                 lines.append(name)
             value = n.get("value", "")

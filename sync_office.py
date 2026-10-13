@@ -65,8 +65,8 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     ``office.json``, then creates an empty ``master.db`` with this PC's own (admin, letter A)
     membership record.
 
-    Unlike ``sync_pairing._install`` / ``sync_migrate.migrate_to_office_key`` (which write
-    ``office.json`` last because everything it names is already verified by then), this PC's
+    Unlike ``sync_pairing._install`` (which writes ``office.json`` last because everything it
+    names is already verified by then), this PC's
     own ``init_office_membership`` needs ``office.json``'s ``admin_pubkey`` to sign its first
     records with (``sync_admin.load_admin_key`` reads it back), so it has to exist first. If
     database creation then fails, this PC is left in office mode with no database -- the same
@@ -111,6 +111,11 @@ def create_new_office(app_dir, office_name: str, password: str, device_name: str
     try:
         with db._connect() as conn:
             sync_admin.init_office_membership(app_dir, conn, cert_pem, device_name)
+        # A brand-new office has no legacy data to protect, so there is nothing for shadow mode
+        # to compare: start live. Left in "off", no PC captures or applies changes until the
+        # shadow week and go-live (meant for migrating an existing office). Joiners inherit
+        # "live" from the snapshot (sync_snapshot).
+        db.set_sync_mode("live")
     finally:
         del db
 
@@ -148,7 +153,8 @@ def dispatch_session(session, app_dir, engine) -> None:
     port 49159). Uses ``Session.peek_type`` so neither handler needs to change -- each still
     reads its own first frame with ``recv()``. ``{"t": "shadow_snapshot"}`` (P3-7b: another
     PC downloading the admin PC's shadow replica to turn shadow mode on) goes to
-    ``sync_shadow.handle_shadow_snapshot_session``."""
+    ``sync_shadow.handle_shadow_snapshot_session``. ``{"t": "sdis_push"}`` (SDIS Part P) goes
+    to ``core.sdis.transfer.handle_push``."""
     import sync_snapshot
     t = session.peek_type()
     if t == sync_snapshot.FRAME_SNAPSHOT:
@@ -156,6 +162,10 @@ def dispatch_session(session, app_dir, engine) -> None:
     elif t == "shadow_snapshot":
         import sync_shadow
         sync_shadow.handle_shadow_snapshot_session(session, engine.db, app_dir)
+    elif t == "sdis_push":
+        # SDIS Part P: a staff PC's finished capture files (core.sdis.transfer.FRAME_PUSH).
+        import core.sdis.transfer
+        core.sdis.transfer.handle_push(session, app_dir)
     else:
         engine.handle_session(session)
 

@@ -386,24 +386,21 @@ These are the parts most likely to go wrong if skipped:
 
 ---
 
-## Smart Credential Combinations (SCC / MECP)
+## Smart Credential Combinations (SCC / SCC-U)
 
-**SCC (Smart Credential Combinations)** extends the ambient assistance workflow to portal password discovery, credential verification, and automated vault tagging.
+**SCC (Smart Credential Combinations)** extends the ambient assistance workflow to portal password discovery, credential verification, and automated vault tagging. As of 2026-09-29, SCC is driven by the desktop (**SCC-U**) and is no longer tracked by the browser extension.
 
-### 1. In-Browser Multi-Entry Credential Provider (MECP Widget)
-When navigating to tax portal login and password pages, the browser companion attaches the unobtrusive **MECP Assistant**:
-- **Clean Unmasked Presentation**: Displays cleartext buttons showing the 4 candidate password variations directly alongside the password input.
-- **Single-Click Injection**: Clicking any combination injects the password into the active field, triggers native React/Angular input events, and moves the cursor without breaking the field state.
-- **Fast Dismissal & Auto-Slide**: Clicking the password button slides the widget out immediately to prevent re-triggering or blocking submit buttons.
+### Desktop-Driven Flow (SCC-U)
 
-### 2. Password Formulas & Combination Architecture
-SCC provides 4 standard slots:
-1. **Dynamic PAN Formula 1**: `Pan@123` / `Pan#123` (computed from extracted PAN).
-2. **Dynamic PAN Formula 2**: `Pan@2024` / `Pan#2026` / capitalized variant.
-3. **Fixed String 1**: Configurable firm standard default password.
-4. **Fixed String 2**: Secondary firm standard default password.
+When staff open Client Detail for an unverified Income Tax client:
+- A card displays candidate password combinations (dynamic PAN-derived formulas e.g. `Pan@123`, `Pan#2024`, plus any saved password).
+- Staff can copy a combination to the clipboard or click to inject it directly into the active portal page.
+- The desktop application monitors the portal's response (via VSDC UI Automation) and automatically tags the client record with `"Password verified via SCC"` upon successful login.
+- Outcome reader tracks whether each combination worked, failed, or was locked, providing clear feedback in the card.
 
-### 3. Automatic Vault Tagging & Audit Trail
-- When a login succeeds with an injected SCC formula, Sera detects the navigation transition.
-- Automatically records `"Password verified via SCC"` into the client's notes in `master.db`.
-- Floats a 20-second non-intrusive dark notification banner confirming that the client credentials have been verified and tagged.
+### Browser Role
+
+- The browser extension no longer watches for SCC login success or tracks attempts.
+- When the desktop sends an SCC card payload, the extension displays it as a regular MECP card in the focused portal tab.
+- The card closes only when explicitly dismissed by the user (✕ button) or when the desktop signals completion.
+- No passwords are stored in browser storage; combinations are delivered session-by-session from the desktop.

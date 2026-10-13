@@ -22,10 +22,60 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import automation
+
 try:
     import qtawesome as qta
 except Exception:
     qta = None
+
+# (label, stored automation_mode) - the autofill type a service's Client Detail button runs.
+MODE_CHOICES = (
+    ("Fast Autofill", automation.ACTION_AUTOFILL),
+    ("SMTI Manual Assist", automation.ACTION_SMTI),
+    ("MECP Manual Copy", automation.ACTION_MECP),
+)
+MODE_CHOICES_2 = (
+    ("None", ""),
+    ("Fast Autofill", automation.ACTION_AUTOFILL),
+    ("SMTI Manual Assist", automation.ACTION_SMTI),
+    ("MECP Manual Copy", automation.ACTION_MECP),
+)
+MODE_HELP = (
+    "What this service's button (and Alt+N) does in Client Detail:\n"
+    "Fast Autofill - the extension fills and submits the login form.\n"
+    "SMTI Manual Assist - an on-page widget to inject User ID / Password yourself.\n"
+    "MECP Manual Copy - a floating card to copy credentials."
+)
+MODE_HELP_2 = (
+    "Optional secondary autofill button for this service in Client Detail.\n"
+    "Choose another method from the pool, or None if only one button is desired."
+)
+# Stored values match automation.open_in_default_browser; "" = use the app-wide browser setting.
+BROWSER_CHOICES = (
+    ("Default (app setting)", ""),
+    ("Google Chrome", "chrome"),
+    ("Microsoft Edge", "edge"),
+    ("Mozilla Firefox", "firefox"),
+)
+BROWSER_HELP = (
+    "Browser that opens this portal when Sera has to launch one.\n"
+    "Default uses the browser chosen in Settings."
+)
+MODE_TAGS = {
+    automation.ACTION_AUTOFILL: "Fast Autofill",
+    automation.ACTION_SMTI: "SMTI Assist",
+    automation.ACTION_MECP: "MECP Copy",
+}
+
+
+def service_mode_tag(service: dict) -> str:
+    m1 = automation.service_action_mode(service)
+    t1 = MODE_TAGS.get(m1, "Fast Autofill")
+    m2 = automation.service_secondary_action_mode(service)
+    if m2 and m2 in MODE_TAGS and m2 != m1:
+        return f"{t1} + {MODE_TAGS[m2]}"
+    return t1
 
 
 def _safe_icon(name, color=None):
@@ -65,7 +115,7 @@ class ServiceEditDialog(QDialog):
         title_vbox.setSpacing(2)
         title_lbl = QLabel("Edit Compliance Service" if service_data else "New Compliance Service")
         title_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #F8FAFC;")
-        sub_lbl = QLabel("Map portal login credentials, automation modes, and extension selectors.")
+        sub_lbl = QLabel("Map portal login credentials and choose how this portal is autofilled.")
         sub_lbl.setStyleSheet("font-size: 11.5px; color: #8E8D88;")
         title_vbox.addWidget(title_lbl)
         title_vbox.addWidget(sub_lbl)
@@ -80,9 +130,11 @@ class ServiceEditDialog(QDialog):
         main_layout.addWidget(divider)
 
         # Form Container
+        # Styled by object name: a bare "QFrame" rule also matches every QLabel in the form.
         form_frame = QFrame()
+        form_frame.setObjectName("ServiceForm")
         form_frame.setStyleSheet("""
-            QFrame {
+            QFrame#ServiceForm {
                 background-color: #141414;
                 border: 1px solid #262626;
                 border-radius: 8px;
@@ -120,30 +172,30 @@ class ServiceEditDialog(QDialog):
         form.addRow("User ID Column:", self.uid_combo)
         form.addRow("Password Column:", self.pwd_combo)
 
-        self.uid_sel = QLineEdit(service_data.get("username_selector", "") if service_data else "")
-        self.pwd_sel = QLineEdit(service_data.get("password_selector", "") if service_data else "")
-        form.addRow("Username Selector:", self.uid_sel)
-        form.addRow("Password Selector:", self.pwd_sel)
-
-        self.success_sel = QLineEdit(service_data.get("success_selector", "") if service_data else "")
-        self.success_sel.setPlaceholderText("e.g. div.success-msg, or text:Submitted Successfully!")
-        self.arn_sel = QLineEdit(service_data.get("arn_selector", "") if service_data else "")
-        self.arn_sel.setPlaceholderText("e.g. #arn-value, or text:Transaction ID")
-        form.addRow("Success Msg Selector:", self.success_sel)
-        form.addRow("ARN Field Selector:", self.arn_sel)
+        # Selectors are no longer edited here: known portals get them from the database presets
+        # and the extension falls back to its own field detection. Existing values are kept.
+        self._service_data = service_data or {}
 
         self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Extension (Autofill / Browser Tab)", "extension")
-        self.mode_combo.addItem("Manual (MECP / Clipboard Copy)", "manual")
-        
+        for label, mode in MODE_CHOICES:
+            self.mode_combo.addItem(label, mode)
+        self.mode_combo.setToolTip(MODE_HELP)
         if service_data:
-            mode_val = service_data.get("automation_mode")
-            if mode_val in ("automated", "playwright") or not mode_val:
-                mode_val = "extension"
-            idx_mode = self.mode_combo.findData(mode_val)
+            idx_mode = self.mode_combo.findData(automation.service_action_mode(service_data))
             self.mode_combo.setCurrentIndex(max(idx_mode, 0))
 
         form.addRow("Automation Mode:", self.mode_combo)
+
+        self.mode_2_combo = QComboBox()
+        for label, mode in MODE_CHOICES_2:
+            self.mode_2_combo.addItem(label, mode)
+        self.mode_2_combo.setToolTip(MODE_HELP_2)
+        if service_data:
+            sec_mode = service_data.get("automation_mode_2") or ""
+            idx_mode_2 = self.mode_2_combo.findData(sec_mode)
+            self.mode_2_combo.setCurrentIndex(max(idx_mode_2, 0))
+
+        form.addRow("Automation Mode 2:", self.mode_2_combo)
 
         self.ext_flow_combo = QComboBox()
         self.ext_flow_combo.addItem("Two-Step (Username first, then Password)", "double")
@@ -154,16 +206,27 @@ class ServiceEditDialog(QDialog):
             self.ext_flow_combo.setCurrentIndex(max(idx_ext_flow, 0))
         
         form.addRow("Extension Login Flow:", self.ext_flow_combo)
+
+        self.browser_combo = QComboBox()
+        for label, key in BROWSER_CHOICES:
+            self.browser_combo.addItem(label, key)
+        self.browser_combo.setToolTip(BROWSER_HELP)
+        if service_data:
+            idx_browser = self.browser_combo.findData((service_data.get("browser") or "").lower())
+            self.browser_combo.setCurrentIndex(max(idx_browser, 0))
+
+        form.addRow("Browser:", self.browser_combo)
         main_layout.addWidget(form_frame)
 
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self.mode_2_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._on_mode_changed()
 
         # Wire real-time portal selector presets on typing
         self.name_input.textChanged.connect(self._auto_detect_portal_presets)
         self.url_input.textChanged.connect(self._auto_detect_portal_presets)
 
-        if not service_data or not self.uid_sel.text().strip():
+        if not service_data:
             self._auto_detect_portal_presets()
 
         # Action Buttons
@@ -205,11 +268,7 @@ class ServiceEditDialog(QDialog):
                 if getattr(self, '_last_preset', None) == def_url:
                     break
                 self._last_preset = def_url
-                
-                if not self.uid_sel.text().strip() or self.uid_sel.text() in ['#username', "input[type='text']"]:
-                    self.uid_sel.setText(u_sel)
-                if not self.pwd_sel.text().strip() or self.pwd_sel.text() in ['#password', "input[type='password']"]:
-                    self.pwd_sel.setText(p_sel)
+
                 if not self.url_input.text().strip() and not self.url_input.hasFocus():
                     self.url_input.setText(def_url)
                 
@@ -236,32 +295,67 @@ class ServiceEditDialog(QDialog):
             self._last_preset = None
 
     def _on_mode_changed(self):
-        is_ext = (self.mode_combo.currentData() == "extension")
-        self.ext_flow_combo.setEnabled(is_ext)
-        self.uid_sel.setEnabled(is_ext)
-        self.pwd_sel.setEnabled(is_ext)
-        self.success_sel.setEnabled(is_ext)
-        self.arn_sel.setEnabled(is_ext)
+        # Only Fast Autofill drives the login form itself, so enable flow if either mode uses it.
+        has_ext = (self.mode_combo.currentData() == automation.ACTION_AUTOFILL) or (self.mode_2_combo.currentData() == automation.ACTION_AUTOFILL)
+        self.ext_flow_combo.setEnabled(has_ext)
 
     def _on_accept(self):
         if not self.name_input.text().strip():
             QMessageBox.warning(self, "Missing Name", "Service name is required.")
             return
+        if not self._confirm_watched_domain():
+            return
         self.accept()
 
+    def _confirm_watched_domain(self) -> bool:
+        """SDIS Part T (D21): show the domain the login link puts in scope and ask once (only when it
+        changed). A link that gives no domain, or a never_register one, saves without watching."""
+        from core.vsdc import vsdc_scope
+        name = self.name_input.text().strip()
+        link = self.url_input.text().strip()
+        if not link:
+            return True
+        dom = vsdc_scope.domain_for_link(link)
+        if dom and dom == vsdc_scope.domain_for_link(self._service_data.get("login_page_link") or ""):
+            return True             # confirmed when it was first saved
+        why = None
+        if not dom:
+            why = "this link gives no domain Sera can watch (a bare suffix, localhost or an IP)"
+        elif vsdc_scope.never_registered(dom):
+            why = f"{dom} is a shared sign-in site (never_register in sdis_containers.json)"
+        else:
+            builtin = vsdc_scope.builtin_portal_for_domain(dom)
+            other = next((p for p, ds in vsdc_scope.service_domains().items()
+                          if p != (self._service_data.get("name") or "") and any(
+                              vsdc_scope._overlaps(dom, d) for d in ds)), None)
+            if builtin or other:
+                why = f"{dom} is already watched for {builtin or other}"
+        if why:
+            QMessageBox.information(self, "Portal not registered",
+                                    f"The service will be saved, but no portal is registered: {why}.")
+            return True
+        return QMessageBox.question(
+            self, "Watch this portal?",
+            f"Sera will watch {dom} (and its subdomains) as the portal '{name}':\n"
+            f"SGT capture and the SDIS recorder will read pages there.\n\n"
+            f"Yes saves the service and watches {dom}. No goes back so you can change the link.") == QMessageBox.Yes
+
     def result_data(self) -> dict:
-        mode = self.mode_combo.currentData() or "extension"
+        old = self._service_data
         return {
             "name": self.name_input.text().strip(),
             "login_page_link": self.url_input.text().strip(),
             "userid_column_id": self.uid_combo.currentData(),
             "password_column_id": self.pwd_combo.currentData(),
-            "username_selector": self.uid_sel.text().strip() if mode == "extension" else "",
-            "password_selector": self.pwd_sel.text().strip() if mode == "extension" else "",
-            "automation_mode": mode,
+            # Not editable any more: carried over unchanged (empty ones are filled from presets on save).
+            "username_selector": old.get("username_selector") or "",
+            "password_selector": old.get("password_selector") or "",
+            "automation_mode": self.mode_combo.currentData() or automation.ACTION_AUTOFILL,
+            "automation_mode_2": self.mode_2_combo.currentData() or "",
             "extension_flow": self.ext_flow_combo.currentData(),
-            "success_selector": self.success_sel.text().strip() if mode == "extension" else "",
-            "arn_selector": self.arn_sel.text().strip() if mode == "extension" else ""
+            "browser": self.browser_combo.currentData() or "",
+            "success_selector": old.get("success_selector") or "",
+            "arn_selector": old.get("arn_selector") or "",
         }
 
 
@@ -370,11 +464,7 @@ class ServiceManagerDialog(QDialog):
     def _reload_services(self):
         self.list_widget.clear()
         for s in self.db.get_services():
-            mode_val = s.get("automation_mode", "extension")
-            if mode_val in ("automated", "playwright") or not mode_val:
-                mode_val = "extension"
-            tag = "Extension (Autofill)" if mode_val == "extension" else "Manual (MECP)"
-            item = QListWidgetItem(f"{s['name']}  [{tag}]")
+            item = QListWidgetItem(f"{s['name']}  [{service_mode_tag(s)}]")
             item.setData(Qt.UserRole, s["id"])
             self.list_widget.addItem(item)
 
@@ -384,12 +474,16 @@ class ServiceManagerDialog(QDialog):
 
     def _sync_extension_services(self):
         try:
+            from core.vsdc import vsdc_scope
+            vsdc_scope.reload_extra_domains()     # SDIS Part T: a saved / deleted service (un)registers its portal
+        except Exception:
+            pass
+        try:
             from automation import update_extension_settings
             update_extension_settings(
-                fst_enabled=(self.db.get_setting("fst_enabled", "1") == "1"),
-                tracker_enabled=(self.db.get_setting("tracker_enabled", "1") == "1"),
                 sca_enabled=(self.db.get_setting("sca_enabled", "1") == "1"),
-                allowed_services=self.db.get_services()
+                allowed_services=self.db.get_services(),
+                clipboard_clear_seconds=int(self.db.get_setting("clipboard_clear_seconds", "30")),
             )
         except Exception:
             pass

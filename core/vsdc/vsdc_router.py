@@ -17,9 +17,10 @@ import comtypes.client
 from .vsdc_crosshairs import match_url_crosshair, CrosshairDefinition, ALL_CROSSHAIRS, get_crosshair
 from .vsdc_ocr import VSDCOcrEngine
 from . import vsdc_uia_text
+from . import vsdc_diag
 from .vsdc_scope import (
     is_in_scope_url, portal_for_url, is_government_registry_host, portal_logo_cue, TRIPWIRE_TOP_LINES, extract_host,
-    sanitize_page_url,
+    sanitize_page_url, registered_domain,
 )
 from .vsdc_alerts import AlertSender, stamp_device_name
 from .vsdc247 import Vsdc247Scanner, configured_mode, MODE_OFF, MODE_SHADOW, MODE_LIVE
@@ -70,8 +71,6 @@ from .vsdc_name_parser import (
     is_better_taxpayer_name,
     extract_gst_welcome_name,
 )
-from .vsdc_beeper import PANBeeper
-from .vsdc_gemini_parser import parse_compliance_with_gemini
 
 # The e-Verify confirmation step is resolved from page content, never from the URL
 # (all three wizard steps share one Angular route) - see _route_itr_crosshair.
@@ -103,6 +102,10 @@ BROWSER_EXE_NAMES = (
     "brave.exe",
     "opera.exe",
 )
+
+# " - Google Chrome", " – ...", " — Mozilla Firefox": the browser's suffix on a window title
+BROWSER_SUFFIX_RE = re.compile(r"[-–—]\s*(?:google chrome|microsoft[\s​]*edge|mozilla firefox|brave|opera).*$",
+                               re.IGNORECASE)
 
 
 class _WindowSession:
@@ -204,7 +207,8 @@ _STATIC_SCREEN_TIMEOUT_SEC = 30.0
 # closed browser window's state (and its assembler, with whatever it hadn't
 # yet flushed) doesn't linger forever. Generous on purpose - VSDC ticks fast
 # but a taxpayer can legitimately sit on one page for minutes while reading it.
-_SESSION_IDLE_TIMEOUT_SEC = 30 * 60
+# Two hours, the same idle limit as SGT's sessions (core/sgt/sgt_shadow.py IDLE_END_SEC).
+_SESSION_IDLE_TIMEOUT_SEC = 2 * 3600
 
 
 class VSDCRouter:
@@ -360,6 +364,7 @@ class VSDCRouter:
         self._sgt_mode: str = self._env_sgt_mode() or SGT_OFF
         self._sgt_alone: bool = False              # SGT on, the other three off: no crosshair routing
         self._sgt = None                           # core.sgt.sgt_shadow.SgtShadow, built on first use
+        self.diag_tick: Dict[str, Any] = {}        # this tick, for the heartbeat (vsdc_diag)
         if self._sgt_mode != SGT_OFF:
             print(f"[SGT] mode = {self._sgt_mode.upper()} (from SGT_MODE)")
 
@@ -369,7 +374,8 @@ class VSDCRouter:
         return env if env in (SGT_OFF, SGT_SHADOW, SGT_LIVE) else None
 
     def apply_engine_settings(self, vsdc: bool, vsdc_x: bool, vsdc247: bool, sgt: str = "off",
-                              sgt_record: bool = True, sgt_i: bool = False) -> None:
+                              sgt_record: bool = True, sgt_i: bool = False, scc_detect: bool = False,
+                              sdis_record: bool = True) -> None:
         """
         Applies the three Settings -> Tracker switches, live (no restart):
 
@@ -389,15 +395,21 @@ class VSDCRouter:
         runs alone (the other three off): it reads every in-scope page with no crosshair
         routing, the same way VSDC247 works alone. Shadow keeps its rows apart from the other
         engines', so it can run beside them. SGT_MODE overrides it. SGT-I (sgt_i) is SGT's
-        Intelligence half: it only watches what SGT reads and never changes a capture.
+        Intelligence half: it only watches what SGT reads and never changes a capture. SCC-U
+        (scc_detect) likewise only watches SGT's reads, for Income Tax logins.
         """
         wanted = str(sgt).strip().lower()
         sgt_mode = self._env_sgt_mode() or (wanted if wanted in (SGT_SHADOW, SGT_LIVE) else SGT_OFF)
         self._sgt_record = bool(sgt_record)
         if self._sgt is not None and getattr(self._sgt, "_recorder", None) is not None:
             self._sgt._recorder.enabled = self._sgt_record
+        self._sdis_record = bool(sdis_record)
+        if self._sgt is not None and getattr(self._sgt, "_sdis", None) is not None:
+            self._sgt._sdis.enabled = self._sdis_record
         self._sgt_i_on = bool(sgt_i)
         self._apply_sgt_i()
+        self._scc_on = bool(scc_detect)
+        self._apply_scc()
         if sgt_mode != self._sgt_mode and self._sgt is not None:
             # Open sessions end under the mode they were read in, so no dataset is keyed half
             # one way and half the other.
@@ -418,10 +430,13 @@ class VSDCRouter:
             self._mode_247 = MODE_LIVE if vsdc247 else MODE_OFF
         self._247_only = self._env_247_only or (bool(vsdc247) and not vsdc and not vsdc_x)
         self._engines_off = not (vsdc or vsdc_x or vsdc247 or sgt_on) and not self._env_247_only
-        print(f"[VSDC] engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
-              f"VSDC247={self._mode_247.upper()}"
-              f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
-              f"{' (works alone)' if self._sgt_alone else ''}{' - ALL OFF' if self._engines_off else ''}")
+        engines = (f"engines: VSDC={'on' if vsdc else 'off'} | VSDC-X={'on' if vsdc_x else 'off'} | "
+                   f"VSDC247={self._mode_247.upper()}"
+                   f"{' (works alone)' if self._247_only else ''} | SGT={self._sgt_mode.upper()}"
+                   f"{' (works alone)' if self._sgt_alone else ''} | SGT-I={'on' if sgt_i else 'off'}"
+                   f"{' - ALL OFF' if self._engines_off else ''}")
+        print(f"[VSDC] {engines}")
+        vsdc_diag.note(engines)
 
     def _apply_sgt_i(self) -> None:
         """Attaches SGT-I to SGT when switched on. One host per run: one that switched itself
@@ -438,24 +453,66 @@ class VSDCRouter:
             host.set_enabled(on)
             self._sgt.set_intelligence(host if on else None)
 
+    def set_client_lookup(self, lookup) -> None:
+        """lookup(portal, portal user ID) -> {"gstin", "pan"} of the saved client who owns it, or None.
+        SGT uses it where a page shows the user ID but not the client's GSTIN."""
+        self._client_lookup = lookup
+        if self._sgt is not None:
+            self._sgt.set_client_lookup(lookup)
+
+    def set_scc_handlers(self, factory) -> None:
+        """factory() -> the handlers to register on SCC-U's host when it is created (once per run)."""
+        self._scc_handlers = factory
+
+    def _apply_scc(self) -> None:
+        """Attaches SCC-U to SGT when switched on, the same way as SGT-I: one host per run, and
+        one that switched itself off after a failure stays off."""
+        if self._sgt is None:
+            return
+        on = getattr(self, "_scc_on", False)
+        host = getattr(self, "_scc_host", None)
+        if on and host is None:
+            from core.scc import SccHost
+            host = self._scc_host = SccHost()
+            factory = getattr(self, "_scc_handlers", None)
+            for handler in (factory() if factory else []):
+                host.register(handler)
+        if host is not None:
+            host.set_enabled(on)
+            self._sgt.set_scc(host if on else None)
+
     def _run_sgt(self, hwnd: int, title: str = "") -> None:
         """SGT observes this page. Its tracker rows leave through its own outbox (evaluate_tick
         hands them out one per tick), never through this tick's result."""
         if self._sgt is None:
+            from core.sdis.recorder import SdisRecorder
             from core.sgt.sgt_corpus import PageRecorder
             from core.sgt.sgt_health import SpecStats
             from core.sgt.sgt_shadow import SgtShadow, shadow_dir
             folder = shadow_dir()
-            # recorder: pages for replay; stats: portal-change watch; state: crash recovery;
-            # alert: a live submission whose client never became known (phone, like VSDC247)
+            # recorder: pages for replay; sdis: raw pages for Sera Distill; stats: portal-change
+            # watch; state: crash recovery; alert: a live submission whose client never became
+            # known (phone, like VSDC247)
             self._sgt = SgtShadow(dispatched_ids=lambda: list(self._dispatched_ids), notify=self.notify_sgt,
                                   recorder=PageRecorder(enabled=getattr(self, "_sgt_record", True)),
+                                  sdis=SdisRecorder(enabled=getattr(self, "_sdis_record", True)),
                                   stats=SpecStats(folder), state_path=folder / "sessions_state.json",
                                   mode=self._sgt_mode,
-                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page))
+                                  alert_unattributed=lambda form, page: self.alerts.notify_unattributed_submission(form, page),
+                                  ask_demotion=self.notify_demotion,
+                                  resolve_client=getattr(self, "_client_lookup", None))
             self._apply_sgt_i()
+            self._apply_scc()
+        # Which tab of the window is in front: SGT keeps one session per tab, so a page that
+        # names no client never feeds the client of the tab the user came from. When UIA is
+        # still busy with a slow page read, the tab cannot be told and the page could not be
+        # read either - SGT simply looks again next tick.
+        tab = vsdc_uia_text.selected_tab_id(hwnd)
+        if tab is None and vsdc_uia_text.was_busy():
+            return
+        self.diag_tick["tab"] = "known" if tab else "unknown"
         self._sgt.observe(hwnd, self._tick_portal, self._tick_page_url,
-                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title)
+                          frame=self._capture_window(hwnd), ocr=self.ocr, title=title, tab=tab)
 
     _TRIPWIRE_MAX_PROBES = 3
     _TRIPWIRE_RETRY_SEC = 5.0
@@ -494,6 +551,8 @@ class VSDCRouter:
         self._tripwire_hosts[host] = [-1, now]         # raised once for this host; done
         print(f"[VSDC Scope] {host} shows the {cue} logo but is not on the allowed list - VSDC is paused there. "
               f"Add it to vsdc_scope.json if this is the real portal.")
+        # SDIS Part T: the domain a 'watch it too' offer (W4-5) would add as an extra_domains entry.
+        print(f"[VSDC Scope] tripwire registered domain: {registered_domain(host) or host} (portal {cue})")
         self.notify_activity("prompt", "Portal address looks new - VSDC paused",
                              f"{host} shows the {cue} logo but is not on the allowed list")
 
@@ -513,6 +572,18 @@ class VSDCRouter:
             self._hud_buffer.append((event_type, title, subtitle, snapshot))
             return
         self._emit_activity(event_type, title, subtitle, snapshot)
+
+    on_demotion = None          # set by the app: shows the "lower this status?" dialog (called from SGT's thread)
+
+    def notify_demotion(self, info: Dict[str, Any]) -> None:
+        """SGT saw a lower status for a filing that has an ARN and asks the user before lowering it."""
+        cb = self.on_demotion
+        if callable(cb):
+            cb(info)
+
+    def answer_demotion(self, token: str, lower: bool) -> None:
+        if self._sgt is not None:
+            self._sgt.answer_demotion(token, lower)
 
     def notify_sgt(self, event_type: str, title: str, subtitle: str, context: Dict[str, Optional[str]]) -> None:
         """
@@ -914,11 +985,11 @@ class VSDCRouter:
             if not element:
                 return None
 
-            # Look for Edit control (Address bar)
-            # UIA_EditControlTypeId = 50004
-            condition = self._uia.CreatePropertyCondition(
-                self._uia_client.UIA_ControlTypePropertyId,
-                50004,
+            # Look for Edit control (Address bar) - or a ComboBox, which is what Firefox's bar is
+            # UIA_EditControlTypeId = 50004, UIA_ComboBoxControlTypeId = 50003
+            condition = self._uia.CreateOrCondition(
+                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50004),
+                self._uia.CreatePropertyCondition(self._uia_client.UIA_ControlTypePropertyId, 50003),
             )
             edits = element.FindAll(self._uia_client.TreeScope_Descendants, condition)
             if not edits:
@@ -965,8 +1036,12 @@ class VSDCRouter:
                 stamp_device_name(sgt_row)
                 return sgt_row
         if self._engines_off:
+            self.diag_tick = {"engines": "all off"}
             return None
         hwnd, title, proc_name = self.get_foreground_info()
+        # What the heartbeat says was in front (logs/vsdc.log): the exe only, until the scope
+        # gate has passed - a page outside the portals is never named there.
+        self.diag_tick = {"front": proc_name or ("none" if not hwnd else "?")}
         if not hwnd or not title:
             return None
 
@@ -1036,7 +1111,7 @@ class VSDCRouter:
             # Strip session countdown timers and browser suffixes so title doesn't change every second
             cleaned_title = re.sub(r"\b(?:session\s*time|time\s*remaining|timeout)\b[:\s0-9]+", "", title_lower, flags=re.IGNORECASE)
             cleaned_title = re.sub(r"\b\d{1,2}\s*:\s*\d{2}\b", "", cleaned_title)
-            cleaned_title = re.sub(r"-\s*(?:google chrome|microsoft edge|mozilla firefox|brave|opera).*$", "", cleaned_title, flags=re.IGNORECASE).strip()
+            cleaned_title = BROWSER_SUFFIX_RE.sub("", cleaned_title).strip()
             url = cleaned_title or title_lower
 
         url_normalized = url.replace("\\", "/")
@@ -1086,6 +1161,10 @@ class VSDCRouter:
         # only) have no portal host, so they fall back to what the window title implies.
         self._tick_portal = (portal_for_url(extracted_url) if address_bar_readable else None) or self.active_portal
         self._tick_page_url = sanitize_page_url(extracted_url) if address_bar_readable else ""
+        self.diag_tick.update(address_bar="read" if address_bar_readable else "unreadable",
+                              in_scope="yes" if in_scope else "no")
+        if in_scope:
+            self.diag_tick.update(portal=self._tick_portal, page=self._tick_page_url or None)
 
         matched_crosshair = None
         if in_scope and (address_bar_readable or is_portal_title):
@@ -2185,8 +2264,6 @@ class VSDCRouter:
                 meta["period_label"] = None
             if not is_valid_gst_status(meta.get("status")):
                 meta["status"] = None
-
-            # Gemini API call removed to prevent synchronous thread blocking.
 
             legal_name = meta.get("legal_name")
             if not legal_name and not self._uia_only_mode:

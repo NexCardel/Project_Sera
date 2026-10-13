@@ -539,18 +539,84 @@ def test_convergence_abc_forwarding_never_connected(tmp_path):
 
 # ------------------------------------------------------------------ Test (g)
 
-@pytest.mark.skip(reason="Compaction / NEED_SNAPSHOT is implemented in Phase 4 (P4-4)")
+def _age_peer(node, peer, days):
+    """Makes ``peer`` look last seen ``days`` ago in ``node``'s peer vectors (both DB files)."""
+    import datetime as _dt
+    stamp = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with node.open_db() as conn:
+        conn.execute("UPDATE _sync_peer_vectors SET seen_at = ? WHERE device_id = ?", (stamp, peer.device_id))
+    with node.open_raw_db() as conn:
+        conn.execute("UPDATE _sync_peer_vectors SET seen_at = ? WHERE device_id = ?", (stamp, peer.device_id))
+    import sync_capture
+    import sync_compaction
+    conn = sync_capture._open(str(node.db_path), node.hex_key, 5.0)
+    try:
+        sync_compaction.note_peer_seen(conn, peer.device_id, stamp)
+    finally:
+        conn.close()
+
+
+def _token_count(node, token):
+    with node.open_db() as conn:
+        return conn.execute("SELECT count(*) FROM clients WHERE client_id_token = ?", (token,)).fetchone()[0]
+
+
 def test_convergence_offline_node_snapshot_recovery(tmp_path):
     """(g) A node offline for a long time (compaction, P4-4) gets NEED_SNAPSHOT and still
     converges without losing its own unsent edits.
     """
-    with SyncHarness(num_nodes=2, base_dir=tmp_path / "conv_g") as harness:
-        n0, n1 = harness.nodes[0], harness.nodes[1]
-        harness.partition(n0, n1)
+    import time as _time
+    import sync_compaction
 
-        # Node 0 does extensive operations past the compaction threshold.
-        # Node 1 writes an unsent local edit.
-        # Reconnect: Node 1 receives NEED_SNAPSHOT, merges its unsent edits, and converges.
+    with SyncHarness(num_nodes=3, base_dir=tmp_path / "conv_g") as harness:
+        n0, n1, n2 = harness.nodes
+        n0.write(lambda conn: _insert_client(conn, "G-BASE"))
+        harness.run_until_quiet(timeout=10.0)
+
+        # Node 2 goes away for a long time; it makes an edit nobody has seen.
+        harness.partition(n0, n2)
+        harness.partition(n1, n2)
+        n2.write(lambda conn: _insert_client(conn, "G-OFFLINE", notes="made while away"))
+
+        # The others keep working, and compact past everything node 2 has.
+        for i in range(30):
+            n0.write(lambda conn, i=i: _insert_client(conn, f"G-N0-{i:03d}"))
+        n1.write(lambda conn: _insert_client(conn, "G-N1"))
+        harness.run_until_quiet(timeout=10.0)
+        for node in (n0, n1):
+            _age_peer(node, n2, days=sync_compaction.STALE_MEMBER_DAYS + 10)
+            assert node.engine.compact()["skipped"] is None
+        stream = n0.device_id + ":m"
+        assert n0.engine.compaction_floors()[stream] > 0
+
+        # Back again: node 2 sends its own change first, is told it needs a snapshot, and
+        # downloads one from node 0.
         harness.heal()
-        harness.run_until_quiet(timeout=5.0)
-        assert harness.digest(n0) == harness.digest(n1)
+        result = n2.sync_with(n0)
+        assert result.ok and stream in result.need_snapshot
+        assert _token_count(n0, "G-OFFLINE") == 1
+        deadline = _time.monotonic() + 30.0
+        while _time.monotonic() < deadline and not [k for k, _ in n2.events if k in ("catch_up_staged", "catch_up_failed")]:
+            _time.sleep(0.05)
+        assert [k for k, _ in n2.events if k == "catch_up_staged"], n2.events
+        assert sync_compaction.has_pending_catch_up(n2.app_dir)
+
+        # Restart node 2: the snapshot is installed before its database is opened.
+        info = harness.restart_node(
+            n2, before_open=lambda node: sync_compaction.apply_pending_catch_up(node.app_dir, node.hex_key))
+        assert info and info["source_device"] == n0.device_id
+        assert not sync_compaction.has_pending_catch_up(n2.app_dir)
+
+        n2.write(lambda conn: _insert_client(conn, "G-AFTER"))
+        harness.run_until_quiet(timeout=20.0)
+        assert harness.digest(n0) == harness.digest(n1) == harness.digest(n2)
+        for node in (n0, n1, n2):
+            assert _token_count(node, "G-OFFLINE") == 1
+            assert _token_count(node, "G-AFTER") == 1
+            assert _token_count(node, "G-N0-029") == 1
+        # Node 2's own stream has no gap.
+        with n2.open_db() as conn:
+            vec = conn.execute("SELECT max_seq FROM _sync_vector WHERE origin = ?", (n2.device_id + ":m",)).fetchone()[0]
+            nxt = int(conn.execute("SELECT value FROM _sync_meta WHERE key = 'next_seq'").fetchone()[0])
+            assert conn.execute("SELECT value FROM _sync_meta WHERE key = 'device_id'").fetchone()[0] == n2.device_id
+        assert vec == nxt - 1

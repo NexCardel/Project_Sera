@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPixmap
 try:
     import qtawesome as qta
 except Exception:
@@ -84,7 +84,14 @@ class SlidePanel(QFrame):
         self.container_layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(self.container, stretch=1)
         
-        self.anim = QPropertyAnimation(self, b"geometry", self)
+        # The slide animates a snapshot of the panel (self._proxy), not the panel: repainting a full
+        # client profile on every frame cost ~27 ms (7 frames in 220 ms, worst gap 70 ms), a
+        # snapshot costs next to nothing. The real panel is parked off-screen meanwhile and put in
+        # place when the slide ends.
+        self._proxy = QLabel(parent)
+        self._proxy.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._proxy.hide()
+        self.anim = QPropertyAnimation(self._proxy, b"geometry", self)
         self.anim.setDuration(220)
         self.anim.setEasingCurve(QEasingCurve.OutCubic)
         self.anim.finished.connect(self._on_anim_finished)
@@ -111,6 +118,8 @@ class SlidePanel(QFrame):
         parent_w = self.parent().width()
         parent_h = self.parent().height()
         panel_w = self._calc_panel_width(parent_w)
+        if self.anim.state() == QPropertyAnimation.Running:
+            return                                  # the slide's end puts the panel in place
         if self._is_open:
             self.setGeometry(parent_w - panel_w, 0, panel_w, parent_h)
             self.raise_()
@@ -142,28 +151,57 @@ class SlidePanel(QFrame):
             self.header.hide()
             self.btn_back.hide()
             
+    def _end_geometry(self) -> QRect:
+        parent_w, parent_h = self.parent().width(), self.parent().height()
+        panel_w = self._calc_panel_width(parent_w)
+        return QRect(parent_w - panel_w, 0, panel_w, parent_h)
+
+    def _off_geometry(self) -> QRect:
+        parent_w, parent_h = self.parent().width(), self.parent().height()
+        return QRect(parent_w, 0, self._calc_panel_width(parent_w), parent_h)
+
+    def _snapshot(self, geom: QRect) -> QPixmap:
+        """The panel as it looks at `geom` (laid out at that size, then drawn once)."""
+        self.setGeometry(geom)
+        self.show()
+        return self.grab()
+
+    def _start_proxy_slide(self, pixmap: QPixmap, start: QRect, end: QRect):
+        if pixmap.isNull():
+            return False
+        self._proxy.setPixmap(pixmap)
+        self._proxy.setGeometry(start)
+        self._proxy.show()
+        self._proxy.raise_()
+        self.setGeometry(self._off_geometry())      # parked; the proxy stands in for it
+        self.anim.stop()
+        self.anim.setStartValue(start)
+        self.anim.setEndValue(end)
+        self.anim.start()
+        return True
+
+    def _finish_proxy(self):
+        self._proxy.hide()
+        self._proxy.setPixmap(QPixmap())
+
     def slide_in(self):
         self._is_open = True
         self.opened.emit()
-        self.show()
-        self.raise_()
         if not self.parent():
+            self.show()
+            self.raise_()
             return
-        parent_w = self.parent().width()
-        parent_h = self.parent().height()
-        panel_w = self._calc_panel_width(parent_w)
+        end_geom = self._end_geometry()
+        sliding = self.anim.state() == QPropertyAnimation.Running
+        if not sliding and self.isVisible() and self.geometry() == end_geom:
+            self.raise_()                           # already open (another client picked): nothing to slide
+            return
 
+        start_geom = self._proxy.geometry() if sliding else self._off_geometry()
         self.anim.stop()
-        start_geom = self.geometry()
-        if not self.isVisible() or start_geom.width() <= 0 or not start_geom.isValid() or start_geom.x() >= parent_w:
-            start_geom = QRect(parent_w, 0, panel_w, parent_h)
-        else:
-            start_geom = QRect(start_geom.x(), 0, panel_w, parent_h)
-        
-        end_geom = QRect(parent_w - panel_w, 0, panel_w, parent_h)
-        self.anim.setStartValue(start_geom)
-        self.anim.setEndValue(end_geom)
-        self.anim.start()
+        if not self._start_proxy_slide(self._snapshot(end_geom), start_geom, end_geom):
+            self.setGeometry(end_geom)              # no snapshot possible: show it in place
+            self.raise_()
 
     def slide_out(self):
         if not self._is_open and not self.isVisible():
@@ -173,19 +211,24 @@ class SlidePanel(QFrame):
         if not self.parent():
             self.hide()
             return
-        parent_w = self.parent().width()
-        parent_h = self.parent().height()
-        panel_w = self._calc_panel_width(parent_w)
-
+        sliding = self.anim.state() == QPropertyAnimation.Running
+        start_geom = self._proxy.geometry() if sliding else self.geometry()
         self.anim.stop()
-        start_geom = self.geometry()
-        end_geom = QRect(parent_w, 0, panel_w, parent_h)
-        self.anim.setStartValue(start_geom)
-        self.anim.setEndValue(end_geom)
-        self.anim.start()
+        off = self._off_geometry()
+        if sliding:
+            # reverse from where the proxy is: it already carries the picture
+            self.anim.setStartValue(start_geom)
+            self.anim.setEndValue(off)
+            self.anim.start()
+            return
+        if not self._start_proxy_slide(self.grab(), start_geom, off):
+            self.hide()
 
     def _on_anim_finished(self):
-        if not self._is_open:
-            self.hide()
-        else:
+        self._finish_proxy()
+        if self._is_open:
+            self.setGeometry(self._end_geometry())
+            self.show()
             self.raise_()
+        else:
+            self.hide()

@@ -42,7 +42,7 @@ def learnt(tmp_path, pages=12, clients=CLIENTS):
     comp = at.AtlasComponent(atlas, client_fields=("pan",))
     for name, pan in clients:
         for k in range(pages):
-            comp.observe(obs(page_lines(k, name), pan, url="https://portal.example.test/p%d" % k), None)
+            comp.observe(obs(page_lines(k, name), pan, url="https://portal.example.test/%s" % ("page-" + "abcdefghijklmnop"[k])), None)
     return atlas, atlas.portal("portal.example.test")
 
 
@@ -131,6 +131,18 @@ def test_the_menu_no_longer_makes_every_page_a_profile_or_error_page(tmp_path):
     after = pk.classify(page_for(obs(lines, "ABCDE1234F"), atlas))
     assert before.kind == "profile"                             # "My Profile" menu item + a PAN
     assert after.kind != "profile"
+
+
+def test_seras_own_injected_panel_is_never_portal_content():
+    # Field test 2026-09-28: Sera's extension panel ("Username Injected", "Password" buttons)
+    # showed up in the ITR login page's atlas fingerprint. uia_nodes marks it "own".
+    docs = [[{"parent": -1, "depth": 0, "ctype": 50026, "name": "", "own": True},
+             {"parent": 0, "depth": 1, "ctype": 50000, "name": "Username Injected"},
+             {"parent": -1, "depth": 0, "ctype": 50026, "name": "", "landmark": 80002},
+             {"parent": 2, "depth": 1, "ctype": 50000, "name": "Continue"}]]
+    page = page_for(obs(["Username Injected", "Continue"], "ABCDE1234F", nodes=docs))
+    zone = {n.text: n.zone for n in page.nodes if n.text}
+    assert zone == {"Username Injected": pm.NAVIGATION, "Continue": pm.MAIN}
 
 
 def test_node_tree_is_used_when_the_core_had_one(tmp_path):

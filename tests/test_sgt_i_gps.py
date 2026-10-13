@@ -160,10 +160,18 @@ def test_identify_page_needs_the_lookback_to_settle_a_shared_address(tmp_path):
     tells them apart by structure (never by address alone); the GPS only has the address to go on
     live, so a shared one is settled by the last page seen this session - or not guessed at all."""
     atlas = _new_atlas(tmp_path)
+
+    def step(name):
+        # A real screen carries its own buttons and labels; a one-heading read at an address the
+        # atlas already knows is taken for that screen still loading (atlas min_new_page_tokens).
+        nodes = [pm.Node(0, name, heading=1, section=0)]
+        nodes += [pm.Node(i, "%s action %d" % (name, i), role="button", section=0) for i in range(1, 12)]
+        return pm.PageMap(tuple(nodes), (pm.Section(0, name, 1, node=0),), ())
+
     for i in range(3):
         client, session = "client-%d" % i, "session-%d" % i
-        p1 = atlas.merge(_page("Step One"), url="/wizard", client=client, session=session)
-        p2 = atlas.merge(_page("Step Two"), url="/wizard", client=client, session=session)
+        p1 = atlas.merge(step("Step One"), url="/wizard", client=client, session=session)
+        p2 = atlas.merge(step("Step Two"), url="/wizard", client=client, session=session)
     assert gps.identify_page(atlas, "/wizard", []) is None        # no lookback - no guess
     assert gps.identify_page(atlas, "/wizard", [p1]) == p2        # p1's usual next step
 

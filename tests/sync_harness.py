@@ -455,7 +455,10 @@ class HarnessNode:
         with self._lock:
             self._active_sessions.add(session)
         try:
-            self.engine.handle_session(session)
+            # As in the app: a snapshot request (P2-6 / P4-4 catch-up) goes to the snapshot
+            # service, everything else to the sync engine.
+            import sync_office
+            sync_office.dispatch_session(session, self.app_dir, self.engine)
         finally:
             with self._lock:
                 self._active_sessions.discard(session)
@@ -696,55 +699,78 @@ class SyncHarness:
         # Propagate the full roster before building MemberSets.
         self._propagate_all_members()
 
-        admin_pubkey = self.nodes[0].office.admin_pubkey
-
         for node in self.nodes:
-            with node.open_db() as conn:
-                recs = sync_admin.list_members(conn, admin_pubkey, include_revoked=False)
-                members = MemberSet(
-                    [(m["device_id"], m["cert_pem"]) for m in recs],
-                    own_cert_pem=node.cert_pem,
-                )
-
-            transport = SyncTransport(node.chain, members)
-            server = transport.serve(node._handle_session, host="127.0.0.1", port=0)
-            node.transport = transport
-            node.server = server
-            node.port = server.address[1]
-
-            # P3-5: sessions are run by the sync engine. Sealing and applying need mode live
-            # (the harness replicates straight into the live DBs; shadow replicas are P3-7).
-            import sync_engine
-            with node.open_db() as conn:
-                row = conn.execute("SELECT value FROM _sync_meta WHERE key = 'device_id'").fetchone()
-            if not row or row[0] != node.device_id:
-                raise RuntimeError(f"{node.name}: master.db has the wrong device id for its stream")
-            node.db.set_sync_mode("live")
-            node.engine = sync_engine.SyncEngine(
-                node.db, transport,
-                app_dir=node.app_dir,
-                admin_pubkey=admin_pubkey,
-                own_cert_pem=node.cert_pem,
-                connect=lambda ip, port, dev, _n=node: _n.connect(dev),
-                # Pokes: UDP on the same port number as the node's TCP sync port.
-                poke_listen=("127.0.0.1", node.port),
-                poke_port_for=lambda dev, port: port,
-                on_event=lambda kind, info, _n=node: _n.events.append((kind, info)),
-            )
-            node.db.set_seal_listener(node.engine.notify_local_change)
+            self._start_node(node)
 
         # Record all peer addresses in local address book.
         for node in self.nodes:
-            with node.open_db() as conn:
-                for other in self.nodes:
-                    if other.device_id != node.device_id:
-                        sync_discovery.upsert_address(
-                            conn,
-                            other.device_id,
-                            "127.0.0.1",
-                            other.port,
-                            source="manual",
-                        )
+            self._record_addresses(node)
+
+    def _record_addresses(self, node: HarnessNode) -> None:
+        with node.open_db() as conn:
+            for other in self.nodes:
+                if other.device_id != node.device_id:
+                    sync_discovery.upsert_address(
+                        conn,
+                        other.device_id,
+                        "127.0.0.1",
+                        other.port,
+                        source="manual",
+                    )
+
+    def restart_node(self, node: "HarnessNode | int | str", before_open: Callable[[HarnessNode], Any] | None = None,
+                     set_live: bool = False) -> Any:
+        """Simulates quitting and starting Sera on one node: stops its engine and server, drops
+        its SeraDatabase, runs ``before_open(node)`` (the start-up hooks that run before any
+        database is opened, e.g. a staged install), then opens the DB again and starts a new
+        transport/engine on a new port (the other nodes' address books are updated). Returns
+        what ``before_open`` returned. The mode is left as the DB says unless ``set_live``."""
+        node = self.get_node(node)
+        node.close()
+        node._db = None
+        node.events.clear()
+        result = before_open(node) if before_open is not None else None
+        self._start_node(node, set_live=set_live)
+        for other in self.nodes:
+            self._record_addresses(other)
+        return result
+
+    def _start_node(self, node: HarnessNode, set_live: bool = True) -> None:
+        admin_pubkey = self.nodes[0].office.admin_pubkey
+        with node.open_db() as conn:
+            recs = sync_admin.list_members(conn, admin_pubkey, include_revoked=False)
+            members = MemberSet(
+                [(m["device_id"], m["cert_pem"]) for m in recs],
+                own_cert_pem=node.cert_pem,
+            )
+
+        transport = SyncTransport(node.chain, members)
+        server = transport.serve(node._handle_session, host="127.0.0.1", port=0)
+        node.transport = transport
+        node.server = server
+        node.port = server.address[1]
+
+        # P3-5: sessions are run by the sync engine. Sealing and applying need mode live
+        # (the harness replicates straight into the live DBs; shadow replicas are P3-7).
+        import sync_engine
+        with node.open_db() as conn:
+            row = conn.execute("SELECT value FROM _sync_meta WHERE key = 'device_id'").fetchone()
+        if not row or row[0] != node.device_id:
+            raise RuntimeError(f"{node.name}: master.db has the wrong device id for its stream")
+        if set_live:
+            node.db.set_sync_mode("live")
+        node.engine = sync_engine.SyncEngine(
+            node.db, transport,
+            app_dir=node.app_dir,
+            admin_pubkey=admin_pubkey,
+            own_cert_pem=node.cert_pem,
+            connect=lambda ip, port, dev, _n=node: _n.connect(dev),
+            # Pokes: UDP on the same port number as the node's TCP sync port.
+            poke_listen=("127.0.0.1", node.port),
+            poke_port_for=lambda dev, port: port,
+            on_event=lambda kind, info, _n=node: _n.events.append((kind, info)),
+        )
+        node.db.set_seal_listener(node.engine.notify_local_change)
 
     def _to_device_id(self, node_or_id: "HarnessNode | int | str") -> str:
         """Resolves node, index, or string to a device_id."""
