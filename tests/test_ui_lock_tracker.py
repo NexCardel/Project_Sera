@@ -485,7 +485,9 @@ def test_kebab_and_menu_create_client_open_the_capture_dialog(make_window, monke
 def test_tools_menu_entries_in_order(make_window, monkeypatch):
     win, _ = make_window()
     shown = _fake_menu(monkeypatch)
-    assert win.btn_preferences.text() == "Tools  ▾"
+    # the menu chevron is painted by the kit (chevron=True), no typed ▾ in the label
+    assert win.btn_preferences.text() == "Tools"
+    assert win.btn_preferences.is_chevron()
     win.btn_preferences.click()
     assert shown == [["Re-Resolve Identities (SRPF)", "Map Datapoints to MCL Columns…", "Open LTT sheet",
                       "Export Captures (CSV)", "Distill…", "Clear All Captures"]]

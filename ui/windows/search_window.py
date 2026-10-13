@@ -27,9 +27,9 @@ except Exception:
     qta = None
 from ui.components.kit import (
     ROLE_SERVICES, Card, ChipBar, DataGrid, GridFooter, GridFrame, IconButton, Input, LabelledAction,
-    PageHeader, SelectionBar, SettingRow, Switch,
+    PageHeader, SelectionBar, SettingRow, Switch, set_page_margins,
 )
-from ui.utils.responsive import WidthAware
+from ui.utils.responsive import WidthAware, WidthMode
 from ui.utils.theme import SmartTableWidgetItem
 from ui.utils.tokens import KIT, TOKENS as T
 
@@ -135,10 +135,14 @@ class SearchWindow(WidthAware, QWidget):
         self._building = False
         self.refresh()
 
+    def on_width_mode_changed(self, mode):
+        if getattr(self, "_page_layout", None) is not None:
+            set_page_margins(self._page_layout, mode is WidthMode.COMPACT)
+
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T["s_6"], T["s_6"], T["s_6"], T["s_6"])
-        layout.setSpacing(T["s_4"])
+        set_page_margins(layout)
+        self._page_layout = layout
 
         # Header: sidebar toggle, title with live count, Columns, Refresh and the one primary
         self.page_header = PageHeader("All Clients")
@@ -147,7 +151,7 @@ class SearchWindow(WidthAware, QWidget):
         self.page_header.add_leading(self.btn_toggle_sidebar)
 
         self.btn_columns = LabelledAction(
-            "Columns ▾", variant="secondary", icon="mdi.view-column-outline",
+            "Columns", variant="secondary", icon="mdi.view-column-outline", chevron=True,
             tooltip="Which columns show here (same switches as Settings → Main screen)")
         self.btn_columns.clicked.connect(self._show_columns_menu)
         self.page_header.add_action(self.btn_columns)

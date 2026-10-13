@@ -374,6 +374,9 @@ class LabelledAction(_ReasonMixin, QPushButton):
         self.setStyleSheet(_action_qss(self.variant, self._sm, self._icon_only, self._chevron))
         self._apply_icon()
 
+    def is_chevron(self):
+        return self._chevron
+
     def paintEvent(self, event):
         super().paintEvent(event)
         if not self._chevron or self._icon_only:
@@ -3139,6 +3142,15 @@ def _px_font(widget, px, weight=None):
 
 def _is_compact_mode(mode):
     return str(getattr(mode, "value", mode)).lower() == "compact"
+
+
+def set_page_margins(layout, compact=False):
+    """A daily screen's outer rhythm (the mockup's .main): 16 / 20 / 12 with a 12 px gap; COMPACT 12 / 14 / 10."""
+    if compact:
+        layout.setContentsMargins(K["pad_main_h_c"], K["pad_main_top_c"], K["pad_main_h_c"], K["pad_main_bot_c"])
+    else:
+        layout.setContentsMargins(K["pad_main_h"], K["pad_main_top"], K["pad_main_h"], K["pad_main_bot"])
+    layout.setSpacing(K["gap_main"])
 
 
 # tone: (background, border, icon colour)

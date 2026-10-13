@@ -27,7 +27,7 @@ from ui.utils.responsive import WidthMode, mode_for
 from ui.components.kit import (
     MessageBox,
     Banner, CellAction, Card, Chip, ChipBar, Checkbox, DarkListTable, DataGrid, DialogFrame, GridFooter,
-    GridFrame, Pill, TextArea,
+    GridFrame, Pill, TextArea, set_page_margins,
     IconButton, Input, LabelledAction, PageHeader, Segmented, Select, SettingRow, Tile, ROLE_ACTIONS,
     ROLE_PILL, ROLE_SUB, show_message,
 )
@@ -1474,8 +1474,8 @@ class TrackerDumpWindow(QWidget):
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(T["s_6"], T["s_6"], T["s_6"], T["s_6"])
-        main_layout.setSpacing(T["s_4"])
+        set_page_margins(main_layout)
+        self._page_layout = main_layout
 
         # ---- Header: title on the left, page actions on the right ----
         self.page_header = PageHeader(
@@ -1490,7 +1490,7 @@ class TrackerDumpWindow(QWidget):
         refresh_sc.activated.connect(self.load_data)
 
         self.btn_preferences = LabelledAction(
-            "Tools  ▾", variant="secondary", icon="mdi.cog-outline",
+            "Tools", variant="secondary", icon="mdi.cog-outline", chevron=True,
             tooltip="Re-resolve identities, reports, CSV export, clear captures")
         self.btn_preferences.clicked.connect(self._show_preferences_menu)
         self.page_header.add_action(self.btn_preferences)
@@ -1664,7 +1664,7 @@ class TrackerDumpWindow(QWidget):
         self.cmb_page_size.currentIndexChanged.connect(self._on_page_size_changed)
         self.grid_footer.add_widget(self.cmb_page_size)
 
-        self.btn_prev_page = LabelledAction("◀ Prev", variant="ghost", sm=True)
+        self.btn_prev_page = LabelledAction("Prev", variant="ghost", sm=True, icon="mdi.chevron-left")
         self.btn_prev_page.clicked.connect(self._prev_page)
         self.grid_footer.add_widget(self.btn_prev_page)
 
@@ -1672,7 +1672,7 @@ class TrackerDumpWindow(QWidget):
         self.lbl_current_page.setObjectName("KitGridFootText")
         self.grid_footer.add_widget(self.lbl_current_page)
 
-        self.btn_next_page = LabelledAction("Next ▶", variant="ghost", sm=True)
+        self.btn_next_page = LabelledAction("Next", variant="ghost", sm=True, icon="mdi.chevron-right")
         self.btn_next_page.clicked.connect(self._next_page)
         self.grid_footer.add_widget(self.btn_next_page)
 
@@ -1738,6 +1738,8 @@ class TrackerDumpWindow(QWidget):
         narrow page (see the plan, docs/ui-scale-adaptive-layout-plan.md, B2)."""
         self._width_mode = mode
         compact = mode is WidthMode.COMPACT
+        if getattr(self, "_page_layout", None) is not None:
+            set_page_margins(self._page_layout, compact)
         self._lbl_subtitle.setVisible(not compact)
 
         self.txt_search.setMinimumWidth(180)

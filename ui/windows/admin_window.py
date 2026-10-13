@@ -42,7 +42,7 @@ from ui.components.kit import (
     MessageBox,
     ROLE_PILL, ROLE_SERVICES, ROLE_SUB, Banner, Card, Checkbox, Chip, ChipBar, DataGrid, DialogFrame,
     FieldLabel, GridFooter, GridFrame, Input, LabelledAction, PageHeader, SectionLabel, SelectionBar,
-    Select, TextArea,
+    Select, TextArea, set_page_margins,
 )
 from ui.utils.dynamic_form_widgets import make_input_widget, read_input_widget, set_input_widget_value
 from ui.utils.responsive import WidthAware, WidthMode
@@ -280,8 +280,8 @@ class AdminWindow(WidthAware, QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T["s_6"], T["s_5"], T["s_6"], T["s_5"])
-        layout.setSpacing(T["s_3"])
+        set_page_margins(layout)
+        self._page_layout = layout
         layout.setSizeConstraint(QLayout.SetNoConstraint)
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
@@ -312,7 +312,7 @@ class AdminWindow(WidthAware, QWidget):
         # These actions are now exclusively accessed via the new Sidebar shell.
 
         body = QHBoxLayout()
-        body.setSpacing(T["s_4"])
+        body.setSpacing(K["gap_mc"])
 
         left_layout = QVBoxLayout()
         left_layout.setSpacing(T["s_2"])
@@ -445,7 +445,7 @@ class AdminWindow(WidthAware, QWidget):
         head.addLayout(title_box, stretch=1)
 
         self.more_btn = LabelledAction("More", variant="secondary", icon="mdi.dots-horizontal",
-                                       tooltip="More actions")
+                                       tooltip="More actions", chevron=True)
         more_menu = QMenu(self.more_btn)
         self.act_archive = more_menu.addAction(_icon("mdi.archive-outline", T["text2"]), "Archive client")
         self.act_archive.triggered.connect(self._on_archive)
@@ -502,6 +502,8 @@ class AdminWindow(WidthAware, QWidget):
 
     def on_width_mode_changed(self, mode):
         compact = mode is WidthMode.COMPACT
+        if getattr(self, "_page_layout", None) is not None:
+            set_page_margins(self._page_layout, compact)
         self.new_btn.set_icon_only(compact)
         self.more_btn.set_icon_only(compact)
 
