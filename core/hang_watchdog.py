@@ -56,7 +56,10 @@ def _thread_cpu_seconds(native_id: int) -> float:
 
 
 def _append(text: str) -> None:
-    print(text)
+    try:
+        print(text)
+    except Exception:
+        pass            # no console, or a closed one: the file below is what matters
     path = _log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size > LOG_MAX_BYTES:

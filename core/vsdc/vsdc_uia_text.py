@@ -261,6 +261,65 @@ def take_read_stats() -> Dict[str, Any]:
     return out
 
 
+UIA_TABITEM_CONTROL_TYPE_ID = 50019
+NO_TABS_RECHECK_SEC = 10.0      # a window with no tab strip is searched again only this often (~40 ms a search)
+
+
+def _selected_among(uia_client, items: List[Any]) -> Optional[str]:
+    for el in items:
+        try:
+            p = el.GetCurrentPattern(uia_client.UIA_SelectionItemPatternId)
+            if p and p.QueryInterface(uia_client.IUIAutomationSelectionItemPattern).CurrentIsSelected:
+                return ".".join(str(x) for x in el.GetRuntimeId())
+        except Exception:
+            continue                # a closed tab's element: skip it
+    return None
+
+
+def selected_tab_id(hwnd: int, timeout_sec: float = 1.0) -> Optional[str]:
+    """
+    An id for the browser tab in front in this window: the UIA RuntimeId of its selected TabItem
+    in the tab strip (measured 2026-10-13 in Edge/Chrome: the same id every read and across a
+    navigation inside the tab, a different one per tab). None when it cannot be told (no tab
+    strip, a browser that exposes none, a failed or skipped read - see was_busy()).
+
+    The window's tab elements are kept per worker thread: a normal tick only asks each of them
+    "are you selected?" (1-3 ms in all, measured); the tab strip is searched again (30-120 ms, once
+    545 ms on a big window) only when none of them is - a new tab, a closed one - and a window with
+    no tab strip at most every NO_TABS_RECHECK_SEC. A property read only: no tab is ever clicked.
+    """
+    _caller.busy = False        # an early return below must not leave an older read's "busy" behind
+    if not hwnd or not user32.IsWindow(hwnd):
+        return None
+
+    def _do():
+        uia, uia_client = _get_uia_on_worker()
+        if not uia:
+            return None
+        cache = getattr(_tls, "tabs", None)
+        if cache is None:
+            cache = _tls.tabs = {}
+        items, searched = cache.get(hwnd) or ([], 0.0)
+        if items:
+            found = _selected_among(uia_client, items)
+            if found:
+                return found
+        elif searched and time.monotonic() - searched < NO_TABS_RECHECK_SEC:
+            return None             # no tab strip here (an app window, full screen): not every tick
+        root = uia.ElementFromHandle(hwnd)
+        if not root:
+            return None
+        cond = uia.CreatePropertyCondition(uia_client.UIA_ControlTypePropertyId, UIA_TABITEM_CONTROL_TYPE_ID)
+        coll = root.FindAll(uia_client.TreeScope_Descendants, cond)
+        items = [coll.GetElement(i) for i in range(coll.Length)] if coll else []
+        if len(cache) > 20:
+            cache.clear()
+        cache[hwnd] = (items, time.monotonic())
+        return _selected_among(uia_client, items)
+
+    return _run_with_timeout(_do, timeout_sec)
+
+
 def is_available(timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> bool:
     """Cheap availability check without doing a real page read."""
     result = _run_with_timeout(lambda: _get_uia_on_worker()[0] is not None, timeout_sec)
@@ -437,6 +496,7 @@ def read_page_text(hwnd: int, timeout_sec: float = DEFAULT_TIMEOUT_SEC, max_line
     VSDC-X does not, so its lines are exactly as before).
     """
     empty: Dict[str, Any] = {"text": "", "lines": []}
+    _caller.busy = False        # an early return below must not leave an older read's "busy" behind
     if not hwnd or not user32.IsWindow(hwnd):
         return empty
 

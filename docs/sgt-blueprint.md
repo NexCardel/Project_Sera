@@ -591,6 +591,28 @@ what was in front, scope, portal and page link inside the scope gate only, SGT r
 skipped / busy, UIA read times). A capture tick not finishing for 30 s writes every thread's
 stack to `hang.log`. Tests: `tests/test_vsdc_diag.py`.
 
+**One session per browser tab (2026-10-13).** A window used to be one session, and the shelf only
+told clients apart by a PAN/GSTIN clash. So after switching to another client's tab, a page that
+names no client (a returns dashboard) fed the client of the tab the user came from. Now the router
+passes `vsdc_uia_text.selected_tab_id(hwnd)`: the UIA RuntimeId of the selected TabItem. It was
+measured in Edge/Chrome as stable across reads and across navigation inside the tab, and different
+for each tab. It costs 1-3 ms with the window's tab elements cached; a fresh search of the tab
+strip takes 30-760 ms. Rules:
+- each session records the tabs it owns;
+- switching to another tab brings back that tab's own session;
+- a never-seen tab joins the session in view (opened from it, same login), unless its first page
+  names another client - then it becomes that client's tab;
+- the tabs of an ended session are "retired": seen again, a retired tab starts a fresh session
+  that names its client only from what it shows;
+- with no tab id (Firefox untested, a window with no tab strip, a failed read) the window is one
+  session, as before;
+- while UIA is busy, SGT skips the tick.
+
+A clash INSIDE a known tab starts a strict session whose clashing PAN/GSTIN is also ignored on that
+page's re-reads (`strict_block`: a stray row is the same evidence each time). This does not apply
+without a tab id, because GST gives every client's welcome page the same link. Tests:
+`tests/test_sgt_tabs.py`.
+
 ## 11. Risks to hold onto
 
 | Risk | Mitigation |

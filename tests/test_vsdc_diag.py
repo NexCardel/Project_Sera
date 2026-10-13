@@ -115,6 +115,18 @@ def test_a_late_read_is_logged_with_its_time_and_counted(uia):
     assert uia.take_read_stats()["reads"] == 0          # per interval
 
 
+def test_busy_never_outlives_the_call_that_set_it(uia):
+    """A tab read of a window that no longer exists returns before asking UIA: was_busy() must
+    not still report an older skipped read (the router would skip SGT for nothing)."""
+    g = gate(uia)
+    uia._run_with_timeout(lambda: g.wait(5), 0.02)
+    uia._run_with_timeout(lambda: "x", 0.2)
+    assert uia.was_busy()
+    assert uia.selected_tab_id(0) is None and not uia.was_busy()
+    assert uia._run_with_timeout(lambda: "x", 0.2) is None and uia.was_busy()
+    assert uia.read_page_text(0) == {"text": "", "lines": []} and not uia.was_busy()
+
+
 def test_read_page_text_says_busy(uia):
     g = gate(uia)
     uia._run_with_timeout(lambda: g.wait(5), 0.02)
@@ -205,15 +217,22 @@ def test_a_stuck_capture_worker_dumps_the_stacks(monkeypatch):
         _paused = False
         last_progress = time.monotonic() - 100
 
+    def wait_for(cond, limit=10.0):
+        end = time.monotonic() + limit
+        while not cond() and time.monotonic() < end:
+            time.sleep(0.05)
+        return cond()
+
     w = Worker()
     t = vsdc_diag.watch_worker(w, stall_s=0.5)
-    time.sleep(1.3)
-    w.last_progress = time.monotonic()
-    time.sleep(1.2)
-    w._running = False
-    t.join(3)
-    assert dumps and "capture worker stalled" in dumps[0]
-    assert "STALLED" in log_text() and "moving again" in log_text()
+    try:
+        assert wait_for(lambda: dumps and "STALLED" in log_text())
+        assert "capture worker stalled" in dumps[0]
+        w.last_progress = time.monotonic() + 3600     # a tick finished, and the next is not late
+        assert wait_for(lambda: "moving again" in log_text())
+    finally:
+        w._running = False
+        t.join(3)
 
 
 def test_hang_watchdog_dump_threads_writes_the_title(monkeypatch, tmp_path):
