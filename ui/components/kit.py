@@ -2843,6 +2843,15 @@ def fit_column_widths(available, specs, manual=None, user_hidden=(), compact=Fal
             free.remove(c)
     if not flex and cols:
         widths[cols[-1]] += max(0, available - sum(widths.values()))
+    # rounding in the shrink above can leave a few px over: take them from the widest columns that have room
+    over = sum(widths.values()) - available
+    while over > 0 and cols:
+        c = max(cols, key=lambda k: widths[k] - minimum(k))
+        take = min(over, max(0, widths[c] - minimum(c)))
+        if take <= 0:
+            break
+        widths[c] -= take
+        over -= take
     return widths, hidden
 
 

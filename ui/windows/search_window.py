@@ -138,6 +138,9 @@ class SearchWindow(WidthAware, QWidget):
     def on_width_mode_changed(self, mode):
         if getattr(self, "_page_layout", None) is not None:
             set_page_margins(self._page_layout, mode is WidthMode.COMPACT)
+            # the margins took width from the grid: fit its columns to what is left now
+            if getattr(self, "results_table", None) is not None and self.results_table.columnCount():
+                self.results_table.fit_columns()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
