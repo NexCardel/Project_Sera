@@ -68,6 +68,7 @@ The log holds resolved values only; page TEXT is kept separately, for replay, on
 recording is on (sgt_corpus.py - local, 30 days).
 """
 
+import copy
 import json
 import os
 import re
@@ -95,6 +96,7 @@ CAPTURE_METHODS = {MODE_SHADOW: "SGT_shadow", MODE_LIVE: "SGT_live"}
 HUD_TAG = HUD_TAGS[MODE_SHADOW]
 CAPTURE_METHOD = CAPTURE_METHODS[MODE_SHADOW]
 IDLE_END_SEC = 20 * 60
+RESUME_WINDOW_SEC = 4 * 3600
 REREAD_AFTER_SEC = 15.0
 MIN_UIA_LINES = 3               # fewer than this and the page is treated as blind
 MISSES_TO_CLEAR = 2             # reads in a row a piece must be missing from its page to be cleared
@@ -281,6 +283,7 @@ class SgtShadow:
         self._today = today
         self._echo = echo
         self._sessions: Dict[int, _Session] = {}
+        self._parked: Dict[int, Tuple[float, Dict[str, Any]]] = {}
         self._foreign_pans: Set[str] = set()     # other PANs readable on the page being absorbed
         self._new_profile: List[str] = []        # datapoints captured while absorbing this page
         self._page_pans: Set[str] = set()        # every PAN readable on it
@@ -315,6 +318,7 @@ class SgtShadow:
             return None
 
     def end_session(self, hwnd: int, reason: str) -> None:
+        self._parked.pop(hwnd, None)
         s = self._sessions.pop(hwnd, None)
         if s is not None:
             self._finish(s, reason)
@@ -323,6 +327,7 @@ class SgtShadow:
             self._stats.save()
 
     def end_all(self, reason: str) -> None:
+        self._parked.clear()
         for hwnd in list(self._sessions):
             self.end_session(hwnd, reason)
 
@@ -350,7 +355,38 @@ class SgtShadow:
             else:
                 s.portal = portal
         if s is None:
-            s = self._sessions[hwnd] = _Session(portal=portal)
+            parked = self._parked.pop(hwnd, None)
+            resumed = False
+            if parked is not None:
+                parked_at, snap = parked
+                age = now - parked_at
+                gap = now - float(snap.get("last_seen") or parked_at)
+                snap_portal = snap.get("portal") or ""
+                portal_ok = not portal or not snap_portal or portal == snap_portal
+                url_ok = not (_LOGIN.search(url) or _LOGOUT.search(url)) if url else True
+                if 0 <= age <= RESUME_WINDOW_SEC and gap <= RESUME_WINDOW_SEC and portal_ok and url_ok:
+                    resumed = True
+                    s = _session_from_json(snap)
+                    old_id = snap.get("session_id", s.session_id)
+                    s.session_id = uuid.uuid4().hex[:12]
+                    s.started = now
+                    s.last_seen = now
+                    s.slots = []
+                    s.draft.slot = None
+                    if portal:
+                        s.portal = portal
+                    if s.sdis is not None:
+                        if s.sdis.instances:
+                            s.sdis.instances = [inst for inst in s.sdis.instances if not inst.sent_key]
+                            s.sdis.current = {k: v for k, v in s.sdis.current.items() if v in s.sdis.instances}
+                        if s.sdis.carrier and s.sdis.carrier.sent_key:
+                            s.sdis.carrier = None
+                    self._sessions[hwnd] = s
+                    idle_sec = max(0.0, round(gap, 1))
+                    self._event(s, "session_resumed", from_session=old_id, idle_sec=idle_sec)
+                    self._echo(f"[SGT] {self._tag} session resumed (from session {old_id}, idled {int(idle_sec)}s)")
+            if not resumed:
+                s = self._sessions[hwnd] = _Session(portal=portal)
         if not s.portal:
             s.portal = portal
         s.last_seen = now
@@ -1022,9 +1058,26 @@ class SgtShadow:
 
     # ── Ending ───────────────────────────────────────────────────────────────────
     def _end_idle(self, now: float) -> None:
+        for h, (parked_at, _) in list(self._parked.items()):
+            if now - parked_at > RESUME_WINDOW_SEC:
+                self._parked.pop(h, None)
         for hwnd, s in list(self._sessions.items()):
             if now - s.last_seen > IDLE_END_SEC:
+                snap = copy.deepcopy(_session_to_json(s))
+                has_content = s.has_content
+                gap = now - s.last_seen
                 self.end_session(hwnd, "idle 20 min")
+                prof = snap.get("profile") or {}
+                pan_val = prof.get("pan")
+                if isinstance(pan_val, dict):
+                    pan_val = pan_val.get("value")
+                gstin_val = prof.get("gstin")
+                if isinstance(gstin_val, dict):
+                    gstin_val = gstin_val.get("value")
+                if has_content and (pan_val or gstin_val) and gap <= RESUME_WINDOW_SEC:
+                    self._parked[hwnd] = (now, snap)
+                else:
+                    self._parked.pop(hwnd, None)
 
     def would_be_payload(self, s: _Session) -> Dict[str, Any]:
         dispatched: Set[str] = {str(x) for x in (self._dispatched_ids() or ())}
