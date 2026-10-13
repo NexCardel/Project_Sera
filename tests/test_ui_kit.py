@@ -1136,3 +1136,35 @@ def test_grid_frame_holds_grid_and_footer(app):
     assert g.tone == "dark" and f.tone == "dark"
     frame.apply_width_mode("compact")
     assert g.compact and f.compact
+
+
+def test_labelled_action_chevron_reserves_room_and_paints(app):
+    plain = kit.LabelledAction("Columns", variant="secondary", icon="mdi.view-column")
+    menu = kit.LabelledAction("Columns", variant="secondary", icon="mdi.view-column", chevron=True)
+    plain.resize(160, TOKENS["h_ctl"])
+    menu.resize(160, TOKENS["h_ctl"])
+    plain.show(), menu.show()
+    assert "padding: 0 13px 0 13px" in plain.styleSheet()
+    assert f"padding: 0 {13 + KIT['gap_chip'] + KIT['d_icon_s']}px 0 13px" in menu.styleSheet()
+    menu.grab()  # paints the chevron without error
+
+
+def test_nav_item_edge_inset_moves_wash_and_text_not_the_bar(app):
+    n = kit.NavItem("All Clients", icon="mdi.account-group", edge_inset=10)
+    assert n._inset == 10
+    assert kit.NavItem("Tracker Dump")._inset == 0
+
+
+def test_dot_icon_is_the_status_dot_in_a_box(app):
+    icon = kit.dot_icon("ok")
+    assert not icon.isNull()
+    assert icon.availableSizes()[0].width() == 14
+    with pytest.raises(ValueError):
+        kit.dot_icon("nope")
+
+
+def test_tile_orange_tone_and_page_header_title_px(app):
+    t = kit.Tile("Need a client", tone="orange")
+    assert t.height() >= KIT["h_tile"]
+    assert kit.PageHeader("Settings", title_px=19)._title_px == 19
+    assert "font-size: 19px" in kit.PageHeader("Settings", title_px=19).styleSheet()

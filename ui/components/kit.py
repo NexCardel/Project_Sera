@@ -296,13 +296,15 @@ _ACTION_TONES = {
 
 
 @lru_cache(maxsize=None)
-def _action_qss(variant, sm, icon_only):
+def _action_qss(variant, sm, icon_only, chevron=False):
     bg, bd, tx, hbg, hbd = _ACTION_TONES[variant]
     pad = 0 if icon_only else (10 if sm else 13)
+    # room on the right for the menu chevron (paint in LabelledAction.paintEvent)
+    pad_r = pad + K["gap_chip"] + K["d_icon_s"] if chevron else pad
     size = T["f_s"] if sm else K["f_btn"]
     return (
         f"QPushButton {{ background: {bg}; border: 1px solid {bd}; border-radius: {T['r_m']}px;"
-        f" color: {tx}; font-size: {size}px; font-weight: 600; padding: 0 {pad}px;"
+        f" color: {tx}; font-size: {size}px; font-weight: 600; padding: 0 {pad_r}px 0 {pad}px;"
         f" min-height: 0px; max-height: {T['h_ctl']}px; }}"
         f"QPushButton::menu-indicator {{ image: none; width: 0px; }}"
         f"QPushButton:hover, QPushButton:pressed {{ background: {hbg}; border-color: {hbd}; }}"
@@ -315,7 +317,8 @@ def _action_qss(variant, sm, icon_only):
 class LabelledAction(_ReasonMixin, QPushButton):
     VARIANTS = tuple(_ACTION_TONES)
 
-    def __init__(self, text="", parent=None, *, variant="secondary", icon=None, sm=False, tooltip=""):
+    def __init__(self, text="", parent=None, *, variant="secondary", icon=None, sm=False, tooltip="",
+                 chevron=False):
         super().__init__(text, parent)
         if variant not in _ACTION_TONES:
             raise ValueError(f"unknown LabelledAction variant: {variant}")
@@ -324,6 +327,7 @@ class LabelledAction(_ReasonMixin, QPushButton):
         self._swatch = None
         self._sm = sm
         self._icon_only = False
+        self._chevron = bool(chevron)
         self.variant = variant
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(K["h_sm"] if sm else T["h_ctl"])
@@ -365,8 +369,26 @@ class LabelledAction(_ReasonMixin, QPushButton):
         self._apply_icon()
 
     def _restyle(self):
-        self.setStyleSheet(_action_qss(self.variant, self._sm, self._icon_only))
+        self.setStyleSheet(_action_qss(self.variant, self._sm, self._icon_only, self._chevron))
         self._apply_icon()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._chevron or self._icon_only:
+            return
+        # the mockup's "Columns ▾": a stroked chevron after the text, in the button's text colour
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        tx = _ACTION_TONES[self.variant][2]
+        if not self.isEnabled():
+            tx = _rgba(tx, _DISABLED_ALPHA)
+        side = K["d_icon_s"]
+        cx = self.width() - T["s_3"] - side / 2.0
+        cy = self.height() / 2.0
+        p.setPen(QPen(QColor(tx), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPolyline(QPolygonF([QPointF(cx - 3, cy - 1.5), QPointF(cx, cy + 1.5),
+                                  QPointF(cx + 3, cy - 1.5)]))
+        p.end()
 
     def _apply_icon(self):
         icon = _icon(self._icon_spec, _ACTION_TONES[self.variant][2])
@@ -593,6 +615,31 @@ class StatusDot(QWidget):
         p.setBrush(QColor(colour))
         p.drawEllipse(QRectF(self._HALO, self._HALO, self._DOT, self._DOT))
         p.end()
+
+
+def dot_icon(tone="ok", size=14):
+    """The StatusDot painted into a QIcon (8 px dot with its 3 px halo), for buttons such as the
+    sidebar's Auto-sync pill, where a text glyph would give a 4 px dot with no halo."""
+    if tone not in _DOT_TONES:
+        raise ValueError(f"unknown dot_icon tone: {tone}")
+    colour, halo = _DOT_TONES[tone]
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    ratio = app.devicePixelRatio() if app is not None else 1.0
+    pm = QPixmap(int(size * ratio), int(size * ratio))
+    pm.setDevicePixelRatio(ratio)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    c = (size) / 2.0
+    if halo:
+        p.setBrush(_qcolor(colour, halo))
+        p.drawEllipse(QRectF(0, 0, size, size))
+    p.setBrush(QColor(colour))
+    p.drawEllipse(QRectF(c - StatusDot._DOT / 2.0, c - StatusDot._DOT / 2.0, StatusDot._DOT, StatusDot._DOT))
+    p.end()
+    return QIcon(pm)
 
 
 # ---------------------------------------------------------------- Pill and Tag
@@ -3484,8 +3531,8 @@ class Scrim(QWidget):
 
 
 @lru_cache(maxsize=None)
-def _page_hd_qss(compact):
-    size = T["f_xl"] if compact else T["f_xxl"]
+def _page_hd_qss(compact, title_px=None):
+    size = title_px or (T["f_xl"] if compact else T["f_xxl"])
     return (
         "QFrame#KitPageHeader, QWidget#KitPageHeadText { background: transparent; border: none; }"
         f"QLabel#KitPageTitle {{ color: {T['text']}; background: transparent; border: none;"
@@ -3499,8 +3546,9 @@ def _page_hd_qss(compact):
 
 
 class PageHeader(QFrame):
-    def __init__(self, title="", parent=None, *, count="", lead=""):
+    def __init__(self, title="", parent=None, *, count="", lead="", title_px=None):
         super().__init__(parent)
+        self._title_px = title_px
         self.setObjectName("KitPageHeader")
         self.setMinimumHeight(K["h_page_hd"])
         self._compact = False
@@ -3531,7 +3579,7 @@ class PageHeader(QFrame):
         self.lead_label.setVisible(bool(lead))
         col.addWidget(self.lead_label)
         self._lay.addWidget(text, 1)
-        self.setStyleSheet(_page_hd_qss(False))
+        self.setStyleSheet(_page_hd_qss(False, self._title_px))
 
     def title(self):
         return self.title_label.text()
@@ -3567,7 +3615,7 @@ class PageHeader(QFrame):
 
     def set_compact(self, on):
         self._compact = bool(on)
-        self.setStyleSheet(_page_hd_qss(self._compact))
+        self.setStyleSheet(_page_hd_qss(self._compact, self._title_px))
         self.lead_label.setVisible(bool(self.lead_label.text()) and not self._compact)
 
     def apply_width_mode(self, mode):
@@ -3580,6 +3628,7 @@ _TILE_TONES = {
     "amber": T["warn"],
     "red": T["dangertx"],
     "blue": K["blue_tx"],
+    "orange": K["orange"],
 }
 
 
@@ -3842,13 +3891,15 @@ class NavLabel(QLabel):
 
 class NavItem(QPushButton):
     """Sidebar entry: icon + text (+ optional Key hint), drawn by the widget. set_active(on) marks the
-    page that is showing (mint wash and a bar on the left edge)."""
+    page that is showing (mint wash and a bar on the left edge). edge_inset: the sidebar passes 10, so the
+    bar sits on the sidebar's edge and the wash and text start inside it, as the mockup's .nav::before."""
 
-    def __init__(self, text, parent=None, *, icon=None, hint=None, tooltip=""):
+    def __init__(self, text, parent=None, *, icon=None, hint=None, tooltip="", edge_inset=0):
         super().__init__(text, parent)
         self._icon_spec = icon
         self._icons = {}
         self._active = False
+        self._inset = int(edge_inset)
         self.setFixedHeight(K["h_nav"])
         # paints itself; the app sheet's QDialog QPushButton min-height would make it 40 px in a dialog
         self.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; border: none; background: transparent; }")
@@ -3908,7 +3959,7 @@ class NavItem(QPushButton):
             bg, fg = None, K["nav_tx"]
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rect = QRectF(self._inset, 0, self.width() - self._inset, self.height()).adjusted(0.5, 0.5, -0.5, -0.5)
         if bg:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(bg))
@@ -3922,7 +3973,7 @@ class NavItem(QPushButton):
             p.setPen(QPen(QColor(T["mint"]), 2))
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), T["r_m"], T["r_m"])
-        x = K["pad_nav_h"]
+        x = self._inset + K["pad_nav_h"]
         icon = self._nav_icon(fg) if self._icon_spec else None
         if icon is not None and not icon.isNull():
             side = 16
